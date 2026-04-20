@@ -439,6 +439,70 @@ test('submit does not auto-attach deployment orchestrator skill for non-deploy r
   assert.equal(startRunCall?.arguments[2]?.metadata?.managedSkillContext, undefined);
 });
 
+test('submit does not auto-attach deployment orchestrator skill for negated deploy language', async () => {
+  mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  mock.method(userSkillService, 'listAvailableSkills', async () => [
+    {
+      sourceType: 'platform',
+      skillId: 'deploy-skill-1',
+      revisionId: 'deploy-rev-1',
+      slug: 'deploy-skill-governed',
+      name: '部署编排',
+      description: '自动处理部署工作流',
+      category: 'deployment',
+      revisionNumber: 1,
+      governance: {
+        systemRole: 'deployment_orchestrator',
+        adminManaged: true,
+        required: true,
+        autoActivation: {
+          enabled: true,
+          triggers: ['deploy', 'redeploy', 'rollback', 'status'],
+        },
+      },
+      resourceSummary: null,
+    },
+  ] as any);
+  const resolveSelectionsMock = mock.method(
+    userSkillService,
+    'resolveSelectionsForSession',
+    async () => []
+  );
+  const touchMock = mock.fn(async () => undefined);
+
+  const setupService = {
+    ensureSessionOwnership: mock.fn(async () => undefined),
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      reused: false,
+    })),
+  };
+  const runService = {
+    startRun: mock.fn(async (_sessionId: string, _userId: string, input: any) => ({
+      id: 'run-1',
+      sessionId: 'session-1',
+      status: 'queued',
+      input,
+    })),
+  };
+
+  const service = new AltusManagedInputService(setupService as any, runService as any, touchMock as any);
+  await service.submit('user-1', {
+    sessionId: 'session-1',
+    content: '帮我生成一份产品需求文档，不要部署，不要发布，也不要检查部署状态。',
+    messageKey: 'msg-doc-no-deploy',
+    metadata: {
+      source: 'chat',
+    },
+  });
+
+  assert.deepEqual(resolveSelectionsMock.mock.calls[0]?.arguments[1], []);
+  const startRunCall = runService.startRun.mock.calls[0];
+  assert.equal(startRunCall?.arguments[2]?.metadata?.skills, undefined);
+  assert.equal(startRunCall?.arguments[2]?.metadata?.managedSkillContext, undefined);
+});
+
 test('submit does not duplicate deployment orchestrator skill when already explicitly selected', async () => {
   mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
   mock.method(userSkillService, 'listAvailableSkills', async () => [

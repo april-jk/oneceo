@@ -37,6 +37,18 @@ test('startRun persists timeline, creates run, and dispatches coordinator execut
   const setupCalls: Record<string, unknown>[] = [];
   const setupService = {
     ensureSessionOwnership: mock.fn(async () => {}),
+    buildTaskIntentProfile: mock.fn(async () => ({
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: [],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+    })),
     captureConnectorSnapshot: mock.fn(async () => ({
       snapshotId: 'snapshot-1',
       statuses: [{ connectorKey: 'github', authStatus: 'authorized' }],
@@ -228,6 +240,18 @@ test('stopRun aborts active controller for in-flight run', async () => {
 
   const setupService = {
     ensureSessionOwnership: mock.fn(async () => {}),
+    buildTaskIntentProfile: mock.fn(async () => ({
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: [],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+    })),
     captureConnectorSnapshot: mock.fn(async () => ({
       snapshotId: 'snapshot-2',
       statuses: [],
@@ -332,6 +356,18 @@ test('getLatestRun falls back to db summary when recovery reconciliation throws'
 
   const setupService = {
     ensureSessionOwnership: mock.fn(async () => {}),
+    buildTaskIntentProfile: mock.fn(async () => ({
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: [],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+    })),
   };
 
   const eventWriter = {

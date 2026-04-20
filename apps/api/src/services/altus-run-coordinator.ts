@@ -17,6 +17,10 @@ import { AltusManagedSetupService, altusManagedSetupService } from './altus-mana
 import { AltusRunEventWriter, altusRunEventWriter } from './altus-run-event-writer';
 import { AltusRunLifecycleService, altusRunLifecycleService } from './altus-run-lifecycle-service';
 import { AltusRunState } from './altus-run-state';
+import {
+  type AltusRunRecoveryMode,
+  type AltusRunTransitionReason,
+} from './altus-run-loop-state';
 import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 import {
@@ -328,7 +332,7 @@ export class AltusRunCoordinator {
     userInput: string,
     taskIntentProfile?: AltusManagedTaskIntentProfile
   ): DeploymentCompletionIntent {
-    if (taskIntentProfile?.mode === 'non_deployable_artifact') {
+    if (taskIntentProfile && !taskIntentProfile.deploymentAllowed) {
       return {
         mode: 'none',
         acceptedToolNames: [],
@@ -606,8 +610,8 @@ export class AltusRunCoordinator {
     if (errorMessage.startsWith(DEPLOYMENT_COMPLETION_BLOCKED_PREFIX)) {
       return '线上部署尚未完成，Altus 将继续修复并重试发布。';
     }
-    if (errorMessage.startsWith('deployment_tool_not_allowed_non_web_task')) {
-      return '当前任务是非网站类交付，Altus 已阻止误部署并将继续按源码交付处理。';
+    if (errorMessage.startsWith('deployment_tool_not_allowed_without_explicit_request')) {
+      return '当前任务没有明确部署请求，Altus 已阻止误触发部署，并将继续按交付物生成处理。';
     }
     if (!this.isDeploymentTool(toolName)) {
       return errorMessage;
@@ -650,6 +654,7 @@ export class AltusRunCoordinator {
       options: input.options,
       content: input.question,
       messageKey: clarificationMessageKey,
+      transitionReason: 'clarification_requested',
       }
     );
     return {
@@ -718,6 +723,7 @@ export class AltusRunCoordinator {
     mcpProviders?: any[];
     onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
     onAssistantTextDelta?: (deltaText: string, fullText: string) => Promise<void> | void;
+    onRetryableError?: (error: unknown, attempt: number, delayMs: number) => Promise<void> | void;
     fallbackModel?: string | null;
   }) {
     const maxAttempts = Math.max(1, this.getModelRetryLimit() + 1);
@@ -733,10 +739,32 @@ export class AltusRunCoordinator {
         if (attempt >= maxAttempts || !this.isRetryableModelError(error)) {
           throw error;
         }
-        await this.delay(this.getModelRetryDelayMs(attempt));
+        const delayMs = this.getModelRetryDelayMs(attempt);
+        await input.onRetryableError?.(error, attempt, delayMs);
+        await this.delay(delayMs);
       }
     }
     throw (lastError instanceof Error ? lastError : new Error(String(lastError || 'managed_model_error')));
+  }
+
+  private async syncLoopSnapshot(
+    state: AltusRunState,
+    input: {
+      lastTransitionReason: AltusRunTransitionReason;
+      recoveryMode?: AltusRunRecoveryMode;
+      currentRound?: number;
+      maxRounds?: number;
+      plainTextRecoveryUsed?: boolean;
+      lastToolName?: string | null;
+      lastToolCallId?: string | null;
+    }
+  ) {
+    await (this.lifecycleService as AltusRunLifecycleService & {
+      syncLoopSnapshot?: (state: AltusRunState, loop: Record<string, unknown>) => Promise<void>;
+    }).syncLoopSnapshot?.(state, {
+      ...input,
+      updatedAt: new Date(),
+    });
   }
 
   private parseSseBlock(rawBlock: string) {
@@ -980,12 +1008,32 @@ export class AltusRunCoordinator {
       state.input.userInput,
       state.input.taskIntentProfile
     );
-    let deploymentCompletionUnlocked = !deploymentCompletionIntent.requiresManagedSuccess;
     let lastDeploymentEvidence: DeploymentCompletionEvidence | null = null;
+    const maxToolRounds = this.getMaxToolRounds();
 
-    for (let round = 0; round < this.getMaxToolRounds(); round += 1) {
+    for (let round = 0; round < maxToolRounds; round += 1) {
       if (signal.aborted) {
         throw new Error('managed_run_aborted');
+      }
+
+      const currentRound = round + 1;
+      const roundTransitionReason: AltusRunTransitionReason =
+        round === 0 ? 'initial_execution' : 'tool_result_continue';
+      await this.syncLoopSnapshot(state, {
+        lastTransitionReason: roundTransitionReason,
+        recoveryMode: 'none',
+        currentRound,
+        maxRounds: maxToolRounds,
+        plainTextRecoveryUsed,
+      });
+      if (currentRound >= Math.max(1, maxToolRounds - 1)) {
+        await this.syncLoopSnapshot(state, {
+          lastTransitionReason: 'tool_round_limit_near',
+          recoveryMode: 'context_pressure',
+          currentRound,
+          maxRounds: maxToolRounds,
+          plainTextRecoveryUsed,
+        });
       }
 
       await this.eventWriter.appendRunEvent(
@@ -996,6 +1044,9 @@ export class AltusRunCoordinator {
         {
         status: round === 0 ? 'running' : 'waiting_tool',
         content: round === 0 ? '正在分析并执行任务' : '继续处理工具结果',
+        transitionReason: roundTransitionReason,
+        currentRound,
+        maxRounds: maxToolRounds,
         }
       );
 
@@ -1007,6 +1058,30 @@ export class AltusRunCoordinator {
         signal,
         mcpProviders: state.input.mcpProviders,
         fallbackModel: state.input.model,
+        onRetryableError: async (error, attempt, delayMs) => {
+          const parsed = this.extractModelError(error);
+          await this.syncLoopSnapshot(state, {
+            lastTransitionReason: 'model_retryable_error',
+            recoveryMode: 'model_retry',
+            currentRound,
+            maxRounds: maxToolRounds,
+            plainTextRecoveryUsed,
+          });
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            state.input.userId,
+            'run_status',
+            {
+              status: 'running',
+              content: '模型上游暂时不可用，正在自动重试',
+              transitionReason: 'model_retryable_error',
+              attempt,
+              retryDelayMs: delayMs,
+              error: parsed.message,
+            }
+          );
+        },
         onAssistantTextDelta: async (deltaText, fullText) => {
           await this.eventWriter.appendRunEvent(
             state.input.runId,
@@ -1060,6 +1135,13 @@ export class AltusRunCoordinator {
 
       if (toolCalls.length === 0) {
         if (assistantContent && this.isClarificationResponse(assistantContent)) {
+          await this.syncLoopSnapshot(state, {
+            lastTransitionReason: 'clarification_requested',
+            recoveryMode: 'awaiting_user',
+            currentRound,
+            maxRounds: maxToolRounds,
+            plainTextRecoveryUsed,
+          });
           return this.requestClarification(state, {
             question: assistantContent,
           });
@@ -1074,6 +1156,26 @@ export class AltusRunCoordinator {
           const plainTextExcerpt = assistantContent
             ? truncate(assistantContent, 1000)
             : 'empty assistant response';
+          await this.syncLoopSnapshot(state, {
+            lastTransitionReason: 'plain_text_continuation_failed',
+            recoveryMode: 'model_retry',
+            currentRound,
+            maxRounds: maxToolRounds,
+            plainTextRecoveryUsed: true,
+          });
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            state.input.userId,
+            'run_status',
+            {
+              status: 'running',
+              content: '模型连续两次未调用工具，停止当前 managed run',
+              transitionReason: 'plain_text_continuation_failed',
+              currentRound,
+              maxRounds: maxToolRounds,
+            }
+          );
           throw new Error(`managed_model_plain_text_without_tool_call:${plainTextExcerpt}`);
         }
         messages.push({
@@ -1081,6 +1183,26 @@ export class AltusRunCoordinator {
           content: this.buildContinuationReminder(assistantContent),
         });
         plainTextRecoveryUsed = true;
+        await this.syncLoopSnapshot(state, {
+          lastTransitionReason: 'plain_text_continuation_prompted',
+          recoveryMode: 'model_retry',
+          currentRound,
+          maxRounds: maxToolRounds,
+          plainTextRecoveryUsed,
+        });
+        await this.eventWriter.appendRunEvent(
+          state.input.runId,
+          state.input.sessionId,
+          state.input.userId,
+          'run_status',
+          {
+            status: 'running',
+            content: '模型未调用工具，已注入继续执行提醒',
+            transitionReason: 'plain_text_continuation_prompted',
+            currentRound,
+            maxRounds: maxToolRounds,
+          }
+        );
         continue;
       }
 
@@ -1154,6 +1276,15 @@ export class AltusRunCoordinator {
             );
           }
           if (result.type === 'ask_user') {
+            await this.syncLoopSnapshot(state, {
+              lastTransitionReason: 'clarification_requested',
+              recoveryMode: 'awaiting_user',
+              currentRound,
+              maxRounds: maxToolRounds,
+              plainTextRecoveryUsed,
+              lastToolName: toolName,
+              lastToolCallId: toolCall.id,
+            });
             return this.requestClarification(state, {
               question: result.question,
               options: result.options,
@@ -1243,6 +1374,7 @@ export class AltusRunCoordinator {
               content: this.buildToolEventContent(toolName, 'completed'),
               arguments: args,
               toolCallId: toolCall.id,
+              transitionReason: deliverables.length > 0 ? 'completed_with_deliverables' : 'completed_without_deliverables',
               outputPreview: truncate(
                 JSON.stringify({
                   summary: result.summary,
@@ -1268,6 +1400,8 @@ export class AltusRunCoordinator {
             return { outcome: 'completed' as const, content: finalContent, deliverables };
           }
 
+          let postToolTransitionReason: AltusRunTransitionReason = 'tool_result_continue';
+          let postToolRecoveryMode: AltusRunRecoveryMode = 'none';
           if (this.isDeploymentTool(toolName)) {
             const evidence = this.parseDeploymentCompletionEvidence(result.content);
             if (evidence) {
@@ -1275,13 +1409,18 @@ export class AltusRunCoordinator {
                 ...evidence,
                 toolName,
               };
+              if (evidence.status === 'retryable_repair_required') {
+                postToolTransitionReason = 'deployment_repair_required';
+                postToolRecoveryMode = 'tool_repair';
+              }
               if (
                 this.isManagedDeploymentEvidenceSuccessful(
                   deploymentCompletionIntent,
                   lastDeploymentEvidence
                 )
               ) {
-                deploymentCompletionUnlocked = true;
+                // Keep the latest successful deployment evidence in memory so
+                // a later complete_task can be accepted without re-parsing history.
               }
             }
           }
@@ -1302,15 +1441,28 @@ export class AltusRunCoordinator {
             content: this.buildToolEventContent(toolName, 'completed'),
             arguments: args,
             toolCallId: toolCall.id,
+            transitionReason: postToolTransitionReason,
             outputPreview: truncate(result.content, 4000),
             ...(this.isDeploymentTool(toolName)
               ? this.buildDeploymentToolViewProjection(toolName, result.content) || {}
               : {}),
             }
           );
+          await this.syncLoopSnapshot(state, {
+            lastTransitionReason: postToolTransitionReason,
+            recoveryMode: postToolRecoveryMode,
+            currentRound,
+            maxRounds: maxToolRounds,
+            plainTextRecoveryUsed,
+            lastToolName: toolName,
+            lastToolCallId: toolCall.id,
+          });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error || 'tool_failed');
           const eventError = this.sanitizeToolEventError(toolName, message);
+          const failedTransitionReason: AltusRunTransitionReason = message.startsWith(DEPLOYMENT_COMPLETION_BLOCKED_PREFIX)
+            ? 'deployment_completion_blocked'
+            : 'tool_failed_but_recoverable';
           await this.eventWriter.appendRunEvent(
             state.input.runId,
             state.input.sessionId,
@@ -1322,6 +1474,7 @@ export class AltusRunCoordinator {
             arguments: args,
             toolCallId: toolCall.id,
             error: eventError,
+            transitionReason: failedTransitionReason,
             ...(this.isDeploymentTool(toolName)
               ? {
                   userView: {
@@ -1336,6 +1489,15 @@ export class AltusRunCoordinator {
               : {}),
             }
           );
+          await this.syncLoopSnapshot(state, {
+            lastTransitionReason: failedTransitionReason,
+            recoveryMode: 'tool_repair',
+            currentRound,
+            maxRounds: maxToolRounds,
+            plainTextRecoveryUsed,
+            lastToolName: toolName,
+            lastToolCallId: toolCall.id,
+          });
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
@@ -1348,6 +1510,13 @@ export class AltusRunCoordinator {
       }
     }
 
+    await this.syncLoopSnapshot(state, {
+      lastTransitionReason: 'tool_round_limit_exceeded',
+      recoveryMode: 'context_pressure',
+      currentRound: maxToolRounds,
+      maxRounds: maxToolRounds,
+      plainTextRecoveryUsed,
+    });
     throw new Error('managed_run_tool_round_limit_exceeded');
   }
 

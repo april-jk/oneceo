@@ -5106,7 +5106,8 @@ router.post('/sessions/:sessionId/deployment/deploy', async (req, res) => {
 
 /**
  * POST /api/task-creation/sessions/:sessionId/deployment/redeploy
- * 重新部署指定版本
+ * 重新部署指定版本；当上次部署已失败时允许不传 deploymentId，
+ * 直接按当前工作区重新发布
  */
 router.post('/sessions/:sessionId/deployment/redeploy', async (req, res) => {
   try {
@@ -5121,13 +5122,7 @@ router.post('/sessions/:sessionId/deployment/redeploy', async (req, res) => {
       });
     }
 
-    const deploymentId = asText(req.body?.deploymentId);
-    if (!deploymentId) {
-      return res.status(400).json({
-        success: false,
-        error: getPublicErrorMessage('缺少 deploymentId'),
-      });
-    }
+    const deploymentId = asText(req.body?.deploymentId) || undefined;
 
     const result = await executeTaskSessionDeploymentAction({
       action: 'redeploy',

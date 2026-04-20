@@ -14,6 +14,7 @@ export const appUsers = pgTable(
     email: text('email').notNull(),
     passwordHash: text('password_hash').notNull(),
     displayName: text('display_name').notNull(),
+    profileJson: jsonb('profile_json').notNull().default(sql`'{}'::jsonb`),
     status: text('status').notNull().default('active'),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),

@@ -14,6 +14,7 @@ const originalMethods = {
   getByEmail: appUserDAO.getByEmail,
   createUser: appUserDAO.create,
   getById: appUserDAO.getById,
+  updateById: appUserDAO.updateById,
   touchLastLogin: appUserDAO.touchLastLogin,
   getVerification: appUserEmailVerificationDAO.getByEmailAndPurpose,
   upsertVerification: appUserEmailVerificationDAO.upsert,
@@ -27,6 +28,7 @@ afterEach(() => {
   appUserDAO.getByEmail = originalMethods.getByEmail;
   appUserDAO.create = originalMethods.createUser;
   appUserDAO.getById = originalMethods.getById;
+  appUserDAO.updateById = originalMethods.updateById;
   appUserDAO.touchLastLogin = originalMethods.touchLastLogin;
   appUserEmailVerificationDAO.getByEmailAndPurpose = originalMethods.getVerification;
   appUserEmailVerificationDAO.upsert = originalMethods.upsertVerification;
@@ -173,4 +175,74 @@ test('AppAuthService.register consumes verification code before creating session
   assert.equal(result.user?.id, 'user-1');
   assert.equal(result.user?.email, 'user@example.com');
   assert.ok(result.token);
+});
+
+test('AppAuthService.updateProfile normalizes personalization payload and returns updated user', async () => {
+  let capturedUpdate:
+    | {
+        id: string;
+        input: {
+          displayName?: string;
+          profileJson?: Record<string, unknown>;
+        };
+      }
+    | null = null;
+
+  appUserDAO.getById = async () =>
+    ({
+      id: 'user-profile-1',
+      email: 'profile@example.com',
+      displayName: 'Existing Name',
+      profileJson: {
+        personalization: {
+          preferredName: 'Old',
+          role: 'Engineer',
+          about: 'Old bio',
+          responsePreferences: 'Old pref',
+        },
+      },
+      status: 'active',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }) as any;
+
+  appUserDAO.updateById = async (id, input) => {
+    capturedUpdate = { id, input };
+    return {
+      id,
+      email: 'profile@example.com',
+      displayName: input.displayName || 'Existing Name',
+      profileJson: input.profileJson || {},
+      status: 'active',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as any;
+  };
+
+  const result = await appAuthService.updateProfile('user-profile-1', {
+    displayName: '  New Name  ',
+    personalization: {
+      preferredName: '  Watson  ',
+      role: ' Founder ',
+      about: '  Builds agent systems. ',
+      responsePreferences: '  Start with the answer. ',
+    },
+  });
+
+  assert.equal(capturedUpdate?.id, 'user-profile-1');
+  assert.deepEqual(capturedUpdate?.input.profileJson, {
+    personalization: {
+      preferredName: 'Watson',
+      role: 'Founder',
+      about: 'Builds agent systems.',
+      responsePreferences: 'Start with the answer.',
+    },
+  });
+  assert.equal(result?.displayName, 'New Name');
+  assert.deepEqual(result?.personalization, {
+    preferredName: 'Watson',
+    role: 'Founder',
+    about: 'Builds agent systems.',
+    responsePreferences: 'Start with the answer.',
+  });
 });

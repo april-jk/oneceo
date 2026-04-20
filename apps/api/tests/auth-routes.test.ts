@@ -15,6 +15,7 @@ const originalSendRegisterVerificationCode = appAuthService.sendRegisterVerifica
 const originalLogin = appAuthService.login;
 const originalLogout = appAuthService.logout;
 const originalResolve = appAuthService.resolveUserBySessionToken;
+const originalUpdateProfile = appAuthService.updateProfile;
 
 after(() => {
   appAuthService.register = originalRegister;
@@ -22,6 +23,7 @@ after(() => {
   appAuthService.login = originalLogin;
   appAuthService.logout = originalLogout;
   appAuthService.resolveUserBySessionToken = originalResolve;
+  appAuthService.updateProfile = originalUpdateProfile;
 });
 
 async function startServer(): Promise<TestServer> {
@@ -56,6 +58,12 @@ function createUser(id: string) {
     id,
     email: `${id}@example.com`,
     displayName: `User ${id}`,
+    personalization: {
+      preferredName: '',
+      role: '',
+      about: '',
+      responsePreferences: '',
+    },
     status: 'active',
   };
 }
@@ -244,6 +252,56 @@ test('POST /api/auth/logout revokes session and clears cookie', async () => {
     assert.equal(revokedToken, 'logout-token');
     assert.match(response.headers.get('set-cookie') || '', /app_session_id=;/);
     assert.match(response.headers.get('set-cookie') || '', /Max-Age=0/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('PATCH /api/auth/profile updates current user profile', async () => {
+  const server = await startServer();
+  appAuthService.resolveUserBySessionToken = async () => ({
+    session: { id: 'sess-4' } as any,
+    user: createUser('user-profile-1'),
+  });
+  appAuthService.updateProfile = async (userId, input) => {
+    assert.equal(userId, 'user-profile-1');
+    assert.equal(input.displayName, 'Watson');
+    assert.deepEqual(input.personalization, {
+      preferredName: 'Watson',
+      role: 'Founder',
+      about: 'Builds AI products.',
+      responsePreferences: 'Keep answers concise.',
+    });
+    return {
+      ...createUser('user-profile-1'),
+      displayName: 'Watson',
+      personalization: input.personalization as any,
+    } as any;
+  };
+
+  try {
+    const response = await fetch(`${server.origin}/api/auth/profile`, {
+      method: 'PATCH',
+      headers: {
+        'content-type': 'application/json',
+        cookie: 'app_session_id=valid-app-token',
+      },
+      body: JSON.stringify({
+        displayName: 'Watson',
+        personalization: {
+          preferredName: 'Watson',
+          role: 'Founder',
+          about: 'Builds AI products.',
+          responsePreferences: 'Keep answers concise.',
+        },
+      }),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.equal(payload.data.user.displayName, 'Watson');
+    assert.equal(payload.data.user.personalization.role, 'Founder');
   } finally {
     await server.close();
   }

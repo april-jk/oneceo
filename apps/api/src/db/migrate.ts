@@ -60,6 +60,7 @@ const REQUIRED_COLUMNS = [
   ['app_users', 'email'],
   ['app_users', 'password_hash'],
   ['app_users', 'display_name'],
+  ['app_users', 'profile_json'],
   ['app_user_legacy_id_mappings', 'app_user_id'],
   ['app_user_legacy_id_mappings', 'legacy_user_id'],
   ['app_user_legacy_id_mappings', 'source'],
@@ -629,11 +630,14 @@ CREATE TABLE IF NOT EXISTS app_users (
   email TEXT NOT NULL,
   password_hash TEXT NOT NULL,
   display_name TEXT NOT NULL,
+  profile_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   status TEXT NOT NULL DEFAULT 'active',
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
   last_login_at TIMESTAMP
 );
+ALTER TABLE app_users
+  ADD COLUMN IF NOT EXISTS profile_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS app_user_legacy_id_mappings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

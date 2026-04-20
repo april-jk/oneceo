@@ -55,6 +55,7 @@ const originalEnsureOpencodeServer = osacAgentAny.ensureOpencodeServer;
 const originalBindSession = opencodeEventStreamAny.bindSession;
 const originalSubscribeOpencodeEvent = opencodeEventStreamAny.subscribe;
 const originalSubscribeRemote = opencodeRemoteAny.subscribe;
+const originalLoadNativeMessageHistory = opencodeRemoteAny.loadNativeMessageHistory;
 
 after(async () => {
   sessionDaoAny.getSession = originalGetSessionDao;
@@ -81,6 +82,7 @@ after(async () => {
   opencodeEventStreamAny.bindSession = originalBindSession;
   opencodeEventStreamAny.subscribe = originalSubscribeOpencodeEvent;
   opencodeRemoteAny.subscribe = originalSubscribeRemote;
+  opencodeRemoteAny.loadNativeMessageHistory = originalLoadNativeMessageHistory;
   await redisClientService.disconnect?.();
   await closeDatabaseConnection().catch(() => undefined);
 });
@@ -740,6 +742,104 @@ test('GET /api/task-creation/sessions/:sessionId/messages returns 403 for foreig
     assert.equal(response.status, 403);
     assert.equal(payload.error, '当前用户无权访问该会话');
   } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/task-creation/sessions/:sessionId/messages merges missing persisted user inputs into native history timeline', async () => {
+  const server = await startServer();
+  const createdAt1 = new Date('2026-04-20T16:27:04.385Z').toISOString();
+  const createdAt2 = new Date('2026-04-20T16:27:07.771Z').toISOString();
+  sessionDaoAny.getSession = async (sessionId: string) => ({
+    id: sessionId,
+    userId: 'owner-user',
+    status: 'in_progress',
+    mode: 'sandbox',
+    executor: 'opencode',
+    runtime: {
+      orchestratorSessionId: 'orch-merge-1',
+      opencodeSessionId: 'native-opencode-merge-1',
+    },
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  fileStoreAny.getSession = async (sessionId: string) => ({
+    ...ownerSession(sessionId),
+    mode: 'sandbox',
+    executor: 'opencode',
+    runtime: {
+      orchestratorSessionId: 'orch-merge-1',
+      opencodeSessionId: 'native-opencode-merge-1',
+    },
+  });
+  fileStoreAny.getMessages = async () => [
+    {
+      id: 'persisted-user-1',
+      role: 'user',
+      messageType: 'opencode_user_input',
+      content: '继续在同一会话回复“continuation-ok”。',
+      metadata: {
+        originalInput: '继续在同一会话回复“continuation-ok”。',
+        opencodeSessionId: 'native-opencode-merge-1',
+      },
+      createdAt: createdAt1,
+    },
+    {
+      id: 'persisted-user-2',
+      role: 'user',
+      messageType: 'opencode_user_input',
+      content: '请输出 8 行带编号文本（line-1 到 line-8），每行简短解释。',
+      metadata: {
+        originalInput: '请输出 8 行带编号文本（line-1 到 line-8），每行简短解释。',
+        opencodeSessionId: 'native-opencode-merge-1',
+      },
+      createdAt: createdAt2,
+    },
+  ];
+  opencodeRemoteAny.loadNativeMessageHistory = async () => [
+    {
+      id: 'native-user-1',
+      role: 'user',
+      messageType: 'opencode_user_input',
+      content: '继续在同一会话回复“continuation-ok”。',
+      metadata: {
+        source: 'opencode_native_history',
+        opencodeSessionId: 'native-opencode-merge-1',
+      },
+      createdAt: createdAt1,
+    },
+    {
+      id: 'native-agent-1',
+      role: 'agent',
+      messageType: 'opencode_event',
+      content: 'continuation-ok',
+      metadata: {
+        eventType: 'message.final',
+        source: 'opencode_native_history',
+        opencodeSessionId: 'native-opencode-merge-1',
+      },
+      createdAt: new Date('2026-04-20T16:27:05.000Z').toISOString(),
+    },
+  ];
+
+  try {
+    const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-merge-1/messages`, {
+      headers: { 'x-test-user-id': 'owner-user' },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    const userMessages = payload.data.filter((message: any) => message.role === 'user');
+    assert.deepEqual(
+      userMessages.map((message: any) => message.content),
+      [
+        '继续在同一会话回复“continuation-ok”。',
+        '请输出 8 行带编号文本（line-1 到 line-8），每行简短解释。',
+      ]
+    );
+  } finally {
+    opencodeRemoteAny.loadNativeMessageHistory = originalLoadNativeMessageHistory;
     await server.close();
   }
 });

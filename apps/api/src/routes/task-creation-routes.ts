@@ -1983,6 +1983,15 @@ function normalizeUserReferenceText(contentRaw: unknown, metadataRaw: unknown): 
     .toLowerCase();
 }
 
+function isRenderableUserTimelineMessage(message: TimelineMessage | null | undefined): boolean {
+  if (message?.role !== 'user') return false;
+  return (
+    message.messageType === 'user_input' ||
+    message.messageType === 'user_response' ||
+    message.messageType === 'opencode_user_input'
+  );
+}
+
 function mergeUserReferenceMetadataFromPersisted(
   primaryMessages: TimelineMessage[],
   persistedMessages: TimelineMessage[]
@@ -2005,11 +2014,15 @@ function mergeUserReferenceMetadataFromPersisted(
     referenceQueueByText.set(key, queue);
   }
 
-  if (referenceQueueByText.size === 0) {
-    return primaryMessages;
+  const remainingPrimaryUserCounts = new Map<string, number>();
+  for (const message of primaryMessages) {
+    if (!isRenderableUserTimelineMessage(message)) continue;
+    const key = normalizeUserReferenceText(message.content, message.metadata);
+    if (!key) continue;
+    remainingPrimaryUserCounts.set(key, (remainingPrimaryUserCounts.get(key) || 0) + 1);
   }
 
-  return primaryMessages.map((message) => {
+  const mergedPrimaryMessages = primaryMessages.map((message) => {
     if (message?.role !== 'user') return message;
     if (hasUserReferenceMetadata(message?.metadata)) return message;
     const key = normalizeUserReferenceText(message?.content, message?.metadata);
@@ -2026,6 +2039,25 @@ function mergeUserReferenceMetadataFromPersisted(
       },
     };
   });
+
+  const appendedMessages: TimelineMessage[] = [];
+  for (const message of persistedMessages) {
+    if (!isRenderableUserTimelineMessage(message)) continue;
+    const key = normalizeUserReferenceText(message.content, message.metadata);
+    if (!key) continue;
+    const remainingPrimary = remainingPrimaryUserCounts.get(key) || 0;
+    if (remainingPrimary > 0) {
+      remainingPrimaryUserCounts.set(key, remainingPrimary - 1);
+      continue;
+    }
+    appendedMessages.push(message);
+  }
+
+  if (appendedMessages.length === 0) {
+    return mergedPrimaryMessages;
+  }
+
+  return mergedPrimaryMessages.concat(appendedMessages);
 }
 
 function normalizeRuntimeGenerationValue(value: unknown): number | null {

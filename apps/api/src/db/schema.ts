@@ -139,6 +139,7 @@ export const taskCreationSessions = pgTable('task_creation_sessions', {
   id: uuid('id').primaryKey(),
   userId: text('user_id'), // 用户ID（可选，未来可以关联用户系统）
   status: text('status').notNull().default('in_progress'), // in_progress, completed, failed
+  metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
   completedAt: timestamp('completed_at'),

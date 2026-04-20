@@ -13,6 +13,9 @@
 - 后端 API 已启动：`http://127.0.0.1:4000`
 - `.env` 中 E2B/OpenCode 相关 key 已配置
 - 前端是否启动不影响该测试（本套件直接测 API + WS + SSE）
+- 套件会默认使用固定测试账号文件登录并携带 `app_session_id`：
+  - `apps/web/e2e/playwright-test-account.json`
+  - 如需覆盖，可设置 `ONECEO_DIRECT_TEST_ACCOUNT_FILE`
 
 ## 运行命令
 

@@ -936,6 +936,28 @@ export class TaskCreationSessionDAO {
     return session;
   }
 
+  async getSessionMetadataJson(sessionId: string) {
+    const session = await this.getSession(sessionId);
+    return this.asRecord(session?.metadataJson);
+  }
+
+  async patchSessionMetadataJson(sessionId: string, patch: Record<string, unknown>) {
+    const current = await this.getSessionMetadataJson(sessionId);
+    const [session] = await db
+      .update(taskCreationSessions)
+      .set({
+        metadataJson: {
+          ...current,
+          ...this.asRecord(patch),
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(taskCreationSessions.id, sessionId))
+      .returning();
+
+    return session || null;
+  }
+
   /**
    * 如果会话尚未绑定用户，则绑定到当前用户
    */

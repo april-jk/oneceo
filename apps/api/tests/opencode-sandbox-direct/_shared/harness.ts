@@ -1,10 +1,14 @@
 import '../../../src/config/env';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import WebSocket from 'ws';
+import { APP_SESSION_COOKIE_NAME } from '../../../src/utils/auth-session';
 
 export const API_BASE = process.env.TASK_CREATION_API_BASE || 'http://127.0.0.1:4000';
 export const WS_URL = process.env.TASK_CREATION_WS_URL || 'ws://127.0.0.1:4000/ws/task-creation';
+const DEFAULT_TEST_ACCOUNT_FILE = path.resolve(process.cwd(), '../web/e2e/playwright-test-account.json');
 
 export type WsMessage = {
   type?: string;
@@ -43,6 +47,12 @@ export type ScenarioResult = {
   details: Record<string, unknown>;
 };
 
+type DirectTestAccount = {
+  email: string;
+  password: string;
+  displayName?: string;
+};
+
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const SSE_CONNECT_TIMEOUT_MS = Math.max(
   5000,
@@ -56,6 +66,7 @@ const SSE_EVENT_BUFFER_MAX = Math.max(
   200,
   Number(process.env.DIRECT_TEST_SSE_BUFFER_MAX || 5000)
 );
+let authCookieHeaderPromise: Promise<string> | null = null;
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -67,6 +78,78 @@ function parseJsonSafe(text: string): any {
   } catch {
     return null;
   }
+}
+
+async function loadDirectTestAccount(): Promise<DirectTestAccount> {
+  const accountFile =
+    process.env.ONECEO_DIRECT_TEST_ACCOUNT_FILE || process.env.ONECEO_E2E_TEST_ACCOUNT_FILE || DEFAULT_TEST_ACCOUNT_FILE;
+  const raw = await fs.readFile(accountFile, 'utf8');
+  const parsed = parseJsonSafe(raw);
+  const email = asText(parsed?.email);
+  const password = asText(parsed?.password);
+  const displayName = asText(parsed?.displayName) || 'OpenCode Direct E2E';
+  if (!email || !password) {
+    throw new Error(`invalid direct test account file: ${accountFile}`);
+  }
+  return { email, password, displayName };
+}
+
+function extractAppSessionCookie(response: Response): string {
+  const raw = response.headers.get('set-cookie') || '';
+  const matched = raw.match(new RegExp(`(?:^|,\\s*)${APP_SESSION_COOKIE_NAME}=([^;,\\s]+)`));
+  if (!matched?.[1]) {
+    throw new Error(`api login succeeded but ${APP_SESSION_COOKIE_NAME} cookie missing`);
+  }
+  return `${APP_SESSION_COOKIE_NAME}=${matched[1]}`;
+}
+
+async function createAuthCookieHeader(): Promise<string> {
+  const account = await loadDirectTestAccount();
+  const loginPayload = JSON.stringify({
+    email: account.email,
+    password: account.password,
+  });
+
+  let loginResponse = await fetch(`${API_BASE}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: loginPayload,
+  });
+
+  if (!loginResponse.ok) {
+    await fetch(`${API_BASE}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: account.email,
+        password: account.password,
+        displayName: account.displayName,
+      }),
+    }).catch(() => undefined);
+
+    loginResponse = await fetch(`${API_BASE}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: loginPayload,
+    });
+  }
+
+  if (!loginResponse.ok) {
+    const text = await loginResponse.text().catch(() => '');
+    throw new Error(`auth login failed: ${loginResponse.status} ${text}`);
+  }
+
+  return extractAppSessionCookie(loginResponse);
+}
+
+async function ensureAuthCookieHeader(): Promise<string> {
+  if (!authCookieHeaderPromise) {
+    authCookieHeaderPromise = createAuthCookieHeader().catch((error) => {
+      authCookieHeaderPromise = null;
+      throw error;
+    });
+  }
+  return authCookieHeaderPromise;
 }
 
 export class WsHarness {
@@ -89,7 +172,12 @@ export class WsHarness {
   }
 
   static async connect(url: string, timeoutMs: number = 20000): Promise<WsHarness> {
-    const ws = new WebSocket(url);
+    const authCookieHeader = await ensureAuthCookieHeader();
+    const ws = new WebSocket(url, {
+      headers: {
+        Cookie: authCookieHeader,
+      },
+    });
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(
         () => reject(new Error(`WebSocket connect timeout after ${timeoutMs}ms`)),
@@ -153,7 +241,15 @@ export class WsHarness {
 }
 
 export async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
+  const authCookieHeader = await ensureAuthCookieHeader();
+  const headers = new Headers(init?.headers || {});
+  if (!headers.has('Cookie')) {
+    headers.set('Cookie', authCookieHeader);
+  }
+  const response = await fetch(url, {
+    ...init,
+    headers,
+  });
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`HTTP ${response.status}: ${text}`);
@@ -271,13 +367,17 @@ export class SseHarness {
     }`;
 
     const harness = new SseHarness();
+    const authCookieHeader = await ensureAuthCookieHeader();
     const connectAbort = new AbortController();
     const connectTimer = setTimeout(() => {
       connectAbort.abort(new Error(`SSE connect timeout after ${SSE_CONNECT_TIMEOUT_MS}ms`));
     }, SSE_CONNECT_TIMEOUT_MS);
 
     const response = await fetch(url, {
-      headers: { Accept: 'text/event-stream' },
+      headers: {
+        Accept: 'text/event-stream',
+        Cookie: authCookieHeader,
+      },
       signal: AbortSignal.any([harness.abortController.signal, connectAbort.signal]),
     }).finally(() => clearTimeout(connectTimer));
 

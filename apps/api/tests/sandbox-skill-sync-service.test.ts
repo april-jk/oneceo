@@ -27,6 +27,8 @@ test('syncResolvedSkillResource writes one markdown resource into the selected s
       opencodeBaseUrl: 'https://sandbox.example.com',
       opencodeWorkspaceRoot: '/workspace/session-1',
       opencodeStateRoot: '/state/session-1',
+      osacEndpoint: 'http://sandbox.example.com/ws',
+      osacAuthToken: 'token-1',
     },
   }) as any);
   mock.method(sandboxExecutionEnvironmentDAO, 'updateMetadata', async () => ({} as any));

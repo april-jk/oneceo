@@ -370,6 +370,9 @@ test('live route: GET /runs/:runId/stream replays redis run stream before db fal
     payload: {
       status: 'running',
       content: 'from redis run stream',
+      transitionReason: 'model_retryable_error',
+      currentRound: 2,
+      maxRounds: 192,
     },
   });
 
@@ -404,6 +407,14 @@ test('live route: GET /runs/:runId/stream replays redis run stream before db fal
 
     assert.match(text, /from redis run stream/);
     assert.match(text, /event: run_status/);
+    assert.doesNotMatch(text, /transitionReason/);
+    assert.doesNotMatch(text, /currentRound/);
+    assert.doesNotMatch(text, /maxRounds/);
+
+    const persistedRows = await inspector.xrange(redisKeyspace.runEventsStream(scope), '-', '+');
+    const serialized = JSON.stringify(persistedRows);
+    assert.match(serialized, /transitionReason/);
+    assert.match(serialized, /model_retryable_error/);
   } finally {
     await server.close();
   }

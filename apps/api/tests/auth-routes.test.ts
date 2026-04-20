@@ -207,6 +207,37 @@ test('GET /api/auth/me returns current user when cookie is valid', async () => {
   }
 });
 
+test('GET /api/auth/me prefers a later valid session cookie when duplicate app_session_id values are present', async () => {
+  const server = await startServer();
+  const seenTokens: string[] = [];
+  appAuthService.resolveUserBySessionToken = async (token: string) => {
+    seenTokens.push(token);
+    if (token === 'fresh-valid-token') {
+      return {
+        session: { id: 'sess-fresh' } as any,
+        user: createUser('user-me-fresh'),
+      };
+    }
+    return null;
+  };
+
+  try {
+    const response = await fetch(`${server.origin}/api/auth/me`, {
+      headers: {
+        cookie: 'app_session_id=stale-invalid-token; app_session_id=fresh-valid-token',
+      },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.equal(payload.data.user.id, 'user-me-fresh');
+    assert.deepEqual(seenTokens, ['fresh-valid-token']);
+  } finally {
+    await server.close();
+  }
+});
+
 test('GET /api/auth/me returns 401 when cookie is missing', async () => {
   const server = await startServer();
   appAuthService.resolveUserBySessionToken = async () => null;

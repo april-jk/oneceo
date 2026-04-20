@@ -37,10 +37,16 @@ test('appendRunEvent projects managed tool terminal events into conversation tim
     toolName: 'read_file',
     toolCallId: 'tool-1',
     content: '工具 read_file 已完成',
+    transitionReason: 'tool_result_continue',
+    currentRound: 3,
+    maxRounds: 192,
     arguments: {
       path: '/workspace/README.md',
     },
     outputPreview: 'ok',
+    debug: {
+      rawError: 'internal only',
+    },
   });
 
   assert.equal(addMessageMock.mock.callCount(), 1);
@@ -57,9 +63,19 @@ test('appendRunEvent projects managed tool terminal events into conversation tim
   assert.deepEqual(projection.metadata?.arguments, {
     path: '/workspace/README.md',
   });
+  assert.equal(projection.metadata?.transitionReason, undefined);
+  assert.equal(projection.metadata?.currentRound, undefined);
+  assert.equal(projection.metadata?.maxRounds, undefined);
+  assert.equal(projection.metadata?.debug, undefined);
 
   assert.equal(redisCalls.length, 1);
   assert.equal(redisCalls[0]?.eventType, 'tool_call_completed');
+  assert.equal(redisCalls[0]?.payload.transitionReason, 'tool_result_continue');
+  assert.equal(redisCalls[0]?.payload.currentRound, 3);
+  assert.equal(redisCalls[0]?.payload.maxRounds, 192);
+  assert.deepEqual(redisCalls[0]?.payload.debug, {
+    rawError: 'internal only',
+  });
 
   assert.equal(publishMock.mock.callCount(), 1);
   const publishArgs = publishMock.mock.calls[0]?.arguments as any[];

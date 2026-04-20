@@ -11,6 +11,12 @@ import { sandboxSkillSyncService } from '../src/services/sandbox-skill-sync-serv
 
 const originalFetch = global.fetch;
 
+(connectorGuideService as any).buildPromptSections = async () => ({
+  instructionsSection: '',
+  reminderSection: '',
+  attachedConnectorKeys: [],
+});
+
 afterEach(() => {
   mock.reset();
   global.fetch = originalFetch;
@@ -119,6 +125,24 @@ test('resolveDeploymentCompletionIntent ignores negated deploy wording and non-d
   });
   assert.equal(profiledIntent.mode, 'none');
   assert.equal(profiledIntent.requiresManagedSuccess, false);
+
+  const sourceOnlyWebsiteIntent = (coordinator as any).resolveDeploymentCompletionIntent(
+    '先给我源码文件。',
+    {
+      mode: 'deployable_web_app',
+      reason: 'historical_deployable_request',
+      recentUserMessages: ['做一个纯 HTML 企业官网，包含首页、关于我们和联系我们，先给我源码文件。'],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: true,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+    }
+  );
+  assert.equal(sourceOnlyWebsiteIntent.mode, 'none');
+  assert.equal(sourceOnlyWebsiteIntent.requiresManagedSuccess, false);
 });
 
 test('deployment status evidence only unlocks completion after non-transient success state', () => {
@@ -440,6 +464,18 @@ test('execute blocks deployment completion until managed deployment succeeds', a
     'session-coordinator-deployment-guard',
     '帮我部署当前项目'
   );
+  state.input.taskIntentProfile = {
+    mode: 'deployable_web_app',
+    reason: 'latest_deployable_request',
+    recentUserMessages: ['帮我部署当前项目'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: false,
+    deployRequested: true,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: true,
+  };
   const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
   const lifecycleCalls: string[] = [];
 
@@ -1169,8 +1205,9 @@ test('execute does not complete on plain assistant text and continues until comp
   assert.equal((setupCalls[0] as any).input.content, '已确认当前工作空间为空，尚未进行文件创建。\n\n验证:\n- 工作空间目录已检查');
   assert.deepEqual(
     eventCalls.map((entry) => entry.eventType),
-    ['run_status', 'run_status', 'run_status', 'tool_call_started', 'tool_call_completed', 'assistant_message']
+    ['run_status', 'run_status', 'run_status', 'run_status', 'tool_call_started', 'tool_call_completed', 'assistant_message']
   );
+  assert.equal(eventCalls[2]?.payload.transitionReason, 'plain_text_continuation_prompted');
 });
 
 test('execute requests clarification and transitions to waiting_user', async () => {
@@ -1391,6 +1428,8 @@ test('execute converts plain assistant clarification into waiting_user', async (
 test('execute retries transient upstream timeout before completing', async () => {
   const state = createState('run-coordinator-retry', 'session-coordinator-retry');
   const lifecycleCalls: string[] = [];
+  const loopSnapshots: Array<Record<string, unknown>> = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
 
   const setupService = {
     ensureSandbox: mock.fn(async () => ({
@@ -1407,10 +1446,13 @@ test('execute retries transient upstream timeout before completing', async () =>
   };
 
   const eventWriter = {
-    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, _eventType: string, payload: Record<string, unknown>) => ({
-      sequence: 1,
-      payload,
-    })),
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
   };
 
   const lifecycleService = {
@@ -1428,6 +1470,9 @@ test('execute retries transient upstream timeout before completing', async () =>
     }),
     markStopped: mock.fn(async () => {
       lifecycleCalls.push('stopped');
+    }),
+    syncLoopSnapshot: mock.fn(async (_state: any, loop: Record<string, unknown>) => {
+      loopSnapshots.push(loop);
     }),
   };
 
@@ -1494,6 +1539,126 @@ test('execute retries transient upstream timeout before completing', async () =>
   assert.equal(executeMock.mock.callCount(), 1);
   assert.deepEqual(lifecycleCalls, ['running', 'completed']);
   assert.equal(state.status, 'completed');
+  assert.equal(
+    loopSnapshots.some((snapshot) => snapshot.lastTransitionReason === 'model_retryable_error'),
+    true
+  );
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'run_status' && entry.payload.transitionReason === 'model_retryable_error'
+    ),
+    true
+  );
+});
+
+test('execute records plain-text continuation recovery before failing the managed loop', async () => {
+  const state = createState('run-coordinator-plain-text-fail', 'session-coordinator-plain-text-fail');
+  const lifecycleCalls: string[] = [];
+  const loopSnapshots: Array<Record<string, unknown>> = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-plain-text-fail',
+      workspaceRoot: '/workspace/session-coordinator-plain-text-fail',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => {}),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+    syncLoopSnapshot: mock.fn(async (_state: any, loop: Record<string, unknown>) => {
+      loopSnapshots.push(loop);
+    }),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: fetchCount === 1 ? '我先分析现有文件结构。' : '继续分析现有文件结构。',
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => {
+    throw new Error('execute should not be called when the model never emits tool calls');
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(fetchCount, 2);
+  assert.equal(executeMock.mock.callCount(), 0);
+  assert.deepEqual(lifecycleCalls, ['running', 'failed']);
+  assert.equal(state.status, 'failed');
+  assert.match(state.stopReason || '', /managed_model_plain_text_without_tool_call/);
+  assert.equal(
+    loopSnapshots.some((snapshot) => snapshot.lastTransitionReason === 'plain_text_continuation_prompted'),
+    true
+  );
+  assert.equal(
+    loopSnapshots.some((snapshot) => snapshot.lastTransitionReason === 'plain_text_continuation_failed'),
+    true
+  );
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'run_status' && entry.payload.transitionReason === 'plain_text_continuation_prompted'
+    ),
+    true
+  );
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'run_status' && entry.payload.transitionReason === 'plain_text_continuation_failed'
+    ),
+    true
+  );
 });
 
 test('execute consumes streamed tool_call chunks and emits tool_call_progress', async () => {

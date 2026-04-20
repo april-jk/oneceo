@@ -898,12 +898,12 @@ export default function Sidebar({
             <Button
               variant="ghost"
               className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150 ${collapsed ? "" : "min-w-0 overflow-hidden"}`}
-              onClick={() => openSettingsDialog({ tab: "settings" })}
+              onClick={() => openSettingsDialog({ tab: "personalization" })}
             >
               <Settings className="w-4 h-4" />
               {!collapsed && (
                 <span className="min-w-0 truncate text-sm font-medium">
-                  {t("sidebar.settings")}
+                  {t("sidebar.personalization")}
                 </span>
               )}
             </Button>
@@ -955,6 +955,13 @@ export default function Sidebar({
               <DropdownMenuItem className="rounded-lg py-2.5 px-3">
                 <Bell className="w-4 h-4 mr-2 text-muted-foreground" />
                 <span className="text-sm">{t("sidebar.notifications")}</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="rounded-lg py-2.5 px-3"
+                onSelect={() => openSettingsDialog({ tab: "personalization" })}
+              >
+                <Pencil className="w-4 h-4 mr-2 text-muted-foreground" />
+                <span className="text-sm">{t("sidebar.personalization")}</span>
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="rounded-lg py-2.5 px-3"

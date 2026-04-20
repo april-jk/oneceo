@@ -285,12 +285,13 @@
 要求：
 
 1. 先读取本地持久化的 per-user project row。
-2. 再用 Railway GraphQL 校验 project 是否存在且仍属于当前 workspace。
-3. 若校验失败且错误为 `Project not found`：
+2. 若持久化 row 的 `workspaceId` 缺失，或与当前 `RAILWAY_WORKSPACE_ID` 不一致，禁止继续复用旧 project；必须回到“按当前 workspace 解析/创建 per-user project”的主路径。
+3. 仅在持久化 row 已明确属于当前 workspace 时，再用 Railway GraphQL 校验 project 是否存在。
+4. 若校验失败且错误为 `Project not found`：
    - 直接创建新的 per-user project
    - 覆盖旧的 user project row
    - 后续 session 资源全部挂到新 project 下
-4. 不允许继续拿失效 projectId 进入 `ensureProjectEnvironment()` / `createService()` / `createProjectToken()`。
+5. 不允许继续拿失效 projectId 或旧 workspace 里的 projectId 进入 `ensureProjectEnvironment()` / `createService()` / `createProjectToken()`。
 
 同时要求 `repairExistingAccount()` 补全真正的修复语义：
 
@@ -298,6 +299,20 @@
 - environment 丢失：重建 environment
 - service 丢失：重建 service、source、trigger、domain
 - token 缺失：重建 token
+- 若 session 最近一次部署已经明确失败，而用户随后发起 `redeploy`：
+  - 平台必须先删除当前 session 绑定的旧 Railway app service
+  - 再进入 service 修复 / 重建主路径
+  - 禁止在旧失败 service 仍然保留计费的情况下继续新建替代 service
+- 若 `serviceDelete` 后 Railway `project.services` 仍残留同名旧 service 记录，但该 service 未真实挂载到目标 `environment.serviceInstances`：
+  - 不能按“同名即复用”继续拿旧 serviceId
+  - 必须把该记录视为 ghost service
+  - 重建时必须生成新的唯一 serviceName，并只在新 service 真实挂载到目标 environment 后才允许继续发布
+- service 修复 / 重建完成后，发布源码前必须显式等待目标 environment 中出现新的 `serviceInstance` 绑定；不能在环境仍为空时立刻执行 `railway up`，否则会出现 `Failed to upload code with status code 404 Not Found`
+- 增加正式 retention 约束：
+  - 每个用户 project 在 Railway 侧只允许保留一套当前有效部署资源
+  - 当新的 deploy / redeploy 成功进入 `ready + public reachable` 后，平台必须自动删除同一 user project 下其它 session 残留的 app service / database service / environment，并删除对应的 deployment account row
+  - 当本次 deploy / failed-redeploy 为了本次发布新建了 service / environment，但后续又失败时，平台必须自动删除这次失败资源，避免失败 session 在 project 下持续残留并计费
+  - 若当前失败只是对“已有仍可用 service”执行普通 redeploy / rollback 失败，不能反向删除当前线上仍可用的那一套资源
 
 而不是只在“已有 row”时默认沿用旧 projectId。
 
@@ -423,6 +438,7 @@ managed deployment tool 结果需要明确分成三类：
 1. 当 per-user Railway project 被外部删除后，下一次 deploy 会自动重建 project，并继续完成 session deploy。
 2. 当 session service / environment 被删除后，deploy 能自动修复或明确落到 `resource_binding_repair_required`，不会退回“首次部署”。
 3. 部署标签卡始终能显示当前资源状态和最后一次 provider 错误。
+4. 当 session 上一次部署已失败，随后执行 redeploy 时，旧 Railway app service 会先被删除，再创建新的 session service，避免失败 service 持续计费。
 
 ### 9.2 Umami 注入层
 
@@ -442,7 +458,9 @@ managed deployment tool 结果需要明确分成三类：
 ### 10.1 单元测试
 
 - stale per-user project row -> 自动重建 project
+- persisted user project `workspaceId` 缺失或与当前 `RAILWAY_WORKSPACE_ID` 不一致 -> 重新按当前 workspace 解析/创建 per-user project
 - stale session account row -> 自动修复 environment / service / token
+- failed session redeploy -> 先删除旧 Railway app service，再重建 session 级 service 绑定
 - `/deployment` 在 account 缺失但 provider 失败已存在时返回 `repair_required`，而不是“首次部署”
 - bootstrap 产物不再包含 `%VITE_*%`
 - analytics 状态从 `pending_domain` -> `bound` -> `tracking`

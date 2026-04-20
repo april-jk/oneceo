@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { validateTaskSessionDeploymentPublicReadiness } from '../src/services/task-session-deployment-runtime-service';
+import {
+  shouldRecycleRailwayServiceForFailedRedeploy,
+  validateTaskSessionDeploymentPublicReadiness,
+} from '../src/services/task-session-deployment-runtime-service';
 import type { RailwayDeploymentPanelData } from '../src/services/railway-deployment-service';
 
 function createPanel(overrides: Partial<RailwayDeploymentPanelData> = {}): RailwayDeploymentPanelData {
@@ -82,4 +85,63 @@ test('validateTaskSessionDeploymentPublicReadiness promotes a live successful de
   assert.equal(result.latestStatus, 'SUCCESS');
   assert.equal(result.deploymentId, 'dep-live');
   assert.equal(result.activeDeploymentPending, false);
+});
+
+test('shouldRecycleRailwayServiceForFailedRedeploy returns true for provider_error bindings with a service id', () => {
+  const result = shouldRecycleRailwayServiceForFailedRedeploy({
+    state: {
+      bindingState: 'provider_error',
+      serviceId: 'svc-1',
+    },
+  });
+
+  assert.equal(result, true);
+});
+
+test('shouldRecycleRailwayServiceForFailedRedeploy returns true for provider_error bindings even when the service id has not been snapshotted yet', () => {
+  const result = shouldRecycleRailwayServiceForFailedRedeploy({
+    state: {
+      bindingState: 'provider_error',
+      serviceId: '',
+    },
+  });
+
+  assert.equal(result, true);
+});
+
+test('shouldRecycleRailwayServiceForFailedRedeploy returns true when the selected deployment already failed', () => {
+  const result = shouldRecycleRailwayServiceForFailedRedeploy({
+    panel: createPanel({
+      bindingState: 'ready',
+      serviceId: 'svc-1',
+      deploymentId: 'dep-failed',
+      latestStatus: 'SUCCESS',
+      deployments: [
+        {
+          id: 'dep-failed',
+          status: 'FAILED',
+        },
+      ],
+    }),
+  });
+
+  assert.equal(result, true);
+});
+
+test('shouldRecycleRailwayServiceForFailedRedeploy returns false for healthy ready deployments', () => {
+  const result = shouldRecycleRailwayServiceForFailedRedeploy({
+    panel: createPanel({
+      bindingState: 'ready',
+      serviceId: 'svc-1',
+      latestStatus: 'SUCCESS',
+      deployments: [
+        {
+          id: 'dep-success',
+          status: 'SUCCESS',
+        },
+      ],
+    }),
+  });
+
+  assert.equal(result, false);
 });

@@ -413,6 +413,34 @@ function buildStoredDeploymentStatePanel(
   } satisfies RailwayDeploymentPanelData;
 }
 
+function pickFailedDeploymentStatus(panel: RailwayDeploymentPanelData | null | undefined) {
+  if (!panel) return '';
+  const selectedDeploymentId = asText(panel.deploymentId);
+  const selectedDeployment =
+    panel.deployments.find((item) => asText(item.id) === selectedDeploymentId) ||
+    panel.deployments[0] ||
+    null;
+  return asText(selectedDeployment?.status || panel.latestStatus).toUpperCase();
+}
+
+export function shouldRecycleRailwayServiceForFailedRedeploy(input: {
+  state?: Pick<TaskSessionDeploymentState, 'bindingState' | 'serviceId'> | null;
+  panel?: RailwayDeploymentPanelData | null;
+}) {
+  const bindingState = asText(input.panel?.bindingState || input.state?.bindingState).toLowerCase();
+  if (bindingState === 'repair_required' || bindingState === 'provider_error') {
+    return true;
+  }
+
+  const serviceId = asText(input.panel?.serviceId || input.state?.serviceId);
+  if (!serviceId) {
+    return false;
+  }
+
+  const deploymentStatus = pickFailedDeploymentStatus(input.panel);
+  return deploymentStatus === 'FAILED' || deploymentStatus === 'CRASHED';
+}
+
 function resolveDeploymentAnalyticsDomain(input: {
   metadata: Record<string, unknown>;
   accountDomain?: string;
@@ -1165,16 +1193,28 @@ export async function executeTaskSessionDeploymentAction(
   });
   const environmentMetadata = pickRecord(environment?.metadata);
   let savedState = pickTaskSessionDeploymentState(environmentMetadata.deploymentState);
+  const savedPanel = pickTaskSessionDeploymentPanelSnapshot(environmentMetadata.deploymentPanel);
   let currentPhase: RailwayDeploymentProvisioningPhase = 'resource_provisioning';
   let account: Awaited<ReturnType<typeof platformDeploymentAccountService.ensureProjectAccount>> | null = null;
+  const previousAccount = await platformDeploymentAccountService
+    .getProjectAccount(input.userId, input.taskSessionId)
+    .catch(() => null);
   const userProject = await platformDeploymentAccountService.getUserProject(input.userId).catch(() => null);
+  const shouldRecycleFailedRedeploy =
+    input.action === 'redeploy' &&
+    shouldRecycleRailwayServiceForFailedRedeploy({
+      state: savedState,
+      panel: savedPanel,
+    });
 
   savedState = await persistTaskSessionDeploymentState(orchestratorSessionId, savedState, {
     bindingState: 'provisioning',
     provisioningPhase: currentPhase,
     providerErrorCode: undefined,
     providerErrorMessage: undefined,
-    message: '平台正在准备 Railway 部署资源。',
+    message: shouldRecycleFailedRedeploy
+      ? '检测到上次部署失败，平台正在回收旧的 Railway 服务并重新准备部署资源。'
+      : '平台正在准备 Railway 部署资源。',
     projectId: userProject?.projectId,
     projectName: userProject?.projectName,
     lastVerifiedAt: new Date().toISOString(),
@@ -1182,10 +1222,9 @@ export async function executeTaskSessionDeploymentAction(
   });
 
   try {
-    account = await platformDeploymentAccountService.ensureProjectAccount(
-      input.userId,
-      input.taskSessionId
-    );
+    account = shouldRecycleFailedRedeploy
+      ? await platformDeploymentAccountService.recycleProjectService(input.userId, input.taskSessionId)
+      : await platformDeploymentAccountService.ensureProjectAccount(input.userId, input.taskSessionId);
     const resourceBinding = buildDeploymentResourceBinding(input.taskSessionId, account);
     savedState = await persistTaskSessionDeploymentState(orchestratorSessionId, savedState, {
       bindingState: 'provisioning',
@@ -1209,7 +1248,7 @@ export async function executeTaskSessionDeploymentAction(
       platformDeployment,
     };
 
-    if (input.action === 'deploy') {
+    if (input.action === 'deploy' || shouldRecycleFailedRedeploy) {
       const workspaceRoot =
         asText(environmentMetadata.opencodeWorkspaceRoot) ||
         asText(input.workspacePath) ||
@@ -1296,12 +1335,23 @@ export async function executeTaskSessionDeploymentAction(
         session: input.session,
         orchestratorSessionId,
       });
+      await platformDeploymentAccountService
+        .pruneSupersededProjectResources(input.userId, account.projectKey, account.projectId)
+        .catch((cleanupError) => {
+          console.warn('[DEPLOYMENT_RETENTION_CLEANUP_FAILED]', {
+            taskSessionId: input.taskSessionId,
+            userId: input.userId,
+            projectKey: account?.projectKey,
+            projectId: account?.projectId,
+            error: cleanupError,
+          });
+        });
       await enqueueTaskSessionDeploymentSync({
         taskSessionId: input.taskSessionId,
         orchestratorSessionId,
         selectedDeploymentId: actionResult.deploymentId,
         delayMs: panel.activeDeploymentPending ? 8_000 : 4_000,
-        reason: 'deploy_followup',
+        reason: shouldRecycleFailedRedeploy ? 'failed_redeploy_followup' : 'deploy_followup',
       });
       return {
         panel,
@@ -1376,6 +1426,17 @@ export async function executeTaskSessionDeploymentAction(
       session: input.session,
       orchestratorSessionId,
     });
+    await platformDeploymentAccountService
+      .pruneSupersededProjectResources(input.userId, account.projectKey, account.projectId)
+      .catch((cleanupError) => {
+        console.warn('[DEPLOYMENT_RETENTION_CLEANUP_FAILED]', {
+          taskSessionId: input.taskSessionId,
+          userId: input.userId,
+          projectKey: account?.projectKey,
+          projectId: account?.projectId,
+          error: cleanupError,
+        });
+      });
     await enqueueTaskSessionDeploymentSync({
       taskSessionId: input.taskSessionId,
       orchestratorSessionId,
@@ -1391,6 +1452,14 @@ export async function executeTaskSessionDeploymentAction(
   } catch (error) {
     const message = getTaskSessionDeploymentErrorMessage(error);
     const classified = classifyRailwayDeploymentError(message);
+    const shouldCleanupFailedResources =
+      Boolean(account?.serviceId) &&
+      (
+        shouldRecycleFailedRedeploy ||
+        !previousAccount?.serviceId ||
+        previousAccount.serviceId !== account?.serviceId ||
+        previousAccount.environmentId !== account?.environmentId
+      );
     await persistTaskSessionDeploymentState(orchestratorSessionId, savedState, {
       bindingState: classified.bindingState,
       provisioningPhase: currentPhase,
@@ -1407,6 +1476,17 @@ export async function executeTaskSessionDeploymentAction(
         buildDeploymentResourceBinding(input.taskSessionId, account) || savedState?.resourceBinding,
       lastVerifiedAt: new Date().toISOString(),
     });
+    if (shouldCleanupFailedResources) {
+      await platformDeploymentAccountService
+        .cleanupFailedProjectResources(input.userId, input.taskSessionId)
+        .catch((cleanupError) => {
+          console.warn('[FAILED_DEPLOYMENT_RESOURCE_CLEANUP_FAILED]', {
+            taskSessionId: input.taskSessionId,
+            userId: input.userId,
+            error: cleanupError,
+          });
+        });
+    }
     throw error;
   }
 }

@@ -1084,26 +1084,42 @@ async function runRailwayUpFromDirectory(input: {
     args.push('-m', message);
   }
 
-  try {
-    const { stdout } = await execFile(railwayBinary, args, {
-      cwd: input.sourceDir,
-      maxBuffer: 16 * 1024 * 1024,
-      env: {
-        ...process.env,
-        CI: 'true',
-        RAILWAY_TOKEN: input.token,
-      },
-    });
-    const payload = JSON.parse(stdout || '{}') as {
-      deploymentId?: unknown;
-    };
-    return asText(payload.deploymentId) || undefined;
-  } catch (error: any) {
-    const stdout = typeof error?.stdout === 'string' ? error.stdout.trim() : '';
-    const stderr = typeof error?.stderr === 'string' ? error.stderr.trim() : '';
-    const raw = stderr || stdout || error?.message || 'Railway 直传部署失败';
-    throw new Error(raw);
+  const maxAttempts = 5;
+  const baseDelayMs = 2000;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const { stdout } = await execFile(railwayBinary, args, {
+        cwd: input.sourceDir,
+        maxBuffer: 16 * 1024 * 1024,
+        env: {
+          ...process.env,
+          CI: 'true',
+          RAILWAY_TOKEN: input.token,
+        },
+      });
+      const payload = JSON.parse(stdout || '{}') as {
+        deploymentId?: unknown;
+      };
+      return asText(payload.deploymentId) || undefined;
+    } catch (error: any) {
+      const stdout = typeof error?.stdout === 'string' ? error.stdout.trim() : '';
+      const stderr = typeof error?.stderr === 'string' ? error.stderr.trim() : '';
+      const raw = stderr || stdout || error?.message || 'Railway 直传部署失败';
+      const normalized = raw.toLowerCase();
+      const shouldRetry =
+        attempt < maxAttempts &&
+        (normalized.includes('failed to upload code with status code 404') ||
+          normalized.includes('status code 404 not found') ||
+          normalized.includes('service not found'));
+      if (!shouldRetry) {
+        throw new Error(raw);
+      }
+      await new Promise((resolve) => setTimeout(resolve, baseDelayMs * attempt));
+    }
   }
+
+  throw new Error('Railway 直传部署失败');
 }
 
 export async function uploadTaskSessionWorkspaceToRailway(input: {

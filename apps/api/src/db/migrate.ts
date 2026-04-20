@@ -721,10 +721,13 @@ CREATE TABLE IF NOT EXISTS task_creation_sessions (
   id UUID PRIMARY KEY,
   user_id TEXT,
   status TEXT NOT NULL DEFAULT 'in_progress',
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
   completed_at TIMESTAMP
 );
+ALTER TABLE task_creation_sessions
+  ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 -- 连接器相关表与补丁必须在 runtime_events 外键表之前创建
 ${connectorTablesSQL}

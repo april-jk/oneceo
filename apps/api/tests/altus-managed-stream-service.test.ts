@@ -56,6 +56,9 @@ test('altus managed stream service prefers redis historical events before db fal
       payload: {
         status: 'running',
         content: 'from redis',
+        transitionReason: 'model_retryable_error',
+        currentRound: 2,
+        maxRounds: 192,
       },
     },
   ];
@@ -83,6 +86,9 @@ test('altus managed stream service prefers redis historical events before db fal
     assert.equal(daoCalled, false);
     assert.match(output, /event: run_status/);
     assert.match(output, /from redis/);
+    assert.doesNotMatch(output, /transitionReason/);
+    assert.doesNotMatch(output, /currentRound/);
+    assert.doesNotMatch(output, /maxRounds/);
   } finally {
     service.redisStateService.listRunEvents = originalRedisList;
     service.recoveryService.reconcileRunById = originalReconcileRunById;
@@ -108,6 +114,7 @@ test('altus managed stream service falls back to db when redis has no stream his
         payloadJson: {
           status: 'completed',
           content: 'from db',
+          transitionReason: 'completed_with_deliverables',
         },
       },
     ];
@@ -132,6 +139,7 @@ test('altus managed stream service falls back to db when redis has no stream his
     assert.equal(daoCalled, true);
     assert.match(output, /event: run_completed/);
     assert.match(output, /from db/);
+    assert.doesNotMatch(output, /transitionReason/);
   } finally {
     service.redisStateService.listRunEvents = originalRedisList;
     service.recoveryService.reconcileRunById = originalReconcileRunById;

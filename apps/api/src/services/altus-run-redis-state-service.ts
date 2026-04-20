@@ -2,6 +2,11 @@ import { hostname } from 'node:os';
 import type { ManagedRunStatus } from '../db/dao/task-session-run.dao';
 import { redisClientService, type RedisCommandPort } from './redis-client-service';
 import { deriveTenantKeyForRedis, redisKeyspace, redisStreamMaxLen, redisTtlSeconds } from './redis-keyspace';
+import {
+  createAltusRunLoopSnapshot,
+  type AltusRunLoopSnapshot,
+  type AltusRunLoopUpdate,
+} from './altus-run-loop-state';
 
 type RunRedisContext = {
   userId: string;
@@ -46,6 +51,7 @@ export type RunRecoverySnapshot = {
     latestSequence: number;
     latestEventType: string | null;
   };
+  loop: AltusRunLoopSnapshot;
   updatedAt: string;
 };
 
@@ -138,6 +144,7 @@ export class AltusRunRedisStateService {
       latestSequence?: number;
       latestEventType?: string | null;
     };
+    loop?: AltusRunLoopUpdate;
   }) {
     const scope = this.buildScope(input);
     const existing = await this.getRecoverySnapshot(scope);
@@ -173,6 +180,10 @@ export class AltusRunRedisStateService {
         ),
         latestEventType: input.stream?.latestEventType ?? existing?.stream?.latestEventType ?? null,
       },
+      loop: createAltusRunLoopSnapshot({
+        ...(existing?.loop || {}),
+        ...(input.loop || {}),
+      }),
       updatedAt: new Date().toISOString(),
     } satisfies RunRecoverySnapshot;
     await this.redis.setJson(redisKeyspace.runRecovery(scope), next, redisTtlSeconds.runRecovery);

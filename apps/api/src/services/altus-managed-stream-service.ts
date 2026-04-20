@@ -2,6 +2,7 @@ import type express from 'express';
 import { taskSessionRunDAO } from '../db/dao';
 import { altusRunRedisStateService, AltusRunRedisStateService } from './altus-run-redis-state-service';
 import { altusRunRecoveryService, AltusRunRecoveryService } from './altus-run-recovery-service';
+import { stripManagedDebugPayload } from './altus-managed-shared';
 
 type ManagedStreamEnvelope = {
   sequence: number;
@@ -16,12 +17,13 @@ type Subscriber = {
 
 function writeSse(res: express.Response, input: ManagedStreamEnvelope) {
   if (res.writableEnded) return;
+  const userVisiblePayload = stripManagedDebugPayload(input.payload);
   res.write(`id: ${input.sequence}\n`);
   res.write(`event: ${input.eventType}\n`);
   res.write(`data: ${JSON.stringify({
     sequence: input.sequence,
     eventType: input.eventType,
-    payload: input.payload,
+    payload: userVisiblePayload,
   })}\n\n`);
 }
 

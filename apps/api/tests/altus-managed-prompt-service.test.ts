@@ -125,6 +125,29 @@ test('managed prompt derives non-deployable artifact intent and emits a hard no-
   assert.match(prompt, /do not call `deploy_application`, `redeploy_application`, or `rollback_application_deployment`/i);
 });
 
+test('managed prompt does not authorize deployment for website source tasks without an explicit deploy request', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '做一个纯 HTML 企业官网，包含首页、关于我们和联系我们，先给我源码文件。',
+  ]);
+
+  assert.equal(profile.mode, 'deployable_web_app');
+  assert.equal(profile.deployRequested, false);
+  assert.equal(profile.deploymentAllowed, false);
+
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-web-source-only-test',
+    sessionTitle: 'web source only contract',
+    workspaceRoot: '/workspace/session-web-source-only-test',
+    connectors: [],
+    taskIntentProfile: profile,
+  });
+
+  assert.match(prompt, /# Deployment trigger contract/);
+  assert.match(prompt, /is not an explicit deployment request/i);
+  assert.match(prompt, /does not by itself authorize deployment/i);
+  assert.doesNotMatch(prompt, /use `deploy_application` for first publish or publishing the latest workspace changes/i);
+});
+
 test('managed prompt builds minimal skill catalog index without full body', () => {
   const prompt = altusManagedPromptService.buildSkillCatalogPrompt([
     {

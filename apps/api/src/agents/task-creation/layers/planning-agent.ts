@@ -16,6 +16,39 @@ import { z } from 'zod';
 import type { IntentRecognitionResult, TaskDescription } from '../types/intent';
 import { isAwaitingUserInputError } from '../errors';
 import { getPlanningPersona } from './planners/persona-registry';
+import { classifyTaskIntentShape, type TaskIntentShape } from '../../../services/task-intent-shape-service';
+
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function parsePlanningInput(raw: string) {
+  const text = asText(raw);
+  const marker = '\n\n用户补充：';
+  if (!text.startsWith('历史任务定义：') || !text.includes(marker)) {
+    return {
+      effectiveUserInput: text,
+      hasHistoricalBase: false,
+      historicalBase: null as Record<string, unknown> | null,
+    };
+  }
+
+  const baseRaw = text.slice('历史任务定义：'.length, text.indexOf(marker)).trim();
+  const supplement = text.slice(text.indexOf(marker) + marker.length).trim();
+  try {
+    return {
+      effectiveUserInput: supplement || text,
+      hasHistoricalBase: true,
+      historicalBase: JSON.parse(baseRaw) as Record<string, unknown>,
+    };
+  } catch {
+    return {
+      effectiveUserInput: supplement || text,
+      hasHistoricalBase: true,
+      historicalBase: null as Record<string, unknown> | null,
+    };
+  }
+}
 
 export class PlanningAgent extends BaseAgent {
   private userCallback?: (question: string, options?: string[]) => Promise<string>;
@@ -90,6 +123,25 @@ export class PlanningAgent extends BaseAgent {
     intentResult: IntentRecognitionResult,
     userInput: string
   ): Promise<TaskDescription> {
+    const planningInput = parsePlanningInput(userInput);
+    const shape = classifyTaskIntentShape(
+      planningInput.hasHistoricalBase
+        ? [
+            asText(planningInput.historicalBase?.title),
+            asText(planningInput.historicalBase?.objective),
+            asText(planningInput.historicalBase?.scope),
+            planningInput.effectiveUserInput,
+          ]
+        : planningInput.effectiveUserInput
+    );
+    if (
+      !planningInput.hasHistoricalBase &&
+      intentResult.intent_type === 'software_development' &&
+      ['web_app', 'script_artifact', 'business_system', 'software_artifact'].includes(shape.artifactKind)
+    ) {
+      return this.buildSoftwareTaskDescription(intentResult, planningInput.effectiveUserInput, shape);
+    }
+
     const route = getPlanningPersona(intentResult.intent_type);
     const clarificationBlock = Array.isArray(route.clarificationTemplate) && route.clarificationTemplate.length > 0
       ? `澄清问题模板（如需补充信息时优先使用）：\n- ${route.clarificationTemplate.join('\n- ')}\n`
@@ -164,7 +216,7 @@ ${userInput}
 
       if (planningResult.task_description) {
         const description = planningResult.task_description as TaskDescription;
-        if (this.isIntentMismatch(intentResult, description)) {
+        if (this.isIntentMismatch(intentResult, description, planningInput.effectiveUserInput)) {
           return this.buildFallbackTaskDescription(intentResult, userInput);
         }
         return description;
@@ -173,7 +225,7 @@ ${userInput}
       // 兼容模型直接返回任务描述对象的情况
       if (planningResult.title || planningResult.objective || planningResult.scope) {
         const description = planningResult as TaskDescription;
-        if (this.isIntentMismatch(intentResult, description)) {
+        if (this.isIntentMismatch(intentResult, description, planningInput.effectiveUserInput)) {
           return this.buildFallbackTaskDescription(intentResult, userInput);
         }
         return description;
@@ -191,15 +243,32 @@ ${userInput}
     }
   }
 
-  private isIntentMismatch(intentResult: IntentRecognitionResult, description: TaskDescription): boolean {
-    if (intentResult.intent_type !== 'software_development') {
-      return false;
-    }
+  private isIntentMismatch(
+    intentResult: IntentRecognitionResult,
+    description: TaskDescription,
+    userInput: string
+  ): boolean {
     const text = `${description.title || ''} ${description.objective || ''} ${
       Array.isArray(description.deliverables) ? description.deliverables.join(' ') : ''
     }`;
-    const mismatchKeywords = ['营销', '市场', '渠道', '策略', '分析', '推广'];
-    return mismatchKeywords.some((keyword) => text.includes(keyword));
+    const shape = classifyTaskIntentShape(userInput);
+    const marketingMismatchKeywords = ['营销', '市场', '渠道', '策略', '推广'];
+
+    if (intentResult.intent_type === 'software_development') {
+      if (marketingMismatchKeywords.some((keyword) => text.includes(keyword))) {
+        return true;
+      }
+      if (shape.artifactKind === 'script_artifact') {
+        return ['网页', '网站', 'web app', '浏览器', 'playwright'].some((keyword) =>
+          text.toLowerCase().includes(keyword)
+        );
+      }
+      if (shape.explicitNoDeploy) {
+        return ['部署', 'publish', 'go live'].some((keyword) => text.toLowerCase().includes(keyword));
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -232,52 +301,138 @@ ${userInput}
     intentResult: IntentRecognitionResult,
     userInput: string
   ): TaskDescription {
+    const planningInput = parsePlanningInput(userInput);
+    if (intentResult.intent_type === 'software_development') {
+      return this.buildSoftwareTaskDescription(
+        intentResult,
+        planningInput.effectiveUserInput,
+        classifyTaskIntentShape(planningInput.effectiveUserInput)
+      );
+    }
+
     const intentType = intentResult.intent_type;
     const keyTarget = intentResult.key_info?.target || '';
-    const normalizedInput = userInput.trim();
+    const normalizedInput = planningInput.effectiveUserInput.trim();
+    const target = keyTarget || normalizedInput || '当前任务';
+    const scope = intentResult.key_info?.scope || '按用户输入补齐范围与交付物';
+    const title = normalizedInput ? normalizedInput.replace(/。/g, '') : target;
 
-    if (intentType === 'software_development') {
-      const target = keyTarget || normalizedInput || 'Web 应用';
-      const title = normalizedInput ? normalizedInput.replace(/。/g, '') : `${target} 开发`;
-      const deliverables = ['可运行的网页应用', '完整源代码', '基础使用说明'];
-      const constraints = ['单文件或少量文件交付', '确保浏览器可运行'];
+    return {
+      title,
+      objective: `根据用户输入整理并执行任务：${target}`,
+      scope,
+      deliverables: [
+        '任务目标说明',
+        '交付物清单',
+        '关键约束与边界',
+      ],
+      constraints: [
+        '优先遵守用户明确给出的边界条件',
+        '避免将任务改写成无关领域模板',
+      ],
+      additional_info: {
+        fallback: true,
+        note: '由于解析任务描述失败，已退回到中性任务模板',
+        userInput,
+      },
+    };
+  }
 
+  private buildSoftwareTaskDescription(
+    intentResult: IntentRecognitionResult,
+    userInput: string,
+    shape: TaskIntentShape
+  ): TaskDescription {
+    const normalizedInput = asText(userInput).replace(/。/g, '') || '软件任务';
+    const normalizedTarget = asText(intentResult.key_info?.target)
+      .replace(/用户补充信息：/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const effectiveInput =
+      normalizedTarget && normalizedTarget.length > normalizedInput.length
+        ? normalizedTarget.replace(/。/g, '')
+        : normalizedInput;
+    const inheritedConstraints = asText(intentResult.key_info?.constraints);
+    const baseConstraints = [
+      shape.explicitNoDeploy ? '不要部署' : '',
+      shape.explicitNoWeb ? '不要改造成网站或网页应用' : '',
+      shape.sourceCodeOnly ? '只交付源码文件，不附带额外发布链路' : '',
+      shape.explicitNoExternalAuth ? '不要假设任何外部平台已经授权' : '',
+      inheritedConstraints,
+    ].filter(Boolean);
+
+    if (shape.artifactKind === 'script_artifact') {
+      const deliverables = ['可运行的脚本源码', '输出结果或报告文件', '基础使用说明'];
+      if (!/markdown/i.test(effectiveInput) && !effectiveInput.includes('markdown')) {
+        deliverables[1] = '脚本输出结果';
+      }
       return {
-        title,
-        objective: `基于用户需求实现可运行的网页应用（${target}）`,
-        scope: '单页或单文件实现，覆盖核心交互',
+        title: effectiveInput,
+        objective: `编写并验证脚本类交付物：${effectiveInput}`,
+        scope: '保持脚本/CLI/分析产物形态，不改造成网页应用或部署项目',
         deliverables,
-        constraints,
+        constraints: baseConstraints.length > 0 ? baseConstraints : ['交付脚本及其结果，不扩展到网页部署链路'],
         additional_info: {
           fallback: true,
-          note: '解析任务描述失败，已回退至软件开发默认模板',
-          userInput,
+          artifactKind: shape.artifactKind,
+          note: '按脚本类任务模板直接规划，避免误入网页应用模板',
         },
       };
     }
 
-    const target = keyTarget || '新产品';
-    const scope = intentResult.key_info?.scope || '营销策略制定';
-    const title = `${target}营销计划制定`;
+    if (shape.artifactKind === 'web_app') {
+      return {
+        title: effectiveInput,
+        objective:
+          shape.deliveryMode === 'deployable'
+            ? `实现并交付可部署的网站/网页应用：${effectiveInput}`
+            : `实现网站/网页应用源码：${effectiveInput}`,
+        scope:
+          shape.deliveryMode === 'deployable'
+            ? '围绕用户目标完成网站实现，并保留可部署所需的最小正确结构'
+            : '围绕用户目标完成网站源码，不触发部署或外部平台假设',
+        deliverables:
+          shape.deliveryMode === 'deployable'
+            ? ['可运行的网站或网页应用', '完整源代码', '部署所需配置与使用说明']
+            : ['网站源代码', '关键页面与资源文件', '本地使用或预览说明'],
+        constraints:
+          baseConstraints.length > 0
+            ? baseConstraints
+            : ['保持网站任务形态，不改写成营销策划或其他非软件任务'],
+        additional_info: {
+          fallback: true,
+          artifactKind: shape.artifactKind,
+          note: '按网站类任务模板直接规划，避免误入营销或脚本模板',
+        },
+      };
+    }
 
     return {
-      title,
-      objective: `基于已知信息，为 ${target} 产出可落地的营销计划方案`,
-      scope,
-      deliverables: [
-        '营销策略文档',
-        '目标市场分析',
-        '渠道策略建议',
-        '阶段性执行计划',
-      ],
-      constraints: [
-        '需确认产品类型与目标市场',
-        '需确认预算范围与时间框架',
-      ],
+      title: effectiveInput,
+      objective: `基于用户需求完成软件开发任务：${effectiveInput}`,
+      scope:
+        shape.needsClarification
+          ? '需要先澄清使用角色、核心模块和交付形态，再进入实现'
+          : '围绕用户目标完成核心功能实现',
+      deliverables: ['源代码', '核心功能实现', '基础使用说明'],
+      constraints:
+        shape.needsClarification
+          ? [
+              '先确认主要使用角色',
+              '先确认必须包含的核心模块',
+              '先确认本次只要源码、本地运行还是需要部署',
+              ...baseConstraints,
+            ].filter(Boolean)
+          : baseConstraints.length > 0
+            ? baseConstraints
+            : ['保持当前软件任务边界，不改写成营销策划或网页部署模板'],
       additional_info: {
         fallback: true,
-        note: '由于解析任务描述失败，已生成基础规划，后续可补充关键信息',
-        userInput,
+        artifactKind: shape.artifactKind,
+        note:
+          shape.artifactKind === 'business_system'
+            ? '识别为业务系统类软件任务，已阻止营销模板兜底'
+            : '按软件任务模板直接规划',
       },
     };
   }

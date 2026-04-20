@@ -1157,6 +1157,14 @@ export class PlatformDeploymentAccountService {
     });
   }
 
+  private async fetchRemoteProjectById(adminToken: string, projectId: string) {
+    return getProjectById(adminToken, projectId);
+  }
+
+  private getRailwayWorkspaceId() {
+    return requireEnv('RAILWAY_WORKSPACE_ID');
+  }
+
   private async listReusableAccountRows(
     userId: string,
     options?: {
@@ -1196,6 +1204,50 @@ export class PlatformDeploymentAccountService {
         const rightTime = right.updatedAt instanceof Date ? right.updatedAt.getTime() : 0;
         return rightTime - leftTime;
       });
+  }
+
+  private async recoverUserProjectFromReusableAccounts(userId: string): Promise<UserRailwayProject | null> {
+    const candidates = await this.listReusableAccountRows(userId);
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    const adminToken = requireEnv('RAILWAY_ADMIN_TOKEN');
+    const workspaceId = this.getRailwayWorkspaceId();
+    for (const candidate of candidates) {
+      const config = toDeploymentConfig(candidate.configJson);
+      if (!config.projectId) {
+        continue;
+      }
+      try {
+        const remoteProject = await this.fetchRemoteProjectById(adminToken, config.projectId);
+        if (!remoteProject?.id) {
+          continue;
+        }
+        const projectConfig: UserRailwayProjectConfig = {
+          provider: 'platform_managed',
+          supplier: 'railway',
+          projectId: remoteProject.id,
+          projectName: remoteProject.name || config.projectName,
+          workspaceId,
+          createdAt: config.createdAt || new Date().toISOString(),
+        };
+        await this.persistUserProjectRow(userId, projectConfig);
+        return {
+          userId,
+          projectId: projectConfig.projectId,
+          projectName: projectConfig.projectName,
+          workspaceId: projectConfig.workspaceId,
+          createdAt: projectConfig.createdAt,
+        };
+      } catch (error: any) {
+        if (!isRailwayProjectNotFoundError(error?.message || '')) {
+          throw error;
+        }
+      }
+    }
+
+    return null;
   }
 
   private async reuseExistingServiceSlot(input: {
@@ -1342,8 +1394,17 @@ export class PlatformDeploymentAccountService {
     if (existing?.projectId) {
       const adminToken = requireEnv('RAILWAY_ADMIN_TOKEN');
       try {
-        const remoteProject = await getProjectById(adminToken, existing.projectId);
+        const remoteProject = await this.fetchRemoteProjectById(adminToken, existing.projectId);
         if (remoteProject.id) {
+          const sameProjectReusableRows = await this.listReusableAccountRows(normalizedUserId, {
+            projectId: existing.projectId,
+          });
+          if (sameProjectReusableRows.length === 0) {
+            const recoveredProject = await this.recoverUserProjectFromReusableAccounts(normalizedUserId);
+            if (recoveredProject) {
+              return recoveredProject;
+            }
+          }
           if (
             remoteProject.name &&
             remoteProject.name !== existing.projectName
@@ -1353,7 +1414,7 @@ export class PlatformDeploymentAccountService {
               supplier: 'railway',
               projectId: remoteProject.id,
               projectName: remoteProject.name,
-              workspaceId: existing.workspaceId || requireEnv('RAILWAY_WORKSPACE_ID'),
+              workspaceId: existing.workspaceId || this.getRailwayWorkspaceId(),
               createdAt: existing.createdAt || new Date().toISOString(),
             });
             return {
@@ -1368,6 +1429,11 @@ export class PlatformDeploymentAccountService {
           throw error;
         }
       }
+    }
+
+    const recoveredProject = await this.recoverUserProjectFromReusableAccounts(normalizedUserId);
+    if (recoveredProject) {
+      return recoveredProject;
     }
 
     const adminToken = requireEnv('RAILWAY_ADMIN_TOKEN');

@@ -15,6 +15,7 @@ import {
 } from './task-attachment-service';
 import { asText, pickObject } from './altus-managed-shared';
 import { managedImageObjectService, type ManagedImageObjectService } from './managed-image-object-service';
+import { classifyTaskIntentShape } from './task-intent-shape-service';
 import { userSkillService } from './user-skill-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 
@@ -128,12 +129,6 @@ function mergeSkillSelections(
   return results;
 }
 
-function matchesDeploymentIntent(content: string): boolean {
-  const normalized = asText(content);
-  if (!normalized) return false;
-  return DEPLOYMENT_INTENT_PATTERNS.some((pattern) => pattern.test(normalized));
-}
-
 function detectDeploymentAction(content: string): DeploymentAction | null {
   const normalized = asText(content);
   if (!normalized) return null;
@@ -211,8 +206,9 @@ export class AltusManagedInputService {
     const baseMetadata = pickObject(input.metadata);
     const explicitSkillSelections = normalizeSkillSelections(baseMetadata.skills);
     let mergedSkillSelections = explicitSkillSelections;
+    const taskIntentShape = classifyTaskIntentShape(content);
     const deploymentAction = detectDeploymentAction(content);
-    if (deploymentAction && matchesDeploymentIntent(content)) {
+    if (deploymentAction && taskIntentShape.deployRequested && !taskIntentShape.explicitNoDeploy) {
       const deploymentSkill = availableSkills.find((item) =>
         canAutoAttachDeploymentSkill(item as any, deploymentAction)
       );

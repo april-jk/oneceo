@@ -174,6 +174,27 @@ export function truncate(value: string, limit = 16000) {
   return `${value.slice(0, limit)}\n...[truncated]`;
 }
 
+const MANAGED_DEBUG_PAYLOAD_KEYS = new Set([
+  'transitionReason',
+  'currentRound',
+  'maxRounds',
+  'recoveryMode',
+  'loop',
+  'debug',
+  'internalDebug',
+]);
+
+export function stripManagedDebugPayload(payload: Record<string, unknown>) {
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload || {})) {
+    if (MANAGED_DEBUG_PAYLOAD_KEYS.has(key)) {
+      continue;
+    }
+    sanitized[key] = value;
+  }
+  return sanitized;
+}
+
 export function parseToolArguments(raw: string) {
   if (!raw) return {};
   try {

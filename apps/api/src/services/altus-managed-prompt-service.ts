@@ -280,6 +280,12 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
   const deployRequested = includesAnyKeyword(combined, DEPLOY_REQUEST_KEYWORDS);
   const scriptArtifactRequested = includesAnyKeyword(combined, SCRIPT_ARTIFACT_KEYWORDS);
   const emailTemplateRequested = includesAnyKeyword(combined, EMAIL_TEMPLATE_KEYWORDS);
+  const deploymentAllowed =
+    deployRequested &&
+    !explicitNoDeploy &&
+    !explicitNoWeb &&
+    !scriptArtifactRequested &&
+    !emailTemplateRequested;
 
   let mode: AltusManagedTaskIntentProfile['mode'] = 'neutral';
   let reason: AltusManagedTaskIntentProfile['reason'] = 'unknown';
@@ -317,7 +323,7 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
     deployRequested,
     scriptArtifactRequested,
     emailTemplateRequested,
-    deploymentAllowed: mode === 'deployable_web_app',
+    deploymentAllowed,
   };
 }
 
@@ -411,6 +417,33 @@ export class AltusManagedPromptService {
             '',
           ].join('\n')
         : '';
+    const noAutoDeploySection =
+      taskIntentProfile && !taskIntentProfile.deploymentAllowed
+        ? [
+            '# Deployment trigger contract',
+            '- The current session is not an explicit deployment request.',
+            '- Do not call `deploy_application`, `redeploy_application`, `rollback_application_deployment`, or `get_application_deployment_status` unless the user explicitly asks to deploy, redeploy, rollback, or check deployment status in the current turn.',
+            '- Building a website, generating source code, creating documents, office files, scripts, reports, or templates does not by itself authorize deployment.',
+            '- If the user only asked for implementation or source files, finish the artifact and call complete_task without entering the deployment flow.',
+            '',
+          ].join('\n')
+        : '';
+    const deploymentToolSection =
+      taskIntentProfile && !taskIntentProfile.deploymentAllowed
+        ? ''
+        : [
+            '- When the user asks to deploy, publish, go live, 上线, redeploy, rollback deployment, or check deployment status for the current app, use the managed deployment tools instead of replying with plain text.',
+            '- In deploy/redeploy/status flows, do not run local preview/dev commands such as `vite preview`, `npm run preview`, `vite dev`, `npm run dev`, or `react-scripts start` to decide whether Railway deployment is healthy.',
+            '- In deploy/redeploy/status flows, do not infer the public deployment start command from the raw workspace `package.json` or an outdated `oneceo.manifest.json`. The platform will normalize the deployable source before publishing.',
+            '- Use `deploy_application` for first publish or publishing the latest workspace changes.',
+            '- Use `redeploy_application` when the user wants the latest code changes published again.',
+            '- Use `rollback_application_deployment` only when the user explicitly asks to rollback or revert the deployment.',
+            '- Use `get_application_deployment_status` when the user asks for deployment progress, current URL, or deployment health.',
+            '- If `deploy_application` or `redeploy_application` returns `status=retryable_repair_required`, inspect `repair.category` first. For `template_compliance`, `deployment_configuration`, or `workspace_missing`, repair the workspace baseline with file/code tools and then call the deployment tool again. For `resource_binding`, do not keep editing workspace files; continue with deployment/status tools until the platform resource binding is repaired or a clear blocker is surfaced. For `deployment_pending`, do not edit workspace files; keep calling `get_application_deployment_status` until the deployment becomes ready.',
+            '- `debug_open_page` only proves a local debug preview is reachable. It never proves that the managed public deployment succeeded.',
+            '- For deploy/redeploy/rollback requests, do not call `complete_task` until deployment is actually ready online. Treat `bindingState=ready` plus a non-transient deployment status as the success condition. If the deployment tool reports `deployment_pending`, keep polling with `get_application_deployment_status`. If deployment is still failing, continue repairing or clearly report that the online deployment is not complete yet.',
+            '- Keep deployment debug details internal. In user-facing replies, summarize only the current phase, whether auto-repair is happening, and the final result.',
+          ].join('\n');
 
     return [
       'You are Altus, the managed-mode engineering agent inside OneCEO.',
@@ -481,6 +514,7 @@ export class AltusManagedPromptService {
       '- Do not rerun the same failing shell command unchanged. If a script fails, inspect the exact error, change the script or dependency once, then rerun.',
       '',
       nonDeployableTaskSection,
+      noAutoDeploySection,
       '# OneCEO web app contract',
       '- When the user asks for a website, web app, dashboard, admin panel, SaaS UI, landing page with working product flow, or other deployable browser product, you must build it as a OneCEO deployable web app instead of an ad-hoc static artifact.',
       '- For deployable web app tasks, you must produce a root `package.json` with working `build` and `start` scripts.',
@@ -495,17 +529,7 @@ export class AltusManagedPromptService {
       '- If you touch the frontend entry for a deployable web app, keep a stable hook for platform analytics injection. Do not hard-code tracker host, websiteId, or vendor-specific script tags.',
       '- For deployable web app tasks, include a healthcheck route path in `oneceo.manifest.json`. Prefer `/api/system/health` when you own the server route design.',
       '- Do not finish a deployable web app task while required deployment files are missing. Before completion, verify at least: `package.json`, `oneceo.manifest.json`, and the primary app entry files exist.',
-      '- When the user asks to deploy, publish, go live, 上线, redeploy, rollback deployment, or check deployment status for the current app, use the managed deployment tools instead of replying with plain text.',
-      '- In deploy/redeploy/status flows, do not run local preview/dev commands such as `vite preview`, `npm run preview`, `vite dev`, `npm run dev`, or `react-scripts start` to decide whether Railway deployment is healthy.',
-      '- In deploy/redeploy/status flows, do not infer the public deployment start command from the raw workspace `package.json` or an outdated `oneceo.manifest.json`. The platform will normalize the deployable source before publishing.',
-      '- Use `deploy_application` for first publish or publishing the latest workspace changes.',
-      '- Use `redeploy_application` when the user wants the latest code changes published again.',
-      '- Use `rollback_application_deployment` only when the user explicitly asks to rollback or revert the deployment.',
-      '- Use `get_application_deployment_status` when the user asks for deployment progress, current URL, or deployment health.',
-      '- If `deploy_application` or `redeploy_application` returns `status=retryable_repair_required`, inspect `repair.category` first. For `template_compliance`, `deployment_configuration`, or `workspace_missing`, repair the workspace baseline with file/code tools and then call the deployment tool again. For `resource_binding`, do not keep editing workspace files; continue with deployment/status tools until the platform resource binding is repaired or a clear blocker is surfaced. For `deployment_pending`, do not edit workspace files; keep calling `get_application_deployment_status` until the deployment becomes ready.',
-      '- `debug_open_page` only proves a local debug preview is reachable. It never proves that the managed public deployment succeeded.',
-      '- For deploy/redeploy/rollback requests, do not call `complete_task` until deployment is actually ready online. Treat `bindingState=ready` plus a non-transient deployment status as the success condition. If the deployment tool reports `deployment_pending`, keep polling with `get_application_deployment_status`. If deployment is still failing, continue repairing or clearly report that the online deployment is not complete yet.',
-      '- Keep deployment debug details internal. In user-facing replies, summarize only the current phase, whether auto-repair is happening, and the final result.',
+      deploymentToolSection,
       '',
       '# PPT workflow',
       `- For PPT tasks, choose exactly one contentArchetype from ${formatCodeList(PPT_CONTENT_ARCHETYPES)} before drafting slides.`,

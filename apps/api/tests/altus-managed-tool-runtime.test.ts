@@ -686,7 +686,50 @@ test('deployment tools are blocked for non-deployable artifact sessions', async 
     runtime.execute('deploy_application', {
       notes: 'publish current app',
     }),
-    /deployment_tool_not_allowed_non_web_task/
+    /deployment_tool_not_allowed_without_explicit_request/
+  );
+
+  assert.equal(executeMock.mock.callCount(), 0);
+});
+
+test('deployment tools are blocked for website source sessions without an explicit deploy request', async () => {
+  const executeMock = mock.method(altusManagedDeploymentToolService, 'execute', async () => {
+    throw new Error('should_not_be_called');
+  });
+
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-web-source-only',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-web-source-only',
+    activeSkills: [],
+    mcpProviders: [],
+    taskIntentProfile: {
+      mode: 'deployable_web_app',
+      reason: 'historical_deployable_request',
+      recentUserMessages: ['做一个纯 HTML 企业官网，包含首页、关于我们和联系我们，先给我源码文件。'],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: true,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+    },
+  });
+
+  await assert.rejects(
+    runtime.execute('deploy_application', {
+      notes: 'publish current app',
+    }),
+    /deployment_tool_not_allowed_without_explicit_request/
+  );
+
+  await assert.rejects(
+    runtime.execute('get_application_deployment_status', {
+      notes: 'check deployment',
+    }),
+    /deployment_tool_not_allowed_without_explicit_request/
   );
 
   assert.equal(executeMock.mock.callCount(), 0);

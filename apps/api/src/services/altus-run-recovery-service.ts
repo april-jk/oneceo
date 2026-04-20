@@ -5,6 +5,7 @@ import {
   altusRunRedisStateService,
   type RunRecoverySnapshot,
 } from './altus-run-redis-state-service';
+import { createAltusRunLoopSnapshot } from './altus-run-loop-state';
 
 function asText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -91,6 +92,9 @@ export class AltusRunRecoveryService {
         latestSequence,
         latestEventType: currentRecovery?.stream?.latestEventType ?? null,
       },
+      loop: currentRecovery?.loop
+        ? createAltusRunLoopSnapshot(currentRecovery.loop)
+        : createAltusRunLoopSnapshot(),
       updatedAt: new Date().toISOString(),
     };
   }
@@ -140,6 +144,7 @@ export class AltusRunRecoveryService {
         sandbox: recovery.sandbox,
         connectorRuntime: recovery.connectorRuntime,
         stream: recovery.stream,
+        loop: recovery.loop,
       });
       return true;
     }

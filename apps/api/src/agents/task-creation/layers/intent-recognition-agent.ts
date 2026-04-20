@@ -15,6 +15,7 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { IntentType, type IntentRecognitionResult } from '../types/intent';
 import { isAwaitingUserInputError } from '../errors';
+import { classifyTaskIntentShape } from '../../../services/task-intent-shape-service';
 
 export class IntentRecognitionAgent extends BaseAgent {
   private userCallback?: (question: string, options?: string[]) => Promise<string>;
@@ -130,6 +131,36 @@ export class IntentRecognitionAgent extends BaseAgent {
   }
 
   private coerceIntent(userInput: string, intentResult: IntentRecognitionResult): IntentRecognitionResult {
+    const shape = classifyTaskIntentShape(userInput);
+    if (shape.suggestedIntentType === IntentType.SOFTWARE_DEVELOPMENT) {
+      const constraints = [
+        shape.explicitNoDeploy ? '不要部署' : '',
+        shape.explicitNoWeb ? '不要改造成网站' : '',
+        shape.sourceCodeOnly ? '只交付源码' : '',
+        shape.explicitNoExternalAuth ? '不要假设已授权任何外部平台' : '',
+      ]
+        .filter(Boolean)
+        .join('；');
+
+      return {
+        ...intentResult,
+        intent_type: IntentType.SOFTWARE_DEVELOPMENT,
+        confidence: Math.max(0.82, intentResult.confidence || 0),
+        key_info: {
+          ...intentResult.key_info,
+          target: intentResult.key_info?.target || userInput.slice(0, 80),
+          constraints: constraints || intentResult.key_info?.constraints || '',
+        },
+        clarification_needed: shape.needsClarification,
+        clarification_question: shape.clarificationQuestion || intentResult.clarification_question,
+        clarification_questions:
+          shape.clarificationQuestions.length > 0
+            ? shape.clarificationQuestions
+            : intentResult.clarification_questions,
+        next_agent: shape.needsClarification ? 'user_clarification' : 'planning_agent',
+      };
+    }
+
     if (!this.isLikelySoftwareIntent(userInput)) {
       return intentResult;
     }
@@ -156,6 +187,34 @@ export class IntentRecognitionAgent extends BaseAgent {
    * @returns 意图识别结果
    */
   async recognizeIntent(userInput: string): Promise<IntentRecognitionResult> {
+    const shape = classifyTaskIntentShape(userInput);
+    if (shape.suggestedIntentType === IntentType.SOFTWARE_DEVELOPMENT) {
+      const deterministicIntent = this.coerceIntent(userInput, {
+        intent_type: IntentType.SOFTWARE_DEVELOPMENT,
+        confidence: 0.92,
+        key_info: {
+          target: userInput.slice(0, 80),
+          scope: shape.artifactKind,
+          constraints: '',
+        },
+        clarification_needed: shape.needsClarification,
+        clarification_question: shape.clarificationQuestion || undefined,
+        clarification_questions: shape.clarificationQuestions,
+        next_agent: shape.needsClarification ? 'user_clarification' : 'planning_agent',
+      });
+
+      if (
+        deterministicIntent.clarification_needed &&
+        deterministicIntent.clarification_question &&
+        this.userCallback
+      ) {
+        const userResponse = await this.userCallback(deterministicIntent.clarification_question);
+        return this.recognizeIntent(`${userInput}\n\n用户补充信息：${userResponse}`);
+      }
+
+      return deterministicIntent;
+    }
+
     const prompt = `用户输入：${userInput}
 
 请分析用户的意图，并以 JSON 格式返回识别结果。`;

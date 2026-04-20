@@ -326,6 +326,12 @@ export class AltusManagedSetupService {
     await ensureSandboxRuntimeMetadata(provision.sessionId, {
       taskSessionId: sessionId,
     }).catch(() => null);
+    await taskCreationFileMemoryStore.updateSessionExecutor(sessionId, 'altus');
+    await taskCreationFileMemoryStore.updateRuntimeBinding(sessionId, {
+      orchestratorSessionId: provision.sessionId,
+      executor: 'altus',
+      workspaceRoot,
+    });
     void sessionMcpRecoveryService.ensureSessionRecovered(sessionId, provision.sessionId).catch(() => null);
     return {
       sandboxId: provision.sessionId,

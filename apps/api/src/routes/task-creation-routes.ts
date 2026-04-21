@@ -68,6 +68,7 @@ import { downloadFromR2 } from '../services/r2-client';
 import { taskSessionDeliverableService } from '../services/task-session-deliverable-service';
 import { platformSkillService } from '../services/platform-skill-service';
 import { userSkillService } from '../services/user-skill-service';
+import { taskCreationProjectRedisCacheService } from '../services/task-creation-project-redis-cache-service';
 import { isLegacyClientUserId, isSameUserId, normalizeUserId } from '../utils/user-id';
 
 const router = express.Router();
@@ -297,13 +298,10 @@ router.put('/codex/runtime-config', express.json({ limit: '2mb' }), async (req, 
 router.get('/projects', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
-    const projects = await appUserProjectDAO.listByUser(currentUser.userId, {
-      projectType: 'standard',
-      status: 'active',
-    });
+    const projects = await listCachedTaskCreationProjects(currentUser.userId);
     return res.json({
       success: true,
-      data: projects.map(toTaskCreationProjectSummary),
+      data: projects,
     });
   } catch (error: any) {
     const authError = resolveCurrentUserError(error);
@@ -311,6 +309,57 @@ router.get('/projects', async (req, res) => {
     return res.status(authError?.status || 500).json({
       success: false,
       error: getPublicErrorMessage(authError?.message || error?.message || '获取项目列表失败'),
+    });
+  }
+});
+
+router.get('/projects/:projectId', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { projectId } = req.params;
+    const project = await getCachedOwnedTaskCreationProject(currentUser.userId, projectId);
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        error: '项目不存在或当前用户无权访问该项目',
+      });
+    }
+    return res.json({
+      success: true,
+      data: project,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    console.error('获取项目详情失败:', error);
+    return res.status(authError?.status || 500).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '获取项目详情失败'),
+    });
+  }
+});
+
+router.get('/projects/:projectId/sessions', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { projectId } = req.params;
+    const project = await getCachedOwnedTaskCreationProject(currentUser.userId, projectId);
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        error: '项目不存在或当前用户无权访问该项目',
+      });
+    }
+    const sessions = await listCachedTaskCreationProjectSessions(currentUser.userId, projectId);
+    return res.json({
+      success: true,
+      data: sessions,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    console.error('获取项目会话列表失败:', error);
+    return res.status(authError?.status || 500).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '获取项目会话列表失败'),
     });
   }
 });
@@ -338,6 +387,7 @@ router.post('/projects', express.json({ limit: '256kb' }), async (req, res) => {
       description: input.description,
       projectType: 'standard',
     });
+    await taskCreationProjectRedisCacheService.invalidateProjectList(currentUser.userId);
     return res.status(201).json({
       success: true,
       data: toTaskCreationProjectSummary(created),
@@ -393,6 +443,10 @@ router.put('/projects/:projectId', express.json({ limit: '256kb' }), async (req,
       });
     }
 
+    await taskCreationProjectRedisCacheService.invalidateProjectReads(currentUser.userId, {
+      projectIds: [projectId],
+    });
+
     return res.json({
       success: true,
       data: toTaskCreationProjectSummary(updated),
@@ -425,6 +479,9 @@ router.delete('/projects/:projectId', async (req, res) => {
     await taskCreationSessionDAO.clearProjectAssignmentForUser(currentUser.userId, projectId);
     await taskCreationFileMemoryStore.clearProjectAssignment(projectId);
     await appUserProjectDAO.deleteOwnedProject(projectId, currentUser.userId);
+    await taskCreationProjectRedisCacheService.invalidateProjectReads(currentUser.userId, {
+      projectIds: [projectId],
+    });
 
     return res.json({
       success: true,
@@ -1937,6 +1994,55 @@ function normalizeSessionProjectAssignmentInput(body: any): {
     projectId,
     projectName,
   };
+}
+
+async function listCachedTaskCreationProjects(userId: string) {
+  const cached = await taskCreationProjectRedisCacheService.getProjectList<ReturnType<typeof toTaskCreationProjectSummary>>(userId);
+  if (Array.isArray(cached)) {
+    return cached;
+  }
+  const projects = await appUserProjectDAO.listByUser(userId, {
+    projectType: 'standard',
+    status: 'active',
+  });
+  const summaries = projects.map(toTaskCreationProjectSummary);
+  await taskCreationProjectRedisCacheService.setProjectList(userId, summaries);
+  return summaries;
+}
+
+async function getCachedOwnedTaskCreationProject(userId: string, projectId: string) {
+  const normalizedProjectId = asText(projectId);
+  if (!normalizedProjectId) return null;
+  const cached = await taskCreationProjectRedisCacheService.getProjectDetail<ReturnType<typeof toTaskCreationProjectSummary>>(
+    userId,
+    normalizedProjectId
+  );
+  if (cached) {
+    return cached;
+  }
+  const project = await appUserProjectDAO.getOwnedProjectById(normalizedProjectId, userId);
+  if (!project || project.projectType !== 'standard' || project.status !== 'active') {
+    return null;
+  }
+  const summary = toTaskCreationProjectSummary(project);
+  await taskCreationProjectRedisCacheService.setProjectDetail(userId, normalizedProjectId, summary);
+  return summary;
+}
+
+async function listCachedTaskCreationProjectSessions(userId: string, projectId: string) {
+  const normalizedProjectId = asText(projectId);
+  if (!normalizedProjectId) return [];
+  const cached = await taskCreationProjectRedisCacheService.getProjectSessions<ReturnType<typeof toSessionSummary>>(
+    userId,
+    normalizedProjectId
+  );
+  if (Array.isArray(cached)) {
+    return cached;
+  }
+  const sessions = await taskCreationSessionDAO.listOwnedProjectSessions(userId, normalizedProjectId);
+  const summaries = sessions.map(toSessionSummary);
+  await taskCreationProjectRedisCacheService.setProjectSessions(userId, normalizedProjectId, summaries);
+  return summaries;
 }
 
 function toTaskCreationProjectSummary(project: any) {
@@ -4005,6 +4111,7 @@ router.post('/sessions/:sessionId/project', async (req, res) => {
         error: '会话不存在',
       });
     }
+    const previousProjectId = asText(session.projectId);
 
     const requestedProjectId = asText(req.body?.projectId);
     let nextProject = normalizeSessionProjectAssignmentInput({
@@ -4026,6 +4133,9 @@ router.post('/sessions/:sessionId/project', async (req, res) => {
     }
     await taskCreationSessionDAO.updateSessionProject(session.id, nextProject);
     await taskCreationFileMemoryStore.updateSessionProject(session.id, nextProject);
+    await taskCreationProjectRedisCacheService.invalidateProjectReads(currentUser.userId, {
+      projectIds: [previousProjectId, nextProject.projectId],
+    });
     const updated = await resolveTaskSessionRecord(session.id);
     return res.json({
       success: true,

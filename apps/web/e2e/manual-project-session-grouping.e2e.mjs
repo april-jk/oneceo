@@ -211,6 +211,13 @@ async function main() {
     locale: "zh-CN",
   });
   const page = await context.newPage();
+  const projectSessionsApiHits = [];
+  page.on("response", (response) => {
+    const url = response.url();
+    if (url.includes("/api/task-creation/projects/") && url.includes("/sessions")) {
+      projectSessionsApiHits.push(url);
+    }
+  });
   const result = {
     webBaseUrl: WEB_BASE_URL,
     apiBaseUrl: API_BASE_URL,
@@ -296,6 +303,9 @@ async function main() {
       .getByRole("button", { name: new RegExp(sessionTitle) })
       .first()
       .waitFor({ state: "visible", timeout: 30_000 });
+    if (projectSessionsApiHits.length === 0) {
+      throw new Error("project-scoped sessions api was never requested during the sidebar flow");
+    }
     await assertSidebarLayoutStable(sidebar);
     await assertProjectContentScrollReady(sidebar);
     await sidebar.screenshot({
@@ -315,7 +325,7 @@ async function main() {
       fullPage: true,
     });
 
-    await page.getByRole("link", { name: new RegExp(sessionTitle) }).first().click();
+    await page.getByText(sessionTitle, { exact: false }).first().click();
     await page.waitForURL(`**/session/${sessionId}?view=history`, { timeout: 30_000 });
     await page.getByText("项目会话").waitFor({ state: "hidden", timeout: 30_000 });
     await page.screenshot({
@@ -356,6 +366,7 @@ async function main() {
             "assign session to standard project from context menu",
             "keep project content in a dedicated vertical scroll region",
             "expand standard project in sidebar without horizontal overflow",
+            "load expanded sidebar project sessions from the project-scoped api",
             "open standard project detail page",
             "verify standard project page does not render manager tree",
             "open assigned session from standard project detail without refresh",

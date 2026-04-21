@@ -82,6 +82,7 @@ import {
   deleteTaskCreationProject,
   deleteTaskCreationSession,
   listTaskCreationProjects,
+  listTaskCreationProjectSessions,
   listTaskCreationSessions,
   renameTaskCreationSessionTitle,
   type TaskCreationProjectSummary,
@@ -193,6 +194,11 @@ export default function Sidebar({
   const [tasksDialogOpen, setTasksDialogOpen] = React.useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = React.useState(false);
   const [sessionTasks, setSessionTasks] = React.useState<SessionTask[]>([]);
+  const [projectSessionsByProjectId, setProjectSessionsByProjectId] = React.useState<
+    Record<string, SessionTask[]>
+  >({});
+  const [projectSessionLoadingByProjectId, setProjectSessionLoadingByProjectId] =
+    React.useState<Record<string, boolean>>({});
   const [createProjectDialogOpen, setCreateProjectDialogOpen] = React.useState(false);
   const [createProjectName, setCreateProjectName] = React.useState("");
   const [createProjectDescription, setCreateProjectDescription] = React.useState("");
@@ -217,6 +223,8 @@ export default function Sidebar({
   const lastListFetchRef = React.useRef(0);
   const lastListErrorToastAtRef = React.useRef(0);
   const projectListLoadingRef = React.useRef(false);
+  const projectSessionLoadingRef = React.useRef<Record<string, boolean>>({});
+  const projectSessionsByProjectIdRef = React.useRef<Record<string, SessionTask[]>>({});
   const LIST_POLL_MS = 30000;
 
   const sortManualProjects = React.useCallback((projects: TaskCreationProjectSummary[]) => {
@@ -278,6 +286,154 @@ export default function Sidebar({
       })
       .map(({ originalIndex, ...session }) => session);
   }, []);
+  const mapSessionTaskList = React.useCallback(
+    (list: TaskCreationSessionSummary[]) => sortSessionTasks(list.map(mapSessionTask)),
+    [mapSessionTask, sortSessionTasks],
+  );
+  const manualProjectIdSet = React.useMemo(
+    () => new Set(manualProjects.map((project) => project.id)),
+    [manualProjects],
+  );
+
+  React.useEffect(() => {
+    projectSessionsByProjectIdRef.current = projectSessionsByProjectId;
+  }, [projectSessionsByProjectId]);
+
+  const patchCachedSessionAcrossProjects = React.useCallback(
+    (sessionId: string, patch: Partial<SessionTask>) => {
+      setProjectSessionsByProjectId((prev) => {
+        let changed = false;
+        const next: Record<string, SessionTask[]> = {};
+        for (const [projectId, sessions] of Object.entries(prev)) {
+          const hasTarget = sessions.some((session) => session.sessionId === sessionId);
+          if (!hasTarget) {
+            next[projectId] = sessions;
+            continue;
+          }
+          changed = true;
+          next[projectId] = sortSessionTasks(
+            sessions.map((session, index) =>
+              session.sessionId === sessionId
+                ? {
+                    ...session,
+                    ...patch,
+                    updatedAt: patch.updatedAt || new Date().toISOString(),
+                    originalIndex: index,
+                  }
+                : {
+                    ...session,
+                    originalIndex: index,
+                  },
+            ),
+          );
+        }
+        return changed ? next : prev;
+      });
+    },
+    [sortSessionTasks],
+  );
+
+  const removeCachedSessionAcrossProjects = React.useCallback((sessionId: string) => {
+    setProjectSessionsByProjectId((prev) => {
+      let changed = false;
+      const next: Record<string, SessionTask[]> = {};
+      for (const [projectId, sessions] of Object.entries(prev)) {
+        const filtered = sessions.filter((session) => session.sessionId !== sessionId);
+        if (filtered.length !== sessions.length) {
+          changed = true;
+        }
+        next[projectId] = filtered;
+      }
+      return changed ? next : prev;
+    });
+  }, []);
+
+  const loadProjectSessions = React.useCallback(
+    async (projectId: string, options?: { force?: boolean }) => {
+      const safeProjectId = projectId.trim();
+      if (!safeProjectId || !manualProjectIdSet.has(safeProjectId)) return;
+      if (projectSessionLoadingRef.current[safeProjectId]) return;
+      if (
+        !options?.force &&
+        Object.prototype.hasOwnProperty.call(projectSessionsByProjectIdRef.current, safeProjectId)
+      ) {
+        return;
+      }
+
+      projectSessionLoadingRef.current[safeProjectId] = true;
+      setProjectSessionLoadingByProjectId((prev) => ({ ...prev, [safeProjectId]: true }));
+      try {
+        const sessions = await listTaskCreationProjectSessions(safeProjectId);
+        setProjectSessionsByProjectId((prev) => ({
+          ...prev,
+          [safeProjectId]: mapSessionTaskList(sessions),
+        }));
+      } catch (error) {
+        console.error("[Sidebar] failed to load project sessions:", error);
+        toast.error(
+          error instanceof Error && error.message.trim()
+            ? error.message.trim()
+            : t("sidebar.loadSessionsFailed"),
+        );
+      } finally {
+        delete projectSessionLoadingRef.current[safeProjectId];
+        setProjectSessionLoadingByProjectId((prev) => {
+          if (!prev[safeProjectId]) return prev;
+          const next = { ...prev };
+          delete next[safeProjectId];
+          return next;
+        });
+      }
+    },
+    [manualProjectIdSet, mapSessionTaskList, t],
+  );
+
+  React.useEffect(() => {
+    const validProjectIds = new Set(manualProjects.map((project) => project.id));
+    setProjectSessionsByProjectId((prev) => {
+      let changed = false;
+      const next: Record<string, SessionTask[]> = {};
+      for (const [projectId, sessions] of Object.entries(prev)) {
+        if (!validProjectIds.has(projectId)) {
+          changed = true;
+          continue;
+        }
+        next[projectId] = sessions;
+      }
+      return changed ? next : prev;
+    });
+    setProjectSessionLoadingByProjectId((prev) => {
+      let changed = false;
+      const next: Record<string, boolean> = {};
+      for (const [projectId, loading] of Object.entries(prev)) {
+        if (!validProjectIds.has(projectId)) {
+          changed = true;
+          delete projectSessionLoadingRef.current[projectId];
+          continue;
+        }
+        next[projectId] = loading;
+      }
+      return changed ? next : prev;
+    });
+  }, [manualProjects]);
+
+  React.useEffect(() => {
+    for (const projectId of expandedProjects) {
+      if (
+        manualProjectIdSet.has(projectId) &&
+        !projectSessionLoadingByProjectId[projectId] &&
+        !Object.prototype.hasOwnProperty.call(projectSessionsByProjectId, projectId)
+      ) {
+        void loadProjectSessions(projectId);
+      }
+    }
+  }, [
+    expandedProjects,
+    loadProjectSessions,
+    manualProjectIdSet,
+    projectSessionLoadingByProjectId,
+    projectSessionsByProjectId,
+  ]);
 
   React.useEffect(() => {
     let disposed = false;
@@ -441,6 +597,10 @@ export default function Sidebar({
   };
 
   const toggleProject = (projectId: string) => {
+    const isExpanded = expandedProjects.includes(projectId);
+    if (!isExpanded && manualProjectIdSet.has(projectId)) {
+      void loadProjectSessions(projectId);
+    }
     setExpandedProjects((prev) =>
       prev.includes(projectId)
         ? prev.filter((id) => id !== projectId)
@@ -596,20 +756,6 @@ export default function Sidebar({
     0,
   );
   const hasSessionOverflow = hiddenSessionCount > 0;
-  const projectSessionMap = React.useMemo(() => {
-    const mapping = new Map<string, SessionTask[]>();
-    for (const session of orderedSessionTasks) {
-      const projectId =
-        typeof session.projectId === "string" && session.projectId.trim()
-          ? session.projectId.trim()
-          : "";
-      if (!projectId) continue;
-      const current = mapping.get(projectId) || [];
-      current.push(session);
-      mapping.set(projectId, current);
-    }
-    return mapping;
-  }, [orderedSessionTasks]);
   const patchSessionTask = React.useCallback((sessionId: string, patch: Partial<SessionTask>) => {
     setSessionTasks((prev) =>
       sortSessionTasks(
@@ -660,6 +806,7 @@ export default function Sidebar({
       const updated = await renameTaskCreationSessionTitle(target.sessionId, nextTitle);
       const appliedTitle = updated?.title?.trim() || nextTitle;
       patchSessionTask(target.sessionId, { title: appliedTitle });
+      patchCachedSessionAcrossProjects(target.sessionId, { title: appliedTitle });
       dispatchSessionUpdate({
         sessionId: target.sessionId,
         title: appliedTitle,
@@ -680,6 +827,7 @@ export default function Sidebar({
       const updated = await toggleTaskCreationSessionFavorite(session.sessionId, nextFavorite);
       const appliedFavorite = typeof updated?.isFavorite === "boolean" ? Boolean(updated.isFavorite) : nextFavorite;
       patchSessionTask(session.sessionId, { isFavorite: appliedFavorite });
+      patchCachedSessionAcrossProjects(session.sessionId, { isFavorite: appliedFavorite });
       dispatchSessionUpdate({
         sessionId: session.sessionId,
         isFavorite: appliedFavorite,
@@ -726,6 +874,7 @@ export default function Sidebar({
         throw new Error(t("sidebar.projectCreateFailed"));
       }
       setManualProjects((prev) => sortManualProjects([created, ...prev]));
+      setProjectSessionsByProjectId((prev) => ({ ...prev, [created.id]: [] }));
       setExpandedProjectGroups((prev) =>
         prev.includes("manual-projects") ? prev : ["manual-projects", ...prev],
       );
@@ -789,6 +938,19 @@ export default function Sidebar({
     try {
       await deleteTaskCreationProject(target.id);
       setManualProjects((prev) => prev.filter((project) => project.id !== target.id));
+      setProjectSessionsByProjectId((prev) => {
+        if (!Object.prototype.hasOwnProperty.call(prev, target.id)) return prev;
+        const next = { ...prev };
+        delete next[target.id];
+        return next;
+      });
+      setProjectSessionLoadingByProjectId((prev) => {
+        if (!Object.prototype.hasOwnProperty.call(prev, target.id)) return prev;
+        const next = { ...prev };
+        delete next[target.id];
+        return next;
+      });
+      delete projectSessionLoadingRef.current[target.id];
       setSessionTasks((prev) =>
         sortSessionTasks(
           prev.map((session, index) => ({
@@ -819,6 +981,10 @@ export default function Sidebar({
     projectName: string | null,
   ) => {
     if (moveProjectSubmitting) return;
+    const previousProjectId =
+      typeof session.projectId === "string" && session.projectId.trim()
+        ? session.projectId.trim()
+        : null;
     const assignableProject = projectId
       ? assignableProjects.find((project) => project.id === projectId) || null
       : null;
@@ -846,6 +1012,20 @@ export default function Sidebar({
         projectId: appliedProjectId,
         projectName: appliedProjectName,
       });
+      const cachedOrExpandedProjectIds = new Set([
+        ...Object.keys(projectSessionsByProjectIdRef.current),
+        ...expandedProjects,
+      ]);
+      const projectIdsToReload = [previousProjectId, appliedProjectId].filter(
+        (value, index, list): value is string =>
+          typeof value === "string" &&
+          value.trim().length > 0 &&
+          list.indexOf(value) === index &&
+          cachedOrExpandedProjectIds.has(value),
+      );
+      for (const affectedProjectId of projectIdsToReload) {
+        void loadProjectSessions(affectedProjectId, { force: true });
+      }
       dispatchSessionUpdate({
         sessionId: session.sessionId,
         projectId: appliedProjectId,
@@ -870,6 +1050,7 @@ export default function Sidebar({
     try {
       await deleteTaskCreationSession(target.sessionId);
       setSessionTasks((prev) => prev.filter((session) => session.sessionId !== target.sessionId));
+      removeCachedSessionAcrossProjects(target.sessionId);
       if (activeSessionId === target.sessionId) {
         setLocation("/");
       }
@@ -881,7 +1062,7 @@ export default function Sidebar({
     } finally {
       setDeleteSubmitting(false);
     }
-  }, [activeSessionId, deleteTarget, setLocation, t]);
+  }, [activeSessionId, deleteTarget, removeCachedSessionAcrossProjects, setLocation, t]);
 
   const renderSessionTaskItem = React.useCallback(
     (session: SessionTask, options?: { compact?: boolean; onNavigate?: () => void }) => {
@@ -1201,7 +1382,10 @@ export default function Sidebar({
                               const isProjectActive =
                                 selectedProject?.id === project.id &&
                                 selectedProject?.kind === project.kind;
-                              const projectSessions = projectSessionMap.get(project.id) || [];
+                              const projectSessions =
+                                project.kind === "manual"
+                                  ? projectSessionsByProjectId[project.id] || []
+                                  : [];
                               return (
                                 <div key={project.id} className="min-w-0 space-y-0.5">
                                   <div className="flex items-center gap-1">
@@ -1285,7 +1469,10 @@ export default function Sidebar({
                                     )}
                                   </div>
 
-                                  {isExpanded && project.kind === "manual" && projectSessions.length > 0 ? (
+                                  {isExpanded &&
+                                  project.kind === "manual" &&
+                                  !projectSessionLoadingByProjectId[project.id] &&
+                                  projectSessions.length > 0 ? (
                                     <div className="ml-7 min-w-0 space-y-0.5 overflow-x-hidden">
                                       {projectSessions.map((session) =>
                                         renderSessionTaskItem(session, { compact: true }),

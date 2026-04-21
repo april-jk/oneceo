@@ -188,27 +188,6 @@ test('listSettings backfills missing required platform bindings for existing use
   mock.method(platformSkillService, 'listPublicSkills', async () => [
     {
       sourceType: 'platform',
-      skillId: 'skill-deploy',
-      revisionId: 'rev-deploy',
-      slug: 'deployment-orchestrator',
-      name: '部署编排',
-      description: '自动处理部署工作流',
-      category: 'deployment',
-      revisionNumber: 1,
-      resourceSummary: null,
-      governance: {
-        systemRole: 'deployment_orchestrator',
-        adminManaged: true,
-        required: true,
-        autoActivation: {
-          enabled: true,
-          triggers: ['deploy'],
-          toolNames: ['deploy_application'],
-        },
-      },
-    },
-    {
-      sourceType: 'platform',
       skillId: 'skill-office',
       revisionId: 'rev-office',
       slug: 'office-ppt',
@@ -221,6 +200,27 @@ test('listSettings backfills missing required platform bindings for existing use
         systemRole: null,
         adminManaged: false,
         required: false,
+        autoActivation: {
+          enabled: false,
+          triggers: [],
+          toolNames: [],
+        },
+      },
+    },
+    {
+      sourceType: 'platform',
+      skillId: 'skill-required',
+      revisionId: 'rev-required',
+      slug: 'required-governed-skill',
+      name: '系统常驻 Skill',
+      description: '用于验证 required backfill',
+      category: 'general',
+      revisionNumber: 1,
+      resourceSummary: null,
+      governance: {
+        systemRole: null,
+        adminManaged: true,
+        required: true,
         autoActivation: {
           enabled: false,
           triggers: [],
@@ -242,7 +242,7 @@ test('listSettings backfills missing required platform bindings for existing use
     bindings = [
       ...bindings,
       {
-        id: 'binding-deploy',
+        id: 'binding-required',
         userId: input.userId,
         platformSkillId: input.platformSkillId,
         enabled: input.enabled,
@@ -255,5 +255,5 @@ test('listSettings backfills missing required platform bindings for existing use
   const settings = await userSkillService.listSettings('user-1');
 
   assert.equal(upsertMock.mock.callCount(), 1);
-  assert.equal(settings.availableSkills.some((item) => item.skillId === 'skill-deploy'), true);
+  assert.equal(settings.availableSkills.some((item) => item.skillId === 'skill-required'), true);
 });

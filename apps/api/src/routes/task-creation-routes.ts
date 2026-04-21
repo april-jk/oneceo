@@ -1365,6 +1365,7 @@ function isAltusManagedSession(session: Pick<FileSessionRecord, 'mode' | 'driver
 }
 
 export async function ensureTaskSessionRuntime(sessionId: string) {
+  const ensureStartedAt = Date.now();
   const session = await resolveTaskSessionRecord(sessionId);
   if (!session) {
     throw new Error('会话不存在');
@@ -1429,6 +1430,7 @@ export async function ensureTaskSessionRuntime(sessionId: string) {
           executor,
           altusManaged,
           runtimeStatus: runtimeStatus?.status || 'ready',
+          durationMs: Date.now() - ensureStartedAt,
         });
         return {
           orchestratorSessionId,
@@ -1483,6 +1485,7 @@ export async function ensureTaskSessionRuntime(sessionId: string) {
     executor,
     altusManaged,
     runtimeStatus: runtimeStatus?.status || provision.status || 'ready',
+    durationMs: Date.now() - ensureStartedAt,
   });
 
   return {

@@ -19,16 +19,47 @@ async function main() {
     setGlobalDispatcher(new ProxyAgent(proxyUrl));
   }
 
-  const templateName = process.env.E2B_TEMPLATE_NAME || 'opencode-playwright-mcp-v5-neko-lockbridge-20260413';
+  const templateName = process.env.E2B_TEMPLATE_NAME || 'opencode-playwright-mcp-v7-osac-prebuilt-20260421';
   const patchUrl = await resolvePatchUrl();
+  const osacSpec = await resolveOsacBuildSpec();
 
-  const template = buildTemplate(patchUrl);
+  const template = buildTemplate({
+    patchUrl,
+    osacDownloadUrl: osacSpec.presignedUrl,
+    osacSha256: osacSpec.sha256,
+    osacVersion: osacSpec.version,
+  });
 
   await Template.build(template, templateName, {
     cpuCount: 2,
     memoryMB: 4096,
     onBuildLogs: defaultBuildLogger(),
   });
+}
+
+async function resolveOsacBuildSpec() {
+  const explicitUrl = process.env.E2B_TEMPLATE_OSAC_URL?.trim();
+  const explicitSha256 = process.env.E2B_TEMPLATE_OSAC_SHA256?.trim();
+  const explicitVersion = process.env.E2B_TEMPLATE_OSAC_VERSION?.trim();
+  if (explicitUrl && explicitSha256) {
+    return {
+      presignedUrl: explicitUrl,
+      sha256: explicitSha256,
+      version: explicitVersion || 'custom',
+    };
+  }
+
+  const { platformRuntimeArtifactService } = await import(
+    '../../apps/api/src/services/platform-runtime-artifact-service'
+  );
+  const { getPresignedDownloadUrl } = await import('../../apps/api/src/services/r2-client');
+  const published = await platformRuntimeArtifactService.getPublishedOsacDownloadSpec();
+  const expiresIn = Number(process.env.E2B_TEMPLATE_OSAC_EXPIRES || 60 * 60 * 24 * 7);
+  return {
+    presignedUrl: await getPresignedDownloadUrl(published.objectKey, expiresIn),
+    sha256: published.sha256,
+    version: published.version,
+  };
 }
 
 async function resolvePatchUrl(): Promise<string | undefined> {

@@ -290,7 +290,7 @@ test('deployment tool usage auto-attaches governed skill linked by tool name', a
       governance: {
         systemRole: 'deployment_orchestrator',
         adminManaged: true,
-        required: true,
+        required: false,
         autoActivation: {
           enabled: true,
           triggers: ['deploy'],
@@ -333,7 +333,7 @@ test('deployment tool usage auto-attaches governed skill linked by tool name', a
         governance: {
           systemRole: 'deployment_orchestrator',
           adminManaged: true,
-          required: true,
+          required: false,
           autoActivation: {
             enabled: true,
             triggers: ['deploy'],

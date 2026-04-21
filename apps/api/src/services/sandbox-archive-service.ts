@@ -321,6 +321,26 @@ function listRestoreCandidates(
   return candidates;
 }
 
+function uniqueNonEmptyKeys(values: Array<string | null | undefined>): string[] {
+  const deduped = new Set<string>();
+  for (const value of values) {
+    const key = asText(value);
+    if (!key) continue;
+    deduped.add(key);
+  }
+  return Array.from(deduped.values());
+}
+
+async function findFirstExistingR2Key(keys: string[]): Promise<string> {
+  const candidates = uniqueNonEmptyKeys(keys);
+  if (candidates.length === 0) return '';
+  const exists = await Promise.all(candidates.map((key) => sandboxArchiveServiceDeps.existsInR2(key)));
+  for (let index = 0; index < candidates.length; index += 1) {
+    if (exists[index]) return candidates[index]!;
+  }
+  return '';
+}
+
 function isArchiveEnabled(): boolean {
   const raw = String(process.env.E2B_ARCHIVE_ENABLED || 'true').trim().toLowerCase();
   return !['0', 'false', 'no', 'off'].includes(raw);
@@ -340,9 +360,18 @@ async function resolveWorkspaceRoot(sandboxId: string): Promise<{
   existingMetadata: Record<string, unknown>;
 }> {
   const env = await sandboxArchiveServiceDeps.sandboxExecutionEnvironmentDAO.getBySessionId(sandboxId);
-  const liveSandboxInfo = await sandboxArchiveServiceDeps.e2bConnector.getSandboxInfo(sandboxId).catch(() => null);
+  const envMetadata = asRecord(env?.metadata);
+  const envTaskSessionId = extractTaskSessionId(envMetadata);
+  const envWorkspaceRoot =
+    asText((envMetadata as any).opencodeWorkspaceRoot) ||
+    asText((envMetadata as any).altusWorkspaceRoot) ||
+    asText((envMetadata as any).workspaceRoot);
+  const liveSandboxInfo =
+    !envTaskSessionId && !envWorkspaceRoot
+      ? await sandboxArchiveServiceDeps.e2bConnector.getSandboxInfo(sandboxId).catch(() => null)
+      : null;
   const metadata = {
-    ...asRecord(env?.metadata),
+    ...envMetadata,
     ...asRecord(liveSandboxInfo?.metadata),
   };
   const taskSessionId = extractTaskSessionId(metadata);
@@ -632,8 +661,18 @@ export async function restoreWorkspaceIfArchived(
     await resolveWorkspaceRoot(sandboxId);
   const metadataKey = buildMetadataKey(taskSessionId, sandboxId);
   let manifest: Partial<ArchiveManifest> | undefined;
+  const requestedSnapshotKey = asText(options?.snapshotKey);
+  const baseRestoreCandidates = uniqueNonEmptyKeys([
+    requestedSnapshotKey,
+    buildArchiveKey(taskSessionId, sandboxId),
+    `sandboxes/${sandboxId}/workspace.tar.gz`,
+  ]);
+  const [metadataExists, baseRestoreKey] = await Promise.all([
+    sandboxArchiveServiceDeps.existsInR2(metadataKey),
+    findFirstExistingR2Key(baseRestoreCandidates),
+  ]);
 
-  if (await sandboxArchiveServiceDeps.existsInR2(metadataKey)) {
+  if (metadataExists) {
     try {
       manifest = parseManifest(await sandboxArchiveServiceDeps.downloadFromR2(metadataKey));
     } catch (error) {
@@ -641,17 +680,9 @@ export async function restoreWorkspaceIfArchived(
     }
   }
 
-  const requestedSnapshotKey = asText(options?.snapshotKey);
-  const candidates = [
-    ...(requestedSnapshotKey ? [requestedSnapshotKey] : []),
-    ...listRestoreCandidates(taskSessionId, sandboxId, manifest),
-  ];
-  let restoreKey = '';
-  for (const key of candidates) {
-    if (await sandboxArchiveServiceDeps.existsInR2(key)) {
-      restoreKey = key;
-      break;
-    }
+  let restoreKey = baseRestoreKey;
+  if (!restoreKey && manifest) {
+    restoreKey = await findFirstExistingR2Key(listRestoreCandidates(taskSessionId, sandboxId, manifest));
   }
   if (!restoreKey) {
     return false;

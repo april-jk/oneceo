@@ -275,7 +275,7 @@ test('submit auto-attaches deployment orchestrator skill for deploy requests', a
       governance: {
         systemRole: 'deployment_orchestrator',
         adminManaged: true,
-        required: true,
+        required: false,
         autoActivation: {
           enabled: true,
           triggers: ['deploy', 'redeploy', 'rollback', 'status'],
@@ -308,7 +308,7 @@ test('submit auto-attaches deployment orchestrator skill for deploy requests', a
               governance: {
                 systemRole: 'deployment_orchestrator',
                 adminManaged: true,
-                required: true,
+                required: false,
                 autoActivation: {
                   enabled: true,
                   triggers: ['deploy', 'redeploy', 'rollback', 'status'],
@@ -390,7 +390,7 @@ test('submit does not auto-attach deployment orchestrator skill for non-deploy r
       governance: {
         systemRole: 'deployment_orchestrator',
         adminManaged: true,
-        required: true,
+        required: false,
         autoActivation: {
           enabled: true,
           triggers: ['deploy', 'redeploy', 'rollback', 'status'],
@@ -454,7 +454,7 @@ test('submit does not auto-attach deployment orchestrator skill for negated depl
       governance: {
         systemRole: 'deployment_orchestrator',
         adminManaged: true,
-        required: true,
+        required: false,
         autoActivation: {
           enabled: true,
           triggers: ['deploy', 'redeploy', 'rollback', 'status'],
@@ -518,7 +518,7 @@ test('submit does not duplicate deployment orchestrator skill when already expli
       governance: {
         systemRole: 'deployment_orchestrator',
         adminManaged: true,
-        required: true,
+        required: false,
         autoActivation: {
           enabled: true,
           triggers: ['deploy', 'redeploy', 'rollback', 'status'],

@@ -22,9 +22,11 @@ import { classifyTaskIntentShape, type TaskIntentShape } from '../../services/ta
 import { taskCreationFileMemoryStore } from './file-memory-store';
 import { AltusRunState } from '../../services/altus-run-state';
 import { altusRunCoordinator } from '../../services/altus-run-coordinator';
+import { altusMemoryContextService } from '../../services/altus-memory-context-service';
 import { altusManagedSetupService } from '../../services/altus-managed-setup-service';
 import { deriveManagedTaskIntentProfile } from '../../services/altus-managed-prompt-service';
 import { readManagedSkillCatalog, readManagedSkillContext } from '../../services/altus-managed-shared';
+import { readSessionSkillState } from '../../services/task-session-skill-state-service';
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -689,6 +691,18 @@ export class TaskCreationService {
           ...(Array.isArray(payload.taskDescription?.deliverables) ? payload.taskDescription.deliverables : []),
           ...(Array.isArray(payload.taskDescription?.constraints) ? payload.taskDescription.constraints : []),
         ]);
+        const skillCatalog = readManagedSkillCatalog(payload.metadata?.managedSkillCatalog);
+        const skills = readManagedSkillContext(payload.metadata?.managedSkillContext);
+        const residentSkillSelections = skills.map((item) => ({
+          sourceType: item.sourceType,
+          skillId: item.skillId,
+          revisionId: item.revisionId,
+        }));
+        const sessionSkillState = readSessionSkillState(payload.metadata?.sessionSkillState);
+        const memoryContext = await altusMemoryContextService.buildPromptSectionForRun({
+          sessionId: this.sessionId,
+          userId: payload.userId,
+        });
         const state = new AltusRunState({
           runId: run.id,
           sessionId: this.sessionId,
@@ -696,10 +710,16 @@ export class TaskCreationService {
           model: run.model || this.resolveAltusModel(),
           userInput: this.buildExecutionBrief(payload, 'development'),
           sessionTitle: sessionMemory?.title || null,
+          memoryContextPrompt: memoryContext.promptSection,
+          userMemory: memoryContext.userMemory,
+          projectMemory: memoryContext.projectMemory,
+          sessionAltusMemory: memoryContext.sessionMemory,
           connectors: connectorSnapshot.statuses,
           mcpProviders: mcpToolSnapshot.providers as any,
-          skillCatalog: readManagedSkillCatalog(payload.metadata?.managedSkillCatalog),
-          skills: readManagedSkillContext(payload.metadata?.managedSkillContext),
+          skillCatalog,
+          skills,
+          residentSkillSelections,
+          sessionSkillState,
           taskIntentProfile,
         });
 

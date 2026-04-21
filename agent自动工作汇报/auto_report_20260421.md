@@ -36,3 +36,10 @@
   - `useTaskCreationAgent` 在 managed draft session 创建后补做项目归属绑定
   - `task-session-altus-memory-service` 在文件缺失时改为从 timeline 派生 session memory 并落库
 - 新增和更新了对应 Playwright 回归与服务层单测，最终复测通过。
+
+## 20:10 Altus managed 纯记忆问答误失败修复
+
+- 定位到 managed 协调器把“我是谁 / 你是谁 / 记得我吗”这类纯记忆问答也强行套进 `complete_task` 合约，模型直接回答纯文本后会被标记为 `managed_model_plain_text_without_tool_call`。
+- 已在 `altus-run-coordinator` 增加窄范围放行：只对纯身份/记忆问答接受纯文本直答，普通工程任务仍继续要求工具链和 `complete_task`。
+- 同步更新 managed prompt，消除“系统允许纯记忆直答”与“prompt 强制所有回复都必须 complete_task”之间的冲突。
+- 已补充 coordinator / prompt 回归测试，准备执行定向验证。

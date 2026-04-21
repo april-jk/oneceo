@@ -149,6 +149,8 @@ test("sidebar keeps session order stable when clicking project or session", asyn
 
     await page.locator("aside").getByRole("button", { name: projectName }).click();
     await expect(page).toHaveURL(new RegExp(`/project/${projectId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    await expect(page.locator("aside")).toContainText(olderSessionTitle);
+    await expect(page.locator("aside")).toContainText(newerSessionTitle);
 
     await openAllTasksDialog(page);
     const orderAfterProjectClick = await extractRelativeSessionOrder(page, [
@@ -160,6 +162,8 @@ test("sidebar keeps session order stable when clicking project or session", asyn
 
     await page.locator("aside").getByRole("button", { name: newerSessionTitle }).click();
     await expect(page).toHaveURL(new RegExp(`/session/${newerSessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    await expect(page.locator("aside")).toContainText(olderSessionTitle);
+    await expect(page.locator("aside")).toContainText(newerSessionTitle);
 
     await openAllTasksDialog(page);
     const orderAfterSessionClick = await extractRelativeSessionOrder(page, [

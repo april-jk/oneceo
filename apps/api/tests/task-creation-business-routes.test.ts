@@ -24,6 +24,8 @@ const originalHasForeignOwnedSessions = sessionDaoAny.hasForeignOwnedSessions;
 const originalRebindRecentUnownedSessionsToUser = sessionDaoAny.rebindRecentUnownedSessionsToUser;
 const originalRebindSessionsFromLegacyUserId = sessionDaoAny.rebindSessionsFromLegacyUserId;
 const originalGetSessionDao = sessionDaoAny.getSession;
+const originalGetTaskDescriptionDao = sessionDaoAny.getTaskDescription;
+const originalGetMessagesDao = sessionDaoAny.getMessages;
 const originalCreateSessionDao = sessionDaoAny.createSession;
 const originalBindUserIfMissingDao = sessionDaoAny.bindUserIfMissing;
 const originalAddMessageDao = sessionDaoAny.addMessage;
@@ -41,6 +43,8 @@ after(() => {
   sessionDaoAny.rebindRecentUnownedSessionsToUser = originalRebindRecentUnownedSessionsToUser;
   sessionDaoAny.rebindSessionsFromLegacyUserId = originalRebindSessionsFromLegacyUserId;
   sessionDaoAny.getSession = originalGetSessionDao;
+  sessionDaoAny.getTaskDescription = originalGetTaskDescriptionDao;
+  sessionDaoAny.getMessages = originalGetMessagesDao;
   sessionDaoAny.createSession = originalCreateSessionDao;
   sessionDaoAny.bindUserIfMissing = originalBindUserIfMissingDao;
   sessionDaoAny.addMessage = originalAddMessageDao;
@@ -123,6 +127,8 @@ test('GET /api/task-creation/sessions only returns sessions owned by current use
   sessionDaoAny.hasForeignOwnedSessions = async () => false;
   sessionDaoAny.rebindRecentUnownedSessionsToUser = async () => [];
   sessionDaoAny.rebindSessionsFromLegacyUserId = async () => [];
+  sessionDaoAny.getTaskDescription = async () => null;
+  sessionDaoAny.getMessages = async () => [];
   legacyMappingDaoAny.upsert = async () => null;
   legacyMappingDaoAny.listLegacyIdsByAppUserId = async () => [];
   legacyMappingDaoAny.resolveAppUserIdByLegacyUserId = async () => null;
@@ -139,6 +145,127 @@ test('GET /api/task-creation/sessions only returns sessions owned by current use
     assert.equal(payload.success, true);
     assert.equal(payload.data.length, 1);
     assert.equal(payload.data[0].id, 'owned-session');
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/task-creation/sessions returns full owned db list when memory only has a partial overlap', async () => {
+  const server = await startServer();
+  fileStoreAny.listSessions = async () => [createMemorySession('owned-session-2', 'Recovered Session 2')];
+  sessionDaoAny.getRecentSessions = async (_limit: number, userId?: string) => {
+    assert.equal(userId, 'user-partial-memory');
+    return [
+      {
+        id: 'owned-session-1',
+        status: 'completed',
+        projectId: null,
+        projectName: null,
+        createdAt: new Date('2026-04-21T10:00:00.000Z'),
+        updatedAt: new Date('2026-04-21T12:00:00.000Z'),
+      },
+      {
+        id: 'owned-session-2',
+        status: 'in_progress',
+        projectId: null,
+        projectName: null,
+        createdAt: new Date('2026-04-21T11:00:00.000Z'),
+        updatedAt: new Date('2026-04-21T13:00:00.000Z'),
+      },
+    ];
+  };
+  sessionDaoAny.hasForeignOwnedSessions = async () => false;
+  sessionDaoAny.rebindRecentUnownedSessionsToUser = async () => [];
+  sessionDaoAny.rebindSessionsFromLegacyUserId = async () => [];
+  sessionDaoAny.getTaskDescription = async () => null;
+  sessionDaoAny.getMessages = async (sessionId: string) =>
+    sessionId === 'owned-session-1'
+      ? [{ role: 'user', content: '请帮我总结部署问题' }]
+      : [{ role: 'user', content: '继续处理站点发布' }];
+  legacyMappingDaoAny.upsert = async () => null;
+  legacyMappingDaoAny.listLegacyIdsByAppUserId = async () => [];
+  legacyMappingDaoAny.resolveAppUserIdByLegacyUserId = async () => null;
+
+  try {
+    const response = await fetch(`${server.origin}/api/task-creation/sessions?limit=all`, {
+      headers: {
+        'x-test-user-id': 'user-partial-memory',
+      },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.deepEqual(
+      payload.data.map((item: { id: string }) => item.id),
+      ['owned-session-1', 'owned-session-2']
+    );
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/task-creation/sessions does not reuse a smaller cached list for a larger request', async () => {
+  const server = await startServer();
+  fileStoreAny.listSessions = async () => [];
+
+  const sessions = [
+    {
+      id: 'owned-cache-1',
+      status: 'completed',
+      projectId: null,
+      projectName: null,
+      createdAt: new Date('2026-04-21T08:00:00.000Z'),
+      updatedAt: new Date('2026-04-21T09:00:00.000Z'),
+    },
+    {
+      id: 'owned-cache-2',
+      status: 'in_progress',
+      projectId: null,
+      projectName: null,
+      createdAt: new Date('2026-04-21T10:00:00.000Z'),
+      updatedAt: new Date('2026-04-21T11:00:00.000Z'),
+    },
+  ];
+  const requestedLimits: number[] = [];
+  sessionDaoAny.getRecentSessions = async (limit: number, userId?: string) => {
+    assert.equal(userId, 'user-cache-limit');
+    requestedLimits.push(limit);
+    return limit <= 1 ? sessions.slice(0, 1) : sessions;
+  };
+  sessionDaoAny.hasForeignOwnedSessions = async () => false;
+  sessionDaoAny.rebindRecentUnownedSessionsToUser = async () => [];
+  sessionDaoAny.rebindSessionsFromLegacyUserId = async () => [];
+  sessionDaoAny.getTaskDescription = async () => null;
+  sessionDaoAny.getMessages = async () => [];
+  legacyMappingDaoAny.upsert = async () => null;
+  legacyMappingDaoAny.listLegacyIdsByAppUserId = async () => [];
+  legacyMappingDaoAny.resolveAppUserIdByLegacyUserId = async () => null;
+
+  try {
+    const firstResponse = await fetch(`${server.origin}/api/task-creation/sessions?limit=1`, {
+      headers: {
+        'x-test-user-id': 'user-cache-limit',
+      },
+    });
+    const firstPayload = await firstResponse.json();
+
+    const secondResponse = await fetch(`${server.origin}/api/task-creation/sessions?limit=all`, {
+      headers: {
+        'x-test-user-id': 'user-cache-limit',
+      },
+    });
+    const secondPayload = await secondResponse.json();
+
+    assert.equal(firstResponse.status, 200);
+    assert.equal(firstPayload.data.length, 1);
+    assert.equal(secondResponse.status, 200);
+    assert.equal(secondPayload.success, true);
+    assert.deepEqual(
+      secondPayload.data.map((item: { id: string }) => item.id),
+      ['owned-cache-1', 'owned-cache-2']
+    );
+    assert.equal(requestedLimits.length, 2);
   } finally {
     await server.close();
   }
@@ -269,6 +396,8 @@ test('GET /api/task-creation/sessions rebinds legacy user sessions before orphan
   fileStoreAny.listSessions = async () => [createMemorySession('legacy-bound-1', 'Legacy Bound')];
   sessionDaoAny.getRecentSessions = async () => [];
   sessionDaoAny.hasForeignOwnedSessions = async () => true;
+  sessionDaoAny.getTaskDescription = async () => null;
+  sessionDaoAny.getMessages = async () => [];
   legacyMappingDaoAny.upsert = async () => null;
   legacyMappingDaoAny.listLegacyIdsByAppUserId = async () => [];
   legacyMappingDaoAny.resolveAppUserIdByLegacyUserId = async () => null;

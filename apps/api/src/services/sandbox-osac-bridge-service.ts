@@ -48,12 +48,8 @@ function resolveExecutorRemoteBaseDir(
   };
 
   const derived = deriveFromWorkspaceRoot();
-  const isLegacyConfiguredDir = !configured || configured === '/opt/.altus/opencode';
 
   if (executor !== 'codex') {
-    if (derived && isLegacyConfiguredDir) {
-      return derived;
-    }
     return configured || derived || '/home/user/opencode';
   }
 

@@ -94,7 +94,7 @@ export const PLATFORM_SKILL_SEEDS: PlatformSkillSeed[] = [
     metadataJson: {
       systemRole: 'deployment_orchestrator',
       adminManaged: true,
-      required: true,
+      required: false,
       autoActivation: {
         enabled: true,
         triggers: ['deploy', 'redeploy', 'rollback', 'status'],

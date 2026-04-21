@@ -21,3 +21,18 @@
 - 已将 Altus 运行链路接上三级记忆：managed run 启动时组装“用户级 + 项目级 + session 级” prompt context，coordinator 在 sandbox 物化 session 记忆文件，并在 `completed / failed / waiting_user / archive / restore` 等受控时机回写 DB 与 Redis。
 - 已同步补齐边界约束：`POST /sessions` 支持创建时带 `projectId`，项目删除在仍有关联 session 时返回 409，项目改名后同步 session `projectName` 缓存，已进入有效运行阶段的 session 禁止再变更项目归属。
 - 已补充针对性回归测试：`altus-managed-run-entry.service.test.ts` 覆盖 run 输入带入 memory context，`altus-run-coordinator.test.ts` 覆盖 memory prompt 注入与 session 记忆 flush，`sandbox-archive.service.test.ts` 覆盖 archive/restore 时 Altus 记忆回写。
+## 17:41 Altus三级记忆 Playwright 全链路测试准备
+
+- 新增 Altus 三级记忆 Playwright 测试方案文档，覆盖用户级、项目级、session 级主链路。
+- 准备单次登录复用 cookie 的 Playwright 回归，用项目内箭头入口直接起会话。
+- 计划同时核验 UI、接口返回、内部 memory context 和 session memory 快照，避免只看表面交互。
+
+## 18:20 Altus三级记忆 Playwright 全链路修复与复测
+
+- 通过 Playwright 真实跑通后，定位到两个实际问题：
+  1. managed 模式从项目箭头进入新会话时，draft session 未继承 `projectId`
+  2. session memory 在有 sandbox 但缺少 memory 文件时不会 fallback 回写，导致 `version=0`
+- 已分别修复：
+  - `useTaskCreationAgent` 在 managed draft session 创建后补做项目归属绑定
+  - `task-session-altus-memory-service` 在文件缺失时改为从 timeline 派生 session memory 并落库
+- 新增和更新了对应 Playwright 回归与服务层单测，最终复测通过。

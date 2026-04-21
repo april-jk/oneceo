@@ -6,8 +6,8 @@ import { ArrowLeft, CalendarClock, CheckCircle2, Clock3, FolderOpen, MessageSqua
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
-  listTaskCreationProjects,
-  listTaskCreationSessions,
+  getTaskCreationProject,
+  listTaskCreationProjectSessions,
   type TaskCreationProjectSummary,
   type TaskCreationSessionSummary,
 } from "@/lib/task-creation-client";
@@ -53,16 +53,13 @@ export default function StandardProjectDetail({
 
       setLoading(true);
       try {
-        const [projects, allSessions] = await Promise.all([
-          listTaskCreationProjects(),
-          listTaskCreationSessions("all"),
+        const [matchedProject, matchedSessions] = await Promise.all([
+          getTaskCreationProject(projectId),
+          listTaskCreationProjectSessions(projectId),
         ]);
         if (disposed) return;
 
-        const matchedProject =
-          projects.find((item) => item.id === projectId) || null;
-        const matchedSessions = allSessions
-          .filter((session) => session.projectId === projectId)
+        const sortedSessions = matchedSessions
           .sort((left, right) => {
             const leftTime = Date.parse(left.updatedAt || "");
             const rightTime = Date.parse(right.updatedAt || "");
@@ -72,7 +69,7 @@ export default function StandardProjectDetail({
           });
 
         setProject(matchedProject);
-        setSessions(matchedSessions);
+        setSessions(sortedSessions);
       } catch (error) {
         if (disposed) return;
         toast.error(

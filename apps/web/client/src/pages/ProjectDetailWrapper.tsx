@@ -64,6 +64,9 @@ export default function ProjectDetailWrapper() {
         <StandardProjectDetail
           projectId={projectId}
           onBack={() => setLocation("/home")}
+          onOpenSession={(sessionId) =>
+            setLocation(`/session/${encodeURIComponent(sessionId)}?view=history`)
+          }
         />
       ) : projectKind === "self-organized" ? (
         <ProjectDetail

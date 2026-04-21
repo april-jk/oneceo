@@ -245,7 +245,11 @@ export default function StandardProjectDetail({
                 <Link
                   key={session.id}
                   href={`/session/${encodeURIComponent(session.id)}?view=history`}
-                  onClick={() => onOpenSession?.(session.id)}
+                  onClick={(event) => {
+                    if (!onOpenSession) return;
+                    event.preventDefault();
+                    onOpenSession(session.id);
+                  }}
                 >
                   <div className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition-colors hover:bg-muted/30">
                     <div className="min-w-0 flex-1">

@@ -886,6 +886,11 @@ export default function Sidebar({
   const renderSessionTaskItem = React.useCallback(
     (session: SessionTask, options?: { compact?: boolean; onNavigate?: () => void }) => {
       const compact = Boolean(options?.compact);
+      const navigateToSession =
+        options?.onNavigate ||
+        (() => {
+          setLocation(`/session/${encodeURIComponent(session.sessionId)}?view=history`);
+        });
       const statusVisual = getSessionStatusVisual(session.status, t);
       const favoriteLabel = session.isFavorite ? t("sidebar.favoriteRemove") : t("sidebar.favoriteAdd");
       const leadingIcon = statusVisual.waitingUser ? (
@@ -902,6 +907,7 @@ export default function Sidebar({
         <Button
           variant="ghost"
           className="grid h-7 w-full min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-1.5 overflow-hidden rounded-lg px-2 text-sidebar-foreground transition-colors duration-150 hover:bg-sidebar-accent/50"
+          onClick={navigateToSession}
         >
           {leadingIcon}
           <span className="text-xs truncate flex-1 min-w-0 text-left">
@@ -915,7 +921,7 @@ export default function Sidebar({
         <Button
           variant="ghost"
           className="w-full min-w-0 justify-between h-10 overflow-hidden px-3 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
-          onClick={options?.onNavigate}
+          onClick={navigateToSession}
         >
           <span className="flex items-center gap-2 min-w-0">
             {leadingIcon}
@@ -931,13 +937,8 @@ export default function Sidebar({
 
       return (
         <ContextMenu key={session.sessionId}>
-          <ContextMenuTrigger>
-            <Link
-              href={`/session/${session.sessionId}?view=history`}
-              className="block min-w-0 max-w-full"
-            >
-              {button}
-            </Link>
+          <ContextMenuTrigger asChild>
+            {button}
           </ContextMenuTrigger>
           <ContextMenuContent className="w-52">
             <ContextMenuItem disabled>
@@ -1029,7 +1030,7 @@ export default function Sidebar({
         </ContextMenu>
       );
     },
-    [assignableProjects, handleFavoriteToggle, handleProjectAssign, moveProjectSubmitting, openCreateProjectDialog, openDeleteDialog, openRenameDialog, t],
+    [assignableProjects, handleFavoriteToggle, handleProjectAssign, moveProjectSubmitting, openCreateProjectDialog, openDeleteDialog, openRenameDialog, setLocation, t],
   );
 
   return (
@@ -1239,7 +1240,11 @@ export default function Sidebar({
                                         <ContextMenuContent className="w-44">
                                           <ContextMenuItem onSelect={() => void handleToggleProjectPinned(project)}>
                                             <Pin className={`h-4 w-4 ${project.pinned ? "fill-current" : ""}`} />
-                                            <span>{t("sidebar.projectPinAction")}</span>
+                                            <span>
+                                              {project.pinned
+                                                ? t("sidebar.projectUnpinAction")
+                                                : t("sidebar.projectPinAction")}
+                                            </span>
                                           </ContextMenuItem>
                                           <ContextMenuItem
                                             onSelect={() => {

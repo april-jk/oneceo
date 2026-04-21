@@ -1265,8 +1265,9 @@ function mapStageFromStatus(status: string | null | undefined) {
   return 'executing';
 }
 
-async function buildSessionSummaryFromDb(limit: number, userId: string) {
-  const sessions = await taskCreationSessionDAO.getRecentSessions(limit, userId);
+async function buildSessionSummaryFromDbSessions(
+  sessions: Awaited<ReturnType<typeof taskCreationSessionDAO.getRecentSessions>>
+) {
   const result: any[] = [];
   for (const session of sessions) {
     let description: Awaited<ReturnType<typeof taskCreationSessionDAO.getTaskDescription>> | null = null;
@@ -1303,6 +1304,23 @@ async function buildSessionSummaryFromDb(limit: number, userId: string) {
     });
   }
   return result;
+}
+
+function mergeDbSessionSummaryWithMemory(dbSummary: any, memorySession: FileSessionRecord | null) {
+  if (!memorySession) return dbSummary;
+
+  const mergedLifecycle = mergeSessionLifecycleFromDb(toSessionSummary(memorySession), dbSummary);
+  return {
+    ...dbSummary,
+    ...mergedLifecycle,
+    id: dbSummary.id,
+    title: dbSummary.title,
+    projectId: dbSummary.projectId || mergedLifecycle.projectId || null,
+    projectName: dbSummary.projectName || mergedLifecycle.projectName || null,
+    createdAt: dbSummary.createdAt,
+    updatedAt: mergedLifecycle.updatedAt || dbSummary.updatedAt,
+    messages: [],
+  };
 }
 
 async function createDraftTaskSession(title: string | undefined, userId: string) {
@@ -3832,25 +3850,23 @@ router.get('/sessions', async (req, res) => {
         });
       }
     }
-    const ownedSessionIds = new Set(ownedDbSessions.map((item) => String(item.id)));
-
     const rawSessions = await taskCreationFileMemoryStore.listSessions(limit);
-    let sessions = rawSessions
-      .filter((session) => ownedSessionIds.has(String(session.id)))
-      .map(toSessionSummary);
-    if (!refresh && sessions.length > 0) {
-      return res.json({
-        success: true,
-        data: sessions,
-      });
-    }
+    const ownedSessionIds = new Set(ownedDbSessions.map((item) => String(item.id)));
+    const ownedMemorySessions = rawSessions.filter((session) => ownedSessionIds.has(String(session.id)));
+    const ownedMemoryById = new Map(ownedMemorySessions.map((session) => [String(session.id), session]));
 
     const sessionListCache = sessionListCacheByUser.get(currentUser.userId) || null;
+    const cacheCoversRequestedLimit = Boolean(
+      sessionListCache &&
+      (sessionListCache.limit >= limit || sessionListCache.data.length < sessionListCache.limit) &&
+      sessionListCache.data.length >= ownedDbSessions.length
+    );
     if (
       !refresh &&
       sessionListCache &&
       now - sessionListCache.fetchedAt < cacheTtlMs &&
-      sessionListCache.data.length > 0
+      sessionListCache.data.length > 0 &&
+      cacheCoversRequestedLimit
     ) {
       const cached = limit >= sessionListCache.data.length
         ? sessionListCache.data
@@ -3862,39 +3878,17 @@ router.get('/sessions', async (req, res) => {
       });
     }
 
-    if (sessions.length === 0) {
-      const summaries = await buildSessionSummaryFromDb(limit, currentUser.userId);
-      if (summaries.length === 0) {
-        logSessionListEmpty({
-          userId: currentUser.userId,
-          source: 'db_summary',
-          ownedDbCount: ownedDbSessions.length,
-          memoryCount: rawSessions.length,
-          refresh,
-        });
-      }
-      sessionListCacheByUser.set(currentUser.userId, {
-        fetchedAt: now,
-        limit,
-        data: summaries,
-      });
-      return res.json({
-        success: true,
-        data: summaries,
-        cache: { hit: false },
+    let sessions = await buildSessionSummaryFromDbSessions(ownedDbSessions);
+    if (sessions.length > ownedMemorySessions.length && ownedMemorySessions.length > 0) {
+      console.warn('[TASK_SESSION_LIST_MEMORY_PARTIAL]', {
+        userId: currentUser.userId,
+        ownedDbCount: sessions.length,
+        ownedMemoryCount: ownedMemorySessions.length,
+        memoryCount: rawSessions.length,
+        refresh,
       });
     }
-
-    try {
-      const dbSummaries = await buildSessionSummaryFromDb(limit, currentUser.userId);
-      const dbById = new Map(dbSummaries.map((item) => [String(item.id), item]));
-      sessions = sessions.map((session) => mergeSessionLifecycleFromDb(session, dbById.get(String(session.id))));
-    } catch (error) {
-      if (!isTransientDatabaseError(error)) {
-        throw error;
-      }
-      console.warn('[TASK_SESSION_LIST_DB_RECONCILE_FAILED]', error);
-    }
+    sessions = sessions.map((session) => mergeDbSessionSummaryWithMemory(session, ownedMemoryById.get(String(session.id)) || null));
 
     sessionListCacheByUser.set(currentUser.userId, {
       fetchedAt: now,

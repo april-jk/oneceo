@@ -48,7 +48,13 @@ export interface FileSessionRecord {
   id: string;
   title: string;
   titleLocked?: boolean;
-  titleSource?: 'placeholder' | 'first_explicit_user_input' | 'manual';
+  titleSource?:
+    | 'placeholder'
+    | 'first_explicit_user_input'
+    | 'task_description'
+    | 'clarification_summary'
+    | 'manual';
+  titleState?: 'provisional' | 'resolved' | 'manual';
   titleResolvedAt?: string;
   isFavorite?: boolean;
   projectId?: string | null;
@@ -97,6 +103,7 @@ interface MemoryFileShape {
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const MEMORY_FILE = path.join(DATA_DIR, 'task-creation-memory.json');
+const DEFAULT_SESSION_TITLE = '待识别任务';
 
 type TaskStage = NonNullable<FileSessionRecord['stage']>;
 type TaskPhase = NonNullable<FileSessionRecord['phase']>;
@@ -329,9 +336,10 @@ class TaskCreationFileMemoryStore {
 
       const session: FileSessionRecord = {
         id: sessionId || this.createId('session'),
-        title: title.trim().slice(0, 80) || '新建任务会话',
+        title: title.trim().slice(0, 80) || DEFAULT_SESSION_TITLE,
         titleLocked: false,
         titleSource: 'placeholder',
+        titleState: 'provisional',
         isFavorite: false,
         projectId: null,
         projectName: null,
@@ -588,6 +596,7 @@ class TaskCreationFileMemoryStore {
     options?: {
       lock?: boolean;
       source?: FileSessionRecord['titleSource'];
+      state?: FileSessionRecord['titleState'];
       force?: boolean;
       resolvedAt?: string;
     }
@@ -602,20 +611,29 @@ class TaskCreationFileMemoryStore {
 
       const nextLock = Boolean(options?.lock);
       const nextSource = options?.source || session.titleSource || 'placeholder';
+      const nextState =
+        options?.state ||
+        (nextSource === 'manual'
+          ? 'manual'
+          : nextSource === 'task_description' || nextSource === 'clarification_summary'
+            ? 'resolved'
+            : session.titleState || 'provisional');
       const nextResolvedAt =
         options?.resolvedAt || (nextLock ? new Date().toISOString() : session.titleResolvedAt);
       const titleChanged = session.title !== nextTitle;
       const lockChanged = Boolean(session.titleLocked) !== nextLock;
       const sourceChanged = session.titleSource !== nextSource;
+      const stateChanged = session.titleState !== nextState;
       const resolvedAtChanged = session.titleResolvedAt !== nextResolvedAt;
 
-      if (!titleChanged && !lockChanged && !sourceChanged && !resolvedAtChanged) {
+      if (!titleChanged && !lockChanged && !sourceChanged && !stateChanged && !resolvedAtChanged) {
         return;
       }
 
       session.title = nextTitle;
       session.titleLocked = nextLock;
       session.titleSource = nextSource;
+      session.titleState = nextState;
       session.titleResolvedAt = nextResolvedAt;
       session.updatedAt = new Date().toISOString();
       await this.writeMemory(memory);

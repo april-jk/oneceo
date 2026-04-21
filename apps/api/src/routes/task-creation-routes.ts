@@ -76,7 +76,9 @@ const router = express.Router();
 const TASK_ATTACHMENT_DIR = '.attachments';
 const recentHistoryHydrationInFlight = new Map<string, Promise<void>>();
 const recentHistoryHydrationQueuedAt = new Map<string, number>();
-const DEFAULT_SESSION_TITLE = '新建任务会话';
+const DEFAULT_SESSION_TITLE = '待识别任务';
+const WAITING_SESSION_TITLE = '待补充需求';
+const LEGACY_DEFAULT_SESSION_TITLE = '新建任务会话';
 const WEAK_INTENT_TITLE_INPUTS = new Set([
   '你好',
   '您好',
@@ -732,11 +734,18 @@ function toIso(value: Date | string | null | undefined): string {
 
 function toSessionSummary(session: any) {
   const normalizedStage = normalizeLiveSessionStage(session);
+  const titleResolution = resolveDisplaySessionTitle({
+    storedTitle: session.title,
+    storedTitleSource: session.titleSource,
+    storedTitleState: session.titleState,
+    status: session.status,
+  });
   return {
     id: session.id,
-    title: session.title,
-    titleLocked: Boolean(session.titleLocked),
-    titleSource: session.titleSource,
+    title: titleResolution.title,
+    titleLocked: Boolean(session.titleLocked) || titleResolution.titleSource !== 'placeholder',
+    titleSource: titleResolution.titleSource,
+    titleState: titleResolution.titleState,
     titleResolvedAt: session.titleResolvedAt,
     isFavorite: Boolean(session.isFavorite),
     projectId: session.projectId || null,
@@ -904,11 +913,6 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
     }
     console.warn('[TASK_SESSION_DB_HYDRATE_PARTIAL]', { sessionId, error });
   }
-  const titleCandidate =
-    taskDescription?.title ||
-    messages?.find((m) => m.role === 'user')?.content ||
-    '新建任务会话';
-
   const status: FileSessionRecord['status'] =
     session.status === 'completed' || session.status === 'failed' || session.status === 'waiting_user'
       ? session.status
@@ -953,10 +957,18 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
       })
     : false;
   const sandboxExecutor = inferredExecutor || (hasSandboxHistory ? 'opencode' : '');
+  const titleResolution = resolveDisplaySessionTitle({
+    taskDescriptionTitle: taskDescription?.title,
+    firstUserMessage: messages?.find((m) => m.role === 'user')?.content,
+    status,
+  });
 
   return {
     id: session.id,
-    title: String(titleCandidate).trim().slice(0, 80) || '新建任务会话',
+    title: titleResolution.title,
+    titleLocked: titleResolution.titleSource !== 'placeholder',
+    titleSource: titleResolution.titleSource,
+    titleState: titleResolution.titleState,
     isFavorite: false,
     projectId: session.projectId || null,
     projectName: session.projectName || null,
@@ -1050,10 +1062,6 @@ async function buildLightweightFileSessionFromDb(sessionId: string): Promise<Fil
       );
     });
   const sandboxExecutor = inferredExecutor || (hasSandboxSignals ? 'opencode' : '');
-  const titleCandidate =
-    taskDescription?.title ||
-    normalizedRecentMessages.find((message) => asText(message.role) === 'user')?.content ||
-    '新建任务会话';
 
   const status: FileSessionRecord['status'] =
     session.status === 'completed' || session.status === 'failed' || session.status === 'waiting_user'
@@ -1064,13 +1072,21 @@ async function buildLightweightFileSessionFromDb(sessionId: string): Promise<Fil
       ? 'completed'
       : status === 'failed'
         ? 'failed'
-        : status === 'waiting_user'
+      : status === 'waiting_user'
           ? 'clarifying'
           : 'executing';
+  const titleResolution = resolveDisplaySessionTitle({
+    taskDescriptionTitle: taskDescription?.title,
+    firstUserMessage: normalizedRecentMessages.find((message) => asText(message.role) === 'user')?.content,
+    status,
+  });
 
   return {
     id: session.id,
-    title: String(titleCandidate).trim().slice(0, 80) || '新建任务会话',
+    title: titleResolution.title,
+    titleLocked: titleResolution.titleSource !== 'placeholder',
+    titleSource: titleResolution.titleSource,
+    titleState: titleResolution.titleState,
     projectId: session.projectId || null,
     projectName: session.projectName || null,
     status,
@@ -1110,6 +1126,13 @@ async function hydrateFileSessionFromDb(sessionId: string) {
   const record = await buildFileSessionFromDb(sessionId);
   if (!record) return null;
   await taskCreationFileMemoryStore.createSession(record.title, record.id);
+  await taskCreationFileMemoryStore.updateSessionTitle(record.id, record.title, {
+    lock: Boolean(record.titleLocked),
+    source: record.titleSource,
+    state: record.titleState,
+    force: true,
+    resolvedAt: record.titleResolvedAt,
+  });
   await taskCreationFileMemoryStore.updateSessionStatus(record.id, record.status as any);
   if (record.runtime?.orchestratorSessionId) {
     await taskCreationFileMemoryStore.updateRuntimeBinding(record.id, {
@@ -1140,6 +1163,28 @@ async function resolveTaskSessionRecord(sessionId: string) {
   session = await mergeSessionLifecycleFromDbBestEffort(sessionId, session);
   if (!session) {
     session = await hydrateFileSessionFromDb(sessionId);
+  } else {
+    try {
+      const lightweight = await buildLightweightFileSessionFromDb(sessionId);
+      if (
+        lightweight &&
+        getSessionTitleSourcePriority(lightweight.titleSource) >= getSessionTitleSourcePriority(session.titleSource)
+      ) {
+        session = {
+          ...session,
+          title: lightweight.title,
+          titleLocked: lightweight.titleLocked,
+          titleSource: lightweight.titleSource,
+          titleState: lightweight.titleState,
+          titleResolvedAt: lightweight.titleResolvedAt,
+        };
+      }
+    } catch (error) {
+      if (!isTransientDatabaseError(error)) {
+        throw error;
+      }
+      console.warn('[TASK_SESSION_TITLE_RECONCILE_SKIPPED]', { sessionId, error });
+    }
   }
   session = await reconcileRecoveredOpencodeCompletion(session);
   return session;
@@ -1285,15 +1330,16 @@ async function buildSessionSummaryFromDbSessions(
     }
     const firstUserMessage =
       messages?.find((message) => message.role === 'user' && asText(message.content))?.content || '';
-    const title =
-      description?.title ||
-      (isExplicitSessionTitleInput(String(firstUserMessage))
-        ? deriveResolvedSessionTitle(firstUserMessage)
-        : '') ||
-      `任务会话 ${String(session.id).slice(-6)}`;
+    const titleResolution = resolveDisplaySessionTitle({
+      taskDescriptionTitle: description?.title,
+      firstUserMessage,
+      status: session.status,
+    });
     result.push({
       id: session.id,
-      title: title.trim().slice(0, 80),
+      title: titleResolution.title,
+      titleSource: titleResolution.titleSource,
+      titleState: titleResolution.titleState,
       projectId: session.projectId || null,
       projectName: session.projectName || null,
       status: session.status,
@@ -1309,12 +1355,26 @@ async function buildSessionSummaryFromDbSessions(
 function mergeDbSessionSummaryWithMemory(dbSummary: any, memorySession: FileSessionRecord | null) {
   if (!memorySession) return dbSummary;
 
-  const mergedLifecycle = mergeSessionLifecycleFromDb(toSessionSummary(memorySession), dbSummary);
+  const memorySummary = toSessionSummary(memorySession);
+  const mergedLifecycle = mergeSessionLifecycleFromDb(memorySummary, dbSummary);
+  const dbPriority = getSessionTitleSourcePriority(dbSummary.titleSource);
+  const memoryPriority = getSessionTitleSourcePriority(memorySummary.titleSource);
+  const preferMemoryTitle =
+    memoryPriority > dbPriority ||
+    (memoryPriority === dbPriority &&
+      !isPlaceholderSessionTitle(memorySummary.title) &&
+      isPlaceholderSessionTitle(dbSummary.title));
+  const titleSummary = preferMemoryTitle ? memorySummary : dbSummary;
+
   return {
     ...dbSummary,
     ...mergedLifecycle,
     id: dbSummary.id,
-    title: dbSummary.title,
+    title: titleSummary.title,
+    titleLocked: titleSummary.titleLocked,
+    titleSource: titleSummary.titleSource,
+    titleState: titleSummary.titleState,
+    titleResolvedAt: titleSummary.titleResolvedAt || mergedLifecycle.titleResolvedAt || null,
     projectId: dbSummary.projectId || mergedLifecycle.projectId || null,
     projectName: dbSummary.projectName || mergedLifecycle.projectName || null,
     createdAt: dbSummary.createdAt,
@@ -1330,6 +1390,14 @@ async function createDraftTaskSession(title: string | undefined, userId: string)
     status: 'in_progress',
   });
   await taskCreationFileMemoryStore.createSession(title || DEFAULT_SESSION_TITLE, created.id);
+  if (title && !isPlaceholderSessionTitle(title) && !isWeakIntentTitleInput(title)) {
+    await taskCreationFileMemoryStore.updateSessionTitle(created.id, title, {
+      lock: true,
+      source: 'manual',
+      state: 'manual',
+      force: true,
+    });
+  }
   await taskCreationFileMemoryStore.updateSessionStatus(created.id, 'in_progress');
   return created.id;
 }
@@ -1980,7 +2048,7 @@ function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function normalizeSessionTitleText(value: unknown): string {
+function sanitizeSessionTitleText(value: unknown): string {
   return asText(value).replace(/\s+/g, ' ').trim();
 }
 
@@ -2001,7 +2069,7 @@ function isWeakIntentTitleInput(value: string): boolean {
 }
 
 function isExplicitSessionTitleInput(value: string): boolean {
-  const normalized = normalizeSessionTitleText(value);
+  const normalized = sanitizeSessionTitleText(value);
   if (!normalized) return false;
   if (isWeakIntentTitleInput(normalized)) return false;
   if (normalized.length >= 12) return true;
@@ -2011,7 +2079,201 @@ function isExplicitSessionTitleInput(value: string): boolean {
 }
 
 function deriveResolvedSessionTitle(value: unknown): string {
-  return normalizeSessionTitleText(value).slice(0, 80);
+  return sanitizeSessionTitleText(value).slice(0, 80);
+}
+
+function resolvePlaceholderSessionTitle(status: unknown): string {
+  return asText(status) === 'waiting_user' ? WAITING_SESSION_TITLE : DEFAULT_SESSION_TITLE;
+}
+
+function isLegacyIdStyleSessionTitle(value: string): boolean {
+  return /^任务会话\s+[a-z0-9]{4,}$/i.test(value.trim());
+}
+
+function isPlaceholderSessionTitle(value: unknown): boolean {
+  const normalized = deriveResolvedSessionTitle(value);
+  if (!normalized) return true;
+  return (
+    normalized === DEFAULT_SESSION_TITLE ||
+    normalized === WAITING_SESSION_TITLE ||
+    normalized === LEGACY_DEFAULT_SESSION_TITLE ||
+    isLegacyIdStyleSessionTitle(normalized)
+  );
+}
+
+function cleanupSessionTitleObject(value: string): string {
+  return value
+    .replace(/^(?:这个|该|当前|目前|刚才的?|一下|一轮|一次|关于)\s*/i, '')
+    .replace(/(?:的根因|根因|原因)$/i, '')
+    .replace(/[，,。；;：:!！?？]+$/g, '')
+    .replace(/\bhtml\b/gi, 'HTML')
+    .replace(/\bcss\b/gi, 'CSS')
+    .replace(/\bnode(?:\.js|js)\b/gi, 'Node.js')
+    .replace(/\breact\b/gi, 'React')
+    .replace(/\bvue\b/gi, 'Vue')
+    .replace(/\brailway\b/gi, 'Railway')
+    .replace(/\bapi\b/gi, 'API')
+    .replace(/\bdb\b/gi, 'DB')
+    .replace(/\b(v\d+)(?=[\u4e00-\u9fff])/gi, '$1 ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripSessionTitleLeadPhrases(value: string): string {
+  let text = value.trim();
+  const patterns = [
+    /^(?:你好|您好|嗨|hi|hello|hey)[，,\s:：-]*/i,
+    /^(?:请问|请帮我|请帮|请你|帮我|麻烦你|想请你|我想让你|我想|我需要)[，,\s:：-]*/i,
+    /^(?:继续|再|然后|现在|目前)[，,\s:：-]*/i,
+    /^(?:做一次|来一次|做个|看下|看一下|处理一下|处理下|帮我看下|帮我看一下|帮我处理一下)[，,\s:：-]*/i,
+  ];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const pattern of patterns) {
+      const next = text.replace(pattern, '').trim();
+      if (next !== text) {
+        text = next;
+        changed = true;
+      }
+    }
+  }
+  return text.trim();
+}
+
+function deriveAutoSessionTitle(value: unknown): string {
+  const normalized = sanitizeSessionTitleText(value);
+  if (!normalized || isWeakIntentTitleInput(normalized)) return '';
+
+  let text =
+    normalized
+      .split(/[。！？!?；;\n]/)
+      .map((part) => part.trim())
+      .find(Boolean) || normalized;
+  text = stripSessionTitleLeadPhrases(text);
+  text = cleanupSessionTitleObject(text);
+
+  if (!text || isWeakIntentTitleInput(text)) return '';
+
+  if (/(?:2048).*(?:小游戏|游戏)|(?:小游戏|游戏).*(?:2048)/i.test(text) && /\bhtml\b/i.test(text)) {
+    return 'HTML 2048 小游戏';
+  }
+
+  const issueMatch = text.match(/^(.*?)(报错|错误|失败|异常)(?:的)?(?:根因|原因)?$/);
+  if (issueMatch) {
+    const objectText = cleanupSessionTitleObject(issueMatch[1]);
+    const issueText = cleanupSessionTitleObject(issueMatch[2]);
+    return deriveResolvedSessionTitle(`${objectText}${issueText}分析`);
+  }
+
+  const questionMatch = text.match(/^(?:为什么|怎么|如何)(.+)$/);
+  if (questionMatch) {
+    const objectText = cleanupSessionTitleObject(questionMatch[1]);
+    return deriveResolvedSessionTitle(objectText ? `${objectText}问题` : '');
+  }
+
+  const actionSuffixMap: Record<string, string> = {
+    分析: '分析',
+    排查: '排查',
+    定位: '定位',
+    修复: '修复',
+    优化: '优化',
+    重构: '重构',
+    整理: '整理',
+    总结: '总结',
+    调研: '调研',
+  };
+  const actionMatch = text.match(/^(分析|排查|定位|修复|优化|重构|整理|总结|调研)(.+)$/);
+  if (actionMatch) {
+    const objectText = cleanupSessionTitleObject(actionMatch[2]);
+    return deriveResolvedSessionTitle(objectText ? `${objectText}${actionSuffixMap[actionMatch[1]]}` : actionMatch[1]);
+  }
+
+  const buildMatch = text.match(/^(开发|实现|创建|生成|制作|设计|编写|写)(.+)$/);
+  if (buildMatch) {
+    const objectText = cleanupSessionTitleObject(buildMatch[2]);
+    return deriveResolvedSessionTitle(objectText);
+  }
+
+  const changeMatch = text.match(/^把(.+?)(?:改成|改为|做成|改到)(.+)$/);
+  if (changeMatch) {
+    const fromText = cleanupSessionTitleObject(changeMatch[1]);
+    const toText = cleanupSessionTitleObject(changeMatch[2]);
+    return deriveResolvedSessionTitle([fromText, toText ? `改为${toText}` : ''].filter(Boolean).join(' '));
+  }
+
+  return deriveResolvedSessionTitle(text).slice(0, 32);
+}
+
+function resolveDisplaySessionTitle(input: {
+  storedTitle?: unknown;
+  storedTitleSource?: unknown;
+  storedTitleState?: unknown;
+  taskDescriptionTitle?: unknown;
+  firstUserMessage?: unknown;
+  status?: unknown;
+}) {
+  const storedTitle = deriveResolvedSessionTitle(input.storedTitle);
+  const storedTitleSource = asText(input.storedTitleSource);
+  const storedTitleState = asText(input.storedTitleState);
+  const taskDescriptionTitle = deriveResolvedSessionTitle(input.taskDescriptionTitle);
+  const firstUserMessageTitle = deriveAutoSessionTitle(input.firstUserMessage);
+
+  if (storedTitle && !isPlaceholderSessionTitle(storedTitle)) {
+    return {
+      title: storedTitle,
+      titleSource:
+        storedTitleSource === 'first_explicit_user_input' ||
+        storedTitleSource === 'task_description' ||
+        storedTitleSource === 'clarification_summary' ||
+        storedTitleSource === 'manual'
+          ? (storedTitleSource as 'first_explicit_user_input' | 'task_description' | 'clarification_summary' | 'manual')
+          : ('manual' as const),
+      titleState:
+        storedTitleState === 'provisional' || storedTitleState === 'resolved' || storedTitleState === 'manual'
+          ? (storedTitleState as 'provisional' | 'resolved' | 'manual')
+          : storedTitleSource === 'first_explicit_user_input'
+            ? ('provisional' as const)
+            : storedTitleSource === 'task_description' || storedTitleSource === 'clarification_summary'
+              ? ('resolved' as const)
+              : ('manual' as const),
+    };
+  }
+  if (taskDescriptionTitle) {
+    return {
+      title: taskDescriptionTitle,
+      titleSource: 'task_description' as const,
+      titleState: 'resolved' as const,
+    };
+  }
+  if (firstUserMessageTitle) {
+    return {
+      title: firstUserMessageTitle,
+      titleSource: 'first_explicit_user_input' as const,
+      titleState: 'provisional' as const,
+    };
+  }
+  return {
+    title: resolvePlaceholderSessionTitle(input.status),
+    titleSource: 'placeholder' as const,
+    titleState: 'provisional' as const,
+  };
+}
+
+function getSessionTitleSourcePriority(value: unknown): number {
+  switch (asText(value)) {
+    case 'manual':
+      return 5;
+    case 'task_description':
+      return 4;
+    case 'clarification_summary':
+      return 3;
+    case 'first_explicit_user_input':
+      return 2;
+    case 'placeholder':
+    default:
+      return 1;
+  }
 }
 
 function normalizeSessionProjectAssignmentInput(body: any): {
@@ -3661,6 +3923,14 @@ router.post('/sessions', async (req, res) => {
       isNewSession ? title : '',
       effectiveSessionId
     );
+    if (isNewSession && normalizedRequestedTitle && !isPlaceholderSessionTitle(normalizedRequestedTitle)) {
+      await taskCreationFileMemoryStore.updateSessionTitle(session.id, normalizedRequestedTitle, {
+        lock: true,
+        source: 'manual',
+        state: 'manual',
+        force: true,
+      });
+    }
 
     if (requestedMode === 'sandbox' || requestedMode === 'altus') {
       await taskCreationFileMemoryStore.updateSessionMode(session.id, requestedMode as any);
@@ -3975,7 +4245,7 @@ router.post('/sessions/:sessionId/title/resolve', async (req, res) => {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
     await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
-    const input = normalizeSessionTitleText(req.body?.message);
+    const input = sanitizeSessionTitleText(req.body?.message);
     const session = await resolveTaskSessionRecord(sessionId);
     if (!session) {
       return res.status(404).json({
@@ -3984,36 +4254,53 @@ router.post('/sessions/:sessionId/title/resolve', async (req, res) => {
       });
     }
 
-    const titleLocked = Boolean(session.titleLocked);
-    const currentTitle = asText(session.title) || DEFAULT_SESSION_TITLE;
+    const currentTitleResolution = resolveDisplaySessionTitle({
+      storedTitle: session.title,
+      storedTitleSource: session.titleSource,
+      storedTitleState: session.titleState,
+      status: session.status,
+    });
+    const titleLocked = Boolean(session.titleLocked) || currentTitleResolution.titleSource !== 'placeholder';
     if (!input || titleLocked || !isExplicitSessionTitleInput(input)) {
       return res.json({
         success: true,
         data: {
           id: session.id,
-          title: currentTitle,
+          title: currentTitleResolution.title,
           titleLocked,
-          titleSource: session.titleSource || 'placeholder',
+          titleSource: currentTitleResolution.titleSource,
+          titleState: currentTitleResolution.titleState,
           titleResolvedAt: session.titleResolvedAt || null,
           resolved: false,
         },
       });
     }
 
-    const nextTitle = deriveResolvedSessionTitle(input) || DEFAULT_SESSION_TITLE;
+    const nextTitle = deriveAutoSessionTitle(input) || resolvePlaceholderSessionTitle(session.status);
     await taskCreationFileMemoryStore.updateSessionTitle(session.id, nextTitle, {
       lock: true,
       source: 'first_explicit_user_input',
+      state: 'provisional',
     });
     const updated = await resolveTaskSessionRecord(session.id);
+    const updatedSummary = toSessionSummary(
+      updated || {
+        ...session,
+        title: nextTitle,
+        titleLocked: true,
+        titleSource: 'first_explicit_user_input',
+        titleState: 'provisional',
+      }
+    );
     return res.json({
       success: true,
       data: {
         id: session.id,
-        title: updated?.title || nextTitle,
-        titleLocked: Boolean(updated?.titleLocked),
-        titleSource: updated?.titleSource || 'first_explicit_user_input',
-        titleResolvedAt: updated?.titleResolvedAt || null,
+        title: updatedSummary.title,
+        titleLocked: updatedSummary.titleLocked,
+        titleSource: updatedSummary.titleSource,
+        titleState: updatedSummary.titleState,
+        titleResolvedAt: updatedSummary.titleResolvedAt || null,
         resolved: true,
       },
     });
@@ -4067,6 +4354,7 @@ router.post('/sessions/:sessionId/title/rename', async (req, res) => {
     await taskCreationFileMemoryStore.updateSessionTitle(session.id, nextTitle, {
       lock: true,
       source: 'manual',
+      state: 'manual',
       force: true,
     });
     const updated = await resolveTaskSessionRecord(session.id);

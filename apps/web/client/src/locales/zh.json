@@ -75,6 +75,7 @@
     "projectDescriptionPlaceholder": "补充这个普通项目的目标、范围或当前重点。",
     "noManualProjects": "还没有普通项目。点击右上角 + 新建后，才能把会话归属到项目中。",
     "noManualProjectsForSession": "当前还没有可选的普通项目。请先新建普通项目；自组织项目不会出现在这里。",
+    "projectSessionListEmpty": "这个普通项目下还没有归属会话。",
     "notifications": "通知",
     "credits": "积分",
     "proMember": "专业会员",

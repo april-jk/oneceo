@@ -75,6 +75,7 @@
     "projectDescriptionPlaceholder": "Add the goal, scope, or current focus of this standard project.",
     "noManualProjects": "There are no standard projects yet. Click the + button to create one before assigning sessions.",
     "noManualProjectsForSession": "There are no standard projects available yet. Create one first; self-organized projects do not appear here.",
+    "projectSessionListEmpty": "There are no assigned sessions in this standard project yet.",
     "notifications": "Notifications",
     "credits": "Credits",
     "proMember": "Pro Member",

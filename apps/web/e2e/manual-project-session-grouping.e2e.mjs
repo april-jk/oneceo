@@ -293,7 +293,7 @@ async function main() {
       toggleButton.click();
     }, projectName);
     await sidebar
-      .locator(`a[href="/session/${sessionId}?view=history"]`)
+      .getByRole("button", { name: new RegExp(sessionTitle) })
       .first()
       .waitFor({ state: "visible", timeout: 30_000 });
     await assertSidebarLayoutStable(sidebar);
@@ -315,6 +315,25 @@ async function main() {
       fullPage: true,
     });
 
+    await page.getByRole("link", { name: new RegExp(sessionTitle) }).first().click();
+    await page.waitForURL(`**/session/${sessionId}?view=history`, { timeout: 30_000 });
+    await page.getByText("项目会话").waitFor({ state: "hidden", timeout: 30_000 });
+    await page.screenshot({
+      path: path.join(REPORT_DIR, "06-session-opened-from-standard-project-detail.png"),
+      fullPage: true,
+    });
+
+    await projectButton.click();
+    await page.waitForURL(/\/project\//, { timeout: 30_000 });
+    await waitForText(page, "项目会话");
+    await sidebar.getByRole("button", { name: new RegExp(sessionTitle) }).first().click();
+    await page.waitForURL(`**/session/${sessionId}?view=history`, { timeout: 30_000 });
+    await page.getByText("项目会话").waitFor({ state: "hidden", timeout: 30_000 });
+    await page.screenshot({
+      path: path.join(REPORT_DIR, "07-session-opened-from-sidebar-project-list.png"),
+      fullPage: true,
+    });
+
     await sidebar.getByRole("button", { name: "oneceo.ai", exact: true }).click();
     await page.waitForURL(/\/project\/1$/, { timeout: 30_000 });
     await page.getByRole("button", { name: "创建经理" }).waitFor({
@@ -322,7 +341,7 @@ async function main() {
       timeout: 30_000,
     });
     await page.screenshot({
-      path: path.join(REPORT_DIR, "06-self-organized-project-detail.png"),
+      path: path.join(REPORT_DIR, "08-self-organized-project-detail.png"),
       fullPage: true,
     });
 
@@ -339,6 +358,8 @@ async function main() {
             "expand standard project in sidebar without horizontal overflow",
             "open standard project detail page",
             "verify standard project page does not render manager tree",
+            "open assigned session from standard project detail without refresh",
+            "open assigned session from expanded sidebar project list without refresh",
             "open self-organized preview project",
             "verify self-organized project still renders manager UI",
           ],

@@ -33,9 +33,13 @@ import {
   type OpencodePendingQuestion,
 } from './opencode-question-adapter';
 import { DEFAULT_CODEX_MODEL } from '../utils/codex-runtime-config';
+import { altusManagedSetupService } from './altus-managed-setup-service';
+import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-service';
 import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
+import { taskSessionSkillStateService, type SkillSelectionInput } from './task-session-skill-state-service';
 import { taskSessionRedisCacheService } from './task-session-redis-cache-service';
 import { classifyTaskIntentShape } from './task-intent-shape-service';
+import { userSkillService } from './user-skill-service';
 
 type OpencodeEventListenerPayload = {
   taskSessionId: string;
@@ -119,6 +123,21 @@ type OpencodeMessageRoleEntry = {
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function buildNeutralTaskIntentProfile(): AltusManagedTaskIntentProfile {
+  return {
+    mode: 'neutral',
+    reason: 'unknown',
+    recentUserMessages: [],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: false,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: true,
+  };
 }
 
 function sleep(ms: number) {
@@ -1564,6 +1583,47 @@ export class OpencodeRemoteService {
   private messageWalPath =
     asString(process.env.TASK_CREATION_MESSAGE_WAL_PATH) ||
     path.resolve(process.cwd(), 'data', 'task-creation-message-queue.wal.jsonl');
+
+  private async prepareDirectResidentSkillSelections(input: {
+    taskSessionId: string;
+    content: string;
+    source?: 'user' | 'agent';
+    submittedSelections?: unknown;
+    pendingQuestion?: unknown;
+  }): Promise<{
+    residentSkillSelections: SkillSelectionInput[];
+  }> {
+    const source = input.source === 'agent' ? 'agent' : 'user';
+    const currentState = await taskSessionSkillStateService.getSessionSkillState(input.taskSessionId);
+    if (source === 'agent') {
+      return {
+        residentSkillSelections: currentState.residentSelections,
+      };
+    }
+
+    const session = await taskCreationSessionDAO.getSession(input.taskSessionId).catch(() => null);
+    const userId = asString(session?.userId);
+    if (!userId) {
+      return {
+        residentSkillSelections: currentState.residentSelections,
+      };
+    }
+
+    const skillCatalog = await userSkillService.listAvailableSkills(userId).catch(() => []);
+    const taskIntentProfile = await altusManagedSetupService
+      .buildTaskIntentProfile(input.taskSessionId, input.content)
+      .catch(() => buildNeutralTaskIntentProfile());
+    const prepared = await taskSessionSkillStateService.prepareRunState({
+      sessionId: input.taskSessionId,
+      skillCatalog: skillCatalog as any,
+      taskIntentProfile,
+      submittedSelections: input.submittedSelections,
+      messageType: input.pendingQuestion ? 'user_response' : 'user_input',
+    });
+    return {
+      residentSkillSelections: prepared.residentSkillSelections,
+    };
+  }
 
   private buildRunKey(taskSessionId: string, opencodeSessionId: string): string {
     return `${taskSessionId}::${opencodeSessionId}`;
@@ -3719,6 +3779,16 @@ export class OpencodeRemoteService {
     const currentSession = await taskCreationFileMemoryStore.getSession(taskSessionId);
     let preferredRecoveredOpencodeSessionId =
       asString(runtime?.opencodeSessionId) || asString(currentSession?.runtime?.opencodeSessionId) || undefined;
+    const directSkillSelections = await this.prepareDirectResidentSkillSelections({
+      taskSessionId,
+      content,
+      source: input.source,
+      submittedSelections:
+        input.metadata && Object.prototype.hasOwnProperty.call(input.metadata, 'skills')
+          ? input.metadata.skills
+          : undefined,
+      pendingQuestion: currentSession?.pendingQuestion,
+    });
 
     let orchestratorSessionId = runtime.orchestratorSessionId;
     const workspacePath = asString(input.workspacePath) || resolveOpencodeWorkspacePath(taskSessionId);
@@ -3747,8 +3817,22 @@ export class OpencodeRemoteService {
           await sandboxSkillSyncService.syncSelectedSkills({
             taskSessionId,
             orchestratorSessionId,
-            skills: input.metadata?.skills,
+            skills: directSkillSelections.residentSkillSelections,
           });
+          try {
+            await taskSessionSkillStateService.markResidentSkillsMaterialized({
+              sessionId: taskSessionId,
+              sandboxId: orchestratorSessionId,
+              workspaceRoot: workspacePath,
+              residentSelections: directSkillSelections.residentSkillSelections,
+            });
+          } catch (error) {
+            console.warn('[OPENCODE_DIRECT_SKILL_MEMORY_INIT_WARN]', {
+              taskSessionId,
+              orchestratorSessionId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
           await osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
             workspacePath: workspacePath || undefined,
             host: opencodeHost,

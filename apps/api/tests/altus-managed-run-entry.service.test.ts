@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { afterEach, mock, test } from 'node:test';
 import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-memory-store';
 import { taskSessionRunDAO } from '../src/db/dao';
+import { altusMemoryContextService } from '../src/services/altus-memory-context-service';
 import { AltusManagedRunEntryService } from '../src/services/altus-managed-run-entry-service';
+import { taskSessionAltusMemoryService } from '../src/services/task-session-altus-memory-service';
+import { taskSessionSkillStateService } from '../src/services/task-session-skill-state-service';
+import { userSkillService } from '../src/services/user-skill-service';
 
 afterEach(() => {
   mock.reset();
@@ -25,8 +29,122 @@ test('startRun persists timeline, creates run, and dispatches coordinator execut
     title: 'Build game',
     pendingQuestion: null,
   }) as any);
+  mock.method(altusMemoryContextService, 'buildPromptSectionForRun', async () => ({
+    promptSection: '## Altus Memory Context\n- 用户偏好：专业、冷静',
+    userMemory: {
+      preferredName: 'Watson',
+      responsePreferences: '专业、冷静',
+    },
+    projectMemory: {
+      context: '这是一个 2048 游戏项目',
+      guidelines: '保持可直接运行',
+    },
+    sessionMemory: {
+      version: 2,
+      summary: {
+        goal: '实现 2048 小游戏',
+        latestOutcome: '尚未开始',
+        openQuestions: [],
+      },
+      constraints: ['使用现有技术栈'],
+      decisions: [],
+      workingNotes: [],
+      updatedAt: '2026-04-21T16:00:00.000Z',
+    },
+  }));
+  mock.method(taskSessionAltusMemoryService, 'getSessionAltusMemory', async () => ({
+    version: 2,
+    summary: {
+      goal: '实现 2048 小游戏',
+      latestOutcome: '尚未开始',
+      openQuestions: [],
+    },
+    constraints: ['使用现有技术栈'],
+    decisions: [],
+    workingNotes: [],
+    updatedAt: '2026-04-21T16:00:00.000Z',
+  }));
   mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
   mock.method(taskSessionRunDAO, 'getLatestRun', async () => null);
+  mock.method(userSkillService, 'listAvailableSkills', async () => [
+    {
+      sourceType: 'platform',
+      skillId: 'skill-1',
+      revisionId: 'rev-1',
+      slug: 'office-ppt',
+      name: 'PPT 办公',
+      description: '创建专业演示文稿',
+      category: 'office',
+      revisionNumber: 2,
+      resourceSummary: {
+        totalCount: 2,
+        referenceCount: 1,
+        templateCount: 1,
+        paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+      },
+    },
+  ] as any);
+  mock.method(taskSessionSkillStateService, 'prepareRunState', async () => ({
+    skillCatalog: [
+      {
+        sourceType: 'platform',
+        skillId: 'skill-1',
+        revisionId: 'rev-1',
+        slug: 'office-ppt',
+        name: 'PPT 办公',
+        description: '创建专业演示文稿',
+        category: 'office',
+        revisionNumber: 2,
+        resourceSummary: {
+          totalCount: 2,
+          referenceCount: 1,
+          templateCount: 1,
+          paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+        },
+      },
+    ],
+    skills: [
+      {
+        sourceType: 'platform',
+        skillId: 'skill-1',
+        revisionId: 'rev-1',
+        slug: 'office-ppt',
+        name: 'PPT 办公',
+        description: '创建专业演示文稿',
+        category: 'office',
+        renderedMarkdown: '# Skill Brief',
+        revisionNumber: 2,
+        resourceSummary: {
+          totalCount: 2,
+          referenceCount: 1,
+          templateCount: 1,
+          paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+        },
+      },
+    ],
+    activeSkillsForTurn: [
+      {
+        sourceType: 'platform',
+        skillId: 'skill-1',
+        revisionId: 'rev-1',
+        slug: 'office-ppt',
+        name: 'PPT 办公',
+        description: '创建专业演示文稿',
+        category: 'office',
+        renderedMarkdown: '# Skill Brief',
+        revisionNumber: 2,
+        resourceSummary: {
+          totalCount: 2,
+          referenceCount: 1,
+          templateCount: 1,
+          paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+        },
+      },
+    ],
+    residentSkillSelections: [],
+    sessionSkillState: null,
+    residentSelectionsForSync: [],
+  }) as any);
   const createRunMock = mock.method(taskSessionRunDAO, 'createRun', async (input: any) => ({
     ...run,
     connectorSnapshotId: input.connectorSnapshotId,
@@ -61,6 +179,18 @@ test('startRun persists timeline, creates run, and dispatches coordinator execut
           tools: [{ providerId: 'provider-1', toolName: 'github_search' }],
         },
       ],
+    })),
+    buildTaskIntentProfile: mock.fn(async () => ({
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: [],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
     })),
     persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
       setupCalls.push({ type: 'timeline', input });
@@ -213,6 +343,10 @@ test('startRun persists timeline, creates run, and dispatches coordinator execut
   assert.equal(capturedState?.input.skills?.length, 1);
   assert.equal(capturedState?.input.skillCatalog?.[0]?.slug, 'office-ppt');
   assert.equal(capturedState?.input.skills?.[0]?.resourceSummary?.totalCount, 2);
+  assert.match(capturedState?.input.memoryContextPrompt || '', /Altus Memory Context/);
+  assert.equal(capturedState?.input.userMemory?.preferredName, 'Watson');
+  assert.equal(capturedState?.input.projectMemory?.context, '这是一个 2048 游戏项目');
+  assert.equal(capturedState?.input.sessionAltusMemory?.summary?.goal, '实现 2048 小游戏');
   assert.ok(capturedAbortController instanceof AbortController);
 });
 
@@ -235,6 +369,33 @@ test('stopRun aborts active controller for in-flight run', async () => {
   }) as any);
   mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
   mock.method(taskSessionRunDAO, 'getLatestRun', async () => null);
+  mock.method(userSkillService, 'listAvailableSkills', async () => [] as any);
+  mock.method(altusMemoryContextService, 'buildPromptSectionForRun', async () => ({
+    promptSection: '',
+    userMemory: null,
+    projectMemory: null,
+    sessionMemory: await taskSessionAltusMemoryService.getSessionAltusMemory('session-2'),
+  }));
+  mock.method(taskSessionAltusMemoryService, 'getSessionAltusMemory', async () => ({
+    version: 0,
+    summary: {
+      goal: '',
+      latestOutcome: '',
+      openQuestions: [],
+    },
+    constraints: [],
+    decisions: [],
+    workingNotes: [],
+    updatedAt: '2026-04-21T16:00:00.000Z',
+  }));
+  mock.method(taskSessionSkillStateService, 'prepareRunState', async () => ({
+    skillCatalog: [],
+    skills: [],
+    activeSkillsForTurn: [],
+    residentSkillSelections: [],
+    sessionSkillState: null,
+    residentSelectionsForSync: [],
+  }) as any);
   mock.method(taskSessionRunDAO, 'createRun', async () => run as any);
   mock.method(taskSessionRunDAO, 'getRun', async () => run as any);
 
@@ -259,6 +420,18 @@ test('stopRun aborts active controller for in-flight run', async () => {
     captureMcpToolSnapshot: mock.fn(async () => ({
       snapshotId: 'mcp-snapshot-2',
       providers: [],
+    })),
+    buildTaskIntentProfile: mock.fn(async () => ({
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: [],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
     })),
     persistTimelineMessage: mock.fn(async () => {}),
     updateSessionLifecycle: mock.fn(async () => {}),

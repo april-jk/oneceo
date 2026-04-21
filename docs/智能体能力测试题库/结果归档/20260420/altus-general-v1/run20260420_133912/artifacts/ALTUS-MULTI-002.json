@@ -1,0 +1,1274 @@
+{
+  "caseId": "ALTUS-MULTI-002",
+  "prompts": [
+    "生成一个公司官网。",
+    "现在部署当前项目。"
+  ],
+  "turnResults": [
+    {
+      "prompt": "生成一个公司官网。",
+      "outcome": "timeout"
+    }
+  ],
+  "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa",
+  "sessionDetail": {
+    "success": true,
+    "data": {
+      "id": "9fe60157-b102-4968-8aac-9897d69796aa",
+      "title": "生成一个公司官网。营销计划制定",
+      "status": "in_progress",
+      "stage": "executing",
+      "mode": "sandbox",
+      "executor": "opencode",
+      "driver": "opencode",
+      "runtime": {
+        "generation": 2,
+        "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+        "executor": "opencode",
+        "executorSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+        "opencodeSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+        "updatedAt": "2026-04-20T05:46:43.959Z"
+      },
+      "createdAt": "2026-04-20T13:44:42.144Z",
+      "updatedAt": "2026-04-20T05:45:15.424Z",
+      "messages": [],
+      "runtimeStatus": {
+        "status": "ready",
+        "provider": "e2b",
+        "updatedAt": "2026-04-20T05:47:41.866Z",
+        "sandboxId": "i7dsq4tky6tual0d10hsd"
+      },
+      "connectorsSummary": {
+        "total": 6,
+        "attached": 0,
+        "active": 0,
+        "needsAuth": 0,
+        "failed": 0
+      }
+    }
+  },
+  "recentMessages": {
+    "success": true,
+    "data": {
+      "messages": [
+        {
+          "id": "e5e15592-b89d-412f-8d4c-e1389e7d8f67",
+          "messageKey": "runtime:na:1776663882145000:user_input",
+          "role": "user",
+          "messageType": "user_input",
+          "content": "生成一个公司官网。",
+          "metadata": {
+            "messageKey": "runtime:na:1776663882145000:user_input",
+            "timestamp": 1776663882145,
+            "sessionEventSeq": 1776663882145000,
+            "timelineCursor": 4547,
+            "runtimeGeneration": 2
+          },
+          "createdAt": "2026-04-20T05:44:42.145Z"
+        },
+        {
+          "id": "4820717e-d717-456d-bba5-52416dc6c845",
+          "messageKey": "runtime:na:1776663882157000:status_update",
+          "role": "agent",
+          "messageType": "status_update",
+          "content": "分析阶段：正在分析您的任务需求...",
+          "metadata": {
+            "messageKey": "runtime:na:1776663882157000:status_update",
+            "timestamp": 1776663882157,
+            "sessionEventSeq": 1776663882157000,
+            "timelineCursor": 4548,
+            "stage": "collecting",
+            "tone": "intent",
+            "runtimeGeneration": 2
+          },
+          "createdAt": "2026-04-20T05:44:42.157Z"
+        },
+        {
+          "id": "6bba765f-7db5-4ec4-88e1-5adf4c0cf9fa",
+          "messageKey": "runtime:na:1776663882876000:status_update",
+          "role": "agent",
+          "messageType": "status_update",
+          "content": "分析阶段：正在规划任务详情...",
+          "metadata": {
+            "messageKey": "runtime:na:1776663882876000:status_update",
+            "timestamp": 1776663882876,
+            "sessionEventSeq": 1776663882876000,
+            "timelineCursor": 4550,
+            "stage": "planning",
+            "tone": "planning",
+            "runtimeGeneration": 2
+          },
+          "createdAt": "2026-04-20T05:44:42.876Z"
+        },
+        {
+          "id": "13484197-3cba-452b-9344-c74590fa9444",
+          "messageKey": "runtime:na:1776663882876000:agent_message",
+          "role": "agent",
+          "messageType": "agent_message",
+          "content": "已识别任务类型：其他",
+          "metadata": {
+            "messageKey": "runtime:na:1776663882876000:agent_message",
+            "timestamp": 1776663882876,
+            "sessionEventSeq": 1776663882876000,
+            "timelineCursor": 4551,
+            "runtimeGeneration": 2
+          },
+          "createdAt": "2026-04-20T05:44:42.876Z"
+        },
+        {
+          "id": "b1bab412-2abe-4f15-8ff8-e35b062d7267",
+          "messageKey": "runtime:na:1776663883264000:agent_message",
+          "role": "agent",
+          "messageType": "agent_message",
+          "content": "任务规划完成：生成一个公司官网。营销计划制定",
+          "metadata": {
+            "messageKey": "runtime:na:1776663883264000:agent_message",
+            "timestamp": 1776663883264,
+            "sessionEventSeq": 1776663883264000,
+            "timelineCursor": 4553,
+            "runtimeGeneration": 2
+          },
+          "createdAt": "2026-04-20T05:44:43.264Z"
+        },
+        {
+          "id": "5587731d-c6d7-444b-b224-9d44e5c6684b",
+          "messageKey": "runtime:na:1776663883264000:status_update",
+          "role": "agent",
+          "messageType": "status_update",
+          "content": "分析阶段：正在生成执行计划...",
+          "metadata": {
+            "messageKey": "runtime:na:1776663883264000:status_update",
+            "timestamp": 1776663883264,
+            "sessionEventSeq": 1776663883264000,
+            "timelineCursor": 4554,
+            "stage": "planning",
+            "tone": "planning",
+            "runtimeGeneration": 2
+          },
+          "createdAt": "2026-04-20T05:44:43.264Z"
+        },
+        {
+          "id": "f4b16a4a-7c1b-492e-807e-534edddd84df",
+          "messageKey": "runtime:na:1776663883757000:plan_generated",
+          "role": "agent",
+          "messageType": "plan_generated",
+          "content": "执行计划已生成",
+          "metadata": {
+            "messageKey": "runtime:na:1776663883757000:plan_generated",
+            "timestamp": 1776663883757,
+            "sessionEventSeq": 1776663883757000,
+            "timelineCursor": 4555,
+            "runtimeGeneration": 2
+          },
+          "createdAt": "2026-04-20T05:44:43.757Z"
+        },
+        {
+          "id": "520bb18e-1228-475b-a1cb-45fae518d568",
+          "messageKey": "runtime:na:1776663883758000:status_update",
+          "role": "agent",
+          "messageType": "status_update",
+          "content": "开发阶段：正在启动执行环境...",
+          "metadata": {
+            "messageKey": "runtime:na:1776663883758000:status_update",
+            "timestamp": 1776663883758,
+            "sessionEventSeq": 1776663883758000,
+            "timelineCursor": 4556,
+            "stage": "executing",
+            "tone": "execution",
+            "runtimeGeneration": 2
+          },
+          "createdAt": "2026-04-20T05:44:43.758Z"
+        },
+        {
+          "id": "3b0ab0ca-5e8a-4e30-a569-78e44e525ea9",
+          "messageKey": "runtime:na:1776663910616000:agent_message",
+          "role": "agent",
+          "messageType": "agent_message",
+          "content": "执行环境已就绪，开始下发执行指令...",
+          "metadata": {
+            "messageKey": "runtime:na:1776663910616000:agent_message",
+            "timestamp": 1776663910616,
+            "sessionEventSeq": 1776663910616000,
+            "timelineCursor": 4572,
+            "runtimeGeneration": 2
+          },
+          "createdAt": "2026-04-20T05:45:10.616Z"
+        },
+        {
+          "id": "4723a2df-47be-428e-84e9-a70d0f9f49e4",
+          "messageKey": "runtime:na:1776663915164000:opencode_agent_input",
+          "role": "agent",
+          "messageType": "opencode_agent_input",
+          "content": "当前处于【开发阶段】\n你是执行智能体，请依据以下任务信息在当前工作区完成执行：\n用户需求: 生成一个公司官网。\n任务描述: {\"title\":\"生成一个公司官网。营销计划制定\",\"objective\":\"基于已知信息，为 生成一个公司官网。 产出可落地的营销计划方案\",\"scope\":\"待补充\",\"deliverables\":[\"营销策略文档\",\"目标市场分析\",\"渠道策略建议\",\"阶段性执行计划\"],\"constraints\":[\"需确认产品类型与目标市场\",\"需确认预算范围与时间框架\"]}\n执行计划摘要: {\"title\":\"生成一个公司官网。营销计划制定\",\"description\":\"基于已知信息，为 生成一个公司官网。 产出可落地的营销计划方案\",\"managers\":[{\"id\":\"m1\",\"name\":\"执行经理\",\"task_count\":4}]}\n要求：\n1) 以命令行模式执行（不要进入交互式界面）。\n2) 输出可落地的执行结果与产出说明。\n3) 如需生成文件，请直接写入当前工作区并在输出中说明文件路径。\n4) 必须使用 playwright-mcp 进行浏览器自动化验证（在开发/测试/修复阶段均需使用）。\nplaywright-mcp 已预置，无需安装任何 Playwright 依赖，也不要修改 package.json 或执行 npm/pnpm 安装。\n必须连接到与 n.eko 同一实例的 Chromium（CDP 9222，例如 http://127.0.0.1:9222），不要启动新的独立浏览器实例。\n连接后复用现有浏览器上下文与首个页面（contexts[0] 与 pages[0]）；若无页面，仅在该上下文中创建一个新页面，确保同一个窗口可被 n.eko 捕获。\n要求 Playwright 以可视模式运行（headless=false），保证画面在调试窗口可见。\n若需启动网页服务，请使用可访问端口并明确输出访问地址。\n在输出中说明测试步骤、结果与发现的问题。\n如需用户协助（账号/权限/业务确认），请明确提出。",
+          "metadata": {
+            "messageKey": "runtime:na:1776663915164000:opencode_agent_input",
+            "timestamp": 1776663915164,
+            "sessionEventSeq": 1776663915164000,
+            "timelineCursor": 4579,
+            "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+            "opencodeSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+            "workspacePath": "/home/user/opencode/workspaces/9fe60157-b102-4968-8aac-9897d69796aa",
+            "runtimeGeneration": 2
+          },
+          "createdAt": "2026-04-20T05:45:15.164Z"
+        },
+        {
+          "id": "2227dd1b-7818-4217-b8f5-6b07e7c4f3d1",
+          "messageKey": "stream:2:ses_25694191affe1I3jkTXfMHI5Pm:prt_da96c0444001esBdT1WfWuXLCO",
+          "role": "agent",
+          "messageType": "opencode_event",
+          "content": "我需要先了解更多信息才能制定有效的营销计划。让我询问一些关键问题。",
+          "metadata": {
+            "messageKey": "stream:2:ses_25694191affe1I3jkTXfMHI5Pm:prt_da96c0444001esBdT1WfWuXLCO",
+            "timestamp": 1776663915165,
+            "sessionEventSeq": 1776663915165001,
+            "timelineCursor": 4607,
+            "runtimeGeneration": 2,
+            "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+            "opencodeSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+            "workspacePath": "/home/user/opencode/workspaces/9fe60157-b102-4968-8aac-9897d69796aa",
+            "partId": "prt_da96c0444001esBdT1WfWuXLCO",
+            "eventType": "message.part.updated",
+            "partType": "text",
+            "event": {
+              "properties": {
+                "part": {
+                  "id": "prt_da96c0444001esBdT1WfWuXLCO",
+                  "type": "text"
+                }
+              }
+            }
+          },
+          "createdAt": "2026-04-20T05:45:15.165Z"
+        },
+        {
+          "id": "7611792b-1647-47fe-b50c-afcc1af09f34",
+          "messageKey": "stream:na:ses_25694191affe1I3jkTXfMHI5Pm:prt_da96c0444001esBdT1WfWuXLCO",
+          "role": "agent",
+          "messageType": "opencode_event",
+          "content": "我需要先了解更多信息才能制定有效的营销计划。让我询问一些关键问题。",
+          "metadata": {
+            "messageKey": "stream:na:ses_25694191affe1I3jkTXfMHI5Pm:prt_da96c0444001esBdT1WfWuXLCO",
+            "timestamp": 1776663915165,
+            "sessionEventSeq": 1776663915165001,
+            "timelineCursor": 4609,
+            "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+            "opencodeSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+            "workspacePath": "/home/user/opencode/workspaces/9fe60157-b102-4968-8aac-9897d69796aa",
+            "partId": "prt_da96c0444001esBdT1WfWuXLCO",
+            "eventType": "message.part.updated",
+            "partType": "text",
+            "event": {
+              "properties": {
+                "part": {
+                  "id": "prt_da96c0444001esBdT1WfWuXLCO",
+                  "type": "text"
+                }
+              }
+            },
+            "runtimeGeneration": 2
+          },
+          "createdAt": "2026-04-20T05:45:15.165Z"
+        },
+        {
+          "id": "024d78b1-0937-4705-9345-26fce6addc7a",
+          "messageKey": "stream:na:ses_25694191affe1I3jkTXfMHI5Pm:prt_da96c2b9e001xLzkRjgO7CzU91",
+          "role": "agent",
+          "messageType": "opencode_event",
+          "content": "[Tool] question · running",
+          "metadata": {
+            "messageKey": "stream:na:ses_25694191affe1I3jkTXfMHI5Pm:prt_da96c2b9e001xLzkRjgO7CzU91",
+            "timestamp": 1776663915165,
+            "sessionEventSeq": 1776663915165002,
+            "timelineCursor": 4593,
+            "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+            "opencodeSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+            "workspacePath": "/home/user/opencode/workspaces/9fe60157-b102-4968-8aac-9897d69796aa",
+            "partId": "prt_da96c2b9e001xLzkRjgO7CzU91",
+            "eventType": "message.part.updated",
+            "toolName": "question",
+            "partType": "tool",
+            "event": {
+              "properties": {
+                "part": {
+                  "id": "prt_da96c2b9e001xLzkRjgO7CzU91",
+                  "callID": "call_aef35dfa695d4867b45bd25a",
+                  "type": "tool",
+                  "tool": "question"
+                }
+              }
+            },
+            "runtimeGeneration": 2
+          },
+          "createdAt": "2026-04-20T05:45:15.165Z"
+        },
+        {
+          "id": "1930fc94-15c6-4ce3-b6cd-4c866bff4fcb",
+          "messageKey": "stream:2:ses_25694191affe1I3jkTXfMHI5Pm:prt_da96c2b9e001xLzkRjgO7CzU91",
+          "role": "agent",
+          "messageType": "opencode_event",
+          "content": "[Tool] question · running",
+          "metadata": {
+            "messageKey": "stream:2:ses_25694191affe1I3jkTXfMHI5Pm:prt_da96c2b9e001xLzkRjgO7CzU91",
+            "timestamp": 1776663915165,
+            "sessionEventSeq": 1776663915165002,
+            "timelineCursor": 4619,
+            "runtimeGeneration": 2,
+            "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+            "opencodeSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+            "workspacePath": "/home/user/opencode/workspaces/9fe60157-b102-4968-8aac-9897d69796aa",
+            "partId": "prt_da96c2b9e001xLzkRjgO7CzU91",
+            "eventType": "message.part.updated",
+            "toolName": "question",
+            "partType": "tool",
+            "event": {
+              "properties": {
+                "part": {
+                  "id": "prt_da96c2b9e001xLzkRjgO7CzU91",
+                  "callID": "call_aef35dfa695d4867b45bd25a",
+                  "type": "tool",
+                  "tool": "question"
+                }
+              }
+            }
+          },
+          "createdAt": "2026-04-20T05:45:15.165Z"
+        },
+        {
+          "id": "0f57486c-2a70-47b1-a371-7198f15baa5b",
+          "messageKey": "runtime:na:1776663915435000:agent_message",
+          "role": "agent",
+          "messageType": "agent_message",
+          "content": "任务已发送到 OpenCode，正在流式执行，后续会实时回传每一步状态...",
+          "metadata": {
+            "messageKey": "runtime:na:1776663915435000:agent_message",
+            "timestamp": 1776663915435,
+            "sessionEventSeq": 1776663915435000,
+            "timelineCursor": 4576,
+            "runtimeGeneration": 2
+          },
+          "createdAt": "2026-04-20T05:45:15.435Z"
+        },
+        {
+          "id": "81d7eaec-d46e-4fe9-9693-67a2ff6f9872",
+          "messageKey": "runtime:na:1776663916565003:opencode_status",
+          "role": "agent",
+          "messageType": "opencode_status",
+          "content": "OpenCode 已接收指令，正在执行并回传实时事件...",
+          "metadata": {
+            "messageKey": "runtime:na:1776663916565003:opencode_status",
+            "timestamp": 1776663916565,
+            "sessionEventSeq": 1776663916565003,
+            "timelineCursor": 4580,
+            "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+            "opencodeSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+            "runtimeGeneration": 2
+          },
+          "createdAt": "2026-04-20T05:45:16.565Z"
+        },
+        {
+          "id": "e6e85cad-2c07-4589-9a0d-64783e1558c1",
+          "messageKey": "runtime:na:1776663918041002:opencode_event",
+          "role": "agent",
+          "messageType": "opencode_event",
+          "content": "[OpenCode] session.diff",
+          "metadata": {
+            "messageKey": "runtime:na:1776663918041002:opencode_event",
+            "timestamp": 1776663918041,
+            "sessionEventSeq": 1776663918041002,
+            "timelineCursor": 4583,
+            "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+            "opencodeSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+            "eventType": "session.diff",
+            "runtimeGeneration": 2
+          },
+          "createdAt": "2026-04-20T05:45:18.041Z"
+        }
+      ],
+      "oldestCursor": 1776663882145000,
+      "newestCursor": 1776663918041002,
+      "hasOlderHistory": true,
+      "source": "recent_cache"
+    }
+  },
+  "fullMessages": {
+    "success": true,
+    "data": [
+      {
+        "id": "cfa51dcc-f6a0-428c-bdb9-e99b18f607dc",
+        "messageKey": "runtime:na:1776663882145000:user_input",
+        "role": "user",
+        "messageType": "user_input",
+        "content": "生成一个公司官网。",
+        "metadata": {
+          "messageKey": "runtime:na:1776663882145000:user_input",
+          "timestamp": 1776663882145,
+          "sessionEventSeq": 1776663882145000,
+          "timelineCursor": 4547,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T05:44:42.145Z"
+      },
+      {
+        "id": "f6924fcf-842d-4e05-9519-5fc5a6ce1ce5",
+        "messageKey": "runtime:na:1776663882157000:status_update",
+        "role": "agent",
+        "messageType": "status_update",
+        "content": "分析阶段：正在分析您的任务需求...",
+        "metadata": {
+          "messageKey": "runtime:na:1776663882157000:status_update",
+          "timestamp": 1776663882157,
+          "sessionEventSeq": 1776663882157000,
+          "timelineCursor": 4548,
+          "stage": "collecting",
+          "tone": "intent",
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T05:44:42.157Z"
+      },
+      {
+        "id": "5d3c38c0-22e7-4284-bc5a-2049ba0d16e6",
+        "messageKey": "runtime:na:1776663882876000:status_update",
+        "role": "agent",
+        "messageType": "status_update",
+        "content": "分析阶段：正在规划任务详情...",
+        "metadata": {
+          "messageKey": "runtime:na:1776663882876000:status_update",
+          "timestamp": 1776663882876,
+          "sessionEventSeq": 1776663882876000,
+          "timelineCursor": 4550,
+          "stage": "planning",
+          "tone": "planning",
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T05:44:42.876Z"
+      },
+      {
+        "id": "f656e7d0-dbbf-4a9e-958c-bd04c25b6f1f",
+        "messageKey": "runtime:na:1776663882876000:agent_message",
+        "role": "agent",
+        "messageType": "agent_message",
+        "content": "已识别任务类型：其他",
+        "metadata": {
+          "messageKey": "runtime:na:1776663882876000:agent_message",
+          "timestamp": 1776663882876,
+          "sessionEventSeq": 1776663882876000,
+          "timelineCursor": 4551,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T05:44:42.876Z"
+      },
+      {
+        "id": "8ba646bc-3944-4157-b530-e582b61ad81a",
+        "messageKey": "runtime:na:1776663883264000:agent_message",
+        "role": "agent",
+        "messageType": "agent_message",
+        "content": "任务规划完成：生成一个公司官网。营销计划制定",
+        "metadata": {
+          "messageKey": "runtime:na:1776663883264000:agent_message",
+          "timestamp": 1776663883264,
+          "sessionEventSeq": 1776663883264000,
+          "timelineCursor": 4553,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T05:44:43.264Z"
+      },
+      {
+        "id": "dab77202-3dae-410f-885c-85aa17e2b31b",
+        "messageKey": "runtime:na:1776663883264000:status_update",
+        "role": "agent",
+        "messageType": "status_update",
+        "content": "分析阶段：正在生成执行计划...",
+        "metadata": {
+          "messageKey": "runtime:na:1776663883264000:status_update",
+          "timestamp": 1776663883264,
+          "sessionEventSeq": 1776663883264000,
+          "timelineCursor": 4554,
+          "stage": "planning",
+          "tone": "planning",
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T05:44:43.264Z"
+      },
+      {
+        "id": "6f1db99f-4a1c-4c54-9d30-d8d5b329d20a",
+        "messageKey": "runtime:na:1776663883757000:plan_generated",
+        "role": "agent",
+        "messageType": "plan_generated",
+        "content": "执行计划已生成",
+        "metadata": {
+          "messageKey": "runtime:na:1776663883757000:plan_generated",
+          "timestamp": 1776663883757,
+          "sessionEventSeq": 1776663883757000,
+          "timelineCursor": 4555,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T05:44:43.757Z"
+      },
+      {
+        "id": "7e8b9130-b8c8-48f2-a00e-23f0b686df43",
+        "messageKey": "runtime:na:1776663883758000:status_update",
+        "role": "agent",
+        "messageType": "status_update",
+        "content": "开发阶段：正在启动执行环境...",
+        "metadata": {
+          "messageKey": "runtime:na:1776663883758000:status_update",
+          "timestamp": 1776663883758,
+          "sessionEventSeq": 1776663883758000,
+          "timelineCursor": 4556,
+          "stage": "executing",
+          "tone": "execution",
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T05:44:43.758Z"
+      },
+      {
+        "id": "57d2862b-6937-4a3a-a466-bdf85b1ff334",
+        "messageKey": "runtime:na:1776663910616000:agent_message",
+        "role": "agent",
+        "messageType": "agent_message",
+        "content": "执行环境已就绪，开始下发执行指令...",
+        "metadata": {
+          "messageKey": "runtime:na:1776663910616000:agent_message",
+          "timestamp": 1776663910616,
+          "sessionEventSeq": 1776663910616000,
+          "timelineCursor": 4572,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T05:45:10.616Z"
+      },
+      {
+        "id": "301b8df7-d403-47a1-94d0-33b1901c0eb2",
+        "messageKey": "runtime:na:1776663915164000:opencode_agent_input",
+        "role": "agent",
+        "messageType": "opencode_agent_input",
+        "content": "当前处于【开发阶段】\n你是执行智能体，请依据以下任务信息在当前工作区完成执行：\n用户需求: 生成一个公司官网。\n任务描述: {\"title\":\"生成一个公司官网。营销计划制定\",\"objective\":\"基于已知信息，为 生成一个公司官网。 产出可落地的营销计划方案\",\"scope\":\"待补充\",\"deliverables\":[\"营销策略文档\",\"目标市场分析\",\"渠道策略建议\",\"阶段性执行计划\"],\"constraints\":[\"需确认产品类型与目标市场\",\"需确认预算范围与时间框架\"]}\n执行计划摘要: {\"title\":\"生成一个公司官网。营销计划制定\",\"description\":\"基于已知信息，为 生成一个公司官网。 产出可落地的营销计划方案\",\"managers\":[{\"id\":\"m1\",\"name\":\"执行经理\",\"task_count\":4}]}\n要求：\n1) 以命令行模式执行（不要进入交互式界面）。\n2) 输出可落地的执行结果与产出说明。\n3) 如需生成文件，请直接写入当前工作区并在输出中说明文件路径。\n4) 必须使用 playwright-mcp 进行浏览器自动化验证（在开发/测试/修复阶段均需使用）。\nplaywright-mcp 已预置，无需安装任何 Playwright 依赖，也不要修改 package.json 或执行 npm/pnpm 安装。\n必须连接到与 n.eko 同一实例的 Chromium（CDP 9222，例如 http://127.0.0.1:9222），不要启动新的独立浏览器实例。\n连接后复用现有浏览器上下文与首个页面（contexts[0] 与 pages[0]）；若无页面，仅在该上下文中创建一个新页面，确保同一个窗口可被 n.eko 捕获。\n要求 Playwright 以可视模式运行（headless=false），保证画面在调试窗口可见。\n若需启动网页服务，请使用可访问端口并明确输出访问地址。\n在输出中说明测试步骤、结果与发现的问题。\n如需用户协助（账号/权限/业务确认），请明确提出。",
+        "metadata": {
+          "messageKey": "runtime:na:1776663915164000:opencode_agent_input",
+          "timestamp": 1776663915164,
+          "sessionEventSeq": 1776663915164000,
+          "timelineCursor": 4579,
+          "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+          "opencodeSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+          "workspacePath": "/home/user/opencode/workspaces/9fe60157-b102-4968-8aac-9897d69796aa",
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T05:45:15.164Z"
+      },
+      {
+        "id": "68ef95a3-edc9-4b14-b3da-161c101710ef",
+        "messageKey": "stream:2:ses_25694191affe1I3jkTXfMHI5Pm:prt_da96c0444001esBdT1WfWuXLCO",
+        "role": "agent",
+        "messageType": "opencode_event",
+        "content": "我需要先了解更多信息才能制定有效的营销计划。让我询问一些关键问题。",
+        "metadata": {
+          "messageKey": "stream:2:ses_25694191affe1I3jkTXfMHI5Pm:prt_da96c0444001esBdT1WfWuXLCO",
+          "timestamp": 1776663915165,
+          "sessionEventSeq": 1776663915165001,
+          "timelineCursor": 4607,
+          "runtimeGeneration": 2,
+          "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+          "opencodeSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+          "workspacePath": "/home/user/opencode/workspaces/9fe60157-b102-4968-8aac-9897d69796aa",
+          "partId": "prt_da96c0444001esBdT1WfWuXLCO",
+          "eventType": "message.part.updated",
+          "partType": "text",
+          "event": {
+            "properties": {
+              "part": {
+                "id": "prt_da96c0444001esBdT1WfWuXLCO",
+                "type": "text"
+              }
+            }
+          }
+        },
+        "createdAt": "2026-04-20T05:45:15.165Z"
+      },
+      {
+        "id": "dc6681d2-a1a0-48c0-894c-0586eccd46a8",
+        "messageKey": "stream:na:ses_25694191affe1I3jkTXfMHI5Pm:prt_da96c0444001esBdT1WfWuXLCO",
+        "role": "agent",
+        "messageType": "opencode_event",
+        "content": "我需要先了解更多信息才能制定有效的营销计划。让我询问一些关键问题。",
+        "metadata": {
+          "messageKey": "stream:na:ses_25694191affe1I3jkTXfMHI5Pm:prt_da96c0444001esBdT1WfWuXLCO",
+          "timestamp": 1776663915165,
+          "sessionEventSeq": 1776663915165001,
+          "timelineCursor": 4609,
+          "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+          "opencodeSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+          "workspacePath": "/home/user/opencode/workspaces/9fe60157-b102-4968-8aac-9897d69796aa",
+          "partId": "prt_da96c0444001esBdT1WfWuXLCO",
+          "eventType": "message.part.updated",
+          "partType": "text",
+          "event": {
+            "properties": {
+              "part": {
+                "id": "prt_da96c0444001esBdT1WfWuXLCO",
+                "type": "text"
+              }
+            }
+          },
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T05:45:15.165Z"
+      },
+      {
+        "id": "c0cc8777-c02c-4851-bfdb-d964d693d1ef",
+        "messageKey": "stream:na:ses_25694191affe1I3jkTXfMHI5Pm:prt_da96c2b9e001xLzkRjgO7CzU91",
+        "role": "agent",
+        "messageType": "opencode_event",
+        "content": "[Tool] question · running",
+        "metadata": {
+          "messageKey": "stream:na:ses_25694191affe1I3jkTXfMHI5Pm:prt_da96c2b9e001xLzkRjgO7CzU91",
+          "timestamp": 1776663915165,
+          "sessionEventSeq": 1776663915165002,
+          "timelineCursor": 4593,
+          "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+          "opencodeSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+          "workspacePath": "/home/user/opencode/workspaces/9fe60157-b102-4968-8aac-9897d69796aa",
+          "partId": "prt_da96c2b9e001xLzkRjgO7CzU91",
+          "eventType": "message.part.updated",
+          "toolName": "question",
+          "partType": "tool",
+          "event": {
+            "properties": {
+              "part": {
+                "id": "prt_da96c2b9e001xLzkRjgO7CzU91",
+                "callID": "call_aef35dfa695d4867b45bd25a",
+                "type": "tool",
+                "tool": "question"
+              }
+            }
+          },
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T05:45:15.165Z"
+      },
+      {
+        "id": "69f0aefe-e5ec-426b-ac97-fac50b324ca3",
+        "messageKey": "stream:2:ses_25694191affe1I3jkTXfMHI5Pm:prt_da96c2b9e001xLzkRjgO7CzU91",
+        "role": "agent",
+        "messageType": "opencode_event",
+        "content": "[Tool] question · running",
+        "metadata": {
+          "messageKey": "stream:2:ses_25694191affe1I3jkTXfMHI5Pm:prt_da96c2b9e001xLzkRjgO7CzU91",
+          "timestamp": 1776663915165,
+          "sessionEventSeq": 1776663915165002,
+          "timelineCursor": 4619,
+          "runtimeGeneration": 2,
+          "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+          "opencodeSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+          "workspacePath": "/home/user/opencode/workspaces/9fe60157-b102-4968-8aac-9897d69796aa",
+          "partId": "prt_da96c2b9e001xLzkRjgO7CzU91",
+          "eventType": "message.part.updated",
+          "toolName": "question",
+          "partType": "tool",
+          "event": {
+            "properties": {
+              "part": {
+                "id": "prt_da96c2b9e001xLzkRjgO7CzU91",
+                "callID": "call_aef35dfa695d4867b45bd25a",
+                "type": "tool",
+                "tool": "question"
+              }
+            }
+          }
+        },
+        "createdAt": "2026-04-20T05:45:15.165Z"
+      },
+      {
+        "id": "b8694be4-7404-4644-a064-11dc7bd2897a",
+        "messageKey": "runtime:na:1776663915435000:agent_message",
+        "role": "agent",
+        "messageType": "agent_message",
+        "content": "任务已发送到 OpenCode，正在流式执行，后续会实时回传每一步状态...",
+        "metadata": {
+          "messageKey": "runtime:na:1776663915435000:agent_message",
+          "timestamp": 1776663915435,
+          "sessionEventSeq": 1776663915435000,
+          "timelineCursor": 4576,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T05:45:15.435Z"
+      },
+      {
+        "id": "6fc32202-beeb-4e34-8c8d-c04bcf5fb2f0",
+        "messageKey": "runtime:na:1776663916565003:opencode_status",
+        "role": "agent",
+        "messageType": "opencode_status",
+        "content": "OpenCode 已接收指令，正在执行并回传实时事件...",
+        "metadata": {
+          "messageKey": "runtime:na:1776663916565003:opencode_status",
+          "timestamp": 1776663916565,
+          "sessionEventSeq": 1776663916565003,
+          "timelineCursor": 4580,
+          "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+          "opencodeSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T05:45:16.565Z"
+      },
+      {
+        "id": "eebab901-4183-43f3-9581-b1d0f0df072f",
+        "messageKey": "runtime:na:1776663918041002:opencode_event",
+        "role": "agent",
+        "messageType": "opencode_event",
+        "content": "[OpenCode] session.diff",
+        "metadata": {
+          "messageKey": "runtime:na:1776663918041002:opencode_event",
+          "timestamp": 1776663918041,
+          "sessionEventSeq": 1776663918041002,
+          "timelineCursor": 4583,
+          "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+          "opencodeSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+          "eventType": "session.diff",
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T05:45:18.041Z"
+      }
+    ]
+  },
+  "workspaceTree": {
+    "success": true,
+    "data": {
+      "root": "/home/user/opencode/workspaces/9fe60157-b102-4968-8aac-9897d69796aa",
+      "items": []
+    },
+    "cache": {
+      "hit": false
+    }
+  },
+  "latestRun": {
+    "success": true,
+    "data": null
+  },
+  "deployment": {
+    "success": true,
+    "data": {
+      "configured": false,
+      "canDeploy": true,
+      "bindingState": "uninitialized",
+      "provisioningPhase": "resource_provisioning",
+      "message": "首次部署时将自动准备托管仓库与部署资源，并发布当前工作区内容。",
+      "activeDeploymentPending": false,
+      "domains": [],
+      "deployments": [],
+      "logs": [],
+      "missing": [],
+      "analytics": {
+        "provider": "umami",
+        "configured": true,
+        "enabled": false,
+        "status": "pending_domain",
+        "host": "https://analytics.oneceo.ai",
+        "message": "等待首次部署后绑定 Umami website"
+      }
+    }
+  },
+  "transcript": [
+    {
+      "type": "agent_message",
+      "agent": "system",
+      "content": "欢迎使用 Altus 任务创建助手！请描述您想要创建的任务。",
+      "metadata": {}
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "system",
+      "stage": "collecting",
+      "phase": "ideation",
+      "content": "构思阶段：正在整理需求...",
+      "metadata": {
+        "phase": "ideation",
+        "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+      },
+      "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "intent",
+      "stage": "collecting",
+      "phase": "analysis",
+      "content": "分析阶段：正在分析您的任务需求...",
+      "metadata": {
+        "phase": "analysis",
+        "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+      },
+      "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+    },
+    {
+      "type": "agent_message",
+      "agent": "intent_recognition",
+      "content": "已识别任务类型：其他",
+      "metadata": {
+        "intent_type": "other",
+        "confidence": 60,
+        "next_action": "plan",
+        "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+      },
+      "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "planning",
+      "stage": "planning",
+      "phase": "analysis",
+      "content": "分析阶段：正在规划任务详情...",
+      "metadata": {
+        "phase": "analysis",
+        "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+      },
+      "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+    },
+    {
+      "type": "agent_message",
+      "agent": "planning",
+      "content": "任务规划完成：生成一个公司官网。营销计划制定",
+      "metadata": {
+        "task_description": {
+          "title": "生成一个公司官网。营销计划制定",
+          "objective": "基于已知信息，为 生成一个公司官网。 产出可落地的营销计划方案",
+          "scope": "待补充",
+          "deliverables": [
+            "营销策略文档",
+            "目标市场分析",
+            "渠道策略建议",
+            "阶段性执行计划"
+          ],
+          "constraints": [
+            "需确认产品类型与目标市场",
+            "需确认预算范围与时间框架"
+          ],
+          "additional_info": {
+            "fallback": true,
+            "note": "由于解析任务描述失败，已生成基础规划，后续可补充关键信息",
+            "userInput": "生成一个公司官网。"
+          }
+        },
+        "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+      },
+      "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "planning",
+      "stage": "planning",
+      "phase": "analysis",
+      "content": "分析阶段：正在生成执行计划...",
+      "metadata": {
+        "phase": "analysis",
+        "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+      },
+      "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+    },
+    {
+      "type": "plan_generated",
+      "plan": {
+        "project": {
+          "title": "生成一个公司官网。营销计划制定",
+          "description": "基于已知信息，为 生成一个公司官网。 产出可落地的营销计划方案",
+          "managers": [
+            {
+              "id": "m1",
+              "name": "执行经理",
+              "description": "负责整体执行计划与协调",
+              "tasks": [
+                {
+                  "id": "t1-1",
+                  "title": "营销策略文档",
+                  "description": "完成交付物：营销策略文档",
+                  "estimated_hours": 8,
+                  "deliverables": [
+                    "营销策略文档"
+                  ]
+                },
+                {
+                  "id": "t1-2",
+                  "title": "目标市场分析",
+                  "description": "完成交付物：目标市场分析",
+                  "estimated_hours": 8,
+                  "deliverables": [
+                    "目标市场分析"
+                  ]
+                },
+                {
+                  "id": "t1-3",
+                  "title": "渠道策略建议",
+                  "description": "完成交付物：渠道策略建议",
+                  "estimated_hours": 8,
+                  "deliverables": [
+                    "渠道策略建议"
+                  ]
+                },
+                {
+                  "id": "t1-4",
+                  "title": "阶段性执行计划",
+                  "description": "完成交付物：阶段性执行计划",
+                  "estimated_hours": 8,
+                  "deliverables": [
+                    "阶段性执行计划"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa",
+      "metadata": {
+        "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+      }
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "execution",
+      "stage": "executing",
+      "phase": "development",
+      "content": "开发阶段：执行计划已生成，正在启动执行环境...",
+      "metadata": {
+        "phase": "development",
+        "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+      },
+      "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "execution",
+      "stage": "executing",
+      "phase": "development",
+      "content": "开发阶段：正在启动执行环境...",
+      "metadata": {
+        "phase": "development",
+        "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+      },
+      "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+    },
+    {
+      "type": "agent_message",
+      "agent": "execution_plan",
+      "content": "执行环境已就绪，开始下发执行指令...",
+      "metadata": {
+        "osacEndpoint": "wss://18080-i7dsq4tky6tual0d10hsd.e2b.app/ws",
+        "osacHost": "18080-i7dsq4tky6tual0d10hsd.e2b.app",
+        "osacHostPort": 18080,
+        "osacConnectionMode": "direct",
+        "osacAuthToken": "e2b_c67a8dcd70ec437389ac15f4f4380f20",
+        "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+        "workspacePath": "/home/user/opencode/workspaces/9fe60157-b102-4968-8aac-9897d69796aa",
+        "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+      },
+      "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+    },
+    {
+      "type": "status_update",
+      "content": "正在连接智能体...",
+      "metadata": {
+        "code": "event_stream_error",
+        "message": "fetch failed",
+        "stage": "event_subscribe",
+        "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+        "source": "opencode_event_stream_retry",
+        "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+      },
+      "stage": "executing",
+      "tone": "execution",
+      "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+    },
+    {
+      "type": "agent_message",
+      "agent": "execution_plan",
+      "content": "任务已发送到 OpenCode，正在流式执行，后续会实时回传每一步状态...",
+      "metadata": {
+        "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+        "opencodeSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+        "workspacePath": "/home/user/opencode/workspaces/9fe60157-b102-4968-8aac-9897d69796aa",
+        "executionMode": "opencode_remote",
+        "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+      },
+      "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+    },
+    {
+      "type": "status_update",
+      "content": "OpenCode 已接收指令，正在执行并回传实时事件...",
+      "metadata": {
+        "opencodeSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+        "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+        "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+      },
+      "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+    },
+    {
+      "type": "opencode_event",
+      "content": "[OpenCode] session.diff",
+      "metadata": {
+        "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+        "opencodeSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+        "eventType": "session.diff",
+        "seq": 13,
+        "timestamp": 1776663918041,
+        "event": {
+          "type": "session.diff",
+          "properties": {
+            "diff": []
+          },
+          "directory": "/home/user/opencode/workspaces/9fe60157-b102-4968-8aac-9897d69796aa"
+        },
+        "rawPayload": {
+          "eventType": "session.diff",
+          "event": {
+            "type": "session.diff",
+            "properties": {
+              "diff": []
+            },
+            "directory": "/home/user/opencode/workspaces/9fe60157-b102-4968-8aac-9897d69796aa"
+          }
+        },
+        "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+      },
+      "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+    },
+    {
+      "type": "opencode_event",
+      "content": "[Tool] question",
+      "metadata": {
+        "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+        "opencodeSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+        "eventType": "message.part.updated",
+        "seq": 24,
+        "timestamp": 1776663931852,
+        "event": {
+          "type": "message.part.updated",
+          "properties": {
+            "part": {
+              "type": "tool",
+              "id": "prt_da96c2b9e001xLzkRjgO7CzU91",
+              "tool": "question",
+              "state": {
+                "input": {},
+                "status": "pending"
+              }
+            }
+          },
+          "directory": "/home/user/opencode/workspaces/9fe60157-b102-4968-8aac-9897d69796aa"
+        },
+        "rawPayload": {
+          "eventType": "message.part.updated",
+          "event": {
+            "type": "message.part.updated",
+            "properties": {
+              "part": {
+                "type": "tool",
+                "id": "prt_da96c2b9e001xLzkRjgO7CzU91",
+                "tool": "question",
+                "state": {
+                  "input": {},
+                  "status": "pending"
+                }
+              }
+            },
+            "directory": "/home/user/opencode/workspaces/9fe60157-b102-4968-8aac-9897d69796aa"
+          }
+        },
+        "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+      },
+      "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+    },
+    {
+      "type": "opencode_event",
+      "content": "[Tool] question",
+      "metadata": {
+        "orchestratorSessionId": "i7dsq4tky6tual0d10hsd",
+        "opencodeSessionId": "ses_25694191affe1I3jkTXfMHI5Pm",
+        "eventType": "message.part.updated",
+        "seq": 26,
+        "timestamp": 1776663931930,
+        "event": {
+          "type": "message.part.updated",
+          "properties": {
+            "part": {
+              "type": "tool",
+              "id": "prt_da96c2b9e001xLzkRjgO7CzU91",
+              "tool": "question",
+              "state": {
+                "input": {
+                  "questions": [
+                    {
+                      "header": "公司类型",
+                      "question": "请提供公司的基本信息，包括：",
+                      "options": [
+                        {
+                          "label": "科技公司",
+                          "description": "软件、硬件或技术服务公司"
+                        },
+                        {
+                          "label": "制造企业",
+                          "description": "生产实体产品的制造公司"
+                        },
+                        {
+                          "label": "服务型企业",
+                          "description": "咨询、教育、金融等服务公司"
+                        },
+                        {
+                          "label": "电商/零售",
+                          "description": "在线销售或零售业务"
+                        }
+                      ],
+                      "multiple": false
+                    },
+                    {
+                      "header": "目标市场",
+                      "question": "目标客户群体是？",
+                      "options": [
+                        {
+                          "label": "B2B企业客户",
+                          "description": "面向其他企业的商业客户"
+                        },
+                        {
+                          "label": "B2C个人消费者",
+                          "description": "面向个人终端用户"
+                        },
+                        {
+                          "label": "政府/机构",
+                          "description": "政府部门或公共机构"
+                        },
+                        {
+                          "label": "混合模式",
+                          "description": "同时面向多种客户类型"
+                        }
+                      ],
+                      "multiple": false
+                    },
+                    {
+                      "header": "预算范围",
+                      "question": "营销预算范围大致是多少？",
+                      "options": [
+                        {
+                          "label": "1-10万",
+                          "description": "小型预算"
+                        },
+                        {
+                          "label": "10-50万",
+                          "description": "中型预算"
+                        },
+                        {
+                          "label": "50-200万",
+                          "description": "大型预算"
+                        },
+                        {
+                          "label": "200万以上",
+                          "description": "超大型预算"
+                        }
+                      ],
+                      "multiple": false
+                    }
+                  ]
+                },
+                "status": "running"
+              }
+            }
+          },
+          "directory": "/home/user/opencode/workspaces/9fe60157-b102-4968-8aac-9897d69796aa"
+        },
+        "rawPayload": {
+          "eventType": "message.part.updated",
+          "event": {
+            "type": "message.part.updated",
+            "properties": {
+              "part": {
+                "type": "tool",
+                "id": "prt_da96c2b9e001xLzkRjgO7CzU91",
+                "tool": "question",
+                "state": {
+                  "input": {
+                    "questions": [
+                      {
+                        "header": "公司类型",
+                        "question": "请提供公司的基本信息，包括：",
+                        "options": [
+                          {
+                            "label": "科技公司",
+                            "description": "软件、硬件或技术服务公司"
+                          },
+                          {
+                            "label": "制造企业",
+                            "description": "生产实体产品的制造公司"
+                          },
+                          {
+                            "label": "服务型企业",
+                            "description": "咨询、教育、金融等服务公司"
+                          },
+                          {
+                            "label": "电商/零售",
+                            "description": "在线销售或零售业务"
+                          }
+                        ],
+                        "multiple": false
+                      },
+                      {
+                        "header": "目标市场",
+                        "question": "目标客户群体是？",
+                        "options": [
+                          {
+                            "label": "B2B企业客户",
+                            "description": "面向其他企业的商业客户"
+                          },
+                          {
+                            "label": "B2C个人消费者",
+                            "description": "面向个人终端用户"
+                          },
+                          {
+                            "label": "政府/机构",
+                            "description": "政府部门或公共机构"
+                          },
+                          {
+                            "label": "混合模式",
+                            "description": "同时面向多种客户类型"
+                          }
+                        ],
+                        "multiple": false
+                      },
+                      {
+                        "header": "预算范围",
+                        "question": "营销预算范围大致是多少？",
+                        "options": [
+                          {
+                            "label": "1-10万",
+                            "description": "小型预算"
+                          },
+                          {
+                            "label": "10-50万",
+                            "description": "中型预算"
+                          },
+                          {
+                            "label": "50-200万",
+                            "description": "大型预算"
+                          },
+                          {
+                            "label": "200万以上",
+                            "description": "超大型预算"
+                          }
+                        ],
+                        "multiple": false
+                      }
+                    ]
+                  },
+                  "status": "running"
+                }
+              }
+            },
+            "directory": "/home/user/opencode/workspaces/9fe60157-b102-4968-8aac-9897d69796aa"
+          }
+        },
+        "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+      },
+      "sessionId": "9fe60157-b102-4968-8aac-9897d69796aa"
+    }
+  ]
+}

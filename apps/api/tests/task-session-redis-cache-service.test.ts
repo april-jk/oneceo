@@ -127,6 +127,12 @@ test('task session redis cache service stores workspace/recent/history/session-e
     oldestCursor: 11,
     newestCursor: 20,
   });
+  await service.setSkillSessionState({
+    ...scope,
+    state: {
+      residentSelections: [{ sourceType: 'platform', skillId: 'skill-1', revisionId: 'rev-1' }],
+    },
+  });
   await service.appendSessionEvent({
     ...scope,
     eventType: 'session.diff',
@@ -142,12 +148,14 @@ test('task session redis cache service stores workspace/recent/history/session-e
   const file = await service.getWorkspaceFile({ ...scope, path: 'src/index.ts' });
   const recent = await service.getRecentMessagesPage(scope);
   const historyCursor = await service.getHistoryCursor(scope);
+  const skillState = await service.getSkillSessionState(scope);
   const events = await service.listSessionEvents({ ...scope, afterEventId: 100 });
 
   assert.equal((tree?.root as string) || '', '/workspace');
   assert.equal((file?.path as string) || '', 'src/index.ts');
   assert.equal(Array.isArray((recent as any)?.messages), true);
   assert.equal(historyCursor?.newestCursor, 20);
+  assert.equal(Array.isArray(skillState?.state?.residentSelections), true);
   assert.equal(events.length, 1);
   assert.equal(events[0]?.eventId, 101);
 

@@ -1,0 +1,58 @@
+{
+  "run_manifest": {
+    "run_id": "run_20260420_150000",
+    "suite_id": "altus-general-v1",
+    "suite_version": "1.0.0",
+    "executed_at": "2026-04-20T15:00:00+08:00",
+    "executor": "manual_or_script_name",
+    "git": {
+      "branch": "codex/example",
+      "commit": "abcdef123456"
+    },
+    "model_config": {
+      "provider": "example-provider",
+      "model": "example-model",
+      "temperature": 0.2,
+      "notes": "optional"
+    },
+    "environment": {
+      "mode": "managed",
+      "base_url": "http://localhost:4000",
+      "auth_profile": "playwright-test-account"
+    },
+    "case_count": 18,
+    "summary": {
+      "passed": 0,
+      "failed_soft": 0,
+      "failed_hard": 0,
+      "blocked": 0,
+      "average_score": 0
+    }
+  },
+  "case_results": [
+    {
+      "case_id": "ALTUS-CLARIFY-001",
+      "case_version": "1.0.0",
+      "category": "clarification",
+      "status": "passed",
+      "hard_fail": false,
+      "hard_fail_reasons": [],
+      "dimension_scores": {
+        "intent_understanding": 5,
+        "clarification_discipline": 5,
+        "planning_and_tool_selection": 3,
+        "execution_completion": 3,
+        "repair_and_exception_handling": 3,
+        "boundary_control": 5,
+        "output_quality": 5
+      },
+      "total_score": 78,
+      "verdict": "pass",
+      "evidence_refs": [
+        "conversation:session_123:message_45",
+        "run_event:run_abc:event_17"
+      ],
+      "notes": "Replace with real execution notes"
+    }
+  ]
+}

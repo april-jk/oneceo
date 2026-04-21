@@ -1,0 +1,5 @@
+{
+  "suite_path": "/Users/watson/codingProj/oneceo/docs/智能体能力测试题库/题库种子/altus_eval_seed_v1.json",
+  "output_root": "/Users/watson/codingProj/oneceo/docs/智能体能力测试题库/结果归档",
+  "smoke": true
+}

@@ -1390,6 +1390,31 @@ export class TaskCreationSessionDAO {
       .filter((session): session is TaskCreationSessionRecord => Boolean(session));
   }
 
+  async listOwnedProjectSessions(userId: string, projectId: string): Promise<TaskCreationSessionRecord[]> {
+    const normalizedUserId = normalizeUserId(userId);
+    const normalizedProjectId = this.asText(projectId);
+    if (!normalizedUserId || !normalizedProjectId) return [];
+
+    const sessions = await db
+      .select()
+      .from(taskCreationSessions)
+      .where(
+        and(
+          sql`btrim(coalesce(${taskCreationSessions.userId}, '')) = ${normalizedUserId}`,
+          sql`COALESCE(${taskCreationSessions.metadataJson}->>'projectId', '') = ${normalizedProjectId}`
+        )
+      )
+      .orderBy(
+        desc(taskCreationSessions.updatedAt),
+        desc(taskCreationSessions.createdAt),
+        desc(taskCreationSessions.id)
+      );
+
+    return sessions
+      .map((session) => this.decorateSessionRecord(session))
+      .filter((session): session is TaskCreationSessionRecord => Boolean(session));
+  }
+
   /**
    * 判断是否存在归属到其他用户的会话（用于限制空归属自动回填范围）
    */

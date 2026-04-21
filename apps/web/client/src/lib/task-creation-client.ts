@@ -21,6 +21,16 @@ export type TaskCreationSessionSummary = {
   updatedAt?: string;
 };
 
+export type TaskCreationProjectSummary = {
+  id: string;
+  name: string;
+  description?: string;
+  projectType?: string;
+  status?: string;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
 export type CreateTaskCreationSessionInput = {
   sessionId?: string;
   title?: string;
@@ -942,6 +952,66 @@ export async function toggleTaskCreationSessionFavorite(
       "Content-Type": "application/json",
     }),
     body: JSON.stringify({ favorite }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationSessionSummary };
+  return result?.data || null;
+}
+
+export async function listTaskCreationProjects(): Promise<TaskCreationProjectSummary[]> {
+  const url = `${getApiBaseUrl()}/api/task-creation/projects`;
+  const response = await fetch(url, {
+    headers: buildClientIdentityHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationProjectSummary[] };
+  return Array.isArray(result?.data) ? result.data : [];
+}
+
+export async function createTaskCreationProject(input: {
+  name: string;
+  description?: string | null;
+}): Promise<TaskCreationProjectSummary | null> {
+  const url = `${getApiBaseUrl()}/api/task-creation/projects`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      name: input.name,
+      description: input.description ?? "",
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationProjectSummary };
+  return result?.data || null;
+}
+
+export async function updateTaskCreationSessionProject(
+  sessionId: string,
+  input: {
+    projectId?: string | null;
+    projectName?: string | null;
+  }
+): Promise<TaskCreationSessionSummary | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/project`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      projectId: input.projectId ?? null,
+      projectName: input.projectName ?? null,
+    }),
   });
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));

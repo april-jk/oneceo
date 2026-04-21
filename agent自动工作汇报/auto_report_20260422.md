@@ -5,3 +5,6 @@
 - 已修复用户态会话列表路由：改为始终以 DB owned sessions 为返回基准，memory 仅用于补充实时状态；同时增加 `TASK_SESSION_LIST_MEMORY_PARTIAL` 诊断日志，便于在现网继续观测“DB 全量、memory 残缺”的样本。
 - 已补两条 API 回归测试：一条固定覆盖“DB 多条、memory 少量仍返回全量”，另一条覆盖“较小 limit 的缓存不会污染后续 `limit=all` 请求”。
 - 已完成定向验证：`pnpm --filter api exec tsx --test tests/task-creation-business-routes.test.ts` 与 `pnpm --filter api type-check` 均通过。
+- 已新增“会话自动命名优化方案”文档，并按采用状态收口为新的标题策略：用户侧主标题不再使用 `任务会话 {id后缀}`，统一切换为状态型占位标题与提炼后的短标题。
+- 已完成会话命名链路修复：后端统一负责标题提炼与来源优先级判定，列表/详情/侧边栏改为共用同一套标题决策；前端不再维护独立的“是否需要自动命名”规则，只将非空用户输入转交后端解析。
+- 已补充会话命名回归验证：`pnpm --filter api exec tsx --test tests/task-creation-business-routes.test.ts`、`pnpm --filter web exec vitest run client/src/tests/sidebar-session-status-visual.test.ts`、`pnpm --filter web check` 通过。

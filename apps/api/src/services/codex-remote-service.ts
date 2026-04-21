@@ -545,7 +545,7 @@ fi
       executor: 'codex',
       metadata: {
         taskSessionId,
-        taskTitle: title || '新建任务会话',
+        taskTitle: title || '待识别任务',
         executor: 'codex',
       },
     });

@@ -3,6 +3,7 @@ import {
   getSessionStatusVisual,
   hasMeaningfulSidebarSessionUpdate,
   mergeSidebarSessionPatch,
+  resolveSidebarSessionTitle,
 } from "@/components/Sidebar";
 
 describe("sidebar session status visual", () => {
@@ -10,6 +11,8 @@ describe("sidebar session status visual", () => {
     if (key === "sidebar.statusWaitingUser") return "待补充";
     if (key === "sidebar.statusInProgress") return "进行中";
     if (key === "sidebar.statusCompleted") return "已完成";
+    if (key === "sidebar.sessionFallbackTitle") return "待识别任务";
+    if (key === "sidebar.sessionWaitingFallbackTitle") return "待补充需求";
     return key;
   };
 
@@ -57,5 +60,29 @@ describe("sidebar session status visual", () => {
         status: "in_progress",
       }),
     ).toBe(true);
+  });
+
+  it("uses pending task fallback for unnamed in-progress sessions", () => {
+    expect(
+      resolveSidebarSessionTitle(
+        {
+          title: "",
+          status: "in_progress",
+        },
+        t,
+      ),
+    ).toBe("待识别任务");
+  });
+
+  it("uses needs-input fallback for unnamed waiting sessions", () => {
+    expect(
+      resolveSidebarSessionTitle(
+        {
+          title: "",
+          status: "waiting_user",
+        },
+        t,
+      ),
+    ).toBe("待补充需求");
   });
 });

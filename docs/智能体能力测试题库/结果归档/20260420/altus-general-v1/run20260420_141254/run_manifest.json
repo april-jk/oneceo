@@ -1,0 +1,38 @@
+{
+  "run_id": "run20260420_141254",
+  "suite_id": "altus-general-v1",
+  "suite_version": "1.0.0",
+  "executed_at": "2026-04-20T06:12:54.346Z",
+  "executor": "current-altus-retest",
+  "git": {
+    "branch": "codex/safe-dev-20260420-120832",
+    "commit": "36580a55b44ef92a459647ba85102f0b4461592c"
+  },
+  "model_config": {
+    "provider": "runtime",
+    "model": "current-altus-postfix",
+    "temperature": 0,
+    "notes": ""
+  },
+  "environment": {
+    "mode": "managed",
+    "base_url": "http://localhost:4000",
+    "auth_profile": "playwright-test-account"
+  },
+  "case_count": 5,
+  "summary": {
+    "total_cases": 5,
+    "executed_cases": 4,
+    "passed": 0,
+    "failed_soft": 3,
+    "failed_hard": 1,
+    "blocked": 1,
+    "not_run": 0,
+    "average_score": 22.25,
+    "category_average_scores": {
+      "clarification": 34,
+      "boundary_control": 15,
+      "multi_turn_continuity": 6
+    }
+  }
+}

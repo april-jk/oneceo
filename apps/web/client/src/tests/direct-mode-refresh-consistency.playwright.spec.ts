@@ -10,6 +10,8 @@ import {
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { bootstrapSharedAuthenticatedUser } from './playwright-auth';
+import { composerTextarea } from './playwright-locators';
 
 const WEB_URL = 'http://127.0.0.1:3000';
 const API_URL = 'http://127.0.0.1:4000';
@@ -213,9 +215,11 @@ async function readClientUserId(page: Page) {
   return page.evaluate(() => localStorage.getItem('oneceo_client_user_id') || '');
 }
 
-async function createApiContext() {
+async function createApiContextFromBrowser(context: BrowserContext) {
+  const storageState = await context.storageState();
   return playwrightRequest.newContext({
     baseURL: API_URL,
+    storageState,
   });
 }
 
@@ -480,15 +484,15 @@ async function openFreshSessionPage(
 }
 
 test('direct mode capability flow keeps conversation data identical after refresh and re-entry', async ({
-  page,
   browser,
-  context,
 }, testInfo) => {
-  const api = await createApiContext();
+  const context = await bootstrapSharedAuthenticatedUser(browser, WEB_URL);
+  const page = await context.newPage();
+  const api = await createApiContextFromBrowser(context);
   try {
     await prepareDirectMode(page);
 
-    const composer = page.getByRole('textbox', { name: 'Type your message here...' });
+    const composer = composerTextarea(page);
     await composer.fill(STATUS_PROMPT);
     await composer.press('Enter');
 
@@ -561,16 +565,17 @@ test('direct mode capability flow keeps conversation data identical after refres
       await nextContext.close();
     }
   } finally {
+    await context.close();
     await api.dispose();
   }
 });
 
 test('direct mode opencode session restores native history identically after refresh and re-entry', async ({
-  page,
   browser,
-  context,
 }, testInfo) => {
-  const api = await createApiContext();
+  const context = await bootstrapSharedAuthenticatedUser(browser, WEB_URL);
+  const page = await context.newPage();
+  const api = await createApiContextFromBrowser(context);
   try {
     await prepareDirectMode(page);
     const seeded = await findLatestCompletedNativeSession(api);
@@ -652,6 +657,7 @@ test('direct mode opencode session restores native history identically after ref
       await nextContext.close();
     }
   } finally {
+    await context.close();
     await api.dispose();
   }
 });

@@ -15,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,6 +43,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
 import {
   FileText,
   FolderOpen,
@@ -71,12 +73,17 @@ import { useTranslation } from "react-i18next";
 import React from "react";
 import { toast } from "sonner";
 import {
+  createTaskCreationProject,
   deleteTaskCreationSession,
+  listTaskCreationProjects,
   listTaskCreationSessions,
   renameTaskCreationSessionTitle,
+  type TaskCreationProjectSummary,
   toggleTaskCreationSessionFavorite,
+  updateTaskCreationSessionProject,
   type TaskCreationSessionSummary,
 } from "@/lib/task-creation-client";
+import type { TaskProjectSelection } from "@/lib/task-project-selection";
 import { openSettingsDialog } from "@/lib/settings-dialog-events";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -84,8 +91,7 @@ interface SidebarProps {
   className?: string;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
-  selectedProjectId?: string | null;
-  onProjectSelect?: (projectId: string | null) => void;
+  selectedProject?: TaskProjectSelection | null;
 }
 
 const WAITING_USER_TEXT_CLASS = "text-[var(--function-warning,rgb(217_119_6))]";
@@ -142,9 +148,21 @@ export default function Sidebar({
   className = "",
   collapsed = false,
   onToggleCollapse,
-  selectedProjectId,
-  onProjectSelect,
+  selectedProject,
 }: SidebarProps) {
+  type ProjectManager = {
+    id: string;
+    name: string;
+    type: string;
+    tasks: Array<{ id: string; name: string; status: string }>;
+  };
+  type SidebarProjectNode = {
+    id: string;
+    name: string;
+    description?: string;
+    managers: ProjectManager[];
+    kind: "manual" | "self-organized";
+  };
   type SessionTask = {
     sessionId: string;
     title: string;
@@ -160,21 +178,31 @@ export default function Sidebar({
   const [location, setLocation] = useLocation();
   const { t } = useTranslation();
   const { user } = useAuth();
+  const [manualProjects, setManualProjects] = React.useState<TaskCreationProjectSummary[]>([]);
+  const [expandedProjectGroups, setExpandedProjectGroups] = React.useState<string[]>(["self-organized"]);
   const [expandedProjects, setExpandedProjects] = React.useState<string[]>([]);
   const [expandedManagers, setExpandedManagers] = React.useState<string[]>([]);
   const [tasksDialogOpen, setTasksDialogOpen] = React.useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = React.useState(false);
   const [sessionTasks, setSessionTasks] = React.useState<SessionTask[]>([]);
+  const [createProjectDialogOpen, setCreateProjectDialogOpen] = React.useState(false);
+  const [createProjectName, setCreateProjectName] = React.useState("");
+  const [createProjectDescription, setCreateProjectDescription] = React.useState("");
+  const [createProjectSubmitting, setCreateProjectSubmitting] = React.useState(false);
   const [renameDialogOpen, setRenameDialogOpen] = React.useState(false);
   const [renameTarget, setRenameTarget] = React.useState<SessionTask | null>(null);
   const [renameValue, setRenameValue] = React.useState("");
   const [renameSubmitting, setRenameSubmitting] = React.useState(false);
+  const [moveProjectDialogOpen, setMoveProjectDialogOpen] = React.useState(false);
+  const [moveProjectTarget, setMoveProjectTarget] = React.useState<SessionTask | null>(null);
+  const [moveProjectSubmitting, setMoveProjectSubmitting] = React.useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
   const [deleteTarget, setDeleteTarget] = React.useState<SessionTask | null>(null);
   const [deleteSubmitting, setDeleteSubmitting] = React.useState(false);
   const listLoadingRef = React.useRef(false);
   const lastListFetchRef = React.useRef(0);
   const lastListErrorToastAtRef = React.useRef(0);
+  const projectListLoadingRef = React.useRef(false);
   const LIST_POLL_MS = 30000;
 
   const mapSessionTask = React.useCallback(
@@ -269,6 +297,8 @@ export default function Sidebar({
               title?: string;
               status?: string;
               isFavorite?: boolean;
+              projectId?: string | null;
+              projectName?: string | null;
             })
           : null;
       const patchedSessionId =
@@ -284,6 +314,8 @@ export default function Sidebar({
           ? detail.status.trim()
           : "";
       const hasFavoritePatch = typeof detail?.isFavorite === "boolean";
+      const hasProjectIdPatch = Object.prototype.hasOwnProperty.call(detail || {}, "projectId");
+      const hasProjectNamePatch = Object.prototype.hasOwnProperty.call(detail || {}, "projectName");
       if (patchedSessionId) {
         setSessionTasks((prev) => {
           const nowIso = new Date().toISOString();
@@ -298,6 +330,8 @@ export default function Sidebar({
               title: patchedTitle || current.title,
               status: patchedStatus || current.status,
               isFavorite: hasFavoritePatch ? Boolean(detail?.isFavorite) : current.isFavorite,
+              projectId: hasProjectIdPatch ? detail?.projectId || null : current.projectId,
+              projectName: hasProjectNamePatch ? detail?.projectName || null : current.projectName,
               updatedAt: nowIso,
             };
             return sortSessionTasks(next);
@@ -310,6 +344,8 @@ export default function Sidebar({
                 status: patchedStatus || "in_progress",
                 updatedAt: nowIso,
                 isFavorite: hasFavoritePatch ? Boolean(detail?.isFavorite) : false,
+                projectId: hasProjectIdPatch ? detail?.projectId || null : null,
+                projectName: hasProjectNamePatch ? detail?.projectName || null : null,
               },
               ...prev,
             ]);
@@ -339,6 +375,44 @@ export default function Sidebar({
     };
   }, [mapSessionTask, sortSessionTasks, t]);
 
+  React.useEffect(() => {
+    let disposed = false;
+    const loadProjects = async () => {
+      if (disposed || projectListLoadingRef.current) return;
+      projectListLoadingRef.current = true;
+      try {
+        const projects = await listTaskCreationProjects();
+        if (disposed) return;
+        setManualProjects(projects);
+        setExpandedProjectGroups((prev) => {
+          if (projects.length === 0 || prev.includes("manual-projects")) return prev;
+          return ["manual-projects", ...prev];
+        });
+      } catch (error) {
+        console.error("[Sidebar] failed to load projects:", error);
+        toast.error(
+          error instanceof Error && error.message.trim()
+            ? error.message.trim()
+            : t("sidebar.loadProjectsFailed"),
+        );
+      } finally {
+        projectListLoadingRef.current = false;
+      }
+    };
+    void loadProjects();
+    return () => {
+      disposed = true;
+    };
+  }, [t, user?.id]);
+
+  const toggleProjectGroup = (groupId: string) => {
+    setExpandedProjectGroups((prev) =>
+      prev.includes(groupId)
+        ? prev.filter((id) => id !== groupId)
+        : [...prev, groupId],
+    );
+  };
+
   const toggleProject = (projectId: string) => {
     setExpandedProjects((prev) =>
       prev.includes(projectId)
@@ -363,10 +437,15 @@ export default function Sidebar({
     { icon: Network, label: t("sidebar.ceoView"), href: "/ceo-view" },
   ];
 
-  const projectsData = [
+  // Preview-only scaffold for the upcoming self-organized projects feature.
+  // AI maintainers: do not reshape or replace this block unless the request
+  // explicitly targets that future feature.
+  // This block must stay excluded from session-parent project choices.
+  const selfOrganizedProjectsData: SidebarProjectNode[] = [
     {
       id: "1",
       name: "oneceo.ai",
+      description: "",
       managers: [
         {
           id: "m1",
@@ -388,6 +467,7 @@ export default function Sidebar({
     {
       id: "2",
       name: "artgen ai",
+      description: "",
       managers: [
         {
           id: "m3",
@@ -400,19 +480,60 @@ export default function Sidebar({
     {
       id: "3",
       name: "voiceClone",
+      description: "",
       managers: [],
     },
     {
       id: "4",
       name: "AI员工",
+      description: "",
       managers: [],
     },
     {
       id: "5",
       name: "opencode相关",
+      description: "",
       managers: [],
     },
-  ];
+  ].map((project) => ({
+    ...project,
+    kind: "self-organized" as const,
+  }));
+  const manualProjectNodes = React.useMemo<SidebarProjectNode[]>(
+    () =>
+      manualProjects.map((project) => ({
+        id: project.id,
+        name: project.name,
+        description: project.description,
+        managers: [],
+        kind: "manual" as const,
+      })),
+    [manualProjects],
+  );
+  const projectGroups = React.useMemo(
+    () => [
+      {
+        id: "manual-projects",
+        name: t("sidebar.standardProjects"),
+        projects: manualProjectNodes,
+      },
+      {
+        id: "self-organized",
+        name: t("sidebar.selfOrganizedProjects"),
+        projects: selfOrganizedProjectsData,
+      },
+    ],
+    [manualProjectNodes, selfOrganizedProjectsData, t],
+  );
+  const assignableProjects = React.useMemo(
+    () =>
+      manualProjects.map((project) => ({
+        id: project.id,
+        name: project.name,
+      })),
+    [manualProjects],
+  );
+  // End of preview-only self-organized projects scaffold.
   const activeSessionId = React.useMemo(() => {
     const matched = location.match(/^\/session\/([^/?]+)/);
     return matched?.[1] || null;
@@ -473,6 +594,8 @@ export default function Sidebar({
           title: session.title,
           status: session.status,
           isFavorite: session.isFavorite,
+          projectId: session.projectId,
+          projectName: session.projectName,
         },
       }),
     );
@@ -529,6 +652,92 @@ export default function Sidebar({
     setDeleteTarget(session);
     setDeleteDialogOpen(true);
   }, []);
+
+  const openCreateProjectDialog = React.useCallback(() => {
+    setCreateProjectName("");
+    setCreateProjectDescription("");
+    setCreateProjectDialogOpen(true);
+  }, []);
+
+  const handleCreateProjectSubmit = React.useCallback(async () => {
+    const nextName = createProjectName.trim();
+    if (!nextName) return;
+    setCreateProjectSubmitting(true);
+    try {
+      const created = await createTaskCreationProject({
+        name: nextName,
+        description: createProjectDescription,
+      });
+      if (!created?.id) {
+        throw new Error(t("sidebar.projectCreateFailed"));
+      }
+      setManualProjects((prev) => [created, ...prev]);
+      setExpandedProjectGroups((prev) =>
+        prev.includes("manual-projects") ? prev : ["manual-projects", ...prev],
+      );
+      setExpandedProjects((prev) => (prev.includes(created.id) ? prev : [...prev, created.id]));
+      setCreateProjectDialogOpen(false);
+      toast.success(t("sidebar.projectCreated"));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("sidebar.projectCreateFailed"));
+    } finally {
+      setCreateProjectSubmitting(false);
+    }
+  }, [createProjectDescription, createProjectName, t]);
+
+  const openMoveProjectDialog = React.useCallback((session: SessionTask) => {
+    setMoveProjectTarget(session);
+    setMoveProjectDialogOpen(true);
+  }, []);
+
+  const handleProjectAssign = React.useCallback(async (projectId: string | null, projectName: string | null) => {
+    const target = moveProjectTarget;
+    if (!target) return;
+    const assignableProject = projectId
+      ? assignableProjects.find((project) => project.id === projectId) || null
+      : null;
+    if (projectId && !assignableProject) {
+      toast.error(t("sidebar.projectParentRestricted"));
+      return;
+    }
+    const nextProjectId = assignableProject ? assignableProject.id : null;
+    const nextProjectName = assignableProject ? assignableProject.name : null;
+    setMoveProjectSubmitting(true);
+    try {
+      const updated = await updateTaskCreationSessionProject(target.sessionId, {
+        projectId: nextProjectId,
+        projectName: nextProjectName,
+      });
+      const appliedProjectId =
+        updated && Object.prototype.hasOwnProperty.call(updated, "projectId")
+          ? updated.projectId || null
+          : nextProjectId;
+      const appliedProjectName =
+        updated && Object.prototype.hasOwnProperty.call(updated, "projectName")
+          ? updated.projectName || null
+          : nextProjectName;
+      patchSessionTask(target.sessionId, {
+        projectId: appliedProjectId,
+        projectName: appliedProjectName,
+      });
+      dispatchSessionUpdate({
+        sessionId: target.sessionId,
+        projectId: appliedProjectId,
+        projectName: appliedProjectName,
+      });
+      setMoveProjectDialogOpen(false);
+      setMoveProjectTarget(null);
+      toast.success(
+        appliedProjectId
+          ? t("sidebar.projectMoved", { projectName: appliedProjectName || nextProjectName || "" })
+          : t("sidebar.projectRemoved"),
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("sidebar.projectUpdateFailed"));
+    } finally {
+      setMoveProjectSubmitting(false);
+    }
+  }, [assignableProjects, dispatchSessionUpdate, moveProjectTarget, patchSessionTask, t]);
 
   const handleDeleteConfirm = React.useCallback(async () => {
     const target = deleteTarget;
@@ -616,9 +825,9 @@ export default function Sidebar({
               <Star className={`h-4 w-4 ${session.isFavorite ? "fill-current text-amber-500" : ""}`} />
               <span>{favoriteLabel}</span>
             </ContextMenuItem>
-            <ContextMenuItem disabled>
+            <ContextMenuItem onSelect={() => openMoveProjectDialog(session)}>
               <FolderInput className="h-4 w-4" />
-              <span>{t("sidebar.moveToProjectPending")}</span>
+              <span>{t("sidebar.moveToProjectAction")}</span>
             </ContextMenuItem>
             <ContextMenuSeparator />
             <ContextMenuItem variant="destructive" onSelect={() => openDeleteDialog(session)}>
@@ -629,7 +838,7 @@ export default function Sidebar({
         </ContextMenu>
       );
     },
-    [handleFavoriteToggle, openDeleteDialog, openRenameDialog, t],
+    [handleFavoriteToggle, openDeleteDialog, openMoveProjectDialog, openRenameDialog, t],
   );
 
   return (
@@ -692,7 +901,6 @@ export default function Sidebar({
                   } ${collapsed ? "" : "min-w-0 overflow-hidden"}`}
                   onClick={() => {
                     setLocation(`/new-task?new=${Date.now()}`);
-                    onProjectSelect?.(null);
                   }}
                 >
                   <Icon className="w-4 h-4" />
@@ -738,24 +946,28 @@ export default function Sidebar({
               <span className="truncate text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                 {t("sidebar.projects").toUpperCase()}
               </span>
-              <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 shrink-0"
+                onClick={openCreateProjectDialog}
+              >
                 <PlusCircle className="w-4 h-4" />
               </Button>
             </div>
             <div className="space-y-1">
-              {projectsData.map((project) => {
-                const isExpanded = expandedProjects.includes(project.id);
+              {projectGroups.map((group) => {
+                const isGroupExpanded = expandedProjectGroups.includes(group.id);
                 return (
-                  <div key={project.id} className="space-y-0.5">
-                    {/* Project */}
+                  <div key={group.id} className="space-y-1">
                     <div className="flex items-center gap-1">
                       <Button
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7 shrink-0"
-                        onClick={() => toggleProject(project.id)}
+                        onClick={() => toggleProjectGroup(group.id)}
                       >
-                        {isExpanded ? (
+                        {isGroupExpanded ? (
                           <ChevronDown className="w-3.5 h-3.5" />
                         ) : (
                           <ChevronRight className="w-3.5 h-3.5" />
@@ -764,73 +976,120 @@ export default function Sidebar({
                       <Button
                         variant="ghost"
                         className="flex-1 min-w-0 justify-start gap-2 h-7 overflow-hidden px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
-                        onClick={() => onProjectSelect?.(project.id)}
+                        onClick={() => toggleProjectGroup(group.id)}
                       >
                         <FolderOpen className="w-3.5 h-3.5" />
                         <span className="text-sm truncate min-w-0">
-                          {project.name}
+                          {group.name}
                         </span>
                       </Button>
                     </div>
 
-                    {/* Managers */}
-                    {isExpanded && project.managers.length > 0 && (
-                      <div className="ml-7 space-y-0.5">
-                        {project.managers.map((manager) => {
-                          const isManagerExpanded = expandedManagers.includes(
-                            manager.id,
-                          );
+                    {isGroupExpanded && (
+                      <div className="ml-4 space-y-0.5">
+                        {group.projects.length === 0 && group.id === "manual-projects" ? (
+                          <div className="px-2 py-2 text-xs leading-5 text-muted-foreground">
+                            {t("sidebar.noManualProjects")}
+                          </div>
+                        ) : null}
+                        {group.projects.map((project) => {
+                          const isExpanded = expandedProjects.includes(project.id);
+                          const isProjectActive =
+                            selectedProject?.id === project.id &&
+                            selectedProject?.kind === project.kind;
                           return (
-                            <div key={manager.id} className="space-y-0.5">
-                              {/* Manager */}
+                            <div key={project.id} className="space-y-0.5">
                               <div className="flex items-center gap-1">
                                 <Button
                                   variant="ghost"
                                   size="icon"
-                                  className="h-6 w-6 shrink-0"
-                                  onClick={() => toggleManager(manager.id)}
+                                  className="h-7 w-7 shrink-0"
+                                  onClick={() => toggleProject(project.id)}
                                 >
-                                  {isManagerExpanded ? (
-                                    <ChevronDown className="w-3 h-3" />
+                                  {isExpanded ? (
+                                    <ChevronDown className="w-3.5 h-3.5" />
                                   ) : (
-                                    <ChevronRight className="w-3 h-3" />
+                                    <ChevronRight className="w-3.5 h-3.5" />
                                   )}
                                 </Button>
                                 <Button
                                   variant="ghost"
-                                  className="flex-1 min-w-0 justify-start gap-2 h-6 overflow-hidden px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                                  className={`flex-1 min-w-0 justify-start gap-2 h-7 overflow-hidden px-2 rounded-lg transition-colors duration-150 ${
+                                    isProjectActive
+                                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                                      : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+                                  }`}
+                                  onClick={() => {
+                                    setLocation(`/project/${encodeURIComponent(project.id)}`);
+                                  }}
                                 >
-                                  <User className="w-3 h-3" />
-                                  <span className="text-xs truncate min-w-0">
-                                    {manager.name}
+                                  <FolderOpen className="w-3.5 h-3.5" />
+                                  <span className="text-sm truncate min-w-0">
+                                    {project.name}
                                   </span>
                                 </Button>
                               </div>
 
-                              {/* Tasks */}
-                              {isManagerExpanded &&
-                                manager.tasks.length > 0 && (
-                                  <div className="ml-6 space-y-0.5">
-                                    {manager.tasks.map((task: any) => (
-                                      <Link
-                                        key={task.id}
-                                        href={`/task/${project.id}/${manager.id}/${task.id}`}
-                                      >
-                                        <Button
-                                          variant="ghost"
-                                          className="w-full min-w-0 justify-start gap-2 h-6 overflow-hidden px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
-                                        >
-                                          <CheckCircle2
-                                            className={`w-3 h-3 ${task.status === "completed" ? "text-green-500" : "text-muted-foreground"}`}
-                                          />
-                                          <span className="text-xs truncate min-w-0">
-                                            {task.name}
-                                          </span>
-                                        </Button>
-                                      </Link>
-                                    ))}
-                                  </div>
-                                )}
+                              {isExpanded && project.managers.length > 0 && (
+                                <div className="ml-7 space-y-0.5">
+                                  {project.managers.map((manager) => {
+                                    const isManagerExpanded = expandedManagers.includes(
+                                      manager.id,
+                                    );
+                                    return (
+                                      <div key={manager.id} className="space-y-0.5">
+                                        <div className="flex items-center gap-1">
+                                          <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-6 w-6 shrink-0"
+                                            onClick={() => toggleManager(manager.id)}
+                                          >
+                                            {isManagerExpanded ? (
+                                              <ChevronDown className="w-3 h-3" />
+                                            ) : (
+                                              <ChevronRight className="w-3 h-3" />
+                                            )}
+                                          </Button>
+                                          <Button
+                                            variant="ghost"
+                                            className="flex-1 min-w-0 justify-start gap-2 h-6 overflow-hidden px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                                          >
+                                            <User className="w-3 h-3" />
+                                            <span className="text-xs truncate min-w-0">
+                                              {manager.name}
+                                            </span>
+                                          </Button>
+                                        </div>
+
+                                        {isManagerExpanded &&
+                                          manager.tasks.length > 0 && (
+                                        <div className="ml-6 space-y-0.5">
+                                              {manager.tasks.map((task) => (
+                                                <Link
+                                                  key={task.id}
+                                                  href={`/task/${project.id}/${manager.id}/${task.id}`}
+                                                >
+                                                  <Button
+                                                    variant="ghost"
+                                                    className="w-full min-w-0 justify-start gap-2 h-6 overflow-hidden px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                                                  >
+                                                    <CheckCircle2
+                                                      className={`w-3 h-3 ${task.status === "completed" ? "text-green-500" : "text-muted-foreground"}`}
+                                                    />
+                                                    <span className="text-xs truncate min-w-0">
+                                                      {task.name}
+                                                    </span>
+                                                  </Button>
+                                                </Link>
+                                              ))}
+                                            </div>
+                                          )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
                             </div>
                           );
                         })}
@@ -1031,6 +1290,114 @@ export default function Sidebar({
               {renameSubmitting ? t("sidebar.saving") : t("common.save")}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={createProjectDialogOpen} onOpenChange={setCreateProjectDialogOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t("sidebar.createProjectTitle")}</DialogTitle>
+            <DialogDescription>{t("sidebar.createProjectDescription")}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="sidebar-create-project-name">{t("sidebar.projectNameLabel")}</Label>
+              <Input
+                id="sidebar-create-project-name"
+                value={createProjectName}
+                onChange={(event) => setCreateProjectName(event.target.value)}
+                placeholder={t("sidebar.projectNamePlaceholder")}
+                maxLength={80}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void handleCreateProjectSubmit();
+                  }
+                }}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="sidebar-create-project-description">
+                {t("sidebar.projectDescriptionLabel")}
+              </Label>
+              <Textarea
+                id="sidebar-create-project-description"
+                value={createProjectDescription}
+                onChange={(event) => setCreateProjectDescription(event.target.value)}
+                placeholder={t("sidebar.projectDescriptionPlaceholder")}
+                maxLength={300}
+                className="min-h-[112px] resize-none"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setCreateProjectDialogOpen(false);
+              }}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              onClick={() => void handleCreateProjectSubmit()}
+              disabled={createProjectSubmitting || !createProjectName.trim()}
+            >
+              {createProjectSubmitting ? t("sidebar.creatingProject") : t("sidebar.createProjectAction")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={moveProjectDialogOpen} onOpenChange={setMoveProjectDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t("sidebar.moveToProjectTitle")}</DialogTitle>
+            <DialogDescription>
+              {t("sidebar.moveToProjectDescription", {
+                projectName: moveProjectTarget?.projectName || t("sidebar.noProjectOption"),
+              })}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Button
+              type="button"
+              variant={moveProjectTarget?.projectId ? "outline" : "default"}
+              className="w-full justify-start"
+              disabled={moveProjectSubmitting}
+              onClick={() => void handleProjectAssign(null, null)}
+            >
+              {t("sidebar.noProjectOption")}
+            </Button>
+            {assignableProjects.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-border p-3 text-sm text-muted-foreground">
+                <p>{t("sidebar.noManualProjectsForSession")}</p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="mt-3 w-full justify-center"
+                  onClick={() => {
+                    setMoveProjectDialogOpen(false);
+                    openCreateProjectDialog();
+                  }}
+                >
+                  {t("sidebar.createProjectAction")}
+                </Button>
+              </div>
+            ) : null}
+            {assignableProjects.map((project) => (
+              <Button
+                key={project.id}
+                type="button"
+                variant={moveProjectTarget?.projectId === project.id ? "default" : "outline"}
+                className="w-full justify-start"
+                disabled={moveProjectSubmitting}
+                onClick={() => void handleProjectAssign(project.id, project.name)}
+              >
+                {project.name}
+              </Button>
+            ))}
+          </div>
         </DialogContent>
       </Dialog>
 

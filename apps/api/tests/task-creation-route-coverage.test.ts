@@ -3,7 +3,7 @@ import { after, test } from 'node:test';
 import express from 'express';
 import taskCreationRoutes from '../src/routes/task-creation-routes';
 import { mockAuthContextMiddleware } from './helpers/mock-auth-context';
-import { taskCreationSessionDAO } from '../src/db/dao';
+import { appUserProjectDAO, taskCreationSessionDAO } from '../src/db/dao';
 import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-memory-store';
 import { sessionConnectorService } from '../src/services/session-connector-service';
 import { userSkillService } from '../src/services/user-skill-service';
@@ -15,18 +15,25 @@ type TestServer = {
 };
 
 const sessionDaoAny = taskCreationSessionDAO as any;
+const projectDaoAny = appUserProjectDAO as any;
 const fileStoreAny = taskCreationFileMemoryStore as any;
 const sessionConnectorAny = sessionConnectorService as any;
 const userSkillServiceAny = userSkillService as any;
 const runtimeConfigServiceAny = codexRuntimeConfigService as any;
 
 const originalGetSession = sessionDaoAny.getSession;
+const originalListProjects = projectDaoAny.listByUser;
+const originalGetOwnedProjectById = projectDaoAny.getOwnedProjectById;
+const originalGetOwnedProjectByName = projectDaoAny.getOwnedProjectByName;
+const originalCreateProject = projectDaoAny.create;
 const originalGetIntentResult = sessionDaoAny.getIntentResult;
 const originalGetTaskDescription = sessionDaoAny.getTaskDescription;
 const originalGetExecutionPlan = sessionDaoAny.getExecutionPlan;
 const originalDeleteSession = sessionDaoAny.deleteSession;
+const originalUpdateSessionProject = sessionDaoAny.updateSessionProject;
 const originalGetFileSession = fileStoreAny.getSession;
 const originalDeleteFileSession = fileStoreAny.deleteSession;
+const originalUpdateFileSessionProject = fileStoreAny.updateSessionProject;
 const originalAssertSessionOwnership = sessionConnectorAny.assertSessionOwnership;
 const originalListAvailableSkills = userSkillServiceAny.listAvailableSkills;
 const originalListSettings = userSkillServiceAny.listSettings;
@@ -41,12 +48,18 @@ const originalUpsertRuntimeConfig = runtimeConfigServiceAny.upsertByUserId;
 
 after(() => {
   sessionDaoAny.getSession = originalGetSession;
+  projectDaoAny.listByUser = originalListProjects;
+  projectDaoAny.getOwnedProjectById = originalGetOwnedProjectById;
+  projectDaoAny.getOwnedProjectByName = originalGetOwnedProjectByName;
+  projectDaoAny.create = originalCreateProject;
   sessionDaoAny.getIntentResult = originalGetIntentResult;
   sessionDaoAny.getTaskDescription = originalGetTaskDescription;
   sessionDaoAny.getExecutionPlan = originalGetExecutionPlan;
   sessionDaoAny.deleteSession = originalDeleteSession;
+  sessionDaoAny.updateSessionProject = originalUpdateSessionProject;
   fileStoreAny.getSession = originalGetFileSession;
   fileStoreAny.deleteSession = originalDeleteFileSession;
+  fileStoreAny.updateSessionProject = originalUpdateFileSessionProject;
   sessionConnectorAny.assertSessionOwnership = originalAssertSessionOwnership;
   userSkillServiceAny.listAvailableSkills = originalListAvailableSkills;
   userSkillServiceAny.listSettings = originalListSettings;
@@ -100,6 +113,8 @@ test('auth-only task-creation routes reject anonymous access', async () => {
     { method: 'POST', path: '/api/task-creation/settings/skills/custom/custom-1/activate' },
     { method: 'GET', path: '/api/task-creation/codex/runtime-config' },
     { method: 'PUT', path: '/api/task-creation/codex/runtime-config', body: { model: 'gpt-5.4' } },
+    { method: 'GET', path: '/api/task-creation/projects' },
+    { method: 'POST', path: '/api/task-creation/projects', body: { name: 'Project A' } },
     { method: 'POST', path: '/api/task-creation/sessions', body: { title: 'Session' } },
     { method: 'POST', path: '/api/task-creation/sessions/draft', body: { title: 'Draft' } },
     { method: 'GET', path: '/api/task-creation/sessions/s-1/workspace/tree' },
@@ -167,6 +182,71 @@ test('skills and codex runtime routes bind requests to current user', async () =
   }
 });
 
+test('project routes bind requests to current user and persist standard projects', async () => {
+  const server = await startServer();
+  const received: string[] = [];
+  projectDaoAny.listByUser = async (userId: string, options: Record<string, unknown>) => {
+    received.push(`list:${userId}:${String(options.projectType)}:${String(options.status)}`);
+    return [
+      {
+        id: 'project-1',
+        userId,
+        name: 'Project A',
+        description: 'desc',
+        projectType: 'standard',
+        status: 'active',
+        createdAt: new Date('2026-04-21T00:00:00.000Z'),
+        updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+      },
+    ];
+  };
+  projectDaoAny.getOwnedProjectByName = async (userId: string, name: string) => {
+    received.push(`name:${userId}:${name}`);
+    return null;
+  };
+  projectDaoAny.create = async (input: Record<string, unknown>) => {
+    received.push(`create:${String(input.userId)}:${String(input.name)}`);
+    return {
+      id: 'project-2',
+      userId: input.userId,
+      name: input.name,
+      description: input.description || '',
+      projectType: 'standard',
+      status: 'active',
+      createdAt: new Date('2026-04-21T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+    };
+  };
+
+  try {
+    const listResponse = await fetch(`${server.origin}/api/task-creation/projects`, {
+      headers: { 'x-test-user-id': 'user-project-1' },
+    });
+    assert.equal(listResponse.status, 200);
+    const listPayload = await listResponse.json();
+    assert.equal(listPayload.data?.[0]?.name, 'Project A');
+
+    const createResponse = await fetch(`${server.origin}/api/task-creation/projects`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-test-user-id': 'user-project-1',
+      },
+      body: JSON.stringify({ name: 'Project B', description: 'hello' }),
+    });
+    assert.equal(createResponse.status, 201);
+    const createPayload = await createResponse.json();
+    assert.equal(createPayload.data?.id, 'project-2');
+    assert.deepEqual(received, [
+      'list:user-project-1:standard:active',
+      'name:user-project-1:Project B',
+      'create:user-project-1:Project B',
+    ]);
+  } finally {
+    await server.close();
+  }
+});
+
 test('owner-guarded task session routes reject foreign users', async () => {
   const server = await startServer();
   sessionDaoAny.getSession = async (sessionId: string) => ({ id: sessionId, userId: 'owner-user' });
@@ -175,6 +255,7 @@ test('owner-guarded task session routes reject foreign users', async () => {
     { method: 'POST', path: '/api/task-creation/sessions/s-1/title/resolve', body: { message: 'rename me' } },
     { method: 'POST', path: '/api/task-creation/sessions/s-1/title/rename', body: { title: 'new title' } },
     { method: 'POST', path: '/api/task-creation/sessions/s-1/favorite', body: { favorite: true } },
+    { method: 'POST', path: '/api/task-creation/sessions/s-1/project', body: { projectId: '1', projectName: 'oneceo.ai' } },
     { method: 'GET', path: '/api/task-creation/sessions/s-1/debug' },
     { method: 'POST', path: '/api/task-creation/sessions/s-1/debug/start' },
     { method: 'GET', path: '/api/task-creation/sessions/s-1/workspace/tree' },
@@ -242,6 +323,95 @@ test('intent and delete routes work for the owner', async () => {
     assert.equal(deletePayload.success, true);
     assert.equal(deletedSessionId, 's-2');
     assert.equal(deletedFileSessionId, 's-2');
+  } finally {
+    await server.close();
+  }
+});
+
+test('project assignment route updates db and file memory for the owner', async () => {
+  const server = await startServer();
+  const dbUpdates: Array<{ sessionId: string; payload: Record<string, unknown> }> = [];
+  const fileUpdates: Array<{ sessionId: string; payload: Record<string, unknown> }> = [];
+  const sessionState = {
+    projectId: null as string | null,
+    projectName: null as string | null,
+  };
+  projectDaoAny.getOwnedProjectById = async (projectId: string, userId: string) => ({
+    id: projectId,
+    userId,
+    name: 'oneceo.ai',
+    description: '',
+    projectType: 'standard',
+    status: 'active',
+    createdAt: new Date('2026-04-21T00:00:00.000Z'),
+    updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+  });
+  sessionDaoAny.getSession = async (sessionId: string) => ({
+    id: sessionId,
+    userId: 'owner-user',
+    status: 'in_progress',
+    projectId: sessionState.projectId,
+    projectName: sessionState.projectName,
+  });
+  sessionDaoAny.updateSessionProject = async (sessionId: string, payload: Record<string, unknown>) => {
+    dbUpdates.push({ sessionId, payload });
+    return {
+      id: sessionId,
+      userId: 'owner-user',
+      status: 'in_progress',
+      projectId: payload.projectId ?? null,
+      projectName: payload.projectName ?? null,
+    };
+  };
+  fileStoreAny.getSession = async (sessionId: string) => ({
+    id: sessionId,
+    title: 'Session',
+    status: 'in_progress',
+    projectId: sessionState.projectId,
+    projectName: sessionState.projectName,
+    messages: [],
+  });
+  fileStoreAny.updateSessionProject = async (sessionId: string, payload: Record<string, unknown>) => {
+    fileUpdates.push({ sessionId, payload });
+    sessionState.projectId = typeof payload.projectId === 'string' ? payload.projectId : null;
+    sessionState.projectName = typeof payload.projectName === 'string' ? payload.projectName : null;
+  };
+
+  try {
+    const response = await fetch(`${server.origin}/api/task-creation/sessions/s-3/project`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-test-user-id': 'owner-user',
+      },
+      body: JSON.stringify({
+        projectId: '1',
+      }),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.equal(payload.data.projectId, '1');
+    assert.equal(payload.data.projectName, 'oneceo.ai');
+    assert.deepEqual(dbUpdates, [
+      {
+        sessionId: 's-3',
+        payload: {
+          projectId: '1',
+          projectName: 'oneceo.ai',
+        },
+      },
+    ]);
+    assert.deepEqual(fileUpdates, [
+      {
+        sessionId: 's-3',
+        payload: {
+          projectId: '1',
+          projectName: 'oneceo.ai',
+        },
+      },
+    ]);
   } finally {
     await server.close();
   }

@@ -181,6 +181,15 @@ function extractTextContent(content: unknown) {
   return '';
 }
 
+function mergeWorkingNotes(current: string[], additions: string[]) {
+  const normalized = [...current, ...additions]
+    .map((item) => asText(item))
+    .filter(Boolean)
+    .map((item) => item.slice(0, LIMITS.listItem));
+  const deduped = normalized.filter((item, index) => normalized.indexOf(item) === index);
+  return deduped.slice(-LIMITS.workingNotes);
+}
+
 export class TaskSessionAltusMemoryService {
   private buildSandboxFileMemory(sessionId: string, state: AltusSessionMemory): SandboxAltusFileMemory {
     return {
@@ -234,6 +243,27 @@ export class TaskSessionAltusMemoryService {
         ? [extractTextContent(pendingQuestion.content).slice(0, LIMITS.listItem)]
         : current.summary.openQuestions,
     };
+  }
+
+  private async deriveWorkingNotesFromTimeline(sessionId: string, current: AltusSessionMemory) {
+    const recent = await taskCreationSessionDAO.getRecentMessages(sessionId);
+    const reversed = [...recent].reverse();
+    const latestUserMessage = reversed.find(
+      (item) =>
+        item.role === 'user' &&
+        (item.messageType === 'user_input' || item.messageType === 'user_response') &&
+        extractTextContent(item.content)
+    );
+    const latestAgentMessage = reversed.find(
+      (item) =>
+        (item.role === 'agent' || item.role === 'assistant') &&
+        item.messageType !== 'tool_result' &&
+        extractTextContent(item.content)
+    );
+    return mergeWorkingNotes(current.workingNotes, [
+      latestUserMessage ? `user: ${extractTextContent(latestUserMessage.content)}` : '',
+      latestAgentMessage ? `assistant: ${extractTextContent(latestAgentMessage.content)}` : '',
+    ]);
   }
 
   async getSessionAltusMemory(sessionId: string): Promise<AltusSessionMemory> {
@@ -364,7 +394,11 @@ export class TaskSessionAltusMemoryService {
   }) {
     const memory = await this.readSandboxFileMemory(input);
     if (!memory) {
-      return this.getSessionAltusMemory(input.sessionId);
+      return this.saveTimelineDerivedMemory({
+        sessionId: input.sessionId,
+        runId: input.runId,
+        reason: input.reason,
+      });
     }
     const current = await this.getSessionAltusMemory(input.sessionId);
     const derivedSummary = await this.deriveSummaryFromTimeline(input.sessionId, current);
@@ -390,6 +424,28 @@ export class TaskSessionAltusMemoryService {
       },
       updatedAt: now,
       lastWriterRunId: asText(input.runId) || memory.lastWriterRunId || current.lastWriterRunId,
+    };
+    return this.saveSessionAltusMemory(input.sessionId, nextState);
+  }
+
+  async saveTimelineDerivedMemory(input: {
+    sessionId: string;
+    runId?: string | null;
+    reason: string;
+  }) {
+    const current = await this.getSessionAltusMemory(input.sessionId);
+    const [derivedSummary, derivedWorkingNotes] = await Promise.all([
+      this.deriveSummaryFromTimeline(input.sessionId, current),
+      this.deriveWorkingNotesFromTimeline(input.sessionId, current),
+    ]);
+    const now = new Date().toISOString();
+    const nextState: AltusSessionMemory = {
+      ...current,
+      version: current.version + 1,
+      summary: derivedSummary,
+      workingNotes: derivedWorkingNotes,
+      updatedAt: now,
+      lastWriterRunId: asText(input.runId) || current.lastWriterRunId,
     };
     return this.saveSessionAltusMemory(input.sessionId, nextState);
   }

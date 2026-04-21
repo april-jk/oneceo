@@ -272,7 +272,24 @@ export class AltusRunCoordinator {
     state: AltusRunState,
     reason: 'waiting_user' | 'completed' | 'failed' | 'stopped'
   ) {
-    if (!state.sandboxId || !state.workspaceRoot) return;
+    if (!state.sandboxId || !state.workspaceRoot) {
+      try {
+        const next = await taskSessionAltusMemoryService.saveTimelineDerivedMemory({
+          sessionId: state.input.sessionId,
+          runId: state.input.runId,
+          reason,
+        });
+        state.input.sessionAltusMemory = next;
+      } catch (error) {
+        console.warn('[ALTUS_RUN_MEMORY_DERIVED_FLUSH_WARN]', {
+          sessionId: state.input.sessionId,
+          runId: state.input.runId,
+          reason,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
     try {
       const next = await taskSessionAltusMemoryService.saveSandboxFileMemoryToDb({
         sessionId: state.input.sessionId,

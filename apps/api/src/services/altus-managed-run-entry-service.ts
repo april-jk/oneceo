@@ -15,7 +15,9 @@ import { altusRunRedisStateService, AltusRunRedisStateService } from './altus-ru
 import { AltusRunState } from './altus-run-state';
 import { sessionMcpRecoveryService } from './session-mcp-recovery-service';
 import { altusRunRecoveryService, AltusRunRecoveryService } from './altus-run-recovery-service';
+import { altusMemoryContextService } from './altus-memory-context-service';
 import { userSkillService } from './user-skill-service';
+import { taskSessionAltusMemoryService } from './task-session-altus-memory-service';
 import { taskSessionSkillStateService } from './task-session-skill-state-service';
 
 export class AltusManagedRunEntryService {
@@ -147,6 +149,10 @@ export class AltusManagedRunEntryService {
           : undefined,
       messageType,
     });
+    const memoryContext = await altusMemoryContextService.buildPromptSectionForRun({
+      sessionId,
+      userId,
+    });
     await this.setupService.updateSessionLifecycle(sessionId, {
       status: 'in_progress',
       stage: 'executing',
@@ -168,6 +174,10 @@ export class AltusManagedRunEntryService {
       model: run.model || this.getModelName(),
       userInput: content,
       sessionTitle: sessionMemory?.title || null,
+      memoryContextPrompt: memoryContext.promptSection,
+      userMemory: memoryContext.userMemory,
+      projectMemory: memoryContext.projectMemory,
+      sessionAltusMemory: memoryContext.sessionMemory,
       connectors: connectorSnapshot.statuses,
       mcpProviders: mcpToolSnapshot.providers as any,
       skillCatalog: preparedSkills.skillCatalog,
@@ -234,6 +244,18 @@ export class AltusManagedRunEntryService {
       model: run.model || this.getModelName(),
       userInput: '',
       sessionTitle: null,
+      memoryContextPrompt: null,
+      userMemory: {
+        preferredName: '',
+        occupation: '',
+        identity: '',
+        location: '',
+        background: '',
+        preferences: '',
+        responsePreferences: '',
+      },
+      projectMemory: null,
+      sessionAltusMemory: await taskSessionAltusMemoryService.getSessionAltusMemory(run.sessionId),
       connectors: [],
       mcpProviders: [],
       skillCatalog: [],

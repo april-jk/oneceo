@@ -34,11 +34,16 @@ const originalGetExecutionPlan = sessionDaoAny.getExecutionPlan;
 const originalDeleteSession = sessionDaoAny.deleteSession;
 const originalUpdateSessionProject = sessionDaoAny.updateSessionProject;
 const originalClearSessionProjectAssignment = sessionDaoAny.clearProjectAssignmentForUser;
+const originalCountOwnedProjectSessions = sessionDaoAny.countOwnedProjectSessions;
+const originalSyncOwnedProjectName = sessionDaoAny.syncOwnedProjectName;
 const originalListOwnedProjectSessions = sessionDaoAny.listOwnedProjectSessions;
+const originalCreateSession = sessionDaoAny.createSession;
 const originalGetFileSession = fileStoreAny.getSession;
+const originalCreateFileSession = fileStoreAny.createSession;
 const originalDeleteFileSession = fileStoreAny.deleteSession;
 const originalUpdateFileSessionProject = fileStoreAny.updateSessionProject;
 const originalClearFileProjectAssignment = fileStoreAny.clearProjectAssignment;
+const originalSyncFileProjectName = fileStoreAny.syncProjectName;
 const originalAssertSessionOwnership = sessionConnectorAny.assertSessionOwnership;
 const originalListAvailableSkills = userSkillServiceAny.listAvailableSkills;
 const originalListSettings = userSkillServiceAny.listSettings;
@@ -65,11 +70,16 @@ after(() => {
   sessionDaoAny.deleteSession = originalDeleteSession;
   sessionDaoAny.updateSessionProject = originalUpdateSessionProject;
   sessionDaoAny.clearProjectAssignmentForUser = originalClearSessionProjectAssignment;
+  sessionDaoAny.countOwnedProjectSessions = originalCountOwnedProjectSessions;
+  sessionDaoAny.syncOwnedProjectName = originalSyncOwnedProjectName;
   sessionDaoAny.listOwnedProjectSessions = originalListOwnedProjectSessions;
+  sessionDaoAny.createSession = originalCreateSession;
   fileStoreAny.getSession = originalGetFileSession;
+  fileStoreAny.createSession = originalCreateFileSession;
   fileStoreAny.deleteSession = originalDeleteFileSession;
   fileStoreAny.updateSessionProject = originalUpdateFileSessionProject;
   fileStoreAny.clearProjectAssignment = originalClearFileProjectAssignment;
+  fileStoreAny.syncProjectName = originalSyncFileProjectName;
   sessionConnectorAny.assertSessionOwnership = originalAssertSessionOwnership;
   userSkillServiceAny.listAvailableSkills = originalListAvailableSkills;
   userSkillServiceAny.listSettings = originalListSettings;
@@ -320,11 +330,11 @@ test('project detail routes bind requests to current user and return scoped sess
   }
 });
 
-test('project update and delete routes persist pinned state and clear session assignments', async () => {
+test('project update and delete routes persist pinned state and sync project naming', async () => {
   const server = await startServer();
   const received: string[] = [];
-  let clearedDbProjectId = '';
-  let clearedFileProjectId = '';
+  let syncedDbProjectName = '';
+  let syncedFileProjectName = '';
   let deletedProjectId = '';
 
   projectDaoAny.getOwnedProjectById = async (projectId: string, userId: string) => ({
@@ -360,12 +370,13 @@ test('project update and delete routes persist pinned state and clear session as
     deletedProjectId = `${userId}:${projectId}`;
     return { id: projectId, userId };
   };
-  sessionDaoAny.clearProjectAssignmentForUser = async (userId: string, projectId: string) => {
-    clearedDbProjectId = `${userId}:${projectId}`;
+  sessionDaoAny.countOwnedProjectSessions = async () => 0;
+  sessionDaoAny.syncOwnedProjectName = async (userId: string, projectId: string, projectName: string) => {
+    syncedDbProjectName = `${userId}:${projectId}:${projectName}`;
     return 2;
   };
-  fileStoreAny.clearProjectAssignment = async (projectId: string) => {
-    clearedFileProjectId = projectId;
+  fileStoreAny.syncProjectName = async (projectId: string, projectName: string) => {
+    syncedFileProjectName = `${projectId}:${projectName}`;
   };
 
   try {
@@ -396,9 +407,46 @@ test('project update and delete routes persist pinned state and clear session as
       'name:user-project-9:Project Z',
       'update:user-project-9:project-9:Project Z:true',
     ]);
-    assert.equal(clearedDbProjectId, 'user-project-9:project-9');
-    assert.equal(clearedFileProjectId, 'project-9');
+    assert.equal(syncedDbProjectName, 'user-project-9:project-9:Project Z');
+    assert.equal(syncedFileProjectName, 'project-9:Project Z');
     assert.equal(deletedProjectId, 'user-project-9:project-9');
+  } finally {
+    await server.close();
+  }
+});
+
+test('project delete route rejects when assigned sessions still exist', async () => {
+  const server = await startServer();
+  let deletedProjectId = '';
+
+  projectDaoAny.getOwnedProjectById = async (projectId: string, userId: string) => ({
+    id: projectId,
+    userId,
+    name: 'Project Locked',
+    description: 'desc',
+    projectType: 'standard',
+    status: 'active',
+    metadataJson: { pinned: false },
+    createdAt: new Date('2026-04-21T00:00:00.000Z'),
+    updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+  });
+  sessionDaoAny.countOwnedProjectSessions = async () => 3;
+  projectDaoAny.deleteOwnedProject = async (projectId: string, userId: string) => {
+    deletedProjectId = `${userId}:${projectId}`;
+    return { id: projectId, userId };
+  };
+
+  try {
+    const response = await fetch(`${server.origin}/api/task-creation/projects/project-lock`, {
+      method: 'DELETE',
+      headers: {
+        'x-test-user-id': 'user-project-10',
+      },
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 409);
+    assert.equal(payload.error, '当前项目下仍有关联会话，请先移出这些会话后再删除项目');
+    assert.equal(deletedProjectId, '');
   } finally {
     await server.close();
   }
@@ -507,6 +555,7 @@ test('project assignment route updates db and file memory for the owner', async 
     id: sessionId,
     userId: 'owner-user',
     status: 'in_progress',
+    metadataJson: {},
     projectId: sessionState.projectId,
     projectName: sessionState.projectName,
   });
@@ -567,6 +616,135 @@ test('project assignment route updates db and file memory for the owner', async 
           projectId: '1',
           projectName: 'oneceo.ai',
         },
+      },
+    ]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('project assignment route rejects after session memory has entered effective run', async () => {
+  const server = await startServer();
+
+  sessionDaoAny.getSession = async (sessionId: string) => ({
+    id: sessionId,
+    userId: 'owner-user',
+    status: 'in_progress',
+    metadataJson: {
+      altusSessionMemory: {
+        version: 2,
+      },
+    },
+    projectId: null,
+    projectName: null,
+  });
+  fileStoreAny.getSession = async (sessionId: string) => ({
+    id: sessionId,
+    title: 'Session',
+    status: 'in_progress',
+    projectId: null,
+    projectName: null,
+    messages: [],
+  });
+
+  try {
+    const response = await fetch(`${server.origin}/api/task-creation/sessions/s-locked/project`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-test-user-id': 'owner-user',
+      },
+      body: JSON.stringify({
+        projectId: '1',
+      }),
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 409);
+    assert.equal(payload.error, '会话已进入有效运行阶段，当前版本不支持再变更项目归属');
+  } finally {
+    await server.close();
+  }
+});
+
+test('create session route persists initial project assignment before first message', async () => {
+  const server = await startServer();
+  const dbProjectAssignments: Array<Record<string, unknown>> = [];
+  const fileProjectAssignments: Array<Record<string, unknown>> = [];
+
+  projectDaoAny.getOwnedProjectById = async (projectId: string, userId: string) => ({
+    id: projectId,
+    userId,
+    name: 'Project Seed',
+    description: '',
+    projectType: 'standard',
+    status: 'active',
+    createdAt: new Date('2026-04-21T00:00:00.000Z'),
+    updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+  });
+  fileStoreAny.createSession = async (title: string, sessionId?: string) => ({
+    id: sessionId || 'session-seeded',
+    title,
+    status: 'in_progress',
+    projectId: null,
+    projectName: null,
+    mode: 'sandbox',
+    executor: 'opencode',
+    messages: [],
+  });
+  fileStoreAny.updateSessionProject = async (_sessionId: string, payload: Record<string, unknown>) => {
+    fileProjectAssignments.push(payload);
+  };
+  fileStoreAny.addMessage = async () => undefined;
+  fileStoreAny.updateSessionMode = async () => undefined;
+  fileStoreAny.updateSessionExecutor = async () => undefined;
+  fileStoreAny.updateSessionDriver = async () => undefined;
+  fileStoreAny.getMessages = async () => [];
+  fileStoreAny.getSession = async (sessionId: string) => ({
+    id: sessionId,
+    title: 'Seeded Session',
+    status: 'in_progress',
+    projectId: 'project-seed',
+    projectName: 'Project Seed',
+    messages: [],
+  });
+  sessionDaoAny.getSession = async () => null;
+  sessionDaoAny.createSession = async (payload: Record<string, unknown>) => ({
+    id: payload.id,
+    userId: payload.userId,
+  });
+  sessionDaoAny.updateSessionProject = async (_sessionId: string, payload: Record<string, unknown>) => {
+    dbProjectAssignments.push(payload);
+    return null;
+  };
+  sessionDaoAny.addMessage = async () => undefined;
+
+  try {
+    const response = await fetch(`${server.origin}/api/task-creation/sessions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-test-user-id': 'owner-user',
+      },
+      body: JSON.stringify({
+        sessionId: 'session-seeded',
+        projectId: 'project-seed',
+        initialMessage: '请继续开发',
+      }),
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(payload.data.projectId, 'project-seed');
+    assert.equal(payload.data.projectName, 'Project Seed');
+    assert.deepEqual(dbProjectAssignments, [
+      {
+        projectId: 'project-seed',
+        projectName: 'Project Seed',
+      },
+    ]);
+    assert.deepEqual(fileProjectAssignments, [
+      {
+        projectId: 'project-seed',
+        projectName: 'Project Seed',
       },
     ]);
   } finally {

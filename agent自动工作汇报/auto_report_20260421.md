@@ -17,3 +17,7 @@
 - 已重新对照 `task-session-skill-state-service` 的 skills 记忆设计，收缩 Altus 三级记忆文档中的 session 级方案：保留“DB 真相源 + Redis 可选缓存 + sandbox 文件副本 + 受控 flush”这一复杂度，不再为 Altus 额外引入 `baseVersion / compare-and-set` 一类更重的回写协议，避免首版出现不可控状态机和隐藏竞态。
 - 已按最新要求调整 Altus 三级记忆文档：用户级 / 项目级记忆改为“DB 真相源 + Redis 读加速”，同时明确 Redis 只做缓存、写入必须先写 DB 再刷新或失效 Redis，避免把用户级 / 项目级做成第二真相源。
 - 已进一步收紧 Altus session 级记忆文档：明确 run 启动阶段只装载一次 session memory，运行中以内存快照和 sandbox 文件为主，避免多轮执行期间反复读写数据库；DB 回写流程直接对齐 skills memory 的固定模式：读 sandbox 文件、normalize、写 DB、刷新 Redis。
+- 已开始按采用文档进入 Altus 三级记忆代码实现：用户级记忆扩展到用户设置个性化表单，项目级记忆扩展到项目创建/编辑表单与 `app_user_projects.metadata_json.altusProjectMemory`，session 级记忆新增 `task-session-altus-memory-service` 并接入 DB + Redis + sandbox 文件副本。
+- 已将 Altus 运行链路接上三级记忆：managed run 启动时组装“用户级 + 项目级 + session 级” prompt context，coordinator 在 sandbox 物化 session 记忆文件，并在 `completed / failed / waiting_user / archive / restore` 等受控时机回写 DB 与 Redis。
+- 已同步补齐边界约束：`POST /sessions` 支持创建时带 `projectId`，项目删除在仍有关联 session 时返回 409，项目改名后同步 session `projectName` 缓存，已进入有效运行阶段的 session 禁止再变更项目归属。
+- 已补充针对性回归测试：`altus-managed-run-entry.service.test.ts` 覆盖 run 输入带入 memory context，`altus-run-coordinator.test.ts` 覆盖 memory prompt 注入与 session 记忆 flush，`sandbox-archive.service.test.ts` 覆盖 archive/restore 时 Altus 记忆回写。

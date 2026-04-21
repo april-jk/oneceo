@@ -1,6 +1,7 @@
 import type express from 'express';
 import { randomInt } from 'node:crypto';
 import { appUserDAO, appUserEmailVerificationDAO, appUserSessionDAO } from '../db/dao';
+import { altusMemoryContextService } from './altus-memory-context-service';
 import { appAuthEmailService } from './app-auth-email-service';
 import { hashPassword, verifyPassword } from '../utils/auth-password';
 import { createSessionToken, hashSessionToken, resolveSessionExpiry } from '../utils/auth-session';
@@ -25,15 +26,21 @@ function isValidEmail(email: string) {
 
 const PERSONALIZATION_MAX_LENGTH = {
   preferredName: 80,
-  role: 80,
-  about: 1000,
+  occupation: 80,
+  identity: 80,
+  location: 120,
+  background: 1000,
+  preferences: 800,
   responsePreferences: 1500,
 } as const;
 
 type AppUserPersonalization = {
   preferredName: string;
-  role: string;
-  about: string;
+  occupation: string;
+  identity: string;
+  location: string;
+  background: string;
+  preferences: string;
   responsePreferences: string;
 };
 
@@ -53,14 +60,27 @@ function normalizeBoundedText(value: unknown, maxLength: number, label: string) 
 
 export function normalizeAppUserPersonalization(value: unknown): AppUserPersonalization {
   const record = asRecord(value);
+  const legacyRole = record.role;
+  const legacyAbout = record.about;
   return {
     preferredName: normalizeBoundedText(
       record.preferredName,
       PERSONALIZATION_MAX_LENGTH.preferredName,
       '称呼偏好'
     ),
-    role: normalizeBoundedText(record.role, PERSONALIZATION_MAX_LENGTH.role, '职业/角色'),
-    about: normalizeBoundedText(record.about, PERSONALIZATION_MAX_LENGTH.about, '更多关于你的信息'),
+    occupation: normalizeBoundedText(
+      record.occupation ?? legacyRole,
+      PERSONALIZATION_MAX_LENGTH.occupation,
+      '职业'
+    ),
+    identity: normalizeBoundedText(record.identity, PERSONALIZATION_MAX_LENGTH.identity, '身份'),
+    location: normalizeBoundedText(record.location, PERSONALIZATION_MAX_LENGTH.location, '所在地'),
+    background: normalizeBoundedText(
+      record.background ?? legacyAbout,
+      PERSONALIZATION_MAX_LENGTH.background,
+      '背景信息'
+    ),
+    preferences: normalizeBoundedText(record.preferences, PERSONALIZATION_MAX_LENGTH.preferences, '长期偏好'),
     responsePreferences: normalizeBoundedText(
       record.responsePreferences,
       PERSONALIZATION_MAX_LENGTH.responsePreferences,
@@ -290,6 +310,8 @@ export class AppAuthService {
     if (!updated) {
       throw new Error('更新用户资料失败');
     }
+
+    await altusMemoryContextService.invalidateUserMemory(userId);
 
     return toPublicUser(updated);
   }

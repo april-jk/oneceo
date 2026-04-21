@@ -68,6 +68,7 @@ import { downloadFromR2 } from '../services/r2-client';
 import { taskSessionDeliverableService } from '../services/task-session-deliverable-service';
 import { platformSkillService } from '../services/platform-skill-service';
 import { userSkillService } from '../services/user-skill-service';
+import { altusMemoryContextService } from '../services/altus-memory-context-service';
 import { taskCreationProjectRedisCacheService } from '../services/task-creation-project-redis-cache-service';
 import { isLegacyClientUserId, isSameUserId, normalizeUserId } from '../utils/user-id';
 
@@ -386,7 +387,9 @@ router.post('/projects', express.json({ limit: '256kb' }), async (req, res) => {
       name: input.name,
       description: input.description,
       projectType: 'standard',
+      altusProjectMemory: input.altusProjectMemory,
     });
+    await altusMemoryContextService.invalidateProjectMemory(currentUser.userId, String(created.id));
     await taskCreationProjectRedisCacheService.invalidateProjectList(currentUser.userId);
     return res.status(201).json({
       success: true,
@@ -443,6 +446,12 @@ router.put('/projects/:projectId', express.json({ limit: '256kb' }), async (req,
       });
     }
 
+    if (input.name && input.name !== currentProject.name) {
+      await taskCreationSessionDAO.syncOwnedProjectName(currentUser.userId, projectId, updated.name);
+      await taskCreationFileMemoryStore.syncProjectName(projectId, updated.name);
+    }
+    await altusMemoryContextService.invalidateProjectMemory(currentUser.userId, projectId);
+
     await taskCreationProjectRedisCacheService.invalidateProjectReads(currentUser.userId, {
       projectIds: [projectId],
     });
@@ -476,9 +485,15 @@ router.delete('/projects/:projectId', async (req, res) => {
       });
     }
 
-    await taskCreationSessionDAO.clearProjectAssignmentForUser(currentUser.userId, projectId);
-    await taskCreationFileMemoryStore.clearProjectAssignment(projectId);
+    const assignedSessionCount = await taskCreationSessionDAO.countOwnedProjectSessions(currentUser.userId, projectId);
+    if (assignedSessionCount > 0) {
+      return res.status(409).json({
+        success: false,
+        error: '当前项目下仍有关联会话，请先移出这些会话后再删除项目',
+      });
+    }
     await appUserProjectDAO.deleteOwnedProject(projectId, currentUser.userId);
+    await altusMemoryContextService.invalidateProjectMemory(currentUser.userId, projectId);
     await taskCreationProjectRedisCacheService.invalidateProjectReads(currentUser.userId, {
       projectIds: [projectId],
     });
@@ -2046,9 +2061,10 @@ async function listCachedTaskCreationProjectSessions(userId: string, projectId: 
 }
 
 function toTaskCreationProjectSummary(project: any) {
-  const metadata = project?.metadataJson && typeof project.metadataJson === 'object'
-    ? (project.metadataJson as Record<string, unknown>)
-    : {};
+  const metadata =
+    project?.metadataJson && typeof project.metadataJson === 'object'
+      ? (project.metadataJson as Record<string, unknown>)
+      : {};
   return {
     id: String(project.id),
     name: asText(project.name),
@@ -2056,6 +2072,7 @@ function toTaskCreationProjectSummary(project: any) {
     projectType: asText(project.projectType) || 'standard',
     status: asText(project.status) || 'active',
     pinned: Boolean(metadata.pinned),
+    altusProjectMemory: appUserProjectDAO.readAltusProjectMemory(project?.metadataJson),
     createdAt: project.createdAt ? new Date(project.createdAt).toISOString() : null,
     updatedAt: project.updatedAt ? new Date(project.updatedAt).toISOString() : null,
   };
@@ -2065,6 +2082,10 @@ function normalizeTaskCreationProjectCreateInput(body: any) {
   return {
     name: appUserProjectDAO.normalizeName(body?.name),
     description: appUserProjectDAO.normalizeDescription(body?.description),
+    altusProjectMemory:
+      body && Object.prototype.hasOwnProperty.call(body, 'altusProjectMemory')
+        ? appUserProjectDAO.normalizeAltusProjectMemory(body?.altusProjectMemory)
+        : undefined,
   };
 }
 
@@ -2072,10 +2093,14 @@ function normalizeTaskCreationProjectUpdateInput(body: any) {
   const hasName = Object.prototype.hasOwnProperty.call(body || {}, 'name');
   const hasDescription = Object.prototype.hasOwnProperty.call(body || {}, 'description');
   const hasPinned = Object.prototype.hasOwnProperty.call(body || {}, 'pinned');
+  const hasAltusProjectMemory = Object.prototype.hasOwnProperty.call(body || {}, 'altusProjectMemory');
   return {
     ...(hasName ? { name: appUserProjectDAO.normalizeName(body?.name) } : {}),
     ...(hasDescription ? { description: appUserProjectDAO.normalizeDescription(body?.description) } : {}),
     ...(hasPinned ? { pinned: Boolean(body?.pinned) } : {}),
+    ...(hasAltusProjectMemory
+      ? { altusProjectMemory: appUserProjectDAO.normalizeAltusProjectMemory(body?.altusProjectMemory) }
+      : {}),
   };
 }
 
@@ -3577,6 +3602,7 @@ router.post('/sessions', async (req, res) => {
     const requestedExecutor = asText(req.body?.executor);
     const requestedCodexExecutionMode = asText(req.body?.codexExecutionMode);
     const requestedDriver = asText(req.body?.driver);
+    const requestedProjectId = asText(req.body?.projectId);
     const initialMessage = asText(req.body?.initialMessage);
     const initialMessageTypeRaw = asText(req.body?.initialMessageType);
     const initialMessageType = initialMessageTypeRaw === 'user_response' ? 'user_response' : 'user_input';
@@ -3592,6 +3618,23 @@ router.post('/sessions', async (req, res) => {
         ? normalizedRequestedTitle
         : '') ||
       DEFAULT_SESSION_TITLE;
+    let initialProjectAssignment: { projectId: string | null; projectName: string | null } = {
+      projectId: null,
+      projectName: null,
+    };
+    if (requestedProjectId) {
+      const ownedProject = await appUserProjectDAO.getOwnedProjectById(requestedProjectId, currentUser.userId);
+      if (!ownedProject || ownedProject.projectType !== 'standard' || ownedProject.status !== 'active') {
+        return res.status(404).json({
+          success: false,
+          error: '项目不存在或当前用户无权访问该项目',
+        });
+      }
+      initialProjectAssignment = normalizeSessionProjectAssignmentInput({
+        projectId: ownedProject.id,
+        projectName: ownedProject.name,
+      });
+    }
 
     const session = await taskCreationFileMemoryStore.createSession(
       isNewSession ? title : '',
@@ -3623,6 +3666,9 @@ router.post('/sessions', async (req, res) => {
       });
     if (derivedDriver) {
       await taskCreationFileMemoryStore.updateSessionDriver(session.id, derivedDriver);
+    }
+    if (initialProjectAssignment.projectId) {
+      await taskCreationFileMemoryStore.updateSessionProject(session.id, initialProjectAssignment);
     }
 
     if (isNewSession) {
@@ -3686,6 +3732,9 @@ router.post('/sessions', async (req, res) => {
           }
         }
         await taskCreationSessionDAO.bindUserIfMissing(session.id, currentUser.userId);
+      }
+      if (initialProjectAssignment.projectId) {
+        await taskCreationSessionDAO.updateSessionProject(session.id, initialProjectAssignment);
       }
       if (isNewSession) {
         await taskCreationSessionDAO.addMessage({
@@ -4109,6 +4158,25 @@ router.post('/sessions/:sessionId/project', async (req, res) => {
       return res.status(404).json({
         success: false,
         error: '会话不存在',
+      });
+    }
+    const dbSession = await taskCreationSessionDAO.getSession(session.id);
+    const sessionMetadata =
+      dbSession?.metadataJson && typeof dbSession.metadataJson === 'object'
+        ? (dbSession.metadataJson as Record<string, unknown>)
+        : {};
+    const altusSessionMemory =
+      sessionMetadata.altusSessionMemory && typeof sessionMetadata.altusSessionMemory === 'object'
+        ? (sessionMetadata.altusSessionMemory as Record<string, unknown>)
+        : {};
+    const hasEnteredEffectiveRun =
+      typeof altusSessionMemory.version === 'number' && Number.isFinite(altusSessionMemory.version)
+        ? altusSessionMemory.version > 0
+        : false;
+    if (hasEnteredEffectiveRun) {
+      return res.status(409).json({
+        success: false,
+        error: '会话已进入有效运行阶段，当前版本不支持再变更项目归属',
       });
     }
     const previousProjectId = asText(session.projectId);

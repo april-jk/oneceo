@@ -14,6 +14,7 @@ type SchemaReadinessReport = {
 
 const REQUIRED_TABLES = [
   'app_users',
+  'app_user_projects',
   'app_user_legacy_id_mappings',
   'app_user_sessions',
   'app_user_email_verifications',
@@ -61,6 +62,12 @@ const REQUIRED_COLUMNS = [
   ['app_users', 'password_hash'],
   ['app_users', 'display_name'],
   ['app_users', 'profile_json'],
+  ['app_user_projects', 'user_id'],
+  ['app_user_projects', 'name'],
+  ['app_user_projects', 'description'],
+  ['app_user_projects', 'project_type'],
+  ['app_user_projects', 'status'],
+  ['app_user_projects', 'metadata_json'],
   ['app_user_legacy_id_mappings', 'app_user_id'],
   ['app_user_legacy_id_mappings', 'legacy_user_id'],
   ['app_user_legacy_id_mappings', 'source'],
@@ -202,6 +209,9 @@ const REQUIRED_COLUMNS = [
 
 const REQUIRED_INDEXES = [
   'idx_app_users_email',
+  'idx_app_user_projects_user_name',
+  'idx_app_user_projects_user_id',
+  'idx_app_user_projects_user_type_status',
   'idx_app_user_legacy_mappings_legacy_user_id',
   'idx_app_user_sessions_token_hash',
   'idx_app_user_email_verifications_email_purpose',
@@ -639,6 +649,26 @@ CREATE TABLE IF NOT EXISTS app_users (
 ALTER TABLE app_users
   ADD COLUMN IF NOT EXISTS profile_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 
+CREATE TABLE IF NOT EXISTS app_user_projects (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  project_type TEXT NOT NULL DEFAULT 'standard',
+  status TEXT NOT NULL DEFAULT 'active',
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+ALTER TABLE app_user_projects
+  ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+ALTER TABLE app_user_projects
+  ADD COLUMN IF NOT EXISTS project_type TEXT NOT NULL DEFAULT 'standard';
+ALTER TABLE app_user_projects
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE app_user_projects
+  ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+
 CREATE TABLE IF NOT EXISTS app_user_legacy_id_mappings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   app_user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
@@ -702,6 +732,11 @@ CREATE TABLE IF NOT EXISTS admin_user_sessions (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_email ON app_users(email);
 CREATE INDEX IF NOT EXISTS idx_app_users_status ON app_users(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_projects_user_name
+  ON app_user_projects(user_id, name);
+CREATE INDEX IF NOT EXISTS idx_app_user_projects_user_id ON app_user_projects(user_id);
+CREATE INDEX IF NOT EXISTS idx_app_user_projects_user_type_status
+  ON app_user_projects(user_id, project_type, status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_legacy_mappings_legacy_user_id
   ON app_user_legacy_id_mappings(legacy_user_id);
 CREATE INDEX IF NOT EXISTS idx_app_user_legacy_mappings_app_user_id

@@ -26,14 +26,18 @@ const originalListProjects = projectDaoAny.listByUser;
 const originalGetOwnedProjectById = projectDaoAny.getOwnedProjectById;
 const originalGetOwnedProjectByName = projectDaoAny.getOwnedProjectByName;
 const originalCreateProject = projectDaoAny.create;
+const originalUpdateProject = projectDaoAny.updateOwnedProject;
+const originalDeleteProject = projectDaoAny.deleteOwnedProject;
 const originalGetIntentResult = sessionDaoAny.getIntentResult;
 const originalGetTaskDescription = sessionDaoAny.getTaskDescription;
 const originalGetExecutionPlan = sessionDaoAny.getExecutionPlan;
 const originalDeleteSession = sessionDaoAny.deleteSession;
 const originalUpdateSessionProject = sessionDaoAny.updateSessionProject;
+const originalClearSessionProjectAssignment = sessionDaoAny.clearProjectAssignmentForUser;
 const originalGetFileSession = fileStoreAny.getSession;
 const originalDeleteFileSession = fileStoreAny.deleteSession;
 const originalUpdateFileSessionProject = fileStoreAny.updateSessionProject;
+const originalClearFileProjectAssignment = fileStoreAny.clearProjectAssignment;
 const originalAssertSessionOwnership = sessionConnectorAny.assertSessionOwnership;
 const originalListAvailableSkills = userSkillServiceAny.listAvailableSkills;
 const originalListSettings = userSkillServiceAny.listSettings;
@@ -52,14 +56,18 @@ after(() => {
   projectDaoAny.getOwnedProjectById = originalGetOwnedProjectById;
   projectDaoAny.getOwnedProjectByName = originalGetOwnedProjectByName;
   projectDaoAny.create = originalCreateProject;
+  projectDaoAny.updateOwnedProject = originalUpdateProject;
+  projectDaoAny.deleteOwnedProject = originalDeleteProject;
   sessionDaoAny.getIntentResult = originalGetIntentResult;
   sessionDaoAny.getTaskDescription = originalGetTaskDescription;
   sessionDaoAny.getExecutionPlan = originalGetExecutionPlan;
   sessionDaoAny.deleteSession = originalDeleteSession;
   sessionDaoAny.updateSessionProject = originalUpdateSessionProject;
+  sessionDaoAny.clearProjectAssignmentForUser = originalClearSessionProjectAssignment;
   fileStoreAny.getSession = originalGetFileSession;
   fileStoreAny.deleteSession = originalDeleteFileSession;
   fileStoreAny.updateSessionProject = originalUpdateFileSessionProject;
+  fileStoreAny.clearProjectAssignment = originalClearFileProjectAssignment;
   sessionConnectorAny.assertSessionOwnership = originalAssertSessionOwnership;
   userSkillServiceAny.listAvailableSkills = originalListAvailableSkills;
   userSkillServiceAny.listSettings = originalListSettings;
@@ -242,6 +250,90 @@ test('project routes bind requests to current user and persist standard projects
       'name:user-project-1:Project B',
       'create:user-project-1:Project B',
     ]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('project update and delete routes persist pinned state and clear session assignments', async () => {
+  const server = await startServer();
+  const received: string[] = [];
+  let clearedDbProjectId = '';
+  let clearedFileProjectId = '';
+  let deletedProjectId = '';
+
+  projectDaoAny.getOwnedProjectById = async (projectId: string, userId: string) => ({
+    id: projectId,
+    userId,
+    name: 'Project A',
+    description: 'desc',
+    projectType: 'standard',
+    status: 'active',
+    metadataJson: { pinned: false },
+    createdAt: new Date('2026-04-21T00:00:00.000Z'),
+    updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+  });
+  projectDaoAny.getOwnedProjectByName = async (userId: string, name: string) => {
+    received.push(`name:${userId}:${name}`);
+    return null;
+  };
+  projectDaoAny.updateOwnedProject = async (projectId: string, userId: string, patch: Record<string, unknown>) => {
+    received.push(`update:${userId}:${projectId}:${String(patch.name)}:${String(patch.pinned)}`);
+    return {
+      id: projectId,
+      userId,
+      name: patch.name,
+      description: patch.description || '',
+      projectType: 'standard',
+      status: 'active',
+      metadataJson: { pinned: Boolean(patch.pinned) },
+      createdAt: new Date('2026-04-21T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+    };
+  };
+  projectDaoAny.deleteOwnedProject = async (projectId: string, userId: string) => {
+    deletedProjectId = `${userId}:${projectId}`;
+    return { id: projectId, userId };
+  };
+  sessionDaoAny.clearProjectAssignmentForUser = async (userId: string, projectId: string) => {
+    clearedDbProjectId = `${userId}:${projectId}`;
+    return 2;
+  };
+  fileStoreAny.clearProjectAssignment = async (projectId: string) => {
+    clearedFileProjectId = projectId;
+  };
+
+  try {
+    const updateResponse = await fetch(`${server.origin}/api/task-creation/projects/project-9`, {
+      method: 'PUT',
+      headers: {
+        'content-type': 'application/json',
+        'x-test-user-id': 'user-project-9',
+      },
+      body: JSON.stringify({ name: 'Project Z', description: 'updated', pinned: true }),
+    });
+    assert.equal(updateResponse.status, 200);
+    const updatePayload = await updateResponse.json();
+    assert.equal(updatePayload.data?.name, 'Project Z');
+    assert.equal(updatePayload.data?.pinned, true);
+
+    const deleteResponse = await fetch(`${server.origin}/api/task-creation/projects/project-9`, {
+      method: 'DELETE',
+      headers: {
+        'x-test-user-id': 'user-project-9',
+      },
+    });
+    assert.equal(deleteResponse.status, 200);
+    const deletePayload = await deleteResponse.json();
+    assert.equal(deletePayload.success, true);
+
+    assert.deepEqual(received, [
+      'name:user-project-9:Project Z',
+      'update:user-project-9:project-9:Project Z:true',
+    ]);
+    assert.equal(clearedDbProjectId, 'user-project-9:project-9');
+    assert.equal(clearedFileProjectId, 'project-9');
+    assert.equal(deletedProjectId, 'user-project-9:project-9');
   } finally {
     await server.close();
   }

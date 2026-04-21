@@ -355,6 +355,93 @@ router.post('/projects', express.json({ limit: '256kb' }), async (req, res) => {
   }
 });
 
+router.put('/projects/:projectId', express.json({ limit: '256kb' }), async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { projectId } = req.params;
+    const currentProject = await appUserProjectDAO.getOwnedProjectById(projectId, currentUser.userId);
+    if (!currentProject || currentProject.projectType !== 'standard' || currentProject.status !== 'active') {
+      return res.status(404).json({
+        success: false,
+        error: '项目不存在或当前用户无权访问该项目',
+      });
+    }
+
+    const input = normalizeTaskCreationProjectUpdateInput(req.body);
+    if (input.name !== undefined && !input.name) {
+      return res.status(400).json({
+        success: false,
+        error: '项目名称不能为空',
+      });
+    }
+
+    if (input.name && input.name !== currentProject.name) {
+      const existed = await appUserProjectDAO.getOwnedProjectByName(currentUser.userId, input.name);
+      if (existed && String(existed.id) !== String(currentProject.id)) {
+        return res.status(409).json({
+          success: false,
+          error: '项目名称已存在',
+        });
+      }
+    }
+
+    const updated = await appUserProjectDAO.updateOwnedProject(projectId, currentUser.userId, input);
+    if (!updated) {
+      return res.status(404).json({
+        success: false,
+        error: '项目不存在或当前用户无权访问该项目',
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: toTaskCreationProjectSummary(updated),
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    console.error('更新项目失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    return res.status(authError?.status || 500).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '更新项目失败'),
+    });
+  }
+});
+
+router.delete('/projects/:projectId', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { projectId } = req.params;
+    const currentProject = await appUserProjectDAO.getOwnedProjectById(projectId, currentUser.userId);
+    if (!currentProject || currentProject.projectType !== 'standard' || currentProject.status !== 'active') {
+      return res.status(404).json({
+        success: false,
+        error: '项目不存在或当前用户无权访问该项目',
+      });
+    }
+
+    await taskCreationSessionDAO.clearProjectAssignmentForUser(currentUser.userId, projectId);
+    await taskCreationFileMemoryStore.clearProjectAssignment(projectId);
+    await appUserProjectDAO.deleteOwnedProject(projectId, currentUser.userId);
+
+    return res.json({
+      success: true,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    console.error('删除项目失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    return res.status(authError?.status || 500).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '删除项目失败'),
+    });
+  }
+});
+
 function clampNumber(value: number, min: number, max: number) {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
@@ -1853,12 +1940,16 @@ function normalizeSessionProjectAssignmentInput(body: any): {
 }
 
 function toTaskCreationProjectSummary(project: any) {
+  const metadata = project?.metadataJson && typeof project.metadataJson === 'object'
+    ? (project.metadataJson as Record<string, unknown>)
+    : {};
   return {
     id: String(project.id),
     name: asText(project.name),
     description: asText(project.description),
     projectType: asText(project.projectType) || 'standard',
     status: asText(project.status) || 'active',
+    pinned: Boolean(metadata.pinned),
     createdAt: project.createdAt ? new Date(project.createdAt).toISOString() : null,
     updatedAt: project.updatedAt ? new Date(project.updatedAt).toISOString() : null,
   };
@@ -1868,6 +1959,17 @@ function normalizeTaskCreationProjectCreateInput(body: any) {
   return {
     name: appUserProjectDAO.normalizeName(body?.name),
     description: appUserProjectDAO.normalizeDescription(body?.description),
+  };
+}
+
+function normalizeTaskCreationProjectUpdateInput(body: any) {
+  const hasName = Object.prototype.hasOwnProperty.call(body || {}, 'name');
+  const hasDescription = Object.prototype.hasOwnProperty.call(body || {}, 'description');
+  const hasPinned = Object.prototype.hasOwnProperty.call(body || {}, 'pinned');
+  return {
+    ...(hasName ? { name: appUserProjectDAO.normalizeName(body?.name) } : {}),
+    ...(hasDescription ? { description: appUserProjectDAO.normalizeDescription(body?.description) } : {}),
+    ...(hasPinned ? { pinned: Boolean(body?.pinned) } : {}),
   };
 }
 

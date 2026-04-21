@@ -66,6 +66,7 @@ import {
   Check,
   Coins,
   Crown,
+  Pin,
   Pencil,
   Share2,
   Star,
@@ -78,12 +79,14 @@ import React from "react";
 import { toast } from "sonner";
 import {
   createTaskCreationProject,
+  deleteTaskCreationProject,
   deleteTaskCreationSession,
   listTaskCreationProjects,
   listTaskCreationSessions,
   renameTaskCreationSessionTitle,
   type TaskCreationProjectSummary,
   toggleTaskCreationSessionFavorite,
+  updateTaskCreationProject,
   updateTaskCreationSessionProject,
   type TaskCreationSessionSummary,
 } from "@/lib/task-creation-client";
@@ -164,6 +167,7 @@ export default function Sidebar({
     id: string;
     name: string;
     description?: string;
+    pinned?: boolean;
     managers: ProjectManager[];
     kind: "manual" | "self-organized";
   };
@@ -193,6 +197,11 @@ export default function Sidebar({
   const [createProjectName, setCreateProjectName] = React.useState("");
   const [createProjectDescription, setCreateProjectDescription] = React.useState("");
   const [createProjectSubmitting, setCreateProjectSubmitting] = React.useState(false);
+  const [editProjectDialogOpen, setEditProjectDialogOpen] = React.useState(false);
+  const [editProjectTarget, setEditProjectTarget] = React.useState<TaskCreationProjectSummary | null>(null);
+  const [editProjectName, setEditProjectName] = React.useState("");
+  const [editProjectDescription, setEditProjectDescription] = React.useState("");
+  const [editProjectSubmitting, setEditProjectSubmitting] = React.useState(false);
   const [renameDialogOpen, setRenameDialogOpen] = React.useState(false);
   const [renameTarget, setRenameTarget] = React.useState<SessionTask | null>(null);
   const [renameValue, setRenameValue] = React.useState("");
@@ -201,11 +210,27 @@ export default function Sidebar({
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
   const [deleteTarget, setDeleteTarget] = React.useState<SessionTask | null>(null);
   const [deleteSubmitting, setDeleteSubmitting] = React.useState(false);
+  const [deleteProjectDialogOpen, setDeleteProjectDialogOpen] = React.useState(false);
+  const [deleteProjectTarget, setDeleteProjectTarget] = React.useState<TaskCreationProjectSummary | null>(null);
+  const [deleteProjectSubmitting, setDeleteProjectSubmitting] = React.useState(false);
   const listLoadingRef = React.useRef(false);
   const lastListFetchRef = React.useRef(0);
   const lastListErrorToastAtRef = React.useRef(0);
   const projectListLoadingRef = React.useRef(false);
   const LIST_POLL_MS = 30000;
+
+  const sortManualProjects = React.useCallback((projects: TaskCreationProjectSummary[]) => {
+    return [...projects].sort((left, right) => {
+      const pinnedDelta = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
+      if (pinnedDelta !== 0) return pinnedDelta;
+      const leftTime = Date.parse(left.updatedAt || left.createdAt || "");
+      const rightTime = Date.parse(right.updatedAt || right.createdAt || "");
+      const safeLeft = Number.isFinite(leftTime) ? leftTime : 0;
+      const safeRight = Number.isFinite(rightTime) ? rightTime : 0;
+      if (safeRight !== safeLeft) return safeRight - safeLeft;
+      return (left.name || "").localeCompare(right.name || "", "zh-CN");
+    });
+  }, []);
 
   const mapSessionTask = React.useCallback(
     (session: TaskCreationSessionSummary | any, index: number): SessionTask & { originalIndex: number } => ({
@@ -385,7 +410,7 @@ export default function Sidebar({
       try {
         const projects = await listTaskCreationProjects();
         if (disposed) return;
-        setManualProjects(projects);
+        setManualProjects(sortManualProjects(projects));
         setExpandedProjectGroups((prev) => {
           if (projects.length === 0 || prev.includes("manual-projects")) return prev;
           return ["manual-projects", ...prev];
@@ -405,7 +430,7 @@ export default function Sidebar({
     return () => {
       disposed = true;
     };
-  }, [t, user?.id]);
+  }, [sortManualProjects, t, user?.id]);
 
   const toggleProjectGroup = (groupId: string) => {
     setExpandedProjectGroups((prev) =>
@@ -507,6 +532,7 @@ export default function Sidebar({
         id: project.id,
         name: project.name,
         description: project.description,
+        pinned: Boolean(project.pinned),
         managers: [],
         kind: "manual" as const,
       })),
@@ -675,6 +701,18 @@ export default function Sidebar({
     setCreateProjectDialogOpen(true);
   }, []);
 
+  const openEditProjectDialog = React.useCallback((project: TaskCreationProjectSummary) => {
+    setEditProjectTarget(project);
+    setEditProjectName(project.name || "");
+    setEditProjectDescription(project.description || "");
+    setEditProjectDialogOpen(true);
+  }, []);
+
+  const openDeleteProjectDialog = React.useCallback((project: TaskCreationProjectSummary) => {
+    setDeleteProjectTarget(project);
+    setDeleteProjectDialogOpen(true);
+  }, []);
+
   const handleCreateProjectSubmit = React.useCallback(async () => {
     const nextName = createProjectName.trim();
     if (!nextName) return;
@@ -687,7 +725,7 @@ export default function Sidebar({
       if (!created?.id) {
         throw new Error(t("sidebar.projectCreateFailed"));
       }
-      setManualProjects((prev) => [created, ...prev]);
+      setManualProjects((prev) => sortManualProjects([created, ...prev]));
       setExpandedProjectGroups((prev) =>
         prev.includes("manual-projects") ? prev : ["manual-projects", ...prev],
       );
@@ -699,7 +737,81 @@ export default function Sidebar({
     } finally {
       setCreateProjectSubmitting(false);
     }
-  }, [createProjectDescription, createProjectName, t]);
+  }, [createProjectDescription, createProjectName, sortManualProjects, t]);
+
+  const handleEditProjectSubmit = React.useCallback(async () => {
+    const target = editProjectTarget;
+    const nextName = editProjectName.trim();
+    if (!target || !nextName) return;
+    setEditProjectSubmitting(true);
+    try {
+      const updated = await updateTaskCreationProject(target.id, {
+        name: nextName,
+        description: editProjectDescription,
+      });
+      if (!updated?.id) {
+        throw new Error(t("sidebar.projectUpdateFailed"));
+      }
+      setManualProjects((prev) =>
+        sortManualProjects(prev.map((project) => (project.id === updated.id ? updated : project))),
+      );
+      setEditProjectDialogOpen(false);
+      setEditProjectTarget(null);
+      toast.success(t("sidebar.projectUpdated"));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("sidebar.projectUpdateFailed"));
+    } finally {
+      setEditProjectSubmitting(false);
+    }
+  }, [editProjectDescription, editProjectName, editProjectTarget, sortManualProjects, t]);
+
+  const handleToggleProjectPinned = React.useCallback(async (project: TaskCreationProjectSummary) => {
+    try {
+      const updated = await updateTaskCreationProject(project.id, {
+        pinned: !Boolean(project.pinned),
+      });
+      if (!updated?.id) {
+        throw new Error(t("sidebar.projectUpdateFailed"));
+      }
+      setManualProjects((prev) =>
+        sortManualProjects(prev.map((item) => (item.id === updated.id ? updated : item))),
+      );
+      toast.success(updated.pinned ? t("sidebar.projectPinned") : t("sidebar.projectUnpinned"));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("sidebar.projectUpdateFailed"));
+    }
+  }, [sortManualProjects, t]);
+
+  const handleDeleteProjectConfirm = React.useCallback(async () => {
+    const target = deleteProjectTarget;
+    if (!target) return;
+    setDeleteProjectSubmitting(true);
+    try {
+      await deleteTaskCreationProject(target.id);
+      setManualProjects((prev) => prev.filter((project) => project.id !== target.id));
+      setSessionTasks((prev) =>
+        sortSessionTasks(
+          prev.map((session, index) => ({
+            ...session,
+            projectId: session.projectId === target.id ? null : session.projectId,
+            projectName: session.projectId === target.id ? null : session.projectName,
+            originalIndex: index,
+          })),
+        ),
+      );
+      setExpandedProjects((prev) => prev.filter((projectId) => projectId !== target.id));
+      if (selectedProject?.kind === "manual" && selectedProject.id === target.id) {
+        setLocation("/");
+      }
+      setDeleteProjectDialogOpen(false);
+      setDeleteProjectTarget(null);
+      toast.success(t("sidebar.projectDeleted"));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("sidebar.projectDeleteFailed"));
+    } finally {
+      setDeleteProjectSubmitting(false);
+    }
+  }, [deleteProjectTarget, selectedProject, setLocation, sortSessionTasks, t]);
 
   const handleProjectAssign = React.useCallback(async (
     session: SessionTask,
@@ -1080,6 +1192,10 @@ export default function Sidebar({
                               </div>
                             ) : null}
                             {group.projects.map((project) => {
+                              const sourceProject =
+                                project.kind === "manual"
+                                  ? manualProjects.find((item) => item.id === project.id) || null
+                                  : null;
                               const isExpanded = expandedProjects.includes(project.id);
                               const isProjectActive =
                                 selectedProject?.id === project.id &&
@@ -1100,34 +1216,74 @@ export default function Sidebar({
                                         <ChevronRight className="w-3.5 h-3.5" />
                                       )}
                                     </Button>
-                                    <Button
-                                      variant="ghost"
-                                      className={`flex-1 min-w-0 justify-start gap-2 h-7 overflow-hidden px-2 rounded-lg transition-colors duration-150 ${
-                                        isProjectActive
-                                          ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                                          : "text-sidebar-foreground hover:bg-sidebar-accent/50"
-                                      }`}
-                                      onClick={() => {
-                                        setLocation(`/project/${encodeURIComponent(project.id)}`);
-                                      }}
-                                    >
-                                      <FolderOpen className="w-3.5 h-3.5" />
-                                      <span className="text-sm truncate min-w-0">
-                                        {project.name}
-                                      </span>
-                                    </Button>
+                                    {project.kind === "manual" ? (
+                                      <ContextMenu>
+                                        <ContextMenuTrigger asChild>
+                                          <Button
+                                            variant="ghost"
+                                            className={`flex-1 min-w-0 justify-start gap-2 h-7 overflow-hidden px-2 rounded-lg transition-colors duration-150 ${
+                                              isProjectActive
+                                                ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                                                : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+                                            }`}
+                                            onClick={() => {
+                                              setLocation(`/project/${encodeURIComponent(project.id)}`);
+                                            }}
+                                          >
+                                            <FolderOpen className="w-3.5 h-3.5" />
+                                            <span className="text-sm truncate min-w-0">
+                                              {project.name}
+                                            </span>
+                                          </Button>
+                                        </ContextMenuTrigger>
+                                        <ContextMenuContent className="w-44">
+                                          <ContextMenuItem onSelect={() => void handleToggleProjectPinned(project)}>
+                                            <Pin className={`h-4 w-4 ${project.pinned ? "fill-current" : ""}`} />
+                                            <span>{t("sidebar.projectPinAction")}</span>
+                                          </ContextMenuItem>
+                                          <ContextMenuItem
+                                            onSelect={() => {
+                                              if (sourceProject) openEditProjectDialog(sourceProject);
+                                            }}
+                                          >
+                                            <Pencil className="h-4 w-4" />
+                                            <span>{t("sidebar.projectEditAction")}</span>
+                                          </ContextMenuItem>
+                                          <ContextMenuItem
+                                            variant="destructive"
+                                            onSelect={() => {
+                                              if (sourceProject) openDeleteProjectDialog(sourceProject);
+                                            }}
+                                          >
+                                            <Trash2 className="h-4 w-4" />
+                                            <span>{t("sidebar.projectDeleteAction")}</span>
+                                          </ContextMenuItem>
+                                        </ContextMenuContent>
+                                      </ContextMenu>
+                                    ) : (
+                                      <Button
+                                        variant="ghost"
+                                        className={`flex-1 min-w-0 justify-start gap-2 h-7 overflow-hidden px-2 rounded-lg transition-colors duration-150 ${
+                                          isProjectActive
+                                            ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                                            : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+                                        }`}
+                                        onClick={() => {
+                                          setLocation(`/project/${encodeURIComponent(project.id)}`);
+                                        }}
+                                      >
+                                        <FolderOpen className="w-3.5 h-3.5" />
+                                        <span className="text-sm truncate min-w-0">
+                                          {project.name}
+                                        </span>
+                                      </Button>
+                                    )}
                                   </div>
 
-                                  {isExpanded && project.kind === "manual" ? (
+                                  {isExpanded && project.kind === "manual" && projectSessions.length > 0 ? (
                                     <div className="ml-7 min-w-0 space-y-0.5 overflow-x-hidden">
-                                      {projectSessions.length > 0 ? (
-                                        projectSessions.map((session) =>
-                                          renderSessionTaskItem(session, { compact: true }),
-                                        )
-                                      ) : (
-                                        <div className="px-2 py-2 text-xs leading-5 text-muted-foreground">
-                                          {t("sidebar.projectSessionListEmpty")}
-                                        </div>
+                                      {projectSessions.map((session) =>
+                                        renderSessionTaskItem(session, { compact: true }),
                                       )}
                                     </div>
                                   ) : null}
@@ -1452,6 +1608,63 @@ export default function Sidebar({
         </DialogContent>
       </Dialog>
 
+      <Dialog open={editProjectDialogOpen} onOpenChange={setEditProjectDialogOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t("sidebar.projectEditTitle")}</DialogTitle>
+            <DialogDescription>{t("sidebar.projectEditDescription")}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="sidebar-edit-project-name">{t("sidebar.projectNameLabel")}</Label>
+              <Input
+                id="sidebar-edit-project-name"
+                value={editProjectName}
+                onChange={(event) => setEditProjectName(event.target.value)}
+                placeholder={t("sidebar.projectNamePlaceholder")}
+                maxLength={80}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void handleEditProjectSubmit();
+                  }
+                }}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="sidebar-edit-project-description">
+                {t("sidebar.projectDescriptionLabel")}
+              </Label>
+              <Textarea
+                id="sidebar-edit-project-description"
+                value={editProjectDescription}
+                onChange={(event) => setEditProjectDescription(event.target.value)}
+                placeholder={t("sidebar.projectDescriptionPlaceholder")}
+                maxLength={300}
+                className="min-h-[112px] resize-none"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setEditProjectDialogOpen(false);
+                setEditProjectTarget(null);
+              }}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              onClick={() => void handleEditProjectSubmit()}
+              disabled={editProjectSubmitting || !editProjectName.trim()}
+            >
+              {editProjectSubmitting ? t("sidebar.saving") : t("common.save")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -1479,6 +1692,38 @@ export default function Sidebar({
               disabled={deleteSubmitting}
             >
               {deleteSubmitting ? t("sidebar.deleting") : t("common.delete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={deleteProjectDialogOpen} onOpenChange={setDeleteProjectDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("sidebar.projectDeleteTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteProjectTarget?.name
+                ? t("sidebar.projectDeleteDescriptionWithTitle", { title: deleteProjectTarget.name })
+                : t("sidebar.projectDeleteDescription")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => {
+                setDeleteProjectDialogOpen(false);
+                setDeleteProjectTarget(null);
+              }}
+            >
+              {t("common.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault();
+                void handleDeleteProjectConfirm();
+              }}
+              disabled={deleteProjectSubmitting}
+            >
+              {deleteProjectSubmitting ? t("sidebar.deleting") : t("sidebar.projectDeleteAction")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

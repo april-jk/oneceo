@@ -72,6 +72,7 @@ import {
   Star,
   FolderSync,
   Trash2,
+  ArrowRight,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useTranslation } from "react-i18next";
@@ -1070,6 +1071,11 @@ export default function Sidebar({
     }
   }, [assignableProjects, dispatchSessionUpdate, moveProjectSubmitting, patchSessionTask, t]);
 
+  const openProjectScopedNewSession = React.useCallback((projectId: string) => {
+    const token = Date.now().toString();
+    setLocation(`/new-task?projectId=${encodeURIComponent(projectId)}&new=${encodeURIComponent(token)}`);
+  }, [setLocation]);
+
   const handleDeleteConfirm = React.useCallback(async () => {
     const target = deleteTarget;
     if (!target) return;
@@ -1494,6 +1500,21 @@ export default function Sidebar({
                                         </span>
                                       </Button>
                                     )}
+                                    {project.kind === "manual" ? (
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-7 w-7 shrink-0 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50"
+                                        title={t("sidebar.projectCreateSessionAction")}
+                                        aria-label={t("sidebar.projectCreateSessionAction")}
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          openProjectScopedNewSession(project.id);
+                                        }}
+                                      >
+                                        <ArrowRight className="h-3.5 w-3.5" />
+                                      </Button>
+                                    ) : null}
                                   </div>
 
                                   {isExpanded &&

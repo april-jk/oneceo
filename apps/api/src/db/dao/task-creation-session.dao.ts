@@ -1020,6 +1020,27 @@ export class TaskCreationSessionDAO {
     });
   }
 
+  async clearProjectAssignmentForUser(userId: string, projectId: string): Promise<number> {
+    const normalizedUserId = normalizeUserId(userId);
+    const normalizedProjectId = this.asText(projectId);
+    if (!normalizedUserId || !normalizedProjectId) return 0;
+
+    const result = await db.execute(sql`
+      UPDATE task_creation_sessions
+      SET metadata_json = jsonb_set(
+        jsonb_set(COALESCE(metadata_json, '{}'::jsonb), '{projectId}', 'null'::jsonb, true),
+        '{projectName}',
+        'null'::jsonb,
+        true
+      ),
+      updated_at = NOW()
+      WHERE user_id = ${normalizedUserId}
+        AND COALESCE(metadata_json->>'projectId', '') = ${normalizedProjectId}
+    `);
+
+    return Number((result as any)?.rowCount || 0);
+  }
+
   /**
    * 如果会话尚未绑定用户，则绑定到当前用户
    */

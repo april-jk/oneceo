@@ -53,3 +53,16 @@
 - 按“每个用户一个 project、只保留最新一套部署资源”重新梳理清理逻辑：成功部署后自动清除同一 Railway project 下被新版本替代的旧 environment / app service / db service，并同步删除旧 connector account 绑定。
 - 针对失败清理补齐 stop-loss：如果本次 deploy 或失败后的 repair-redeploy 新建了 environment/service 但最终仍失败，立即回收这批失败资源；普通 redeploy/rollback 若只是操作现存线上 service 失败，则不误删仍可用的线上资源。
 - 已补充 `platform-deployment-account-service` 相关单元测试，验证“失败资源清理”和“同 project 历史资源剪枝”两条主链均能执行。
+- 对照 `referance/claudecode_src` 学习 ClaudeCode 的 skills 调用、会话保留与 compaction/resume 恢复机制，确认 oneceo 当前缺的是“session 级 active skills 真相源”，不是单纯的 skill catalog 或 UI 展示。
+- 已补充候选设计文档 `docs/agent研发文档/技能平台化热加载设计/21_Altus_Skills会话级保持与多轮恢复修复方案_[尚未采用].md`，聚焦 Altus 在多轮澄清、resume 和 direct/managed 双链路中的 skills 持续生效问题，等待审核。
+- 根据文档审核反馈，已把方案从“固定 sticky skills”修正为“session 级 skill 状态 + run 前按当前上下文解析是否继续挂载”，并补入 ClaudeCode 中的按轮 surfaced、条件激活与已调用 skill 恢复三层参考结论。
+- 继续对照 oneceo 现有平台化 skills 链路补充特异化设计：明确区分 `availableSkills`、`residentSkills`、`activeSkillsForTurn` 三层状态，避免把 prompt 激活和 sandbox 同步混成一个动作导致 OpenCode 频繁重启。
+- 已将技能会话保持方案重写为 oneceo 专用版：核心改成“session 只存轻量 skill 引用状态、run 前实时解析 activeSkillsForTurn、sandbox 只维护 residentSkills 惰性驻留”，去掉对 ClaudeCode 文件系统模型的结构性依赖。
+- 按开发版标准再次收敛 skills 方案文档：补齐 `sessionSkillState` 目标结构、`resolveSkillsForTurn()` 函数签名、按文件拆分的改动点、resident 回收规则和测试矩阵，作为后续实现基线。
+- 根据最新约束重新修订 skills 会话保持候选文档：明确 API 服务侧本地文件持久化禁止进入正式方案，真正的会话记忆改为 `DB 真相源 + Redis 可选热缓存 + sandbox 文件运行时物化副本` 三层。
+- 文档中单独补了一节“文件记忆到底如何使用”，把首轮运行、多轮 continuation、sandbox 销毁重建、tool 自动激活四条时序拆开说明，避免后续实现再次把 sandbox 文件误当成持久化状态。
+- 按最新补充要求继续收紧方案：新增 sandbox runtime 结构化记忆“必须回写 DB”的规则，并明确采用 `变更即回写 + 定时 checkpoint + sandbox 关闭前强制 flush`，而不是只靠固定周期回写。
+- 根据“变更即回写会带来 DB IO 压力”的反馈，再次调整候选方案：将回写策略收敛为 `sandbox 本地 runtime state + Redis delta 增量缓冲 + DB 周期 checkpoint + 关键边界强制 flush`，避免把每次细粒度变化都直刷数据库。
+- 根据最新明确方向再次重写候选文档：不再采用 Redis delta/checkpoint 复杂机制，正式收敛为 `数据库唯一真相源 + Redis 只做已保存快照加速 + sandbox 文件记忆随项目文件一起归档，在保存触发点从 sandbox 刷回 DB`。
+- 已开始落地 skills 会话保持代码：为 `task_creation_sessions` 增加 `metadata_json`，新增 `task-session-skill-state-service` 统一处理 session skill state、sandbox `skills-memory.json`、以及保存触发点刷回 DB/Redis，并将 Altus managed run 入口、sandbox skill sync、tool auto attach、archive/restore 全链路接入。
+- 已补充针对性回归：验证“按当前上下文决定 contextual resident skill 是否继续挂载”和“sandbox 文件记忆可刷回 DB”；同时跑通受影响的 Altus managed runtime / coordinator 相关单测，当前 direct 链路尚未并入这套状态服务。

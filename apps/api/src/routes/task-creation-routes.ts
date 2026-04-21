@@ -7,6 +7,7 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import {
+  appUserProjectDAO,
   appUserLegacyIdMappingDAO,
   sandboxExecutionEnvironmentDAO,
   taskCreationSessionDAO,
@@ -67,6 +68,8 @@ import { downloadFromR2 } from '../services/r2-client';
 import { taskSessionDeliverableService } from '../services/task-session-deliverable-service';
 import { platformSkillService } from '../services/platform-skill-service';
 import { userSkillService } from '../services/user-skill-service';
+import { altusMemoryContextService } from '../services/altus-memory-context-service';
+import { taskCreationProjectRedisCacheService } from '../services/task-creation-project-redis-cache-service';
 import { isLegacyClientUserId, isSameUserId, normalizeUserId } from '../utils/user-id';
 
 const router = express.Router();
@@ -293,6 +296,224 @@ router.put('/codex/runtime-config', express.json({ limit: '2mb' }), async (req, 
   }
 });
 
+router.get('/projects', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const projects = await listCachedTaskCreationProjects(currentUser.userId);
+    return res.json({
+      success: true,
+      data: projects,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    console.error('获取项目列表失败:', error);
+    return res.status(authError?.status || 500).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '获取项目列表失败'),
+    });
+  }
+});
+
+router.get('/projects/:projectId', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { projectId } = req.params;
+    const project = await getCachedOwnedTaskCreationProject(currentUser.userId, projectId);
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        error: '项目不存在或当前用户无权访问该项目',
+      });
+    }
+    return res.json({
+      success: true,
+      data: project,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    console.error('获取项目详情失败:', error);
+    return res.status(authError?.status || 500).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '获取项目详情失败'),
+    });
+  }
+});
+
+router.get('/projects/:projectId/sessions', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { projectId } = req.params;
+    const project = await getCachedOwnedTaskCreationProject(currentUser.userId, projectId);
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        error: '项目不存在或当前用户无权访问该项目',
+      });
+    }
+    const sessions = await listCachedTaskCreationProjectSessions(currentUser.userId, projectId);
+    return res.json({
+      success: true,
+      data: sessions,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    console.error('获取项目会话列表失败:', error);
+    return res.status(authError?.status || 500).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '获取项目会话列表失败'),
+    });
+  }
+});
+
+router.post('/projects', express.json({ limit: '256kb' }), async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const input = normalizeTaskCreationProjectCreateInput(req.body);
+    if (!input.name) {
+      return res.status(400).json({
+        success: false,
+        error: '项目名称不能为空',
+      });
+    }
+    const existed = await appUserProjectDAO.getOwnedProjectByName(currentUser.userId, input.name);
+    if (existed) {
+      return res.status(409).json({
+        success: false,
+        error: '项目名称已存在',
+      });
+    }
+    const created = await appUserProjectDAO.create({
+      userId: currentUser.userId,
+      name: input.name,
+      description: input.description,
+      projectType: 'standard',
+      altusProjectMemory: input.altusProjectMemory,
+    });
+    await altusMemoryContextService.invalidateProjectMemory(currentUser.userId, String(created.id));
+    await taskCreationProjectRedisCacheService.invalidateProjectList(currentUser.userId);
+    return res.status(201).json({
+      success: true,
+      data: toTaskCreationProjectSummary(created),
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    console.error('创建项目失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    return res.status(authError?.status || 500).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '创建项目失败'),
+    });
+  }
+});
+
+router.put('/projects/:projectId', express.json({ limit: '256kb' }), async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { projectId } = req.params;
+    const currentProject = await appUserProjectDAO.getOwnedProjectById(projectId, currentUser.userId);
+    if (!currentProject || currentProject.projectType !== 'standard' || currentProject.status !== 'active') {
+      return res.status(404).json({
+        success: false,
+        error: '项目不存在或当前用户无权访问该项目',
+      });
+    }
+
+    const input = normalizeTaskCreationProjectUpdateInput(req.body);
+    if (input.name !== undefined && !input.name) {
+      return res.status(400).json({
+        success: false,
+        error: '项目名称不能为空',
+      });
+    }
+
+    if (input.name && input.name !== currentProject.name) {
+      const existed = await appUserProjectDAO.getOwnedProjectByName(currentUser.userId, input.name);
+      if (existed && String(existed.id) !== String(currentProject.id)) {
+        return res.status(409).json({
+          success: false,
+          error: '项目名称已存在',
+        });
+      }
+    }
+
+    const updated = await appUserProjectDAO.updateOwnedProject(projectId, currentUser.userId, input);
+    if (!updated) {
+      return res.status(404).json({
+        success: false,
+        error: '项目不存在或当前用户无权访问该项目',
+      });
+    }
+
+    if (input.name && input.name !== currentProject.name) {
+      await taskCreationSessionDAO.syncOwnedProjectName(currentUser.userId, projectId, updated.name);
+      await taskCreationFileMemoryStore.syncProjectName(projectId, updated.name);
+    }
+    await altusMemoryContextService.invalidateProjectMemory(currentUser.userId, projectId);
+
+    await taskCreationProjectRedisCacheService.invalidateProjectReads(currentUser.userId, {
+      projectIds: [projectId],
+    });
+
+    return res.json({
+      success: true,
+      data: toTaskCreationProjectSummary(updated),
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    console.error('更新项目失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    return res.status(authError?.status || 500).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '更新项目失败'),
+    });
+  }
+});
+
+router.delete('/projects/:projectId', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { projectId } = req.params;
+    const currentProject = await appUserProjectDAO.getOwnedProjectById(projectId, currentUser.userId);
+    if (!currentProject || currentProject.projectType !== 'standard' || currentProject.status !== 'active') {
+      return res.status(404).json({
+        success: false,
+        error: '项目不存在或当前用户无权访问该项目',
+      });
+    }
+
+    const assignedSessionCount = await taskCreationSessionDAO.countOwnedProjectSessions(currentUser.userId, projectId);
+    if (assignedSessionCount > 0) {
+      return res.status(409).json({
+        success: false,
+        error: '当前项目下仍有关联会话，请先移出这些会话后再删除项目',
+      });
+    }
+    await appUserProjectDAO.deleteOwnedProject(projectId, currentUser.userId);
+    await altusMemoryContextService.invalidateProjectMemory(currentUser.userId, projectId);
+    await taskCreationProjectRedisCacheService.invalidateProjectReads(currentUser.userId, {
+      projectIds: [projectId],
+    });
+
+    return res.json({
+      success: true,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    console.error('删除项目失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    return res.status(authError?.status || 500).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '删除项目失败'),
+    });
+  }
+});
+
 function clampNumber(value: number, min: number, max: number) {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
@@ -418,6 +639,9 @@ async function requireOwnedTaskSession(sessionId: string, userId: string, legacy
     }
     session = rebound;
   }
+  if (!session) {
+    throw new Error('会话不存在');
+  }
   const normalizedSessionUserId = normalizeUserId(session.userId);
   if (!isSameUserId(normalizedSessionUserId, normalizedUserId) && legacyUserIdHint) {
     const adopted = await taskCreationSessionDAO.adoptSessionFromLegacyUserId(
@@ -428,6 +652,9 @@ async function requireOwnedTaskSession(sessionId: string, userId: string, legacy
     if (adopted?.userId) {
       session = adopted;
     }
+  }
+  if (!session) {
+    throw new Error('会话不存在');
   }
   if (!isSameUserId(normalizeUserId(session.userId), normalizedUserId)) {
     const legacyOwner = normalizeUserId(session.userId);
@@ -544,13 +771,19 @@ function mergeSessionLifecycleFromDb(memorySession: any, dbSession: any) {
     (dbStatus === 'completed' || dbStatus === 'failed' || dbStatus === 'waiting_user') && dbStatus !== memoryStatus;
 
   if (!shouldPreferDbLifecycle) {
-    return memorySession;
+    return {
+      ...memorySession,
+      projectId: dbSession.projectId || memorySession.projectId || null,
+      projectName: dbSession.projectName || memorySession.projectName || null,
+    };
   }
 
   return {
     ...memorySession,
     status: dbSession.status,
     stage: dbSession.stage || mapStageFromStatus(dbSession.status),
+    projectId: dbSession.projectId || memorySession.projectId || null,
+    projectName: dbSession.projectName || memorySession.projectName || null,
     updatedAt: dbSession.updatedAt || memorySession.updatedAt,
   };
 }
@@ -725,8 +958,8 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
     id: session.id,
     title: String(titleCandidate).trim().slice(0, 80) || '新建任务会话',
     isFavorite: false,
-    projectId: null,
-    projectName: null,
+    projectId: session.projectId || null,
+    projectName: session.projectName || null,
     shareEnabled: false,
     shareToken: null,
     status,
@@ -838,6 +1071,8 @@ async function buildLightweightFileSessionFromDb(sessionId: string): Promise<Fil
   return {
     id: session.id,
     title: String(titleCandidate).trim().slice(0, 80) || '新建任务会话',
+    projectId: session.projectId || null,
+    projectName: session.projectName || null,
     status,
     stage,
     mode: hasSandboxSignals ? 'sandbox' : undefined,
@@ -1058,6 +1293,8 @@ async function buildSessionSummaryFromDb(limit: number, userId: string) {
     result.push({
       id: session.id,
       title: title.trim().slice(0, 80),
+      projectId: session.projectId || null,
+      projectName: session.projectName || null,
       status: session.status,
       stage: mapStageFromStatus(session.status),
       createdAt: toIso(session.createdAt as any),
@@ -1756,6 +1993,117 @@ function deriveResolvedSessionTitle(value: unknown): string {
   return normalizeSessionTitleText(value).slice(0, 80);
 }
 
+function normalizeSessionProjectAssignmentInput(body: any): {
+  projectId: string | null;
+  projectName: string | null;
+} {
+  const projectId = asText(body?.projectId) || null;
+  const projectName = deriveResolvedSessionTitle(body?.projectName) || null;
+  if (!projectId || !projectName) {
+    return {
+      projectId: null,
+      projectName: null,
+    };
+  }
+  return {
+    projectId,
+    projectName,
+  };
+}
+
+async function listCachedTaskCreationProjects(userId: string) {
+  const cached = await taskCreationProjectRedisCacheService.getProjectList<ReturnType<typeof toTaskCreationProjectSummary>>(userId);
+  if (Array.isArray(cached)) {
+    return cached;
+  }
+  const projects = await appUserProjectDAO.listByUser(userId, {
+    projectType: 'standard',
+    status: 'active',
+  });
+  const summaries = projects.map(toTaskCreationProjectSummary);
+  await taskCreationProjectRedisCacheService.setProjectList(userId, summaries);
+  return summaries;
+}
+
+async function getCachedOwnedTaskCreationProject(userId: string, projectId: string) {
+  const normalizedProjectId = asText(projectId);
+  if (!normalizedProjectId) return null;
+  const cached = await taskCreationProjectRedisCacheService.getProjectDetail<ReturnType<typeof toTaskCreationProjectSummary>>(
+    userId,
+    normalizedProjectId
+  );
+  if (cached) {
+    return cached;
+  }
+  const project = await appUserProjectDAO.getOwnedProjectById(normalizedProjectId, userId);
+  if (!project || project.projectType !== 'standard' || project.status !== 'active') {
+    return null;
+  }
+  const summary = toTaskCreationProjectSummary(project);
+  await taskCreationProjectRedisCacheService.setProjectDetail(userId, normalizedProjectId, summary);
+  return summary;
+}
+
+async function listCachedTaskCreationProjectSessions(userId: string, projectId: string) {
+  const normalizedProjectId = asText(projectId);
+  if (!normalizedProjectId) return [];
+  const cached = await taskCreationProjectRedisCacheService.getProjectSessions<ReturnType<typeof toSessionSummary>>(
+    userId,
+    normalizedProjectId
+  );
+  if (Array.isArray(cached)) {
+    return cached;
+  }
+  const sessions = await taskCreationSessionDAO.listOwnedProjectSessions(userId, normalizedProjectId);
+  const summaries = sessions.map(toSessionSummary);
+  await taskCreationProjectRedisCacheService.setProjectSessions(userId, normalizedProjectId, summaries);
+  return summaries;
+}
+
+function toTaskCreationProjectSummary(project: any) {
+  const metadata =
+    project?.metadataJson && typeof project.metadataJson === 'object'
+      ? (project.metadataJson as Record<string, unknown>)
+      : {};
+  return {
+    id: String(project.id),
+    name: asText(project.name),
+    description: asText(project.description),
+    projectType: asText(project.projectType) || 'standard',
+    status: asText(project.status) || 'active',
+    pinned: Boolean(metadata.pinned),
+    altusProjectMemory: appUserProjectDAO.readAltusProjectMemory(project?.metadataJson),
+    createdAt: project.createdAt ? new Date(project.createdAt).toISOString() : null,
+    updatedAt: project.updatedAt ? new Date(project.updatedAt).toISOString() : null,
+  };
+}
+
+function normalizeTaskCreationProjectCreateInput(body: any) {
+  return {
+    name: appUserProjectDAO.normalizeName(body?.name),
+    description: appUserProjectDAO.normalizeDescription(body?.description),
+    altusProjectMemory:
+      body && Object.prototype.hasOwnProperty.call(body, 'altusProjectMemory')
+        ? appUserProjectDAO.normalizeAltusProjectMemory(body?.altusProjectMemory)
+        : undefined,
+  };
+}
+
+function normalizeTaskCreationProjectUpdateInput(body: any) {
+  const hasName = Object.prototype.hasOwnProperty.call(body || {}, 'name');
+  const hasDescription = Object.prototype.hasOwnProperty.call(body || {}, 'description');
+  const hasPinned = Object.prototype.hasOwnProperty.call(body || {}, 'pinned');
+  const hasAltusProjectMemory = Object.prototype.hasOwnProperty.call(body || {}, 'altusProjectMemory');
+  return {
+    ...(hasName ? { name: appUserProjectDAO.normalizeName(body?.name) } : {}),
+    ...(hasDescription ? { description: appUserProjectDAO.normalizeDescription(body?.description) } : {}),
+    ...(hasPinned ? { pinned: Boolean(body?.pinned) } : {}),
+    ...(hasAltusProjectMemory
+      ? { altusProjectMemory: appUserProjectDAO.normalizeAltusProjectMemory(body?.altusProjectMemory) }
+      : {}),
+  };
+}
+
 function asPositiveInt(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
     return Math.floor(value);
@@ -1983,6 +2331,15 @@ function normalizeUserReferenceText(contentRaw: unknown, metadataRaw: unknown): 
     .toLowerCase();
 }
 
+function isRenderableUserTimelineMessage(message: TimelineMessage | null | undefined): boolean {
+  if (message?.role !== 'user') return false;
+  return (
+    message.messageType === 'user_input' ||
+    message.messageType === 'user_response' ||
+    message.messageType === 'opencode_user_input'
+  );
+}
+
 function mergeUserReferenceMetadataFromPersisted(
   primaryMessages: TimelineMessage[],
   persistedMessages: TimelineMessage[]
@@ -2005,11 +2362,15 @@ function mergeUserReferenceMetadataFromPersisted(
     referenceQueueByText.set(key, queue);
   }
 
-  if (referenceQueueByText.size === 0) {
-    return primaryMessages;
+  const remainingPrimaryUserCounts = new Map<string, number>();
+  for (const message of primaryMessages) {
+    if (!isRenderableUserTimelineMessage(message)) continue;
+    const key = normalizeUserReferenceText(message.content, message.metadata);
+    if (!key) continue;
+    remainingPrimaryUserCounts.set(key, (remainingPrimaryUserCounts.get(key) || 0) + 1);
   }
 
-  return primaryMessages.map((message) => {
+  const mergedPrimaryMessages = primaryMessages.map((message) => {
     if (message?.role !== 'user') return message;
     if (hasUserReferenceMetadata(message?.metadata)) return message;
     const key = normalizeUserReferenceText(message?.content, message?.metadata);
@@ -2026,6 +2387,25 @@ function mergeUserReferenceMetadataFromPersisted(
       },
     };
   });
+
+  const appendedMessages: TimelineMessage[] = [];
+  for (const message of persistedMessages) {
+    if (!isRenderableUserTimelineMessage(message)) continue;
+    const key = normalizeUserReferenceText(message.content, message.metadata);
+    if (!key) continue;
+    const remainingPrimary = remainingPrimaryUserCounts.get(key) || 0;
+    if (remainingPrimary > 0) {
+      remainingPrimaryUserCounts.set(key, remainingPrimary - 1);
+      continue;
+    }
+    appendedMessages.push(message);
+  }
+
+  if (appendedMessages.length === 0) {
+    return mergedPrimaryMessages;
+  }
+
+  return mergedPrimaryMessages.concat(appendedMessages);
 }
 
 function normalizeRuntimeGenerationValue(value: unknown): number | null {
@@ -3222,6 +3602,7 @@ router.post('/sessions', async (req, res) => {
     const requestedExecutor = asText(req.body?.executor);
     const requestedCodexExecutionMode = asText(req.body?.codexExecutionMode);
     const requestedDriver = asText(req.body?.driver);
+    const requestedProjectId = asText(req.body?.projectId);
     const initialMessage = asText(req.body?.initialMessage);
     const initialMessageTypeRaw = asText(req.body?.initialMessageType);
     const initialMessageType = initialMessageTypeRaw === 'user_response' ? 'user_response' : 'user_input';
@@ -3237,6 +3618,23 @@ router.post('/sessions', async (req, res) => {
         ? normalizedRequestedTitle
         : '') ||
       DEFAULT_SESSION_TITLE;
+    let initialProjectAssignment: { projectId: string | null; projectName: string | null } = {
+      projectId: null,
+      projectName: null,
+    };
+    if (requestedProjectId) {
+      const ownedProject = await appUserProjectDAO.getOwnedProjectById(requestedProjectId, currentUser.userId);
+      if (!ownedProject || ownedProject.projectType !== 'standard' || ownedProject.status !== 'active') {
+        return res.status(404).json({
+          success: false,
+          error: '项目不存在或当前用户无权访问该项目',
+        });
+      }
+      initialProjectAssignment = normalizeSessionProjectAssignmentInput({
+        projectId: ownedProject.id,
+        projectName: ownedProject.name,
+      });
+    }
 
     const session = await taskCreationFileMemoryStore.createSession(
       isNewSession ? title : '',
@@ -3268,6 +3666,9 @@ router.post('/sessions', async (req, res) => {
       });
     if (derivedDriver) {
       await taskCreationFileMemoryStore.updateSessionDriver(session.id, derivedDriver);
+    }
+    if (initialProjectAssignment.projectId) {
+      await taskCreationFileMemoryStore.updateSessionProject(session.id, initialProjectAssignment);
     }
 
     if (isNewSession) {
@@ -3331,6 +3732,9 @@ router.post('/sessions', async (req, res) => {
           }
         }
         await taskCreationSessionDAO.bindUserIfMissing(session.id, currentUser.userId);
+      }
+      if (initialProjectAssignment.projectId) {
+        await taskCreationSessionDAO.updateSessionProject(session.id, initialProjectAssignment);
       }
       if (isNewSession) {
         await taskCreationSessionDAO.addMessage({
@@ -3740,6 +4144,93 @@ router.post('/sessions/:sessionId/favorite', async (req, res) => {
     return res.status(500).json({
       success: false,
       error: getPublicErrorMessage('更新会话收藏状态失败，请稍后重试'),
+    });
+  }
+});
+
+router.post('/sessions/:sessionId/project', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { sessionId } = req.params;
+    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: '会话不存在',
+      });
+    }
+    const dbSession = await taskCreationSessionDAO.getSession(session.id);
+    const sessionMetadata =
+      dbSession?.metadataJson && typeof dbSession.metadataJson === 'object'
+        ? (dbSession.metadataJson as Record<string, unknown>)
+        : {};
+    const altusSessionMemory =
+      sessionMetadata.altusSessionMemory && typeof sessionMetadata.altusSessionMemory === 'object'
+        ? (sessionMetadata.altusSessionMemory as Record<string, unknown>)
+        : {};
+    const hasEnteredEffectiveRun =
+      typeof altusSessionMemory.version === 'number' && Number.isFinite(altusSessionMemory.version)
+        ? altusSessionMemory.version > 0
+        : false;
+    if (hasEnteredEffectiveRun) {
+      return res.status(409).json({
+        success: false,
+        error: '会话已进入有效运行阶段，当前版本不支持再变更项目归属',
+      });
+    }
+    const previousProjectId = asText(session.projectId);
+
+    const requestedProjectId = asText(req.body?.projectId);
+    let nextProject = normalizeSessionProjectAssignmentInput({
+      projectId: null,
+      projectName: null,
+    });
+    if (requestedProjectId) {
+      const ownedProject = await appUserProjectDAO.getOwnedProjectById(requestedProjectId, currentUser.userId);
+      if (!ownedProject || ownedProject.projectType !== 'standard' || ownedProject.status !== 'active') {
+        return res.status(404).json({
+          success: false,
+          error: '项目不存在或当前用户无权访问该项目',
+        });
+      }
+      nextProject = normalizeSessionProjectAssignmentInput({
+        projectId: ownedProject.id,
+        projectName: ownedProject.name,
+      });
+    }
+    await taskCreationSessionDAO.updateSessionProject(session.id, nextProject);
+    await taskCreationFileMemoryStore.updateSessionProject(session.id, nextProject);
+    await taskCreationProjectRedisCacheService.invalidateProjectReads(currentUser.userId, {
+      projectIds: [previousProjectId, nextProject.projectId],
+    });
+    const updated = await resolveTaskSessionRecord(session.id);
+    return res.json({
+      success: true,
+      data: toSessionSummary(updated || { ...session, ...nextProject }),
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
+    console.error('更新会话项目归属失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    return res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage('更新会话项目归属失败，请稍后重试'),
     });
   }
 });

@@ -13,7 +13,7 @@ export type UserManagementSort = {
   direction: UserManagementSortDirection;
 };
 
-export type UserDetailTab = 'overview' | 'conversations' | 'sandboxes';
+export type UserDetailTab = 'overview' | 'conversations' | 'sandboxes' | 'deployments';
 export type UserManagementViewState = {
   filters: UserManagementFilters;
   sort: UserManagementSort;
@@ -42,6 +42,38 @@ export const DEFAULT_USER_MANAGEMENT_VIEW_STATE: UserManagementViewState = {
   selectedUserId: null,
   selectedUserLabel: null,
   drawerOpen: false,
+  detailTab: 'overview',
+};
+
+export type DeploymentManagementViewKey = 'records' | 'conversations' | 'users' | 'railway';
+export type DeploymentManagementDetailTab = 'overview' | 'history' | 'logs' | 'relations' | 'raw';
+export type DeploymentManagementViewState = {
+  view: DeploymentManagementViewKey;
+  filters: {
+    query: string;
+    status: string;
+    hasUrl: string;
+    userId: string;
+    taskSessionId: string;
+  };
+  selectedTaskSessionId: string | null;
+  detailDialogOpen: boolean;
+  detailTab: DeploymentManagementDetailTab;
+};
+
+export const DEFAULT_DEPLOYMENT_MANAGEMENT_FILTERS: DeploymentManagementViewState['filters'] = {
+  query: '',
+  status: 'all',
+  hasUrl: 'all',
+  userId: '',
+  taskSessionId: '',
+};
+
+export const DEFAULT_DEPLOYMENT_MANAGEMENT_VIEW_STATE: DeploymentManagementViewState = {
+  view: 'records',
+  filters: DEFAULT_DEPLOYMENT_MANAGEMENT_FILTERS,
+  selectedTaskSessionId: null,
+  detailDialogOpen: false,
   detailTab: 'overview',
 };
 

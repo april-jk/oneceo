@@ -7,6 +7,7 @@ import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
 import { osacAgentService } from './osac-agent-service';
 import { connectorGuideService } from './connector-guide-service';
 import { markSandboxDirty, touchSandbox } from './sandbox-activity-service';
+import { taskSessionSkillStateService } from './task-session-skill-state-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 import { userSkillService } from './user-skill-service';
 import {
@@ -442,6 +443,34 @@ export class AltusManagedToolRuntime {
     }
 
     if (activated.length > 0) {
+      try {
+        await taskSessionSkillStateService.recordRuntimeAutoAttachedSkills({
+          sessionId: this.input.sessionId,
+          sandboxId: this.input.sandboxId,
+          workspaceRoot: this.input.workspaceRoot,
+          activatedSkills: activated,
+          toolName,
+          taskIntentProfile: this.input.taskIntentProfile || {
+            mode: 'neutral',
+            reason: 'unknown',
+            recentUserMessages: [],
+            explicitNoDeploy: false,
+            explicitNoWeb: false,
+            webArtifactRequested: false,
+            deployRequested: false,
+            scriptArtifactRequested: false,
+            emailTemplateRequested: false,
+            deploymentAllowed: true,
+          },
+        });
+      } catch (error) {
+        console.warn('[ALTUS_RUNTIME_AUTO_ATTACHED_SKILLS_PERSIST_WARN]', {
+          taskSessionId: this.input.sessionId,
+          sandboxId: this.input.sandboxId,
+          toolName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       writeConnectorDebugLog('[ALTUS_RUNTIME_AUTO_ATTACHED_SKILLS]', {
         taskSessionId: this.input.sessionId,
         sandboxId: this.input.sandboxId,

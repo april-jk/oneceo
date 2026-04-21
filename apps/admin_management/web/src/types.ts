@@ -861,6 +861,194 @@ export interface AppUserDetailResponse {
   revokedSessionCount?: number;
 }
 
+export interface DeploymentPanelData {
+  configured: boolean;
+  canDeploy: boolean;
+  message?: string;
+  bindingState: string;
+  provisioningPhase?: string;
+  providerErrorCode?: string;
+  providerErrorMessage?: string;
+  lastVerifiedAt?: string;
+  projectId?: string;
+  projectName?: string;
+  environmentId?: string;
+  environmentName?: string;
+  serviceId?: string;
+  serviceName?: string;
+  deploymentId?: string;
+  latestStatus?: string;
+  latestUrl?: string;
+  latestStaticUrl?: string;
+  activeDeploymentPending: boolean;
+  domains: string[];
+  deployments: Array<{
+    id: string;
+    status: string;
+    createdAt?: string;
+    serviceName?: string;
+    commitMessage?: string;
+    commitAuthor?: string;
+    url?: string;
+    staticUrl?: string;
+  }>;
+  logs: Array<{
+    timestamp?: string;
+    message: string;
+    severity?: string;
+  }>;
+  missing: string[];
+  analytics?: Record<string, unknown>;
+  resourceBinding?: Record<string, unknown>;
+}
+
+export interface DeploymentRecord {
+  taskSessionId: string;
+  statusCategory: 'success' | 'failed' | 'pending' | 'ready' | 'uninitialized' | 'unknown' | string;
+  hasDeployment: boolean;
+  deploymentId: string | null;
+  bindingState: string;
+  latestStatus: string | null;
+  latestUrl: string | null;
+  latestStaticUrl: string | null;
+  activeDeploymentPending: boolean;
+  projectName: string | null;
+  environmentName: string | null;
+  serviceName: string | null;
+  lastVerifiedAt: string | null;
+  updatedAt: string;
+  user: {
+    id: string;
+    source: string;
+    displayName: string | null;
+    email: string | null;
+    status: string | null;
+    lastLoginAt: string | null;
+    lastSeenAt: string | null;
+  } | null;
+  session: {
+    id: string;
+    userId: string | null;
+    title: string;
+    status: string;
+    stage: string | null;
+    createdAt: string | null;
+    updatedAt: string | null;
+  };
+  sandbox: {
+    sandboxId: string;
+    sessionId: string;
+    orchestratorSessionId: string | null;
+    vmName: string | null;
+    status: string;
+    createdAt: string | null;
+    updatedAt: string | null;
+    closedAt: string | null;
+  } | null;
+  panel: DeploymentPanelData;
+}
+
+export interface DeploymentManagementOverview {
+  summary: {
+    total: number;
+    success: number;
+    failed: number;
+    pending: number;
+    ready: number;
+    withUrl: number;
+    latestUpdatedAt: string | null;
+  };
+}
+
+export interface DeploymentManagementListResponse {
+  records: DeploymentRecord[];
+  total: number;
+}
+
+export interface DeploymentConversationListResponse {
+  items: DeploymentRecord[];
+  total: number;
+}
+
+export interface DeploymentUserSummary {
+  user: DeploymentRecord['user'];
+  deploymentCount: number;
+  successCount: number;
+  failedCount: number;
+  pendingCount: number;
+  latestUpdatedAt: string | null;
+  latestRecord: DeploymentRecord | null;
+}
+
+export interface DeploymentUserListResponse {
+  items: DeploymentUserSummary[];
+  total: number;
+}
+
+export interface RailwayManagedAccountRef {
+  userId: string;
+  connectorKey: string;
+  displayName: string | null;
+  authStatus: string;
+  lastError: string | null;
+  updatedAt: string | null;
+  projectKey: string;
+}
+
+export interface RailwayServiceItem {
+  key: string;
+  projectId: string;
+  projectName: string | null;
+  environmentId: string;
+  environmentName: string | null;
+  serviceId: string;
+  serviceName: string | null;
+  primaryDomain: string | null;
+  domainCount: number;
+  targetPort: number | null;
+  latestDeploymentId: string | null;
+  latestDeploymentStatus: string | null;
+  latestDeploymentAt: string | null;
+  latestUrl: string | null;
+  latestStaticUrl: string | null;
+  linkedUsers: Array<{
+    id: string;
+    displayName: string | null;
+    email: string | null;
+    status: string | null;
+  }>;
+  linkedUserCount: number;
+  managedAccountCount: number;
+  riskTags: string[];
+  variablesPreview: string[];
+  refs: RailwayManagedAccountRef[];
+  updatedAt: string | null;
+}
+
+export interface RailwayServiceListResponse {
+  summary: {
+    total: number;
+    withDomain: number;
+    failed: number;
+    risky: number;
+    updatedAt: string | null;
+  };
+  items: RailwayServiceItem[];
+}
+
+export interface RailwayBatchActionResponse {
+  total: number;
+  successCount: number;
+  failureCount: number;
+  results: Array<{
+    key: string;
+    serviceId: string;
+    serviceName: string | null;
+    ok: boolean;
+    message?: string;
+  }>;
+}
+
 export interface SandboxEnvironmentItem {
   id: string;
   sessionId: string;

@@ -60,6 +60,7 @@ import {
 import type { ConnectorKey } from "@/lib/connectors-client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTheme, type ThemePreference } from "@/contexts/ThemeContext";
+import type { AppUserPersonalization } from "@/lib/auth-client";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -78,6 +79,7 @@ type SettingsPanelProps = {
 };
 
 const SETTINGS_TABS: SettingsTab[] = [
+  "personalization",
   "account",
   "model",
   "settings",
@@ -96,6 +98,24 @@ const ACCOUNT_AVATAR_TONES = [
   "bg-rose-500",
   "bg-cyan-500",
 ];
+const EMPTY_PERSONALIZATION: AppUserPersonalization = {
+  preferredName: "",
+  occupation: "",
+  identity: "",
+  location: "",
+  background: "",
+  preferences: "",
+  responsePreferences: "",
+};
+const PERSONALIZATION_LIMITS: Record<keyof AppUserPersonalization, number> = {
+  preferredName: 80,
+  occupation: 80,
+  identity: 80,
+  location: 120,
+  background: 1000,
+  preferences: 800,
+  responsePreferences: 1500,
+};
 
 function isSettingsTab(value: string | null | undefined): value is SettingsTab {
   return Boolean(value && SETTINGS_TABS.includes(value as SettingsTab));
@@ -129,6 +149,20 @@ function getReadableAccountStatus(
     return fallback;
   }
   return status.replace(/[_-]/g, " ");
+}
+
+function normalizePersonalization(
+  value: Partial<AppUserPersonalization> | null | undefined,
+): AppUserPersonalization {
+  return {
+    preferredName: value?.preferredName?.trim?.() || "",
+    occupation: value?.occupation?.trim?.() || "",
+    identity: value?.identity?.trim?.() || "",
+    location: value?.location?.trim?.() || "",
+    background: value?.background?.trim?.() || "",
+    preferences: value?.preferences?.trim?.() || "",
+    responsePreferences: value?.responsePreferences?.trim?.() || "",
+  };
 }
 
 function AppearancePreview({ theme }: { theme: ThemePreference }) {
@@ -232,7 +266,7 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   const { t, i18n } = useTranslation();
   const [, setLocation] = useLocation();
-  const { user, logout } = useAuth();
+  const { user, logout, updateProfile } = useAuth();
   const { theme, setTheme } = useTheme();
   const [emailNotifications, setEmailNotifications] = useState(true);
   const [pushNotifications, setPushNotifications] = useState(true);
@@ -251,6 +285,10 @@ export function SettingsPanel({
   const [codexConfigUpdatedAt, setCodexConfigUpdatedAt] = useState("");
   const [codexConfigLoaded, setCodexConfigLoaded] = useState(false);
   const [accountDisplayNameDraft, setAccountDisplayNameDraft] = useState("");
+  const [accountSaving, setAccountSaving] = useState(false);
+  const [personalizationDraft, setPersonalizationDraft] =
+    useState<AppUserPersonalization>(EMPTY_PERSONALIZATION);
+  const [personalizationSaving, setPersonalizationSaving] = useState(false);
   const [accountView, setAccountView] = useState<"overview" | "details">(
     "overview",
   );
@@ -319,6 +357,20 @@ export function SettingsPanel({
   );
   const accountDisplayNameChanged =
     accountDisplayNameDraft.trim() !== (user?.displayName || "").trim();
+  const accountDisplayNameValid = Boolean(accountDisplayNameDraft.trim());
+  const personalizationBaseline = useMemo(
+    () => normalizePersonalization(user?.personalization),
+    [user?.personalization],
+  );
+  const personalizationDirty = useMemo(
+    () =>
+      (
+        Object.keys(EMPTY_PERSONALIZATION) as Array<keyof AppUserPersonalization>
+      ).some(
+        (key) => personalizationDraft[key] !== personalizationBaseline[key],
+      ),
+    [personalizationBaseline, personalizationDraft],
+  );
   const appearanceOptions = useMemo(
     () =>
       [
@@ -412,6 +464,10 @@ export function SettingsPanel({
   }, [user?.displayName]);
 
   useEffect(() => {
+    setPersonalizationDraft(personalizationBaseline);
+  }, [personalizationBaseline]);
+
+  useEffect(() => {
     if (activeTab !== "account") {
       setAccountView("overview");
     }
@@ -483,6 +539,54 @@ export function SettingsPanel({
     }
   };
 
+  const handlePersonalizationFieldChange = (
+    field: keyof AppUserPersonalization,
+    value: string,
+  ) => {
+    setPersonalizationDraft((current) => ({
+      ...current,
+      [field]: value.slice(0, PERSONALIZATION_LIMITS[field]),
+    }));
+  };
+
+  const handleResetPersonalization = () => {
+    setPersonalizationDraft(personalizationBaseline);
+  };
+
+  const handleSavePersonalization = async () => {
+    try {
+      setPersonalizationSaving(true);
+      await updateProfile({
+        personalization: personalizationDraft,
+      });
+      toast.success(t("settings.personalizationSaved"));
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t("settings.personalizationSaveFailed"),
+      );
+    } finally {
+      setPersonalizationSaving(false);
+    }
+  };
+
+  const handleSaveAccountDisplayName = async () => {
+    try {
+      setAccountSaving(true);
+      await updateProfile({
+        displayName: accountDisplayNameDraft.trim(),
+      });
+      toast.success(t("account.profileUpdated"));
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : t("account.profileUpdateFailed"),
+      );
+    } finally {
+      setAccountSaving(false);
+    }
+  };
+
   return (
     <div className="h-full">
       <Tabs
@@ -500,6 +604,17 @@ export function SettingsPanel({
             <div className="px-4 md:px-3 pb-4 md:pb-6 flex-1 min-h-0">
               <TabsList className="flex h-full flex-shrink-0 items-start justify-start self-stretch px-1.5 overflow-x-auto md:overflow-x-visible md:overflow-y-auto w-full md:flex-col md:gap-3 gap-3 bg-transparent">
                 <div className="flex md:gap-2 gap-3 md:flex-col items-start self-stretch">
+                  <TabsTrigger
+                    value="personalization"
+                    className="flex px-2 py-2.5 items-center text-[14px] leading-5 text-foreground max-md:whitespace-nowrap md:h-9 md:gap-2 md:self-stretch md:px-4 md:rounded-lg hover:bg-muted/60 data-[state=active]:bg-muted/60 data-[state=active]:font-medium max-md:border-b-2 max-md:border-foreground"
+                  >
+                    <span className="hidden md:block text-muted-foreground data-[state=active]:text-foreground">
+                      <Pencil className="h-4 w-4" />
+                    </span>
+                    <span className="truncate">
+                      {t("settings.personalizationTab")}
+                    </span>
+                  </TabsTrigger>
                   <TabsTrigger
                     value="account"
                     className="flex px-2 py-2.5 items-center text-[14px] leading-5 text-foreground max-md:whitespace-nowrap md:h-9 md:gap-2 md:self-stretch md:px-4 md:rounded-lg hover:bg-muted/60 data-[state=active]:bg-muted/60 data-[state=active]:font-medium max-md:border-b-2 max-md:border-foreground"
@@ -556,6 +671,235 @@ export function SettingsPanel({
 
           <div className="flex-1 min-w-0 flex flex-col bg-background">
             <div className="flex-1 overflow-y-auto px-6 py-6 md:px-8 md:py-8 space-y-10">
+              <TabsContent value="personalization" className="mt-0">
+                <div className="mx-auto flex w-full max-w-[760px] flex-col gap-8 pb-6">
+                  <div className="border-b border-border/70 pb-6">
+                    <h2 className="text-[26px] font-semibold tracking-tight text-foreground">
+                      {t("settings.personalizationTitle")}
+                    </h2>
+                    <p className="mt-2 max-w-[560px] text-sm leading-6 text-muted-foreground">
+                      {t("settings.personalizationDescription")}
+                    </p>
+                  </div>
+
+                  <section className="space-y-4 border-b border-border/60 pb-8">
+                    <div>
+                      <h3 className="text-base font-semibold text-foreground">
+                        {t("settings.identitySectionTitle")}
+                      </h3>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        {t("settings.identitySectionDescription")}
+                      </p>
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="personalization-preferred-name">
+                          {t("settings.preferredNameLabel")}
+                        </Label>
+                        <Input
+                          id="personalization-preferred-name"
+                          value={personalizationDraft.preferredName}
+                          onChange={(event) =>
+                            handlePersonalizationFieldChange(
+                              "preferredName",
+                              event.target.value,
+                            )
+                          }
+                          maxLength={PERSONALIZATION_LIMITS.preferredName}
+                          placeholder={t("settings.preferredNamePlaceholder")}
+                          className="h-10 rounded-lg border-border/80 bg-muted/20"
+                        />
+                        <div className="text-right text-xs text-muted-foreground">
+                          {personalizationDraft.preferredName.length} /{" "}
+                          {PERSONALIZATION_LIMITS.preferredName}
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="personalization-occupation">
+                          {t("settings.occupationLabel")}
+                        </Label>
+                        <Input
+                          id="personalization-occupation"
+                          value={personalizationDraft.occupation}
+                          onChange={(event) =>
+                            handlePersonalizationFieldChange(
+                              "occupation",
+                              event.target.value,
+                            )
+                          }
+                          maxLength={PERSONALIZATION_LIMITS.occupation}
+                          placeholder={t("settings.occupationPlaceholder")}
+                          className="h-10 rounded-lg border-border/80 bg-muted/20"
+                        />
+                        <div className="text-right text-xs text-muted-foreground">
+                          {personalizationDraft.occupation.length} /{" "}
+                          {PERSONALIZATION_LIMITS.occupation}
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="personalization-identity">
+                          {t("settings.identityLabel")}
+                        </Label>
+                        <Input
+                          id="personalization-identity"
+                          value={personalizationDraft.identity}
+                          onChange={(event) =>
+                            handlePersonalizationFieldChange(
+                              "identity",
+                              event.target.value,
+                            )
+                          }
+                          maxLength={PERSONALIZATION_LIMITS.identity}
+                          placeholder={t("settings.identityPlaceholder")}
+                          className="h-10 rounded-lg border-border/80 bg-muted/20"
+                        />
+                        <div className="text-right text-xs text-muted-foreground">
+                          {personalizationDraft.identity.length} /{" "}
+                          {PERSONALIZATION_LIMITS.identity}
+                        </div>
+                      </div>
+                      <div className="space-y-2 md:col-span-2">
+                        <Label htmlFor="personalization-location">
+                          {t("settings.locationLabel")}
+                        </Label>
+                        <Input
+                          id="personalization-location"
+                          value={personalizationDraft.location}
+                          onChange={(event) =>
+                            handlePersonalizationFieldChange(
+                              "location",
+                              event.target.value,
+                            )
+                          }
+                          maxLength={PERSONALIZATION_LIMITS.location}
+                          placeholder={t("settings.locationPlaceholder")}
+                          className="h-10 rounded-lg border-border/80 bg-muted/20"
+                        />
+                        <div className="text-right text-xs text-muted-foreground">
+                          {personalizationDraft.location.length} /{" "}
+                          {PERSONALIZATION_LIMITS.location}
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="space-y-4 border-b border-border/60 pb-8">
+                    <div>
+                      <h3 className="text-base font-semibold text-foreground">
+                        {t("settings.aboutSectionTitle")}
+                      </h3>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        {t("settings.aboutSectionDescription")}
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="personalization-background">
+                        {t("settings.backgroundLabel")}
+                      </Label>
+                      <Textarea
+                        id="personalization-background"
+                        value={personalizationDraft.background}
+                        onChange={(event) =>
+                          handlePersonalizationFieldChange(
+                            "background",
+                            event.target.value,
+                          )
+                        }
+                        maxLength={PERSONALIZATION_LIMITS.background}
+                        rows={6}
+                        placeholder={t("settings.backgroundPlaceholder")}
+                        className="min-h-[160px] rounded-lg border-border/80 bg-muted/20 leading-6"
+                      />
+                      <div className="text-right text-xs text-muted-foreground">
+                        {personalizationDraft.background.length} /{" "}
+                        {PERSONALIZATION_LIMITS.background}
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="personalization-preferences">
+                        {t("settings.preferencesLabel")}
+                      </Label>
+                      <Textarea
+                        id="personalization-preferences"
+                        value={personalizationDraft.preferences}
+                        onChange={(event) =>
+                          handlePersonalizationFieldChange(
+                            "preferences",
+                            event.target.value,
+                          )
+                        }
+                        maxLength={PERSONALIZATION_LIMITS.preferences}
+                        rows={5}
+                        placeholder={t("settings.preferencesPlaceholder")}
+                        className="min-h-[132px] rounded-lg border-border/80 bg-muted/20 leading-6"
+                      />
+                      <div className="text-right text-xs text-muted-foreground">
+                        {personalizationDraft.preferences.length} /{" "}
+                        {PERSONALIZATION_LIMITS.preferences}
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="space-y-4 pb-4">
+                    <div>
+                      <h3 className="text-base font-semibold text-foreground">
+                        {t("settings.instructionsSectionTitle")}
+                      </h3>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        {t("settings.instructionsSectionDescription")}
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="personalization-response-preferences">
+                        {t("settings.responsePreferencesLabel")}
+                      </Label>
+                      <Textarea
+                        id="personalization-response-preferences"
+                        value={personalizationDraft.responsePreferences}
+                        onChange={(event) =>
+                          handlePersonalizationFieldChange(
+                            "responsePreferences",
+                            event.target.value,
+                          )
+                        }
+                        maxLength={PERSONALIZATION_LIMITS.responsePreferences}
+                        rows={7}
+                        placeholder={t(
+                          "settings.responsePreferencesPlaceholder",
+                        )}
+                        className="min-h-[180px] rounded-lg border-border/80 bg-muted/20 leading-6"
+                      />
+                      <div className="text-right text-xs text-muted-foreground">
+                        {personalizationDraft.responsePreferences.length} /{" "}
+                        {PERSONALIZATION_LIMITS.responsePreferences}
+                      </div>
+                    </div>
+                  </section>
+
+                  <div className="flex items-center justify-end gap-3 border-t border-border/70 pt-5">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleResetPersonalization}
+                      disabled={!personalizationDirty || personalizationSaving}
+                      className="h-10 rounded-lg px-4"
+                    >
+                      {t("settings.resetAction")}
+                    </Button>
+                    <Button
+                      type="button"
+                      onClick={() => void handleSavePersonalization()}
+                      disabled={!personalizationDirty || personalizationSaving}
+                      className="h-10 rounded-lg bg-foreground px-4 text-background hover:bg-foreground/90"
+                    >
+                      {personalizationSaving
+                        ? t("common.loading")
+                        : t("common.save")}
+                    </Button>
+                  </div>
+                </div>
+              </TabsContent>
+
               {/* Settings Tab */}
               <TabsContent value="settings" className="space-y-8 mt-0">
                 <div className="space-y-4 pb-6 border-b border-border/60">
@@ -1092,14 +1436,18 @@ export function SettingsPanel({
                                     type="button"
                                     variant="outline"
                                     onClick={() =>
-                                      handleUnavailableAction(
-                                        t("account.profileUpdateUnavailable"),
-                                      )
+                                      void handleSaveAccountDisplayName()
                                     }
-                                    disabled={!accountDisplayNameChanged}
+                                    disabled={
+                                      !accountDisplayNameChanged ||
+                                      !accountDisplayNameValid ||
+                                      accountSaving
+                                    }
                                     className="h-10 rounded-lg px-4"
                                   >
-                                    {t("account.updateProfile")}
+                                    {accountSaving
+                                      ? t("common.loading")
+                                      : t("account.updateProfile")}
                                   </Button>
                                 </div>
                                 <p className="text-xs leading-5 text-muted-foreground">

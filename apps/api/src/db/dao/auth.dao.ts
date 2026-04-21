@@ -17,13 +17,19 @@ function normalizeLoginName(value: string) {
 }
 
 class AppUserDAO {
-  async create(input: { email: string; passwordHash: string; displayName: string }) {
+  async create(input: {
+    email: string;
+    passwordHash: string;
+    displayName: string;
+    profileJson?: Record<string, unknown>;
+  }) {
     const [created] = await db
       .insert(appUsers)
       .values({
         email: normalizeEmail(input.email),
         passwordHash: input.passwordHash,
         displayName: input.displayName.trim(),
+        profileJson: input.profileJson || {},
       })
       .returning();
     return created;
@@ -44,6 +50,7 @@ class AppUserDAO {
     input: {
       passwordHash?: string;
       displayName?: string;
+      profileJson?: Record<string, unknown>;
       status?: string;
     }
   ) {
@@ -55,6 +62,9 @@ class AppUserDAO {
     }
     if (typeof input.displayName === 'string' && input.displayName.trim()) {
       nextValues.displayName = input.displayName.trim();
+    }
+    if (input.profileJson && typeof input.profileJson === 'object' && !Array.isArray(input.profileJson)) {
+      nextValues.profileJson = input.profileJson;
     }
     if (typeof input.status === 'string' && input.status.trim()) {
       nextValues.status = input.status.trim();

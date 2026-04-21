@@ -7,6 +7,8 @@ import {
   logoutAppUser,
   registerAppUser,
   sendRegisterVerificationCode,
+  type AppUserPersonalization,
+  updateAppUserProfile,
 } from "@/lib/auth-client";
 
 type AuthStatus = "loading" | "authenticated" | "anonymous";
@@ -21,6 +23,10 @@ type AuthContextValue = {
     password: string;
     displayName: string;
     verificationCode: string;
+  }) => Promise<AppAuthUser>;
+  updateProfile: (input: {
+    displayName?: string;
+    personalization?: AppUserPersonalization;
   }) => Promise<AppAuthUser>;
   logout: () => Promise<void>;
   refresh: () => Promise<AppAuthUser | null>;
@@ -63,6 +69,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     sendRegisterCode: async (input) => await sendRegisterVerificationCode(input),
     register: async (input) => {
       const nextUser = await registerAppUser(input);
+      setUser(nextUser);
+      setStatus("authenticated");
+      return nextUser;
+    },
+    updateProfile: async (input) => {
+      const nextUser = await updateAppUserProfile(input);
       setUser(nextUser);
       setStatus("authenticated");
       return nextUser;

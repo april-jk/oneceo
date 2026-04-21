@@ -106,14 +106,90 @@ async function waitForText(page, text, scope = page, timeout = 30_000) {
   });
 }
 
+async function assertSidebarLayoutStable(sidebar) {
+  const metrics = await sidebar.evaluate((aside) => {
+    const viewport = aside.querySelector('[data-slot="scroll-area-viewport"]');
+    const wrapper = viewport?.firstElementChild;
+    const projectHeader = aside.querySelector(
+      "div.mb-2.flex.min-w-0.items-center.justify-between.gap-2.px-3",
+    );
+    const plusButton = projectHeader?.querySelector("button");
+    const asideRect = aside.getBoundingClientRect();
+    const plusRect = plusButton?.getBoundingClientRect();
+
+    return {
+      asideWidth: asideRect.width,
+      asideLeft: asideRect.left,
+      asideRight: asideRect.right,
+      asideScrollWidth: aside.scrollWidth,
+      viewportWidth: viewport?.getBoundingClientRect().width ?? 0,
+      viewportScrollWidth: viewport?.scrollWidth ?? 0,
+      wrapperWidth: wrapper?.getBoundingClientRect().width ?? 0,
+      wrapperScrollWidth: wrapper?.scrollWidth ?? 0,
+      projectHeaderWidth: projectHeader?.getBoundingClientRect().width ?? 0,
+      projectHeaderScrollWidth: projectHeader?.scrollWidth ?? 0,
+      plusLeft: plusRect?.left ?? 0,
+      plusRight: plusRect?.right ?? 0,
+    };
+  });
+
+  const overflowLimit = metrics.asideWidth + 1;
+  const hasOverflow =
+    metrics.asideScrollWidth > overflowLimit ||
+    metrics.viewportScrollWidth > overflowLimit ||
+    metrics.wrapperScrollWidth > overflowLimit ||
+    metrics.projectHeaderScrollWidth > metrics.projectHeaderWidth + 1;
+  const plusOutOfView =
+    metrics.plusLeft < metrics.asideLeft - 1 ||
+    metrics.plusRight > metrics.asideRight + 1;
+
+  if (hasOverflow || plusOutOfView) {
+    throw new Error(`sidebar layout overflow detected: ${JSON.stringify(metrics)}`);
+  }
+}
+
+async function assertProjectContentScrollReady(sidebar) {
+  const metrics = await sidebar.evaluate((aside) => {
+    const root = aside.querySelector('[data-sidebar-project-scroll="true"]');
+    const viewport = root?.querySelector('[data-slot="scroll-area-viewport"]');
+    if (!viewport) {
+      return { missing: true };
+    }
+
+    const before = viewport.scrollTop;
+    viewport.scrollTop = viewport.scrollHeight;
+    const after = viewport.scrollTop;
+
+    return {
+      missing: false,
+      clientHeight: viewport.clientHeight,
+      scrollHeight: viewport.scrollHeight,
+      before,
+      after,
+    };
+  });
+
+  if (metrics.missing) {
+    throw new Error("project scroll viewport missing");
+  }
+
+  if (metrics.scrollHeight < metrics.clientHeight) {
+    return;
+  }
+
+  if (metrics.after <= metrics.before) {
+    throw new Error(`project content did not scroll: ${JSON.stringify(metrics)}`);
+  }
+}
+
 async function main() {
   await mkdir(REPORT_DIR, { recursive: true });
 
   const account = await loadAccount();
   const sessionToken = await loginOrRegister(account);
   const suffix = uniqueSuffix();
-  const sessionTitle = `PW普通项目会话-${suffix}`;
-  const projectName = `PW普通项目-${suffix}`;
+  const sessionTitle = `PW超长普通项目归属会话标题用于验证侧边栏展开布局稳定性-${suffix}`;
+  const projectName = `PW超长普通项目名称用于验证侧边栏展开不会撑坏布局-${suffix}`;
   const projectDescription = `Playwright 普通项目分组链路验证 ${suffix}`;
 
   const createSessionPayload = await apiRequest("/api/task-creation/sessions", {
@@ -176,6 +252,8 @@ async function main() {
     await createDialog.getByRole("button", { name: "新建项目" }).last().click();
 
     await waitForText(page, projectName, sidebar, 30_000);
+    await assertSidebarLayoutStable(sidebar);
+    await assertProjectContentScrollReady(sidebar);
     await sidebar.screenshot({
       path: path.join(REPORT_DIR, "03-sidebar-project-created.png"),
     });
@@ -196,7 +274,22 @@ async function main() {
     await page.keyboard.press("Escape");
     await allTasksDialog.waitFor({ state: "hidden", timeout: 10_000 }).catch(() => undefined);
 
-    await sidebar.getByRole("button", { name: projectName, exact: true }).click();
+    const projectButton = sidebar.getByRole("button", { name: projectName, exact: true }).first();
+    const projectRow = projectButton.locator(
+      "xpath=ancestor::div[contains(@class,'space-y-0.5')][1]",
+    );
+    await projectRow.getByRole("button").first().click();
+    await sidebar
+      .locator(`a[href="/session/${sessionId}?view=history"]`)
+      .first()
+      .waitFor({ state: "visible", timeout: 30_000 });
+    await assertSidebarLayoutStable(sidebar);
+    await assertProjectContentScrollReady(sidebar);
+    await sidebar.screenshot({
+      path: path.join(REPORT_DIR, "04-sidebar-project-expanded.png"),
+    });
+
+    await projectButton.click();
     await page.waitForURL(/\/project\//, { timeout: 30_000 });
     await waitForText(page, "项目会话");
     await waitForText(page, sessionTitle);
@@ -205,7 +298,7 @@ async function main() {
       throw new Error("standard project page incorrectly rendered self-organized manager UI");
     }
     await page.screenshot({
-      path: path.join(REPORT_DIR, "04-standard-project-detail.png"),
+      path: path.join(REPORT_DIR, "05-standard-project-detail.png"),
       fullPage: true,
     });
 
@@ -216,7 +309,7 @@ async function main() {
       timeout: 30_000,
     });
     await page.screenshot({
-      path: path.join(REPORT_DIR, "05-self-organized-project-detail.png"),
+      path: path.join(REPORT_DIR, "06-self-organized-project-detail.png"),
       fullPage: true,
     });
 
@@ -229,6 +322,8 @@ async function main() {
           checked: [
             "create standard project from sidebar",
             "assign session to standard project from context menu",
+            "keep project content in a dedicated vertical scroll region",
+            "expand standard project in sidebar without horizontal overflow",
             "open standard project detail page",
             "verify standard project page does not render manager tree",
             "open self-organized preview project",

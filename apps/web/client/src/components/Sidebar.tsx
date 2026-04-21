@@ -568,6 +568,20 @@ export default function Sidebar({
     0,
   );
   const hasSessionOverflow = hiddenSessionCount > 0;
+  const projectSessionMap = React.useMemo(() => {
+    const mapping = new Map<string, SessionTask[]>();
+    for (const session of orderedSessionTasks) {
+      const projectId =
+        typeof session.projectId === "string" && session.projectId.trim()
+          ? session.projectId.trim()
+          : "";
+      if (!projectId) continue;
+      const current = mapping.get(projectId) || [];
+      current.push(session);
+      mapping.set(projectId, current);
+    }
+    return mapping;
+  }, [orderedSessionTasks]);
   const patchSessionTask = React.useCallback((sessionId: string, patch: Partial<SessionTask>) => {
     setSessionTasks((prev) =>
       sortSessionTasks(
@@ -808,7 +822,10 @@ export default function Sidebar({
       return (
         <ContextMenu key={session.sessionId}>
           <ContextMenuTrigger>
-            <Link href={`/session/${session.sessionId}?view=history`}>
+            <Link
+              href={`/session/${session.sessionId}?view=history`}
+              className="block min-w-0 max-w-full"
+            >
               {button}
             </Link>
           </ContextMenuTrigger>
@@ -878,7 +895,7 @@ export default function Sidebar({
       </div>
 
       {/* Navigation */}
-      <ScrollArea className="flex-1">
+      <div className="flex flex-1 min-h-0 flex-col">
         <div
           className={`space-y-1 p-2.5 ${collapsed ? "items-center" : "pr-3"}`}
         >
@@ -941,207 +958,231 @@ export default function Sidebar({
 
         {/* Projects Section */}
         {!collapsed && (
-          <div className="px-2.5 pb-2.5 pr-3">
-            <div className="mb-2 flex min-w-0 items-center justify-between gap-2 px-3">
-              <span className="truncate text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                {t("sidebar.projects").toUpperCase()}
-              </span>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6 shrink-0"
-                onClick={openCreateProjectDialog}
-              >
-                <PlusCircle className="w-4 h-4" />
-              </Button>
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="shrink-0 px-2.5 pb-2.5 pr-3">
+              <div className="mb-2 flex min-w-0 items-center justify-between gap-2 px-3">
+                <span className="truncate text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t("sidebar.projects").toUpperCase()}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 shrink-0"
+                  onClick={openCreateProjectDialog}
+                >
+                  <PlusCircle className="w-4 h-4" />
+                </Button>
+              </div>
             </div>
-            <div className="space-y-1">
-              {projectGroups.map((group) => {
-                const isGroupExpanded = expandedProjectGroups.includes(group.id);
-                return (
-                  <div key={group.id} className="space-y-1">
-                    <div className="flex items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 shrink-0"
-                        onClick={() => toggleProjectGroup(group.id)}
-                      >
-                        {isGroupExpanded ? (
-                          <ChevronDown className="w-3.5 h-3.5" />
-                        ) : (
-                          <ChevronRight className="w-3.5 h-3.5" />
-                        )}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        className="flex-1 min-w-0 justify-start gap-2 h-7 overflow-hidden px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
-                        onClick={() => toggleProjectGroup(group.id)}
-                      >
-                        <FolderOpen className="w-3.5 h-3.5" />
-                        <span className="text-sm truncate min-w-0">
-                          {group.name}
-                        </span>
-                      </Button>
-                    </div>
 
-                    {isGroupExpanded && (
-                      <div className="ml-4 space-y-0.5">
-                        {group.projects.length === 0 && group.id === "manual-projects" ? (
-                          <div className="px-2 py-2 text-xs leading-5 text-muted-foreground">
-                            {t("sidebar.noManualProjects")}
-                          </div>
-                        ) : null}
-                        {group.projects.map((project) => {
-                          const isExpanded = expandedProjects.includes(project.id);
-                          const isProjectActive =
-                            selectedProject?.id === project.id &&
-                            selectedProject?.kind === project.kind;
-                          return (
-                            <div key={project.id} className="space-y-0.5">
-                              <div className="flex items-center gap-1">
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-7 w-7 shrink-0"
-                                  onClick={() => toggleProject(project.id)}
-                                >
-                                  {isExpanded ? (
-                                    <ChevronDown className="w-3.5 h-3.5" />
-                                  ) : (
-                                    <ChevronRight className="w-3.5 h-3.5" />
-                                  )}
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  className={`flex-1 min-w-0 justify-start gap-2 h-7 overflow-hidden px-2 rounded-lg transition-colors duration-150 ${
-                                    isProjectActive
-                                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                                      : "text-sidebar-foreground hover:bg-sidebar-accent/50"
-                                  }`}
-                                  onClick={() => {
-                                    setLocation(`/project/${encodeURIComponent(project.id)}`);
-                                  }}
-                                >
-                                  <FolderOpen className="w-3.5 h-3.5" />
-                                  <span className="text-sm truncate min-w-0">
-                                    {project.name}
-                                  </span>
-                                </Button>
+            <ScrollArea
+              data-sidebar-project-scroll="true"
+              className="min-h-0 flex-1 [&>[data-slot=scroll-area-viewport]>div]:!block [&>[data-slot=scroll-area-viewport]>div]:!w-full [&>[data-slot=scroll-area-viewport]>div]:max-w-full"
+            >
+              <div className="overflow-x-hidden px-2.5 pb-2.5 pr-3">
+                <div className="space-y-1">
+                  {projectGroups.map((group) => {
+                    const isGroupExpanded = expandedProjectGroups.includes(group.id);
+                    return (
+                      <div key={group.id} className="space-y-1">
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 shrink-0"
+                            onClick={() => toggleProjectGroup(group.id)}
+                          >
+                            {isGroupExpanded ? (
+                              <ChevronDown className="w-3.5 h-3.5" />
+                            ) : (
+                              <ChevronRight className="w-3.5 h-3.5" />
+                            )}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            className="flex-1 min-w-0 justify-start gap-2 h-7 overflow-hidden px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                            onClick={() => toggleProjectGroup(group.id)}
+                          >
+                            <FolderOpen className="w-3.5 h-3.5" />
+                            <span className="text-sm truncate min-w-0">
+                              {group.name}
+                            </span>
+                          </Button>
+                        </div>
+
+                        {isGroupExpanded && (
+                          <div className="ml-4 min-w-0 space-y-0.5 overflow-x-hidden">
+                            {group.projects.length === 0 && group.id === "manual-projects" ? (
+                              <div className="px-2 py-2 text-xs leading-5 text-muted-foreground">
+                                {t("sidebar.noManualProjects")}
                               </div>
+                            ) : null}
+                            {group.projects.map((project) => {
+                              const isExpanded = expandedProjects.includes(project.id);
+                              const isProjectActive =
+                                selectedProject?.id === project.id &&
+                                selectedProject?.kind === project.kind;
+                              const projectSessions = projectSessionMap.get(project.id) || [];
+                              return (
+                                <div key={project.id} className="min-w-0 space-y-0.5">
+                                  <div className="flex items-center gap-1">
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-7 w-7 shrink-0"
+                                      onClick={() => toggleProject(project.id)}
+                                    >
+                                      {isExpanded ? (
+                                        <ChevronDown className="w-3.5 h-3.5" />
+                                      ) : (
+                                        <ChevronRight className="w-3.5 h-3.5" />
+                                      )}
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      className={`flex-1 min-w-0 justify-start gap-2 h-7 overflow-hidden px-2 rounded-lg transition-colors duration-150 ${
+                                        isProjectActive
+                                          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                                          : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+                                      }`}
+                                      onClick={() => {
+                                        setLocation(`/project/${encodeURIComponent(project.id)}`);
+                                      }}
+                                    >
+                                      <FolderOpen className="w-3.5 h-3.5" />
+                                      <span className="text-sm truncate min-w-0">
+                                        {project.name}
+                                      </span>
+                                    </Button>
+                                  </div>
 
-                              {isExpanded && project.managers.length > 0 && (
-                                <div className="ml-7 space-y-0.5">
-                                  {project.managers.map((manager) => {
-                                    const isManagerExpanded = expandedManagers.includes(
-                                      manager.id,
-                                    );
-                                    return (
-                                      <div key={manager.id} className="space-y-0.5">
-                                        <div className="flex items-center gap-1">
-                                          <Button
-                                            variant="ghost"
-                                            size="icon"
-                                            className="h-6 w-6 shrink-0"
-                                            onClick={() => toggleManager(manager.id)}
-                                          >
-                                            {isManagerExpanded ? (
-                                              <ChevronDown className="w-3 h-3" />
-                                            ) : (
-                                              <ChevronRight className="w-3 h-3" />
-                                            )}
-                                          </Button>
-                                          <Button
-                                            variant="ghost"
-                                            className="flex-1 min-w-0 justify-start gap-2 h-6 overflow-hidden px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
-                                          >
-                                            <User className="w-3 h-3" />
-                                            <span className="text-xs truncate min-w-0">
-                                              {manager.name}
-                                            </span>
-                                          </Button>
+                                  {isExpanded && project.kind === "manual" ? (
+                                    <div className="ml-7 min-w-0 space-y-0.5 overflow-x-hidden">
+                                      {projectSessions.length > 0 ? (
+                                        projectSessions.map((session) =>
+                                          renderSessionTaskItem(session, { compact: true }),
+                                        )
+                                      ) : (
+                                        <div className="px-2 py-2 text-xs leading-5 text-muted-foreground">
+                                          {t("sidebar.projectSessionListEmpty")}
                                         </div>
+                                      )}
+                                    </div>
+                                  ) : null}
 
-                                        {isManagerExpanded &&
-                                          manager.tasks.length > 0 && (
-                                        <div className="ml-6 space-y-0.5">
-                                              {manager.tasks.map((task) => (
-                                                <Link
-                                                  key={task.id}
-                                                  href={`/task/${project.id}/${manager.id}/${task.id}`}
-                                                >
-                                                  <Button
-                                                    variant="ghost"
-                                                    className="w-full min-w-0 justify-start gap-2 h-6 overflow-hidden px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
-                                                  >
-                                                    <CheckCircle2
-                                                      className={`w-3 h-3 ${task.status === "completed" ? "text-green-500" : "text-muted-foreground"}`}
-                                                    />
-                                                    <span className="text-xs truncate min-w-0">
-                                                      {task.name}
-                                                    </span>
-                                                  </Button>
-                                                </Link>
-                                              ))}
+                                  {isExpanded && project.kind === "self-organized" && project.managers.length > 0 ? (
+                                    <div className="ml-7 min-w-0 space-y-0.5 overflow-x-hidden">
+                                      {project.managers.map((manager) => {
+                                        const isManagerExpanded = expandedManagers.includes(
+                                          manager.id,
+                                        );
+                                        return (
+                                          <div key={manager.id} className="space-y-0.5">
+                                            <div className="flex items-center gap-1">
+                                              <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-6 w-6 shrink-0"
+                                                onClick={() => toggleManager(manager.id)}
+                                              >
+                                                {isManagerExpanded ? (
+                                                  <ChevronDown className="w-3 h-3" />
+                                                ) : (
+                                                  <ChevronRight className="w-3 h-3" />
+                                                )}
+                                              </Button>
+                                              <Button
+                                                variant="ghost"
+                                                className="flex-1 min-w-0 justify-start gap-2 h-6 overflow-hidden px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                                              >
+                                                <User className="w-3 h-3" />
+                                                <span className="text-xs truncate min-w-0">
+                                                  {manager.name}
+                                                </span>
+                                              </Button>
                                             </div>
-                                          )}
-                                      </div>
-                                    );
-                                  })}
+
+                                            {isManagerExpanded &&
+                                              manager.tasks.length > 0 && (
+                                                <div className="ml-6 min-w-0 space-y-0.5 overflow-x-hidden">
+                                                  {manager.tasks.map((task) => (
+                                                    <Link
+                                                      key={task.id}
+                                                      href={`/task/${project.id}/${manager.id}/${task.id}`}
+                                                    >
+                                                      <Button
+                                                        variant="ghost"
+                                                        className="w-full min-w-0 justify-start gap-2 h-6 overflow-hidden px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                                                      >
+                                                        <CheckCircle2
+                                                          className={`w-3 h-3 ${task.status === "completed" ? "text-green-500" : "text-muted-foreground"}`}
+                                                        />
+                                                        <span className="text-xs truncate min-w-0">
+                                                          {task.name}
+                                                        </span>
+                                                      </Button>
+                                                    </Link>
+                                                  ))}
+                                                </div>
+                                              )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  ) : null}
                                 </div>
-                              )}
-                            </div>
-                          );
-                        })}
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
+                    );
+                  })}
+                </div>
+
+                {hasSessionOverflow && (
+                  <Button
+                    variant="ghost"
+                    className="mt-1 h-8 w-full min-w-0 justify-start gap-2 overflow-hidden px-3 text-muted-foreground hover:text-sidebar-foreground"
+                    onClick={() => setTasksDialogOpen(true)}
+                  >
+                    <span className="truncate text-sm">
+                      {t("sidebar.viewMore")} ({hiddenSessionCount})
+                    </span>
+                  </Button>
+                )}
+
+                {sessionTasks.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {sessionPreviewList.map((session) =>
+                      renderSessionTaskItem(session, { compact: true }),
                     )}
                   </div>
-                );
-              })}
-            </div>
-            {hasSessionOverflow && (
-              <Button
-                variant="ghost"
-                className="mt-1 h-8 w-full min-w-0 justify-start gap-2 overflow-hidden px-3 text-muted-foreground hover:text-sidebar-foreground"
-                onClick={() => setTasksDialogOpen(true)}
-              >
-                <span className="truncate text-sm">
-                  {t("sidebar.viewMore")} ({hiddenSessionCount})
-                </span>
-              </Button>
-            )}
-
-            {sessionTasks.length > 0 && (
-              <div className="mt-2 space-y-1">
-                {sessionPreviewList.map((session) =>
-                  renderSessionTaskItem(session, { compact: true }),
                 )}
+
+                <Separator className="my-3 bg-sidebar-border" />
+
+                {/* All Tasks */}
+                <div className="pb-2.5">
+                  <Button
+                    variant="ghost"
+                    className="grid h-9 w-full min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 overflow-hidden rounded-xl px-3 text-sidebar-foreground transition-colors duration-150 hover:bg-sidebar-accent/50"
+                    onClick={() => setTasksDialogOpen(true)}
+                  >
+                    <FileText className="h-4 w-4" />
+                    <span className="truncate text-sm font-medium text-left">
+                      {t("sidebar.allTasks")}
+                    </span>
+                    <span className="truncate text-right text-xs text-muted-foreground">
+                      {orderedSessionTasks.length}
+                    </span>
+                  </Button>
+                </div>
               </div>
-            )}
+            </ScrollArea>
           </div>
         )}
-
-        {!collapsed && <Separator className="my-3 bg-sidebar-border" />}
-
-        {/* All Tasks */}
-        {!collapsed && (
-          <div className="px-2.5 pb-2.5 pr-3">
-            <Button
-              variant="ghost"
-              className="grid h-9 w-full min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 overflow-hidden rounded-xl px-3 text-sidebar-foreground transition-colors duration-150 hover:bg-sidebar-accent/50"
-              onClick={() => setTasksDialogOpen(true)}
-            >
-              <FileText className="h-4 w-4" />
-              <span className="truncate text-sm font-medium text-left">
-                {t("sidebar.allTasks")}
-              </span>
-              <span className="truncate text-right text-xs text-muted-foreground">
-                {orderedSessionTasks.length}
-              </span>
-            </Button>
-          </div>
-        )}
-      </ScrollArea>
+      </div>
 
       {/* Bottom Section */}
       <div

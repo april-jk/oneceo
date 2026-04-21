@@ -1,0 +1,190 @@
+# 01 Altus三级记忆最小化实现方案 [尚未采用]
+
+更新时间：2026-04-21
+
+适用范围：
+
+1. `apps/api` 中 Altus managed / direct 主链
+2. `apps/web/client` 中用户设置、项目创建/编辑、会话运行入口
+3. 仅覆盖本次要求的“用户级 / 项目级 / session 会话级”三级记忆
+
+---
+
+## 1. 文档目标
+
+这是一份总览文档，负责把本次方案的范围、核心决策和分段阅读顺序说清楚。
+
+本次目标不是再做一套泛化 memory platform，而是参照当前已经落地的 skills 会话记忆方式，把 Altus 记忆补成三层：
+
+1. 用户级记忆
+2. 项目级记忆
+3. session 会话级记忆
+
+并满足下面几个约束：
+
+1. 最短路径实现
+2. 不引入新的持久化基础设施
+3. 不在 API 服务侧使用本地文件持久化
+4. 尽量复用现有设置面板、项目模型、session metadata、skills 记忆链路
+
+---
+
+## 2. 核心决策
+
+### 2.1 三层记忆的职责
+
+1. 用户级记忆
+   - 记录长期稳定的个人信息和回应偏好
+2. 项目级记忆
+   - 记录项目公共背景、规范和执行手册
+3. session 级记忆
+   - 记录当前会话运行态事实、结论和待确认问题
+
+### 2.2 真相源与持久化原则
+
+1. 用户级：`app_users.profile_json.personalization`
+2. 项目级：`app_user_projects.metadata_json.altusProjectMemory`
+3. session 级：`task_creation_sessions.metadata_json.altusSessionMemory`
+
+补充原则：
+
+1. DB 是唯一真相源
+2. 用户级和项目级允许使用 Redis 做读加速
+3. session 级允许使用 Redis 做可选热缓存
+4. sandbox 文件只在 session 级做运行态副本
+5. 用户级和项目级不进入 sandbox 文件持久化链路
+
+### 2.3 运行时继承原则
+
+运行时按下面顺序组装：
+
+1. 用户级
+2. 项目级
+3. session 级
+
+但不做持久化复制：
+
+1. 不把用户级复制到项目
+2. 不把项目级复制到 session
+3. 不把项目级全文固化进 session memory
+
+### 2.4 一致性边界
+
+为了避免首版实现过重，这次方案明确收紧以下边界：
+
+1. 一个 session 同时只允许归属一个项目
+2. session 默认没有项目归属
+3. 首版会话创建时如果要归属项目，必须在 `POST /sessions` 阶段一次性写入 `projectId`
+4. 首版不支持“已进入有效运行的项目 session 直接跨项目迁移”
+5. 首版删除项目时，不做隐式批量解绑
+6. 首版所有用户级 / 项目级修改，只从下一轮 Altus 运行开始生效
+
+---
+
+## 3. 这次审计后补充的关键边界
+
+### 3.1 项目删除边界
+
+首版采用最小且稳定的规则：
+
+1. 如果项目下仍有关联 session，则不允许删除项目
+2. 用户必须先把相关 session 移出项目，或删除这些 session
+
+原因：
+
+1. 避免项目删除时隐式批量改写 session metadata
+2. 避免项目被删后 session 悬挂旧 `projectId`
+3. 减少首版 side effect
+
+### 3.2 跨项目迁移边界
+
+首版不支持“已有项目归属的活跃 session 从项目 A 直接切到项目 B”。
+
+允许：
+
+1. 新建 session 时直接选择项目
+2. 尚未进入有效运行的无项目 session 加入项目
+3. 尚未进入有效运行的已归属项目 session 移出项目
+
+不允许：
+
+1. 已在项目 A 内产生有效会话内容后，再直接迁移到项目 B
+2. 先移出项目，再把同一个已产生有效项目内容的 session 重新加入项目 B
+
+原因：
+
+1. session memory 中可能已经混入项目 A 的事实和约束
+2. 直接迁移容易把旧项目痕迹带入新项目
+3. 这是首版最容易引发脏状态的路径
+
+这里的“有效运行”统一按首版最小规则定义为：
+
+1. `altusSessionMemory.version > 0`
+2. 或者 session 已经在项目归属下完成过一次有效 Altus run 写入
+
+### 3.3 session 文件回写的一致性边界
+
+这部分在本轮对照 `task-session-skill-state-service` 后做了收缩，首版不再额外引入 `baseVersion / compare-and-set` 协议。
+
+首版统一对齐 skills memory 的持久化模式：
+
+1. DB 仍然是唯一真相源
+2. Redis 仍然只是可选热缓存
+3. sandbox 文件仍然只是运行态副本
+4. session 文件只在受控 flush 点回写 DB
+5. 回写入口统一收敛到 `task-session-altus-memory-service`
+6. run 执行过程中不做高频 DB 读写，运行态以内存 + sandbox 文件为主
+
+首版依赖的系统不变量只有两条：
+
+1. 一个 task session 同时只维护一个有效运行态 sandbox
+2. session memory 的 flush 只发生在 run 生命周期和 archive / restore 这些已收口的时机
+
+因此首版不再新增第二套并发协调器，避免比 skills memory 更复杂。
+
+### 3.4 项目名称一致性边界
+
+项目归属的真相源始终是 `projectId`，但当前 session 摘要和侧边栏还会直接读取 `projectName` 作为展示缓存。
+
+因此首版补充两条规则：
+
+1. 项目改名后，后端必须批量同步该项目下 session 的 `projectName`
+2. 如果出现 `projectId` 存在但 `projectName` 旧值未同步的异常，读取侧以 `projectId` 对应的项目最新名称为准
+
+---
+
+## 4. 分段阅读顺序
+
+为了避免一个文档过大，这次方案拆成 5 份渐进式文档：
+
+1. 本文：总览与核心边界
+2. [02_Altus三级记忆数据模型与存储方案_[尚未采用].md](./02_Altus三级记忆数据模型与存储方案_[尚未采用].md)
+3. [03_Altus三级记忆继承_冲突与生命周期方案_[尚未采用].md](./03_Altus三级记忆继承_冲突与生命周期方案_[尚未采用].md)
+4. [04_Altus三级记忆UI_接口与交互方案_[尚未采用].md](./04_Altus三级记忆UI_接口与交互方案_[尚未采用].md)
+5. [05_Altus三级记忆实施步骤_验证与风险方案_[尚未采用].md](./05_Altus三级记忆实施步骤_验证与风险方案_[尚未采用].md)
+
+推荐阅读方式：
+
+1. 先读本文，确认范围和边界
+2. 再读 02，确认数据落点是否接受
+3. 再读 03，确认继承和一致性策略
+4. 再读 04，确认前后端交互是否符合预期
+5. 最后读 05，确认开发顺序与验收方式
+
+---
+
+## 5. 当前结论
+
+本次方案的最小实现核心是：
+
+1. 用户级直接扩展现有 `personalization`
+2. 项目级直接扩展现有 `app_user_projects.metadata_json`
+3. session 级复用 skills 记忆的 persistence pattern
+4. 运行时按“用户 -> 项目 -> session”组装
+5. session 级通过版本化文件回写避免记忆倒退
+
+当前状态：
+
+1. 方案文档已拆分完成
+2. 当前仍为 `[尚未采用]`
+3. 代码尚未开始修改

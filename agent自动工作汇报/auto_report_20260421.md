@@ -14,3 +14,6 @@
 - 已新增路由回归测试 `apps/api/tests/task-creation-deep-routes.test.ts`，固定覆盖“native history 缺一轮 user input，但 file-memory 仍有持久化消息”的场景。
 - 真实直通 e2e 最新复跑结果：`pnpm run test:opencode-direct` 已 `5/5` 全通过，`04_persistence_refresh_consistency` 已翻绿。
 - 本轮 direct e2e 产生的 orchestrator sandbox `isuws2py6fevk9u3pkhpc` 已主动关闭，避免继续计费。
+- 已重新对照 `task-session-skill-state-service` 的 skills 记忆设计，收缩 Altus 三级记忆文档中的 session 级方案：保留“DB 真相源 + Redis 可选缓存 + sandbox 文件副本 + 受控 flush”这一复杂度，不再为 Altus 额外引入 `baseVersion / compare-and-set` 一类更重的回写协议，避免首版出现不可控状态机和隐藏竞态。
+- 已按最新要求调整 Altus 三级记忆文档：用户级 / 项目级记忆改为“DB 真相源 + Redis 读加速”，同时明确 Redis 只做缓存、写入必须先写 DB 再刷新或失效 Redis，避免把用户级 / 项目级做成第二真相源。
+- 已进一步收紧 Altus session 级记忆文档：明确 run 启动阶段只装载一次 session memory，运行中以内存快照和 sandbox 文件为主，避免多轮执行期间反复读写数据库；DB 回写流程直接对齐 skills memory 的固定模式：读 sandbox 文件、normalize、写 DB、刷新 Redis。

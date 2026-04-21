@@ -125,6 +125,7 @@ import {
 import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
 import { resolveUserMessageReferences } from "@/lib/message-reference-parser";
 import { readAltusMode } from "@/lib/altus-settings";
+import type { TaskProjectSelection } from "@/lib/task-project-selection";
 import i18n from "@/i18n";
 import { useLocation, useSearch } from "wouter";
 import { Streamdown } from "streamdown";
@@ -262,6 +263,15 @@ export default function Home() {
   const PREVIEW_STATE_CACHE_PREFIX = "task_creation_preview_state:";
   const [location] = useLocation();
   const search = useSearch();
+  const selectedProject = useMemo<TaskProjectSelection | null>(() => {
+    const params = new URLSearchParams(search);
+    const projectId = params.get("projectId")?.trim();
+    if (!projectId) return null;
+    return {
+      id: projectId,
+      kind: "manual",
+    };
+  }, [search]);
   const [mode, setMode] = useState<PageMode>("input");
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
@@ -425,6 +435,7 @@ export default function Home() {
     autoRuntime: !isHistoryView,
     compactHistory: false,
     runtimeLogPollingEnabled: showRuntimeDrawer,
+    initialProjectId: selectedProject?.kind === "manual" ? selectedProject.id : null,
     onPlanGenerated: (plan) => {
       console.log("计划生成:", plan);
       // TODO: 跳转到项目详情页面或更新左侧项目列表
@@ -2029,6 +2040,7 @@ export default function Home() {
     <WorkspaceLayout
       fluid={mode === "chat"}
       lockViewport={mode === "chat"}
+      selectedProject={selectedProject}
     >
       <div
         className={

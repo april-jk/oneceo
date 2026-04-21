@@ -77,6 +77,7 @@
     "projectPinAction": "置顶",
     "projectUnpinAction": "取消置顶",
     "projectEditAction": "编辑",
+    "projectCreateSessionAction": "在该项目下新建会话",
     "projectDeleteAction": "删除",
     "projectEditTitle": "编辑项目",
     "projectEditDescription": "更新普通项目的名称、简介和项目级记忆。",

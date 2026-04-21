@@ -109,3 +109,106 @@ test('saveSandboxFileMemoryToDb updates summary snapshot and increments version'
   assert.deepEqual(normalized.constraints, ['遵守现有 skills memory 复杂度边界']);
   assert.equal(normalized.fileMemorySnapshot.archiveId, 'snapshot-2');
 });
+
+test('saveTimelineDerivedMemory increments version without sandbox file and records working notes', async () => {
+  const service = new TaskSessionAltusMemoryService();
+  let savedPatch: Record<string, unknown> | null = null;
+
+  mock.method(taskSessionRedisCacheService, 'resolveScopeBySession', async () => null as any);
+  mock.method(taskCreationSessionDAO, 'getSessionMetadataJson', async () => ({
+    altusSessionMemory: {
+      version: 0,
+      summary: {
+        goal: '',
+        latestOutcome: '',
+        openQuestions: [],
+      },
+      constraints: [],
+      decisions: [],
+      workingNotes: [],
+    },
+  }));
+  mock.method(taskCreationSessionDAO, 'getRecentMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '请告诉我当前项目代号，并按用户偏好称呼我',
+    },
+    {
+      role: 'assistant',
+      messageType: 'assistant',
+      content: 'MemoryUser，你当前项目代号是 MemoryProject-001。',
+    },
+  ] as any);
+  mock.method(taskCreationSessionDAO, 'patchSessionMetadataJson', async (_sessionId, patch) => {
+    savedPatch = patch;
+    return null as any;
+  });
+
+  const state = await service.saveTimelineDerivedMemory({
+    sessionId: 'session-altus-3',
+    runId: 'run-3',
+    reason: 'completed',
+  });
+
+  const normalized = readSessionAltusMemory((savedPatch || {}).altusSessionMemory);
+  assert.equal(state.version, 1);
+  assert.equal(normalized.summary.goal, '请告诉我当前项目代号，并按用户偏好称呼我');
+  assert.equal(normalized.summary.latestOutcome, 'MemoryUser，你当前项目代号是 MemoryProject-001。');
+  assert.deepEqual(normalized.workingNotes, [
+    'user: 请告诉我当前项目代号，并按用户偏好称呼我',
+    'assistant: MemoryUser，你当前项目代号是 MemoryProject-001。',
+  ]);
+});
+
+test('saveSandboxFileMemoryToDb falls back to timeline-derived memory when sandbox file is missing', async () => {
+  const service = new TaskSessionAltusMemoryService();
+  let savedPatch: Record<string, unknown> | null = null;
+
+  mock.method(taskSessionRedisCacheService, 'resolveScopeBySession', async () => null as any);
+  mock.method(taskCreationSessionDAO, 'getSessionMetadataJson', async () => ({
+    altusSessionMemory: {
+      version: 0,
+      summary: {
+        goal: '',
+        latestOutcome: '',
+        openQuestions: [],
+      },
+      constraints: [],
+      decisions: [],
+      workingNotes: [],
+    },
+  }));
+  mock.method(taskCreationSessionDAO, 'getRecentMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '请继续保持当前项目记忆',
+    },
+    {
+      role: 'assistant',
+      messageType: 'assistant',
+      content: '好的，我会继续沿用当前项目记忆。',
+    },
+  ] as any);
+  mock.method(taskCreationSessionDAO, 'patchSessionMetadataJson', async (_sessionId, patch) => {
+    savedPatch = patch;
+    return null as any;
+  });
+  mock.method(e2bConnector, 'readFile', async () => {
+    throw new Error('not found');
+  });
+
+  const state = await service.saveSandboxFileMemoryToDb({
+    sessionId: 'session-altus-4',
+    sandboxId: 'sandbox-4',
+    workspaceRoot: '/workspace/session-altus-4',
+    runId: 'run-4',
+    reason: 'completed',
+  });
+
+  const normalized = readSessionAltusMemory((savedPatch || {}).altusSessionMemory);
+  assert.equal(state.version, 1);
+  assert.equal(normalized.summary.goal, '请继续保持当前项目记忆');
+  assert.equal(normalized.summary.latestOutcome, '好的，我会继续沿用当前项目记忆。');
+});

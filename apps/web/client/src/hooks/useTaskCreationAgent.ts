@@ -5112,6 +5112,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         await interruptCurrentRun(activeSessionId || undefined);
       }
       let shouldBindCreatedSession = false;
+      const initialProjectId = !sessionId ? initialProjectIdForNewSession || undefined : undefined;
       if (!activeSessionId) {
         const created = await createTaskCreationDraftSession(text);
         const createdSessionId = (created?.id || '').trim();
@@ -5120,6 +5121,13 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         }
         activeSessionId = createdSessionId;
         shouldBindCreatedSession = true;
+        if (initialProjectId) {
+          await createTaskCreationSession({
+            sessionId: createdSessionId,
+            mode: 'altus',
+            projectId: initialProjectId,
+          });
+        }
         applyPendingConnectorDraftAsync(createdSessionId);
       }
 

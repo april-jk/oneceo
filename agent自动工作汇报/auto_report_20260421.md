@@ -43,3 +43,11 @@
 - 已在 `altus-run-coordinator` 增加窄范围放行：只对纯身份/记忆问答接受纯文本直答，普通工程任务仍继续要求工具链和 `complete_task`。
 - 同步更新 managed prompt，消除“系统允许纯记忆直答”与“prompt 强制所有回复都必须 complete_task”之间的冲突。
 - 已补充 coordinator / prompt 回归测试，准备执行定向验证。
+
+## 20:42 侧边栏项目展平与点击不重排修复
+
+- 已将普通项目在侧边栏中直接作为一级条目显示，不再额外包一层普通项目文件夹；自组织项目分组保持不变。
+- 已修正 session 列表“点击即重排”的两个根因：去掉当前选中 session 自动置顶，同时停止在重命名、移动项目等元数据 patch 时默认把 `updatedAt` 刷成当前时间。
+- 已收紧 `task-creation-session-updated` 的监听逻辑：只有标题、状态、收藏、项目归属或显式 `updatedAt` 变化才触发本地 patch 与刷新，单纯选中态不再触发列表重载。
+- 已补充针对性的前端单测，验证 sidebar patch 会保留原 `updatedAt`，并完成 `pnpm --filter web check` 与定向 `vitest` 校验。
+- 已新增 Playwright 浏览器回归 `sidebar-order-stability.playwright.spec.ts`，使用单次登录复用态验证“点击项目不重排、点击会话不重排”，并在 `http://127.0.0.1:3001` 当前实例上实跑通过。

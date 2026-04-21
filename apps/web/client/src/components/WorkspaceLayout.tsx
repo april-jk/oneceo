@@ -7,19 +7,18 @@
 
 import { useState } from "react";
 import Sidebar from "./Sidebar";
+import type { TaskProjectSelection } from "@/lib/task-project-selection";
 
 interface WorkspaceLayoutProps {
   children: React.ReactNode;
-  selectedProjectId?: string | null;
-  onProjectSelect?: (projectId: string | null) => void;
+  selectedProject?: TaskProjectSelection | null;
   fluid?: boolean;
   lockViewport?: boolean;
 }
 
 export default function WorkspaceLayout({
   children,
-  selectedProjectId,
-  onProjectSelect,
+  selectedProject,
   fluid = false,
   lockViewport = false,
 }: WorkspaceLayoutProps) {
@@ -36,8 +35,7 @@ export default function WorkspaceLayout({
       <Sidebar
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
-        selectedProjectId={selectedProjectId}
-        onProjectSelect={onProjectSelect}
+        selectedProject={selectedProject}
       />
       <main
         className={`${sidebarCollapsed ? "ml-20" : "ml-64"} pt-4 pb-4 transition-all duration-300 ${lockViewport ? "h-screen overflow-hidden" : "min-h-screen"}`}

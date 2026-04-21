@@ -91,3 +91,23 @@ test('sanitizeTimelineMetadataForStorage normalizes workspace absolute paths to 
   assert.equal(sanitized.path, 'docs/guide.md');
   assert.equal(sanitized.targetPath, 'docs/guide-next.md');
 });
+
+test('readSessionProject normalizes incomplete or blank project metadata to no-project state', () => {
+  const normalizedMissingName = (taskCreationSessionDAO as any).readSessionProject({
+    projectId: '1',
+    projectName: '   ',
+  });
+  const normalizedAssigned = (taskCreationSessionDAO as any).readSessionProject({
+    projectId: '  2  ',
+    projectName: '  artgen ai  ',
+  });
+
+  assert.deepEqual(normalizedMissingName, {
+    projectId: null,
+    projectName: null,
+  });
+  assert.deepEqual(normalizedAssigned, {
+    projectId: '2',
+    projectName: 'artgen ai',
+  });
+});

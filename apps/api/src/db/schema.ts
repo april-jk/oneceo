@@ -69,6 +69,32 @@ export const appUserSessions = pgTable(
   })
 );
 
+export const appUserProjects = pgTable(
+  'app_user_projects',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => appUsers.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    projectType: text('project_type').notNull().default('standard'),
+    status: text('status').notNull().default('active'),
+    metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userProjectNameUnique: uniqueIndex('idx_app_user_projects_user_name').on(table.userId, table.name),
+    userIdIdx: index('idx_app_user_projects_user_id').on(table.userId),
+    userTypeStatusIdx: index('idx_app_user_projects_user_type_status').on(
+      table.userId,
+      table.projectType,
+      table.status
+    ),
+  })
+);
+
 export const appUserEmailVerifications = pgTable(
   'app_user_email_verifications',
   {

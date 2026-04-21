@@ -18,7 +18,6 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import WorkspaceLayout from "@/components/WorkspaceLayout";
-import ProjectDetail from "./ProjectDetail";
 import {
   Mic,
   Send,
@@ -263,9 +262,6 @@ export default function Home() {
   const PREVIEW_STATE_CACHE_PREFIX = "task_creation_preview_state:";
   const [location] = useLocation();
   const search = useSearch();
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
-    null,
-  );
   const [mode, setMode] = useState<PageMode>("input");
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
@@ -714,7 +710,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    const shouldLockViewport = !selectedProjectId && mode === "chat";
+    const shouldLockViewport = mode === "chat";
     const html = document.documentElement;
     const body = document.body;
     const root = document.getElementById("root");
@@ -751,7 +747,7 @@ export default function Home() {
         entry.node.style.overscrollBehavior = entry.overscrollBehavior;
       });
     };
-  }, [mode, selectedProjectId]);
+  }, [mode]);
 
   const exitHistoryView = () => {
     if (!isHistoryView) return;
@@ -2031,38 +2027,30 @@ export default function Home() {
 
   return (
     <WorkspaceLayout
-      fluid={!selectedProjectId && mode === "chat"}
-      lockViewport={!selectedProjectId && mode === "chat"}
-      selectedProjectId={selectedProjectId}
-      onProjectSelect={setSelectedProjectId}
+      fluid={mode === "chat"}
+      lockViewport={mode === "chat"}
     >
-      {selectedProjectId ? (
-        <ProjectDetail
-          projectId={selectedProjectId}
-          onBack={() => setSelectedProjectId(null)}
-        />
-      ) : (
-        <div
-          className={
-            mode === "chat"
-              ? "flex h-[calc(100vh-2rem)] min-h-0 flex-col overflow-hidden overscroll-none"
-              : "flex min-h-[calc(100vh-2rem)] flex-col"
-          }
-        >
-          <AnimatePresence mode="wait">
-            {mode === "input" ? (
-              // 初始输入模式
+      <div
+        className={
+          mode === "chat"
+            ? "flex h-[calc(100vh-2rem)] min-h-0 flex-col overflow-hidden overscroll-none"
+            : "flex min-h-[calc(100vh-2rem)] flex-col"
+        }
+      >
+        <AnimatePresence mode="wait">
+          {mode === "input" ? (
+            // 初始输入模式
+            <motion.div
+              key="input-mode"
+              initial={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.3 }}
+              className="flex items-center justify-center min-h-[calc(100vh-2rem)]"
+            >
               <motion.div
-                key="input-mode"
-                initial={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.3 }}
-                className="flex items-center justify-center min-h-[calc(100vh-2rem)]"
-              >
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.4, ease: "easeOut" }}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, ease: "easeOut" }}
                   className="w-full max-w-3xl space-y-8"
                 >
                   {/* Logo and Title */}
@@ -2332,7 +2320,6 @@ export default function Home() {
             )}
           </AnimatePresence>
         </div>
-      )}
       <TaskRuntimeDrawer
         open={showRuntimeDrawer}
         onOpenChange={setShowRuntimeDrawer}

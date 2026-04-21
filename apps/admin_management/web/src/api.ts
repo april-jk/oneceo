@@ -10,6 +10,13 @@ import type {
   ConversationSessionDetailResponse,
   ConversationSessionInfraResponse,
   ConversationSessionsResponse,
+  DeploymentConversationListResponse,
+  DeploymentManagementListResponse,
+  DeploymentManagementOverview,
+  DeploymentRecord,
+  DeploymentUserListResponse,
+  RailwayBatchActionResponse,
+  RailwayServiceListResponse,
   ConnectorGuidePolicy,
   ConnectorGuideCatalogSummary,
   ConnectorGuidePolicyDetail,
@@ -177,6 +184,25 @@ export const api = {
     }),
 
   getOverview: () => request<DashboardOverview>('/api/dashboard/overview'),
+
+  getDeploymentOverview: (query: {
+    limit?: number;
+    query?: string;
+    status?: string;
+    hasUrl?: string;
+    userId?: string;
+    taskSessionId?: string;
+  } = {}) => {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set('limit', String(query.limit));
+    if (query.query) params.set('query', query.query);
+    if (query.status) params.set('status', query.status);
+    if (query.hasUrl) params.set('hasUrl', query.hasUrl);
+    if (query.userId) params.set('userId', query.userId);
+    if (query.taskSessionId) params.set('taskSessionId', query.taskSessionId);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<DeploymentManagementOverview>(`/api/deployment-management/overview${suffix}`);
+  },
 
   listVms: (query: { withState?: boolean; limit?: number; offset?: number } = {}) => {
     const params = new URLSearchParams();
@@ -609,6 +635,103 @@ export const api = {
   listHosts: () => request<HostListResponse>('/api/hosts'),
   listConversationSessions: (limit = 30) =>
     request<ConversationSessionsResponse>(`/api/conversations/sessions?limit=${limit}`),
+  listDeploymentRecords: (query: {
+    limit?: number;
+    query?: string;
+    status?: string;
+    hasUrl?: string;
+    userId?: string;
+    taskSessionId?: string;
+  } = {}) => {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set('limit', String(query.limit));
+    if (query.query) params.set('query', query.query);
+    if (query.status) params.set('status', query.status);
+    if (query.hasUrl) params.set('hasUrl', query.hasUrl);
+    if (query.userId) params.set('userId', query.userId);
+    if (query.taskSessionId) params.set('taskSessionId', query.taskSessionId);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<DeploymentManagementListResponse>(`/api/deployment-management${suffix}`);
+  },
+  listDeploymentConversations: (query: {
+    limit?: number;
+    query?: string;
+    status?: string;
+    hasUrl?: string;
+    userId?: string;
+    taskSessionId?: string;
+  } = {}) => {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set('limit', String(query.limit));
+    if (query.query) params.set('query', query.query);
+    if (query.status) params.set('status', query.status);
+    if (query.hasUrl) params.set('hasUrl', query.hasUrl);
+    if (query.userId) params.set('userId', query.userId);
+    if (query.taskSessionId) params.set('taskSessionId', query.taskSessionId);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<DeploymentConversationListResponse>(`/api/deployment-management/conversations${suffix}`);
+  },
+  listDeploymentUsers: (query: {
+    limit?: number;
+    query?: string;
+    status?: string;
+    hasUrl?: string;
+    userId?: string;
+  } = {}) => {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set('limit', String(query.limit));
+    if (query.query) params.set('query', query.query);
+    if (query.status) params.set('status', query.status);
+    if (query.hasUrl) params.set('hasUrl', query.hasUrl);
+    if (query.userId) params.set('userId', query.userId);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<DeploymentUserListResponse>(`/api/deployment-management/users${suffix}`);
+  },
+  getDeploymentDetail: (taskSessionId: string) =>
+    request<DeploymentRecord>(`/api/deployment-management/task-sessions/${encodeURIComponent(taskSessionId)}`),
+  listRailwayServices: (query: {
+    limit?: number;
+    query?: string;
+    status?: string;
+    risk?: string;
+  } = {}) => {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set('limit', String(query.limit));
+    if (query.query) params.set('query', query.query);
+    if (query.status) params.set('status', query.status);
+    if (query.risk) params.set('risk', query.risk);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<RailwayServiceListResponse>(`/api/deployment-management/railway/services${suffix}`);
+  },
+  batchDeleteRailwayServices: (serviceKeys: string[]) =>
+    request<RailwayBatchActionResponse>('/api/deployment-management/railway/services/batch-delete', {
+      method: 'POST',
+      body: JSON.stringify({ serviceKeys }),
+    }),
+  batchConfigureRailwayServices: (
+    serviceKeys: string[],
+    patch: {
+      builder?: string;
+      buildCommand?: string;
+      startCommand?: string;
+      rootDirectory?: string;
+      healthcheckPath?: string;
+      sourceImage?: string;
+    }
+  ) =>
+    request<RailwayBatchActionResponse>('/api/deployment-management/railway/services/batch-configure', {
+      method: 'POST',
+      body: JSON.stringify({ serviceKeys, patch }),
+    }),
+  batchUpsertRailwayServiceVariables: (
+    serviceKeys: string[],
+    variables: Record<string, string>,
+    replace?: boolean
+  ) =>
+    request<RailwayBatchActionResponse>('/api/deployment-management/railway/services/batch-variables', {
+      method: 'POST',
+      body: JSON.stringify({ serviceKeys, variables, replace: replace === true }),
+    }),
   listAppUsers: (query?: {
     limit?: number;
     query?: string;

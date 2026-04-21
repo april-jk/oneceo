@@ -5,12 +5,14 @@ import type * as React from 'react';
 import { api } from './api';
 import type { AdminUser } from './api';
 import {
+  DEFAULT_DEPLOYMENT_MANAGEMENT_VIEW_STATE,
   DEFAULT_CONNECTOR_GUIDE_MANAGEMENT_VIEW_STATE,
   DEFAULT_OSAC_RELEASE_MANAGEMENT_VIEW_STATE,
   DEFAULT_SKILL_MANAGEMENT_VIEW_STATE,
   DEFAULT_USER_MANAGEMENT_VIEW_STATE,
 } from './components/adminViewState';
 import type {
+  DeploymentManagementViewState,
   ConnectorGuideManagementViewState,
   OsacReleaseManagementViewState,
   SkillManagementViewState,
@@ -28,6 +30,7 @@ import type {
   ConversationSession,
   ConversationSessionDetailResponse,
   DashboardOverview,
+  DeploymentRecord,
   E2bSandboxDetail,
   E2bSandboxFullInfo,
   E2bTemplate,
@@ -59,6 +62,9 @@ const KvmSessionStatusBarChart = lazy(() =>
 const UserManagementSection = lazy(() =>
   import('./components/UserManagementSection').then((module) => ({ default: module.UserManagementSection }))
 );
+const DeploymentManagementSection = lazy(() =>
+  import('./components/DeploymentManagementSection').then((module) => ({ default: module.DeploymentManagementSection }))
+);
 const SkillManagementSection = lazy(() =>
   import('./components/SkillManagementSection').then((module) => ({ default: module.SkillManagementSection }))
 );
@@ -71,7 +77,7 @@ const OsacReleaseManagementSection = lazy(() =>
   import('./components/OsacReleaseManagementSection').then((module) => ({ default: module.OsacReleaseManagementSection }))
 );
 
-type SectionKey = 'kvm' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit';
+type SectionKey = 'kvm' | 'deployment' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit';
 type NavGroupKey = 'runtime' | 'platform';
 type ToastTone = 'error' | 'success' | 'warning' | 'info';
 type SandboxDetailTab = 'overview' | 'files' | 'processes' | 'connectivity' | 'archive' | 'terminal';
@@ -323,6 +329,15 @@ const NAV_ITEMS: Array<{
     signal: 'Sandbox 状态',
   },
   {
+    key: 'deployment',
+    group: 'runtime',
+    label: '部署管理',
+    subtitle: '发布与访问状态',
+    tag: 'DEP',
+    description: '查看会话部署记录、访问地址和用户归属。',
+    signal: '部署状态',
+  },
+  {
     key: 'conversation',
     group: 'runtime',
     label: '对话管理',
@@ -561,6 +576,22 @@ function statusLabel(status: string) {
   if (status === 'failed') return '失败';
   if (status === 'unknown') return '未知';
   return status;
+}
+
+function deploymentStatusLabel(status?: string | null) {
+  if (status === 'success') return '成功';
+  if (status === 'failed') return '失败';
+  if (status === 'pending') return '处理中';
+  if (status === 'ready') return '已就绪';
+  if (status === 'uninitialized') return '未初始化';
+  return status || '-';
+}
+
+function deploymentStatusTone(status?: string | null) {
+  if (status === 'success' || status === 'ready') return 'status-running';
+  if (status === 'failed') return 'status-error';
+  if (status === 'pending') return 'status-paused';
+  return 'status-stopped';
 }
 
 function conversationStageLabel(stage?: string | null) {
@@ -3097,6 +3128,7 @@ const DEFAULT_AUDIT_FILTERS: AuditFilterState = {
 
 type AdminUrlState = {
   activeSection: SectionKey;
+  deployment: DeploymentManagementViewState;
   conversation: {
     query: string;
     status: 'all' | 'in_progress' | 'waiting_user' | 'failed' | 'completed';
@@ -3125,6 +3157,14 @@ type AdminUrlState = {
 
 const ADMIN_URL_QUERY_KEYS = [
   'section',
+  'dep_view',
+  'dep_q',
+  'dep_status',
+  'dep_has_url',
+  'dep_user',
+  'dep_session',
+  'dep_detail',
+  'dep_tab',
   'conv_q',
   'conv_status',
   'conv_stage',
@@ -3176,7 +3216,9 @@ const ADMIN_URL_QUERY_KEYS = [
   'audit_to',
 ] as const;
 
-const USER_DETAIL_TAB_VALUES = new Set(['overview', 'conversations', 'sandboxes']);
+const USER_DETAIL_TAB_VALUES = new Set(['overview', 'conversations', 'sandboxes', 'deployments']);
+const DEPLOYMENT_VIEW_VALUES = new Set(['records', 'conversations', 'users', 'railway']);
+const DEPLOYMENT_DETAIL_TAB_VALUES = new Set(['overview', 'history', 'logs', 'relations', 'raw']);
 const SANDBOX_TAB_VALUES = new Set(['runtime']);
 const SANDBOX_DETAIL_TAB_VALUES = new Set(['overview', 'files', 'processes', 'connectivity', 'archive', 'terminal']);
 const USER_SORT_KEY_VALUES = new Set(['user', 'status', 'last_activity', 'sessions', 'conversations', 'sandboxes']);
@@ -3187,6 +3229,7 @@ const OSAC_TAB_VALUES = new Set(['published', 'pending', 'all', 'upload']);
 
 function isSectionKey(value: string | null): value is SectionKey {
   return value === 'kvm'
+    || value === 'deployment'
     || value === 'conversation'
     || value === 'user'
     || value === 'agent'
@@ -3195,6 +3238,18 @@ function isSectionKey(value: string | null): value is SectionKey {
     || value === 'osacRelease'
     || value === 'sandbox'
     || value === 'audit';
+}
+
+function cloneDeploymentManagementViewState(
+  state: DeploymentManagementViewState = DEFAULT_DEPLOYMENT_MANAGEMENT_VIEW_STATE
+): DeploymentManagementViewState {
+  return {
+    view: state.view,
+    filters: { ...state.filters },
+    selectedTaskSessionId: state.selectedTaskSessionId,
+    detailDialogOpen: state.detailDialogOpen,
+    detailTab: state.detailTab,
+  };
 }
 
 function cloneUserManagementViewState(state: UserManagementViewState = DEFAULT_USER_MANAGEMENT_VIEW_STATE): UserManagementViewState {
@@ -3244,6 +3299,7 @@ function cloneOsacReleaseManagementViewState(
 }
 
 function readAdminUrlState(): AdminUrlState {
+  const deploymentState = cloneDeploymentManagementViewState();
   const userState = cloneUserManagementViewState();
   const skillState = cloneSkillManagementViewState();
   const connectorGuideState = cloneConnectorGuideManagementViewState();
@@ -3253,6 +3309,7 @@ function readAdminUrlState(): AdminUrlState {
   if (typeof window === 'undefined') {
     return {
       activeSection: 'sandbox',
+      deployment: deploymentState,
       conversation: {
         query: '',
         status: 'all',
@@ -3284,6 +3341,8 @@ function readAdminUrlState(): AdminUrlState {
   const sectionParam = params.get('section');
   const activeSection = isSectionKey(sectionParam) ? sectionParam : 'sandbox';
   const conversationStatus = params.get('conv_status');
+  const deploymentView = params.get('dep_view');
+  const deploymentDetailTab = params.get('dep_tab');
   const sandboxTab = params.get('sbx_tab');
   const sandboxDetailTab = params.get('sbx_detail_tab');
   const userSortKey = params.get('user_sort');
@@ -3292,6 +3351,22 @@ function readAdminUrlState(): AdminUrlState {
   const skillView = params.get('skill_view');
   const skillDetailTab = params.get('skill_tab');
   const osacTab = params.get('osac_tab');
+
+  deploymentState.view = DEPLOYMENT_VIEW_VALUES.has(deploymentView || '')
+    ? (deploymentView as DeploymentManagementViewState['view'])
+    : DEFAULT_DEPLOYMENT_MANAGEMENT_VIEW_STATE.view;
+  deploymentState.filters = {
+    query: params.get('dep_q') || '',
+    status: params.get('dep_status') || 'all',
+    hasUrl: params.get('dep_has_url') || 'all',
+    userId: params.get('dep_user') || '',
+    taskSessionId: params.get('dep_session') || '',
+  };
+  deploymentState.selectedTaskSessionId = params.get('dep_detail') || null;
+  deploymentState.detailDialogOpen = params.get('dep_detail') !== null;
+  deploymentState.detailTab = DEPLOYMENT_DETAIL_TAB_VALUES.has(deploymentDetailTab || '')
+    ? (deploymentDetailTab as DeploymentManagementViewState['detailTab'])
+    : DEFAULT_DEPLOYMENT_MANAGEMENT_VIEW_STATE.detailTab;
 
   userState.filters = {
     query: params.get('user_q') || '',
@@ -3350,6 +3425,7 @@ function readAdminUrlState(): AdminUrlState {
 
   return {
     activeSection,
+    deployment: deploymentState,
     conversation: {
       query: params.get('conv_q') || '',
       status:
@@ -3387,6 +3463,7 @@ function readAdminUrlState(): AdminUrlState {
 
 function writeAdminUrlState(input: {
   activeSection: SectionKey;
+  deployment: DeploymentManagementViewState;
   conversation: AdminUrlState['conversation'];
   sandbox: AdminUrlState['sandbox'] & { modalOpen: boolean };
   user: UserManagementViewState;
@@ -3403,6 +3480,23 @@ function writeAdminUrlState(input: {
   }
 
   url.searchParams.set('section', input.activeSection);
+
+  if (input.activeSection === 'deployment') {
+    if (input.deployment.view !== DEFAULT_DEPLOYMENT_MANAGEMENT_VIEW_STATE.view) {
+      url.searchParams.set('dep_view', input.deployment.view);
+    }
+    if (input.deployment.filters.query) url.searchParams.set('dep_q', input.deployment.filters.query);
+    if (input.deployment.filters.status !== 'all') url.searchParams.set('dep_status', input.deployment.filters.status);
+    if (input.deployment.filters.hasUrl !== 'all') url.searchParams.set('dep_has_url', input.deployment.filters.hasUrl);
+    if (input.deployment.filters.userId) url.searchParams.set('dep_user', input.deployment.filters.userId);
+    if (input.deployment.filters.taskSessionId) url.searchParams.set('dep_session', input.deployment.filters.taskSessionId);
+    if (input.deployment.detailDialogOpen && input.deployment.selectedTaskSessionId) {
+      url.searchParams.set('dep_detail', input.deployment.selectedTaskSessionId);
+      if (input.deployment.detailTab !== DEFAULT_DEPLOYMENT_MANAGEMENT_VIEW_STATE.detailTab) {
+        url.searchParams.set('dep_tab', input.deployment.detailTab);
+      }
+    }
+  }
 
   if (input.activeSection === 'conversation') {
     if (input.conversation.query) url.searchParams.set('conv_q', input.conversation.query);
@@ -3570,14 +3664,18 @@ export default function App() {
   const [conversationGovernanceFilter, setConversationGovernanceFilter] = useState<string | null>(null);
   const [conversationEnvironmentGroupFilter, setConversationEnvironmentGroupFilter] = useState<string | null>(null);
   const [conversationDialogTab, setConversationDialogTab] = useState<ConversationDialogTab>('overview');
+  const [conversationDeploymentSummary, setConversationDeploymentSummary] = useState<DeploymentRecord | null>(null);
+  const [conversationDeploymentLoading, setConversationDeploymentLoading] = useState(false);
   const [transitionView, setTransitionView] = useState<'timeline' | 'list'>('timeline');
   const [transitionQuery, setTransitionQuery] = useState('');
   const [transitionFilters, setTransitionFilters] = useState(DEFAULT_TRANSITION_FILTERS);
   const [transitionAdvancedFiltersOpen, setTransitionAdvancedFiltersOpen] = useState(false);
+  const [deploymentManagementUpdatedAt, setDeploymentManagementUpdatedAt] = useState<string | null>(null);
   const [userManagementUpdatedAt, setUserManagementUpdatedAt] = useState<string | null>(null);
   const [skillManagementUpdatedAt, setSkillManagementUpdatedAt] = useState<string | null>(null);
   const [connectorGuideUpdatedAt, setConnectorGuideUpdatedAt] = useState<string | null>(null);
   const [osacReleaseUpdatedAt, setOsacReleaseUpdatedAt] = useState<string | null>(null);
+  const [deploymentManagementViewState, setDeploymentManagementViewState] = useState<DeploymentManagementViewState>(() => cloneDeploymentManagementViewState(initialUrlState.deployment));
   const [userManagementViewState, setUserManagementViewState] = useState<UserManagementViewState>(() => cloneUserManagementViewState(initialUrlState.user));
   const [skillManagementViewState, setSkillManagementViewState] = useState<SkillManagementViewState>(() => cloneSkillManagementViewState(initialUrlState.skill));
   const [connectorGuideManagementViewState, setConnectorGuideManagementViewState] = useState<ConnectorGuideManagementViewState>(() => cloneConnectorGuideManagementViewState(initialUrlState.connectorGuide));
@@ -4323,6 +4421,46 @@ export default function App() {
     return null;
   }, [activeSection, sandboxModalOpen, sandboxModalOrigin?.trail, sandboxRuntimeDetail]);
 
+  const openUserManagementView = useCallback((userId: string, origin: AdminDetailOrigin | null = null) => {
+    if (!userId) return;
+    setUserManagementViewState((current) => ({
+      ...current,
+      selectedUserId: userId,
+      selectedUserLabel: current.selectedUserLabel,
+      drawerOpen: true,
+      detailTab: origin?.section === 'deployment' ? 'deployments' : 'overview',
+    }));
+    setActiveSection('user');
+    setError(null);
+  }, []);
+
+  const openDeploymentManagementView = useCallback(
+    (taskSessionId: string, origin: AdminDetailOrigin | null = null) => {
+      if (!taskSessionId) return;
+      const nextView: DeploymentManagementViewState['view'] =
+        origin?.section === 'user'
+          ? 'users'
+          : origin?.section === 'conversation'
+            ? 'conversations'
+            : 'records';
+      setDeploymentManagementViewState((current) => ({
+        ...current,
+        view: nextView,
+        selectedTaskSessionId: taskSessionId,
+        detailDialogOpen: true,
+        detailTab: 'overview',
+        filters: {
+          ...current.filters,
+          taskSessionId: nextView === 'records' ? taskSessionId : current.filters.taskSessionId,
+          userId: nextView === 'users' ? origin?.section === 'user' ? current.filters.userId : current.filters.userId : current.filters.userId,
+        },
+      }));
+      setActiveSection('deployment');
+      setError(null);
+    },
+    []
+  );
+
   const auditOriginForEntry = useCallback(
     (entry: AuditLogEntry): AdminDetailOrigin => ({
       section: 'audit',
@@ -4445,6 +4583,11 @@ export default function App() {
     setError(null);
     openConversationDialog(taskSessionId, 'overview', currentSandboxOrigin());
   }, [currentSandboxOrigin, openConversationDialog]);
+
+  const openDeploymentFromConversation = useCallback((taskSessionId?: string | null) => {
+    if (!taskSessionId) return;
+    openDeploymentManagementView(taskSessionId, currentConversationOrigin());
+  }, [currentConversationOrigin, openDeploymentManagementView]);
 
   const openSandboxFromConversation = useCallback((sandboxId?: string | null, origin: AdminDetailOrigin | null = null) => {
     if (!sandboxId) return;
@@ -5232,6 +5375,8 @@ export default function App() {
       try {
         if (section === 'kvm') {
           await Promise.all([loadKvmSection(), loadAuditSection()]);
+        } else if (section === 'deployment') {
+          setError(null);
         } else if (section === 'conversation') {
           await loadConversationSessions();
         } else if (section === 'user') {
@@ -5359,6 +5504,7 @@ export default function App() {
   useEffect(() => {
     writeAdminUrlState({
       activeSection,
+      deployment: deploymentManagementViewState,
       conversation: {
         query: conversationSearchQuery,
         status: conversationStatusFilter,
@@ -5390,6 +5536,7 @@ export default function App() {
     auditFilters,
     connectorGuideManagementViewState,
     conversationExecutorFilter,
+    deploymentManagementViewState,
     conversationSearchQuery,
     conversationStageFilter,
     conversationStatusFilter,
@@ -5613,6 +5760,38 @@ export default function App() {
           // ignore list refresh error here; detail view has higher priority
         });
     }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection, authStatus, conversationDialog, selectedSessionId]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated') {
+      return;
+    }
+    if (!selectedSessionId || (activeSection !== 'conversation' && !conversationDialog)) {
+      setConversationDeploymentSummary(null);
+      setConversationDeploymentLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setConversationDeploymentLoading(true);
+    void api.getDeploymentDetail(selectedSessionId)
+      .then((detail) => {
+        if (cancelled) return;
+        setConversationDeploymentSummary(detail);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setConversationDeploymentSummary(null);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setConversationDeploymentLoading(false);
+        }
+      });
 
     return () => {
       cancelled = true;
@@ -6766,6 +6945,58 @@ export default function App() {
           <p className="conversation-user-agent">{conversationUserAgentLabel(sourceUser?.userAgent)}</p>
           </section>
 
+          <section className="sub-panel conversation-dialog-side-panel">
+            <div className="panel-header">
+              <div>
+                <h3>部署摘要</h3>
+                <p className="panel-caption">当前会话的部署状态与访问入口。</p>
+              </div>
+              {conversationDeploymentSummary ? (
+                <span className={`state-chip ${deploymentStatusTone(conversationDeploymentSummary.statusCategory)}`}>
+                  {deploymentStatusLabel(conversationDeploymentSummary.statusCategory)}
+                </span>
+              ) : null}
+            </div>
+            {conversationDeploymentLoading ? (
+              <p className="panel-caption">正在加载部署状态...</p>
+            ) : conversationDeploymentSummary ? (
+              <>
+                <div className="detail-grid conversation-message-summary-grid">
+                  <div>
+                    <p className="kpi-title">项目 / 服务</p>
+                    <p>{conversationDeploymentSummary.projectName || '-'} / {conversationDeploymentSummary.serviceName || '-'}</p>
+                  </div>
+                  <div>
+                    <p className="kpi-title">最新状态</p>
+                    <p>{conversationDeploymentSummary.latestStatus || conversationDeploymentSummary.bindingState}</p>
+                  </div>
+                  <div>
+                    <p className="kpi-title">访问地址</p>
+                    <p>{conversationDeploymentSummary.latestUrl || conversationDeploymentSummary.latestStaticUrl || '-'}</p>
+                  </div>
+                  <div>
+                    <p className="kpi-title">最近验证</p>
+                    <p>{formatDateTime(conversationDeploymentSummary.lastVerifiedAt)}</p>
+                  </div>
+                </div>
+                <div className="section-actions">
+                  <button type="button" className="table-btn" onClick={() => openDeploymentFromConversation(conversationDeploymentSummary.taskSessionId)}>
+                    打开部署管理
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="section-actions">
+                <p className="panel-caption">当前会话暂无部署记录。</p>
+                {conversationDetail?.session.id ? (
+                  <button type="button" className="table-btn" onClick={() => openDeploymentFromConversation(conversationDetail.session.id)}>
+                    前往部署管理
+                  </button>
+                ) : null}
+              </div>
+            )}
+          </section>
+
           <section className="sub-panel conversation-message-summary conversation-dialog-message-summary conversation-dialog-side-panel">
             <div className="detail-grid conversation-message-summary-grid">
               <div>
@@ -7084,6 +7315,8 @@ export default function App() {
   const activeServiceOnline =
     activeSection === 'agent'
       ? agentOverview?.agentApi.online
+      : activeSection === 'deployment'
+        ? true
       : activeSection === 'conversation'
         ? true
       : activeSection === 'user'
@@ -7102,6 +7335,8 @@ export default function App() {
   const activeServiceLabel =
     activeSection === 'agent'
       ? '智能体服务'
+      : activeSection === 'deployment'
+        ? '平台接口'
       : activeSection === 'conversation'
         ? '会话索引'
       : activeSection === 'user'
@@ -7120,6 +7355,8 @@ export default function App() {
   const updatedAtLabel =
     activeSection === 'sandbox'
       ? sandboxApi?.timestamp || sandboxOverviewItems[0]?.startedAt
+      : activeSection === 'deployment'
+        ? deploymentManagementUpdatedAt
       : activeSection === 'conversation'
         ? conversationDetail?.session.updatedAt || conversationSessions[0]?.updatedAt
         : activeSection === 'user'
@@ -7136,6 +7373,7 @@ export default function App() {
           ? auditSummaryFetchedAt || auditEntries[0]?.timestamp
             : kvmOverview?.updatedAt;
   const lockMainAreaScroll =
+    activeSection === 'deployment' ||
     activeSection === 'conversation' ||
     activeSection === 'user' ||
     activeSection === 'skill' ||
@@ -11378,6 +11616,26 @@ export default function App() {
     }
 
     if (activeSection === 'kvm') return renderKvmSection();
+    if (activeSection === 'deployment') {
+      return (
+        <DeploymentManagementSection
+          onError={setError}
+          onUpdatedAtChange={setDeploymentManagementUpdatedAt}
+          onRegisterRefresh={registerSectionRefresh}
+          persistedState={deploymentManagementViewState}
+          onStateChange={setDeploymentManagementViewState}
+          onOpenConversation={(sessionId, origin) => {
+            openConversationDialog(sessionId, 'overview', origin || null);
+          }}
+          onOpenUser={(userId, origin) => {
+            openUserManagementView(userId, origin || null);
+          }}
+          onOpenSandbox={(sandboxId, origin) => {
+            void openSandboxDetail(sandboxId, origin || null);
+          }}
+        />
+      );
+    }
     if (activeSection === 'conversation') return renderConversationOpsSection();
     if (activeSection === 'user') {
       return (
@@ -11392,6 +11650,9 @@ export default function App() {
           }}
           onOpenSandbox={(sandboxId, origin) => {
             void openSandboxDetail(sandboxId, origin || null);
+          }}
+          onOpenDeployment={(taskSessionId, origin) => {
+            openDeploymentManagementView(taskSessionId, origin || null);
           }}
         />
       );

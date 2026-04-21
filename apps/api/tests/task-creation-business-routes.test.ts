@@ -18,6 +18,7 @@ const legacyMappingDaoAny = appUserLegacyIdMappingDAO as any;
 const originalListSessions = fileStoreAny.listSessions;
 const originalCreateSession = fileStoreAny.createSession;
 const originalGetSession = fileStoreAny.getSession;
+const originalUpdateSessionTitle = fileStoreAny.updateSessionTitle;
 const originalAddMessage = fileStoreAny.addMessage;
 const originalGetRecentSessions = sessionDaoAny.getRecentSessions;
 const originalHasForeignOwnedSessions = sessionDaoAny.hasForeignOwnedSessions;
@@ -37,6 +38,7 @@ after(() => {
   fileStoreAny.listSessions = originalListSessions;
   fileStoreAny.createSession = originalCreateSession;
   fileStoreAny.getSession = originalGetSession;
+  fileStoreAny.updateSessionTitle = originalUpdateSessionTitle;
   fileStoreAny.addMessage = originalAddMessage;
   sessionDaoAny.getRecentSessions = originalGetRecentSessions;
   sessionDaoAny.hasForeignOwnedSessions = originalHasForeignOwnedSessions;
@@ -200,6 +202,163 @@ test('GET /api/task-creation/sessions returns full owned db list when memory onl
       payload.data.map((item: { id: string }) => item.id),
       ['owned-session-1', 'owned-session-2']
     );
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/task-creation/sessions uses state fallback title instead of id suffix', async () => {
+  const server = await startServer();
+  fileStoreAny.listSessions = async () => [];
+  sessionDaoAny.getRecentSessions = async (_limit: number, userId?: string) => {
+    assert.equal(userId, 'user-title-fallback');
+    return [
+      {
+        id: 'owned-title-1',
+        status: 'waiting_user',
+        projectId: null,
+        projectName: null,
+        createdAt: new Date('2026-04-21T10:00:00.000Z'),
+        updatedAt: new Date('2026-04-21T12:00:00.000Z'),
+      },
+    ];
+  };
+  sessionDaoAny.hasForeignOwnedSessions = async () => false;
+  sessionDaoAny.rebindRecentUnownedSessionsToUser = async () => [];
+  sessionDaoAny.rebindSessionsFromLegacyUserId = async () => [];
+  sessionDaoAny.getTaskDescription = async () => null;
+  sessionDaoAny.getMessages = async () => [];
+  legacyMappingDaoAny.upsert = async () => null;
+  legacyMappingDaoAny.listLegacyIdsByAppUserId = async () => [];
+  legacyMappingDaoAny.resolveAppUserIdByLegacyUserId = async () => null;
+
+  try {
+    const response = await fetch(`${server.origin}/api/task-creation/sessions?limit=all`, {
+      headers: {
+        'x-test-user-id': 'user-title-fallback',
+      },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.equal(payload.data[0].title, '待补充需求');
+    assert.equal(payload.data[0].titleSource, 'placeholder');
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /api/task-creation/sessions/:sessionId/title/resolve derives concise title from explicit input', async () => {
+  const server = await startServer();
+  const session = {
+    id: 'title-session-1',
+    title: '待识别任务',
+    titleLocked: false,
+    titleSource: 'placeholder',
+    titleState: 'provisional',
+    status: 'in_progress',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    messages: [],
+  };
+
+  fileStoreAny.getSession = async () => session;
+  fileStoreAny.updateSessionTitle = async (
+    sessionId: string,
+    title: string,
+    options?: { lock?: boolean; source?: string; state?: string }
+  ) => {
+    assert.equal(sessionId, 'title-session-1');
+    session.title = title;
+    session.titleLocked = Boolean(options?.lock);
+    session.titleSource = options?.source;
+    session.titleState = options?.state;
+  };
+  sessionDaoAny.getSession = async () => ({
+    id: 'title-session-1',
+    userId: 'user-title-resolve',
+    status: 'in_progress',
+  });
+  legacyMappingDaoAny.upsert = async () => null;
+  legacyMappingDaoAny.listLegacyIdsByAppUserId = async () => [];
+  legacyMappingDaoAny.resolveAppUserIdByLegacyUserId = async () => null;
+
+  try {
+    const response = await fetch(`${server.origin}/api/task-creation/sessions/title-session-1/title/resolve`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-test-user-id': 'user-title-resolve',
+      },
+      body: JSON.stringify({
+        message: '你好，做一次v7冷启动排查',
+      }),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.equal(payload.data.title, 'v7 冷启动排查');
+    assert.equal(payload.data.titleSource, 'first_explicit_user_input');
+    assert.equal(payload.data.titleState, 'provisional');
+    assert.equal(payload.data.resolved, true);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /api/task-creation/sessions/:sessionId/title/resolve composes concise build title from explicit input', async () => {
+  const server = await startServer();
+  const session = {
+    id: 'title-session-2',
+    title: '待识别任务',
+    titleLocked: false,
+    titleSource: 'placeholder',
+    titleState: 'provisional',
+    status: 'in_progress',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    messages: [],
+  };
+
+  fileStoreAny.getSession = async () => session;
+  fileStoreAny.updateSessionTitle = async (
+    _sessionId: string,
+    title: string,
+    options?: { lock?: boolean; source?: string; state?: string }
+  ) => {
+    session.title = title;
+    session.titleLocked = Boolean(options?.lock);
+    session.titleSource = options?.source;
+    session.titleState = options?.state;
+  };
+  sessionDaoAny.getSession = async () => ({
+    id: 'title-session-2',
+    userId: 'user-title-build',
+    status: 'in_progress',
+  });
+  legacyMappingDaoAny.upsert = async () => null;
+  legacyMappingDaoAny.listLegacyIdsByAppUserId = async () => [];
+  legacyMappingDaoAny.resolveAppUserIdByLegacyUserId = async () => null;
+
+  try {
+    const response = await fetch(`${server.origin}/api/task-creation/sessions/title-session-2/title/resolve`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-test-user-id': 'user-title-build',
+      },
+      body: JSON.stringify({
+        message: '帮我开发2048小游戏，使用html实现',
+      }),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.equal(payload.data.title, 'HTML 2048 小游戏');
+    assert.equal(payload.data.resolved, true);
   } finally {
     await server.close();
   }

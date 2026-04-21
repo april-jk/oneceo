@@ -177,7 +177,7 @@ export class TaskCreationWebSocketService {
       const service = new TaskCreationService({
         onSessionCreated: (sessionId: string) => {
           this.sessionByClient.set(clientId, sessionId);
-          void taskCreationFileMemoryStore.createSession('新建任务会话', sessionId);
+          void taskCreationFileMemoryStore.createSession('待识别任务', sessionId);
         },
         onMessage: (message: WebSocketMessage) => {
           this.sendToClient(clientId, message);
@@ -876,7 +876,7 @@ export class TaskCreationWebSocketService {
         executor: 'altus',
         metadata: {
           taskSessionId: sessionId,
-          taskTitle: taskTitle?.slice(0, 80) || '新建任务会话',
+          taskTitle: taskTitle?.slice(0, 80) || '待识别任务',
           sandboxExecutor: 'altus',
           executor: 'altus',
           altusMode: 'managed',

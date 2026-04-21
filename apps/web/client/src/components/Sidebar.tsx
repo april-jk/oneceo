@@ -208,6 +208,17 @@ export function hasMeaningfulSidebarSessionUpdate(detail: {
   );
 }
 
+export function resolveSidebarSessionTitle(
+  session: Pick<TaskCreationSessionSummary, "title" | "status">,
+  t: (key: string, options?: Record<string, unknown>) => string,
+) {
+  const title = typeof session.title === "string" ? session.title.trim() : "";
+  if (title) return title;
+  return session.status === "waiting_user"
+    ? t("sidebar.sessionWaitingFallbackTitle")
+    : t("sidebar.sessionFallbackTitle");
+}
+
 export default function Sidebar({
   className = "",
   collapsed = false,
@@ -303,7 +314,7 @@ export default function Sidebar({
   const mapSessionTask = React.useCallback(
     (session: TaskCreationSessionSummary | any, index: number): SessionTask & { originalIndex: number } => ({
       sessionId: session.id,
-      title: session.title || t("sidebar.sessionFallbackTitle", { suffix: String(session.id).slice(-6) }),
+      title: resolveSidebarSessionTitle(session, t),
       status: session.status || "in_progress",
       updatedAt:
         typeof session.updatedAt === "string" && session.updatedAt.trim()

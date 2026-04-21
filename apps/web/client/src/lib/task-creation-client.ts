@@ -973,6 +973,36 @@ export async function listTaskCreationProjects(): Promise<TaskCreationProjectSum
   return Array.isArray(result?.data) ? result.data : [];
 }
 
+export async function getTaskCreationProject(
+  projectId: string
+): Promise<TaskCreationProjectSummary | null> {
+  const safeProjectId = encodeURIComponent(projectId);
+  const url = `${getApiBaseUrl()}/api/task-creation/projects/${safeProjectId}`;
+  const response = await fetch(url, {
+    headers: buildClientIdentityHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationProjectSummary };
+  return result?.data || null;
+}
+
+export async function listTaskCreationProjectSessions(
+  projectId: string
+): Promise<TaskCreationSessionSummary[]> {
+  const safeProjectId = encodeURIComponent(projectId);
+  const url = `${getApiBaseUrl()}/api/task-creation/projects/${safeProjectId}/sessions`;
+  const response = await fetch(url, {
+    headers: buildClientIdentityHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationSessionSummary[] };
+  return Array.isArray(result?.data) ? result.data : [];
+}
+
 export async function createTaskCreationProject(input: {
   name: string;
   description?: string | null;

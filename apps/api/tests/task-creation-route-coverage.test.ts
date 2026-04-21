@@ -34,6 +34,7 @@ const originalGetExecutionPlan = sessionDaoAny.getExecutionPlan;
 const originalDeleteSession = sessionDaoAny.deleteSession;
 const originalUpdateSessionProject = sessionDaoAny.updateSessionProject;
 const originalClearSessionProjectAssignment = sessionDaoAny.clearProjectAssignmentForUser;
+const originalListOwnedProjectSessions = sessionDaoAny.listOwnedProjectSessions;
 const originalGetFileSession = fileStoreAny.getSession;
 const originalDeleteFileSession = fileStoreAny.deleteSession;
 const originalUpdateFileSessionProject = fileStoreAny.updateSessionProject;
@@ -64,6 +65,7 @@ after(() => {
   sessionDaoAny.deleteSession = originalDeleteSession;
   sessionDaoAny.updateSessionProject = originalUpdateSessionProject;
   sessionDaoAny.clearProjectAssignmentForUser = originalClearSessionProjectAssignment;
+  sessionDaoAny.listOwnedProjectSessions = originalListOwnedProjectSessions;
   fileStoreAny.getSession = originalGetFileSession;
   fileStoreAny.deleteSession = originalDeleteFileSession;
   fileStoreAny.updateSessionProject = originalUpdateFileSessionProject;
@@ -122,6 +124,8 @@ test('auth-only task-creation routes reject anonymous access', async () => {
     { method: 'GET', path: '/api/task-creation/codex/runtime-config' },
     { method: 'PUT', path: '/api/task-creation/codex/runtime-config', body: { model: 'gpt-5.4' } },
     { method: 'GET', path: '/api/task-creation/projects' },
+    { method: 'GET', path: '/api/task-creation/projects/project-1' },
+    { method: 'GET', path: '/api/task-creation/projects/project-1/sessions' },
     { method: 'POST', path: '/api/task-creation/projects', body: { name: 'Project A' } },
     { method: 'POST', path: '/api/task-creation/sessions', body: { title: 'Session' } },
     { method: 'POST', path: '/api/task-creation/sessions/draft', body: { title: 'Draft' } },
@@ -250,6 +254,67 @@ test('project routes bind requests to current user and persist standard projects
       'name:user-project-1:Project B',
       'create:user-project-1:Project B',
     ]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('project detail routes bind requests to current user and return scoped sessions', async () => {
+  const server = await startServer();
+  const received: string[] = [];
+  const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const userId = `user-project-detail-${uniqueSuffix}`;
+  const projectId = `project-${uniqueSuffix}`;
+
+  projectDaoAny.getOwnedProjectById = async (projectId: string, userId: string) => {
+    received.push(`project:${userId}:${projectId}`);
+    return {
+      id: projectId,
+      userId,
+      name: 'Project Detail',
+      description: 'detail',
+      projectType: 'standard',
+      status: 'active',
+      metadataJson: { pinned: true },
+      createdAt: new Date('2026-04-21T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+    };
+  };
+  sessionDaoAny.listOwnedProjectSessions = async (userId: string, projectId: string) => {
+    received.push(`sessions:${userId}:${projectId}`);
+    return [
+      {
+        id: 'session-1',
+        title: 'Scoped Session',
+        projectId,
+        projectName: 'Project Detail',
+        status: 'completed',
+        createdAt: '2026-04-21T00:00:00.000Z',
+        updatedAt: '2026-04-21T00:10:00.000Z',
+        messages: [],
+      },
+    ];
+  };
+
+  try {
+    const detailResponse = await fetch(`${server.origin}/api/task-creation/projects/${projectId}`, {
+      headers: { 'x-test-user-id': userId },
+    });
+    assert.equal(detailResponse.status, 200);
+    const detailPayload = await detailResponse.json();
+    assert.equal(detailPayload.data?.id, projectId);
+    assert.equal(detailPayload.data?.pinned, true);
+
+    const sessionsResponse = await fetch(`${server.origin}/api/task-creation/projects/${projectId}/sessions`, {
+      headers: { 'x-test-user-id': userId },
+    });
+    assert.equal(sessionsResponse.status, 200);
+    const sessionsPayload = await sessionsResponse.json();
+    assert.equal(sessionsPayload.data?.[0]?.id, 'session-1');
+    assert.equal(sessionsPayload.data?.[0]?.projectId, projectId);
+
+    assert.equal(received.includes(`project:${userId}:${projectId}`), true);
+    assert.equal(received.includes(`sessions:${userId}:${projectId}`), true);
   } finally {
     await server.close();
   }

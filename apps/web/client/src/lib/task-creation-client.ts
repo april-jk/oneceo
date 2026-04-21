@@ -21,12 +21,33 @@ export type TaskCreationSessionSummary = {
   updatedAt?: string;
 };
 
+export type TaskCreationProjectSummary = {
+  id: string;
+  name: string;
+  description?: string;
+  projectType?: string;
+  status?: string;
+  pinned?: boolean;
+  altusProjectMemory?: AltusProjectMemory | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
+export type AltusProjectMemory = {
+  context: string;
+  guidelines: string;
+  operatingRules: string;
+  executionManual: string;
+  updatedAt?: string | null;
+};
+
 export type CreateTaskCreationSessionInput = {
   sessionId?: string;
   title?: string;
   mode?: "sandbox" | "altus";
   executor?: "opencode" | "claudecode" | "codex";
   codexExecutionMode?: "sdk" | "ws";
+  projectId?: string | null;
   initialMessage?: string;
   initialMessageType?: "user_input" | "user_response";
 };
@@ -942,6 +963,140 @@ export async function toggleTaskCreationSessionFavorite(
       "Content-Type": "application/json",
     }),
     body: JSON.stringify({ favorite }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationSessionSummary };
+  return result?.data || null;
+}
+
+export async function listTaskCreationProjects(): Promise<TaskCreationProjectSummary[]> {
+  const url = `${getApiBaseUrl()}/api/task-creation/projects`;
+  const response = await fetch(url, {
+    headers: buildClientIdentityHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationProjectSummary[] };
+  return Array.isArray(result?.data) ? result.data : [];
+}
+
+export async function getTaskCreationProject(
+  projectId: string
+): Promise<TaskCreationProjectSummary | null> {
+  const safeProjectId = encodeURIComponent(projectId);
+  const url = `${getApiBaseUrl()}/api/task-creation/projects/${safeProjectId}`;
+  const response = await fetch(url, {
+    headers: buildClientIdentityHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationProjectSummary };
+  return result?.data || null;
+}
+
+export async function listTaskCreationProjectSessions(
+  projectId: string
+): Promise<TaskCreationSessionSummary[]> {
+  const safeProjectId = encodeURIComponent(projectId);
+  const url = `${getApiBaseUrl()}/api/task-creation/projects/${safeProjectId}/sessions`;
+  const response = await fetch(url, {
+    headers: buildClientIdentityHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationSessionSummary[] };
+  return Array.isArray(result?.data) ? result.data : [];
+}
+
+export async function createTaskCreationProject(input: {
+  name: string;
+  description?: string | null;
+  altusProjectMemory?: AltusProjectMemory | null;
+}): Promise<TaskCreationProjectSummary | null> {
+  const url = `${getApiBaseUrl()}/api/task-creation/projects`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      name: input.name,
+      description: input.description ?? "",
+      altusProjectMemory: input.altusProjectMemory ?? null,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationProjectSummary };
+  return result?.data || null;
+}
+
+export async function updateTaskCreationProject(
+  projectId: string,
+  input: {
+    name?: string;
+    description?: string | null;
+    pinned?: boolean;
+    altusProjectMemory?: AltusProjectMemory | null;
+  }
+): Promise<TaskCreationProjectSummary | null> {
+  const safeProjectId = encodeURIComponent(projectId);
+  const url = `${getApiBaseUrl()}/api/task-creation/projects/${safeProjectId}`;
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.description !== undefined ? { description: input.description ?? "" } : {}),
+      ...(input.pinned !== undefined ? { pinned: Boolean(input.pinned) } : {}),
+      ...(input.altusProjectMemory !== undefined ? { altusProjectMemory: input.altusProjectMemory } : {}),
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationProjectSummary };
+  return result?.data || null;
+}
+
+export async function deleteTaskCreationProject(projectId: string): Promise<void> {
+  const safeProjectId = encodeURIComponent(projectId);
+  const url = `${getApiBaseUrl()}/api/task-creation/projects/${safeProjectId}`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: buildClientIdentityHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+}
+
+export async function updateTaskCreationSessionProject(
+  sessionId: string,
+  input: {
+    projectId?: string | null;
+    projectName?: string | null;
+  }
+): Promise<TaskCreationSessionSummary | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/project`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      projectId: input.projectId ?? null,
+      projectName: input.projectName ?? null,
+    }),
   });
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));

@@ -1,6 +1,12 @@
 import type { ConnectorKey } from "@/lib/connectors-client";
 
-export type SettingsTab = "account" | "model" | "settings" | "skills" | "connectors";
+export type SettingsTab =
+  | "personalization"
+  | "account"
+  | "model"
+  | "settings"
+  | "skills"
+  | "connectors";
 
 export type OpenSettingsDialogDetail = {
   tab?: SettingsTab;

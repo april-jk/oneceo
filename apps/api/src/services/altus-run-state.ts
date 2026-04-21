@@ -1,7 +1,11 @@
 import type { ManagedRunStatus } from '../db/dao/task-session-run.dao';
+import type { AltusProjectMemory } from '../db/dao/app-user-project.dao';
+import type { AltusUserMemory } from './altus-memory-context-service';
 import type { TaskSessionDeliverableArtifactRecord } from './task-session-deliverable-service';
 import type { ManagedMcpProvider, ManagedSkillCatalogEntry, ManagedSkillContext } from './altus-managed-shared';
 import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-service';
+import type { AltusSessionMemory } from './task-session-altus-memory-service';
+import type { SessionSkillState, SkillSelectionInput } from './task-session-skill-state-service';
 
 export class AltusRunState {
   status: ManagedRunStatus;
@@ -21,10 +25,16 @@ export class AltusRunState {
       model: string;
       userInput: string;
       sessionTitle?: string | null;
+      memoryContextPrompt?: string | null;
+      userMemory: AltusUserMemory;
+      projectMemory: AltusProjectMemory | null;
+      sessionAltusMemory: AltusSessionMemory;
       connectors: unknown[];
       mcpProviders: ManagedMcpProvider[];
       skillCatalog: ManagedSkillCatalogEntry[];
       skills: ManagedSkillContext[];
+      residentSkillSelections: SkillSelectionInput[];
+      sessionSkillState: SessionSkillState;
       taskIntentProfile: AltusManagedTaskIntentProfile;
     }
   ) {

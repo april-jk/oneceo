@@ -90,6 +90,7 @@ export interface UseTaskCreationAgentOptions {
   autoRuntime?: boolean;
   compactHistory?: boolean;
   runtimeLogPollingEnabled?: boolean;
+  initialProjectId?: string | null;
 }
 
 type SendInputOptions = {
@@ -2622,6 +2623,10 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const autoRuntime = options?.autoRuntime !== false;
   const compactHistory = options?.compactHistory !== false;
   const runtimeLogPollingEnabled = options?.runtimeLogPollingEnabled === true;
+  const initialProjectIdForNewSession =
+    typeof options?.initialProjectId === 'string' && options.initialProjectId.trim()
+      ? options.initialProjectId.trim()
+      : null;
   const [isConnected, setIsConnected] = useState(() => isManagedAltusMode());
   const [isProcessing, setIsProcessing] = useState(false);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
@@ -5107,6 +5112,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         await interruptCurrentRun(activeSessionId || undefined);
       }
       let shouldBindCreatedSession = false;
+      const initialProjectId = !sessionId ? initialProjectIdForNewSession || undefined : undefined;
       if (!activeSessionId) {
         const created = await createTaskCreationDraftSession(text);
         const createdSessionId = (created?.id || '').trim();
@@ -5115,6 +5121,13 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         }
         activeSessionId = createdSessionId;
         shouldBindCreatedSession = true;
+        if (initialProjectId) {
+          await createTaskCreationSession({
+            sessionId: createdSessionId,
+            mode: 'altus',
+            projectId: initialProjectId,
+          });
+        }
         applyPendingConnectorDraftAsync(createdSessionId);
       }
 
@@ -5321,10 +5334,12 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       let prePersistedUserInput = false;
       if (activeSessionId) {
         try {
+          const initialProjectId = !sessionId ? initialProjectIdForNewSession || undefined : undefined;
           await createTaskCreationSession({
             sessionId: activeSessionId,
             mode: 'sandbox',
             executor,
+            ...(initialProjectId ? { projectId: initialProjectId } : {}),
             ...(codexExecutionMode ? { codexExecutionMode } : {}),
             ...(executor === 'codex'
               ? {}
@@ -5487,6 +5502,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     sendOrQueueMessage,
     sendUserInput,
     sessionId,
+    initialProjectIdForNewSession,
     syncRuntime,
     autoRuntime,
     runtimeEnabled,

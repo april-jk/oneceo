@@ -1,6 +1,7 @@
 import type express from 'express';
 import { randomInt } from 'node:crypto';
 import { appUserDAO, appUserEmailVerificationDAO, appUserSessionDAO } from '../db/dao';
+import { altusMemoryContextService } from './altus-memory-context-service';
 import { appAuthEmailService } from './app-auth-email-service';
 import { hashPassword, verifyPassword } from '../utils/auth-password';
 import { createSessionToken, hashSessionToken, resolveSessionExpiry } from '../utils/auth-session';
@@ -23,6 +24,76 @@ function isValidEmail(email: string) {
   return !!email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+const PERSONALIZATION_MAX_LENGTH = {
+  preferredName: 80,
+  occupation: 80,
+  identity: 80,
+  location: 120,
+  background: 1000,
+  preferences: 800,
+  responsePreferences: 1500,
+} as const;
+
+type AppUserPersonalization = {
+  preferredName: string;
+  occupation: string;
+  identity: string;
+  location: string;
+  background: string;
+  preferences: string;
+  responsePreferences: string;
+};
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function normalizeBoundedText(value: unknown, maxLength: number, label: string) {
+  const text = asText(value);
+  if (text.length > maxLength) {
+    throw new Error(`${label}长度不能超过 ${maxLength} 个字符`);
+  }
+  return text;
+}
+
+export function normalizeAppUserPersonalization(value: unknown): AppUserPersonalization {
+  const record = asRecord(value);
+  const legacyRole = record.role;
+  const legacyAbout = record.about;
+  return {
+    preferredName: normalizeBoundedText(
+      record.preferredName,
+      PERSONALIZATION_MAX_LENGTH.preferredName,
+      '称呼偏好'
+    ),
+    occupation: normalizeBoundedText(
+      record.occupation ?? legacyRole,
+      PERSONALIZATION_MAX_LENGTH.occupation,
+      '职业'
+    ),
+    identity: normalizeBoundedText(record.identity, PERSONALIZATION_MAX_LENGTH.identity, '身份'),
+    location: normalizeBoundedText(record.location, PERSONALIZATION_MAX_LENGTH.location, '所在地'),
+    background: normalizeBoundedText(
+      record.background ?? legacyAbout,
+      PERSONALIZATION_MAX_LENGTH.background,
+      '背景信息'
+    ),
+    preferences: normalizeBoundedText(record.preferences, PERSONALIZATION_MAX_LENGTH.preferences, '长期偏好'),
+    responsePreferences: normalizeBoundedText(
+      record.responsePreferences,
+      PERSONALIZATION_MAX_LENGTH.responsePreferences,
+      '自定义指令'
+    ),
+  };
+}
+
+function extractAppUserPersonalization(profileJson: unknown): AppUserPersonalization {
+  const root = asRecord(profileJson);
+  return normalizeAppUserPersonalization(root.personalization);
+}
+
 function generateVerificationCode(length = DEFAULT_REGISTER_CODE_LENGTH) {
   const max = 10 ** length;
   return String(randomInt(0, max)).padStart(length, '0');
@@ -34,6 +105,7 @@ function toPublicUser(user: Awaited<ReturnType<typeof appUserDAO.getById>>) {
     id: String(user.id),
     email: user.email,
     displayName: user.displayName,
+    personalization: extractAppUserPersonalization((user as any).profileJson),
     status: user.status,
     createdAt: user.createdAt?.toISOString?.() || new Date().toISOString(),
     updatedAt: user.updatedAt?.toISOString?.() || new Date().toISOString(),
@@ -145,6 +217,9 @@ export class AppAuthService {
       email,
       passwordHash: await hashPassword(password),
       displayName,
+      profileJson: {
+        personalization: normalizeAppUserPersonalization(undefined),
+      },
     });
     return this.createSessionForUser(String(created.id), req);
   }
@@ -199,6 +274,46 @@ export class AppAuthService {
   async logout(sessionToken: string) {
     if (!asText(sessionToken)) return;
     await appUserSessionDAO.revokeByTokenHash(hashSessionToken(sessionToken));
+  }
+
+  async updateProfile(
+    userId: string,
+    input: {
+      displayName?: string;
+      personalization?: unknown;
+    }
+  ) {
+    const current = await appUserDAO.getById(userId);
+    if (!current) {
+      throw new Error('用户不存在');
+    }
+
+    const nextDisplayName =
+      input.displayName === undefined ? undefined : asText(input.displayName);
+    if (input.displayName !== undefined && !nextDisplayName) {
+      throw new Error('显示名称不能为空');
+    }
+
+    const nextPersonalization =
+      input.personalization === undefined
+        ? extractAppUserPersonalization((current as any).profileJson)
+        : normalizeAppUserPersonalization(input.personalization);
+
+    const updated = await appUserDAO.updateById(userId, {
+      displayName: nextDisplayName,
+      profileJson: {
+        ...asRecord((current as any).profileJson),
+        personalization: nextPersonalization,
+      },
+    });
+
+    if (!updated) {
+      throw new Error('更新用户资料失败');
+    }
+
+    await altusMemoryContextService.invalidateUserMemory(userId);
+
+    return toPublicUser(updated);
   }
 }
 

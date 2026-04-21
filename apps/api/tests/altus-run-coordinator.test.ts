@@ -8,6 +8,8 @@ import { buildManagedMcpToolName } from '../src/services/altus-managed-shared';
 import { connectorGuideService } from '../src/services/connector-guide-service';
 import { osacAgentService } from '../src/services/osac-agent-service';
 import { sandboxSkillSyncService } from '../src/services/sandbox-skill-sync-service';
+import { taskSessionAltusMemoryService } from '../src/services/task-session-altus-memory-service';
+import { taskSessionSkillStateService } from '../src/services/task-session-skill-state-service';
 
 const originalFetch = global.fetch;
 
@@ -207,6 +209,19 @@ test('getModelRetryLimit defaults higher for transient upstream fetch failures w
 
 test('execute completes after tool round and final assistant response', async () => {
   const state = createState('run-coordinator-complete', 'session-coordinator-complete');
+  state.input.memoryContextPrompt = '## Altus Memory Context\n- 项目规范：输出需可直接运行';
+  state.input.sessionAltusMemory = {
+    version: 1,
+    summary: {
+      goal: '实现 2048 小游戏',
+      latestOutcome: '尚未开始',
+      openQuestions: [],
+    },
+    constraints: ['使用现有技术栈'],
+    decisions: [],
+    workingNotes: [],
+    updatedAt: '2026-04-21T16:10:00.000Z',
+  };
   const setupCalls: Record<string, unknown>[] = [];
   const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
   const lifecycleCalls: string[] = [];
@@ -219,6 +234,7 @@ test('execute completes after tool round and final assistant response', async ()
     })),
     buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => {
       assert.match(systemPrompt, /You are Altus/);
+      assert.match(systemPrompt, /Altus Memory Context/);
       return [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: input },
@@ -330,6 +346,28 @@ test('execute completes after tool round and final assistant response', async ()
           verification: ['已写入 index.html'],
         }),
   }));
+  mock.method(taskSessionSkillStateService, 'markResidentSkillsMaterialized', async () => undefined);
+  const markMaterializedMock = mock.method(taskSessionAltusMemoryService, 'markMaterialized', async (input: any) => ({
+    ...(input.state || {}),
+    sandboxMaterialization: {
+      sandboxId: input.sandboxId,
+      workspaceRoot: input.workspaceRoot,
+      materializedAt: '2026-04-21T16:11:00.000Z',
+    },
+  }));
+  const flushAltusMemoryMock = mock.method(taskSessionAltusMemoryService, 'saveSandboxFileMemoryToDb', async (input: any) => ({
+    version: 2,
+    summary: {
+      goal: '实现 2048 小游戏',
+      latestOutcome: '2048 已完成并写入 workspace。',
+      openQuestions: [],
+    },
+    constraints: ['使用现有技术栈'],
+    decisions: [],
+    workingNotes: [],
+    updatedAt: '2026-04-21T16:12:00.000Z',
+    lastWriterRunId: input.runId,
+  }));
 
   const coordinator = new AltusRunCoordinator(
     setupService as any,
@@ -345,6 +383,9 @@ test('execute completes after tool round and final assistant response', async ()
   assert.equal(state.status, 'completed');
   assert.equal(state.sandboxId, 'sandbox-1');
   assert.equal(state.workspaceRoot, '/workspace/session-coordinator-complete');
+  assert.equal(markMaterializedMock.mock.callCount(), 1);
+  assert.equal(flushAltusMemoryMock.mock.callCount(), 1);
+  assert.equal(state.input.sessionAltusMemory?.summary?.latestOutcome, '2048 已完成并写入 workspace。');
 
   const timelineCall = setupCalls.find((entry) => entry.type === 'timeline') as any;
   assert.equal(timelineCall.input.messageType, 'assistant_message');

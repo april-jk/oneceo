@@ -14,6 +14,7 @@ export const appUsers = pgTable(
     email: text('email').notNull(),
     passwordHash: text('password_hash').notNull(),
     displayName: text('display_name').notNull(),
+    profileJson: jsonb('profile_json').notNull().default(sql`'{}'::jsonb`),
     status: text('status').notNull().default('active'),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
@@ -65,6 +66,32 @@ export const appUserSessions = pgTable(
     tokenHashUnique: uniqueIndex('idx_app_user_sessions_token_hash').on(table.sessionTokenHash),
     userIdIdx: index('idx_app_user_sessions_user_id').on(table.userId),
     expiresAtIdx: index('idx_app_user_sessions_expires_at').on(table.expiresAt),
+  })
+);
+
+export const appUserProjects = pgTable(
+  'app_user_projects',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => appUsers.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    projectType: text('project_type').notNull().default('standard'),
+    status: text('status').notNull().default('active'),
+    metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userProjectNameUnique: uniqueIndex('idx_app_user_projects_user_name').on(table.userId, table.name),
+    userIdIdx: index('idx_app_user_projects_user_id').on(table.userId),
+    userTypeStatusIdx: index('idx_app_user_projects_user_type_status').on(
+      table.userId,
+      table.projectType,
+      table.status
+    ),
   })
 );
 
@@ -139,6 +166,7 @@ export const taskCreationSessions = pgTable('task_creation_sessions', {
   id: uuid('id').primaryKey(),
   userId: text('user_id'), // 用户ID（可选，未来可以关联用户系统）
   status: text('status').notNull().default('in_progress'), // in_progress, completed, failed
+  metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
   completedAt: timestamp('completed_at'),

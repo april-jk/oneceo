@@ -663,6 +663,43 @@ class TaskCreationFileMemoryStore {
     });
   }
 
+  async clearProjectAssignment(projectId: string): Promise<void> {
+    const normalizedProjectId = projectId ? String(projectId).trim() : '';
+    if (!normalizedProjectId) return;
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      let changed = false;
+      for (const session of memory.sessions) {
+        if ((session.projectId || null) !== normalizedProjectId) continue;
+        session.projectId = null;
+        session.projectName = null;
+        session.updatedAt = new Date().toISOString();
+        changed = true;
+      }
+      if (!changed) return;
+      await this.writeMemory(memory);
+    });
+  }
+
+  async syncProjectName(projectId: string, projectName: string): Promise<void> {
+    const normalizedProjectId = projectId ? String(projectId).trim() : '';
+    const normalizedProjectName = projectName ? String(projectName).trim().slice(0, 80) : '';
+    if (!normalizedProjectId || !normalizedProjectName) return;
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      let changed = false;
+      for (const session of memory.sessions) {
+        if ((session.projectId || null) !== normalizedProjectId) continue;
+        if ((session.projectName || null) === normalizedProjectName) continue;
+        session.projectName = normalizedProjectName;
+        session.updatedAt = new Date().toISOString();
+        changed = true;
+      }
+      if (!changed) return;
+      await this.writeMemory(memory);
+    });
+  }
+
   async updateSessionShare(
     sessionId: string,
     payload: {

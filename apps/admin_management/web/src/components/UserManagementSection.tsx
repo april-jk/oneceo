@@ -3,6 +3,7 @@ import { api } from '../api';
 import type {
   AppUserConversationSummary,
   AppUserDetailResponse,
+  DeploymentRecord,
   AppUserListResponse,
   AppUserSandboxSummary,
   AppUserSessionSummary,
@@ -32,6 +33,7 @@ type Props = {
   onRegisterRefresh?: (handler: (() => Promise<void>) | null) => void;
   onOpenConversation?: (sessionId: string, origin?: UserDetailJumpOrigin) => void;
   onOpenSandbox?: (sandboxId: string, origin?: UserDetailJumpOrigin) => void;
+  onOpenDeployment?: (taskSessionId: string, origin?: UserDetailJumpOrigin) => void;
   persistedState?: UserManagementViewState | null;
   onStateChange?: (state: UserManagementViewState) => void;
 };
@@ -142,6 +144,15 @@ function sandboxStatusLabel(value?: string | null) {
   if (value === 'closing') return '关闭中';
   if (value === 'closed') return '已关闭';
   if (value === 'failed') return '失败';
+  return value || '-';
+}
+
+function deploymentStatusLabel(value?: string | null) {
+  if (value === 'success') return '成功';
+  if (value === 'failed') return '失败';
+  if (value === 'pending') return '处理中';
+  if (value === 'ready') return '已就绪';
+  if (value === 'uninitialized') return '未初始化';
   return value || '-';
 }
 
@@ -263,12 +274,56 @@ function SandboxItem({
   );
 }
 
+function DeploymentItem({
+  item,
+  onOpenDeployment,
+}: {
+  item: DeploymentRecord;
+  onOpenDeployment?: (item: DeploymentRecord) => void;
+}) {
+  return (
+    <article className="user-management-record-item">
+      <div className="user-management-record-head">
+        {onOpenDeployment ? (
+          <button type="button" className="record-title-link" onClick={() => onOpenDeployment(item)}>
+            {item.session.title}
+          </button>
+        ) : (
+          <strong>{item.session.title}</strong>
+        )}
+        <span className={`state-chip ${item.statusCategory === 'success' || item.statusCategory === 'ready' ? 'status-running' : item.statusCategory === 'failed' ? 'status-error' : 'status-paused'}`}>
+          {deploymentStatusLabel(item.statusCategory)}
+        </span>
+      </div>
+      <dl className="user-management-record-grid">
+        <div>
+          <dt>会话 ID</dt>
+          <dd>{item.taskSessionId}</dd>
+        </div>
+        <div>
+          <dt>项目 / 服务</dt>
+          <dd>{item.projectName || '-'} / {item.serviceName || '-'}</dd>
+        </div>
+        <div>
+          <dt>访问地址</dt>
+          <dd>{item.latestUrl || item.latestStaticUrl || '-'}</dd>
+        </div>
+        <div>
+          <dt>最近更新</dt>
+          <dd>{formatDateTime(item.updatedAt)}</dd>
+        </div>
+      </dl>
+    </article>
+  );
+}
+
 export function UserManagementSection({
   onError,
   onUpdatedAtChange,
   onRegisterRefresh,
   onOpenConversation,
   onOpenSandbox,
+  onOpenDeployment,
   persistedState,
   onStateChange,
 }: Props) {
@@ -283,6 +338,8 @@ export function UserManagementSection({
   const [detailTab, setDetailTab] = useState<UserDetailTab>(initialState.detailTab);
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [deploymentRecords, setDeploymentRecords] = useState<DeploymentRecord[]>([]);
+  const [deploymentLoading, setDeploymentLoading] = useState(false);
   const [actionBusy, setActionBusy] = useState<'status' | null>(null);
   const [summaryRefreshing, setSummaryRefreshing] = useState(false);
   const [summaryFetchedAt, setSummaryFetchedAt] = useState<string | null>(null);
@@ -372,6 +429,31 @@ export function UserManagementSection({
   }, [detail?.user?.id, drawerOpen, loadDetail, selectedUserId]);
 
   useEffect(() => {
+    if (!drawerOpen || detailTab !== 'deployments' || !selectedUserId) return;
+    let cancelled = false;
+    setDeploymentLoading(true);
+    void api.listDeploymentRecords({
+      limit: 20,
+      userId: selectedUserId,
+    }).then((next) => {
+      if (cancelled) return;
+      setDeploymentRecords(next.records);
+      onError(null);
+    }).catch((error) => {
+      if (cancelled) return;
+      setDeploymentRecords([]);
+      onError(error instanceof Error ? error.message : '用户部署记录加载失败');
+    }).finally(() => {
+      if (!cancelled) {
+        setDeploymentLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [detailTab, drawerOpen, onError, selectedUserId]);
+
+  useEffect(() => {
     if (detail?.user?.id === selectedUserId) {
       setSelectedUserLabel(detail.user.displayName || detail.user.email || detail.user.id);
       return;
@@ -395,8 +477,15 @@ export function UserManagementSection({
     await loadUsers(filters, sort);
     if (drawerOpen && selectedUserId) {
       await loadDetail(selectedUserId);
+      if (detailTab === 'deployments') {
+        const next = await api.listDeploymentRecords({
+          limit: 20,
+          userId: selectedUserId,
+        });
+        setDeploymentRecords(next.records);
+      }
     }
-  }, [drawerOpen, filters, loadDetail, loadUsers, selectedUserId, sort]);
+  }, [detailTab, drawerOpen, filters, loadDetail, loadUsers, selectedUserId, sort]);
 
   useEffect(() => {
     onRegisterRefresh?.(handleExternalRefresh);
@@ -411,6 +500,7 @@ export function UserManagementSection({
       const listItem = users.find((item) => item.id === userId) || null;
       setSelectedUserLabel(listItem?.displayName || listItem?.email || userId);
       setDetail(null);
+      setDeploymentRecords([]);
       setDrawerOpen(true);
       setDetailTab('overview');
     },
@@ -740,6 +830,7 @@ export function UserManagementSection({
                 ['overview', '概览'],
                 ['conversations', '对话'],
                 ['sandboxes', 'Sandbox'],
+                ['deployments', '部署'],
               ] as Array<[UserDetailTab, string]>).map(([key, label]) => (
                 <button
                   key={key}
@@ -890,6 +981,24 @@ export function UserManagementSection({
                         />
                       ))
                     : <DetailListEmpty title="当前用户暂无 Sandbox 记录" />)
+                : null}
+
+              {!detailLoading && detail && detailTab === 'deployments'
+                ? (deploymentLoading
+                    ? <DetailListEmpty title="正在加载部署记录..." />
+                    : deploymentRecords.length > 0
+                      ? deploymentRecords.map((item) => (
+                          <DeploymentItem
+                            key={`${item.taskSessionId}-${item.deploymentId || item.updatedAt}`}
+                            item={item}
+                            onOpenDeployment={
+                              onOpenDeployment && detailJumpOrigin
+                                ? (record) => onOpenDeployment(record.taskSessionId, detailJumpOrigin)
+                                : undefined
+                            }
+                          />
+                        ))
+                      : <DetailListEmpty title="当前用户暂无部署记录" />)
                 : null}
             </div>
           </aside>

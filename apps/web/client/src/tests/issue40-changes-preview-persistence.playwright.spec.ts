@@ -1,4 +1,6 @@
-import { expect, request as playwrightRequest, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+import { bootstrapSharedAuthenticatedUser } from "./playwright-auth";
+import { composerTextarea } from "./playwright-locators";
 
 const WEB_URL = "http://oneceo.ai:3000";
 const API_URL = "http://oneceo.ai:3000";
@@ -8,32 +10,11 @@ function uniqueToken() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-async function bootstrapAuthenticatedContext(
-  browser: import("@playwright/test").Browser,
-  token: string,
-) {
-  const api = await playwrightRequest.newContext({ baseURL: API_URL });
-  try {
-    const response = await api.post("/api/auth/register", {
-      data: {
-        displayName: `playwright-issue40-${token}`,
-        email: `playwright-issue40-${token}@example.com`,
-        password: "playwright-issue40-123",
-      },
-    });
-    expect(response.ok()).toBe(true);
-    const storageState = await api.storageState();
-    return await browser.newContext({ storageState });
-  } finally {
-    await api.dispose();
-  }
-}
-
 test("issue40: changes preview tab keeps state after refresh", async ({
   browser,
 }) => {
   const token = uniqueToken();
-  const context = await bootstrapAuthenticatedContext(browser, token);
+  const context = await bootstrapSharedAuthenticatedUser(browser, WEB_URL);
   const page = await context.newPage();
   try {
     await page.goto(WEB_URL, { waitUntil: "domcontentloaded" });
@@ -44,7 +25,7 @@ test("issue40: changes preview tab keeps state after refresh", async ({
     });
     await page.goto(WEB_URL, { waitUntil: "domcontentloaded" });
 
-    const composer = page.getByRole("textbox", { name: "Type your message here..." });
+    const composer = composerTextarea(page);
     await expect(composer).toBeVisible();
     await composer.fill(`issue40 preview state test ${token}`);
     await composer.press("Enter");

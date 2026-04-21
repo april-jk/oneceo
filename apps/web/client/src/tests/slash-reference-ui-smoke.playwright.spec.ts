@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const WEB_URL = process.env.PLAYWRIGHT_WEB_URL || "http://localhost:3001";
+const WEB_URL = process.env.PLAYWRIGHT_WEB_URL || "http://127.0.0.1:3000";
 const CORS_HEADERS = {
   "access-control-allow-origin": WEB_URL,
   "access-control-allow-credentials": "true",

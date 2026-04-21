@@ -27,6 +27,7 @@ export type TaskCreationProjectSummary = {
   description?: string;
   projectType?: string;
   status?: string;
+  pinned?: boolean;
   createdAt?: string | null;
   updatedAt?: string | null;
 };
@@ -992,6 +993,46 @@ export async function createTaskCreationProject(input: {
   }
   const result = (await response.json()) as { data?: TaskCreationProjectSummary };
   return result?.data || null;
+}
+
+export async function updateTaskCreationProject(
+  projectId: string,
+  input: {
+    name?: string;
+    description?: string | null;
+    pinned?: boolean;
+  }
+): Promise<TaskCreationProjectSummary | null> {
+  const safeProjectId = encodeURIComponent(projectId);
+  const url = `${getApiBaseUrl()}/api/task-creation/projects/${safeProjectId}`;
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.description !== undefined ? { description: input.description ?? "" } : {}),
+      ...(input.pinned !== undefined ? { pinned: Boolean(input.pinned) } : {}),
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationProjectSummary };
+  return result?.data || null;
+}
+
+export async function deleteTaskCreationProject(projectId: string): Promise<void> {
+  const safeProjectId = encodeURIComponent(projectId);
+  const url = `${getApiBaseUrl()}/api/task-creation/projects/${safeProjectId}`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: buildClientIdentityHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
 }
 
 export async function updateTaskCreationSessionProject(

@@ -223,8 +223,11 @@ test('AppAuthService.updateProfile normalizes personalization payload and return
     displayName: '  New Name  ',
     personalization: {
       preferredName: '  Watson  ',
-      role: ' Founder ',
-      about: '  Builds agent systems. ',
+      occupation: ' Founder ',
+      identity: ' Builder ',
+      location: ' Shanghai ',
+      background: '  Builds agent systems. ',
+      preferences: '  Prefer clear tradeoffs. ',
       responsePreferences: '  Start with the answer. ',
     },
   });
@@ -233,16 +236,22 @@ test('AppAuthService.updateProfile normalizes personalization payload and return
   assert.deepEqual(capturedUpdate?.input.profileJson, {
     personalization: {
       preferredName: 'Watson',
-      role: 'Founder',
-      about: 'Builds agent systems.',
+      occupation: 'Founder',
+      identity: 'Builder',
+      location: 'Shanghai',
+      background: 'Builds agent systems.',
+      preferences: 'Prefer clear tradeoffs.',
       responsePreferences: 'Start with the answer.',
     },
   });
   assert.equal(result?.displayName, 'New Name');
   assert.deepEqual(result?.personalization, {
     preferredName: 'Watson',
-    role: 'Founder',
-    about: 'Builds agent systems.',
+    occupation: 'Founder',
+    identity: 'Builder',
+    location: 'Shanghai',
+    background: 'Builds agent systems.',
+    preferences: 'Prefer clear tradeoffs.',
     responsePreferences: 'Start with the answer.',
   });
 });

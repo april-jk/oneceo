@@ -5,6 +5,7 @@ const REDIS_PREFIX = 'oneceo:v1';
 export const redisTtlSeconds = {
   workspaceCache: 120,
   skillSessionState: 1800,
+  altusSessionMemory: 1800,
   connectorsMe: 120,
   connectorDraft: 24 * 60 * 60,
   recentMessages: 600,
@@ -98,6 +99,9 @@ export const redisKeyspace = {
   },
   skillSessionState(input: RedisSessionScope) {
     return `${scopePrefix(input)}:cache:skills:session-state`;
+  },
+  altusSessionMemory(input: RedisSessionScope) {
+    return `${scopePrefix(input)}:cache:altus:session-memory`;
   },
   historyCursor(input: RedisSessionScope) {
     return `${scopePrefix(input)}:cursor:history`;

@@ -18,6 +18,7 @@ import { AltusRunEventWriter, altusRunEventWriter } from './altus-run-event-writ
 import { AltusRunLifecycleService, altusRunLifecycleService } from './altus-run-lifecycle-service';
 import { AltusRunState } from './altus-run-state';
 import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
+import { taskSessionAltusMemoryService } from './task-session-altus-memory-service';
 import { taskSessionSkillStateService } from './task-session-skill-state-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 import {
@@ -258,6 +259,31 @@ export class AltusRunCoordinator {
       });
     } catch (error) {
       console.warn('[ALTUS_RUN_SKILL_MEMORY_FLUSH_WARN]', {
+        sessionId: state.input.sessionId,
+        runId: state.input.runId,
+        sandboxId: state.sandboxId,
+        reason,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async flushSandboxAltusMemory(
+    state: AltusRunState,
+    reason: 'waiting_user' | 'completed' | 'failed' | 'stopped'
+  ) {
+    if (!state.sandboxId || !state.workspaceRoot) return;
+    try {
+      const next = await taskSessionAltusMemoryService.saveSandboxFileMemoryToDb({
+        sessionId: state.input.sessionId,
+        sandboxId: state.sandboxId,
+        workspaceRoot: state.workspaceRoot,
+        runId: state.input.runId,
+        reason,
+      });
+      state.input.sessionAltusMemory = next;
+    } catch (error) {
+      console.warn('[ALTUS_RUN_MEMORY_FLUSH_WARN]', {
         sessionId: state.input.sessionId,
         runId: state.input.runId,
         sandboxId: state.sandboxId,
@@ -992,7 +1018,14 @@ export class AltusRunCoordinator {
     });
     const skillCatalogPrompt = altusManagedPromptService.buildSkillCatalogPrompt(state.input.skillCatalog);
     const skillPrompt = altusManagedPromptService.buildSkillContextPrompt(state.input.skills);
-    const compositeSystemPrompt = [systemPrompt, skillCatalogPrompt, skillPrompt].filter(Boolean).join('\n\n');
+    const compositeSystemPrompt = [
+      systemPrompt,
+      state.input.memoryContextPrompt || '',
+      skillCatalogPrompt,
+      skillPrompt,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
     const messages = await this.setupService.buildConversationMessages(
       state.input.sessionId,
       state.input.userInput,
@@ -1437,6 +1470,13 @@ export class AltusRunCoordinator {
           workspaceRoot: sandbox.workspaceRoot,
           residentSelections: residentSelectionsForSync,
         });
+        const nextAltusMemory = await taskSessionAltusMemoryService.markMaterialized({
+          sessionId: state.input.sessionId,
+          sandboxId: sandbox.sandboxId,
+          workspaceRoot: sandbox.workspaceRoot,
+          runId: state.input.runId,
+        });
+        state.input.sessionAltusMemory = nextAltusMemory;
       } catch (error) {
         console.warn('[ALTUS_RUN_SKILL_MEMORY_INIT_WARN]', {
           sessionId: state.input.sessionId,
@@ -1451,6 +1491,7 @@ export class AltusRunCoordinator {
       if (result.outcome === 'waiting_user') {
         state.markWaitingUser();
         await this.flushSandboxSkillMemory(state, 'waiting_user');
+        await this.flushSandboxAltusMemory(state, 'waiting_user');
         await this.lifecycleService.markWaitingUser(state);
         return;
       }
@@ -1459,11 +1500,13 @@ export class AltusRunCoordinator {
         deliverables: state.deliverables,
       });
       await this.flushSandboxSkillMemory(state, 'completed');
+      await this.flushSandboxAltusMemory(state, 'completed');
       await this.lifecycleService.markCompleted(state);
     } catch (error) {
       if (abortController.signal.aborted || asText((error as Error)?.message) === 'managed_run_aborted') {
         state.markStopped('user_interrupt');
         await this.flushSandboxSkillMemory(state, 'stopped');
+        await this.flushSandboxAltusMemory(state, 'stopped');
         await this.lifecycleService.markStopped(state, 'user_interrupt');
         return;
       }
@@ -1471,6 +1514,7 @@ export class AltusRunCoordinator {
       const message = error instanceof Error ? error.message : String(error || 'managed run failed');
       state.markFailed(message);
       await this.flushSandboxSkillMemory(state, 'failed');
+      await this.flushSandboxAltusMemory(state, 'failed');
       await this.lifecycleService.markFailed(state, message);
     }
   }

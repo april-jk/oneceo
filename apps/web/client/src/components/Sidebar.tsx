@@ -78,6 +78,7 @@ import { useTranslation } from "react-i18next";
 import React from "react";
 import { toast } from "sonner";
 import {
+  type AltusProjectMemory,
   createTaskCreationProject,
   deleteTaskCreationProject,
   deleteTaskCreationSession,
@@ -103,6 +104,24 @@ interface SidebarProps {
 }
 
 const WAITING_USER_TEXT_CLASS = "text-[var(--function-warning,rgb(217_119_6))]";
+const EMPTY_ALTUS_PROJECT_MEMORY: AltusProjectMemory = {
+  context: "",
+  guidelines: "",
+  operatingRules: "",
+  executionManual: "",
+};
+
+function normalizeAltusProjectMemory(
+  value: AltusProjectMemory | null | undefined,
+): AltusProjectMemory {
+  return {
+    context: value?.context?.trim?.() || "",
+    guidelines: value?.guidelines?.trim?.() || "",
+    operatingRules: value?.operatingRules?.trim?.() || "",
+    executionManual: value?.executionManual?.trim?.() || "",
+    updatedAt: value?.updatedAt || null,
+  };
+}
 
 function WaitingUserIcon({ className = "h-3.5 w-3.5" }: { className?: string }) {
   return (
@@ -202,11 +221,15 @@ export default function Sidebar({
   const [createProjectDialogOpen, setCreateProjectDialogOpen] = React.useState(false);
   const [createProjectName, setCreateProjectName] = React.useState("");
   const [createProjectDescription, setCreateProjectDescription] = React.useState("");
+  const [createProjectMemory, setCreateProjectMemory] =
+    React.useState<AltusProjectMemory>(EMPTY_ALTUS_PROJECT_MEMORY);
   const [createProjectSubmitting, setCreateProjectSubmitting] = React.useState(false);
   const [editProjectDialogOpen, setEditProjectDialogOpen] = React.useState(false);
   const [editProjectTarget, setEditProjectTarget] = React.useState<TaskCreationProjectSummary | null>(null);
   const [editProjectName, setEditProjectName] = React.useState("");
   const [editProjectDescription, setEditProjectDescription] = React.useState("");
+  const [editProjectMemory, setEditProjectMemory] =
+    React.useState<AltusProjectMemory>(EMPTY_ALTUS_PROJECT_MEMORY);
   const [editProjectSubmitting, setEditProjectSubmitting] = React.useState(false);
   const [renameDialogOpen, setRenameDialogOpen] = React.useState(false);
   const [renameTarget, setRenameTarget] = React.useState<SessionTask | null>(null);
@@ -846,6 +869,7 @@ export default function Sidebar({
   const openCreateProjectDialog = React.useCallback(() => {
     setCreateProjectName("");
     setCreateProjectDescription("");
+    setCreateProjectMemory(EMPTY_ALTUS_PROJECT_MEMORY);
     setCreateProjectDialogOpen(true);
   }, []);
 
@@ -853,6 +877,7 @@ export default function Sidebar({
     setEditProjectTarget(project);
     setEditProjectName(project.name || "");
     setEditProjectDescription(project.description || "");
+    setEditProjectMemory(normalizeAltusProjectMemory(project.altusProjectMemory));
     setEditProjectDialogOpen(true);
   }, []);
 
@@ -869,6 +894,7 @@ export default function Sidebar({
       const created = await createTaskCreationProject({
         name: nextName,
         description: createProjectDescription,
+        altusProjectMemory: createProjectMemory,
       });
       if (!created?.id) {
         throw new Error(t("sidebar.projectCreateFailed"));
@@ -886,7 +912,7 @@ export default function Sidebar({
     } finally {
       setCreateProjectSubmitting(false);
     }
-  }, [createProjectDescription, createProjectName, sortManualProjects, t]);
+  }, [createProjectDescription, createProjectMemory, createProjectName, sortManualProjects, t]);
 
   const handleEditProjectSubmit = React.useCallback(async () => {
     const target = editProjectTarget;
@@ -897,6 +923,7 @@ export default function Sidebar({
       const updated = await updateTaskCreationProject(target.id, {
         name: nextName,
         description: editProjectDescription,
+        altusProjectMemory: editProjectMemory,
       });
       if (!updated?.id) {
         throw new Error(t("sidebar.projectUpdateFailed"));
@@ -912,7 +939,7 @@ export default function Sidebar({
     } finally {
       setEditProjectSubmitting(false);
     }
-  }, [editProjectDescription, editProjectName, editProjectTarget, sortManualProjects, t]);
+  }, [editProjectDescription, editProjectMemory, editProjectName, editProjectTarget, sortManualProjects, t]);
 
   const handleToggleProjectPinned = React.useCallback(async (project: TaskCreationProjectSummary) => {
     try {
@@ -1780,6 +1807,78 @@ export default function Sidebar({
                 className="min-h-[112px] resize-none"
               />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="sidebar-create-project-context">
+                {t("sidebar.projectContextLabel")}
+              </Label>
+              <Textarea
+                id="sidebar-create-project-context"
+                value={createProjectMemory.context}
+                onChange={(event) =>
+                  setCreateProjectMemory((current) => ({
+                    ...current,
+                    context: event.target.value.slice(0, 2000),
+                  }))
+                }
+                placeholder={t("sidebar.projectContextPlaceholder")}
+                maxLength={2000}
+                className="min-h-[112px] resize-none"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="sidebar-create-project-guidelines">
+                {t("sidebar.projectGuidelinesLabel")}
+              </Label>
+              <Textarea
+                id="sidebar-create-project-guidelines"
+                value={createProjectMemory.guidelines}
+                onChange={(event) =>
+                  setCreateProjectMemory((current) => ({
+                    ...current,
+                    guidelines: event.target.value.slice(0, 2000),
+                  }))
+                }
+                placeholder={t("sidebar.projectGuidelinesPlaceholder")}
+                maxLength={2000}
+                className="min-h-[112px] resize-none"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="sidebar-create-project-operating-rules">
+                {t("sidebar.projectOperatingRulesLabel")}
+              </Label>
+              <Textarea
+                id="sidebar-create-project-operating-rules"
+                value={createProjectMemory.operatingRules}
+                onChange={(event) =>
+                  setCreateProjectMemory((current) => ({
+                    ...current,
+                    operatingRules: event.target.value.slice(0, 2000),
+                  }))
+                }
+                placeholder={t("sidebar.projectOperatingRulesPlaceholder")}
+                maxLength={2000}
+                className="min-h-[112px] resize-none"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="sidebar-create-project-execution-manual">
+                {t("sidebar.projectExecutionManualLabel")}
+              </Label>
+              <Textarea
+                id="sidebar-create-project-execution-manual"
+                value={createProjectMemory.executionManual}
+                onChange={(event) =>
+                  setCreateProjectMemory((current) => ({
+                    ...current,
+                    executionManual: event.target.value.slice(0, 3000),
+                  }))
+                }
+                placeholder={t("sidebar.projectExecutionManualPlaceholder")}
+                maxLength={3000}
+                className="min-h-[132px] resize-none"
+              />
+            </div>
           </div>
           <DialogFooter>
             <Button
@@ -1834,6 +1933,78 @@ export default function Sidebar({
                 placeholder={t("sidebar.projectDescriptionPlaceholder")}
                 maxLength={300}
                 className="min-h-[112px] resize-none"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="sidebar-edit-project-context">
+                {t("sidebar.projectContextLabel")}
+              </Label>
+              <Textarea
+                id="sidebar-edit-project-context"
+                value={editProjectMemory.context}
+                onChange={(event) =>
+                  setEditProjectMemory((current) => ({
+                    ...current,
+                    context: event.target.value.slice(0, 2000),
+                  }))
+                }
+                placeholder={t("sidebar.projectContextPlaceholder")}
+                maxLength={2000}
+                className="min-h-[112px] resize-none"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="sidebar-edit-project-guidelines">
+                {t("sidebar.projectGuidelinesLabel")}
+              </Label>
+              <Textarea
+                id="sidebar-edit-project-guidelines"
+                value={editProjectMemory.guidelines}
+                onChange={(event) =>
+                  setEditProjectMemory((current) => ({
+                    ...current,
+                    guidelines: event.target.value.slice(0, 2000),
+                  }))
+                }
+                placeholder={t("sidebar.projectGuidelinesPlaceholder")}
+                maxLength={2000}
+                className="min-h-[112px] resize-none"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="sidebar-edit-project-operating-rules">
+                {t("sidebar.projectOperatingRulesLabel")}
+              </Label>
+              <Textarea
+                id="sidebar-edit-project-operating-rules"
+                value={editProjectMemory.operatingRules}
+                onChange={(event) =>
+                  setEditProjectMemory((current) => ({
+                    ...current,
+                    operatingRules: event.target.value.slice(0, 2000),
+                  }))
+                }
+                placeholder={t("sidebar.projectOperatingRulesPlaceholder")}
+                maxLength={2000}
+                className="min-h-[112px] resize-none"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="sidebar-edit-project-execution-manual">
+                {t("sidebar.projectExecutionManualLabel")}
+              </Label>
+              <Textarea
+                id="sidebar-edit-project-execution-manual"
+                value={editProjectMemory.executionManual}
+                onChange={(event) =>
+                  setEditProjectMemory((current) => ({
+                    ...current,
+                    executionManual: event.target.value.slice(0, 3000),
+                  }))
+                }
+                placeholder={t("sidebar.projectExecutionManualPlaceholder")}
+                maxLength={3000}
+                className="min-h-[132px] resize-none"
               />
             </div>
           </div>

@@ -77,6 +77,7 @@
     "projectPinAction": "Pin to top",
     "projectUnpinAction": "Unpin from top",
     "projectEditAction": "Edit",
+    "projectCreateSessionAction": "Create a session in this project",
     "projectDeleteAction": "Delete",
     "projectEditTitle": "Edit project",
     "projectEditDescription": "Update the standard project's name, summary, and project-level memory.",

@@ -142,7 +142,7 @@ test('archives and uploads when workspace content changed', async () => {
   assert.equal(env.opencodeStateRoot, '/state/task-archive-1');
   assert.equal(saveSkillStateMock.mock.callCount(), 1);
   assert.equal(saveAltusMemoryMock.mock.callCount(), 1);
-  assert.equal((saveAltusMemoryMock.mock.calls[0]?.arguments[0] as any)?.archiveReason, 'idle_timeout');
+  assert.equal((saveAltusMemoryMock.mock.calls[0]?.arguments[0] as any)?.reason, 'archive:idle_timeout');
 });
 
 test('skips archive upload when hash unchanged and archive already exists', async () => {
@@ -218,7 +218,46 @@ test('restores workspace from archived object and executes restore command', asy
   assert.equal(env.opencodeStateRoot, '/state/task-archive-3');
   assert.equal(saveSkillStateMock.mock.callCount(), 1);
   assert.equal(saveAltusMemoryMock.mock.callCount(), 1);
-  assert.equal((saveAltusMemoryMock.mock.calls[0]?.arguments[0] as any)?.archiveReason, 'restore');
+  assert.equal((saveAltusMemoryMock.mock.calls[0]?.arguments[0] as any)?.reason, 'restore');
+});
+
+test('restore skips live sandbox info lookup when tracked metadata already contains task roots', async () => {
+  const sandboxId = 'sandbox-archive-service-no-live-probe';
+  envMap.set(sandboxId, {
+    sessionId: sandboxId,
+    metadata: {
+      taskSessionId: 'task-archive-no-live-probe',
+      opencodeWorkspaceRoot: '/workspace/task-archive-no-live-probe',
+      opencodeStateRoot: '/state/task-archive-no-live-probe',
+    },
+  });
+
+  const getSandboxInfoMock = mock.fn(async () => ({
+    sandboxId,
+    metadata: {
+      taskSessionId: 'task-archive-no-live-probe',
+      workspaceRoot: '/workspace/task-archive-no-live-probe',
+      stateRoot: '/state/task-archive-no-live-probe',
+    },
+  }));
+  __setSandboxArchiveServiceDepsForTest({
+    e2bConnector: {
+      getSandboxInfo: getSandboxInfoMock as any,
+      runCommand: async (sessionId: string, command: string) => {
+        commandLog.push({ sessionId, command });
+        return { stdout: '', output: '', exitCode: 0 };
+      },
+      readFile: async () => archivePayload,
+      writeFile: async (sessionId: string, path: string, data: Uint8Array | Buffer) => {
+        const size = data instanceof Buffer ? data.length : data.byteLength;
+        writeLog.push({ sessionId, path, size });
+      },
+    } as any,
+  });
+
+  const restored = await restoreWorkspaceIfArchived(sandboxId);
+  assert.equal(restored, false);
+  assert.equal(getSandboxInfoMock.mock.callCount(), 0);
 });
 
 test('restores legacy v2 archive and migrates workspace .opencode into state root', async () => {

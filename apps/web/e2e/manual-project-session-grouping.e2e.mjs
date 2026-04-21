@@ -156,6 +156,7 @@ async function assertProjectContentScrollReady(sidebar) {
       return { missing: true };
     }
 
+    viewport.scrollTop = 0;
     const before = viewport.scrollTop;
     viewport.scrollTop = viewport.scrollHeight;
     const after = viewport.scrollTop;
@@ -265,20 +266,32 @@ async function main() {
       button: "right",
     });
 
-    await page.getByRole("menuitem", { name: "移动到项目", exact: true }).click();
+    await page.getByRole("menuitem", { name: "移动到项目", exact: true }).hover();
+    const moveProjectSubmenu = page
+      .locator('[data-slot="context-menu-sub-content"]')
+      .filter({ hasText: projectName })
+      .last();
+    await moveProjectSubmenu.getByRole("menuitem", { name: projectName, exact: true }).click();
 
-    const moveDialog = page.getByRole("dialog").filter({ hasText: "移动到项目" }).first();
-    await moveDialog.getByRole("button", { name: projectName, exact: true }).click();
-    await moveDialog.waitFor({ state: "hidden", timeout: 30_000 });
+    await allTasksDialog.getByRole("button", { name: "Close" }).click();
+    await allTasksDialog.waitFor({ state: "hidden", timeout: 10_000 });
 
-    await page.keyboard.press("Escape");
-    await allTasksDialog.waitFor({ state: "hidden", timeout: 10_000 }).catch(() => undefined);
-
-    const projectButton = sidebar.getByRole("button", { name: projectName, exact: true }).first();
-    const projectRow = projectButton.locator(
-      "xpath=ancestor::div[contains(@class,'space-y-0.5')][1]",
-    );
-    await projectRow.getByRole("button").first().click();
+    const projectButton = sidebar.locator("button").filter({ hasText: projectName }).first();
+    await sidebar.evaluate((aside, targetProjectName) => {
+      const buttons = Array.from(aside.querySelectorAll("button"));
+      const targetButton = buttons.find((button) =>
+        button.textContent?.includes(targetProjectName),
+      );
+      if (!targetButton) {
+        throw new Error(`project button not found: ${targetProjectName}`);
+      }
+      const projectRow = targetButton.closest("div.flex.items-center.gap-1");
+      const toggleButton = projectRow?.querySelector("button");
+      if (!(toggleButton instanceof HTMLElement)) {
+        throw new Error(`project toggle not found: ${targetProjectName}`);
+      }
+      toggleButton.click();
+    }, projectName);
     await sidebar
       .locator(`a[href="/session/${sessionId}?view=history"]`)
       .first()

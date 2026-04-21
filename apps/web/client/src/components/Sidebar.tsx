@@ -31,6 +31,9 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
@@ -60,12 +63,13 @@ import {
   User,
   CheckCircle2,
   Bell,
+  Check,
   Coins,
   Crown,
   Pencil,
   Share2,
   Star,
-  FolderInput,
+  FolderSync,
   Trash2,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
@@ -193,8 +197,6 @@ export default function Sidebar({
   const [renameTarget, setRenameTarget] = React.useState<SessionTask | null>(null);
   const [renameValue, setRenameValue] = React.useState("");
   const [renameSubmitting, setRenameSubmitting] = React.useState(false);
-  const [moveProjectDialogOpen, setMoveProjectDialogOpen] = React.useState(false);
-  const [moveProjectTarget, setMoveProjectTarget] = React.useState<SessionTask | null>(null);
   const [moveProjectSubmitting, setMoveProjectSubmitting] = React.useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
   const [deleteTarget, setDeleteTarget] = React.useState<SessionTask | null>(null);
@@ -699,14 +701,12 @@ export default function Sidebar({
     }
   }, [createProjectDescription, createProjectName, t]);
 
-  const openMoveProjectDialog = React.useCallback((session: SessionTask) => {
-    setMoveProjectTarget(session);
-    setMoveProjectDialogOpen(true);
-  }, []);
-
-  const handleProjectAssign = React.useCallback(async (projectId: string | null, projectName: string | null) => {
-    const target = moveProjectTarget;
-    if (!target) return;
+  const handleProjectAssign = React.useCallback(async (
+    session: SessionTask,
+    projectId: string | null,
+    projectName: string | null,
+  ) => {
+    if (moveProjectSubmitting) return;
     const assignableProject = projectId
       ? assignableProjects.find((project) => project.id === projectId) || null
       : null;
@@ -718,7 +718,7 @@ export default function Sidebar({
     const nextProjectName = assignableProject ? assignableProject.name : null;
     setMoveProjectSubmitting(true);
     try {
-      const updated = await updateTaskCreationSessionProject(target.sessionId, {
+      const updated = await updateTaskCreationSessionProject(session.sessionId, {
         projectId: nextProjectId,
         projectName: nextProjectName,
       });
@@ -730,17 +730,15 @@ export default function Sidebar({
         updated && Object.prototype.hasOwnProperty.call(updated, "projectName")
           ? updated.projectName || null
           : nextProjectName;
-      patchSessionTask(target.sessionId, {
+      patchSessionTask(session.sessionId, {
         projectId: appliedProjectId,
         projectName: appliedProjectName,
       });
       dispatchSessionUpdate({
-        sessionId: target.sessionId,
+        sessionId: session.sessionId,
         projectId: appliedProjectId,
         projectName: appliedProjectName,
       });
-      setMoveProjectDialogOpen(false);
-      setMoveProjectTarget(null);
       toast.success(
         appliedProjectId
           ? t("sidebar.projectMoved", { projectName: appliedProjectName || nextProjectName || "" })
@@ -751,7 +749,7 @@ export default function Sidebar({
     } finally {
       setMoveProjectSubmitting(false);
     }
-  }, [assignableProjects, dispatchSessionUpdate, moveProjectTarget, patchSessionTask, t]);
+  }, [assignableProjects, dispatchSessionUpdate, moveProjectSubmitting, patchSessionTask, t]);
 
   const handleDeleteConfirm = React.useCallback(async () => {
     const target = deleteTarget;
@@ -842,10 +840,74 @@ export default function Sidebar({
               <Star className={`h-4 w-4 ${session.isFavorite ? "fill-current text-amber-500" : ""}`} />
               <span>{favoriteLabel}</span>
             </ContextMenuItem>
-            <ContextMenuItem onSelect={() => openMoveProjectDialog(session)}>
-              <FolderInput className="h-4 w-4" />
-              <span>{t("sidebar.moveToProjectAction")}</span>
-            </ContextMenuItem>
+            <ContextMenuSub>
+              <ContextMenuSubTrigger className="group gap-2 rounded-[8px] p-2 text-sm text-foreground focus:bg-accent/60 data-[state=open]:bg-accent/60">
+                <div className="flex size-5 items-center justify-center">
+                  <FolderSync className="h-4 w-4" />
+                </div>
+                <div className="flex min-w-0 flex-1 items-center gap-2">
+                  <div className="flex flex-1 items-center justify-between gap-2 min-w-0">
+                    <span className="truncate">{t("sidebar.moveToProjectAction")}</span>
+                  </div>
+                </div>
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent className="w-64 rounded-[10px] p-1.5">
+                <ContextMenuItem
+                  className="gap-2 rounded-[8px] p-2"
+                  disabled={moveProjectSubmitting}
+                  onSelect={() => void handleProjectAssign(session, null, null)}
+                >
+                  <div className="flex size-5 items-center justify-center">
+                    {session.projectId ? (
+                      <div className="h-4 w-4" />
+                    ) : (
+                      <Check className="h-4 w-4" />
+                    )}
+                  </div>
+                  <span className="min-w-0 flex-1 truncate">{t("sidebar.noProjectOption")}</span>
+                </ContextMenuItem>
+                {assignableProjects.length === 0 ? (
+                  <>
+                    <ContextMenuItem
+                      disabled
+                      className="min-h-0 cursor-default rounded-[8px] px-2 py-2 text-xs leading-5 text-muted-foreground opacity-100"
+                    >
+                      {t("sidebar.noManualProjectsForSession")}
+                    </ContextMenuItem>
+                    <ContextMenuItem
+                      className="gap-2 rounded-[8px] p-2"
+                      onSelect={() => openCreateProjectDialog()}
+                    >
+                      <div className="flex size-5 items-center justify-center">
+                        <PlusCircle className="h-4 w-4" />
+                      </div>
+                      <span className="min-w-0 flex-1 truncate">{t("sidebar.createProjectAction")}</span>
+                    </ContextMenuItem>
+                  </>
+                ) : (
+                  assignableProjects.map((project) => {
+                    const isCurrentProject = session.projectId === project.id;
+                    return (
+                      <ContextMenuItem
+                        key={project.id}
+                        className="gap-2 rounded-[8px] p-2"
+                        disabled={moveProjectSubmitting}
+                        onSelect={() => void handleProjectAssign(session, project.id, project.name)}
+                      >
+                        <div className="flex size-5 items-center justify-center">
+                          {isCurrentProject ? (
+                            <Check className="h-4 w-4" />
+                          ) : (
+                            <div className="h-4 w-4" />
+                          )}
+                        </div>
+                        <span className="min-w-0 flex-1 truncate">{project.name}</span>
+                      </ContextMenuItem>
+                    );
+                  })
+                )}
+              </ContextMenuSubContent>
+            </ContextMenuSub>
             <ContextMenuSeparator />
             <ContextMenuItem variant="destructive" onSelect={() => openDeleteDialog(session)}>
               <Trash2 className="h-4 w-4" />
@@ -855,7 +917,7 @@ export default function Sidebar({
         </ContextMenu>
       );
     },
-    [handleFavoriteToggle, openDeleteDialog, openMoveProjectDialog, openRenameDialog, t],
+    [assignableProjects, handleFavoriteToggle, handleProjectAssign, moveProjectSubmitting, openCreateProjectDialog, openDeleteDialog, openRenameDialog, t],
   );
 
   return (
@@ -1387,58 +1449,6 @@ export default function Sidebar({
               {createProjectSubmitting ? t("sidebar.creatingProject") : t("sidebar.createProjectAction")}
             </Button>
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={moveProjectDialogOpen} onOpenChange={setMoveProjectDialogOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{t("sidebar.moveToProjectTitle")}</DialogTitle>
-            <DialogDescription>
-              {t("sidebar.moveToProjectDescription", {
-                projectName: moveProjectTarget?.projectName || t("sidebar.noProjectOption"),
-              })}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Button
-              type="button"
-              variant={moveProjectTarget?.projectId ? "outline" : "default"}
-              className="w-full justify-start"
-              disabled={moveProjectSubmitting}
-              onClick={() => void handleProjectAssign(null, null)}
-            >
-              {t("sidebar.noProjectOption")}
-            </Button>
-            {assignableProjects.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-border p-3 text-sm text-muted-foreground">
-                <p>{t("sidebar.noManualProjectsForSession")}</p>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="mt-3 w-full justify-center"
-                  onClick={() => {
-                    setMoveProjectDialogOpen(false);
-                    openCreateProjectDialog();
-                  }}
-                >
-                  {t("sidebar.createProjectAction")}
-                </Button>
-              </div>
-            ) : null}
-            {assignableProjects.map((project) => (
-              <Button
-                key={project.id}
-                type="button"
-                variant={moveProjectTarget?.projectId === project.id ? "default" : "outline"}
-                className="w-full justify-start"
-                disabled={moveProjectSubmitting}
-                onClick={() => void handleProjectAssign(project.id, project.name)}
-              >
-                {project.name}
-              </Button>
-            ))}
-          </div>
         </DialogContent>
       </Dialog>
 

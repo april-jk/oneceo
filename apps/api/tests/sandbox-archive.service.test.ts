@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { afterEach, beforeEach, test } from 'node:test';
+import { afterEach, beforeEach, mock, test } from 'node:test';
 import {
   __resetSandboxArchiveServiceDepsForTest,
   __setSandboxArchiveServiceDepsForTest,
@@ -8,6 +8,8 @@ import {
   listSandboxArchiveHistory,
   restoreWorkspaceIfArchived,
 } from '../src/services/sandbox-archive-service';
+import { taskSessionAltusMemoryService } from '../src/services/task-session-altus-memory-service';
+import { taskSessionSkillStateService } from '../src/services/task-session-skill-state-service';
 
 type EnvRecord = {
   sessionId: string;
@@ -105,6 +107,8 @@ afterEach(() => {
 
 test('archives and uploads when workspace content changed', async () => {
   const sandboxId = 'sandbox-archive-service-1';
+  const saveSkillStateMock = mock.method(taskSessionSkillStateService, 'saveSandboxFileMemoryToDb', async () => null);
+  const saveAltusMemoryMock = mock.method(taskSessionAltusMemoryService, 'saveSandboxFileMemoryToDb', async () => null);
   envMap.set(sandboxId, {
     sessionId: sandboxId,
     metadata: {
@@ -136,6 +140,9 @@ test('archives and uploads when workspace content changed', async () => {
   assert.equal(env.pendingArchiveUpdate, false);
   assert.equal(env.r2ArchiveSha256, sha256(archivePayload));
   assert.equal(env.opencodeStateRoot, '/state/task-archive-1');
+  assert.equal(saveSkillStateMock.mock.callCount(), 1);
+  assert.equal(saveAltusMemoryMock.mock.callCount(), 1);
+  assert.equal((saveAltusMemoryMock.mock.calls[0]?.arguments[0] as any)?.archiveReason, 'idle_timeout');
 });
 
 test('skips archive upload when hash unchanged and archive already exists', async () => {
@@ -170,6 +177,8 @@ test('skips archive upload when hash unchanged and archive already exists', asyn
 
 test('restores workspace from archived object and executes restore command', async () => {
   const sandboxId = 'sandbox-archive-service-3';
+  const saveSkillStateMock = mock.method(taskSessionSkillStateService, 'saveSandboxFileMemoryToDb', async () => null);
+  const saveAltusMemoryMock = mock.method(taskSessionAltusMemoryService, 'saveSandboxFileMemoryToDb', async () => null);
   envMap.set(sandboxId, {
     sessionId: sandboxId,
     metadata: {
@@ -207,6 +216,9 @@ test('restores workspace from archived object and executes restore command', asy
   assert.equal(env.restoreStatus, 'restored');
   assert.equal(env.r2RestoreSourceKey, archiveKey);
   assert.equal(env.opencodeStateRoot, '/state/task-archive-3');
+  assert.equal(saveSkillStateMock.mock.callCount(), 1);
+  assert.equal(saveAltusMemoryMock.mock.callCount(), 1);
+  assert.equal((saveAltusMemoryMock.mock.calls[0]?.arguments[0] as any)?.archiveReason, 'restore');
 });
 
 test('restores legacy v2 archive and migrates workspace .opencode into state root', async () => {

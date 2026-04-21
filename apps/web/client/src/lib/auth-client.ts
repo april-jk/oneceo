@@ -11,8 +11,11 @@ export type AppAuthUser = {
 
 export type AppUserPersonalization = {
   preferredName: string;
-  role: string;
-  about: string;
+  occupation: string;
+  identity: string;
+  location: string;
+  background: string;
+  preferences: string;
   responsePreferences: string;
 };
 

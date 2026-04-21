@@ -1041,6 +1041,43 @@ export class TaskCreationSessionDAO {
     return Number((result as any)?.rowCount || 0);
   }
 
+  async countOwnedProjectSessions(userId: string, projectId: string): Promise<number> {
+    const normalizedUserId = normalizeUserId(userId);
+    const normalizedProjectId = this.asText(projectId);
+    if (!normalizedUserId || !normalizedProjectId) return 0;
+
+    const result = await db.execute(sql`
+      SELECT COUNT(*)::int AS count
+      FROM task_creation_sessions
+      WHERE user_id = ${normalizedUserId}
+        AND COALESCE(metadata_json->>'projectId', '') = ${normalizedProjectId}
+    `);
+    const row = Array.isArray((result as any)?.rows) ? (result as any).rows[0] : null;
+    return Number(row?.count || 0);
+  }
+
+  async syncOwnedProjectName(userId: string, projectId: string, projectName: string): Promise<number> {
+    const normalizedUserId = normalizeUserId(userId);
+    const normalizedProjectId = this.asText(projectId);
+    const normalizedProjectName =
+      this.asText(projectName).slice(0, TaskCreationSessionDAO.SESSION_PROJECT_NAME_LIMIT) || null;
+    if (!normalizedUserId || !normalizedProjectId || !normalizedProjectName) return 0;
+
+    const result = await db.execute(sql`
+      UPDATE task_creation_sessions
+      SET metadata_json = jsonb_set(
+        COALESCE(metadata_json, '{}'::jsonb),
+        '{projectName}',
+        to_jsonb(${normalizedProjectName}::text),
+        true
+      ),
+      updated_at = NOW()
+      WHERE user_id = ${normalizedUserId}
+        AND COALESCE(metadata_json->>'projectId', '') = ${normalizedProjectId}
+    `);
+    return Number((result as any)?.rowCount || 0);
+  }
+
   /**
    * 如果会话尚未绑定用户，则绑定到当前用户
    */

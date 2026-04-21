@@ -1,6 +1,7 @@
 import * as crypto from 'crypto';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { downloadFromR2, existsInR2, getPresignedDownloadUrl, listR2Keys, uploadToR2 } from './r2-client';
+import { taskSessionSkillStateService } from './task-session-skill-state-service';
 import {
   resolveLegacyOpencodeStatePath,
   resolveOpencodeStatePath,
@@ -437,6 +438,25 @@ export async function archiveSandboxWorkspace(
     lastArchiveAttemptAt: archivedAt,
   });
 
+  if (taskSessionId) {
+    try {
+      await taskSessionSkillStateService.saveSandboxFileMemoryToDb({
+        sessionId: taskSessionId,
+        sandboxId,
+        workspaceRoot,
+        archiveId: snapshotKey,
+        reason: `archive:${reason}`,
+      });
+    } catch (error) {
+      console.warn('[SANDBOX_ARCHIVE_SKILL_MEMORY_FLUSH_WARN]', {
+        sandboxId,
+        taskSessionId,
+        reason,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   if (requiresCodexStateVerification) {
     const verification = await ensureCodexStateReady(sandboxId, {
       codexDotCodexPath,
@@ -667,6 +687,23 @@ export async function restoreWorkspaceIfArchived(
     codexArchiveHome,
     codexDotCodexPath,
   });
+
+  if (taskSessionId) {
+    try {
+      await taskSessionSkillStateService.saveSandboxFileMemoryToDb({
+        sessionId: taskSessionId,
+        sandboxId,
+        workspaceRoot,
+        reason: 'restore',
+      });
+    } catch (error) {
+      console.warn('[SANDBOX_RESTORE_SKILL_MEMORY_FLUSH_WARN]', {
+        sandboxId,
+        taskSessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 
   return true;
 }

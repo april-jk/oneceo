@@ -185,51 +185,8 @@ function extractOrchestratorSessionId(message: AgentMessage): string | null {
   return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
 }
 
-const WEAK_INTENT_TITLE_INPUTS = new Set([
-  '你好',
-  '您好',
-  '嗨',
-  'hi',
-  'hello',
-  'hey',
-  '在吗',
-  '有人吗',
-  'help',
-  '帮我一下',
-  '开始',
-  '继续',
-  'ok',
-  'okay',
-  '好的',
-  '收到',
-  '1',
-  '？',
-  '?',
-]);
-
-function normalizeSessionTitleInput(value: string): string {
-  return value.replace(/\s+/g, ' ').trim();
-}
-
-function toComparableSessionTitleInput(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[，。、“”"'!！?？,.；;:：()\[\]{}<>《》【】\-_`~]/g, '')
-    .replace(/\s+/g, '');
-}
-
 function shouldAttemptSessionTitleResolve(value: string): boolean {
-  const normalized = normalizeSessionTitleInput(value);
-  if (!normalized) return false;
-  const comparable = toComparableSessionTitleInput(normalized);
-  if (!comparable || WEAK_INTENT_TITLE_INPUTS.has(comparable) || comparable.length <= 2) {
-    return false;
-  }
-  if (normalized.length >= 12) return true;
-  return /(帮我|请|请帮|分析|排查|修复|开发|实现|优化|重构|设计|生成|创建|制作|写|继续|修改|整理|总结|如何|怎么|为什么|报错|bug|问题|页面|功能|css|html|nodejs|代码|接口|数据库|deploy|build|fix|debug|analy[sz]e|implement|optimi[sz]e|refactor|create|write)/i.test(
-    normalized
-  );
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
 function dispatchTaskCreationSessionUpdated(detail: {

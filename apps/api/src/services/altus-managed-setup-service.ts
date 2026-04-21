@@ -189,7 +189,7 @@ export class AltusManagedSetupService {
 
     const memory = await taskCreationFileMemoryStore.getSession(sessionId);
     if (!memory) {
-      await taskCreationFileMemoryStore.createSession('新建任务会话', sessionId);
+      await taskCreationFileMemoryStore.createSession('待识别任务', sessionId);
       await taskCreationFileMemoryStore.addMessage(sessionId, 'system', 'session_started', '会话已创建');
     }
 

@@ -1,0 +1,185 @@
+# 04 Altus三级记忆 UI、接口与交互方案 [尚未采用]
+
+更新时间：2026-04-21
+
+---
+
+## 1. 目标
+
+本文件只回答：前端怎么改、接口怎么改、用户怎么操作。
+
+---
+
+## 2. 用户级记忆 UI
+
+## 2.1 入口
+
+继续复用：
+
+1. 左下角设置
+2. `个性化` 标签页
+
+不新增新的独立 Altus 用户记忆页面。
+
+## 2.2 表单字段
+
+当前：
+
+1. 称呼偏好
+2. 职业/角色
+3. 更多关于你的信息
+4. 自定义指令
+
+调整后：
+
+1. 昵称
+2. 职业
+3. 身份
+4. 所在地
+5. 背景
+6. 偏好
+7. Altus 回应偏好
+
+## 2.3 接口
+
+继续复用：
+
+1. `GET /api/auth/me`
+2. `PATCH /api/auth/profile`
+
+不新增用户级记忆专用接口。
+
+---
+
+## 3. 项目级记忆 UI
+
+## 3.1 项目创建 / 编辑
+
+在现有项目创建和编辑弹窗中新增：
+
+1. 项目背景
+2. 项目指引
+3. 操作规范
+4. 执行手册
+
+首版不新增独立项目设置页。
+
+## 3.2 项目列表摘要
+
+项目列表继续使用：
+
+1. `name`
+2. `description`
+
+不直接在列表里展开 `altusProjectMemory` 全文。
+
+## 3.3 接口
+
+继续复用：
+
+1. `POST /api/task-creation/projects`
+2. `PUT /api/task-creation/projects/:projectId`
+3. `GET /api/task-creation/projects`
+4. `GET /api/task-creation/projects/:projectId`
+
+请求体扩展 `altusProjectMemory`。
+
+补充要求：
+
+1. `PUT /api/task-creation/projects/:projectId` 更新项目名称时，需要同步刷新该项目下 session 的 `projectName`
+2. `altusProjectMemory` 写入必须 merge 到现有 `metadata_json`
+
+---
+
+## 4. session 与项目归属 UI
+
+## 4.1 首版用户操作
+
+支持：
+
+1. 新建 session 时选择项目
+2. 未进入有效运行的无项目 session 加入项目
+3. 未进入有效运行的已归属项目 session 移出项目
+
+首版不支持：
+
+1. 已归属项目的活跃 session 直接换到另一个项目
+2. 已进入有效运行的 session 再修改项目归属
+
+## 4.2 前端入口建议
+
+在 session 更多操作菜单增加：
+
+1. `加入项目`（仅无项目且未进入有效运行的 session 显示）
+2. `移出项目`（仅已有项目归属且未进入有效运行的 session 显示）
+
+首版不显示：
+
+1. `移动项目`
+
+这样和生命周期边界保持一致。
+
+补充要求：
+
+1. 如果用户从项目视角新建 session，前端必须在创建请求里直接带 `projectId`
+2. 不允许走“先创建无项目 session，再异步补绑项目，再立刻发首轮消息”的非原子流程
+
+## 4.3 后端接口建议
+
+保留并扩展：
+
+1. `POST /api/task-creation/sessions`
+2. `POST /api/task-creation/sessions/:sessionId/project`
+3. `DELETE /api/task-creation/sessions/:sessionId/project`
+
+语义：
+
+1. `POST /sessions`
+   - 支持可选 `projectId`
+   - 如果传入 `projectId`，服务端必须在返回前完成项目归属持久化
+   - 这样新建 session 的首轮 `initialMessage` / run 可以直接继承项目记忆
+2. `POST /sessions/:sessionId/project`
+   - 仅用于“未进入有效运行”的无项目 session 绑定项目
+3. `DELETE /sessions/:sessionId/project`
+   - 仅用于“未进入有效运行”的已归属项目 session 解绑项目
+
+如果 session 已进入有效运行，则无论绑定还是解绑都返回错误。
+
+---
+
+## 5. session 级记忆 UI
+
+首版不提供 session memory 手工编辑面板。
+
+原因：
+
+1. 先保证自动写入和自动恢复正确
+2. 避免引入第三套表单
+3. session memory 更适合作为系统运行态数据
+
+---
+
+## 6. 错误反馈
+
+## 6.1 项目删除
+
+如果项目下仍有关联 session，删除时应返回明确错误：
+
+1. 项目下仍有会话，无法删除
+2. 请先移出或删除这些会话
+
+## 6.2 session 绑定项目
+
+如果用户试图把“未进入有效运行但已有项目归属”的 session 直接切到另一个项目，应返回明确错误：
+
+1. 当前版本不支持直接跨项目迁移会话
+2. 请先移出项目后再加入目标项目，或直接新建目标项目会话
+
+如果用户试图修改一个已进入有效运行的 session 归属，应返回更直接的错误：
+
+1. 当前会话已进入项目上下文锁定状态
+2. 请新建新的目标项目会话继续
+
+## 6.3 记忆字段长度超限
+
+应直接返回字段级错误信息，而不是静默截断。

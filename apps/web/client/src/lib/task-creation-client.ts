@@ -28,7 +28,16 @@ export type TaskCreationProjectSummary = {
   projectType?: string;
   status?: string;
   pinned?: boolean;
+  altusProjectMemory?: AltusProjectMemory | null;
   createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
+export type AltusProjectMemory = {
+  context: string;
+  guidelines: string;
+  operatingRules: string;
+  executionManual: string;
   updatedAt?: string | null;
 };
 
@@ -38,6 +47,7 @@ export type CreateTaskCreationSessionInput = {
   mode?: "sandbox" | "altus";
   executor?: "opencode" | "claudecode" | "codex";
   codexExecutionMode?: "sdk" | "ws";
+  projectId?: string | null;
   initialMessage?: string;
   initialMessageType?: "user_input" | "user_response";
 };
@@ -1006,6 +1016,7 @@ export async function listTaskCreationProjectSessions(
 export async function createTaskCreationProject(input: {
   name: string;
   description?: string | null;
+  altusProjectMemory?: AltusProjectMemory | null;
 }): Promise<TaskCreationProjectSummary | null> {
   const url = `${getApiBaseUrl()}/api/task-creation/projects`;
   const response = await fetch(url, {
@@ -1016,6 +1027,7 @@ export async function createTaskCreationProject(input: {
     body: JSON.stringify({
       name: input.name,
       description: input.description ?? "",
+      altusProjectMemory: input.altusProjectMemory ?? null,
     }),
   });
   if (!response.ok) {
@@ -1031,6 +1043,7 @@ export async function updateTaskCreationProject(
     name?: string;
     description?: string | null;
     pinned?: boolean;
+    altusProjectMemory?: AltusProjectMemory | null;
   }
 ): Promise<TaskCreationProjectSummary | null> {
   const safeProjectId = encodeURIComponent(projectId);
@@ -1044,6 +1057,7 @@ export async function updateTaskCreationProject(
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.description !== undefined ? { description: input.description ?? "" } : {}),
       ...(input.pinned !== undefined ? { pinned: Boolean(input.pinned) } : {}),
+      ...(input.altusProjectMemory !== undefined ? { altusProjectMemory: input.altusProjectMemory } : {}),
     }),
   });
   if (!response.ok) {

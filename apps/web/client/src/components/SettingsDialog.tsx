@@ -100,14 +100,20 @@ const ACCOUNT_AVATAR_TONES = [
 ];
 const EMPTY_PERSONALIZATION: AppUserPersonalization = {
   preferredName: "",
-  role: "",
-  about: "",
+  occupation: "",
+  identity: "",
+  location: "",
+  background: "",
+  preferences: "",
   responsePreferences: "",
 };
 const PERSONALIZATION_LIMITS: Record<keyof AppUserPersonalization, number> = {
   preferredName: 80,
-  role: 80,
-  about: 1000,
+  occupation: 80,
+  identity: 80,
+  location: 120,
+  background: 1000,
+  preferences: 800,
   responsePreferences: 1500,
 };
 
@@ -150,8 +156,11 @@ function normalizePersonalization(
 ): AppUserPersonalization {
   return {
     preferredName: value?.preferredName?.trim?.() || "",
-    role: value?.role?.trim?.() || "",
-    about: value?.about?.trim?.() || "",
+    occupation: value?.occupation?.trim?.() || "",
+    identity: value?.identity?.trim?.() || "",
+    location: value?.location?.trim?.() || "",
+    background: value?.background?.trim?.() || "",
+    preferences: value?.preferences?.trim?.() || "",
     responsePreferences: value?.responsePreferences?.trim?.() || "",
   };
 }
@@ -706,25 +715,69 @@ export function SettingsPanel({
                         </div>
                       </div>
                       <div className="space-y-2">
-                        <Label htmlFor="personalization-role">
-                          {t("settings.roleLabel")}
+                        <Label htmlFor="personalization-occupation">
+                          {t("settings.occupationLabel")}
                         </Label>
                         <Input
-                          id="personalization-role"
-                          value={personalizationDraft.role}
+                          id="personalization-occupation"
+                          value={personalizationDraft.occupation}
                           onChange={(event) =>
                             handlePersonalizationFieldChange(
-                              "role",
+                              "occupation",
                               event.target.value,
                             )
                           }
-                          maxLength={PERSONALIZATION_LIMITS.role}
-                          placeholder={t("settings.rolePlaceholder")}
+                          maxLength={PERSONALIZATION_LIMITS.occupation}
+                          placeholder={t("settings.occupationPlaceholder")}
                           className="h-10 rounded-lg border-border/80 bg-muted/20"
                         />
                         <div className="text-right text-xs text-muted-foreground">
-                          {personalizationDraft.role.length} /{" "}
-                          {PERSONALIZATION_LIMITS.role}
+                          {personalizationDraft.occupation.length} /{" "}
+                          {PERSONALIZATION_LIMITS.occupation}
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="personalization-identity">
+                          {t("settings.identityLabel")}
+                        </Label>
+                        <Input
+                          id="personalization-identity"
+                          value={personalizationDraft.identity}
+                          onChange={(event) =>
+                            handlePersonalizationFieldChange(
+                              "identity",
+                              event.target.value,
+                            )
+                          }
+                          maxLength={PERSONALIZATION_LIMITS.identity}
+                          placeholder={t("settings.identityPlaceholder")}
+                          className="h-10 rounded-lg border-border/80 bg-muted/20"
+                        />
+                        <div className="text-right text-xs text-muted-foreground">
+                          {personalizationDraft.identity.length} /{" "}
+                          {PERSONALIZATION_LIMITS.identity}
+                        </div>
+                      </div>
+                      <div className="space-y-2 md:col-span-2">
+                        <Label htmlFor="personalization-location">
+                          {t("settings.locationLabel")}
+                        </Label>
+                        <Input
+                          id="personalization-location"
+                          value={personalizationDraft.location}
+                          onChange={(event) =>
+                            handlePersonalizationFieldChange(
+                              "location",
+                              event.target.value,
+                            )
+                          }
+                          maxLength={PERSONALIZATION_LIMITS.location}
+                          placeholder={t("settings.locationPlaceholder")}
+                          className="h-10 rounded-lg border-border/80 bg-muted/20"
+                        />
+                        <div className="text-right text-xs text-muted-foreground">
+                          {personalizationDraft.location.length} /{" "}
+                          {PERSONALIZATION_LIMITS.location}
                         </div>
                       </div>
                     </div>
@@ -740,26 +793,49 @@ export function SettingsPanel({
                       </p>
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="personalization-about">
-                        {t("settings.aboutLabel")}
+                      <Label htmlFor="personalization-background">
+                        {t("settings.backgroundLabel")}
                       </Label>
                       <Textarea
-                        id="personalization-about"
-                        value={personalizationDraft.about}
+                        id="personalization-background"
+                        value={personalizationDraft.background}
                         onChange={(event) =>
                           handlePersonalizationFieldChange(
-                            "about",
+                            "background",
                             event.target.value,
                           )
                         }
-                        maxLength={PERSONALIZATION_LIMITS.about}
+                        maxLength={PERSONALIZATION_LIMITS.background}
                         rows={6}
-                        placeholder={t("settings.aboutPlaceholder")}
+                        placeholder={t("settings.backgroundPlaceholder")}
                         className="min-h-[160px] rounded-lg border-border/80 bg-muted/20 leading-6"
                       />
                       <div className="text-right text-xs text-muted-foreground">
-                        {personalizationDraft.about.length} /{" "}
-                        {PERSONALIZATION_LIMITS.about}
+                        {personalizationDraft.background.length} /{" "}
+                        {PERSONALIZATION_LIMITS.background}
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="personalization-preferences">
+                        {t("settings.preferencesLabel")}
+                      </Label>
+                      <Textarea
+                        id="personalization-preferences"
+                        value={personalizationDraft.preferences}
+                        onChange={(event) =>
+                          handlePersonalizationFieldChange(
+                            "preferences",
+                            event.target.value,
+                          )
+                        }
+                        maxLength={PERSONALIZATION_LIMITS.preferences}
+                        rows={5}
+                        placeholder={t("settings.preferencesPlaceholder")}
+                        className="min-h-[132px] rounded-lg border-border/80 bg-muted/20 leading-6"
+                      />
+                      <div className="text-right text-xs text-muted-foreground">
+                        {personalizationDraft.preferences.length} /{" "}
+                        {PERSONALIZATION_LIMITS.preferences}
                       </div>
                     </div>
                   </section>

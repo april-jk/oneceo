@@ -90,6 +90,19 @@ test('managed prompt instructs direct multimodal image analysis instead of OCR-f
   assert.match(prompt, /do not ask the user to describe an uploaded image/i);
 });
 
+test('managed prompt allows direct plain-text reply for pure identity and memory questions', () => {
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-memory-chat-test',
+    sessionTitle: 'memory chat contract',
+    workspaceRoot: '/workspace/session-memory-chat-test',
+    connectors: [],
+  });
+
+  assert.match(prompt, /pure identity or memory question/i);
+  assert.match(prompt, /reply directly with plain assistant text/i);
+  assert.match(prompt, /instead of forcing tool calls or complete_task/i);
+});
+
 test('managed prompt requires deployment tools and auto-repair loop for publish requests', () => {
   const prompt = altusManagedPromptService.buildSystemPrompt({
     sessionId: 'session-deploy-test',

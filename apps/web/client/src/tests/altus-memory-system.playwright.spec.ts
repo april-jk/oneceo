@@ -238,6 +238,7 @@ test('altus 三级记忆在单次登录复用下保持正确', async ({ browser 
   const projectExecutionManual = '不要提问；两句话内回答；优先复用已有记忆。';
   const prompt1 = '请只用两句话回答：你现在应该如何称呼我，并说明当前项目代号。不要提问。';
   const prompt2 = '继续当前会话：只用一句话复述上一轮确认的称呼和项目代号。不要提问。';
+  const prompt3 = '我是谁';
 
   const consoleLogs: string[] = [];
   const requestFailures: string[] = [];
@@ -424,7 +425,7 @@ test('altus 三级记忆在单次登录复用下保持正确', async ({ browser 
       },
     });
     expect(secondInputResponse.ok()).toBe(true);
-    await waitForRunCompleted(api, createdSessionId, firstCompletedRun.id);
+    const secondCompletedRun = await waitForRunCompleted(api, createdSessionId, firstCompletedRun.id);
 
     const secondMemorySnapshot = await waitForInternalMemorySnapshot(
       createdSessionId,
@@ -443,6 +444,39 @@ test('altus 三级记忆在单次登录复用下保持正确', async ({ browser 
       (message) => message.messageType === 'user_input' || message.messageType === 'user_response',
     );
     expect(userTurns.length).toBeGreaterThanOrEqual(2);
+
+    await composerTextarea(page).fill(prompt3);
+    await composerTextarea(page).press('Enter');
+    const thirdCompletedRun = await waitForRunCompleted(api, createdSessionId, secondCompletedRun.id);
+    expect(thirdCompletedRun.status).toBe('completed');
+
+    const thirdMessages = await waitForMessages(api, createdSessionId);
+    expect(
+      thirdMessages.some(
+        (message) =>
+          typeof message.content === 'string' &&
+          message.content.includes('managed_model_plain_text_without_tool_call'),
+      ),
+    ).toBe(false);
+    expect(
+      thirdMessages.some(
+        (message) =>
+          typeof message.content === 'string' &&
+          message.content.includes('本次执行失败') &&
+          message.content.includes('managed_model_plain_text_without_tool_call'),
+      ),
+    ).toBe(false);
+    const identityAssistantMessage = [...thirdMessages]
+      .reverse()
+      .find(
+        (message) =>
+          (message.role === 'assistant' || message.role === 'agent') &&
+          typeof message.content === 'string' &&
+          message.messageType !== 'tool_result' &&
+          message.messageType !== 'status_update' &&
+          !message.content.startsWith('工具 '),
+      );
+    expect(identityAssistantMessage?.content || '').toContain(preferredName);
 
     expect(pageErrors).toEqual([]);
     expect(requestFailures).toEqual([]);

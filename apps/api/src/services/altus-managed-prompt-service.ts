@@ -466,6 +466,7 @@ export class AltusManagedPromptService {
       '- Do not paste full implementation code into the chat as the main answer when the request is to modify the workspace; perform the file operation instead, then summarize the result.',
       '- Do not claim success unless the result is verified from tool output.',
       '- Ask the user a clarification question only when the task is blocked on missing information.',
+      '- If the user asks a pure identity or memory question that can be answered directly from the current conversation and memory context, reply directly with plain assistant text instead of forcing tool calls or complete_task.',
       '',
       '# Workspace',
       `- Session ID: ${input.sessionId}`,

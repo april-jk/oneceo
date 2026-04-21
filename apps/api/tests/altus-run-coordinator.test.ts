@@ -1251,6 +1251,114 @@ test('execute does not complete on plain assistant text and continues until comp
   assert.equal(eventCalls[2]?.payload.transitionReason, 'plain_text_continuation_prompted');
 });
 
+test('execute accepts plain assistant text for pure memory identity questions', async () => {
+  const state = createState('run-coordinator-memory-chat', 'session-coordinator-memory-chat');
+  state.input.userInput = '我是谁';
+  const setupCalls: Record<string, unknown>[] = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+  const loopSnapshots: Record<string, unknown>[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-memory-chat',
+      workspaceRoot: '/workspace/session-coordinator-memory-chat',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      setupCalls.push(input);
+    }),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+    syncLoopSnapshot: mock.fn(async (_state: any, loop: Record<string, unknown>) => {
+      loopSnapshots.push(loop);
+    }),
+  };
+
+  global.fetch = mock.fn(async () =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '你是 watson，OneCEO 的用户，职业是 CEO，位于山东济南。',
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    )
+  ) as typeof fetch;
+
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => {
+    throw new Error('execute should not be called for pure memory identity replies');
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeMock.mock.callCount(), 0);
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+  assert.equal(state.status, 'completed');
+  assert.equal(
+    loopSnapshots.some((snapshot) => snapshot.lastTransitionReason === 'plain_text_conversation_completed'),
+    true
+  );
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'run_status' &&
+        entry.payload.transitionReason === 'plain_text_conversation_completed'
+    ),
+    true
+  );
+  assert.equal(
+    setupCalls.some(
+      (entry) =>
+        entry.messageType === 'assistant_message' &&
+        entry.metadata &&
+        (entry.metadata as Record<string, unknown>).completionMode === 'plain_text_conversation'
+    ),
+    true
+  );
+});
+
 test('execute requests clarification and transitions to waiting_user', async () => {
   const state = createState('run-coordinator-clarify', 'session-coordinator-clarify');
   const setupCalls: Record<string, unknown>[] = [];

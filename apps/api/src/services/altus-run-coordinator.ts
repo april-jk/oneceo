@@ -382,6 +382,69 @@ export class AltusRunCoordinator {
     return keywords.some((keyword) => lower.includes(keyword.toLowerCase()));
   }
 
+  private shouldAcceptPlainTextConversationCompletion(userInput: string, assistantContent: string) {
+    const normalizedInput = asText(userInput).toLowerCase();
+    const normalizedAssistant = asText(assistantContent);
+    if (!normalizedInput || !normalizedAssistant) return false;
+
+    const conversationKeywords = [
+      '我是谁',
+      '你是谁',
+      '记得我吗',
+      '你还记得我吗',
+      '我叫什么',
+      '我的名字',
+      '我的职业',
+      '我的身份',
+      '我在哪',
+      '我的所在地',
+      '我的偏好',
+      '你知道我什么',
+      '介绍一下我',
+      'who am i',
+      'who are you',
+      'do you remember me',
+      'what is my name',
+      'what do you know about me',
+      'what are my preferences',
+      'where am i from',
+    ];
+    const actionKeywords = [
+      '帮我',
+      '请帮',
+      '修复',
+      '开发',
+      '实现',
+      '创建',
+      '修改',
+      '部署',
+      '上线',
+      '调试',
+      '测试',
+      '检查',
+      '分析',
+      '查一下',
+      'run ',
+      'debug',
+      'fix ',
+      'build ',
+      'deploy',
+      'implement',
+      'create ',
+      'write ',
+      'search ',
+      'test ',
+      'investigate',
+    ];
+    if (!conversationKeywords.some((keyword) => normalizedInput.includes(keyword))) {
+      return false;
+    }
+    if (actionKeywords.some((keyword) => normalizedInput.includes(keyword))) {
+      return false;
+    }
+    return !this.isClarificationResponse(normalizedAssistant);
+  }
+
   private buildContinuationReminder(assistantContent: string) {
     const reminder = [
       'System reminder: continue from the latest tool result.',
@@ -393,6 +456,41 @@ export class AltusRunCoordinator {
       return reminder.join(' ');
     }
     return `${reminder.join(' ')} Latest plain assistant text: ${excerpt}`;
+  }
+
+  private async finalizePlainTextConversationCompletion(
+    state: AltusRunState,
+    assistantContent: string,
+    assistantStreamMessageKey: string,
+  ) {
+    const finalContent = truncate(asText(assistantContent), 24000).trim();
+    if (!finalContent) {
+      throw new Error('managed_plain_text_conversation_completion_empty');
+    }
+    await this.setupService.persistTimelineMessage({
+      sessionId: state.input.sessionId,
+      role: 'agent',
+      messageType: 'assistant_message',
+      content: finalContent,
+      metadata: {
+        agent: 'assistant',
+        runId: state.input.runId,
+        completionMode: 'plain_text_conversation',
+      },
+      messageKey: assistantStreamMessageKey,
+    });
+    await this.eventWriter.appendRunEvent(
+      state.input.runId,
+      state.input.sessionId,
+      state.input.userId,
+      'assistant_message',
+      {
+        content: finalContent,
+        messageKey: assistantStreamMessageKey,
+        completionMode: 'plain_text_conversation',
+      }
+    );
+    return { outcome: 'completed' as const, content: finalContent, deliverables: [] };
   }
 
   private resolveDeploymentCompletionIntent(
@@ -1219,6 +1317,36 @@ export class AltusRunCoordinator {
           return this.requestClarification(state, {
             question: assistantContent,
           });
+        }
+        if (
+          assistantContent &&
+          this.shouldAcceptPlainTextConversationCompletion(state.input.userInput, assistantContent)
+        ) {
+          await this.syncLoopSnapshot(state, {
+            lastTransitionReason: 'plain_text_conversation_completed',
+            recoveryMode: 'none',
+            currentRound,
+            maxRounds: maxToolRounds,
+            plainTextRecoveryUsed,
+          });
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            state.input.userId,
+            'run_status',
+            {
+              status: 'running',
+              content: '识别为纯会话型记忆问答，已直接回复',
+              transitionReason: 'plain_text_conversation_completed',
+              currentRound,
+              maxRounds: maxToolRounds,
+            }
+          );
+          return this.finalizePlainTextConversationCompletion(
+            state,
+            assistantContent,
+            assistantStreamMessageKey,
+          );
         }
         if (assistantContent) {
           messages.push({

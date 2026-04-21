@@ -58,3 +58,31 @@
 - 最近会话改为显式分组，默认可见数量从 3 提升到 6，并保留“查看更多”入口。
 - 自组织项目分组改为默认收起，释放更多垂直空间给当前活跃会话列表。
 - 已在当前代码实例上完成 `pnpm --filter web check` 和定向 Playwright 回归，确认这轮排版优化没有破坏“点击不重排”的稳定性。
+
+## 21:15 直通冷启动耗时排查埋点
+
+- 已按最新问题收敛到“发送消息 -> runtime/start -> provision -> OSAC ready -> 首条恢复前阻塞”这条链路，只加耗时埋点，不改现有启动流程。
+- 在 `sandbox-agent-provision-service` 新增 provision 总耗时与 step 级耗时日志，覆盖 `open_environment / workspace_restore / commands_ready / workspace_prepare / sandbox_host / opencode_start / osac_bridge / osac_ready / sandbox_verify / playwright_mcp / neko_debug`。
+- 在 `task-creation-routes.ensureTaskSessionRuntime` 新增 `runtime/start` 总耗时日志，便于把用户入口耗时与 provision 内部阶段对齐。
+- 已同步在采用中的 Sandbox 恢复设计文档追加本轮埋点记录，后续复现将以 `apps/api/data/connector-debug.log` 为主证据源继续定责。
+
+## 22:35 deployment skill 强制挂载问题文档化
+
+- 已结合真实 managed 会话、数据库记录与日志，确认 `deployment-orchestrator` 当前是因 `required=true` 被全局强制挂载，而不是仅在部署意图下自动激活。
+- 已新增候选修复文档 `19_部署编排Skill自动强制挂载修复方案_[尚未采用].md`，明确本次只修“自动强制挂载”语义错误，不扩散到 OSAC、restore 或其他启动链路问题。
+- 已同步更新部署基线专题 README，补充该候选方案索引，便于后续评审与采用状态切换。
+
+## 23:08 冷启动三项主因开始收敛修复
+
+- 已将 `deployment-orchestrator` 的 seed 治理语义从全局 `required` 改为非 required，仅保留 deployment 系统角色和 autoActivation；同时补上 session skill state 清理逻辑，历史会话中已持久化的 `activationSource=required` 旧绑定会在下一次 `prepareRunState` 时自动剔除。
+- 已优化 `restoreWorkspaceIfArchived` 的空检查路径：有环境 metadata 时不再额外调用 `getSandboxInfo`，R2 `metadata/archive` 候选改为并行探测，减少“没有归档也阻塞数秒”的固定成本。
+- 已把 OSAC 预置接入 `opencode-playwright-mcp` E2B 模板构建链路，模板构建时直接拉取当前已发布 OSAC 并写入 `/opt/.altus/opencode/osac`，同时把默认模板版本切到 `opencode-playwright-mcp-v6-osac-prebuilt-20260421`。
+
+## 22:39 OSAC 预置模板命中链路修正
+
+- 已确认 API 实际加载的是 `apps/.env`，旧配置仍把 `E2B_TEMPLATE` 指向 `v4` 模板、把 `OPENCODE_TASK_WORKSPACE_ROOT` 指向 `/home/user/opencode/workspaces`，导致真实 managed 冷启动没有命中新模板与新目录布局。
+- 已修正 `apps/.env` / `apps/.env.example` 到 `/opt/.altus/opencode/workspaces`，并把默认模板切到 `opencode-playwright-mcp-v7-osac-prebuilt-20260421`。
+- 已修正 `sandbox-osac-bridge-service` 的 remote base dir 选择逻辑：`altus/opencode` 不再被 `workspaceRoot` 反推覆盖，统一使用 `OSAC_REMOTE_BASE_DIR`，避免绕开模板预置的 `/opt/.altus/opencode/osac`。
+- 进一步定位出 `v6` 模板 ownership 错误：模板内 `/opt/.altus/opencode` 被构建成 `node:node 755`，而运行时用户是 `user(uid=1001)`，导致 `workspace_prepare` 权限失败。
+- 已更新模板构建脚本改为 `chown -R user:user`，并重新构建 `v7` 模板。
+- 已完成真实 managed 冷启动复测：`workspace_prepare` 恢复成功，`remoteBaseDir=/opt/.altus/opencode`，`remoteBinary=/opt/.altus/opencode/osac`，`reusedExistingBinary=true`，说明 OSAC 已命中模板预置。

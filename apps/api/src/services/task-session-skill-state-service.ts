@@ -242,8 +242,26 @@ function selectionExistsInCatalog(selection: SkillSelectionInput, catalog: Manag
   );
 }
 
+function findCatalogEntry(selection: SkillSelectionInput, catalog: ManagedSkillCatalogEntry[]) {
+  return catalog.find(
+    (item) =>
+      item.sourceType === selection.sourceType &&
+      item.skillId === selection.skillId &&
+      item.revisionId === selection.revisionId
+  );
+}
+
 function filterSelectionsByCatalog(selections: SkillSelectionInput[], catalog: ManagedSkillCatalogEntry[]) {
   return selections.filter((item) => selectionExistsInCatalog(item, catalog));
+}
+
+function shouldRetainPersistedBinding(binding: SessionSkillBinding, catalog: ManagedSkillCatalogEntry[]) {
+  const entry = findCatalogEntry(binding, catalog);
+  if (!entry) return false;
+  if (binding.activationSource === 'required') {
+    return Boolean(entry.governance?.required);
+  }
+  return true;
 }
 
 function upsertBinding(
@@ -420,7 +438,7 @@ export class TaskSessionSkillStateService {
         revisionId: item.revisionId,
       } satisfies SkillSelectionInput));
     const bindings = current.bindings
-      .filter((item) => selectionExistsInCatalog(item, catalog))
+      .filter((item) => shouldRetainPersistedBinding(item, catalog))
       .map((item) => ({ ...item }));
     const residentBindings = bindings.filter((item) =>
       shouldAttachResidentBinding(item, input.taskIntentProfile, input.messageType === 'user_response')

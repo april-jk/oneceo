@@ -134,6 +134,91 @@ test('prepareRunState keeps contextual resident skill only when current intent s
   assert.ok(persistedStates.length >= 2);
 });
 
+test('prepareRunState drops stale required resident binding after governance no longer requires it', async () => {
+  const service = new TaskSessionSkillStateService();
+  let savedPatch: Record<string, unknown> | null = null;
+
+  mock.method(taskSessionRedisCacheService, 'resolveScopeBySession', async () => null as any);
+  mock.method(taskCreationSessionDAO, 'getSessionMetadataJson', async () => ({
+    sessionSkillState: {
+      explicitSelections: [],
+      residentSelections: [
+        {
+          sourceType: 'platform',
+          skillId: 'deploy-skill',
+          revisionId: 'rev-deploy',
+        },
+      ],
+      bindings: [
+        {
+          sourceType: 'platform',
+          skillId: 'deploy-skill',
+          revisionId: 'rev-deploy',
+          activationSource: 'required',
+          residentMode: 'pinned',
+          retentionMode: 'session',
+          status: 'active',
+          lastMatchedAt: '2026-04-20T10:00:00.000Z',
+          lastUsedAt: '2026-04-20T10:00:00.000Z',
+          lastMessageType: 'user_input',
+          lastIntentMode: 'deployable_web_app',
+          lastToolName: null,
+        },
+      ],
+    },
+  }));
+  mock.method(taskCreationSessionDAO, 'patchSessionMetadataJson', async (_sessionId, patch) => {
+    savedPatch = patch;
+    return null as any;
+  });
+  mock.method(userSkillService, 'resolveSelectionsForSession', async () => []);
+
+  const result = await service.prepareRunState({
+    sessionId: 'session-1',
+    skillCatalog: [
+      {
+        sourceType: 'platform',
+        skillId: 'deploy-skill',
+        revisionId: 'rev-deploy',
+        slug: 'deploy-skill',
+        name: 'Deploy Skill',
+        description: '',
+        category: 'deployment',
+        revisionNumber: 1,
+        resourceSummary: null,
+        governance: {
+          systemRole: 'deployment_orchestrator',
+          adminManaged: true,
+          required: false,
+          autoActivation: {
+            enabled: true,
+            triggers: ['deploy'],
+            toolNames: ['deploy_application'],
+          },
+        },
+      },
+    ] as any,
+    taskIntentProfile: {
+      mode: 'neutral',
+      reason: 'plain_chat',
+      recentUserMessages: ['你好'],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: true,
+    },
+    messageType: 'user_input',
+  });
+
+  assert.equal(result.activeSkillsForTurn.length, 0);
+  const normalized = readSessionSkillState((savedPatch || {}).sessionSkillState);
+  assert.equal(normalized.bindings.length, 0);
+  assert.equal(normalized.residentSelections.length, 0);
+});
+
 test('saveSandboxFileMemoryToDb merges sandbox memory snapshot back into session metadata', async () => {
   const service = new TaskSessionSkillStateService();
   let savedPatch: Record<string, unknown> | null = null;

@@ -67,6 +67,7 @@ type AltusRunReplayDrawerProps = {
   runtimeReady?: boolean;
   runtimeStarting?: boolean;
   onEnsureRuntime?: () => Promise<void>;
+  runtimeSwitchBlocked?: boolean;
   onRequestStartDebugByMessage?: () => void;
   onRequestDeployByMessage?: () => void;
   onRequestRedeployByMessage?: () => void;
@@ -143,6 +144,7 @@ export default function AltusRunReplayDrawer({
   runtimeReady,
   runtimeStarting,
   onEnsureRuntime,
+  runtimeSwitchBlocked = false,
   onRequestStartDebugByMessage,
   onRequestDeployByMessage,
   onRequestRedeployByMessage,
@@ -176,12 +178,13 @@ export default function AltusRunReplayDrawer({
     useState<TaskCreationDeploymentInfo | null>(null);
   const [deploymentLoading, setDeploymentLoading] = useState(false);
   const [deploymentError, setDeploymentError] = useState<string | null>(null);
+  const effectiveEnsureRuntime = runtimeSwitchBlocked ? undefined : onEnsureRuntime;
   const filePreview = useWorkspaceFilePreviewState({
     sessionId,
     open: open && drawerView === "files",
     runtimeReady,
     runtimeStarting,
-    onEnsureRuntime,
+    onEnsureRuntime: effectiveEnsureRuntime,
     selectedWorkspacePath: selectedFilePath || normalizedFiles[0]?.path || null,
     diffItems,
   });
@@ -191,7 +194,7 @@ export default function AltusRunReplayDrawer({
     active: drawerView === "debug",
     runtimeReady,
     runtimeStarting,
-    onEnsureRuntime,
+    onEnsureRuntime: effectiveEnsureRuntime,
   });
 
   useEffect(() => {
@@ -222,6 +225,12 @@ export default function AltusRunReplayDrawer({
 
   useEffect(() => {
     if (!open || drawerView !== "deployment") return;
+    if (runtimeSwitchBlocked) {
+      setDeploymentInfo(null);
+      setDeploymentError(i18n.t("previewPanel.deployment.blockedDuringRun"));
+      setDeploymentLoading(false);
+      return;
+    }
     let cancelled = false;
     setDeploymentLoading(true);
     setDeploymentError(null);
@@ -246,7 +255,7 @@ export default function AltusRunReplayDrawer({
     return () => {
       cancelled = true;
     };
-  }, [drawerView, open, sessionId]);
+  }, [drawerView, open, runtimeSwitchBlocked, sessionId]);
 
   const canGoPrev = currentIndex > 0;
   const canGoNext = currentIndex < latestIndex;
@@ -262,6 +271,10 @@ export default function AltusRunReplayDrawer({
       : selectedAction?.detail || "";
 
   const refreshDeployment = async (deploymentId?: string) => {
+    if (runtimeSwitchBlocked) {
+      setDeploymentError(i18n.t("previewPanel.deployment.blockedDuringRun"));
+      return;
+    }
     setDeploymentLoading(true);
     setDeploymentError(null);
     try {
@@ -288,6 +301,10 @@ export default function AltusRunReplayDrawer({
   const runDeploymentAction = async (
     action: "deploy" | "redeploy" | "rollback",
   ) => {
+    if (runtimeSwitchBlocked) {
+      setDeploymentError(i18n.t("previewPanel.deployment.blockedDuringRun"));
+      return;
+    }
     setDeploymentAction(action);
     setDeploymentError(null);
     try {
@@ -562,6 +579,7 @@ export default function AltusRunReplayDrawer({
               onSelectFile={filePreview.handleFileSelect}
               runtimeReady={runtimeReady !== false}
               runtimeStarting={runtimeStarting === true}
+              runtimeSwitchBlocked={runtimeSwitchBlocked}
             />
           ) : drawerView === "changes" ? (
             <AltusPreviewChangesPanel
@@ -580,10 +598,14 @@ export default function AltusRunReplayDrawer({
               onRequestStartDebugByMessage={onRequestStartDebugByMessage}
               onStart={async () => {
                 if (runtimeReady === false) {
-                  if (onEnsureRuntime) {
+                  if (runtimeSwitchBlocked) {
+                    debugPreview.setDebugError(i18n.t("previewPanel.runtimeSwitchBlocked"));
+                    return;
+                  }
+                  if (effectiveEnsureRuntime) {
                     debugPreview.setDebugStarting(true);
                     try {
-                      await onEnsureRuntime();
+                      await effectiveEnsureRuntime();
                     } finally {
                       debugPreview.setDebugStarting(false);
                     }

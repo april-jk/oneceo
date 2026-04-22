@@ -1,5 +1,5 @@
 import express from 'express';
-import { ensureTaskSessionRuntime } from './task-creation-routes';
+import { assertTaskSessionRuntimeStartAllowed, ensureTaskSessionRuntime } from './task-creation-routes';
 import { getPublicErrorMessage } from '../utils/error-response';
 import { createRequireInternalToken } from './internal-auth-middleware';
 import { appUserDAO, appUserSessionDAO, taskCreationSessionDAO } from '../db/dao';
@@ -253,6 +253,7 @@ router.get('/task-creation/admin/sessions/:sessionId/debug', async (req, res) =>
 router.post('/task-creation/sessions/:sessionId/runtime/start', async (req, res) => {
   try {
     const { sessionId } = req.params;
+    await assertTaskSessionRuntimeStartAllowed(sessionId);
     const runtime = await ensureTaskSessionRuntime(sessionId);
     return res.json({
       success: true,
@@ -263,6 +264,12 @@ router.post('/task-creation/sessions/:sessionId/runtime/start', async (req, res)
       return res.status(404).json({
         success: false,
         error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+    if (error?.message === '当前存在进行中的开发任务，暂不允许切换执行环境') {
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('当前存在进行中的开发任务，暂不允许切换执行环境'),
       });
     }
     console.error('内部启动执行环境失败:', error);

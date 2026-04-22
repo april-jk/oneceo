@@ -86,6 +86,7 @@ export default function TaskCreationChat({
   const {
     isConnected,
     isProcessing,
+    managedRunActive,
     isInterrupting,
     messages,
     sessionId,
@@ -369,6 +370,7 @@ export default function TaskCreationChat({
             activeTab={previewTab}
             onTabChange={setPreviewTab}
             onToggle={() => setPreviewOpen(false)}
+            runtimeSwitchBlocked={managedRunActive}
             onRequestDeployByMessage={() => {
               void submitDeploymentPrompt("deploy");
             }}

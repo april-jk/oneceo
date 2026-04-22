@@ -24,7 +24,7 @@ import {
 } from './altus-managed-shared';
 import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-service';
 
-type ManagedToolResult =
+export type ManagedToolResult =
   | { type: 'result'; content: string; activatedSkills?: ManagedSkillContext[] }
   | { type: 'ask_user'; question: string; options?: string[]; activatedSkills?: ManagedSkillContext[] }
   | {
@@ -135,6 +135,21 @@ function isFrontendBuildCommand(value: string) {
     normalized.includes('bun run build') ||
     normalized.includes('bun build') ||
     normalized.includes('vite build')
+  );
+}
+
+function isPersistentLocalServerCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('python -m http.server') ||
+    normalized.includes('python3 -m http.server') ||
+    normalized.includes('npm run dev') ||
+    normalized.includes('pnpm dev') ||
+    normalized.includes('yarn dev') ||
+    normalized.includes('bun dev') ||
+    normalized.includes('vite dev') ||
+    normalized === 'vite'
   );
 }
 
@@ -608,6 +623,11 @@ export class AltusManagedToolRuntime {
       const command = asText(rawArgs.command);
       if (!command) {
         throw new Error('shell_execute_missing_command');
+      }
+      if (isPersistentLocalServerCommand(command)) {
+        throw new Error(
+          'shell_execute_persistent_local_server_blocked:检测到本地常驻服务启动命令。managed shell_execute 不适合直接拉起这类本地预览或开发服务，请改用专用调试工具，或继续执行不会常驻的检查命令。'
+        );
       }
       if (
         this.hasActiveSkill('deployment-orchestrator') &&

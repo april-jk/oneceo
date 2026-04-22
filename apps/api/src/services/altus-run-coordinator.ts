@@ -16,6 +16,11 @@ import {
 import { AltusManagedSetupService, altusManagedSetupService } from './altus-managed-setup-service';
 import { AltusRunEventWriter, altusRunEventWriter } from './altus-run-event-writer';
 import { AltusRunLifecycleService, altusRunLifecycleService } from './altus-run-lifecycle-service';
+import {
+  AltusManagedContextBudgetService,
+  altusManagedContextBudgetService,
+} from './altus-managed-context-budget-service';
+import { AltusManagedToolExecutor } from './altus-managed-tool-executor';
 import { AltusRunState } from './altus-run-state';
 import {
   type AltusRunRecoveryMode,
@@ -203,7 +208,8 @@ export class AltusRunCoordinator {
     private readonly setupService: AltusManagedSetupService = altusManagedSetupService,
     private readonly eventWriter: AltusRunEventWriter = altusRunEventWriter,
     private readonly lifecycleService: AltusRunLifecycleService = altusRunLifecycleService,
-    private readonly deliverableService: TaskSessionDeliverableService = taskSessionDeliverableService
+    private readonly deliverableService: TaskSessionDeliverableService = taskSessionDeliverableService,
+    private readonly budgetService: AltusManagedContextBudgetService = altusManagedContextBudgetService
   ) {}
 
   private getModelName(messages: ChatMessage[], fallbackModel?: string | null) {
@@ -838,14 +844,15 @@ export class AltusRunCoordinator {
     fallbackModel?: string | null;
   }) {
     const baseUrl = `http://127.0.0.1:${process.env.PORT || '4000'}/api/llm-proxy/v1/chat/completions`;
+    const projectedMessages = this.budgetService.projectMessagesForModel(input.messages);
     const response = await fetch(baseUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: this.getModelName(input.messages, input.fallbackModel),
-        messages: sanitizeMessagesForModel(input.messages),
+        model: this.getModelName(projectedMessages, input.fallbackModel),
+        messages: sanitizeMessagesForModel(projectedMessages),
         tools: buildManagedToolDefinitionsWithMcp({
           mcpProviders: Array.isArray(input.mcpProviders) ? input.mcpProviders : [],
         }),
@@ -1143,6 +1150,15 @@ export class AltusRunCoordinator {
       activeSkills: state.input.skills,
       mcpProviders: state.input.mcpProviders,
     });
+    const toolExecutor = new AltusManagedToolExecutor({
+      runId: state.input.runId,
+      sessionId: state.input.sessionId,
+      userId: state.input.userId,
+      runtime,
+      eventWriter: this.eventWriter,
+      buildToolEventContent: (toolName, phase) => this.buildToolEventContent(toolName, phase),
+      sanitizeToolEventError: (toolName, errorMessage) => this.sanitizeToolEventError(toolName, errorMessage),
+    });
     const connectorGuideSections = await connectorGuideService.buildPromptSections(state.input.sessionId);
     const systemPrompt = altusManagedPromptService.buildSystemPrompt({
       sessionId: state.input.sessionId,
@@ -1215,7 +1231,7 @@ export class AltusRunCoordinator {
         'run_status',
         {
         status: round === 0 ? 'running' : 'waiting_tool',
-        content: round === 0 ? '正在分析并执行任务' : '继续处理工具结果',
+        content: round === 0 ? '正在分析并执行任务' : '正在分析上一步结果并决定下一步操作',
         transitionReason: roundTransitionReason,
         currentRound,
         maxRounds: maxToolRounds,
@@ -1420,64 +1436,109 @@ export class AltusRunCoordinator {
         const toolName = asText(toolCall?.function?.name);
         if (!toolName) continue;
         const args = parseToolArguments(asText(toolCall?.function?.arguments));
-        await this.eventWriter.appendRunEvent(
-          state.input.runId,
-          state.input.sessionId,
-          state.input.userId,
-          'tool_call_started',
-          {
-          toolName,
-          content: this.buildToolEventContent(toolName, 'started'),
-          arguments: args,
-          toolCallId: toolCall.id,
-          }
-        );
+        const envelope = await toolExecutor.executeToolCall({
+          toolCall,
+          args,
+          signal,
+          onResult: (result) => {
+            let postToolTransitionReason: AltusRunTransitionReason = 'tool_result_continue';
+            let postToolRecoveryMode: AltusRunRecoveryMode = 'none';
+            const eventPayload: Record<string, unknown> = {
+              outputPreview: truncate(result.content, 4000),
+            };
 
-        try {
-          const result = await runtime.execute(toolName, args, signal);
-          if (Array.isArray(result.activatedSkills) && result.activatedSkills.length > 0) {
-            const autoAttachedPrompt = altusManagedPromptService.buildAutoAttachedSkillPrompt(
-              result.activatedSkills,
-              toolName,
-            );
-            messages.push({
-              role: 'system',
-              content: autoAttachedPrompt,
-            });
-            await this.setupService.persistTimelineMessage({
-              sessionId: state.input.sessionId,
-              role: 'system',
-              messageType: 'status_update',
-              content: `已自动加载技能：${result.activatedSkills.map((item) => item.name).join('、')}`,
-              metadata: {
-                eventType: 'managed_skill_auto_attached',
-                toolName,
-                runId: state.input.runId,
-                sessionId: state.input.sessionId,
-                skillIds: result.activatedSkills.map((item) => item.skillId),
-                skillRevisionIds: result.activatedSkills.map((item) => item.revisionId),
-                skillSlugs: result.activatedSkills.map((item) => item.slug),
-                promptMarkdown: autoAttachedPrompt,
-              },
-              messageKey: `managed:${state.input.runId}:auto_attached_skills:${toolName}:${toolCall.id}`,
-            });
-            await this.eventWriter.appendRunEvent(
-              state.input.runId,
-              state.input.sessionId,
-              state.input.userId,
-              'run_status',
-              {
-                status: 'running',
-                content: `已自动加载技能：${result.activatedSkills.map((item) => item.name).join('、')}`,
-                toolName,
-                skillIds: result.activatedSkills.map((item) => item.skillId),
-                skillRevisionIds: result.activatedSkills.map((item) => item.revisionId),
-                skillSlugs: result.activatedSkills.map((item) => item.slug),
-                promptMarkdown: autoAttachedPrompt,
+            if (this.isDeploymentTool(toolName)) {
+              const evidence = this.parseDeploymentCompletionEvidence(result.content);
+              if (evidence) {
+                lastDeploymentEvidence = {
+                  ...evidence,
+                  toolName,
+                };
+                if (evidence.status === 'retryable_repair_required') {
+                  postToolTransitionReason = 'deployment_repair_required';
+                  postToolRecoveryMode = 'tool_repair';
+                }
               }
-            );
-          }
-          if (result.type === 'ask_user') {
+              Object.assign(eventPayload, this.buildDeploymentToolViewProjection(toolName, result.content) || {});
+            }
+
+            return {
+              transitionReason: postToolTransitionReason,
+              recoveryMode: postToolRecoveryMode,
+              eventPayload: {
+                transitionReason: postToolTransitionReason,
+                ...eventPayload,
+              },
+            };
+          },
+          onFailure: (rawError, sanitizedError) => {
+            const failedTransitionReason: AltusRunTransitionReason = rawError.startsWith(DEPLOYMENT_COMPLETION_BLOCKED_PREFIX)
+              ? 'deployment_completion_blocked'
+              : 'tool_failed_but_recoverable';
+            return {
+              transitionReason: failedTransitionReason,
+              recoveryMode: 'tool_repair',
+              eventPayload: this.isDeploymentTool(toolName)
+                ? {
+                    userView: {
+                      summary: sanitizedError,
+                      preview: sanitizedError,
+                      detail: sanitizedError,
+                    },
+                    internalView: {
+                      detail: [`工具: ${toolName}`, `rawError: ${rawError}`].join('\n'),
+                    },
+                  }
+                : undefined,
+            };
+          },
+        });
+        const executionResult = envelope.status === 'failed' ? null : envelope.result;
+        if (executionResult && Array.isArray(executionResult.activatedSkills) && executionResult.activatedSkills.length > 0) {
+          const autoAttachedPrompt = altusManagedPromptService.buildAutoAttachedSkillPrompt(
+            executionResult.activatedSkills,
+            toolName,
+          );
+          messages.push({
+            role: 'system',
+            content: autoAttachedPrompt,
+          });
+          await this.setupService.persistTimelineMessage({
+            sessionId: state.input.sessionId,
+            role: 'system',
+            messageType: 'status_update',
+            content: `已自动加载技能：${executionResult.activatedSkills.map((item) => item.name).join('、')}`,
+            metadata: {
+              eventType: 'managed_skill_auto_attached',
+              toolName,
+              runId: state.input.runId,
+              sessionId: state.input.sessionId,
+              skillIds: executionResult.activatedSkills.map((item) => item.skillId),
+              skillRevisionIds: executionResult.activatedSkills.map((item) => item.revisionId),
+              skillSlugs: executionResult.activatedSkills.map((item) => item.slug),
+              promptMarkdown: autoAttachedPrompt,
+            },
+            messageKey: `managed:${state.input.runId}:auto_attached_skills:${toolName}:${toolCall.id}`,
+          });
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            state.input.userId,
+            'run_status',
+            {
+              status: 'running',
+              content: `已自动加载技能：${executionResult.activatedSkills.map((item) => item.name).join('、')}`,
+              toolName,
+              skillIds: executionResult.activatedSkills.map((item) => item.skillId),
+              skillRevisionIds: executionResult.activatedSkills.map((item) => item.revisionId),
+              skillSlugs: executionResult.activatedSkills.map((item) => item.slug),
+              promptMarkdown: autoAttachedPrompt,
+            }
+          );
+        }
+
+        if (envelope.status === 'ask_user') {
+          const result = envelope.result;
             await this.syncLoopSnapshot(state, {
               lastTransitionReason: 'clarification_requested',
               recoveryMode: 'awaiting_user',
@@ -1491,10 +1552,11 @@ export class AltusRunCoordinator {
               question: result.question,
               options: result.options,
             });
-          }
+        }
 
+        if (envelope.status === 'complete') {
+          const result = envelope.result;
           if (
-            result.type === 'complete' &&
             toolName === 'complete_task' &&
             deploymentCompletionIntent.requiresManagedSuccess &&
             !this.isManagedDeploymentEvidenceSuccessful(
@@ -1502,15 +1564,53 @@ export class AltusRunCoordinator {
               lastDeploymentEvidence
             )
           ) {
-            throw new Error(
-              this.buildDeploymentCompletionBlockedError(
-                deploymentCompletionIntent,
-                lastDeploymentEvidence
-              )
+            const blockedMessage = this.buildDeploymentCompletionBlockedError(
+              deploymentCompletionIntent,
+              lastDeploymentEvidence
             );
+            const blockedEventError = this.sanitizeToolEventError(toolName, blockedMessage);
+            await this.eventWriter.appendRunEvent(
+              state.input.runId,
+              state.input.sessionId,
+              state.input.userId,
+              'tool_call_failed',
+              {
+                toolName,
+                content: this.buildToolEventContent(toolName, 'failed'),
+                arguments: args,
+                toolCallId: toolCall.id,
+                error: blockedEventError,
+                transitionReason: 'deployment_completion_blocked',
+                userView: {
+                  summary: blockedEventError,
+                  preview: blockedEventError,
+                  detail: blockedEventError,
+                },
+                internalView: {
+                  detail: [`工具: ${toolName}`, `rawError: ${blockedMessage}`].join('\n'),
+                },
+              }
+            );
+            await this.syncLoopSnapshot(state, {
+              lastTransitionReason: 'deployment_completion_blocked',
+              recoveryMode: 'tool_repair',
+              currentRound,
+              maxRounds: maxToolRounds,
+              plainTextRecoveryUsed,
+              lastToolName: toolName,
+              lastToolCallId: toolCall.id,
+            });
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              name: toolName,
+              content: JSON.stringify({
+                error: blockedMessage,
+              }),
+            });
+            continue;
           }
 
-          if (result.type === 'complete') {
             if (!state.sandboxId || !state.workspaceRoot) {
               throw new Error('managed_run_missing_sandbox_context');
             }
@@ -1600,100 +1700,32 @@ export class AltusRunCoordinator {
               }
             );
             return { outcome: 'completed' as const, content: finalContent, deliverables };
-          }
+        }
 
-          let postToolTransitionReason: AltusRunTransitionReason = 'tool_result_continue';
-          let postToolRecoveryMode: AltusRunRecoveryMode = 'none';
-          if (this.isDeploymentTool(toolName)) {
-            const evidence = this.parseDeploymentCompletionEvidence(result.content);
-            if (evidence) {
-              lastDeploymentEvidence = {
-                ...evidence,
-                toolName,
-              };
-              if (evidence.status === 'retryable_repair_required') {
-                postToolTransitionReason = 'deployment_repair_required';
-                postToolRecoveryMode = 'tool_repair';
-              }
-              if (
-                this.isManagedDeploymentEvidenceSuccessful(
-                  deploymentCompletionIntent,
-                  lastDeploymentEvidence
-                )
-              ) {
-                // Keep the latest successful deployment evidence in memory so
-                // a later complete_task can be accepted without re-parsing history.
-              }
-            }
-          }
-
+        if (envelope.status === 'result') {
+          const result = envelope.result;
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
             name: toolName,
             content: result.content,
           });
-          await this.eventWriter.appendRunEvent(
-            state.input.runId,
-            state.input.sessionId,
-            state.input.userId,
-            'tool_call_completed',
-            {
-            toolName,
-            content: this.buildToolEventContent(toolName, 'completed'),
-            arguments: args,
-            toolCallId: toolCall.id,
-            transitionReason: postToolTransitionReason,
-            outputPreview: truncate(result.content, 4000),
-            ...(this.isDeploymentTool(toolName)
-              ? this.buildDeploymentToolViewProjection(toolName, result.content) || {}
-              : {}),
-            }
-          );
           await this.syncLoopSnapshot(state, {
-            lastTransitionReason: postToolTransitionReason,
-            recoveryMode: postToolRecoveryMode,
+            lastTransitionReason: envelope.transitionReason,
+            recoveryMode: envelope.recoveryMode,
             currentRound,
             maxRounds: maxToolRounds,
             plainTextRecoveryUsed,
             lastToolName: toolName,
             lastToolCallId: toolCall.id,
           });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error || 'tool_failed');
-          const eventError = this.sanitizeToolEventError(toolName, message);
-          const failedTransitionReason: AltusRunTransitionReason = message.startsWith(DEPLOYMENT_COMPLETION_BLOCKED_PREFIX)
-            ? 'deployment_completion_blocked'
-            : 'tool_failed_but_recoverable';
-          await this.eventWriter.appendRunEvent(
-            state.input.runId,
-            state.input.sessionId,
-            state.input.userId,
-            'tool_call_failed',
-            {
-            toolName,
-            content: this.buildToolEventContent(toolName, 'failed'),
-            arguments: args,
-            toolCallId: toolCall.id,
-            error: eventError,
-            transitionReason: failedTransitionReason,
-            ...(this.isDeploymentTool(toolName)
-              ? {
-                  userView: {
-                    summary: eventError,
-                    preview: eventError,
-                    detail: eventError,
-                  },
-                  internalView: {
-                    detail: [`工具: ${toolName}`, `rawError: ${message}`].join('\n'),
-                  },
-                }
-              : {}),
-            }
-          );
+          continue;
+        }
+
+        if (envelope.status === 'failed') {
           await this.syncLoopSnapshot(state, {
-            lastTransitionReason: failedTransitionReason,
-            recoveryMode: 'tool_repair',
+            lastTransitionReason: envelope.transitionReason,
+            recoveryMode: envelope.recoveryMode,
             currentRound,
             maxRounds: maxToolRounds,
             plainTextRecoveryUsed,
@@ -1705,7 +1737,7 @@ export class AltusRunCoordinator {
             tool_call_id: toolCall.id,
             name: toolName,
             content: JSON.stringify({
-              error: message,
+              error: envelope.rawError,
             }),
           });
         }

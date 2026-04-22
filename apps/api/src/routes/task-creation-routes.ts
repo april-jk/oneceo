@@ -5673,6 +5673,7 @@ router.get('/sessions/:sessionId/deployment', async (req, res) => {
       });
     }
 
+    await ensureTaskSessionRuntime(sessionId);
     const deploymentId = asText(req.query.deploymentId);
     const data = await buildTaskSessionDeploymentResponse({
       userId: currentUser.userId,
@@ -5761,6 +5762,7 @@ router.post('/sessions/:sessionId/deployment/token/rotate', async (req, res) => 
       });
     }
 
+    await ensureTaskSessionRuntime(sessionId);
     await platformDeploymentAccountService.rotateProjectToken(currentUser.userId, sessionId);
     const data = await buildTaskSessionDeploymentResponse({
       userId: currentUser.userId,

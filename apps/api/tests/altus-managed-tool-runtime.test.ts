@@ -527,6 +527,33 @@ test('shell_execute blocks preview/dev commands while deployment-orchestrator is
   );
 });
 
+test('shell_execute blocks persistent local server commands to avoid long timeout stalls', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  await assert.rejects(
+    runtime.execute('shell_execute', {
+      command: 'python3 -m http.server 8080',
+      cwd: '.',
+    }),
+    /shell_execute_persistent_local_server_blocked/
+  );
+
+  await assert.rejects(
+    runtime.execute('shell_execute', {
+      command: 'python3 -m http.server 8080 &',
+      cwd: '.',
+    }),
+    /shell_execute_persistent_local_server_blocked/
+  );
+});
+
 test('debug_open_page rejects non-http protocols', async () => {
   const runtime = new AltusManagedToolRuntime({
     sessionId: 'session-1',

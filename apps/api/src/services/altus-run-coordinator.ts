@@ -93,6 +93,14 @@ type StreamedToolCallState = {
   };
 };
 
+function basenameLike(value: unknown) {
+  const text = asText(value).replace(/\\/g, '/');
+  if (!text) return '';
+  const normalized = text.replace(/\/+$/, '');
+  const parts = normalized.split('/');
+  return parts[parts.length - 1] || normalized;
+}
+
 type ExtractedJsonStringField = {
   value: string;
   closed: boolean;
@@ -777,6 +785,100 @@ export class AltusRunCoordinator {
     return `正在准备工具 ${toolName}`;
   }
 
+  private buildPostToolRunStatusContent(input: {
+    toolName: string;
+    args?: Record<string, unknown>;
+    outcome: 'completed' | 'failed';
+    transitionReason?: AltusRunTransitionReason;
+    error?: string;
+  }) {
+    const toolName = asText(input.toolName);
+    const args = input.args || {};
+    const pathValue = asText(args.path);
+    const commandValue = asText(args.command);
+    const urlValue = asText(args.url);
+    const displayPath = basenameLike(pathValue);
+    const lowerDisplayPath = displayPath.toLowerCase();
+
+    if (input.outcome === 'failed') {
+      if (toolName === 'shell_execute') {
+        return '刚才那一步执行没成功，我换个方式继续';
+      }
+      if (toolName === 'debug_open_page') {
+        return '页面打开得不太对，我正在检查启动方式和访问地址';
+      }
+      if (toolName === 'write_file') {
+        return displayPath
+          ? `${displayPath} 这一步出了点问题，我先修正后继续`
+          : '刚才写文件时出了点问题，我先修正后继续';
+      }
+      if (toolName === 'complete_task') {
+        return '最后收尾检查还没过，我再修一下';
+      }
+      return '刚才那一步没成功，我调整后继续';
+    }
+
+    if (toolName === 'write_file') {
+      if (lowerDisplayPath === 'index.html') {
+        return '页面框架已经搭好，我继续把样式和交互补完整';
+      }
+      if (lowerDisplayPath === 'style.css') {
+        return '界面样式已经整理好了，我继续补上操作逻辑';
+      }
+      if (lowerDisplayPath === 'script.js' || lowerDisplayPath === 'game.js') {
+        return '主要交互已经接上了，我继续补齐运行需要的内容';
+      }
+      if (lowerDisplayPath === 'package.json') {
+        return '项目运行配置已经准备好，我继续把启动流程收好';
+      }
+      if (lowerDisplayPath === 'server.js') {
+        return '预览服务已经准备好，我继续检查能不能顺利跑起来';
+      }
+      if (lowerDisplayPath === 'oneceo.manifest.json') {
+        return '发布清单已经准备好，我继续做最后检查';
+      }
+      return displayPath
+        ? `${displayPath} 已经处理好了，我继续完善剩下的部分`
+        : '这一部分已经处理好了，我继续完善剩下的部分';
+    }
+    if (toolName === 'read_file') {
+      return displayPath
+        ? `${displayPath} 我已经看过了，接着往下处理`
+        : '这部分内容我已经看过了，接着往下处理';
+    }
+    if (toolName === 'list_directory') {
+      return '目录结构已经理清了，我继续往下完善';
+    }
+    if (toolName === 'search_code') {
+      const queryValue = asText(args.query);
+      return queryValue
+        ? `和“${queryValue}”相关的位置我已经找到了，继续往下处理`
+        : '相关代码位置我已经找到了，继续往下处理';
+    }
+    if (toolName === 'shell_execute') {
+      if (commandValue.includes('mkdir')) {
+        return '运行环境已经准备好了，我开始生成项目内容';
+      }
+      if (commandValue.includes('ls')) {
+        return '文件我已经核对过了，接着做最后整理';
+      }
+      return '这一步已经跑完了，我继续处理后面的内容';
+    }
+    if (toolName === 'debug_open_page') {
+      return '页面已经打开，我正在确认实际效果';
+    }
+    if (toolName === 'get_application_deployment_status') {
+      return '部署状态我已经拿到了，正在确认是否一切正常';
+    }
+    if (toolName === 'deploy_application' || toolName === 'redeploy_application') {
+      return '部署已经发出去了，我继续盯一下结果';
+    }
+    if (toolName === 'rollback_application_deployment') {
+      return '回滚已经开始，我继续确认是否恢复正常';
+    }
+    return '这一步已经完成，我继续处理下一步';
+  }
+
   private sanitizeToolEventError(toolName: string, errorMessage: string) {
     if (errorMessage.startsWith(DEPLOYMENT_COMPLETION_BLOCKED_PREFIX)) {
       return '线上部署尚未完成，Altus 将继续修复并重试发布。';
@@ -1198,6 +1300,7 @@ export class AltusRunCoordinator {
     );
     let lastDeploymentEvidence: DeploymentCompletionEvidence | null = null;
     const maxToolRounds = this.getMaxToolRounds();
+    let nextRoundStatusContent = '正在分析并执行任务';
 
     for (let round = 0; round < maxToolRounds; round += 1) {
       if (signal.aborted) {
@@ -1231,7 +1334,7 @@ export class AltusRunCoordinator {
         'run_status',
         {
         status: round === 0 ? 'running' : 'waiting_tool',
-        content: round === 0 ? '正在分析并执行任务' : '正在分析上一步结果并决定下一步操作',
+        content: round === 0 ? '正在分析并执行任务' : nextRoundStatusContent,
         transitionReason: roundTransitionReason,
         currentRound,
         maxRounds: maxToolRounds,
@@ -1710,6 +1813,12 @@ export class AltusRunCoordinator {
             name: toolName,
             content: result.content,
           });
+          nextRoundStatusContent = this.buildPostToolRunStatusContent({
+            toolName,
+            args,
+            outcome: 'completed',
+            transitionReason: envelope.transitionReason,
+          });
           await this.syncLoopSnapshot(state, {
             lastTransitionReason: envelope.transitionReason,
             recoveryMode: envelope.recoveryMode,
@@ -1723,6 +1832,13 @@ export class AltusRunCoordinator {
         }
 
         if (envelope.status === 'failed') {
+          nextRoundStatusContent = this.buildPostToolRunStatusContent({
+            toolName,
+            args,
+            outcome: 'failed',
+            transitionReason: envelope.transitionReason,
+            error: envelope.error,
+          });
           await this.syncLoopSnapshot(state, {
             lastTransitionReason: envelope.transitionReason,
             recoveryMode: envelope.recoveryMode,

@@ -14,6 +14,8 @@ interface WorkspaceLayoutProps {
   selectedProject?: TaskProjectSelection | null;
   fluid?: boolean;
   lockViewport?: boolean;
+  sidebarCollapsed?: boolean;
+  onSidebarCollapsedChange?: (collapsed: boolean) => void;
 }
 
 export default function WorkspaceLayout({
@@ -21,8 +23,20 @@ export default function WorkspaceLayout({
   selectedProject,
   fluid = false,
   lockViewport = false,
+  sidebarCollapsed: controlledSidebarCollapsed,
+  onSidebarCollapsedChange,
 }: WorkspaceLayoutProps) {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [uncontrolledSidebarCollapsed, setUncontrolledSidebarCollapsed] =
+    useState(false);
+  const sidebarCollapsed =
+    controlledSidebarCollapsed ?? uncontrolledSidebarCollapsed;
+
+  const setSidebarCollapsed = (nextCollapsed: boolean) => {
+    if (controlledSidebarCollapsed === undefined) {
+      setUncontrolledSidebarCollapsed(nextCollapsed);
+    }
+    onSidebarCollapsedChange?.(nextCollapsed);
+  };
 
   return (
     <div

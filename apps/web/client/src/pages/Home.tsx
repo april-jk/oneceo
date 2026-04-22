@@ -10,6 +10,7 @@ import {
   useRef,
   useEffect,
   useMemo,
+  useCallback,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
@@ -129,6 +130,7 @@ import {
 import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
 import { resolveUserMessageReferences } from "@/lib/message-reference-parser";
 import { readAltusMode } from "@/lib/altus-settings";
+import { shouldAutoCollapseSidebarForAltusActions } from "@/lib/altus-actions-layout";
 import type { TaskProjectSelection } from "@/lib/task-project-selection";
 import i18n from "@/i18n";
 import { useLocation, useSearch } from "wouter";
@@ -317,6 +319,7 @@ export default function Home() {
   );
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
   const [showRuntimeDrawer, setShowRuntimeDrawer] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [altusReplayRunId, setAltusReplayRunId] = useState<string | null>(null);
   const [altusReplayIndex, setAltusReplayIndex] = useState(0);
   const [pendingAltusReplayToolCallId, setPendingAltusReplayToolCallId] =
@@ -336,6 +339,9 @@ export default function Home() {
   const [selectedDiffMessageKey, setSelectedDiffMessageKey] = useState<
     string | null
   >(null);
+  const [desktopPreviewLayout, setDesktopPreviewLayout] = useState<
+    [number, number]
+  >([66, 34]);
   const [pendingDiffTarget, setPendingDiffTarget] = useState<{
     diffId?: string | null;
     filePath?: string | null;
@@ -1624,6 +1630,9 @@ export default function Home() {
           activeAltusReplay.actions.length - 1,
         )
       : 0;
+  const previewResizeDraggingRef = useRef(false);
+  const previewResizeLastClientXRef = useRef<number | null>(null);
+  const previewPanelMaxSize = 48;
 
   const openAltusReplay = (
     runId: string,
@@ -1676,6 +1685,59 @@ export default function Home() {
       setPreviewMaximized(false);
     }
   }, [previewOpen, previewMaximized]);
+
+  const handlePreviewResizeDragging = useCallback((isDragging: boolean) => {
+    previewResizeDraggingRef.current = isDragging;
+    if (!isDragging) {
+      previewResizeLastClientXRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!previewResizeDraggingRef.current) return;
+      const previousClientX = previewResizeLastClientXRef.current;
+      previewResizeLastClientXRef.current = event.clientX;
+      if (previousClientX === null) {
+        return;
+      }
+      if (
+        shouldAutoCollapseSidebarForAltusActions({
+          managedAltusMode,
+          sidebarCollapsed,
+          previewOpen,
+          previewMaximized,
+          previewPanelSize: desktopPreviewLayout[1] || 0,
+          previewPanelMaxSize,
+          dragDeltaX: event.clientX - previousClientX,
+        })
+      ) {
+        setSidebarCollapsed(true);
+        previewResizeDraggingRef.current = false;
+        previewResizeLastClientXRef.current = null;
+      }
+    };
+
+    const handlePointerUp = () => {
+      previewResizeDraggingRef.current = false;
+      previewResizeLastClientXRef.current = null;
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
+    };
+  }, [
+    desktopPreviewLayout,
+    managedAltusMode,
+    previewOpen,
+    previewMaximized,
+    sidebarCollapsed,
+  ]);
 
   const previewPanel = previewOpen ? (
     <section className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -2081,6 +2143,8 @@ export default function Home() {
       fluid={mode === "chat"}
       lockViewport={mode === "chat"}
       selectedProject={selectedProject}
+      sidebarCollapsed={sidebarCollapsed}
+      onSidebarCollapsedChange={setSidebarCollapsed}
     >
       <div
         className={
@@ -2331,6 +2395,11 @@ export default function Home() {
                       direction="horizontal"
                       autoSaveId="task-creation-chat-layout"
                       className="h-full min-h-0"
+                      onLayout={(sizes) => {
+                        if (sizes.length >= 2) {
+                          setDesktopPreviewLayout([sizes[0] || 0, sizes[1] || 0]);
+                        }
+                      }}
                     >
                       <ResizablePanel defaultSize={66} minSize={42}>
                         <div className="h-full min-h-0 pr-2">{chatPanel}</div>
@@ -2338,11 +2407,12 @@ export default function Home() {
                       <ResizableHandle
                         withHandle
                         className="w-1.5 bg-transparent after:w-1.5 after:rounded-full after:bg-transparent hover:after:bg-transparent data-[resize-handle-active]:after:bg-transparent [&>div]:hidden"
+                        onDragging={handlePreviewResizeDragging}
                       />
                       <ResizablePanel
                         defaultSize={34}
                         minSize={30}
-                        maxSize={48}
+                        maxSize={previewPanelMaxSize}
                       >
                         <div className="h-full min-h-0 pl-2">
                           {previewPanel}

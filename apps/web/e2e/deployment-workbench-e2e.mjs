@@ -31,7 +31,7 @@ async function loadTestAccount() {
 async function apiRequest(pathname, sessionToken) {
   const response = await fetch(`${API_BASE_URL}${pathname}`, {
     headers: {
-      cookie: `app_session_id=${sessionToken}`,
+      cookie: `app_session_v2_id=${sessionToken}`,
     },
   });
   const text = await response.text();
@@ -46,9 +46,9 @@ async function apiRequest(pathname, sessionToken) {
 
 function extractAppSessionToken(response) {
   const raw = response.headers.get('set-cookie') || '';
-  const matched = raw.match(/(?:^|,\s*)app_session_id=([^;,\s]+)/);
+  const matched = raw.match(/(?:^|,\s*)app_session_v2_id=([^;,\s]+)/);
   if (!matched?.[1]) {
-    throw new Error('failed to extract app_session_id from set-cookie');
+    throw new Error('failed to extract app_session_v2_id from set-cookie');
   }
   return matched[1];
 }
@@ -134,8 +134,8 @@ async function main() {
   const sessionToken = await resolveSessionToken(account);
   const targetSessionId = await resolveSessionId(sessionToken);
   await context.addCookies([
-    { name: 'app_session_id', value: sessionToken, url: WEB_BASE_URL },
-    { name: 'app_session_id', value: sessionToken, url: API_BASE_URL },
+    { name: 'app_session_v2_id', value: sessionToken, url: WEB_BASE_URL },
+    { name: 'app_session_v2_id', value: sessionToken, url: API_BASE_URL },
   ]);
   const page = await context.newPage();
 

@@ -100,7 +100,7 @@ async function ensurePlaywrightTestUser(account) {
 }
 
 function extractAppSessionCookie(setCookieHeader) {
-  const match = String(setCookieHeader || '').match(/(?:^|,\s*)app_session_id=([^;,\s]+)/);
+  const match = String(setCookieHeader || '').match(/(?:^|,\s*)app_session_v2_id=([^;,\s]+)/);
   return match?.[1] ? decodeURIComponent(match[1]) : null;
 }
 
@@ -124,10 +124,10 @@ async function loginViaApiAndSeedBrowser(context, account) {
   }
   const cookieValue = extractAppSessionCookie(response.headers.get('set-cookie'));
   if (!cookieValue) {
-    throw new Error('api login succeeded but set-cookie missing app_session_id');
+    throw new Error('api login succeeded but set-cookie missing app_session_v2_id');
   }
   const cookie = {
-    name: 'app_session_id',
+    name: 'app_session_v2_id',
     value: cookieValue,
     domain: new URL(WEB_BASE_URL).hostname,
     path: '/',
@@ -143,12 +143,12 @@ async function buildAuthCookieHeader(context, account) {
   const apiCookies = await context.cookies(API_BASE_URL);
   const webCookies = await context.cookies(WEB_BASE_URL);
   const merged = [...apiCookies, ...webCookies];
-  const appSession = merged.find((item) => item.name === 'app_session_id' && item.value);
+  const appSession = merged.find((item) => item.name === 'app_session_v2_id' && item.value);
   if (appSession?.value) {
-    return `app_session_id=${appSession.value}`;
+    return `app_session_v2_id=${appSession.value}`;
   }
   const seededValue = await loginViaApiAndSeedBrowser(context, account);
-  return `app_session_id=${seededValue}`;
+  return `app_session_v2_id=${seededValue}`;
 }
 
 async function loginThroughUi(page, account) {

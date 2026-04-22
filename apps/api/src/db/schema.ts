@@ -34,7 +34,7 @@ export const appUserLegacyIdMappings = pgTable(
       .notNull()
       .references(() => appUsers.id, { onDelete: 'cascade' }),
     legacyUserId: text('legacy_user_id').notNull(),
-    source: text('source').notNull().default('request_header'),
+    source: text('source').notNull().default('auth_bootstrap'),
     firstSeenAt: timestamp('first_seen_at').notNull().defaultNow(),
     lastSeenAt: timestamp('last_seen_at').notNull().defaultNow(),
     createdAt: timestamp('created_at').notNull().defaultNow(),

@@ -74,9 +74,9 @@ async function loginOrRegister(account) {
   }
 
   const rawSetCookie = response.headers.get("set-cookie") || "";
-  const matched = rawSetCookie.match(/(?:^|,\s*)app_session_id=([^;,\s]+)/);
+  const matched = rawSetCookie.match(/(?:^|,\s*)app_session_v2_id=([^;,\s]+)/);
   if (!matched?.[1]) {
-    throw new Error("missing app_session_id cookie in login response");
+    throw new Error("missing app_session_v2_id cookie in login response");
   }
   return matched[1];
 }
@@ -86,7 +86,7 @@ async function apiRequest(pathname, { method = "GET", sessionToken, body } = {})
     method,
     headers: {
       ...(body ? { "content-type": "application/json" } : {}),
-      ...(sessionToken ? { cookie: `app_session_id=${sessionToken}` } : {}),
+      ...(sessionToken ? { cookie: `app_session_v2_id=${sessionToken}` } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
   });

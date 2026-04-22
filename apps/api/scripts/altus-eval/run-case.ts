@@ -60,11 +60,11 @@ async function loginAndGetCookie(apiBase: string): Promise<string> {
   }
 
   const setCookie = response.headers.get('set-cookie') || '';
-  const matched = setCookie.match(/(?:^|,\s*)app_session_id=([^;,\s]+)/);
+  const matched = setCookie.match(/(?:^|,\s*)app_session_v2_id=([^;,\s]+)/);
   if (!matched?.[1]) {
-    throw new Error('auth login succeeded but set-cookie missing app_session_id');
+    throw new Error('auth login succeeded but set-cookie missing app_session_v2_id');
   }
-  return `app_session_id=${matched[1]}`;
+  return `app_session_v2_id=${matched[1]}`;
 }
 
 async function fetchJson(apiBase: string, cookie: string, route: string): Promise<any> {

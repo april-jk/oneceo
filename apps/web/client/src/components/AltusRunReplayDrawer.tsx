@@ -162,6 +162,13 @@ export function resolveReplaySelectedFilePath(input: {
   return preferredPath;
 }
 
+function isClickInsideElement(
+  target: EventTarget | null,
+  element: HTMLElement | null,
+) {
+  return Boolean(target instanceof Node && element?.contains(target));
+}
+
 export default function AltusRunReplayDrawer({
   open,
   onOpenChange,
@@ -205,6 +212,7 @@ export default function AltusRunReplayDrawer({
   const [detailViewMode, setDetailViewMode] = useState<"user" | "internal">(
     "user",
   );
+  const [selectedActionVisible, setSelectedActionVisible] = useState(true);
   const [selectedDeploymentId, setSelectedDeploymentId] = useState<
     string | null
   >(null);
@@ -232,6 +240,8 @@ export default function AltusRunReplayDrawer({
   });
   const selectedActionKey = `${runId}:${selectedAction?.toolCallId || "none"}`;
   const previousSelectedActionKeyRef = useRef(selectedActionKey);
+  const drawerContentRef = useRef<HTMLDivElement | null>(null);
+  const selectedActionPanelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const actionChanged = previousSelectedActionKeyRef.current !== selectedActionKey;
@@ -253,6 +263,26 @@ export default function AltusRunReplayDrawer({
   useEffect(() => {
     setDetailViewMode("user");
   }, [runId, selectedAction?.toolCallId]);
+
+  useEffect(() => {
+    setSelectedActionVisible(true);
+  }, [runId, selectedAction?.toolCallId]);
+
+  useEffect(() => {
+    if (!open || drawerView !== "actions" || !selectedActionVisible) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!isClickInsideElement(target, drawerContentRef.current)) return;
+      if (isClickInsideElement(target, selectedActionPanelRef.current)) return;
+      setSelectedActionVisible(false);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [drawerView, open, selectedActionVisible]);
 
   useEffect(() => {
     if (!diffItems.length) {
@@ -379,12 +409,26 @@ export default function AltusRunReplayDrawer({
     await filePreview.handleFileSelect(normalizedPath);
   };
 
+  const handleSelectActionIndex = (index: number) => {
+    setSelectedActionVisible(true);
+    onSelectIndex(index);
+  };
+
+  const handleJumpToLatestAction = () => {
+    setSelectedActionVisible(true);
+    onJumpToLatest();
+  };
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
         className="top-4 right-4 bottom-4 left-auto flex h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] max-w-none flex-col overflow-hidden rounded-2xl border border-border/70 p-0 shadow-sm sm:max-w-none md:w-[calc((100vw-6rem)*0.66)] lg:w-[calc((100vw-18rem)*0.66)] [&>button.absolute]:hidden"
       >
+        <div
+          ref={drawerContentRef}
+          className="flex h-full min-h-0 flex-col overflow-hidden"
+        >
         <div className="h-12 flex-shrink-0 px-3 flex items-center justify-between border-b border-border bg-background/95 backdrop-blur-sm">
           <div className="flex items-center min-w-0">
             <SheetTitle className="text-base font-semibold truncate">
@@ -501,7 +545,7 @@ export default function AltusRunReplayDrawer({
                               <button
                                 key={action.toolCallId}
                                 type="button"
-                                onClick={() => onSelectIndex(action.stepIndex)}
+                                onClick={() => handleSelectActionIndex(action.stepIndex)}
                                 className={cn(
                                   "flex w-full items-start gap-3 border-b border-zinc-100 px-4 py-3 text-left transition-colors last:border-b-0 dark:border-zinc-800",
                                   isActive
@@ -546,12 +590,16 @@ export default function AltusRunReplayDrawer({
                   </div>
                 </ScrollArea>
 
-                <div className="border-t border-zinc-200 bg-zinc-50/90 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/90">
+                {selectedActionVisible ? (
+                <div
+                  ref={selectedActionPanelRef}
+                  className="border-t border-zinc-200 bg-zinc-50/90 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/90"
+                >
                   <div className="space-y-2">
                     <div className="text-xs font-medium uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
                       {i18n.t("replayDrawer.selectedAction")}
                     </div>
-                    <div className="rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-700 dark:bg-zinc-900">
+                    <div className="max-h-[30vh] overflow-y-auto rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-700 dark:bg-zinc-900">
                       {selectedAction ? (
                         <div className="space-y-2">
                           <div className="flex items-center justify-between gap-2">
@@ -607,6 +655,7 @@ export default function AltusRunReplayDrawer({
                     </div>
                   </div>
                 </div>
+                ) : null}
               </div>
             </div>
           ) : drawerView === "files" ? (
@@ -701,7 +750,7 @@ export default function AltusRunReplayDrawer({
               size="sm"
               disabled={!canGoPrev}
               className="h-8 rounded-2xl text-xs"
-              onClick={() => onSelectIndex(Math.max(0, currentIndex - 1))}
+              onClick={() => handleSelectActionIndex(Math.max(0, currentIndex - 1))}
             >
               <ChevronLeft className="mr-1 h-3.5 w-3.5" />
               <span>{i18n.t("replayDrawer.prev")}</span>
@@ -712,7 +761,7 @@ export default function AltusRunReplayDrawer({
               </span>
               <button
                 type="button"
-                onClick={onJumpToLatest}
+                onClick={handleJumpToLatestAction}
                 className="flex items-center justify-center gap-1.5 rounded-full border border-zinc-200 bg-zinc-100 px-2.5 py-0.5 transition-colors hover:bg-zinc-200 dark:border-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700"
               >
                 <div className="h-1.5 w-1.5 rounded-full bg-zinc-500" />
@@ -727,7 +776,7 @@ export default function AltusRunReplayDrawer({
               size="sm"
               disabled={!canGoNext}
               className="h-8 rounded-2xl text-xs"
-              onClick={() => onSelectIndex(Math.min(latestIndex, currentIndex + 1))}
+              onClick={() => handleSelectActionIndex(Math.min(latestIndex, currentIndex + 1))}
             >
               <span>{i18n.t("replayDrawer.next")}</span>
               <ChevronRight className="ml-1 h-3.5 w-3.5" />
@@ -735,6 +784,7 @@ export default function AltusRunReplayDrawer({
           </div>
         </div>
         ) : null}
+        </div>
       </SheetContent>
     </Sheet>
   );

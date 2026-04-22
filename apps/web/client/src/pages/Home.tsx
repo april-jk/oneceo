@@ -119,6 +119,10 @@ import {
   type PendingAttachment,
 } from "@/lib/task-attachments";
 import {
+  buildManagedTaskInputMetadata,
+  type TaskCreationMcpReference,
+} from "@/lib/task-input-metadata";
+import {
   buildTaskSessionDeploymentPrompt,
   type TaskSessionDeploymentPromptAction,
 } from "@/lib/task-session-deployment-prompts";
@@ -166,6 +170,28 @@ type SlashSuggestion = {
   subLabel: string;
   token: ComposerReferenceToken;
 };
+
+function normalizeComposerSelectedMcp(
+  references: ComposerReferenceToken[],
+): TaskCreationMcpReference[] {
+  return references
+    .filter((item) => item.kind === "mcp")
+    .map((item) => item.mcp)
+    .filter(
+      (
+        item,
+      ): item is {
+        key: string;
+        name: string;
+        category: string;
+      } => Boolean(item),
+    )
+    .map((item) => ({
+      key: item.key,
+      name: item.name,
+      category: item.category,
+    }));
+}
 
 function escapeMessageKeySelector(value: string): string {
   if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
@@ -988,23 +1014,7 @@ export default function Home() {
               current.revisionId === item.revisionId,
           ) === index,
       );
-      const selectedMcp = referenceDrafts
-        .filter((item) => item.kind === "mcp")
-        .map((item) => item.mcp)
-        .filter(
-          (
-            item,
-          ): item is {
-            key: string;
-            name: string;
-            category: string;
-          } => Boolean(item),
-        )
-        .map((item) => ({
-          key: item.key,
-          name: item.name,
-          category: item.category,
-        }));
+      const selectedMcp = normalizeComposerSelectedMcp(referenceDrafts);
       let activeSessionId = (sessionId || "").trim();
       if (
         altusMode !== "managed" &&
@@ -1029,18 +1039,12 @@ export default function Home() {
       if (altusMode === "managed") {
         await sendChatInput(baseText, {
           sessionId: activeSessionId || undefined,
-          metadata: hasAttachments
-            ? {
-                ...(mergedSkills.length ? { skills: mergedSkills } : {}),
-                ...(selectedMcp.length ? { mcpReferences: selectedMcp } : {}),
-                originalInput: displayText,
-              }
-            : selectedMcp.length
-              ? {
-                  mcpReferences: selectedMcp,
-                  originalInput: displayText,
-                }
-              : undefined,
+          metadata: buildManagedTaskInputMetadata({
+            originalInput: displayText,
+            skills: mergedSkills,
+            mcpReferences: selectedMcp,
+            fileCount: uploadableAttachments.length,
+          }),
           files: uploadableAttachments.map((item) => item.file),
         });
       } else {
@@ -1181,23 +1185,7 @@ export default function Home() {
               current.revisionId === item.revisionId,
           ) === index,
       );
-      const selectedMcp = referenceDrafts
-        .filter((item) => item.kind === "mcp")
-        .map((item) => item.mcp)
-        .filter(
-          (
-            item,
-          ): item is {
-            key: string;
-            name: string;
-            category: string;
-          } => Boolean(item),
-        )
-        .map((item) => ({
-          key: item.key,
-          name: item.name,
-          category: item.category,
-        }));
+      const selectedMcp = normalizeComposerSelectedMcp(referenceDrafts);
       let uploadedAttachments: UploadedTaskAttachment[] = [];
       if (
         altusMode !== "managed" &&
@@ -1215,18 +1203,12 @@ export default function Home() {
       if (altusMode === "managed") {
         await answerQuestion(baseText, {
           sessionId: activeSessionId,
-          metadata: hasAttachments
-            ? {
-                ...(mergedSkills.length ? { skills: mergedSkills } : {}),
-                ...(selectedMcp.length ? { mcpReferences: selectedMcp } : {}),
-                originalInput: displayText,
-              }
-            : selectedMcp.length
-              ? {
-                  mcpReferences: selectedMcp,
-                  originalInput: displayText,
-                }
-              : undefined,
+          metadata: buildManagedTaskInputMetadata({
+            originalInput: displayText,
+            skills: mergedSkills,
+            mcpReferences: selectedMcp,
+            fileCount: uploadableAttachments.length,
+          }),
           files: uploadableAttachments.length
             ? uploadableAttachments.map((item) => item.file)
             : undefined,

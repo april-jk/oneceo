@@ -147,6 +147,37 @@ test('resolveDeploymentCompletionIntent ignores negated deploy wording and non-d
   assert.equal(sourceOnlyWebsiteIntent.requiresManagedSuccess, false);
 });
 
+test('buildPostToolRunStatusContent uses user-friendly wording instead of command echo', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+
+  assert.equal(
+    (coordinator as any).buildPostToolRunStatusContent({
+      toolName: 'write_file',
+      args: { path: 'src/index.html' },
+      outcome: 'completed',
+    }),
+    '页面框架已经搭好，我继续把样式和交互补完整'
+  );
+
+  assert.equal(
+    (coordinator as any).buildPostToolRunStatusContent({
+      toolName: 'shell_execute',
+      args: { command: 'cd /workspace && npm install' },
+      outcome: 'completed',
+    }),
+    '这一步已经跑完了，我继续处理后面的内容'
+  );
+
+  assert.equal(
+    (coordinator as any).buildPostToolRunStatusContent({
+      toolName: 'shell_execute',
+      args: { command: 'cd /workspace && npm start' },
+      outcome: 'failed',
+    }),
+    '刚才那一步执行没成功，我换个方式继续'
+  );
+});
+
 test('deployment status evidence only unlocks completion after non-transient success state', () => {
   const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
   const intent = (coordinator as any).resolveDeploymentCompletionIntent('帮我部署当前项目');
@@ -398,6 +429,7 @@ test('execute completes after tool round and final assistant response', async ()
   assert.equal(eventCalls[0]?.payload.status, 'starting');
   assert.equal(eventCalls[2]?.payload.toolName, 'write_file');
   assert.equal(eventCalls[3]?.payload.toolName, 'write_file');
+  assert.match(String(eventCalls[4]?.payload.content || ''), /页面框架已经搭好|继续把样式和交互补完整/);
   assert.equal(eventCalls[5]?.payload.toolName, 'complete_task');
   assert.equal(eventCalls[6]?.payload.toolName, 'complete_task');
 });

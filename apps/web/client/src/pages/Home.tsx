@@ -317,7 +317,6 @@ export default function Home() {
   );
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
   const [showRuntimeDrawer, setShowRuntimeDrawer] = useState(false);
-  const [altusReplayOpen, setAltusReplayOpen] = useState(false);
   const [altusReplayRunId, setAltusReplayRunId] = useState<string | null>(null);
   const [altusReplayIndex, setAltusReplayIndex] = useState(0);
   const [pendingAltusReplayToolCallId, setPendingAltusReplayToolCallId] =
@@ -1285,10 +1284,16 @@ export default function Home() {
     () => collapseRepeatedChatAuthors(buildChatItems(messages)),
     [messages],
   );
+  const altusMode = readAltusMode();
+  const managedAltusMode = altusMode === "managed";
   const managedReplayByRun = useMemo(
     () => buildManagedReplayData(messages),
     [messages],
   );
+  const latestManagedReplay = useMemo(() => {
+    const replays = Array.from(managedReplayByRun.values());
+    return replays[replays.length - 1] || null;
+  }, [managedReplayByRun]);
   const { diffItems } = useMemo(() => buildPreviewItems(messages), [messages]);
   const hasSendDraft =
     Boolean(message.trim()) ||
@@ -1611,7 +1616,7 @@ export default function Home() {
   const showMobilePreview = previewOpen && isMobile;
   const activeAltusReplay = altusReplayRunId
     ? managedReplayByRun.get(altusReplayRunId) || null
-    : null;
+    : latestManagedReplay;
   const activeAltusReplayIndex =
     activeAltusReplay && activeAltusReplay.actions.length > 0
       ? Math.min(
@@ -1629,7 +1634,8 @@ export default function Home() {
   ) => {
     if (!runId) return;
     setAltusReplayRunId(runId);
-    setAltusReplayOpen(true);
+    setPreviewOpen(true);
+    setPreviewMaximized(false);
     if (options?.toolCallId) {
       setPendingAltusReplayToolCallId(options.toolCallId);
     } else {
@@ -1673,39 +1679,88 @@ export default function Home() {
 
   const previewPanel = previewOpen ? (
     <section className="flex h-full min-h-0 flex-col overflow-hidden">
-      <OpencodePreviewPanel
-        messages={messages}
-        sessionId={sessionId}
-        open={previewOpen}
-        maximized={previewMaximized}
-        onToggleMaximized={() => setPreviewMaximized((prev) => !prev)}
-        activeTab={previewTab}
-        onTabChange={setPreviewTab}
-        onToggle={() => setPreviewOpen(false)}
-        selectedDiffId={selectedDiffId}
-        onSelectDiff={(id) => {
-          setPendingDiffTarget(null);
-          setSelectedDiffId(id);
-        }}
-        runtimeReady={runtime.ready}
-        runtimeStarting={runtime.starting}
-        onEnsureRuntime={runtime.ensure}
-        runtimeSwitchBlocked={managedRunActive}
-        onRequestStartDebugByMessage={() => {
-          void submitPrompt(t("homeWorkspace.startDebugPrompt"));
-        }}
-        onRequestDeployByMessage={() => {
-          void submitDeploymentPrompt("deploy");
-        }}
-        onRequestRedeployByMessage={() => {
-          void submitDeploymentPrompt("redeploy");
-        }}
-        onRequestRollbackByMessage={() => {
-          void submitDeploymentPrompt("rollback");
-        }}
-        selectedWorkspacePath={previewWorkspacePath}
-        className="h-full min-h-0 w-full"
-      />
+      {managedAltusMode && sessionId ? (
+        <AltusRunReplayDrawer
+          embedded
+          open={previewOpen}
+          onOpenChange={(open) => {
+            setPreviewOpen(open);
+            if (!open) {
+              setPreviewMaximized(false);
+            }
+          }}
+          sessionId={sessionId}
+          runId={activeAltusReplay?.runId || "managed-preview"}
+          runTitle={t("homeWorkspace.altusActions")}
+          actions={activeAltusReplay?.actions || []}
+          files={activeAltusReplay?.files || []}
+          currentIndex={activeAltusReplayIndex}
+          latestIndex={Math.max(
+            0,
+            (activeAltusReplay?.actions.length || 1) - 1,
+          )}
+          onSelectIndex={setAltusReplayIndex}
+          onJumpToLatest={() =>
+            setAltusReplayIndex(
+              Math.max(0, (activeAltusReplay?.actions.length || 1) - 1),
+            )
+          }
+          diffItems={diffItems}
+          runtimeReady={runtime.ready}
+          runtimeStarting={runtime.starting}
+          onEnsureRuntime={runtime.ensure}
+          runtimeSwitchBlocked={managedRunActive}
+          onRequestStartDebugByMessage={() => {
+            void submitPrompt(t("homeWorkspace.startDebugPrompt"));
+          }}
+          onRequestDeployByMessage={() => {
+            void submitDeploymentPrompt("deploy");
+          }}
+          onRequestRedeployByMessage={() => {
+            void submitDeploymentPrompt("redeploy");
+          }}
+          onRequestRollbackByMessage={() => {
+            void submitDeploymentPrompt("rollback");
+          }}
+          onOpenPreviewTab={() => {
+            setPreviewOpen(true);
+          }}
+        />
+      ) : (
+        <OpencodePreviewPanel
+          messages={messages}
+          sessionId={sessionId}
+          open={previewOpen}
+          maximized={previewMaximized}
+          onToggleMaximized={() => setPreviewMaximized((prev) => !prev)}
+          activeTab={previewTab}
+          onTabChange={setPreviewTab}
+          onToggle={() => setPreviewOpen(false)}
+          selectedDiffId={selectedDiffId}
+          onSelectDiff={(id) => {
+            setPendingDiffTarget(null);
+            setSelectedDiffId(id);
+          }}
+          runtimeReady={runtime.ready}
+          runtimeStarting={runtime.starting}
+          onEnsureRuntime={runtime.ensure}
+          runtimeSwitchBlocked={managedRunActive}
+          onRequestStartDebugByMessage={() => {
+            void submitPrompt(t("homeWorkspace.startDebugPrompt"));
+          }}
+          onRequestDeployByMessage={() => {
+            void submitDeploymentPrompt("deploy");
+          }}
+          onRequestRedeployByMessage={() => {
+            void submitDeploymentPrompt("redeploy");
+          }}
+          onRequestRollbackByMessage={() => {
+            void submitDeploymentPrompt("rollback");
+          }}
+          selectedWorkspacePath={previewWorkspacePath}
+          className="h-full min-h-0 w-full"
+        />
+      )}
     </section>
   ) : null;
 
@@ -2322,10 +2377,10 @@ export default function Home() {
         onOpenChange={setShowRuntimeDrawer}
         runtime={runtime}
       />
-      {activeAltusReplay && sessionId ? (
+      {!managedAltusMode && activeAltusReplay && sessionId ? (
         <AltusRunReplayDrawer
-          open={altusReplayOpen}
-          onOpenChange={setAltusReplayOpen}
+          open={previewOpen}
+          onOpenChange={setPreviewOpen}
           sessionId={sessionId}
           runId={activeAltusReplay.runId}
           runTitle={t("homeWorkspace.altusActions")}

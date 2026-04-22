@@ -1,14 +1,113 @@
 import express from 'express';
+import { appUserLegacyIdMappingDAO } from '../db/dao/app-user-legacy-id-mapping.dao';
+import { taskCreationSessionDAO } from '../db/dao/task-creation-session.dao';
 import { appAuthService } from '../services/app-auth-service';
 import { getPublicErrorMessage } from '../utils/error-response';
-import { APP_SESSION_COOKIE_NAME, SESSION_TTL_MS } from '../utils/auth-session';
-import { clearCookie, setCookie } from '../utils/http-cookie';
+import {
+  APP_SESSION_COOKIE_NAME,
+  APP_SESSION_COOKIE_NAMES,
+  APP_SESSION_STATE_COOKIE_NAME,
+  APP_SESSION_STATE_COOKIE_NAMES,
+} from '../utils/auth-session';
+import {
+  buildAppSessionClearCookieOptions,
+  buildAppSessionCookieOptions,
+  buildAppSessionStateCookieOptions,
+} from '../utils/app-auth-cookie-policy';
+import { clearCookie, readCookieValuesByNames, setCookie } from '../utils/http-cookie';
+import { isLegacyClientUserId, normalizeUserId } from '../utils/user-id';
 
 const router = express.Router();
 
-function isSecureCookie(req: express.Request) {
-  return req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
+function applyNoStoreAuthHeaders(res: express.Response) {
+  res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.vary('Origin');
+  res.vary('Cookie');
 }
+
+function listCookieNames(req: express.Request) {
+  const header = typeof req.headers.cookie === 'string' ? req.headers.cookie : '';
+  if (!header) {
+    return [];
+  }
+  return header
+    .split(/;\s*/g)
+    .map((part) => part.split('=')[0]?.trim())
+    .filter((value): value is string => Boolean(value));
+}
+
+function applyAuthDebugHeaders(
+  req: express.Request,
+  res: express.Response,
+  input?: {
+    currentUserId?: string | null;
+    wroteSessionCookie?: boolean;
+  }
+) {
+  const sessionCookieValues = readCookieValuesByNames(req, APP_SESSION_COOKIE_NAMES);
+  const stateCookieValues = readCookieValuesByNames(req, APP_SESSION_STATE_COOKIE_NAMES);
+  res.setHeader('X-Oneceo-Auth-Debug-Cookie-Names', listCookieNames(req).join(',') || 'none');
+  res.setHeader('X-Oneceo-Auth-Debug-Has-Session-Cookie', sessionCookieValues.length > 0 ? '1' : '0');
+  res.setHeader('X-Oneceo-Auth-Debug-Session-Cookie-Count', String(sessionCookieValues.length));
+  res.setHeader('X-Oneceo-Auth-Debug-Has-State-Cookie', stateCookieValues.length > 0 ? '1' : '0');
+  res.setHeader('X-Oneceo-Auth-Debug-Current-User', input?.currentUserId ? '1' : '0');
+  res.setHeader('X-Oneceo-Auth-Debug-Wrote-Session-Cookie', input?.wroteSessionCookie ? '1' : '0');
+}
+
+function logAuthDebug(
+  route: string,
+  req: express.Request,
+  input?: {
+    currentUserId?: string | null;
+    wroteSessionCookie?: boolean;
+  }
+) {
+  if (process.env.NODE_ENV === 'production') {
+    return;
+  }
+  const sessionCookieValues = readCookieValuesByNames(req, APP_SESSION_COOKIE_NAMES);
+  const stateCookieValues = readCookieValuesByNames(req, APP_SESSION_STATE_COOKIE_NAMES);
+  console.info(
+    '[APP_AUTH_DEBUG]',
+    JSON.stringify({
+      route,
+      method: req.method,
+      origin: req.headers.origin || null,
+      referer: req.headers.referer || null,
+      cookieNames: listCookieNames(req),
+      hasSessionCookie: sessionCookieValues.length > 0,
+      sessionCookieCount: sessionCookieValues.length,
+      hasStateCookie: stateCookieValues.length > 0,
+      currentUser: Boolean(input?.currentUserId),
+      wroteSessionCookie: Boolean(input?.wroteSessionCookie),
+    })
+  );
+}
+
+function writeAuthenticatedAppCookies(res: express.Response, req: express.Request, sessionToken: string) {
+  setCookie(res, APP_SESSION_COOKIE_NAME, sessionToken, buildAppSessionCookieOptions(req));
+  setCookie(res, APP_SESSION_STATE_COOKIE_NAME, 'authenticated', buildAppSessionStateCookieOptions(req));
+}
+
+function clearAppAuthCookies(res: express.Response, req: express.Request) {
+  const clearOptions = buildAppSessionClearCookieOptions(req);
+  for (const cookieName of APP_SESSION_COOKIE_NAMES) {
+    clearCookie(res, cookieName, clearOptions);
+  }
+  for (const cookieName of APP_SESSION_STATE_COOKIE_NAMES) {
+    clearCookie(res, cookieName, {
+      ...clearOptions,
+      httpOnly: false,
+    });
+  }
+}
+
+router.use((_req, res, next) => {
+  applyNoStoreAuthHeaders(res);
+  next();
+});
 
 router.post('/register', async (req, res) => {
   try {
@@ -21,9 +120,14 @@ router.post('/register', async (req, res) => {
       },
       req
     );
-    setCookie(res, APP_SESSION_COOKIE_NAME, result.token, {
-      maxAgeMs: SESSION_TTL_MS,
-      secure: isSecureCookie(req),
+    writeAuthenticatedAppCookies(res, req, result.token);
+    applyAuthDebugHeaders(req, res, {
+      currentUserId: result.user?.id || null,
+      wroteSessionCookie: true,
+    });
+    logAuthDebug('/register', req, {
+      currentUserId: result.user?.id || null,
+      wroteSessionCookie: true,
     });
     return res.json({
       success: true,
@@ -43,6 +147,14 @@ router.post('/register/send-code', async (req, res) => {
   try {
     const result = await appAuthService.sendRegisterVerificationCode({
       email: req.body?.email,
+    });
+    applyAuthDebugHeaders(req, res, {
+      currentUserId: null,
+      wroteSessionCookie: false,
+    });
+    logAuthDebug('/register/send-code', req, {
+      currentUserId: null,
+      wroteSessionCookie: false,
     });
     return res.json({
       success: true,
@@ -65,9 +177,14 @@ router.post('/login', async (req, res) => {
       },
       req
     );
-    setCookie(res, APP_SESSION_COOKIE_NAME, result.token, {
-      maxAgeMs: SESSION_TTL_MS,
-      secure: isSecureCookie(req),
+    writeAuthenticatedAppCookies(res, req, result.token);
+    applyAuthDebugHeaders(req, res, {
+      currentUserId: result.user?.id || null,
+      wroteSessionCookie: true,
+    });
+    logAuthDebug('/login', req, {
+      currentUserId: result.user?.id || null,
+      wroteSessionCookie: true,
     });
     return res.json({
       success: true,
@@ -85,15 +202,18 @@ router.post('/login', async (req, res) => {
 
 router.post('/logout', async (req, res) => {
   try {
-    const sessionToken = (req.headers.cookie || '')
-      .split(/;\s*/g)
-      .find((item) => item.startsWith(`${APP_SESSION_COOKIE_NAME}=`))
-      ?.slice(APP_SESSION_COOKIE_NAME.length + 1);
+    const sessionToken = readCookieValuesByNames(req, APP_SESSION_COOKIE_NAMES)[0] || null;
     if (sessionToken) {
-      await appAuthService.logout(decodeURIComponent(sessionToken));
+      await appAuthService.logout(sessionToken);
     }
-    clearCookie(res, APP_SESSION_COOKIE_NAME, {
-      secure: isSecureCookie(req),
+    clearAppAuthCookies(res, req);
+    applyAuthDebugHeaders(req, res, {
+      currentUserId: (req as any).currentAppUser?.id || null,
+      wroteSessionCookie: false,
+    });
+    logAuthDebug('/logout', req, {
+      currentUserId: (req as any).currentAppUser?.id || null,
+      wroteSessionCookie: false,
     });
     return res.json({
       success: true,
@@ -109,20 +229,141 @@ router.post('/logout', async (req, res) => {
   }
 });
 
+router.get('/session', async (req, res) => {
+  const current = (req as any).currentAppUser;
+  if (!current?.id) {
+    const clearOptions = {
+      ...buildAppSessionClearCookieOptions(req),
+      httpOnly: false,
+    };
+    for (const cookieName of APP_SESSION_STATE_COOKIE_NAMES) {
+      clearCookie(res, cookieName, clearOptions);
+    }
+    applyAuthDebugHeaders(req, res, {
+      currentUserId: null,
+      wroteSessionCookie: false,
+    });
+    logAuthDebug('/session', req, {
+      currentUserId: null,
+      wroteSessionCookie: false,
+    });
+    return res.json({
+      success: true,
+      data: {
+        authenticated: false,
+      },
+    });
+  }
+
+  setCookie(res, APP_SESSION_STATE_COOKIE_NAME, 'authenticated', buildAppSessionStateCookieOptions(req));
+  applyAuthDebugHeaders(req, res, {
+    currentUserId: current.id,
+    wroteSessionCookie: false,
+  });
+  logAuthDebug('/session', req, {
+    currentUserId: current.id,
+    wroteSessionCookie: false,
+  });
+  return res.json({
+    success: true,
+    data: {
+      authenticated: true,
+      user: current,
+    },
+  });
+});
+
 router.get('/me', async (req, res) => {
   const current = (req as any).currentAppUser;
   if (!current?.id) {
+    const clearOptions = {
+      ...buildAppSessionClearCookieOptions(req),
+      httpOnly: false,
+    };
+    for (const cookieName of APP_SESSION_STATE_COOKIE_NAMES) {
+      clearCookie(res, cookieName, clearOptions);
+    }
+    applyAuthDebugHeaders(req, res, {
+      currentUserId: null,
+      wroteSessionCookie: false,
+    });
+    logAuthDebug('/me', req, {
+      currentUserId: null,
+      wroteSessionCookie: false,
+    });
     return res.status(401).json({
       success: false,
       error: '当前未登录',
     });
   }
+  setCookie(res, APP_SESSION_STATE_COOKIE_NAME, 'authenticated', buildAppSessionStateCookieOptions(req));
+  applyAuthDebugHeaders(req, res, {
+    currentUserId: current.id,
+    wroteSessionCookie: false,
+  });
+  logAuthDebug('/me', req, {
+    currentUserId: current.id,
+    wroteSessionCookie: false,
+  });
   return res.json({
     success: true,
     data: {
       user: current,
     },
   });
+});
+
+router.post('/legacy-client-id', async (req, res) => {
+  const current = (req as any).currentAppUser;
+  if (!current?.id) {
+    applyAuthDebugHeaders(req, res, {
+      currentUserId: null,
+      wroteSessionCookie: false,
+    });
+    logAuthDebug('/legacy-client-id', req, {
+      currentUserId: null,
+      wroteSessionCookie: false,
+    });
+    return res.status(401).json({
+      success: false,
+      error: '当前未登录',
+    });
+  }
+
+  const legacyUserId = normalizeUserId(req.body?.legacyUserId);
+  if (!legacyUserId || !isLegacyClientUserId(legacyUserId)) {
+    return res.status(400).json({
+      success: false,
+      error: 'legacy 用户标识无效',
+    });
+  }
+
+  try {
+    await appUserLegacyIdMappingDAO.upsert({
+      appUserId: current.id,
+      legacyUserId,
+      source: 'auth_bootstrap',
+    });
+
+    const reboundSessions = await taskCreationSessionDAO.rebindSessionsFromLegacyUserId(
+      current.id,
+      legacyUserId,
+      5000
+    );
+
+    return res.json({
+      success: true,
+      data: {
+        linked: true,
+        reboundCount: reboundSessions.length,
+      },
+    });
+  } catch (error: any) {
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || 'legacy 用户标识绑定失败'),
+    });
+  }
 });
 
 router.patch('/profile', async (req, res) => {

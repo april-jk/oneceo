@@ -69,11 +69,11 @@ async function apiRequest(path, authCookieHeader, init = {}) {
 
 function extractAppSessionCookie(response) {
   const raw = response.headers.get('set-cookie') || '';
-  const matched = raw.match(/(?:^|,\s*)app_session_id=([^;,\s]+)/);
+  const matched = raw.match(/(?:^|,\s*)app_session_v2_id=([^;,\s]+)/);
   if (!matched?.[1]) {
-    throw new Error('failed to extract app_session_id from set-cookie');
+    throw new Error('failed to extract app_session_v2_id from set-cookie');
   }
-  return `app_session_id=${matched[1]}`;
+  return `app_session_v2_id=${matched[1]}`;
 }
 
 async function ensureSessionCookieHeader(account) {
@@ -251,10 +251,10 @@ async function main() {
   const context = await browser.newContext({ viewport: { width: 1440, height: 960 } });
   const page = await context.newPage();
   const sessionCookieHeader = await ensureSessionCookieHeader(account);
-  const sessionCookieValue = sessionCookieHeader.replace(/^app_session_id=/, '');
+  const sessionCookieValue = sessionCookieHeader.replace(/^app_session_v2_id=/, '');
   await context.addCookies([
-    { name: 'app_session_id', value: sessionCookieValue, url: WEB_BASE_URL },
-    { name: 'app_session_id', value: sessionCookieValue, url: API_BASE_URL },
+    { name: 'app_session_v2_id', value: sessionCookieValue, url: WEB_BASE_URL },
+    { name: 'app_session_v2_id', value: sessionCookieValue, url: API_BASE_URL },
   ]);
 
   try {

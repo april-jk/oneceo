@@ -2,10 +2,10 @@ import { createContext, useContext, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import {
   type AppAuthUser,
-  getCurrentAppUser,
   loginAppUser,
   logoutAppUser,
   registerAppUser,
+  resolveAppAuthSession,
   sendRegisterVerificationCode,
   type AppUserPersonalization,
   updateAppUserProfile,
@@ -40,7 +40,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refresh = async () => {
     try {
-      const currentUser = await getCurrentAppUser();
+      const currentUser = await resolveAppAuthSession();
       setUser(currentUser);
       setStatus(currentUser ? "authenticated" : "anonymous");
       return currentUser;
@@ -61,6 +61,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     user,
     status,
     login: async (input) => {
+      setStatus("loading");
       const nextUser = await loginAppUser(input);
       setUser(nextUser);
       setStatus("authenticated");
@@ -68,6 +69,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     sendRegisterCode: async (input) => await sendRegisterVerificationCode(input),
     register: async (input) => {
+      setStatus("loading");
       const nextUser = await registerAppUser(input);
       setUser(nextUser);
       setStatus("authenticated");

@@ -8,3 +8,13 @@
 - 已新增“会话自动命名优化方案”文档，并按采用状态收口为新的标题策略：用户侧主标题不再使用 `任务会话 {id后缀}`，统一切换为状态型占位标题与提炼后的短标题。
 - 已完成会话命名链路修复：后端统一负责标题提炼与来源优先级判定，列表/详情/侧边栏改为共用同一套标题决策；前端不再维护独立的“是否需要自动命名”规则，只将非空用户输入转交后端解析。
 - 已补充会话命名回归验证：`pnpm --filter api exec tsx --test tests/task-creation-business-routes.test.ts`、`pnpm --filter web exec vitest run client/src/tests/sidebar-session-status-visual.test.ts`、`pnpm --filter web check` 通过。
+- 已完成用户态认证链路第二轮收口：移除前端对 `X-Legacy-User-Id` 的全局透传，改为登录态下一次性调用 `POST /api/auth/legacy-client-id`，由服务端落 legacy 映射并立即回绑历史会话，绑定完成后清理浏览器本地 `oneceo_client_user_id`。
+- 已修复前端埋点噪音：`VITE_ANALYTICS_WEBSITE_ID` 非合法 UUID 时不再注入 analytics 脚本，避免首页稳定出现 `analytics.oneceo.ai/api/send 400`。
+- 已完成第三轮认证清理：`apps/api/src/routes/task-creation-routes.ts` 不再从 `X-Legacy-User-Id` 或 `legacyUserId` query 读取授权输入；legacy owner 认领只允许通过服务端映射表判定，映射元数据默认来源统一为 `auth_bootstrap`。
+- 已修复登录后首屏 401 竞态：前端不再把 `/api/auth/login` 的 `200` 直接当作“会话已落地”，而是轮询 `/api/auth/session` 直到服务端确认会话可读，再进入 `/home` 并执行 legacy 绑定；同时移除了 dev 环境下无效 analytics site id 的控制台告警噪音。
+- 已继续收口“登录成功但 `/api/auth/session` 仍返回 `authenticated:false`”问题：认证接口现在统一返回 `Cache-Control: private, no-store, max-age=0`、`Pragma: no-cache`、`Expires: 0` 与 `Vary: Cookie, Origin`，前端 `/api/auth/session` 轮询也改为每次携带唯一 `_ts` 参数，避免匿名态或旧会话快照被浏览器缓存复用。
+- 已完成对应回归验证：`pnpm --filter api exec tsx --test tests/auth-routes.test.ts`、`pnpm --filter api type-check`、`pnpm --filter web check` 通过。
+- 已完成第四轮认证诊断增强：`/api/auth/session`、`/api/auth/me`、`/api/auth/login` 等接口现在会返回不含敏感值的 `X-Oneceo-Auth-Debug-*` 响应头，前端在登录态 bootstrap 超时前会输出最后一次 session 诊断、浏览器可见 cookie 名称和 UA，用于直接判断“浏览器未存 cookie”还是“浏览器未回传 cookie”。
+- 已通过 Playwright 最小复现实验坐实根因：只要浏览器里残留旧的 `Secure app_session_id`，HTTP 页面上的登录接口即使返回新的 `Set-Cookie`，浏览器也不会用非 `Secure` 新值覆盖它，后续 `/api/auth/session` 会持续表现为 `authenticated:false`。
+- 已完成用户态会话 cookie 轮换：当前正式 cookie 名称切换为 `app_session_v2_id` / `app_session_v2_state`，服务端继续兼容读取旧的 `app_session_id` / `app_session_state`，登出与匿名态清理也会同步覆盖新旧两套名字，避免旧浏览器污染继续拦截 HTTP 登录。
+- 已新增浏览器级回归测试 `auth-cookie-rotation.playwright.spec.ts`，固定覆盖“预置旧 `Secure app_session_id` 后仍能成功登录并进入 `/home`”。

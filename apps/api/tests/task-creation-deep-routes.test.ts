@@ -4,7 +4,12 @@ import express from 'express';
 import type { Socket } from 'node:net';
 import taskCreationRoutes from '../src/routes/task-creation-routes';
 import { mockAuthContextMiddleware } from './helpers/mock-auth-context';
-import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO, taskSessionRunDAO } from '../src/db/dao';
+import {
+  appUserLegacyIdMappingDAO,
+  sandboxExecutionEnvironmentDAO,
+  taskCreationSessionDAO,
+  taskSessionRunDAO,
+} from '../src/db/dao';
 import { closeDatabaseConnection } from '../src/config/database';
 import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-memory-store';
 import { sessionConnectorService } from '../src/services/session-connector-service';
@@ -21,6 +26,7 @@ type TestServer = {
 };
 
 const sessionDaoAny = taskCreationSessionDAO as any;
+const legacyMappingDaoAny = appUserLegacyIdMappingDAO as any;
 const runDaoAny = taskSessionRunDAO as any;
 const fileStoreAny = taskCreationFileMemoryStore as any;
 const sessionConnectorAny = sessionConnectorService as any;
@@ -34,6 +40,8 @@ const opencodeRemoteAny = opencodeRemoteService as any;
 const originalGetSessionDao = sessionDaoAny.getSession;
 const originalBindUserIfMissing = sessionDaoAny.bindUserIfMissing;
 const originalAdoptSessionFromLegacyUserId = sessionDaoAny.adoptSessionFromLegacyUserId;
+const originalResolveAppUserIdByLegacyUserId = legacyMappingDaoAny.resolveAppUserIdByLegacyUserId;
+const originalGetTaskDescription = sessionDaoAny.getTaskDescription;
 const originalGetRecentMessages = sessionDaoAny.getRecentMessages;
 const originalGetMessages = sessionDaoAny.getMessages;
 const originalGetRun = runDaoAny.getRun;
@@ -61,6 +69,8 @@ after(async () => {
   sessionDaoAny.getSession = originalGetSessionDao;
   sessionDaoAny.bindUserIfMissing = originalBindUserIfMissing;
   sessionDaoAny.adoptSessionFromLegacyUserId = originalAdoptSessionFromLegacyUserId;
+  legacyMappingDaoAny.resolveAppUserIdByLegacyUserId = originalResolveAppUserIdByLegacyUserId;
+  sessionDaoAny.getTaskDescription = originalGetTaskDescription;
   sessionDaoAny.getRecentMessages = originalGetRecentMessages;
   sessionDaoAny.getMessages = originalGetMessages;
   runDaoAny.getRun = originalGetRun;
@@ -209,7 +219,7 @@ test('GET /api/task-creation/sessions/:sessionId binds orphan session to current
   }
 });
 
-test('GET /api/task-creation/sessions/:sessionId adopts legacy session owner when hint matches', async () => {
+test('GET /api/task-creation/sessions/:sessionId adopts legacy session owner when mapping matches', async () => {
   const server = await startServer();
   sessionDaoAny.getSession = async (sessionId: string) => ({
     id: sessionId,
@@ -240,6 +250,12 @@ test('GET /api/task-creation/sessions/:sessionId adopts legacy session owner whe
       updatedAt: new Date(),
     };
   };
+  legacyMappingDaoAny.resolveAppUserIdByLegacyUserId = async (legacyUserId: string) => {
+    if (legacyUserId === 'legacy-local-user-2') {
+      return 'owner-user';
+    }
+    return null;
+  };
   fileStoreAny.getSession = async (sessionId: string) => ownerSession(sessionId, 'owner-user');
   sessionConnectorAny.listSessionConnectors = async () => [];
 
@@ -247,7 +263,6 @@ test('GET /api/task-creation/sessions/:sessionId adopts legacy session owner whe
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-legacy-owner-1`, {
       headers: {
         'x-test-user-id': 'owner-user',
-        'x-legacy-user-id': 'legacy-local-user-2',
       },
     });
     const payload = await response.json();
@@ -847,6 +862,8 @@ test('GET /api/task-creation/sessions/:sessionId/messages merges missing persist
 test('GET /api/task-creation/sessions/:sessionId/opencode/events replays redis session-events before db fallback', async () => {
   const server = await startServer();
   sessionDaoAny.getSession = async (sessionId: string) => ({ id: sessionId, userId: 'owner-user' });
+  sessionDaoAny.getTaskDescription = async () => null;
+  sessionDaoAny.getRecentMessages = async () => [];
   fileStoreAny.getSession = async (sessionId: string) => ({
     ...ownerSession(sessionId),
     mode: 'sandbox',
@@ -929,6 +946,8 @@ test('GET /api/task-creation/sessions/:sessionId/opencode/events replays redis s
 test('GET /api/task-creation/sessions/:sessionId/opencode/events falls back to db replay when redis stream is empty', async () => {
   const server = await startServer();
   sessionDaoAny.getSession = async (sessionId: string) => ({ id: sessionId, userId: 'owner-user' });
+  sessionDaoAny.getTaskDescription = async () => null;
+  sessionDaoAny.getRecentMessages = async () => [];
   fileStoreAny.getSession = async (sessionId: string) => ({
     ...ownerSession(sessionId),
     mode: 'sandbox',
@@ -1171,6 +1190,8 @@ test('POST /api/task-creation/sessions/:sessionId/connectors/:connectorKey/attac
 test('POST /api/task-creation/sessions/:sessionId/connectors/:connectorKey/detach detaches for owner', async () => {
   const server = await startServer();
   sessionConnectorAny.assertSessionOwnership = async () => undefined;
+  sessionDaoAny.getTaskDescription = async () => null;
+  sessionDaoAny.getRecentMessages = async () => [];
   fileStoreAny.getSession = async (sessionId: string) => ownerSession(sessionId);
   sessionConnectorAny.detachConnector = async (_sessionId: string, userId: string, connectorKey: string) => {
     assert.equal(userId, 'owner-user');

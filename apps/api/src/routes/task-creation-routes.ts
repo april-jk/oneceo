@@ -586,34 +586,8 @@ function resolveCurrentUserError(error: unknown): { status: number; message: str
   return null;
 }
 
-function resolveLegacyUserIdHint(req: express.Request, currentUserId: string): string {
-  const candidate = asText(req.header('X-Legacy-User-Id') || req.header('X-User-Id') || req.query.legacyUserId);
-  if (!candidate) return '';
-  if (isSameUserId(candidate, currentUserId)) return '';
-  if (!isLegacyClientUserId(candidate)) return '';
-  return candidate;
-}
-
-async function upsertLegacyUserMapping(appUserId: string, legacyUserIdHint: string) {
-  if (!legacyUserIdHint) return;
-  try {
-    await appUserLegacyIdMappingDAO.upsert({
-      appUserId,
-      legacyUserId: legacyUserIdHint,
-      source: 'request_header',
-    });
-  } catch (error) {
-    console.warn('[TASK_SESSION_LEGACY_MAPPING_UPSERT_FAILED]', {
-      appUserId,
-      legacyUserId: legacyUserIdHint,
-      error,
-    });
-  }
-}
-
-async function collectLegacyUserIdsForMigration(appUserId: string, legacyUserIdHint: string): Promise<string[]> {
+async function collectLegacyUserIdsForMigration(appUserId: string): Promise<string[]> {
   const values = new Set<string>();
-  if (legacyUserIdHint) values.add(legacyUserIdHint);
   try {
     const mapped = await appUserLegacyIdMappingDAO.listLegacyIdsByAppUserId(appUserId, 200);
     for (const legacyUserId of mapped) {
@@ -628,7 +602,31 @@ async function collectLegacyUserIdsForMigration(appUserId: string, legacyUserIdH
   return [...values];
 }
 
-async function requireOwnedTaskSession(sessionId: string, userId: string, legacyUserIdHint?: string) {
+async function adoptLegacyOwnedSessionIfMapped(sessionId: string, userId: string, sessionUserId: string) {
+  const normalizedUserId = normalizeUserId(userId);
+  const legacyOwner = normalizeUserId(sessionUserId);
+  if (!normalizedUserId || !isLegacyClientUserId(legacyOwner)) {
+    return null;
+  }
+
+  try {
+    const mappedAppUserId = await appUserLegacyIdMappingDAO.resolveAppUserIdByLegacyUserId(legacyOwner);
+    if (!isSameUserId(mappedAppUserId, normalizedUserId)) {
+      return null;
+    }
+    return await taskCreationSessionDAO.adoptSessionFromLegacyUserId(sessionId, normalizedUserId, legacyOwner);
+  } catch (error) {
+    console.warn('[TASK_SESSION_REQUIRE_OWNED_LEGACY_RESOLVE_FAILED]', {
+      sessionId,
+      userId: normalizedUserId,
+      legacyOwner,
+      error,
+    });
+    return null;
+  }
+}
+
+async function requireOwnedTaskSession(sessionId: string, userId: string) {
   const normalizedUserId = normalizeUserId(userId);
   let session = await taskCreationSessionDAO.getSession(sessionId);
   if (!session) {
@@ -644,43 +642,10 @@ async function requireOwnedTaskSession(sessionId: string, userId: string, legacy
   if (!session) {
     throw new Error('会话不存在');
   }
-  const normalizedSessionUserId = normalizeUserId(session.userId);
-  if (!isSameUserId(normalizedSessionUserId, normalizedUserId) && legacyUserIdHint) {
-    const adopted = await taskCreationSessionDAO.adoptSessionFromLegacyUserId(
-      sessionId,
-      normalizedUserId,
-      legacyUserIdHint
-    );
+  if (!isSameUserId(normalizeUserId(session.userId), normalizedUserId)) {
+    const adopted = await adoptLegacyOwnedSessionIfMapped(sessionId, normalizedUserId, session.userId || '');
     if (adopted?.userId) {
       session = adopted;
-    }
-  }
-  if (!session) {
-    throw new Error('会话不存在');
-  }
-  if (!isSameUserId(normalizeUserId(session.userId), normalizedUserId)) {
-    const legacyOwner = normalizeUserId(session.userId);
-    if (isLegacyClientUserId(legacyOwner)) {
-      try {
-        const mappedAppUserId = await appUserLegacyIdMappingDAO.resolveAppUserIdByLegacyUserId(legacyOwner);
-        if (isSameUserId(mappedAppUserId, normalizedUserId)) {
-          const adopted = await taskCreationSessionDAO.adoptSessionFromLegacyUserId(
-            sessionId,
-            normalizedUserId,
-            legacyOwner
-          );
-          if (adopted?.userId) {
-            session = adopted;
-          }
-        }
-      } catch (error) {
-        console.warn('[TASK_SESSION_REQUIRE_OWNED_LEGACY_RESOLVE_FAILED]', {
-          sessionId,
-          userId: normalizedUserId,
-          legacyOwner,
-          error,
-        });
-      }
     }
   }
   if (!isSameUserId(normalizeUserId(session.userId), normalizedUserId)) {
@@ -3877,8 +3842,6 @@ function updateSseClientCursor(key: string, cursor: number) {
 router.post('/sessions', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
-    const legacyUserIdHint = resolveLegacyUserIdHint(req, currentUser.userId);
-    await upsertLegacyUserMapping(currentUser.userId, legacyUserIdHint);
     const requestedSessionId = asText(req.body?.sessionId);
     const requestedTitle = asText(req.body?.title);
     const requestedMode = asText(req.body?.mode);
@@ -4009,13 +3972,12 @@ router.post('/sessions', async (req, res) => {
       } else {
         const normalizedExistingUserId = normalizeUserId(existingDbSession.userId);
         if (normalizedExistingUserId && !isSameUserId(normalizedExistingUserId, currentUser.userId)) {
-          if (legacyUserIdHint && isSameUserId(normalizedExistingUserId, legacyUserIdHint)) {
-            await taskCreationSessionDAO.adoptSessionFromLegacyUserId(
-              session.id,
-              currentUser.userId,
-              legacyUserIdHint
-            );
-          } else {
+          const adopted = await adoptLegacyOwnedSessionIfMapped(
+            session.id,
+            currentUser.userId,
+            normalizedExistingUserId
+          );
+          if (!adopted?.userId) {
             return res.status(403).json({
               success: false,
               error: '当前用户无权访问该会话',
@@ -4072,8 +4034,6 @@ router.post('/sessions', async (req, res) => {
 router.get('/sessions', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
-    const legacyUserIdHint = resolveLegacyUserIdHint(req, currentUser.userId);
-    await upsertLegacyUserMapping(currentUser.userId, legacyUserIdHint);
     const rawLimit = (req.query.limit as string | undefined)?.trim();
     let limit = 200;
     if (rawLimit === 'all') {
@@ -4094,7 +4054,7 @@ router.get('/sessions', async (req, res) => {
     let ownedDbSessions = await taskCreationSessionDAO.getRecentSessions(limit, currentUser.userId);
     if (ownedDbSessions.length === 0) {
       try {
-        const legacyUserIds = await collectLegacyUserIdsForMigration(currentUser.userId, legacyUserIdHint);
+        const legacyUserIds = await collectLegacyUserIdsForMigration(currentUser.userId);
         if (legacyUserIds.length > 0) {
           for (const legacyUserId of legacyUserIds) {
             const reboundLegacy = await taskCreationSessionDAO.rebindSessionsFromLegacyUserId(
@@ -4244,7 +4204,7 @@ router.post('/sessions/:sessionId/title/resolve', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const input = sanitizeSessionTitleText(req.body?.message);
     const session = await resolveTaskSessionRecord(sessionId);
     if (!session) {
@@ -4334,7 +4294,7 @@ router.post('/sessions/:sessionId/title/rename', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await resolveTaskSessionRecord(sessionId);
     if (!session) {
       return res.status(404).json({
@@ -4392,7 +4352,7 @@ router.post('/sessions/:sessionId/favorite', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await resolveTaskSessionRecord(sessionId);
     if (!session) {
       return res.status(404).json({
@@ -4437,7 +4397,7 @@ router.post('/sessions/:sessionId/project', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await resolveTaskSessionRecord(sessionId);
     if (!session) {
       return res.status(404).json({
@@ -4528,7 +4488,7 @@ router.get('/sessions/:sessionId', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const sessionData = await resolveTaskSessionMeta(sessionId);
 
     if (!sessionData) {
@@ -4589,7 +4549,7 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await resolveTaskSessionMeta(sessionId);
     const tenantKey = resolveTenantKey(currentUser);
     const shouldPreferOpencodeNativeHistory =
@@ -4729,7 +4689,7 @@ router.get('/sessions/:sessionId/messages/history', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await resolveTaskSessionMeta(sessionId);
     const beforeCursor = asTimelineCursor(req.query.before);
     const limit = clampNumber(Number(req.query.limit) || 50, 1, 200);
@@ -4793,7 +4753,7 @@ router.get('/sessions/:sessionId/messages', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await resolveTaskSessionMeta(sessionId);
     const messages = await resolveRenderableTimelineMessages(sessionId, session);
 
@@ -5509,7 +5469,7 @@ router.get('/sessions/:sessionId/debug', async (req, res) => {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
     const tenantKey = resolveTenantKey(currentUser);
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     let session = await taskCreationFileMemoryStore.getSession(sessionId);
     if (!session) {
       session = await hydrateFileSessionFromDb(sessionId);
@@ -5612,7 +5572,7 @@ router.post('/sessions/:sessionId/debug/start', async (req, res) => {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
     const tenantKey = resolveTenantKey(currentUser);
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     let session = await taskCreationFileMemoryStore.getSession(sessionId);
     if (!session) {
       session = await hydrateFileSessionFromDb(sessionId);
@@ -6210,7 +6170,7 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     const tenantKey = resolveTenantKey(currentUser);
     const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
@@ -6517,7 +6477,7 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     const refresh = parseRefreshFlag(req.query.refresh);
     const tenantKey = resolveTenantKey(currentUser);
@@ -6731,7 +6691,7 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const rawRequestPath = String(req.query.path || '').trim();
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
@@ -7061,7 +7021,7 @@ async function handleWorkspaceRawRequest(
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
     const tenantKey = resolveTenantKey(currentUser);
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const wildcardPath = String((req.params as Record<string, string | undefined>)['0'] || '').trim();
     const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
     const normalizedPath = resolveWorkspaceRelativeRequestPath(wildcardPath, workspaceRoot);
@@ -7219,7 +7179,7 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
   let currentUser: ReturnType<typeof currentUserResolver.require> | null = null;
   try {
     currentUser = currentUserResolver.require(req);
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
   } catch (error) {
     const authError = resolveCurrentUserError(error);
     if (authError) {
@@ -7689,7 +7649,7 @@ router.get('/sessions/:sessionId/intent', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
 
     const intentResult = await taskCreationSessionDAO.getIntentResult(sessionId);
 
@@ -7738,7 +7698,7 @@ router.get('/sessions/:sessionId/task-description', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
 
     const taskDescription = await taskCreationSessionDAO.getTaskDescription(sessionId);
 
@@ -7787,7 +7747,7 @@ router.get('/sessions/:sessionId/execution-plan', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
 
     const executionPlan = await taskCreationSessionDAO.getExecutionPlan(sessionId);
 
@@ -7836,7 +7796,7 @@ router.delete('/sessions/:sessionId', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
 
     await taskCreationSessionDAO.deleteSession(sessionId);
     await taskCreationFileMemoryStore.deleteSession(sessionId);

@@ -1113,6 +1113,10 @@ export default function Sidebar({
     setLocation(`/new-task?projectId=${encodeURIComponent(projectId)}&new=${encodeURIComponent(token)}`);
   }, [setLocation]);
 
+  const navigateToSessionHistory = React.useCallback((sessionId: string) => {
+    setLocation(`/session/${encodeURIComponent(sessionId)}?view=history`);
+  }, [setLocation]);
+
   const handleDeleteConfirm = React.useCallback(async () => {
     const target = deleteTarget;
     if (!target) return;
@@ -1140,7 +1144,7 @@ export default function Sidebar({
       const navigateToSession =
         options?.onNavigate ||
         (() => {
-          setLocation(`/session/${encodeURIComponent(session.sessionId)}?view=history`);
+          navigateToSessionHistory(session.sessionId);
         });
       const statusVisual = getSessionStatusVisual(session.status, t);
       const favoriteLabel = session.isFavorite ? t("sidebar.favoriteRemove") : t("sidebar.favoriteAdd");
@@ -1281,7 +1285,7 @@ export default function Sidebar({
         </ContextMenu>
       );
     },
-    [assignableProjects, handleFavoriteToggle, handleProjectAssign, moveProjectSubmitting, openCreateProjectDialog, openDeleteDialog, openRenameDialog, setLocation, t],
+    [assignableProjects, handleFavoriteToggle, handleProjectAssign, moveProjectSubmitting, navigateToSessionHistory, openCreateProjectDialog, openDeleteDialog, openRenameDialog, t],
   );
 
   return (
@@ -1802,7 +1806,10 @@ export default function Sidebar({
               <div className="space-y-2">
                 {orderedSessionTasks.map((session) =>
                   renderSessionTaskItem(session, {
-                    onNavigate: () => setTasksDialogOpen(false),
+                    onNavigate: () => {
+                      setTasksDialogOpen(false);
+                      navigateToSessionHistory(session.sessionId);
+                    },
                   }),
                 )}
               </div>

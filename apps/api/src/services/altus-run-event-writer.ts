@@ -25,6 +25,14 @@ function shouldProjectManagedStatusEvent(eventType: string) {
   return MANAGED_STATUS_TIMELINE_EVENT_TYPES.has(asText(eventType).toLowerCase());
 }
 
+function shouldProjectManagedStatusPayload(payload: Record<string, unknown>) {
+  const status = asText(payload.status).toLowerCase();
+  const content = asText(payload.content);
+  if (!content) return false;
+  if (status === 'starting') return false;
+  return true;
+}
+
 function buildManagedToolMessageKey(input: {
   runId: string;
   eventType: string;
@@ -116,7 +124,7 @@ export class AltusRunEventWriter {
       });
     } else if (shouldProjectManagedStatusEvent(normalizedEventType)) {
       const content = asText(envelopePayload.content);
-      if (content) {
+      if (shouldProjectManagedStatusPayload(envelopePayload)) {
         await taskCreationSessionDAO.addMessage({
           sessionId,
           role: 'system',

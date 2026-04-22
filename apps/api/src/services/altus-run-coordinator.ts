@@ -487,7 +487,7 @@ export class AltusRunCoordinator {
       messageType: 'assistant_message',
       content: finalContent,
       metadata: {
-        agent: 'assistant',
+        agent: 'altus',
         runId: state.input.runId,
         completionMode: 'plain_text_conversation',
       },
@@ -1762,7 +1762,7 @@ export class AltusRunCoordinator {
               messageType: 'assistant_message',
               content: finalContent,
               metadata: {
-                agent: 'assistant',
+                agent: 'altus',
                 runId: state.input.runId,
                 verification: result.verification,
                 deliverables,

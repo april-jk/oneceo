@@ -39,6 +39,7 @@ type AltusArtifactPreviewCardProps = {
   displayMode?: "artifact-browser" | "web-preview";
   onOpenViewer?: (path: string) => void;
   onDeployRequested?: (path: string) => Promise<void> | void;
+  runtimeSwitchBlocked?: boolean;
 };
 
 function getFilename(path: string): string {
@@ -80,6 +81,7 @@ export default function AltusArtifactPreviewCard({
   displayMode = "artifact-browser",
   onOpenViewer,
   onDeployRequested,
+  runtimeSwitchBlocked = false,
 }: AltusArtifactPreviewCardProps) {
   useTranslation();
   const normalizedArtifacts = useMemo(() => {
@@ -196,6 +198,10 @@ export default function AltusArtifactPreviewCard({
       setDeploymentPreviewUrl("");
       return;
     }
+    if (runtimeSwitchBlocked) {
+      setDeploymentPreviewUrl("");
+      return;
+    }
     let cancelled = false;
     getTaskCreationDeploymentInfo(sessionId)
       .then((info) => {
@@ -209,7 +215,7 @@ export default function AltusArtifactPreviewCard({
     return () => {
       cancelled = true;
     };
-  }, [sessionId, visibleArtifacts]);
+  }, [runtimeSwitchBlocked, sessionId, visibleArtifacts]);
 
   useEffect(() => {
     if (deploymentPreviewUrl) {
@@ -242,6 +248,11 @@ export default function AltusArtifactPreviewCard({
 
   const reloadWebPreview = async () => {
     if (!previewPath || webPreviewReloading) {
+      return;
+    }
+    if (runtimeSwitchBlocked) {
+      setWebPreviewState("fetch_failed");
+      setWebPreviewMessage(i18n.t("previewPanel.runtimeSwitchBlocked"));
       return;
     }
     setWebPreviewReloading(true);

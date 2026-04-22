@@ -1306,7 +1306,7 @@ export async function startTaskCreationRuntime(sessionId: string): Promise<{
     headers: buildClientIdentityHeaders(),
   });
   if (!response.ok) {
-    throw new Error(`request failed: ${response.status}`);
+    throw new Error(await readErrorMessage(response));
   }
   const result = (await response.json()) as { data?: any };
   return result?.data || {};

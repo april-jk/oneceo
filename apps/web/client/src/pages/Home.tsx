@@ -445,6 +445,7 @@ export default function Home() {
   const {
     isConnected,
     isProcessing,
+    managedRunActive,
     isInterrupting,
     messages,
     hasOlderHistory,
@@ -1689,6 +1690,7 @@ export default function Home() {
         runtimeReady={runtime.ready}
         runtimeStarting={runtime.starting}
         onEnsureRuntime={runtime.ensure}
+        runtimeSwitchBlocked={managedRunActive}
         onRequestStartDebugByMessage={() => {
           void submitPrompt(t("homeWorkspace.startDebugPrompt"));
         }}
@@ -1815,6 +1817,7 @@ export default function Home() {
                   onOpenManagedReplay={openAltusReplay}
                   onOpenWorkspacePreview={openWorkspacePreview}
                   onDeployArtifact={deployFromArtifactCard}
+                  runtimeSwitchBlocked={managedRunActive}
                 />
               ))}
             </AnimatePresence>
@@ -2340,6 +2343,7 @@ export default function Home() {
           runtimeReady={runtime.ready}
           runtimeStarting={runtime.starting}
           onEnsureRuntime={runtime.ensure}
+          runtimeSwitchBlocked={managedRunActive}
           onRequestStartDebugByMessage={() => {
             void submitPrompt(t("homeWorkspace.startDebugPrompt"));
           }}
@@ -4371,6 +4375,7 @@ function MessageBubble({
   onOpenManagedReplay,
   onOpenWorkspacePreview,
   onDeployArtifact,
+  runtimeSwitchBlocked,
 }: {
   item: ChatItem;
   onOpenDiffPreview?: (options?: {
@@ -4388,6 +4393,7 @@ function MessageBubble({
   ) => void;
   onOpenWorkspacePreview?: (path: string) => void;
   onDeployArtifact?: (path: string) => Promise<void> | void;
+  runtimeSwitchBlocked?: boolean;
 }) {
   if (item.kind === "opencode_turn") {
     return (
@@ -4607,6 +4613,7 @@ function MessageBubble({
           artifacts={item.artifacts}
           onOpenViewer={onOpenWorkspacePreview}
           onDeployRequested={onDeployArtifact}
+          runtimeSwitchBlocked={runtimeSwitchBlocked}
         />
       </div>
     );

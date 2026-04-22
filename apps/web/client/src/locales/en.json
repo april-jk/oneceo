@@ -915,6 +915,7 @@
     "diffCreatedNoDetails": "The file was created, and no diff details are available yet",
     "diffDeletedNoDetails": "The file was deleted, and no diff details are available yet",
     "diffUpdatedNoDetails": "The file was updated, and no diff details are available yet",
+    "runtimeSwitchBlocked": "A development run is still active, so switching or rebuilding the runtime is temporarily blocked.",
     "debug": {
       "missingSession": "Missing session information",
       "loadFailed": "Failed to load debug information",
@@ -974,6 +975,7 @@
       "missingSession": "Missing session information",
       "loadInfoFailed": "Failed to load deployment information",
       "loadTemplateBaselineFailed": "Failed to load template baseline",
+      "blockedDuringRun": "The development run is still in progress. Deployment status will load after the current run finishes.",
       "missingMessageEntry": "This page is not wired to a deployment message entry. Trigger deployment from the conversation page.",
       "actionFailed": "Deployment action failed",
       "rotateTokenFailed": "Failed to rotate deployment credentials",

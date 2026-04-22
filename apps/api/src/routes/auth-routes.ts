@@ -2,6 +2,7 @@ import express from 'express';
 import { appUserLegacyIdMappingDAO } from '../db/dao/app-user-legacy-id-mapping.dao';
 import { taskCreationSessionDAO } from '../db/dao/task-creation-session.dao';
 import { appAuthService } from '../services/app-auth-service';
+import { appAuthLoginRateLimitService } from '../services/app-auth-login-rate-limit-service';
 import { getPublicErrorMessage } from '../utils/error-response';
 import {
   APP_SESSION_COOKIE_NAME,
@@ -18,6 +19,50 @@ import { clearCookie, readCookieValuesByNames, setCookie } from '../utils/http-c
 import { isLegacyClientUserId, normalizeUserId } from '../utils/user-id';
 
 const router = express.Router();
+
+function asText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeEmail(value: unknown) {
+  return asText(value).toLowerCase();
+}
+
+function getClientIpAddress(req: express.Request) {
+  const forwardedFor = req.headers['x-forwarded-for'];
+  if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
+    return forwardedFor.split(',')[0]?.trim() || null;
+  }
+  if (Array.isArray(forwardedFor) && forwardedFor[0]) {
+    return String(forwardedFor[0]).split(',')[0]?.trim() || null;
+  }
+  return req.socket.remoteAddress || null;
+}
+
+function buildLoginAttemptIdentity(req: express.Request) {
+  return {
+    email: normalizeEmail(req.body?.email),
+    ipAddress: getClientIpAddress(req),
+    userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null,
+  };
+}
+
+function requireJsonRequest(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (req.is('application/json') || req.is('application/*+json')) {
+    next();
+    return;
+  }
+  return res.status(415).json({
+    success: false,
+    error: '请求必须使用 application/json',
+  });
+}
+
+function applyRetryAfter(res: express.Response, retryAfterSeconds: number) {
+  if (retryAfterSeconds > 0) {
+    res.setHeader('Retry-After', String(retryAfterSeconds));
+  }
+}
 
 function applyNoStoreAuthHeaders(res: express.Response) {
   res.setHeader('Cache-Control', 'private, no-store, max-age=0');
@@ -109,7 +154,7 @@ router.use((_req, res, next) => {
   next();
 });
 
-router.post('/register', async (req, res) => {
+router.post('/register', requireJsonRequest, async (req, res) => {
   try {
     const result = await appAuthService.register(
       {
@@ -143,7 +188,7 @@ router.post('/register', async (req, res) => {
   }
 });
 
-router.post('/register/send-code', async (req, res) => {
+router.post('/register/send-code', requireJsonRequest, async (req, res) => {
   try {
     const result = await appAuthService.sendRegisterVerificationCode({
       email: req.body?.email,
@@ -168,7 +213,26 @@ router.post('/register/send-code', async (req, res) => {
   }
 });
 
-router.post('/login', async (req, res) => {
+router.post('/login', requireJsonRequest, async (req, res) => {
+  const attemptIdentity = buildLoginAttemptIdentity(req);
+  const rateLimitDecision = await appAuthLoginRateLimitService.check(attemptIdentity);
+  if (!rateLimitDecision.allowed) {
+    applyRetryAfter(res, rateLimitDecision.retryAfterSeconds);
+    applyAuthDebugHeaders(req, res, {
+      currentUserId: null,
+      wroteSessionCookie: false,
+    });
+    appAuthLoginRateLimitService.logSecurityEvent('login_blocked', attemptIdentity, {
+      stage: 'precheck',
+      scope: rateLimitDecision.scope,
+      retryAfterSeconds: rateLimitDecision.retryAfterSeconds,
+    });
+    return res.status(429).json({
+      success: false,
+      error: '登录尝试过于频繁，请稍后再试',
+    });
+  }
+
   try {
     const result = await appAuthService.login(
       {
@@ -177,10 +241,14 @@ router.post('/login', async (req, res) => {
       },
       req
     );
+    await appAuthLoginRateLimitService.recordSuccess(attemptIdentity);
     writeAuthenticatedAppCookies(res, req, result.token);
     applyAuthDebugHeaders(req, res, {
       currentUserId: result.user?.id || null,
       wroteSessionCookie: true,
+    });
+    appAuthLoginRateLimitService.logSecurityEvent('login_succeeded', attemptIdentity, {
+      userId: result.user?.id || null,
     });
     logAuthDebug('/login', req, {
       currentUserId: result.user?.id || null,
@@ -193,6 +261,26 @@ router.post('/login', async (req, res) => {
       },
     });
   } catch (error: any) {
+    const failureDecision = await appAuthLoginRateLimitService.recordFailure(attemptIdentity);
+    applyAuthDebugHeaders(req, res, {
+      currentUserId: null,
+      wroteSessionCookie: false,
+    });
+    if (!failureDecision.allowed) {
+      applyRetryAfter(res, failureDecision.retryAfterSeconds);
+      appAuthLoginRateLimitService.logSecurityEvent('login_blocked', attemptIdentity, {
+        stage: 'post_failure',
+        scope: failureDecision.scope,
+        retryAfterSeconds: failureDecision.retryAfterSeconds,
+      });
+      return res.status(429).json({
+        success: false,
+        error: '登录尝试过于频繁，请稍后再试',
+      });
+    }
+    appAuthLoginRateLimitService.logSecurityEvent('login_failed', attemptIdentity, {
+      message: getPublicErrorMessage(error?.message || '登录失败'),
+    });
     return res.status(400).json({
       success: false,
       error: getPublicErrorMessage(error?.message || '登录失败'),
@@ -313,7 +401,7 @@ router.get('/me', async (req, res) => {
   });
 });
 
-router.post('/legacy-client-id', async (req, res) => {
+router.post('/legacy-client-id', requireJsonRequest, async (req, res) => {
   const current = (req as any).currentAppUser;
   if (!current?.id) {
     applyAuthDebugHeaders(req, res, {
@@ -366,7 +454,7 @@ router.post('/legacy-client-id', async (req, res) => {
   }
 });
 
-router.patch('/profile', async (req, res) => {
+router.patch('/profile', requireJsonRequest, async (req, res) => {
   const current = (req as any).currentAppUser;
   if (!current?.id) {
     return res.status(401).json({

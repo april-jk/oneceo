@@ -915,6 +915,7 @@
     "diffCreatedNoDetails": "文件已创建，暂无可展示的 diff 详情",
     "diffDeletedNoDetails": "文件已删除，暂无可展示的 diff 详情",
     "diffUpdatedNoDetails": "文件已更新，暂无可展示的 diff 详情",
+    "runtimeSwitchBlocked": "当前有进行中的开发任务，暂不允许切换或重建执行环境。",
     "debug": {
       "missingSession": "缺少会话信息",
       "loadFailed": "加载调试信息失败",
@@ -974,6 +975,7 @@
       "missingSession": "缺少会话信息",
       "loadInfoFailed": "加载部署信息失败",
       "loadTemplateBaselineFailed": "加载模板基线失败",
+      "blockedDuringRun": "当前开发任务仍在执行，部署状态会在本轮完成后再加载。",
       "missingMessageEntry": "当前页面未绑定部署消息入口，请从会话页触发部署。",
       "actionFailed": "部署操作失败",
       "rotateTokenFailed": "轮换部署凭证失败",

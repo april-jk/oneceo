@@ -5488,6 +5488,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   return {
     isConnected,
     isProcessing,
+    managedRunActive: isManagedRunActiveStatus(managedRunStatus),
+    managedRunStatus,
     messages,
     hasOlderHistory,
     isLoadingOlderHistory,

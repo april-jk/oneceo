@@ -3067,6 +3067,11 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       if (isCodexControlStatusLabel(rawLabel)) {
         continue;
       }
+      if (isManagedNarrationStatusMessage(message)) {
+        flushProgress();
+        pushAgentPlain(rawLabel, "Altus", message.messageKey);
+        continue;
+      }
       const tone = message.tone || getCapsuleTone(rawLabel);
       if (isProgressStatusLabel(rawLabel)) {
         pushProgress(rawLabel, rawLabel, tone, message.messageKey);
@@ -4224,6 +4229,15 @@ function isManagedTimelineMessage(message: AgentMessage): boolean {
     eventType === "tool_call_failed" ||
     eventType === "artifact_updated"
   );
+}
+
+function isManagedNarrationStatusMessage(message: AgentMessage): boolean {
+  if (message.type !== "status_update") return false;
+  const metadata = toRecord(message.metadata);
+  if (!isManagedExecutionEvent(metadata)) return false;
+  const eventType = asText(metadata.eventType).toLowerCase();
+  const content = asText(message.content);
+  return eventType === "run_status" && Boolean(content);
 }
 
 function DirectFoldableMarkdownBlock({

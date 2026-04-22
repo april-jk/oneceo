@@ -3067,6 +3067,11 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       if (isCodexControlStatusLabel(rawLabel)) {
         continue;
       }
+
+      if (isManagedStartingStatusMessage(message)) {
+        continue;
+      }
+
       if (isManagedNarrationStatusMessage(message)) {
         flushProgress();
         pushAgentPlain(rawLabel, "Altus", message.messageKey);
@@ -4236,8 +4241,19 @@ function isManagedNarrationStatusMessage(message: AgentMessage): boolean {
   const metadata = toRecord(message.metadata);
   if (!isManagedExecutionEvent(metadata)) return false;
   const eventType = asText(metadata.eventType).toLowerCase();
+  const status = asText(metadata.status).toLowerCase();
   const content = asText(message.content);
-  return eventType === "run_status" && Boolean(content);
+  return eventType === "run_status" && status !== "starting" && Boolean(content);
+}
+
+function isManagedStartingStatusMessage(message: AgentMessage): boolean {
+  if (message.type !== "status_update") return false;
+  const metadata = toRecord(message.metadata);
+  if (!isManagedExecutionEvent(metadata)) return false;
+  return (
+    asText(metadata.eventType).toLowerCase() === "run_status" &&
+    asText(metadata.status).toLowerCase() === "starting"
+  );
 }
 
 function DirectFoldableMarkdownBlock({

@@ -141,3 +141,29 @@ test('appendRunEvent does not project tool_call_progress to conversation timelin
 
   assert.equal(addMessageMock.mock.callCount(), 0);
 });
+
+test('appendRunEvent does not project starting run_status into conversation timeline', async () => {
+  mock.method(taskSessionRunDAO, 'appendRunEvent', async () => ({
+    id: 'run-event-4',
+    sequence: 10,
+    createdAt: new Date('2026-04-22T14:10:00.000Z'),
+  }) as any);
+  const addMessageMock = mock.method(taskCreationSessionDAO, 'addMessage', async () => null as any);
+  const publishMock = mock.method(altusManagedStreamService, 'publish', () => {});
+  const redisCalls: any[] = [];
+  const writer = new AltusRunEventWriter({
+    appendRunEvent: async (input: any) => {
+      redisCalls.push(input);
+    },
+  } as any);
+
+  await writer.appendRunEvent('run-4', 'session-4', 'user-4', 'run_status', {
+    status: 'starting',
+    content: '正在准备 sandbox 与运行环境',
+  });
+
+  assert.equal(addMessageMock.mock.callCount(), 0);
+  assert.equal(redisCalls.length, 1);
+  assert.equal(redisCalls[0]?.eventType, 'run_status');
+  assert.equal(publishMock.mock.callCount(), 1);
+});

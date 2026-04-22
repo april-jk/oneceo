@@ -41,6 +41,22 @@ function createManagedRunStatusMessage(content: string): AgentMessage {
   };
 }
 
+function createManagedStartingStatusMessage(content: string): AgentMessage {
+  return {
+    type: "status_update",
+    content,
+    messageKey: `managed:run-status-dialogue-1:run_status:starting`,
+    sessionId: "session-managed-status-dialogue-1",
+    metadata: {
+      executionMode: "managed",
+      executor: "altus",
+      eventType: "run_status",
+      runId: "run-status-dialogue-1",
+      status: "starting",
+    },
+  };
+}
+
 describe("managed run status dialogue", () => {
   it("renders managed run_status between tool cards as Altus dialogue", () => {
     const items = buildChatItems([
@@ -64,5 +80,20 @@ describe("managed run status dialogue", () => {
     expect((items[1] as Extract<ChatItem, { kind: "agent_plain" }>).author).toBe("Altus");
     expect((items[1] as Extract<ChatItem, { kind: "agent_plain" }>).text).toContain("决定下一步操作");
     expect(items[2]?.kind).toBe("managed_tool");
+  });
+
+  it("does not render managed starting run_status as dialogue", () => {
+    const items = buildChatItems([
+      createManagedStartingStatusMessage("正在准备 sandbox 与运行环境"),
+      createManagedToolMessage({
+        eventType: "tool_call_started",
+        content: "开始调用 search_code",
+        toolCallId: "tool-2",
+        toolName: "search_code",
+      }),
+    ]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.kind).toBe("managed_tool");
   });
 });

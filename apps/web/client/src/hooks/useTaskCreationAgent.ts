@@ -1430,6 +1430,17 @@ function isManagedSystemEventType(eventType: string): boolean {
   );
 }
 
+function shouldDisplayManagedRunStatusMessage(
+  status: unknown,
+  content: unknown,
+): boolean {
+  const normalizedStatus = asText(status).toLowerCase();
+  const normalizedContent = asText(content);
+  if (!normalizedContent) return false;
+  if (normalizedStatus === 'starting') return false;
+  return true;
+}
+
 export function resolveManagedStreamMessageKey(input: {
   eventType: string;
   runId?: string | null;
@@ -2558,6 +2569,12 @@ function mapHistoryMessageToAgentMessage(item: TaskCreationHistoryMessage, histo
     if (isCodexControlStatusContent(metadata, item?.content || '')) {
       return null;
     }
+    if (
+      asText(metadata?.eventType).toLowerCase() === 'run_status' &&
+      !shouldDisplayManagedRunStatusMessage(metadata?.status, item?.content || '')
+    ) {
+      return null;
+    }
     return {
       id,
       messageKey,
@@ -3260,15 +3277,17 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
             processing: managedStatus !== 'waiting_user',
           });
         }
-        nextMessage = {
-          type: 'status_update',
-          content: content || managedStatus || MANAGED_RUN_RUNNING_TEXT,
-          message: content || managedStatus || MANAGED_RUN_RUNNING_TEXT,
-          stage: managedStatus === 'waiting_user' ? 'clarifying' : 'executing',
-          tone: 'execution',
-          sessionId: sessionKey,
-          metadata: baseMetadata,
-        };
+        if (shouldDisplayManagedRunStatusMessage(managedStatus, content || managedStatus || MANAGED_RUN_RUNNING_TEXT)) {
+          nextMessage = {
+            type: 'status_update',
+            content: content || managedStatus || MANAGED_RUN_RUNNING_TEXT,
+            message: content || managedStatus || MANAGED_RUN_RUNNING_TEXT,
+            stage: managedStatus === 'waiting_user' ? 'clarifying' : 'executing',
+            tone: 'execution',
+            sessionId: sessionKey,
+            metadata: baseMetadata,
+          };
+        }
       } else if (eventType === 'assistant_delta' || eventType === 'assistant_message') {
         nextMessage = {
           type: 'agent_message',

@@ -54,6 +54,7 @@ export type AltusReplayFile = AltusArtifactFile & {
 type AltusRunReplayDrawerProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  embedded?: boolean;
   sessionId: string;
   runId: string;
   runTitle?: string;
@@ -172,6 +173,7 @@ function isClickInsideElement(
 export default function AltusRunReplayDrawer({
   open,
   onOpenChange,
+  embedded = false,
   sessionId,
   runId,
   runTitle,
@@ -419,80 +421,88 @@ export default function AltusRunReplayDrawer({
     onJumpToLatest();
   };
 
-  return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent
-        side="right"
-        className="top-4 right-4 bottom-4 left-auto flex h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] max-w-none flex-col overflow-hidden rounded-2xl border border-border/70 p-0 shadow-sm sm:max-w-none md:w-[calc((100vw-6rem)*0.66)] lg:w-[calc((100vw-18rem)*0.66)] [&>button.absolute]:hidden"
+  const content = (
+    <div
+      ref={drawerContentRef}
+      className="flex h-full min-h-0 flex-col overflow-hidden"
+    >
+      <div
+        className={cn(
+          "h-12 flex-shrink-0 px-3 flex items-center justify-between border-b border-border",
+          embedded ? "bg-card" : "bg-background/95 backdrop-blur-sm",
+        )}
       >
-        <div
-          ref={drawerContentRef}
-          className="flex h-full min-h-0 flex-col overflow-hidden"
-        >
-        <div className="h-12 flex-shrink-0 px-3 flex items-center justify-between border-b border-border bg-background/95 backdrop-blur-sm">
-          <div className="flex items-center min-w-0">
-            <SheetTitle className="text-base font-semibold truncate">
+        <div className="flex items-center min-w-0">
+          {embedded ? (
+            <div className="text-base font-semibold truncate">
               {runTitle || i18n.t("replayDrawer.titleFallback")}
-            </SheetTitle>
-            <SheetDescription className="sr-only">
-              {i18n.t("replayDrawer.description")}
-            </SheetDescription>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className="relative flex flex-wrap items-center rounded-full bg-zinc-100 p-[2px] dark:bg-zinc-800/90">
-              <ReplayHeaderTab
-                active={drawerView === "actions"}
-                onClick={() => setDrawerView("actions")}
-              >
-                <Activity className="h-3 w-3" />
-                <span>Actions</span>
-              </ReplayHeaderTab>
-              <ReplayHeaderTab
-                active={drawerView === "files"}
-                onClick={() => setDrawerView("files")}
-              >
-                <FileText className="h-3 w-3" />
-                <span>{i18n.t("replayDrawer.tabs.files")}</span>
-              </ReplayHeaderTab>
-              <ReplayHeaderTab
-                active={drawerView === "changes"}
-                onClick={() => setDrawerView("changes")}
-              >
-                <FileText className="h-3 w-3" />
-                <span>{i18n.t("replayDrawer.tabs.changes")}</span>
-              </ReplayHeaderTab>
-              <ReplayHeaderTab
-                active={drawerView === "debug"}
-                onClick={() => setDrawerView("debug")}
-              >
-                <Bug className="h-3 w-3" />
-                <span>{i18n.t("replayDrawer.tabs.debug")}</span>
-              </ReplayHeaderTab>
-              <ReplayHeaderTab
-                active={drawerView === "deployment"}
-                onClick={() => setDrawerView("deployment")}
-              >
-                <Rocket className="h-3 w-3" />
-                <span>{i18n.t("replayDrawer.tabs.deployment")}</span>
-              </ReplayHeaderTab>
             </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 rounded-2xl text-muted-foreground hover:text-foreground"
-              onClick={() => onOpenChange(false)}
-              title={i18n.t("replayDrawer.close")}
-            >
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
+          ) : (
+            <>
+              <SheetTitle className="text-base font-semibold truncate">
+                {runTitle || i18n.t("replayDrawer.titleFallback")}
+              </SheetTitle>
+              <SheetDescription className="sr-only">
+                {i18n.t("replayDrawer.description")}
+              </SheetDescription>
+            </>
+          )}
         </div>
+        <div className="flex items-center gap-1.5">
+          <div className="relative flex flex-wrap items-center rounded-full bg-zinc-100 p-[2px] dark:bg-zinc-800/90">
+            <ReplayHeaderTab
+              active={drawerView === "actions"}
+              onClick={() => setDrawerView("actions")}
+            >
+              <Activity className="h-3 w-3" />
+              <span>Actions</span>
+            </ReplayHeaderTab>
+            <ReplayHeaderTab
+              active={drawerView === "files"}
+              onClick={() => setDrawerView("files")}
+            >
+              <FileText className="h-3 w-3" />
+              <span>{i18n.t("replayDrawer.tabs.files")}</span>
+            </ReplayHeaderTab>
+            <ReplayHeaderTab
+              active={drawerView === "changes"}
+              onClick={() => setDrawerView("changes")}
+            >
+              <FileText className="h-3 w-3" />
+              <span>{i18n.t("replayDrawer.tabs.changes")}</span>
+            </ReplayHeaderTab>
+            <ReplayHeaderTab
+              active={drawerView === "debug"}
+              onClick={() => setDrawerView("debug")}
+            >
+              <Bug className="h-3 w-3" />
+              <span>{i18n.t("replayDrawer.tabs.debug")}</span>
+            </ReplayHeaderTab>
+            <ReplayHeaderTab
+              active={drawerView === "deployment"}
+              onClick={() => setDrawerView("deployment")}
+            >
+              <Rocket className="h-3 w-3" />
+              <span>{i18n.t("replayDrawer.tabs.deployment")}</span>
+            </ReplayHeaderTab>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-2xl text-muted-foreground hover:text-foreground"
+            onClick={() => onOpenChange(false)}
+            title={i18n.t("replayDrawer.close")}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
 
-        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-          {drawerView === "actions" ? (
-            <div className="h-full w-full overflow-hidden">
-              <div className="flex h-full flex-col overflow-hidden bg-card">
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        {drawerView === "actions" ? (
+          <div className="h-full w-full overflow-hidden">
+            <div className="flex h-full flex-col overflow-hidden bg-card">
                 <div className="h-14 border-b bg-zinc-50/80 px-4 py-2 backdrop-blur-sm dark:bg-zinc-900/80">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 min-w-0">
@@ -741,7 +751,7 @@ export default function AltusRunReplayDrawer({
           )}
         </div>
 
-        {drawerView === "actions" ? (
+      {drawerView === "actions" ? (
         <div className="flex-shrink-0 border-t border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900">
           <div className="flex items-center justify-between">
             <Button
@@ -784,7 +794,24 @@ export default function AltusRunReplayDrawer({
           </div>
         </div>
         ) : null}
-        </div>
+    </div>
+  );
+
+  if (embedded) {
+    return (
+      <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm">
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side="right"
+        className="top-4 right-4 bottom-4 left-auto flex h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] max-w-none flex-col overflow-hidden rounded-2xl border border-border/70 p-0 shadow-sm sm:max-w-none md:w-[calc((100vw-6rem)*0.66)] lg:w-[calc((100vw-18rem)*0.66)] [&>button.absolute]:hidden"
+      >
+        {content}
       </SheetContent>
     </Sheet>
   );

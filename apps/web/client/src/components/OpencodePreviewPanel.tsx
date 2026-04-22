@@ -111,6 +111,7 @@ interface OpencodePreviewPanelProps {
   runtimeReady?: boolean;
   runtimeStarting?: boolean;
   onEnsureRuntime?: () => Promise<void>;
+  runtimeSwitchBlocked?: boolean;
   onRequestStartDebugByMessage?: () => void;
   onRequestDeployByMessage?: () => void;
   onRequestRedeployByMessage?: () => void;
@@ -178,6 +179,7 @@ export function useWorkspaceFilePreviewState({
   runtimeReady,
   runtimeStarting,
   onEnsureRuntime,
+  runtimeSwitchBlocked = false,
   selectedWorkspacePath,
   diffItems = [],
 }: {
@@ -187,6 +189,7 @@ export function useWorkspaceFilePreviewState({
   runtimeReady?: boolean;
   runtimeStarting?: boolean;
   onEnsureRuntime?: () => Promise<void>;
+  runtimeSwitchBlocked?: boolean;
   selectedWorkspacePath?: string | null;
   diffItems?: PreviewDiffItem[];
 }) {
@@ -203,7 +206,7 @@ export function useWorkspaceFilePreviewState({
   );
   const refreshTimerRef = useRef<number | null>(null);
   const fileRequestSequenceRef = useRef(0);
-  const ensureRuntimeRef = useRef(onEnsureRuntime);
+  const ensureRuntimeRef = useRef(runtimeSwitchBlocked ? undefined : onEnsureRuntime);
   const diffDerivedTree = useMemo(
     () => buildWorkspaceTreeFromDiffItems(sessionId, diffItems),
     [sessionId, diffItems],
@@ -214,8 +217,8 @@ export function useWorkspaceFilePreviewState({
   );
 
   useEffect(() => {
-    ensureRuntimeRef.current = onEnsureRuntime;
-  }, [onEnsureRuntime]);
+    ensureRuntimeRef.current = runtimeSwitchBlocked ? undefined : onEnsureRuntime;
+  }, [onEnsureRuntime, runtimeSwitchBlocked]);
 
   const normalizeWorkspacePath = (value: string) =>
     normalizeWorkspaceRelativePath(value, sessionId);
@@ -599,6 +602,7 @@ export function useWorkspaceDebugPreviewState({
   runtimeReady,
   runtimeStarting,
   onEnsureRuntime,
+  runtimeSwitchBlocked = false,
 }: {
   sessionId?: string | null;
   open: boolean;
@@ -606,6 +610,7 @@ export function useWorkspaceDebugPreviewState({
   runtimeReady?: boolean;
   runtimeStarting?: boolean;
   onEnsureRuntime?: () => Promise<void>;
+  runtimeSwitchBlocked?: boolean;
 }) {
   const [debugInfo, setDebugInfo] = useState<TaskCreationDebugInfo | null>(
     null,
@@ -615,11 +620,11 @@ export function useWorkspaceDebugPreviewState({
   const [debugError, setDebugError] = useState<string | null>(null);
   const debugRuntimeBootRef = useRef(false);
   const debugPollRef = useRef<number | null>(null);
-  const ensureRuntimeRef = useRef(onEnsureRuntime);
+  const ensureRuntimeRef = useRef(runtimeSwitchBlocked ? undefined : onEnsureRuntime);
 
   useEffect(() => {
-    ensureRuntimeRef.current = onEnsureRuntime;
-  }, [onEnsureRuntime]);
+    ensureRuntimeRef.current = runtimeSwitchBlocked ? undefined : onEnsureRuntime;
+  }, [onEnsureRuntime, runtimeSwitchBlocked]);
 
   useEffect(() => {
     debugRuntimeBootRef.current = false;
@@ -766,6 +771,7 @@ export default function OpencodePreviewPanel({
   runtimeReady,
   runtimeStarting,
   onEnsureRuntime,
+  runtimeSwitchBlocked = false,
   onRequestStartDebugByMessage,
   onRequestDeployByMessage,
   onRequestRedeployByMessage,
@@ -801,13 +807,17 @@ export default function OpencodePreviewPanel({
   >(null);
   const deploymentPollRef = useRef<number | null>(null);
   const currentTab = activeTab ?? internalTab;
+  const effectiveEnsureRuntime = runtimeSwitchBlocked ? undefined : onEnsureRuntime;
+  const runtimeSwitchBlockedMessage = i18n.t("previewPanel.runtimeSwitchBlocked");
+  const deploymentBlockedMessage = i18n.t("previewPanel.deployment.blockedDuringRun");
   const filePreview = useWorkspaceFilePreviewState({
     messages,
     sessionId,
     open,
     runtimeReady,
     runtimeStarting,
-    onEnsureRuntime,
+    onEnsureRuntime: effectiveEnsureRuntime,
+    runtimeSwitchBlocked,
     selectedWorkspacePath,
     diffItems,
   });
@@ -817,7 +827,8 @@ export default function OpencodePreviewPanel({
     active: currentTab === "debug",
     runtimeReady,
     runtimeStarting,
-    onEnsureRuntime,
+    onEnsureRuntime: effectiveEnsureRuntime,
+    runtimeSwitchBlocked,
   });
 
   const selectedDiffId = controlledSelectedDiffId ?? internalSelectedDiffId;
@@ -866,6 +877,12 @@ export default function OpencodePreviewPanel({
     if (!sessionId) {
       setDeploymentInfo(null);
       setDeploymentError(i18n.t("previewPanel.deployment.missingSession"));
+      return;
+    }
+    if (runtimeSwitchBlocked) {
+      setDeploymentInfo(null);
+      setDeploymentError(deploymentBlockedMessage);
+      setDeploymentLoading(false);
       return;
     }
 
@@ -927,10 +944,11 @@ export default function OpencodePreviewPanel({
         deploymentPollRef.current = null;
       }
     };
-  }, [open, currentTab, sessionId]);
+  }, [currentTab, deploymentBlockedMessage, open, runtimeSwitchBlocked, sessionId]);
 
   useEffect(() => {
     if (!open || currentTab !== "deployment" || !sessionId) return;
+    if (runtimeSwitchBlocked) return;
     if (!deploymentInfo?.activeDeploymentPending) return;
     if (deploymentPollRef.current) {
       window.clearTimeout(deploymentPollRef.current);
@@ -952,6 +970,7 @@ export default function OpencodePreviewPanel({
     sessionId,
     deploymentInfo?.activeDeploymentPending,
     deploymentInfo?.deploymentId,
+    runtimeSwitchBlocked,
     selectedDeploymentId,
   ]);
 
@@ -961,6 +980,12 @@ export default function OpencodePreviewPanel({
     if (!sessionId) {
       setDeploymentTemplateBaseline(null);
       setDeploymentTemplateError(i18n.t("previewPanel.deployment.missingSession"));
+      return;
+    }
+    if (runtimeSwitchBlocked) {
+      setDeploymentTemplateBaseline(null);
+      setDeploymentTemplateError(deploymentBlockedMessage);
+      setDeploymentTemplateLoading(false);
       return;
     }
 
@@ -992,7 +1017,7 @@ export default function OpencodePreviewPanel({
     return () => {
       cancelled = true;
     };
-  }, [open, currentTab, sessionId]);
+  }, [currentTab, deploymentBlockedMessage, open, runtimeSwitchBlocked, sessionId]);
 
   if (!open) return null;
 
@@ -1001,6 +1026,10 @@ export default function OpencodePreviewPanel({
   const treeCount = filePreview.effectiveTree?.items.length || 0;
 
   const refreshDeployment = async (deploymentId?: string) => {
+    if (runtimeSwitchBlocked) {
+      setDeploymentError(deploymentBlockedMessage);
+      return;
+    }
     if (!sessionId) {
       setDeploymentError(i18n.t("previewPanel.deployment.missingSession"));
       return;
@@ -1027,6 +1056,10 @@ export default function OpencodePreviewPanel({
   };
 
   const refreshDeploymentTemplateBaseline = async () => {
+    if (runtimeSwitchBlocked) {
+      setDeploymentTemplateError(deploymentBlockedMessage);
+      return;
+    }
     if (!sessionId) {
       setDeploymentTemplateError(i18n.t("previewPanel.deployment.missingSession"));
       return;
@@ -1050,6 +1083,10 @@ export default function OpencodePreviewPanel({
   const runDeploymentAction = async (
     action: "deploy" | "redeploy" | "rollback",
   ) => {
+    if (runtimeSwitchBlocked) {
+      setDeploymentError(deploymentBlockedMessage);
+      return;
+    }
     if (!sessionId) {
       setDeploymentError(i18n.t("previewPanel.deployment.missingSession"));
       return;
@@ -1082,6 +1119,10 @@ export default function OpencodePreviewPanel({
   };
 
   const rotateDeploymentToken = async () => {
+    if (runtimeSwitchBlocked) {
+      setDeploymentError(deploymentBlockedMessage);
+      return;
+    }
     if (!sessionId) {
       setDeploymentError(i18n.t("previewPanel.deployment.missingSession"));
       return;
@@ -1219,6 +1260,7 @@ export default function OpencodePreviewPanel({
             onSelectFile={filePreview.handleFileSelect}
             runtimeReady={runtimeReady !== false}
             runtimeStarting={runtimeStarting === true}
+            runtimeSwitchBlocked={runtimeSwitchBlocked}
           />
         </div>
         <div
@@ -1288,10 +1330,14 @@ export default function OpencodePreviewPanel({
             onRequestStartDebugByMessage={onRequestStartDebugByMessage}
             onStart={async () => {
               if (runtimeReady === false) {
-                if (onEnsureRuntime) {
+                if (runtimeSwitchBlocked) {
+                  debugPreview.setDebugError(runtimeSwitchBlockedMessage);
+                  return;
+                }
+                if (effectiveEnsureRuntime) {
                   debugPreview.setDebugStarting(true);
                   try {
-                    await onEnsureRuntime();
+                    await effectiveEnsureRuntime();
                   } finally {
                     debugPreview.setDebugStarting(false);
                   }
@@ -1756,6 +1802,7 @@ export function FilePreview({
   onSelectFile,
   runtimeReady,
   runtimeStarting,
+  runtimeSwitchBlocked = false,
 }: {
   sessionId?: string | null;
   tree: WorkspaceTree | null;
@@ -1773,6 +1820,7 @@ export function FilePreview({
   onSelectFile: (path: string) => void;
   runtimeReady: boolean;
   runtimeStarting: boolean;
+  runtimeSwitchBlocked?: boolean;
 }) {
   const [htmlView, setHtmlView] = useState<"preview" | "source">("preview");
   const [htmlPreviewState, setHtmlPreviewState] =
@@ -1782,6 +1830,7 @@ export function FilePreview({
   const [htmlPreviewNonce, setHtmlPreviewNonce] = useState(0);
   const [deploymentPreviewUrl, setDeploymentPreviewUrl] = useState("");
   const [copiedKey, setCopiedKey] = useState<"path" | "content" | null>(null);
+  const runtimeSwitchBlockedMessage = i18n.t("previewPanel.runtimeSwitchBlocked");
 
   const previewType = file?.previewType || "text";
   const mimeType = file?.mimeType || "application/octet-stream";
@@ -1827,6 +1876,10 @@ export function FilePreview({
       setDeploymentPreviewUrl("");
       return;
     }
+    if (runtimeSwitchBlocked) {
+      setDeploymentPreviewUrl("");
+      return;
+    }
     let cancelled = false;
     getTaskCreationDeploymentInfo(sessionId)
       .then((info) => {
@@ -1840,7 +1893,7 @@ export function FilePreview({
     return () => {
       cancelled = true;
     };
-  }, [previewType, sessionId]);
+  }, [previewType, runtimeSwitchBlocked, sessionId]);
 
   useEffect(() => {
     setHtmlView("preview");
@@ -1879,6 +1932,11 @@ export function FilePreview({
 
   const reloadHtmlPreview = async () => {
     if (!sessionId || !selectedPath || htmlPreviewReloading) return;
+    if (runtimeSwitchBlocked) {
+      setHtmlPreviewState("fetch_failed");
+      setHtmlPreviewMessage(runtimeSwitchBlockedMessage);
+      return;
+    }
     setHtmlPreviewReloading(true);
     setHtmlPreviewState("checking");
     setHtmlPreviewMessage("");

@@ -45,6 +45,7 @@ const originalGetTaskDescription = sessionDaoAny.getTaskDescription;
 const originalGetRecentMessages = sessionDaoAny.getRecentMessages;
 const originalGetMessages = sessionDaoAny.getMessages;
 const originalGetRun = runDaoAny.getRun;
+const originalFindActiveRun = runDaoAny.findActiveRun;
 const originalGetSessionFile = fileStoreAny.getSession;
 const originalGetMessagesFileStore = fileStoreAny.getMessages;
 const originalAssertOwnership = sessionConnectorAny.assertSessionOwnership;
@@ -59,6 +60,7 @@ const originalGetWorkspaceTree = redisCacheAny.getWorkspaceTree;
 const originalGetWorkspaceFile = redisCacheAny.getWorkspaceFile;
 const originalListSessionEvents = redisCacheAny.listSessionEvents;
 const originalSandboxGetBySessionId = sandboxEnvDaoAny.getBySessionId;
+const originalSandboxFindCanonicalByTaskSessionId = sandboxEnvDaoAny.findCanonicalByTaskSessionId;
 const originalEnsureOpencodeServer = osacAgentAny.ensureOpencodeServer;
 const originalBindSession = opencodeEventStreamAny.bindSession;
 const originalSubscribeOpencodeEvent = opencodeEventStreamAny.subscribe;
@@ -74,6 +76,7 @@ after(async () => {
   sessionDaoAny.getRecentMessages = originalGetRecentMessages;
   sessionDaoAny.getMessages = originalGetMessages;
   runDaoAny.getRun = originalGetRun;
+  runDaoAny.findActiveRun = originalFindActiveRun;
   fileStoreAny.getSession = originalGetSessionFile;
   fileStoreAny.getMessages = originalGetMessagesFileStore;
   sessionConnectorAny.assertSessionOwnership = originalAssertOwnership;
@@ -88,6 +91,7 @@ after(async () => {
   redisCacheAny.getWorkspaceFile = originalGetWorkspaceFile;
   redisCacheAny.listSessionEvents = originalListSessionEvents;
   sandboxEnvDaoAny.getBySessionId = originalSandboxGetBySessionId;
+  sandboxEnvDaoAny.findCanonicalByTaskSessionId = originalSandboxFindCanonicalByTaskSessionId;
   osacAgentAny.ensureOpencodeServer = originalEnsureOpencodeServer;
   opencodeEventStreamAny.bindSession = originalBindSession;
   opencodeEventStreamAny.subscribe = originalSubscribeOpencodeEvent;
@@ -1092,6 +1096,100 @@ test('POST /api/task-creation/sessions/:sessionId/runtime/start returns 403 for 
 
     assert.equal(response.status, 403);
     assert.equal(payload.error, '当前用户无权管理该会话连接器');
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /api/task-creation/sessions/:sessionId/runtime/start returns 409 when managed run is active', async () => {
+  const server = await startServer();
+  sessionConnectorAny.assertSessionOwnership = async () => undefined;
+  sessionDaoAny.getSession = async (sessionId: string) => ({
+    id: sessionId,
+    userId: 'owner-user',
+    status: 'in_progress',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  fileStoreAny.getSession = async (sessionId: string) => ownerSession(sessionId);
+  runDaoAny.findActiveRun = async () => ({
+    id: 'run-active-1',
+    sessionId: 's-7',
+    mode: 'managed',
+    status: 'running',
+  });
+
+  try {
+    const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-7/runtime/start`, {
+      method: 'POST',
+      headers: { 'x-test-user-id': 'owner-user' },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 409);
+    assert.equal(payload.success, false);
+    assert.equal(payload.error, '当前存在进行中的开发任务，暂不允许切换执行环境');
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/task-creation/sessions/:sessionId/deployment/template stays pure-read when runtime is missing', async () => {
+  const server = await startServer();
+  sessionConnectorAny.assertSessionOwnership = async () => undefined;
+  sessionDaoAny.getSession = async (sessionId: string) => ({
+    id: sessionId,
+    userId: 'owner-user',
+    status: 'in_progress',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  fileStoreAny.getSession = async (sessionId: string) => ownerSession(sessionId);
+  sandboxEnvDaoAny.findCanonicalByTaskSessionId = async () => null;
+  sandboxEnvDaoAny.getBySessionId = async () => null;
+
+  try {
+    const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-7/deployment/template`, {
+      headers: { 'x-test-user-id': 'owner-user' },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.equal(payload.data.workspaceDetected, false);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /api/task-creation/sessions/:sessionId/deployment/deploy does not provision runtime when binding is missing', async () => {
+  const server = await startServer();
+  sessionConnectorAny.assertSessionOwnership = async () => undefined;
+  sessionDaoAny.getSession = async (sessionId: string) => ({
+    id: sessionId,
+    userId: 'owner-user',
+    status: 'in_progress',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  fileStoreAny.getSession = async (sessionId: string) => ownerSession(sessionId);
+  sandboxEnvDaoAny.findCanonicalByTaskSessionId = async () => null;
+  sandboxEnvDaoAny.getBySessionId = async () => null;
+
+  try {
+    const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-7/deployment/deploy`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-test-user-id': 'owner-user',
+      },
+      body: JSON.stringify({}),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.equal(payload.success, false);
+    assert.equal(payload.error, '未找到可部署的工作区，请先生成项目文件');
   } finally {
     await server.close();
   }

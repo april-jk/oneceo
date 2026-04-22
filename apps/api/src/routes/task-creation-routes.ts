@@ -43,6 +43,7 @@ import {
   buildTaskSessionDeploymentResponse,
   executeTaskSessionDeploymentAction,
   getTaskSessionDeploymentErrorMessage,
+  resolveTaskSessionEnvironment,
 } from '../services/task-session-deployment-runtime-service';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { currentUserResolver } from '../services/current-user-resolver';
@@ -1415,6 +1416,71 @@ function isAltusManagedSession(session: Pick<FileSessionRecord, 'mode' | 'driver
   return asText(session.mode) === 'altus' || asText(session.driver) === 'altus';
 }
 
+const ACTIVE_MANAGED_RUNTIME_SWITCH_BLOCKED_MESSAGE = '当前存在进行中的开发任务，暂不允许切换执行环境';
+
+function createActiveManagedRuntimeSwitchBlockedError() {
+  const error = new Error(ACTIVE_MANAGED_RUNTIME_SWITCH_BLOCKED_MESSAGE);
+  (error as Error & { code?: string }).code = 'active_managed_runtime_switch_blocked';
+  return error;
+}
+
+function isActiveManagedRuntimeSwitchBlockedError(error: unknown): boolean {
+  return (
+    (error instanceof Error && error.message === ACTIVE_MANAGED_RUNTIME_SWITCH_BLOCKED_MESSAGE) ||
+    ((error as { code?: string } | null | undefined)?.code === 'active_managed_runtime_switch_blocked')
+  );
+}
+
+async function findActiveManagedRun(sessionId: string) {
+  const run = await taskSessionRunDAO.findActiveRun(sessionId).catch(() => null);
+  if (!run) return null;
+  const mode = asText(run.mode) || 'managed';
+  return mode === 'managed' ? run : null;
+}
+
+export async function assertTaskSessionRuntimeStartAllowed(sessionId: string) {
+  const activeManagedRun = await findActiveManagedRun(sessionId);
+  if (activeManagedRun) {
+    throw createActiveManagedRuntimeSwitchBlockedError();
+  }
+}
+
+async function resolveTaskSessionRuntimeReadContext(
+  sessionId: string,
+  session?: FileSessionRecord | null
+) {
+  const resolvedSession = session || (await resolveTaskSessionRecord(sessionId));
+  if (!resolvedSession) {
+    throw new Error('会话不存在');
+  }
+
+  const binding = await taskSessionRunDAO.getSandboxBindingBySession(sessionId).catch(() => null);
+  const resolved = await resolveTaskSessionEnvironment({
+    session: resolvedSession,
+    orchestratorSessionId:
+      asText(binding?.sandboxId) || asText(resolvedSession.runtime?.orchestratorSessionId) || undefined,
+  });
+  const environment = resolved.environment;
+  const environmentMetadata = pickRecord(environment?.metadata);
+  const orchestratorSessionId =
+    asText(resolved.orchestratorSessionId) ||
+    asText(binding?.sandboxId) ||
+    asText(resolvedSession.runtime?.orchestratorSessionId);
+  const workspaceRoot =
+    asText(binding?.workspaceRoot) ||
+    asText((environmentMetadata as any).opencodeWorkspaceRoot) ||
+    asText(resolvedSession.runtime?.workspaceRoot) ||
+    resolveOpencodeWorkspacePath(sessionId);
+
+  return {
+    session: resolvedSession,
+    binding,
+    environment,
+    orchestratorSessionId,
+    workspaceRoot,
+  };
+}
+
 export async function ensureTaskSessionRuntime(sessionId: string) {
   const ensureStartedAt = Date.now();
   const session = await resolveTaskSessionRecord(sessionId);
@@ -1422,12 +1488,12 @@ export async function ensureTaskSessionRuntime(sessionId: string) {
     throw new Error('会话不存在');
   }
 
+  const activeManagedRun = await findActiveManagedRun(sessionId);
   const executor = resolveRuntimeExecutor(session);
   const altusManaged = isAltusManagedSession(session);
-  const workspaceRoot =
-    asText(session.runtime?.workspaceRoot) ||
-    resolveOpencodeWorkspacePath(sessionId);
-  const orchestratorSessionId = asText(session.runtime?.orchestratorSessionId);
+  const runtimeContext = await resolveTaskSessionRuntimeReadContext(sessionId, session);
+  const workspaceRoot = runtimeContext.workspaceRoot;
+  const orchestratorSessionId = runtimeContext.orchestratorSessionId;
   writeConnectorDebugLog('[CONNECTOR_RUNTIME_ENSURE_START]', {
     taskSessionId: sessionId,
     executor,
@@ -1435,12 +1501,21 @@ export async function ensureTaskSessionRuntime(sessionId: string) {
     mode: asText(session.mode),
     driver: asText(session.driver),
     orchestratorSessionId: orchestratorSessionId || null,
+    activeManagedRun: Boolean(activeManagedRun),
   });
   if (orchestratorSessionId) {
-    const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
+    const environment =
+      runtimeContext.environment ||
+      (await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId));
     if (environment?.status === 'ready') {
       try {
-        if (executor === 'opencode') {
+        if (activeManagedRun) {
+          writeConnectorDebugLog('[CONNECTOR_RUNTIME_ACTIVE_MANAGED_REUSE_ONLY]', {
+            taskSessionId: sessionId,
+            orchestratorSessionId,
+            executor,
+          });
+        } else if (executor === 'opencode') {
           if (!altusManaged) {
             writeConnectorDebugLog('[CONNECTOR_RUNTIME_REUSE_SYNC_OPENCODE]', {
               taskSessionId: sessionId,
@@ -1473,13 +1548,16 @@ export async function ensureTaskSessionRuntime(sessionId: string) {
         }
         await syncTaskSessionSandboxBinding(sessionId, orchestratorSessionId, workspaceRoot);
         await touchSandbox(orchestratorSessionId, 'runtime_start_reuse');
-        await reconcileTaskSessionDuplicateEnvironments(sessionId, orchestratorSessionId);
+        if (!activeManagedRun) {
+          await reconcileTaskSessionDuplicateEnvironments(sessionId, orchestratorSessionId);
+        }
         const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
         writeConnectorDebugLog('[CONNECTOR_RUNTIME_ENSURE_REUSED]', {
           taskSessionId: sessionId,
           orchestratorSessionId,
           executor,
           altusManaged,
+          activeManagedRun: Boolean(activeManagedRun),
           runtimeStatus: runtimeStatus?.status || 'ready',
           durationMs: Date.now() - ensureStartedAt,
         });
@@ -1502,6 +1580,16 @@ export async function ensureTaskSessionRuntime(sessionId: string) {
         await markSandboxClosed(orchestratorSessionId);
       }
     }
+  }
+
+  if (activeManagedRun) {
+    writeConnectorDebugLog('[CONNECTOR_RUNTIME_ACTIVE_MANAGED_REBOUND_BLOCKED]', {
+      taskSessionId: sessionId,
+      executor,
+      altusManaged,
+      orchestratorSessionId: orchestratorSessionId || null,
+    }, 'warn');
+    throw createActiveManagedRuntimeSwitchBlockedError();
   }
 
   const provision = await sandboxAgentProvisionService.provisionWithLock({
@@ -4996,6 +5084,7 @@ router.post('/sessions/:sessionId/runtime/start', async (req, res) => {
         error: getPublicErrorMessage('会话不存在'),
       });
     }
+    await assertTaskSessionRuntimeStartAllowed(sessionId);
     const runtime = await ensureTaskSessionRuntime(sessionId);
     return res.json({
       success: true,
@@ -5013,6 +5102,12 @@ router.post('/sessions/:sessionId/runtime/start', async (req, res) => {
       return res.status(404).json({
         success: false,
         error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+    if (isActiveManagedRuntimeSwitchBlockedError(error)) {
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage(ACTIVE_MANAGED_RUNTIME_SWITCH_BLOCKED_MESSAGE),
       });
     }
     console.error('启动执行环境失败:', error);
@@ -5673,12 +5768,14 @@ router.get('/sessions/:sessionId/deployment', async (req, res) => {
       });
     }
 
-    await ensureTaskSessionRuntime(sessionId);
+    const runtimeContext = await resolveTaskSessionRuntimeReadContext(sessionId, session);
     const deploymentId = asText(req.query.deploymentId);
     const data = await buildTaskSessionDeploymentResponse({
       userId: currentUser.userId,
       session,
       selectedDeploymentId: deploymentId || undefined,
+      resolvedEnvironment: runtimeContext.environment || undefined,
+      resolvedOrchestratorSessionId: runtimeContext.orchestratorSessionId || undefined,
     });
     return res.json({
       success: true,
@@ -5712,18 +5809,11 @@ router.get('/sessions/:sessionId/deployment/template', async (req, res) => {
       });
     }
 
-    const runtime = await ensureTaskSessionRuntime(sessionId);
-    const orchestratorSessionId = asText(runtime.orchestratorSessionId);
-    const environment = orchestratorSessionId
-      ? await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId)
-      : null;
-    const workspaceRoot =
-      asText((pickRecord(environment?.metadata) as any).opencodeWorkspaceRoot) ||
-      resolveOpencodeWorkspacePath(sessionId);
+    const runtimeContext = await resolveTaskSessionRuntimeReadContext(sessionId, session);
 
     const data = await inspectTaskSessionDeploymentTemplate({
-      orchestratorSessionId,
-      workspaceRoot,
+      orchestratorSessionId: runtimeContext.orchestratorSessionId,
+      workspaceRoot: runtimeContext.workspaceRoot,
     });
     return res.json({
       success: true,
@@ -5762,11 +5852,13 @@ router.post('/sessions/:sessionId/deployment/token/rotate', async (req, res) => 
       });
     }
 
-    await ensureTaskSessionRuntime(sessionId);
     await platformDeploymentAccountService.rotateProjectToken(currentUser.userId, sessionId);
+    const runtimeContext = await resolveTaskSessionRuntimeReadContext(sessionId, session);
     const data = await buildTaskSessionDeploymentResponse({
       userId: currentUser.userId,
       session,
+      resolvedEnvironment: runtimeContext.environment || undefined,
+      resolvedOrchestratorSessionId: runtimeContext.orchestratorSessionId || undefined,
     });
     return res.json({
       success: true,
@@ -5802,14 +5894,10 @@ router.post('/sessions/:sessionId/deployment/deploy', async (req, res) => {
       });
     }
 
-    const runtime = await ensureTaskSessionRuntime(sessionId);
-    const orchestratorSessionId = asText(runtime.orchestratorSessionId);
-    const environment = orchestratorSessionId
-      ? await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId)
-      : null;
-    const workspaceRoot =
-      asText((pickRecord(environment?.metadata) as any).opencodeWorkspaceRoot) ||
-      resolveOpencodeWorkspacePath(sessionId);
+    const runtimeContext = await resolveTaskSessionRuntimeReadContext(sessionId, session);
+    const orchestratorSessionId = runtimeContext.orchestratorSessionId;
+    const environment = runtimeContext.environment;
+    const workspaceRoot = runtimeContext.workspaceRoot;
     if (!orchestratorSessionId || !workspaceRoot) {
       return res.status(400).json({
         success: false,

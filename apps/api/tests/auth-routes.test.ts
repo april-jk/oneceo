@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { after, test } from 'node:test';
+import { after, afterEach, test } from 'node:test';
 import express from 'express';
 import { appUserLegacyIdMappingDAO } from '../src/db/dao/app-user-legacy-id-mapping.dao';
 import { taskCreationSessionDAO } from '../src/db/dao/task-creation-session.dao';
 import authRoutes from '../src/routes/auth-routes';
 import { appAuthMiddleware } from '../src/middleware/app-auth-middleware';
+import { appAuthLoginRateLimitService } from '../src/services/app-auth-login-rate-limit-service';
 import { appAuthService } from '../src/services/app-auth-service';
 import {
   APP_SESSION_COOKIE_NAME,
@@ -26,6 +27,19 @@ const originalResolve = appAuthService.resolveUserBySessionToken;
 const originalUpdateProfile = appAuthService.updateProfile;
 const originalLegacyMappingUpsert = appUserLegacyIdMappingDAO.upsert;
 const originalRebindSessionsFromLegacyUserId = taskCreationSessionDAO.rebindSessionsFromLegacyUserId;
+const originalLoginFailureWindowSeconds = process.env.APP_AUTH_LOGIN_FAILURE_WINDOW_SECONDS;
+const originalLoginBlockSeconds = process.env.APP_AUTH_LOGIN_BLOCK_SECONDS;
+const originalLoginEmailMaxFailures = process.env.APP_AUTH_LOGIN_EMAIL_MAX_FAILURES;
+const originalLoginIpMaxFailures = process.env.APP_AUTH_LOGIN_IP_MAX_FAILURES;
+const originalRedisEnabled = process.env.ONECEO_REDIS_ENABLED;
+
+function restoreEnv(name: string, value: string | undefined) {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
+}
 
 after(() => {
   appAuthService.register = originalRegister;
@@ -36,6 +50,15 @@ after(() => {
   appAuthService.updateProfile = originalUpdateProfile;
   appUserLegacyIdMappingDAO.upsert = originalLegacyMappingUpsert;
   taskCreationSessionDAO.rebindSessionsFromLegacyUserId = originalRebindSessionsFromLegacyUserId;
+});
+
+afterEach(() => {
+  appAuthLoginRateLimitService.resetForTests();
+  restoreEnv('APP_AUTH_LOGIN_FAILURE_WINDOW_SECONDS', originalLoginFailureWindowSeconds);
+  restoreEnv('APP_AUTH_LOGIN_BLOCK_SECONDS', originalLoginBlockSeconds);
+  restoreEnv('APP_AUTH_LOGIN_EMAIL_MAX_FAILURES', originalLoginEmailMaxFailures);
+  restoreEnv('APP_AUTH_LOGIN_IP_MAX_FAILURES', originalLoginIpMaxFailures);
+  restoreEnv('ONECEO_REDIS_ENABLED', originalRedisEnabled);
 });
 
 async function startServer(): Promise<TestServer> {
@@ -253,6 +276,232 @@ test('POST /api/auth/login returns user and app session cookie', async () => {
   }
 });
 
+test('POST /api/auth/login rejects non-JSON requests before reaching auth service', async () => {
+  const server = await startServer();
+  let loginCalled = false;
+  appAuthService.login = async () => {
+    loginCalled = true;
+    return {
+      token: 'should-not-be-issued',
+      session: { id: 'sess-non-json' } as any,
+      user: createUser('user-non-json'),
+    };
+  };
+
+  try {
+    const response = await fetch(`${server.origin}/api/auth/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        email: 'login@example.com',
+        password: 'password123',
+      }),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 415);
+    assert.equal(payload.success, false);
+    assert.equal(payload.error, '请求必须使用 application/json');
+    assert.equal(loginCalled, false);
+    assert.equal(response.headers.get('set-cookie'), null);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /api/auth/login returns 429 after repeated failed attempts from the same email', async () => {
+  process.env.ONECEO_REDIS_ENABLED = 'false';
+  process.env.APP_AUTH_LOGIN_EMAIL_MAX_FAILURES = '2';
+  process.env.APP_AUTH_LOGIN_IP_MAX_FAILURES = '10';
+  process.env.APP_AUTH_LOGIN_FAILURE_WINDOW_SECONDS = '60';
+  process.env.APP_AUTH_LOGIN_BLOCK_SECONDS = '120';
+
+  const server = await startServer();
+  appAuthService.login = async () => {
+    throw new Error('邮箱或密码错误');
+  };
+
+  try {
+    const firstResponse = await fetch(`${server.origin}/api/auth/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-forwarded-for': '203.0.113.10',
+      },
+      body: JSON.stringify({
+        email: 'limit@example.com',
+        password: 'wrong-password',
+      }),
+    });
+    const secondResponse = await fetch(`${server.origin}/api/auth/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-forwarded-for': '203.0.113.10',
+      },
+      body: JSON.stringify({
+        email: 'limit@example.com',
+        password: 'wrong-password',
+      }),
+    });
+    const thirdResponse = await fetch(`${server.origin}/api/auth/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-forwarded-for': '203.0.113.10',
+      },
+      body: JSON.stringify({
+        email: 'limit@example.com',
+        password: 'wrong-password',
+      }),
+    });
+
+    const firstPayload = await firstResponse.json();
+    const secondPayload = await secondResponse.json();
+    const thirdPayload = await thirdResponse.json();
+
+    assert.equal(firstResponse.status, 400);
+    assert.equal(firstPayload.error, '邮箱或密码错误');
+    assert.equal(secondResponse.status, 429);
+    assert.equal(secondPayload.error, '登录尝试过于频繁，请稍后再试');
+    assert.equal(secondResponse.headers.get('retry-after'), '120');
+    assert.equal(thirdResponse.status, 429);
+    assert.equal(thirdPayload.error, '登录尝试过于频繁，请稍后再试');
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /api/auth/login clears accumulated failures after a successful login', async () => {
+  process.env.ONECEO_REDIS_ENABLED = 'false';
+  process.env.APP_AUTH_LOGIN_EMAIL_MAX_FAILURES = '2';
+  process.env.APP_AUTH_LOGIN_IP_MAX_FAILURES = '10';
+  process.env.APP_AUTH_LOGIN_FAILURE_WINDOW_SECONDS = '60';
+  process.env.APP_AUTH_LOGIN_BLOCK_SECONDS = '120';
+
+  const server = await startServer();
+  let callCount = 0;
+  appAuthService.login = async () => {
+    callCount += 1;
+    if (callCount === 2) {
+      return {
+        token: 'app-token-reset',
+        session: { id: 'sess-reset' } as any,
+        user: createUser('user-reset'),
+      };
+    }
+    throw new Error('邮箱或密码错误');
+  };
+
+  try {
+    const firstResponse = await fetch(`${server.origin}/api/auth/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-forwarded-for': '203.0.113.11',
+      },
+      body: JSON.stringify({
+        email: 'reset@example.com',
+        password: 'wrong-password',
+      }),
+    });
+    const secondResponse = await fetch(`${server.origin}/api/auth/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-forwarded-for': '203.0.113.11',
+      },
+      body: JSON.stringify({
+        email: 'reset@example.com',
+        password: 'password123',
+      }),
+    });
+    const thirdResponse = await fetch(`${server.origin}/api/auth/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-forwarded-for': '203.0.113.11',
+      },
+      body: JSON.stringify({
+        email: 'reset@example.com',
+        password: 'wrong-password',
+      }),
+    });
+
+    assert.equal(firstResponse.status, 400);
+    assert.equal(secondResponse.status, 200);
+    assert.equal(thirdResponse.status, 400);
+    assert.equal(thirdResponse.headers.get('retry-after'), null);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /api/auth/login rate-limits password spraying from a single IP across multiple emails', async () => {
+  process.env.ONECEO_REDIS_ENABLED = 'false';
+  process.env.APP_AUTH_LOGIN_EMAIL_MAX_FAILURES = '10';
+  process.env.APP_AUTH_LOGIN_IP_MAX_FAILURES = '2';
+  process.env.APP_AUTH_LOGIN_FAILURE_WINDOW_SECONDS = '60';
+  process.env.APP_AUTH_LOGIN_BLOCK_SECONDS = '180';
+
+  const server = await startServer();
+  appAuthService.login = async () => {
+    throw new Error('邮箱或密码错误');
+  };
+
+  try {
+    const firstResponse = await fetch(`${server.origin}/api/auth/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-forwarded-for': '198.51.100.7',
+      },
+      body: JSON.stringify({
+        email: 'spray-1@example.com',
+        password: 'shared-wrong-password',
+      }),
+    });
+    const secondResponse = await fetch(`${server.origin}/api/auth/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-forwarded-for': '198.51.100.7',
+      },
+      body: JSON.stringify({
+        email: 'spray-2@example.com',
+        password: 'shared-wrong-password',
+      }),
+    });
+    const thirdResponse = await fetch(`${server.origin}/api/auth/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-forwarded-for': '198.51.100.7',
+      },
+      body: JSON.stringify({
+        email: 'spray-3@example.com',
+        password: 'shared-wrong-password',
+      }),
+    });
+
+    const firstPayload = await firstResponse.json();
+    const secondPayload = await secondResponse.json();
+    const thirdPayload = await thirdResponse.json();
+
+    assert.equal(firstResponse.status, 400);
+    assert.equal(firstPayload.error, '邮箱或密码错误');
+    assert.equal(secondResponse.status, 429);
+    assert.equal(secondPayload.error, '登录尝试过于频繁，请稍后再试');
+    assert.equal(secondResponse.headers.get('retry-after'), '180');
+    assert.equal(thirdResponse.status, 429);
+    assert.equal(thirdPayload.error, '登录尝试过于频繁，请稍后再试');
+  } finally {
+    await server.close();
+  }
+});
+
 test('POST /api/auth/login does not mark app session cookie as Secure when browser origin is http', async () => {
   const server = await startServer();
   appAuthService.login = async () => ({
@@ -409,6 +658,43 @@ test('GET /api/auth/me returns current user when cookie is valid', async () => {
       currentUser: '1',
       wroteSessionCookie: '0',
     });
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/auth/me prefers the current session cookie over a valid legacy session cookie', async () => {
+  const server = await startServer();
+  const seenTokens: string[] = [];
+  appAuthService.resolveUserBySessionToken = async (token: string) => {
+    seenTokens.push(token);
+    if (token === 'current-valid-token') {
+      return {
+        session: { id: 'sess-current' } as any,
+        user: createUser('user-current'),
+      };
+    }
+    if (token === 'legacy-valid-token') {
+      return {
+        session: { id: 'sess-legacy' } as any,
+        user: createUser('user-legacy'),
+      };
+    }
+    return null;
+  };
+
+  try {
+    const response = await fetch(`${server.origin}/api/auth/me`, {
+      headers: {
+        cookie: `${APP_SESSION_COOKIE_NAME}=current-valid-token; ${LEGACY_APP_SESSION_COOKIE_NAME}=legacy-valid-token`,
+      },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.equal(payload.data.user.id, 'user-current');
+    assert.deepEqual(seenTokens, ['current-valid-token']);
   } finally {
     await server.close();
   }

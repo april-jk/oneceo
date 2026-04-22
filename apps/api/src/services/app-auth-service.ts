@@ -10,6 +10,8 @@ const REGISTER_VERIFICATION_PURPOSE = 'register';
 const DEFAULT_REGISTER_CODE_LENGTH = 6;
 const DEFAULT_REGISTER_CODE_TTL_SECONDS = 10 * 60;
 const DEFAULT_REGISTER_CODE_RESEND_COOLDOWN_SECONDS = 60;
+const DUMMY_LOGIN_PASSWORD_HASH =
+  'scrypt:6f1e8c4a9d3b2f10c5a7e1d4b8c2f9a1:bba8c7584b26da9c63e641970c9ec0daa3bb8a26779af768c31251573b67d5d6e435c0f551ebe9b1198f07e23281beda7283f51d03a15f2e12459ecb809286a9';
 
 function asText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -226,13 +228,11 @@ export class AppAuthService {
 
   async login(input: { email: string; password: string }, req?: express.Request) {
     const email = asText(input.email).toLowerCase();
-    const password = asText(input.password);
+    const password = asText(input.password) || 'oneceo-invalid-empty-password';
     const user = await appUserDAO.getByEmail(email);
-    if (!user || user.status !== 'active') {
-      throw new Error('邮箱或密码错误');
-    }
-    const ok = await verifyPassword(password, user.passwordHash);
-    if (!ok) {
+    const passwordHash = user?.status === 'active' ? user.passwordHash : DUMMY_LOGIN_PASSWORD_HASH;
+    const ok = await verifyPassword(password, passwordHash);
+    if (!user || user.status !== 'active' || !ok) {
       throw new Error('邮箱或密码错误');
     }
     return this.createSessionForUser(String(user.id), req);

@@ -55,9 +55,23 @@ function resolveMimeType(filePath: string, explicit?: string): string {
     xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     ppt: 'application/vnd.ms-powerpoint',
     pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    tar: 'application/x-tar',
+    gz: 'application/gzip',
+    tgz: 'application/gzip',
     zip: 'application/zip',
   };
   return map[ext] || 'application/octet-stream';
+}
+
+function shellEscape(value: string): string {
+  return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function normalizeDirectoryArchiveName(relativePath: string, explicitName?: string): string {
+  const rawName = asText(explicitName) || path.posix.basename(relativePath);
+  if (!rawName) return 'deliverable.tar.gz';
+  if (/\.tar\.gz$/i.test(rawName)) return rawName;
+  return rawName.replace(/\.(zip|tar|tgz|gz)$/i, '') + '.tar.gz';
 }
 
 function toIso(value: Date | string | null | undefined): string | null {
@@ -95,6 +109,42 @@ export class TaskSessionDeliverableService {
     ].join('/');
   }
 
+  protected async uploadDeliverable(storageKey: string, bytes: Buffer): Promise<void> {
+    await uploadToR2(storageKey, bytes);
+  }
+
+  private async isDirectoryAttachment(sandboxId: string, absolutePath: string): Promise<boolean> {
+    const result = await e2bConnector.runCommand(
+      sandboxId,
+      `if [ -d ${shellEscape(absolutePath)} ]; then printf 'directory'; else printf 'file'; fi`,
+      { timeoutMs: 20_000 },
+    );
+    return asText(result?.stdout) === 'directory';
+  }
+
+  private async readDirectoryArchive(input: {
+    sandboxId: string;
+    workspaceRoot: string;
+    relativePath: string;
+  }): Promise<Uint8Array> {
+    const archivePath = `/tmp/oneceo-deliverable-${randomUUID()}.tar.gz`;
+    try {
+      await e2bConnector.runCommand(
+        input.sandboxId,
+        [
+          `rm -f ${shellEscape(archivePath)}`,
+          `tar -czf ${shellEscape(archivePath)} -C ${shellEscape(input.workspaceRoot)} ${shellEscape(input.relativePath)}`,
+        ].join(' && '),
+        { timeoutMs: 120_000 },
+      );
+      return await e2bConnector.readFile(input.sandboxId, archivePath);
+    } finally {
+      await e2bConnector
+        .runCommand(input.sandboxId, `rm -f ${shellEscape(archivePath)}`, { timeoutMs: 20_000 })
+        .catch(() => undefined);
+    }
+  }
+
   async persistManagedRunDeliverables(input: {
     sessionId: string;
     runId: string;
@@ -120,13 +170,26 @@ export class TaskSessionDeliverableService {
       uniqueAttachments.map(async (attachment) => {
         const relativePath = normalizeRelativePath(asText(attachment.path));
         const absolutePath = this.posix.join(input.workspaceRoot, relativePath);
-        const bytes = Buffer.from(await e2bConnector.readFile(input.sandboxId, absolutePath));
-        const displayName = asText(attachment.name) || this.posix.basename(relativePath);
-        const mimeType = resolveMimeType(relativePath, attachment.mimeType);
+        const isDirectory = await this.isDirectoryAttachment(input.sandboxId, absolutePath);
+        const bytes = Buffer.from(
+          isDirectory
+            ? await this.readDirectoryArchive({
+                sandboxId: input.sandboxId,
+                workspaceRoot: input.workspaceRoot,
+                relativePath,
+              })
+            : await e2bConnector.readFile(input.sandboxId, absolutePath),
+        );
+        const displayName = isDirectory
+          ? normalizeDirectoryArchiveName(relativePath, attachment.name)
+          : asText(attachment.name) || this.posix.basename(relativePath);
+        const mimeType = isDirectory
+          ? 'application/gzip'
+          : resolveMimeType(relativePath, attachment.mimeType);
         const sha256 = createHash('sha256').update(bytes).digest('hex');
         const storageKey = this.buildStorageKey(input.sessionId, input.runId, displayName);
 
-        await uploadToR2(storageKey, bytes);
+        await this.uploadDeliverable(storageKey, bytes);
         return {
           sessionId: input.sessionId,
           runId: input.runId,

@@ -261,6 +261,9 @@ async function waitForWorkspaceEvidence(sessionId, authCookieHeader) {
     tree,
     containsIndex: /index\.html/i.test(text),
     containsPublicIndex: /public[\\/].*index\.html/i.test(text),
+    containsServerEntry: /(?:^|[\\/])(server|app)\.(?:js|ts)\b/i.test(text),
+    containsViewsDir: /"path":"(?:[^"]+\/)?views"/i.test(text),
+    containsPublicDir: /"path":"(?:[^"]+\/)?public"/i.test(text),
     containsPackageJson: /package\.json/i.test(text),
   };
 }
@@ -447,7 +450,13 @@ async function main() {
     }
 
     result.workspaceEvidence = await waitForWorkspaceEvidence(sessionId, authCookieHeader);
-    if (!result.workspaceEvidence.containsIndex && !result.workspaceEvidence.containsPublicIndex) {
+    const hasStaticEntry =
+      result.workspaceEvidence.containsIndex || result.workspaceEvidence.containsPublicIndex;
+    const hasServerRenderedEntry =
+      result.workspaceEvidence.containsPackageJson &&
+      result.workspaceEvidence.containsServerEntry &&
+      (result.workspaceEvidence.containsViewsDir || result.workspaceEvidence.containsPublicDir);
+    if (!hasStaticEntry && !hasServerRenderedEntry) {
       throw new Error('workspace does not contain website entry file');
     }
 

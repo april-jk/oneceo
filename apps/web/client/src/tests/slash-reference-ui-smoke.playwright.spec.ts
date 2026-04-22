@@ -24,6 +24,7 @@ async function openManagedInput(page: Page) {
 
 test("slash suggestions and token chip placement smoke", async ({ page }) => {
   const token = uniqueToken();
+  let managedInputMetadataRaw = "";
   try {
     await page.route("**/api/auth/me", async (route) => {
       if (route.request().method() === "OPTIONS") {
@@ -130,6 +131,65 @@ test("slash suggestions and token chip placement smoke", async ({ page }) => {
         }),
       });
     });
+    await page.route("**/api/task-creation/sessions/draft", async (route) => {
+      if (route.request().method() === "OPTIONS") {
+        await route.fulfill({ status: 204, headers: CORS_HEADERS });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: CORS_HEADERS,
+        body: JSON.stringify({
+          data: {
+            id: "session-slash-skill",
+            title: "slash skill session",
+            status: "draft",
+          },
+        }),
+      });
+    });
+    await page.route("**/api/task-creation/sessions/*/title/resolve", async (route) => {
+      if (route.request().method() === "OPTIONS") {
+        await route.fulfill({ status: 204, headers: CORS_HEADERS });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: CORS_HEADERS,
+        body: JSON.stringify({
+          data: {
+            id: "session-slash-skill",
+            title: "slash skill session",
+            resolved: true,
+          },
+        }),
+      });
+    });
+    await page.route("**/api/altus-managed/inputs", async (route) => {
+      if (route.request().method() === "OPTIONS") {
+        await route.fulfill({ status: 204, headers: CORS_HEADERS });
+        return;
+      }
+      managedInputMetadataRaw = route.request().postData() || "";
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: CORS_HEADERS,
+        body: JSON.stringify({
+          data: {
+            sessionId: "session-slash-skill",
+            attachments: [],
+            run: {
+              id: "run-slash-skill",
+              sessionId: "session-slash-skill",
+              status: "queued",
+            },
+          },
+        }),
+      });
+    });
 
     await openManagedInput(page);
 
@@ -147,9 +207,19 @@ test("slash suggestions and token chip placement smoke", async ({ page }) => {
     await textarea.fill("/github");
     await expect(page.getByRole("button", { name: /GitHub MCP/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /Notion MCP/ })).toHaveCount(0);
+
+    await textarea.fill("run with selected skill");
+    await page.keyboard.press("Enter");
+
+    await expect(page).toHaveURL(/\/session\/session-slash-skill/);
+    expect(managedInputMetadataRaw).toContain('"skills"');
+    expect(managedInputMetadataRaw).toContain('"skillId":"minimax-pdf"');
   } finally {
     await page.unroute("**/api/auth/me");
     await page.unroute("**/api/task-creation/skills");
     await page.unroute("**/api/connectors/me");
+    await page.unroute("**/api/task-creation/sessions/draft");
+    await page.unroute("**/api/task-creation/sessions/*/title/resolve");
+    await page.unroute("**/api/altus-managed/inputs");
   }
 });

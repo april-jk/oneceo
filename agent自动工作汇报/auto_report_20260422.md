@@ -37,6 +37,7 @@
 - 已继续收口 `Altus Actions` 的“已选动作”布局：为底部详情卡增加 `30vh` 最大高度和内部滚动，避免长详情无限撑高后遮挡上方动作列表。
 - 已补上 `Altus Actions` 的“点击外部隐藏已选动作”交互：已选动作详情现在支持点击抽屉内其外部区域收起；重新点击动作项或底部翻页导航后会再次显示，且不影响真实 step 选中状态。
 - 已继续收口 managed Altus 的右侧预览入口：`show preview` 以及相关预览跳转在 managed 模式下不再进入旧的 `内容预览` 卡片，而是直接把右侧整块替换为嵌入式 `Altus Actions`；现有 `Files / Changes / Debug / Deployment` 能力继续复用，但统一收进 `Altus Actions` 主卡片内部，避免同一会话里同时存在两套右侧面板心智。
+- 已继续优化 `Altus Actions` 的横向扩展体验：保留右侧 `ResizablePanel` 现有最大宽度作为第一临界值，但当用户继续向左拖动分隔条时，会自动折叠左侧全局 Sidebar，把额外横向空间继续让给 `Altus Actions`，避免拖到上限后手感突然“撞墙”。
 - 已完成对会话 `1aa95058-0c2d-4731-94ac-e1b044b2fc78` 的第二轮系统排查，并把问题重新定义为“开发态 sandbox 切换控制权泄漏”：根因不是正常归档或旧会话恢复，而是业务读路径触发了 runtime ensure / rebound，导致 duplicate reconcile 主动关闭正在被 managed run 使用的旧 sandbox。方案文档 `20260422_开发态Sandbox切换控制权收口修复方案_[20260422-1830已采用].md` 已进入采用状态，明确要求收回 sandbox 切换控制权，禁止 deployment / preview / replay 等业务模块触发 runtime rebound。
 - 已对上述方案再次做逻辑闭环审查，并补齐三个容易歧义的点：1）明确 `/runtime/start` 不是普通业务读路径，而是显式 sandbox 维护入口；2）写死当前代码基线下唯一合法切换入口只能是 sandbox 维护模块内部与 `/runtime/start`；3）把 preview/artifact/debug 等会间接调用 `startTaskCreationRuntime(sessionId)` 的前端恢复动作也纳入 active run 期间的阻止范围，同时明确本期不做运行中热切换，只做控制权收口。
 - 已按采用文档开始落实代码：后端新增 active managed run 的 runtime 切换阻止逻辑，并把 `/deployment`、`/deployment/template`、`/deployment/token/rotate`、`/deployment/deploy` 改为纯读当前 binding/runtime，不再触发 `ensureTaskSessionRuntime()`；前端新增 `runtimeSwitchBlocked` 透传到 preview/artifact/replay 面板，开发进行中不再自动读取 deployment 或隐式调用 `runtime/start`。已通过 `apps/api` 定向路由测试、`apps/api` type-check 和 `apps/web` TypeScript 编译检查。

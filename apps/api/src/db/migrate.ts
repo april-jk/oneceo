@@ -673,7 +673,7 @@ CREATE TABLE IF NOT EXISTS app_user_legacy_id_mappings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   app_user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
   legacy_user_id TEXT NOT NULL,
-  source TEXT NOT NULL DEFAULT 'request_header',
+  source TEXT NOT NULL DEFAULT 'auth_bootstrap',
   first_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
   last_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),

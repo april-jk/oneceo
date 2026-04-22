@@ -113,9 +113,9 @@ async function writeReport(report: TestReport) {
 
 function requireCookie(response: Response) {
   const setCookie = response.headers.get('set-cookie') || '';
-  const match = setCookie.match(/app_session_id=([^;]+)/);
-  assert.ok(match?.[1], 'register response should set app_session_id cookie');
-  return `app_session_id=${match[1]}`;
+  const match = setCookie.match(/app_session_v2_id=([^;]+)/);
+  assert.ok(match?.[1], 'register response should set app_session_v2_id cookie');
+  return `app_session_v2_id=${match[1]}`;
 }
 
 async function requestJson<T>(

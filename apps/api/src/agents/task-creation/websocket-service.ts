@@ -24,7 +24,8 @@ import { taskCreationSessionDAO } from '../../db/dao';
 import { directModeEntryService } from '../../services/direct-mode-entry-service';
 import { getDirectModeDeploymentErrorMessage } from '../../services/direct-mode-deployment-capability-service';
 import { appAuthService } from '../../services/app-auth-service';
-import { APP_SESSION_COOKIE_NAME } from '../../utils/auth-session';
+import { APP_SESSION_COOKIE_NAMES } from '../../utils/auth-session';
+import { readCookieValuesFromHeaderByNames } from '../../utils/http-cookie';
 
 function normalizeDirectOpencodeErrorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error || '');
@@ -63,26 +64,6 @@ function requiresAuthenticatedUser(messageType: unknown): boolean {
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
-}
-
-function readCookieFromHeader(cookieHeader: unknown, name: string): string | null {
-  const header = asText(cookieHeader);
-  if (!header) return null;
-  const items = header.split(/;\s*/g).filter(Boolean);
-  for (let itemIndex = items.length - 1; itemIndex >= 0; itemIndex -= 1) {
-    const item = items[itemIndex];
-    const separatorIndex = item.indexOf('=');
-    if (separatorIndex <= 0) continue;
-    const key = item.slice(0, separatorIndex).trim();
-    if (key !== name) continue;
-    const rawValue = item.slice(separatorIndex + 1);
-    try {
-      return decodeURIComponent(rawValue);
-    } catch {
-      return rawValue;
-    }
-  }
-  return null;
 }
 
 export class TaskCreationWebSocketService {
@@ -1217,7 +1198,8 @@ export class TaskCreationWebSocketService {
     const context = this.clientAuthContext.get(clientId);
     if (!context) return;
 
-    const sessionToken = readCookieFromHeader(req?.headers?.cookie, APP_SESSION_COOKIE_NAME);
+    const sessionToken =
+      readCookieValuesFromHeaderByNames(asText(req?.headers?.cookie), APP_SESSION_COOKIE_NAMES)[0] || null;
     context.sessionCookiePresent = Boolean(sessionToken);
 
     if (!sessionToken) {

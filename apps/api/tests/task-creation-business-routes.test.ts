@@ -558,7 +558,10 @@ test('GET /api/task-creation/sessions rebinds legacy user sessions before orphan
   sessionDaoAny.getTaskDescription = async () => null;
   sessionDaoAny.getMessages = async () => [];
   legacyMappingDaoAny.upsert = async () => null;
-  legacyMappingDaoAny.listLegacyIdsByAppUserId = async () => [];
+  legacyMappingDaoAny.listLegacyIdsByAppUserId = async (userId: string) => {
+    assert.equal(userId, 'user-legacy-1');
+    return ['legacy-local-user-1'];
+  };
   legacyMappingDaoAny.resolveAppUserIdByLegacyUserId = async () => null;
 
   let orphanRebindCalled = false;
@@ -580,7 +583,6 @@ test('GET /api/task-creation/sessions rebinds legacy user sessions before orphan
     const response = await fetch(`${server.origin}/api/task-creation/sessions`, {
       headers: {
         'x-test-user-id': 'user-legacy-1',
-        'x-legacy-user-id': 'legacy-local-user-1',
       },
     });
     const payload = await response.json();
@@ -643,6 +645,72 @@ test('POST /api/task-creation/sessions binds existing orphan db session to curre
     assert.equal(payload.success, true);
     assert.equal(boundSessionId, 'existing-orphan');
     assert.equal(boundUserId, 'user-bind-existing');
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /api/task-creation/sessions adopts existing legacy-owned db session via mapping', async () => {
+  const server = await startServer();
+  const snapshot = createMemorySession('existing-legacy', 'Recovered Legacy Session');
+  let adoptedSessionId = '';
+  let adoptedUserId = '';
+  let adoptedLegacyUserId = '';
+
+  fileStoreAny.getSession = async () => snapshot;
+  fileStoreAny.createSession = async () => snapshot;
+  fileStoreAny.addMessage = async () => undefined;
+
+  sessionDaoAny.getSession = async () => ({
+    id: 'existing-legacy',
+    userId: 'legacy-local-user-3',
+    status: 'in_progress',
+  });
+  sessionDaoAny.createSession = async () => {
+    throw new Error('should not create new db session');
+  };
+  legacyMappingDaoAny.resolveAppUserIdByLegacyUserId = async (legacyUserId: string) => {
+    assert.equal(legacyUserId, 'legacy-local-user-3');
+    return 'user-bind-legacy';
+  };
+  sessionDaoAny.adoptSessionFromLegacyUserId = async (
+    sessionId: string,
+    userId: string,
+    legacyUserId: string
+  ) => {
+    adoptedSessionId = sessionId;
+    adoptedUserId = userId;
+    adoptedLegacyUserId = legacyUserId;
+    return { id: sessionId, userId, status: 'in_progress' };
+  };
+  sessionDaoAny.bindUserIfMissing = async (sessionId: string, userId: string) => ({
+    id: sessionId,
+    userId,
+    status: 'in_progress',
+  });
+  sessionDaoAny.addMessage = async () => undefined;
+  legacyMappingDaoAny.upsert = async () => null;
+  legacyMappingDaoAny.listLegacyIdsByAppUserId = async () => [];
+
+  try {
+    const response = await fetch(`${server.origin}/api/task-creation/sessions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-test-user-id': 'user-bind-legacy',
+      },
+      body: JSON.stringify({
+        sessionId: 'existing-legacy',
+        title: 'Recovered Legacy Session',
+      }),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.equal(adoptedSessionId, 'existing-legacy');
+    assert.equal(adoptedUserId, 'user-bind-legacy');
+    assert.equal(adoptedLegacyUserId, 'legacy-local-user-3');
   } finally {
     await server.close();
   }

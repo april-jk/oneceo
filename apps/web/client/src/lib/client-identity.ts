@@ -1,12 +1,21 @@
+export const LEGACY_CLIENT_USER_ID_STORAGE_KEY = "oneceo_client_user_id";
+
 export function buildClientIdentityHeaders(init?: HeadersInit): HeadersInit {
-  const headers = new Headers(init);
+  return new Headers(init);
+}
+
+export function readLegacyClientUserId(): string {
   try {
-    const legacyUserId = window.localStorage.getItem("oneceo_client_user_id")?.trim();
-    if (legacyUserId) {
-      headers.set("X-Legacy-User-Id", legacyUserId);
-    }
+    return window.localStorage.getItem(LEGACY_CLIENT_USER_ID_STORAGE_KEY)?.trim() || "";
+  } catch {
+    return "";
+  }
+}
+
+export function clearLegacyClientUserId() {
+  try {
+    window.localStorage.removeItem(LEGACY_CLIENT_USER_ID_STORAGE_KEY);
   } catch {
     // ignore non-browser runtimes
   }
-  return headers;
 }

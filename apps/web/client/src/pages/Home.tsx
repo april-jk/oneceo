@@ -3675,7 +3675,16 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
   return items;
 }
 
-function collapseRepeatedChatAuthors(items: ChatItem[]): ChatItem[] {
+function isAuthorNeutralSeparator(item: ChatItem): boolean {
+  return (
+    item.kind === "capsule" ||
+    item.kind === "managed_tool" ||
+    item.kind === "managed_artifact_card" ||
+    item.kind === "managed_deliverable_card"
+  );
+}
+
+export function collapseRepeatedChatAuthors(items: ChatItem[]): ChatItem[] {
   const nextItems = [...items];
   let previousAuthor = "";
 
@@ -3698,7 +3707,7 @@ function collapseRepeatedChatAuthors(items: ChatItem[]): ChatItem[] {
       continue;
     }
 
-    if (item.kind === "capsule") {
+    if (isAuthorNeutralSeparator(item)) {
       continue;
     }
 

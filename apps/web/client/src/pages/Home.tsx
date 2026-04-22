@@ -68,7 +68,6 @@ import ConnectorDialog from "@/components/ConnectorDialog";
 import AttachmentChipList from "@/components/AttachmentChipList";
 import AttachmentPickerButton from "@/components/AttachmentPickerButton";
 import MessageAttachmentReference from "@/components/MessageAttachmentReference";
-import TaskRuntimeDrawer from "@/components/TaskRuntimeDrawer";
 import OpencodePreviewPanel from "@/components/OpencodePreviewPanel";
 import AltusArtifactPreviewCard, {
   type AltusArtifactFile,
@@ -318,7 +317,6 @@ export default function Home() {
     null,
   );
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
-  const [showRuntimeDrawer, setShowRuntimeDrawer] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [altusReplayRunId, setAltusReplayRunId] = useState<string | null>(null);
   const [altusReplayIndex, setAltusReplayIndex] = useState(0);
@@ -466,7 +464,7 @@ export default function Home() {
   } = useTaskCreationAgent({
     autoRuntime: !isHistoryView,
     compactHistory: false,
-    runtimeLogPollingEnabled: showRuntimeDrawer,
+    runtimeLogPollingEnabled: false,
     initialProjectId: selectedProject?.kind === "manual" ? selectedProject.id : null,
     onPlanGenerated: (plan) => {
       console.log("计划生成:", plan);
@@ -1864,16 +1862,6 @@ export default function Home() {
                 ? t("homeWorkspace.hidePreview")
                 : t("homeWorkspace.showPreview")}
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="rounded-full"
-              onClick={() => setShowRuntimeDrawer(true)}
-              disabled={!runtime.orchestratorSessionId}
-            >
-              {t("homeWorkspace.runtimeLogs")}
-            </Button>
           </div>
         </div>
         <div
@@ -2442,11 +2430,6 @@ export default function Home() {
             )}
           </AnimatePresence>
         </div>
-      <TaskRuntimeDrawer
-        open={showRuntimeDrawer}
-        onOpenChange={setShowRuntimeDrawer}
-        runtime={runtime}
-      />
       {!managedAltusMode && activeAltusReplay && sessionId ? (
         <AltusRunReplayDrawer
           open={previewOpen}

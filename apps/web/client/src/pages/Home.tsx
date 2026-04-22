@@ -3037,7 +3037,11 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         });
         if (parsed.rest.trim()) {
           pushAgentMarkdown(
-            `**${getAgentName(message.agent)}**\n\n${parsed.rest}`,
+            `**${resolveAgentDisplayName({
+              agent: message.agent,
+              metadata: message.metadata,
+              messageKey: message.messageKey,
+            })}**\n\n${parsed.rest}`,
             message.messageKey,
           );
         }
@@ -3046,7 +3050,11 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
 
       flushProgress();
       pushAgentMarkdown(
-        `**${getAgentName(message.agent)}**\n\n${message.content || ""}`,
+        `**${resolveAgentDisplayName({
+          agent: message.agent,
+          metadata: message.metadata,
+          messageKey: message.messageKey,
+        })}**\n\n${message.content || ""}`,
         message.messageKey,
       );
       continue;
@@ -6543,6 +6551,25 @@ function getAgentName(agent?: string) {
     execution_plan: i18n.t("homeWorkspace.executionPlan"),
   };
   return agent ? nameMap[agent] || agent : i18n.t("homeWorkspace.agentLabel");
+}
+
+function resolveAgentDisplayName(input: {
+  agent?: string;
+  metadata?: unknown;
+  messageKey?: string;
+}) {
+  const metadata = toRecord(input.metadata);
+  const rawAgent = asText(input.agent).toLowerCase();
+  const messageKey = asText(input.messageKey);
+  if (
+    rawAgent === "altus" ||
+    asText(metadata.executor).toLowerCase() === "altus" ||
+    asText(metadata.executionMode).toLowerCase() === "managed" ||
+    messageKey.startsWith("managed:")
+  ) {
+    return "Altus";
+  }
+  return getAgentName(input.agent);
 }
 
 function getExecutorDisplayName(metadataRaw: unknown) {

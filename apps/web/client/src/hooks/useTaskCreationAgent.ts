@@ -1456,6 +1456,14 @@ export function resolveManagedStreamMessageKey(input: {
     );
   }
 
+  if (eventType === 'run_status') {
+    return (
+      payloadMessageKey ||
+      envelopeMessageKey ||
+      (runId ? `managed:${runId}:run_status` : 'managed:run_status')
+    );
+  }
+
   if (isManagedSystemEventType(eventType)) {
     if (eventType === 'artifact_updated' && runId) {
       const sequence = input.sequence ?? null;

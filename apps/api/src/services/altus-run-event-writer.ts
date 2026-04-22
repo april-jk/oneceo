@@ -9,12 +9,20 @@ const MANAGED_TOOL_EVENT_TYPES = new Set([
   'tool_call_failed',
 ]);
 
+const MANAGED_STATUS_TIMELINE_EVENT_TYPES = new Set([
+  'run_status',
+]);
+
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
 function shouldProjectManagedToolEvent(eventType: string) {
   return MANAGED_TOOL_EVENT_TYPES.has(asText(eventType).toLowerCase());
+}
+
+function shouldProjectManagedStatusEvent(eventType: string) {
+  return MANAGED_STATUS_TIMELINE_EVENT_TYPES.has(asText(eventType).toLowerCase());
 }
 
 function buildManagedToolMessageKey(input: {
@@ -27,6 +35,14 @@ function buildManagedToolMessageKey(input: {
   if (toolCallId) {
     return `managed:${input.runId}:tool:${toolCallId}`;
   }
+  return `managed:${input.runId}:${input.eventType}:${Math.max(0, Math.floor(input.sequence || 0))}`;
+}
+
+function buildManagedStatusMessageKey(input: {
+  runId: string;
+  eventType: string;
+  sequence: number;
+}) {
   return `managed:${input.runId}:${input.eventType}:${Math.max(0, Math.floor(input.sequence || 0))}`;
 }
 
@@ -56,14 +72,28 @@ export class AltusRunEventWriter {
       sequence,
       eventType: normalizedEventType,
     };
+    const toolProjectionMessageKey = shouldProjectManagedToolEvent(normalizedEventType)
+      ? buildManagedToolMessageKey({
+          runId,
+          eventType: normalizedEventType,
+          sequence,
+          payload: envelopePayload,
+        })
+      : '';
+    const statusProjectionMessageKey = shouldProjectManagedStatusEvent(normalizedEventType)
+      ? buildManagedStatusMessageKey({
+          runId,
+          eventType: normalizedEventType,
+          sequence,
+        })
+      : '';
+    const timelineProjectionMessageKey = toolProjectionMessageKey || statusProjectionMessageKey;
+    if (timelineProjectionMessageKey) {
+      envelopePayload.messageKey = timelineProjectionMessageKey;
+    }
     const userVisiblePayload = stripManagedDebugPayload(envelopePayload);
     if (shouldProjectManagedToolEvent(normalizedEventType)) {
-      const messageKey = buildManagedToolMessageKey({
-        runId,
-        eventType: normalizedEventType,
-        sequence,
-        payload: envelopePayload,
-      });
+      const messageKey = timelineProjectionMessageKey;
       const content = asText(envelopePayload.content) || normalizedEventType;
       await taskCreationSessionDAO.addMessage({
         sessionId,
@@ -84,6 +114,28 @@ export class AltusRunEventWriter {
         },
         createdAt: event.createdAt || new Date(),
       });
+    } else if (shouldProjectManagedStatusEvent(normalizedEventType)) {
+      const content = asText(envelopePayload.content);
+      if (content) {
+        await taskCreationSessionDAO.addMessage({
+          sessionId,
+          role: 'system',
+          messageType: 'status_update',
+          content,
+          metadata: {
+            ...userVisiblePayload,
+            messageKey: timelineProjectionMessageKey,
+            eventType: normalizedEventType,
+            executor: 'altus',
+            executionMode: 'managed',
+            runId,
+            sessionId,
+            userId,
+            status: asText(envelopePayload.status) || undefined,
+          },
+          createdAt: event.createdAt || new Date(),
+        });
+      }
     }
     await this.redisStateService.appendRunEvent({
       runId,

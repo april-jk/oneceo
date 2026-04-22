@@ -3,6 +3,7 @@ import {
   sandboxExecutionEnvironmentDAO,
   taskCreationSessionDAO,
   taskSessionDeploymentSyncJobDAO,
+  taskSessionRunDAO,
 } from '../db/dao';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import {
@@ -182,12 +183,31 @@ function pickTaskSessionDeploymentPanelSnapshot(metadataRaw: unknown): RailwayDe
   } satisfies RailwayDeploymentPanelData;
 }
 
+function hasStoredDeploymentSignal(metadataRaw: unknown): boolean {
+  const metadata = pickRecord(metadataRaw);
+  if (pickTaskSessionDeploymentPanelSnapshot(metadata.deploymentPanel)) {
+    return true;
+  }
+  const state = pickTaskSessionDeploymentState(metadata.deploymentState);
+  return Boolean(state?.bindingState && state.bindingState !== 'uninitialized');
+}
+
 async function findEnvironmentByTaskSessionId(taskSessionId: string) {
   const limit = Math.max(50, Math.min(Number(process.env.SANDBOX_RUNTIME_LOOKUP_LIMIT || 500), 5000));
   const environments = await sandboxExecutionEnvironmentDAO.listRecent(limit);
   for (const env of environments) {
     const metadata = pickRecord(env.metadata);
     if (asText(metadata.taskSessionId) === taskSessionId) {
+      return env;
+    }
+  }
+  return null;
+}
+
+async function findLatestDeploymentSignalEnvironmentByTaskSessionId(taskSessionId: string) {
+  const environments = await sandboxExecutionEnvironmentDAO.listByTaskSessionId(taskSessionId, 20).catch(() => []);
+  for (const env of environments) {
+    if (hasStoredDeploymentSignal(env?.metadata)) {
       return env;
     }
   }
@@ -213,6 +233,21 @@ export async function resolveTaskSessionEnvironment(input: {
         orchestratorSessionId: explicitOrchestratorSessionId,
         environment: explicitEnvironment,
       };
+    }
+  }
+
+  const taskSessionId = asText(input.session?.id);
+  if (taskSessionId) {
+    const binding = await taskSessionRunDAO.getSandboxBindingBySession(taskSessionId).catch(() => null);
+    const bindingSandboxId = asText(binding?.sandboxId);
+    if (bindingSandboxId) {
+      const byBinding = await sandboxExecutionEnvironmentDAO.getBySessionId(bindingSandboxId);
+      if (byBinding) {
+        return {
+          orchestratorSessionId: bindingSandboxId,
+          environment: byBinding,
+        };
+      }
     }
   }
 
@@ -1015,11 +1050,19 @@ export async function buildTaskSessionDeploymentResponse(input: {
   resolvedEnvironment?: TaskSessionDeploymentEnvironment;
   resolvedOrchestratorSessionId?: string | null;
 }): Promise<RailwayDeploymentPanelData> {
-  const { environment } = await resolveTaskSessionEnvironment({
+  const resolved = await resolveTaskSessionEnvironment({
     session: input.session,
     orchestratorSessionId: input.resolvedOrchestratorSessionId,
     environment: input.resolvedEnvironment,
   });
+  let environment = resolved.environment;
+  const taskSessionId = asText(input.session?.id);
+  if (!hasStoredDeploymentSignal(environment?.metadata) && taskSessionId) {
+    const latestDeploymentEnvironment = await findLatestDeploymentSignalEnvironmentByTaskSessionId(taskSessionId);
+    if (latestDeploymentEnvironment) {
+      environment = latestDeploymentEnvironment;
+    }
+  }
   const metadata = pickRecord(environment?.metadata);
   const savedState = pickTaskSessionDeploymentState(metadata.deploymentState);
   const savedPanel = pickTaskSessionDeploymentPanelSnapshot(metadata.deploymentPanel);

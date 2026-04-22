@@ -147,6 +147,13 @@ test("sidebar keeps session order stable when clicking project or session", asyn
     expect(new Set(baselineOrder)).toEqual(new Set([newerSessionTitle, olderSessionTitle]));
     await closeAllTasksDialog(page);
 
+    await openAllTasksDialog(page);
+    await page.getByRole("dialog").getByRole("button", { name: olderSessionTitle }).click();
+    await expect(page).toHaveURL(
+      new RegExp(`/session/${olderSessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\?view=history`),
+    );
+    await expect(page.getByRole("dialog")).toBeHidden();
+
     await page.locator("aside").getByRole("button", { name: projectName }).click();
     await expect(page).toHaveURL(new RegExp(`/project/${projectId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
     await expect(page.locator("aside")).toContainText(olderSessionTitle);

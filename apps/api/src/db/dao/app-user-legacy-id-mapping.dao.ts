@@ -5,7 +5,7 @@ import { isCanonicalAppUserId, isLegacyClientUserId, normalizeUserId } from '../
 
 function asSource(value: unknown): string {
   const text = typeof value === 'string' ? value.trim() : '';
-  return text || 'request_header';
+  return text || 'auth_bootstrap';
 }
 
 class AppUserLegacyIdMappingDAO {

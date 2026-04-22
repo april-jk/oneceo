@@ -36,7 +36,7 @@ async function main() {
       email,
       userId: String(user.id),
       sessionToken: session.token,
-      cookieHeader: `app_session_id=${session.token}`,
+      cookieHeader: `app_session_v2_id=${session.token}`,
     }),
   );
 }

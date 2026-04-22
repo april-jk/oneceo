@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, Bug, Check, ChevronLeft, ChevronRight, Clock3, FileText, ListTodo, Rocket, XCircle } from "lucide-react";
 import type { AltusArtifactFile } from "@/components/AltusArtifactPreviewCard";
 import {
@@ -128,6 +128,40 @@ function uniqueFiles(files: AltusReplayFile[], sessionId: string) {
   return Array.from(map.values());
 }
 
+export function resolveReplayPreferredFilePath(
+  files: AltusReplayFile[],
+  artifactPaths: string[] | undefined,
+) {
+  if (!files.length) return "";
+  const normalizedArtifactPaths = Array.isArray(artifactPaths)
+    ? artifactPaths.filter(Boolean)
+    : [];
+  return (
+    normalizedArtifactPaths.find((path) =>
+      files.some((file) => file.path === path),
+    ) ||
+    files[0]?.path ||
+    ""
+  );
+}
+
+export function resolveReplaySelectedFilePath(input: {
+  currentSelectedPath: string;
+  files: AltusReplayFile[];
+  artifactPaths?: string[] | undefined;
+  forcePreferred: boolean;
+}) {
+  const { currentSelectedPath, files, artifactPaths, forcePreferred } = input;
+  const preferredPath = resolveReplayPreferredFilePath(files, artifactPaths);
+  if (forcePreferred) {
+    return preferredPath;
+  }
+  if (currentSelectedPath && files.some((file) => file.path === currentSelectedPath)) {
+    return currentSelectedPath;
+  }
+  return preferredPath;
+}
+
 export default function AltusRunReplayDrawer({
   open,
   onOpenChange,
@@ -196,14 +230,21 @@ export default function AltusRunReplayDrawer({
     runtimeStarting,
     onEnsureRuntime: effectiveEnsureRuntime,
   });
+  const selectedActionKey = `${runId}:${selectedAction?.toolCallId || "none"}`;
+  const previousSelectedActionKeyRef = useRef(selectedActionKey);
 
   useEffect(() => {
-    const preferredPath =
-      selectedAction?.artifactPaths.find((path) =>
-        normalizedFiles.some((file) => file.path === path),
-      ) || normalizedFiles[0]?.path || "";
-    setSelectedFilePath(preferredPath);
-  }, [normalizedFiles, runId, selectedAction?.artifactPaths]);
+    const actionChanged = previousSelectedActionKeyRef.current !== selectedActionKey;
+    setSelectedFilePath((prev) =>
+      resolveReplaySelectedFilePath({
+        currentSelectedPath: prev,
+        files: normalizedFiles,
+        artifactPaths: selectedAction?.artifactPaths,
+        forcePreferred: actionChanged || !prev,
+      }),
+    );
+    previousSelectedActionKeyRef.current = selectedActionKey;
+  }, [normalizedFiles, selectedActionKey]);
 
   useEffect(() => {
     setDrawerView("actions");
@@ -329,6 +370,13 @@ export default function AltusRunReplayDrawer({
     } finally {
       setDeploymentAction(null);
     }
+  };
+
+  const handleReplayFileSelect = async (path: string) => {
+    const normalizedPath = normalizeWorkspaceRelativePath(path, sessionId);
+    if (!normalizedPath) return;
+    setSelectedFilePath(normalizedPath);
+    await filePreview.handleFileSelect(normalizedPath);
   };
 
   return (
@@ -576,7 +624,7 @@ export default function AltusRunReplayDrawer({
               onTogglePath={filePreview.handleTogglePath}
               onLoadMoreDir={filePreview.handleLoadMoreDirectory}
               onRefresh={() => void filePreview.refreshTree("manual")}
-              onSelectFile={filePreview.handleFileSelect}
+              onSelectFile={handleReplayFileSelect}
               runtimeReady={runtimeReady !== false}
               runtimeStarting={runtimeStarting === true}
               runtimeSwitchBlocked={runtimeSwitchBlocked}

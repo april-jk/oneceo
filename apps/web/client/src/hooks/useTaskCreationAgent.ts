@@ -1651,6 +1651,52 @@ function buildClarificationSemanticKey(value: unknown): string {
   return normalizeClarificationComparableText(value).replace(/\s+/g, '');
 }
 
+function normalizeManagedAssistantComparableText(value: unknown): string {
+  const text = asText(value);
+  if (!text) return '';
+  return text
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function stripDuplicateManagedAssistantForFinalMessage(
+  prev: AgentMessage[],
+  incomingMessage: AgentMessage
+): AgentMessage[] {
+  if (!isManagedAssistantMessage(incomingMessage)) {
+    return prev;
+  }
+  const incomingMeta = toRecord(incomingMessage.metadata);
+  if (asText(incomingMeta.eventType).toLowerCase() !== 'assistant_message') {
+    return prev;
+  }
+
+  const baseKey = resolveManagedAssistantBaseKey(incomingMessage);
+  const currentKey = resolveAgentMessageKey(incomingMessage);
+  const incomingContent = normalizeManagedAssistantComparableText(incomingMessage.content);
+  if (!baseKey || !incomingContent) {
+    return prev;
+  }
+
+  let removed = false;
+  const next = prev.filter((item) => {
+    if (!isManagedAssistantMessage(item)) return true;
+    const itemKey = resolveAgentMessageKey(item);
+    if (!isManagedAssistantSegmentKeyForBase(itemKey, baseKey)) return true;
+    if (itemKey === currentKey) return true;
+    const itemContent = normalizeManagedAssistantComparableText(item.content);
+    if (!itemContent) return true;
+    if (itemContent === incomingContent) {
+      removed = true;
+      return false;
+    }
+    return true;
+  });
+  return removed ? next : prev;
+}
+
 function stripDuplicateManagedAssistantForClarification(
   prev: AgentMessage[],
   clarificationMessage: AgentMessage
@@ -1699,6 +1745,10 @@ export function mergeRealtimeMessage(
 ): AgentMessage[] {
   message = normalizeAgentMessageIdentity(normalizeTerminalDisplayMessage(message));
   message = normalizeManagedAssistantMessageIdentity(prev, message);
+  const dedupedManagedAssistantPrev = stripDuplicateManagedAssistantForFinalMessage(prev, message);
+  if (dedupedManagedAssistantPrev !== prev) {
+    return mergeRealtimeMessage(dedupedManagedAssistantPrev, message, welcomeMessage);
+  }
   if (message.type === 'clarification_request') {
     const dedupedPrev = stripDuplicateManagedAssistantForClarification(prev, message);
     if (dedupedPrev !== prev) {
@@ -2191,6 +2241,15 @@ export function mergeHistoryAgentMessages(base: AgentMessage[], incoming: AgentM
   });
   for (const rawItem of incoming) {
     const item = normalizeManagedAssistantMessageIdentity(merged, rawItem);
+    const dedupedMerged = stripDuplicateManagedAssistantForFinalMessage(merged, item);
+    if (dedupedMerged !== merged) {
+      merged.length = 0;
+      merged.push(...dedupedMerged);
+      indexByKey.clear();
+      merged.forEach((existingItem, index) => {
+        indexByKey.set(getHistoryMessageKey(existingItem), index);
+      });
+    }
     const key = getHistoryMessageKey(item);
     const existingIndex = indexByKey.get(key);
     if (existingIndex !== undefined) {

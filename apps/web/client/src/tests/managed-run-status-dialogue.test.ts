@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildChatItems, type ChatItem } from "@/pages/Home";
+import {
+  buildChatItems,
+  collapseRepeatedChatAuthors,
+  type ChatItem,
+} from "@/pages/Home";
 import type { AgentMessage } from "@/hooks/useTaskCreationAgent";
 
 function createManagedToolMessage(input: {
@@ -95,5 +99,64 @@ describe("managed run status dialogue", () => {
 
     expect(items).toHaveLength(1);
     expect(items[0]?.kind).toBe("managed_tool");
+  });
+
+  it("shows Altus author only once across consecutive narration separated by managed tools", () => {
+    const items = collapseRepeatedChatAuthors(
+      buildChatItems([
+        createManagedRunStatusMessage("运行环境已经准备好了，我开始生成项目内容"),
+        createManagedToolMessage({
+          eventType: "tool_call_completed",
+          content: "工具 write_file 已完成",
+          toolCallId: "tool-1",
+          toolName: "write_file",
+        }),
+        createManagedRunStatusMessage("页面框架已经搭好，我继续把样式和交互补完整"),
+        createManagedToolMessage({
+          eventType: "tool_call_completed",
+          content: "工具 write_file 已完成",
+          toolCallId: "tool-2",
+          toolName: "write_file",
+        }),
+        createManagedRunStatusMessage("界面样式已经整理好了，我继续补上操作逻辑"),
+      ]),
+    );
+
+    const agentPlainItems = items.filter(
+      (item): item is Extract<ChatItem, { kind: "agent_plain" }> =>
+        item.kind === "agent_plain",
+    );
+
+    expect(agentPlainItems).toHaveLength(3);
+    expect(agentPlainItems[0]?.showAuthor).toBe(true);
+    expect(agentPlainItems[1]?.showAuthor).toBe(false);
+    expect(agentPlainItems[2]?.showAuthor).toBe(false);
+  });
+
+  it("shows Altus author again after a new user round starts", () => {
+    const items = collapseRepeatedChatAuthors(
+      buildChatItems([
+        createManagedRunStatusMessage("运行环境已经准备好了，我开始生成项目内容"),
+        {
+          type: "user_input",
+          content: "继续帮我完善动效",
+          messageKey: "user-next-round",
+          sessionId: "session-managed-status-dialogue-1",
+          metadata: {
+            messageKey: "user-next-round",
+          },
+        } as AgentMessage,
+        createManagedRunStatusMessage("我继续补齐动效和收尾细节"),
+      ]),
+    );
+
+    const agentPlainItems = items.filter(
+      (item): item is Extract<ChatItem, { kind: "agent_plain" }> =>
+        item.kind === "agent_plain",
+    );
+
+    expect(agentPlainItems).toHaveLength(2);
+    expect(agentPlainItems[0]?.showAuthor).toBe(true);
+    expect(agentPlainItems[1]?.showAuthor).toBe(true);
   });
 });

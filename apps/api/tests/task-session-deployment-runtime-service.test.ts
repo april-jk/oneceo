@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 import {
+  buildTaskSessionDeploymentResponse,
+  resolveTaskSessionEnvironment,
   shouldRecycleRailwayServiceForFailedRedeploy,
   validateTaskSessionDeploymentPublicReadiness,
 } from '../src/services/task-session-deployment-runtime-service';
 import type { RailwayDeploymentPanelData } from '../src/services/railway-deployment-service';
+import { sandboxExecutionEnvironmentDAO, taskSessionRunDAO } from '../src/db/dao';
+import { platformDeploymentAccountService } from '../src/services/platform-deployment-account-service';
 
 function createPanel(overrides: Partial<RailwayDeploymentPanelData> = {}): RailwayDeploymentPanelData {
   return {
@@ -144,4 +148,173 @@ test('shouldRecycleRailwayServiceForFailedRedeploy returns false for healthy rea
   });
 
   assert.equal(result, false);
+});
+
+test('resolveTaskSessionEnvironment prefers sandbox binding over canonical environment lookup', async () => {
+  const getBySessionIdMock = mock.method(
+    sandboxExecutionEnvironmentDAO,
+    'getBySessionId',
+    async (sessionId: string) => {
+      if (sessionId === 'bound-sandbox') {
+        return {
+          sessionId: 'bound-sandbox',
+          metadata: {
+            taskSessionId: 'task-1',
+            deploymentState: {
+              bindingState: 'provider_error',
+            },
+          },
+        } as any;
+      }
+      return null;
+    },
+  );
+  const bindingMock = mock.method(taskSessionRunDAO, 'getSandboxBindingBySession', async () => ({
+    sandboxId: 'bound-sandbox',
+  }) as any);
+
+  try {
+    const result = await resolveTaskSessionEnvironment({
+      session: {
+        id: 'task-1',
+        runtime: {
+          orchestratorSessionId: '',
+        },
+      } as any,
+    });
+
+    assert.equal(result.orchestratorSessionId, 'bound-sandbox');
+    assert.equal(
+      (result.environment?.metadata as Record<string, any>)?.deploymentState?.bindingState,
+      'provider_error',
+    );
+    assert.equal(bindingMock.mock.callCount(), 1);
+    assert.equal(getBySessionIdMock.mock.callCount(), 1);
+  } finally {
+    mock.restoreAll();
+  }
+});
+
+test('resolveTaskSessionEnvironment prefers sandbox binding over runtime environment lookup', async () => {
+  const getBySessionIdMock = mock.method(
+    sandboxExecutionEnvironmentDAO,
+    'getBySessionId',
+    async (sessionId: string) => {
+      if (sessionId === 'runtime-sandbox') {
+        return {
+          sessionId: 'runtime-sandbox',
+          metadata: {
+            taskSessionId: 'task-2',
+            deploymentState: {
+              bindingState: 'uninitialized',
+            },
+          },
+        } as any;
+      }
+      if (sessionId === 'bound-sandbox') {
+        return {
+          sessionId: 'bound-sandbox',
+          metadata: {
+            taskSessionId: 'task-2',
+            deploymentState: {
+              bindingState: 'provider_error',
+            },
+          },
+        } as any;
+      }
+      return null;
+    },
+  );
+  const bindingMock = mock.method(taskSessionRunDAO, 'getSandboxBindingBySession', async () => ({
+    sandboxId: 'bound-sandbox',
+  }) as any);
+
+  try {
+    const result = await resolveTaskSessionEnvironment({
+      session: {
+        id: 'task-2',
+        runtime: {
+          orchestratorSessionId: 'runtime-sandbox',
+        },
+      } as any,
+    });
+
+    assert.equal(result.orchestratorSessionId, 'bound-sandbox');
+    assert.equal(
+      (result.environment?.metadata as Record<string, any>)?.deploymentState?.bindingState,
+      'provider_error',
+    );
+    assert.equal(bindingMock.mock.callCount(), 1);
+    assert.equal(getBySessionIdMock.mock.callCount(), 1);
+  } finally {
+    mock.restoreAll();
+  }
+});
+
+test('buildTaskSessionDeploymentResponse falls back to the latest environment with deployment signal', async () => {
+  const getBySessionIdMock = mock.method(
+    sandboxExecutionEnvironmentDAO,
+    'getBySessionId',
+    async (sessionId: string) => {
+      if (sessionId === 'runtime-sandbox') {
+        return {
+          sessionId: 'runtime-sandbox',
+          metadata: {},
+        } as any;
+      }
+      return null;
+    },
+  );
+  const bindingMock = mock.method(taskSessionRunDAO, 'getSandboxBindingBySession', async () => ({
+    sandboxId: 'runtime-sandbox',
+  }) as any);
+  const listByTaskSessionIdMock = mock.method(
+    sandboxExecutionEnvironmentDAO,
+    'listByTaskSessionId',
+    async () =>
+      [
+        {
+          sessionId: 'runtime-sandbox',
+          metadata: {},
+        },
+        {
+          sessionId: 'older-deployment-sandbox',
+          metadata: {
+            deploymentState: {
+              bindingState: 'provider_error',
+              providerErrorCode: 'deployment_public_unreachable',
+              providerErrorMessage: 'deployment failed',
+              message: 'deployment failed',
+            },
+          },
+        },
+      ] as any,
+  );
+  const projectAccountMock = mock.method(
+    platformDeploymentAccountService,
+    'getProjectAccount',
+    async () => null as any,
+  );
+
+  try {
+    const result = await buildTaskSessionDeploymentResponse({
+      userId: 'user-1',
+      session: {
+        id: 'task-3',
+        runtime: {
+          orchestratorSessionId: 'runtime-sandbox',
+        },
+      } as any,
+    });
+
+    assert.equal(result.bindingState, 'provider_error');
+    assert.equal(result.providerErrorCode, 'deployment_public_unreachable');
+    assert.match(result.providerErrorMessage || '', /deployment failed/);
+    assert.equal(bindingMock.mock.callCount(), 1);
+    assert.equal(listByTaskSessionIdMock.mock.callCount(), 1);
+    assert.equal(projectAccountMock.mock.callCount(), 0);
+    assert.equal(getBySessionIdMock.mock.callCount(), 1);
+  } finally {
+    mock.restoreAll();
+  }
 });

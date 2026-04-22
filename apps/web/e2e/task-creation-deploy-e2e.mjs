@@ -14,6 +14,10 @@ const PROMPT =
 const SESSION_WAIT_TIMEOUT_MS = Number(process.env.ONECEO_SESSION_WAIT_TIMEOUT_MS || 25 * 60 * 1000);
 const DEPLOY_WAIT_TIMEOUT_MS = Number(process.env.ONECEO_DEPLOY_WAIT_TIMEOUT_MS || 20 * 60 * 1000);
 const POLL_INTERVAL_MS = Number(process.env.ONECEO_E2E_POLL_INTERVAL_MS || 5000);
+const PREVIEW_BUTTON_NAME = /显示预览|show preview/i;
+const DEPLOY_TAB_NAME = /^(部署|Deployment)$/i;
+const DEPLOY_NOW_BUTTON_NAME = /^(立即部署|立即发布|发布|publish now|deploy now|publish)$/i;
+const ARTIFACT_DEPLOY_BUTTON_NAME = /^(发布网站|Deploy website)$/i;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -281,12 +285,17 @@ async function main() {
       })
     );
 
-    await page.getByRole('button', { name: '显示预览' }).click();
-    await page.getByRole('button', { name: '部署' }).click();
-    await page.waitForTimeout(1500);
-
-    const deployButton = page.getByRole('button', { name: '立即部署' });
-    await deployButton.click();
+    await page.getByRole('button', { name: PREVIEW_BUTTON_NAME }).click();
+    const previewPanel = page.locator('aside').first();
+    const previewDeploymentTab = previewPanel.getByRole('button', { name: DEPLOY_TAB_NAME });
+    if (await previewDeploymentTab.count()) {
+      await previewDeploymentTab.click();
+      await page.waitForTimeout(1500);
+      const deployButton = previewPanel.getByRole('button', { name: DEPLOY_NOW_BUTTON_NAME });
+      await deployButton.click();
+    } else {
+      await page.getByRole('button', { name: ARTIFACT_DEPLOY_BUTTON_NAME }).first().click();
+    }
     console.log('[deploy] trigger clicked');
 
     const deploymentInfo = await waitForDeploymentSuccess(sessionId, sessionCookieHeader);

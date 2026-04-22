@@ -107,3 +107,32 @@
    - 状态：部分完成（2026-04-12）
    - 已完成：后端已支持“按用户创建永久 TURN key + 按次签发临时 ICE 凭据”；`/debug/start` 与 `debug_open_page` 已接入。
    - 待完成：当前 Cloudflare 管理 token 实测返回 `Authorization Failure`，需修正 token 的 Account 范围/Calls 权限后完成实机验收。
+
+## 2026-04-22
+
+### 文档
+
+- 管理文档：
+  - [20260422_登录接口网络安全测试TODO_[尚未采用].md](/Users/watson/codingProj/oneceo/docs/网络安全/20260422_登录接口网络安全测试TODO_[尚未采用].md)
+
+### TODO 列表
+
+1. 登录接口越权与会话混淆安全测试
+   - 现状：用户态认证已经切换到正式 `app_session_v2_id`，同时兼容 legacy cookie 读取与清理。
+   - 后续需要补齐：重复 cookie、旧 `Secure app_session_id`、session 重放、legacy 绑定串用户等高风险边界测试。
+
+2. 登录接口抗滥用与爆破测试
+   - 现状：静态阅读中未见登录接口显式 `rate limit / lockout / captcha / 异常登录告警`。
+   - 后续需要补齐：单 IP、单邮箱、密码喷洒、撞库、高并发滥用与告警链路测试。
+
+3. 登录接口跨站与浏览器边界测试
+   - 现状：当前依赖 `SameSite`、CORS 白名单与 cookie 策略保证浏览器边界安全。
+   - 后续需要补齐：跨站 `fetch/form`、`Origin:null`、缓存复用、CSRF 副作用与调试头泄露测试。
+
+4. 登录接口输入与侧信道测试
+   - 现状：当前失败文案已统一为“邮箱或密码错误”，密码校验使用 `scrypt + timingSafeEqual`。
+   - 后续需要补齐：账户枚举、响应时间差、畸形请求、超长 body、日志污染与 Unicode 边界测试。
+
+5. 登录接口审计与配置安全测试
+   - 现状：当前认证接口已加 `no-store` 与 `Vary: Cookie, Origin`，但安全事件审计与部署配置风险仍未形成专项验收。
+   - 后续需要补齐：日志字段、异常告警、生产/开发配置差异、依赖与环境变量安全检查。

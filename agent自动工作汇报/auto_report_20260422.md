@@ -18,3 +18,4 @@
 - 已通过 Playwright 最小复现实验坐实根因：只要浏览器里残留旧的 `Secure app_session_id`，HTTP 页面上的登录接口即使返回新的 `Set-Cookie`，浏览器也不会用非 `Secure` 新值覆盖它，后续 `/api/auth/session` 会持续表现为 `authenticated:false`。
 - 已完成用户态会话 cookie 轮换：当前正式 cookie 名称切换为 `app_session_v2_id` / `app_session_v2_state`，服务端继续兼容读取旧的 `app_session_id` / `app_session_state`，登出与匿名态清理也会同步覆盖新旧两套名字，避免旧浏览器污染继续拦截 HTTP 登录。
 - 已新增浏览器级回归测试 `auth-cookie-rotation.playwright.spec.ts`，固定覆盖“预置旧 `Secure app_session_id` 后仍能成功登录并进入 `/home`”。
+- 已新增 `docs/网络安全/` 文档目录，并补齐“登录接口网络安全测试 TODO”初稿，覆盖越权、会话混淆、爆破/撞库、跨站边界、枚举侧信道、审计与部署配置等测试项；同步将摘要待办写入 `todos.md`，待审核后执行。

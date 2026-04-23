@@ -6650,6 +6650,7 @@ function ManagedToolCard({
     previewText ||
     i18n.t("homeWorkspace.generatingCodeSnippet");
   const writeFilePreviewRef = useRef<HTMLDivElement | null>(null);
+  const todoItems = readManagedTodoItems(item.metadata);
 
   useEffect(() => {
     if (!isWriteFileExpanded) return;
@@ -6657,6 +6658,67 @@ function ManagedToolCard({
     if (!node) return;
     node.scrollTop = node.scrollHeight;
   }, [isWriteFileExpanded, writeFilePreview]);
+
+  if (item.toolName === "todowrite" && todoItems.length > 0) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.18 }}
+        className="w-full"
+      >
+        <button
+          type="button"
+          onClick={() => {
+            if (onOpenReplay && item.runId && item.toolCallId) {
+              onOpenReplay(item.runId, item.toolCallId);
+            }
+          }}
+          className={`w-full max-w-[min(100%,42rem)] rounded-2xl border px-4 py-3 text-left transition ${chipToneClass}`}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <span
+                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full shadow-sm ${statusUi.iconClass}`}
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+              </span>
+              <div className="min-w-0">
+                <div className="text-[12px] font-medium leading-5">
+                  {displayName}
+                </div>
+                <div className="truncate text-[11px] leading-5 opacity-75">
+                  {summaryText || i18n.t("homeWorkspace.todo")}
+                </div>
+              </div>
+            </div>
+            <span
+              className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusUi.badgeClass}`}
+            >
+              {statusLabel}
+            </span>
+          </div>
+          <div className="mt-3 space-y-2">
+            {todoItems.map((todo, index) => (
+              <div
+                key={`${todo.content}-${index}`}
+                className="flex items-center justify-between gap-3"
+              >
+                <div className="min-w-0 text-sm text-foreground">
+                  <span className="block truncate">{todo.content}</span>
+                </div>
+                <span
+                  className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] ${getTodoStatusTone(todo.status)}`}
+                >
+                  {getTodoStatusLabel(todo.status)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </button>
+      </motion.div>
+    );
+  }
 
   return (
     <motion.div
@@ -7248,6 +7310,8 @@ function getManagedToolDisplayName(toolName: string) {
   switch (toolName) {
     case "shell_execute":
       return i18n.t("homeWorkspace.commandExecution");
+    case "todowrite":
+      return i18n.t("homeWorkspace.todo");
     case "write_file":
       return i18n.t("homeWorkspace.writeFile");
     case "read_file":
@@ -7313,6 +7377,57 @@ function readManagedWriteFileProgress(metadataRaw: unknown) {
   };
 }
 
+function readManagedTodoItems(metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const args = toRecord(metadata.arguments);
+  const output = parseManagedToolOutputPreview(metadata.outputPreview);
+  const normalize = (raw: unknown) =>
+    Array.isArray(raw)
+      ? raw
+          .map((item) => {
+            const record = toRecord(item);
+            const content = asText(record.content);
+            const status = asText(record.status);
+            const activeForm = asText(record.activeForm);
+            if (!content || !status) return null;
+            return {
+              content,
+              status,
+              ...(activeForm ? { activeForm } : {}),
+            };
+          })
+          .filter(
+            (
+              item,
+            ): item is {
+              content: string;
+              status: string;
+              activeForm?: string;
+            } => Boolean(item),
+          )
+      : [];
+  const argsTodos = normalize(args.todos);
+  return argsTodos.length > 0 ? argsTodos : normalize(output.todos);
+}
+
+function getTodoStatusLabel(status: string) {
+  return status === "completed"
+    ? i18n.t("homeWorkspace.completed")
+    : status === "in_progress"
+      ? i18n.t("homeWorkspace.inProgress")
+      : i18n.t("homeWorkspace.pending");
+}
+
+function getTodoStatusTone(status: string) {
+  if (status === "completed") {
+    return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
+  }
+  if (status === "in_progress") {
+    return "border-[var(--brand-border)] bg-[var(--brand-soft)] text-[var(--brand-soft-foreground)]";
+  }
+  return "border-border bg-muted/50 text-muted-foreground";
+}
+
 function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
   const args = toRecord(metadata.arguments);
@@ -7346,6 +7461,20 @@ function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
     const query = asText(args.query);
     const target = asText(args.path);
     return [query, target ? `@ ${target}` : ""].filter(Boolean).join(" ");
+  }
+  if (toolName === "todowrite") {
+    const todos = readManagedTodoItems(metadataRaw);
+    const activeTodo = todos.find((item) => item.status === "in_progress");
+    if (activeTodo) {
+      return activeTodo.activeForm || activeTodo.content;
+    }
+    if (todos.length > 0) {
+      return i18n.t("homeWorkspace.tasksProgress", {
+        completed: todos.filter((item) => item.status === "completed").length,
+        total: todos.length,
+      });
+    }
+    return i18n.t("homeWorkspace.todo");
   }
   if (toolName === "ask_user") {
     return (
@@ -7443,6 +7572,15 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
       asText(args.query) ||
       i18n.t("homeWorkspace.returnedSearchResults")
     );
+  }
+  if (toolName === "todowrite") {
+    const todos = readManagedTodoItems(metadataRaw);
+    if (todos.length === 0) {
+      return i18n.t("homeWorkspace.todo");
+    }
+    return todos
+      .map((item) => `[${getTodoStatusLabel(item.status)}] ${item.content}`)
+      .join("\n");
   }
 
   if (isManagedDeploymentTool(toolName)) {
@@ -7542,6 +7680,15 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
       args.path || output.path,
     );
     pushLine(i18n.t("homeWorkspace.resultPreviewLabel"), output.output);
+  } else if (toolName === "todowrite") {
+    const todos = readManagedTodoItems(metadataRaw);
+    pushLine(
+      i18n.t("homeWorkspace.summaryLabel"),
+      formatManagedToolSummary(toolName, metadata),
+    );
+    todos.forEach((todo, index) => {
+      lines.push(`${index + 1}. [${getTodoStatusLabel(todo.status)}] ${todo.content}`);
+    });
   } else if (isManagedDeploymentTool(toolName)) {
     if (projectedView.userDetail) {
       return projectedView.userDetail;

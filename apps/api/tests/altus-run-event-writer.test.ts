@@ -167,3 +167,63 @@ test('appendRunEvent does not project starting run_status into conversation time
   assert.equal(redisCalls[0]?.eventType, 'run_status');
   assert.equal(publishMock.mock.callCount(), 1);
 });
+
+test('appendRunEvent does not project ask_user tool events into conversation timeline', async () => {
+  mock.method(taskSessionRunDAO, 'appendRunEvent', async () => ({
+    id: 'run-event-5',
+    sequence: 11,
+    createdAt: new Date('2026-04-23T09:00:00.000Z'),
+  }) as any);
+  const addMessageMock = mock.method(taskCreationSessionDAO, 'addMessage', async () => null as any);
+  const publishMock = mock.method(altusManagedStreamService, 'publish', () => {});
+  const writer = new AltusRunEventWriter({
+    appendRunEvent: async () => {},
+  } as any);
+
+  await writer.appendRunEvent('run-5', 'session-5', 'user-5', 'tool_call_started', {
+    toolName: 'ask_user',
+    toolCallId: 'tool-ask-1',
+    content: '调用工具 ask_user',
+    arguments: {
+      question: '你想要网页还是脚本？',
+    },
+  });
+
+  assert.equal(addMessageMock.mock.callCount(), 0);
+  assert.equal(publishMock.mock.callCount(), 1);
+});
+
+test('appendRunEvent only projects todowrite after completion', async () => {
+  mock.method(taskSessionRunDAO, 'appendRunEvent', async () => ({
+    id: 'run-event-6',
+    sequence: 12,
+    createdAt: new Date('2026-04-23T09:05:00.000Z'),
+  }) as any);
+  const addMessageMock = mock.method(taskCreationSessionDAO, 'addMessage', async (input: any) => input);
+  mock.method(altusManagedStreamService, 'publish', () => {});
+  const writer = new AltusRunEventWriter({
+    appendRunEvent: async () => {},
+  } as any);
+
+  await writer.appendRunEvent('run-6', 'session-6', 'user-6', 'tool_call_started', {
+    toolName: 'todowrite',
+    toolCallId: 'tool-todo-1',
+    content: '调用工具 todowrite',
+    arguments: {
+      todos: [{ content: '修改后端主链', status: 'in_progress' }],
+    },
+  });
+  await writer.appendRunEvent('run-6', 'session-6', 'user-6', 'tool_call_completed', {
+    toolName: 'todowrite',
+    toolCallId: 'tool-todo-1',
+    content: '工具 todowrite 已完成',
+    arguments: {
+      todos: [{ content: '修改后端主链', status: 'in_progress' }],
+    },
+  });
+
+  assert.equal(addMessageMock.mock.callCount(), 1);
+  const [projection] = addMessageMock.mock.calls[0]?.arguments as any[];
+  assert.equal(projection.metadata?.toolName, 'todowrite');
+  assert.equal(projection.metadata?.eventType, 'tool_call_completed');
+});

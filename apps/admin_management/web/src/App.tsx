@@ -76,9 +76,12 @@ const ConnectorGuideManagementSection = lazy(() =>
 const OsacReleaseManagementSection = lazy(() =>
   import('./components/OsacReleaseManagementSection').then((module) => ({ default: module.OsacReleaseManagementSection }))
 );
+const BillingManagementSection = lazy(() =>
+  import('./components/BillingManagementSection').then((module) => ({ default: module.BillingManagementSection }))
+);
 
-type SectionKey = 'kvm' | 'deployment' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit';
-type NavGroupKey = 'runtime' | 'platform';
+type SectionKey = 'kvm' | 'deployment' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit' | 'billing';
+type NavGroupKey = 'runtime' | 'platform' | 'billing';
 type ToastTone = 'error' | 'success' | 'warning' | 'info';
 type SandboxDetailTab = 'overview' | 'files' | 'processes' | 'connectivity' | 'archive' | 'terminal';
 type SandboxProcessToolView = 'processes' | 'ports';
@@ -308,6 +311,7 @@ function applyAdminTheme(themeKey: AdminThemeKey, mode: AdminThemeMode, systemTo
 const NAV_GROUPS: Array<{ key: NavGroupKey; label: string; description: string }> = [
   { key: 'runtime', label: '运行管理', description: '运行状态与操作记录' },
   { key: 'platform', label: '平台配置', description: '能力、策略与发布配置' },
+  { key: 'billing', label: '计费管理', description: '积分、定价与消费统计' },
 ];
 
 const NAV_ITEMS: Array<{
@@ -408,6 +412,15 @@ const NAV_ITEMS: Array<{
     tag: 'OSA',
     description: '管理上传、校验、发布和回滚。',
     signal: '工件发布',
+  },
+  {
+    key: 'billing',
+    group: 'billing',
+    label: '计费管理',
+    subtitle: '积分与定价配置',
+    tag: 'BIL',
+    description: '查看平台积分消耗、调整用户余额、配置模型定价。',
+    signal: '消费统计',
   },
 ];
 
@@ -3237,7 +3250,8 @@ function isSectionKey(value: string | null): value is SectionKey {
     || value === 'connectorGuide'
     || value === 'osacRelease'
     || value === 'sandbox'
-    || value === 'audit';
+    || value === 'audit'
+    || value === 'billing';
 }
 
 function cloneDeploymentManagementViewState(
@@ -11689,6 +11703,13 @@ export default function App() {
           persistedState={osacReleaseManagementViewState}
           onStateChange={setOsacReleaseManagementViewState}
         />
+      );
+    }
+    if (activeSection === 'billing') {
+      return (
+        <Suspense fallback={<div className="p-6">加载中...</div>}>
+          <BillingManagementSection />
+        </Suspense>
       );
     }
     if (activeSection === 'sandbox') return renderSandboxSection();

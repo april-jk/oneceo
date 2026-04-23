@@ -599,6 +599,10 @@ async function resolveAttachedConnectorBootstrap(
           !Array.isArray(binding.sessionConfigJson)
             ? (binding.sessionConfigJson as Record<string, unknown>)
             : null,
+        runtimeContext: {
+          taskSessionId,
+          userId,
+        },
       });
       const serverName = binding.serverName || connectorServerName(connectorKey, taskSessionId);
       mcpEntries[serverName] = runtimeConfig;

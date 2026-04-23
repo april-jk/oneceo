@@ -5,6 +5,7 @@ import {
   normalizeEditableProfileId,
   resolveConnectorOauthCallbackContext,
   SLACK_FIXED_CALLBACK_PATH,
+  VERCEL_FIXED_CALLBACK_PATH,
   shouldUseConnectorLevelOauth,
   shouldUseUnifiedConnectorCard,
 } from "@/components/ConnectorCenterPanel";
@@ -28,6 +29,7 @@ describe("connector center panel profile id normalization", () => {
     expect(shouldUseUnifiedConnectorCard("github")).toBe(true);
     expect(shouldUseUnifiedConnectorCard("slack")).toBe(true);
     expect(shouldUseUnifiedConnectorCard("notion")).toBe(true);
+    expect(shouldUseUnifiedConnectorCard("vercel")).toBe(true);
     expect(shouldUseUnifiedConnectorCard("supabase")).toBe(false);
   });
 
@@ -35,11 +37,24 @@ describe("connector center panel profile id normalization", () => {
     expect(SLACK_FIXED_CALLBACK_PATH).toBe("/slack/callback");
   });
 
+  it("uses the fixed Vercel callback path", () => {
+    expect(VERCEL_FIXED_CALLBACK_PATH).toBe("/vercel/callback");
+  });
+
   it("recognizes Slack fixed callback pages as connector OAuth callbacks", () => {
     const params = new URLSearchParams("code=oauth-code&state=oauth-state");
     const callback = resolveConnectorOauthCallbackContext("http://localhost/slack/callback", params);
 
     expect(callback.connector).toBe("slack");
+    expect(callback.isFixedCallback).toBe(true);
+    expect(callback.shouldHandle).toBe(true);
+  });
+
+  it("recognizes Vercel fixed callback pages as connector OAuth callbacks", () => {
+    const params = new URLSearchParams("code=oauth-code&state=oauth-state");
+    const callback = resolveConnectorOauthCallbackContext("http://localhost/vercel/callback", params);
+
+    expect(callback.connector).toBe("vercel");
     expect(callback.isFixedCallback).toBe(true);
     expect(callback.shouldHandle).toBe(true);
   });
@@ -54,5 +69,13 @@ describe("connector center panel profile id normalization", () => {
 
   it("redirects Slack callback pages to home when no session is restored", () => {
     expect(cleanupConnectorQuery("/slack/callback", "?code=oauth-code&state=oauth-state")).toBe("/home");
+  });
+
+  it("redirects Vercel callback pages back to the target session after cleanup", () => {
+    expect(
+      cleanupConnectorQuery("/vercel/callback", "?code=oauth-code&state=oauth-state", {
+        targetSessionId: "session-vercel-1",
+      })
+    ).toBe("/session/session-vercel-1");
   });
 });

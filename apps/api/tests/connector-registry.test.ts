@@ -4,6 +4,7 @@ import {
   connectorRegistry,
   type ConnectorAccountMaterial,
 } from '../src/services/connector-registry';
+import { parseInternalConnectorRuntimeToken } from '../src/services/internal-mcp-auth-service';
 
 const envBackup = {
   GITHUB_CONNECTOR_CLIENT_ID: process.env.GITHUB_CONNECTOR_CLIENT_ID,
@@ -21,8 +22,12 @@ const envBackup = {
   FRONTEND_URL: process.env.FRONTEND_URL,
   VERCEL_MCP_REMOTE_URL: process.env.VERCEL_MCP_REMOTE_URL,
   VERCEL_MCP_REMOTE_HEADERS_JSON: process.env.VERCEL_MCP_REMOTE_HEADERS_JSON,
+  VERCEL_CONNECTOR_REDIRECT_URI: process.env.VERCEL_CONNECTOR_REDIRECT_URI,
+  VERCEL_INTERNAL_MCP_URL: process.env.VERCEL_INTERNAL_MCP_URL,
   VERCEL_CONNECTOR_CLIENT_ID: process.env.VERCEL_CONNECTOR_CLIENT_ID,
   VERCEL_CONNECTOR_CLIENT_SECRET: process.env.VERCEL_CONNECTOR_CLIENT_SECRET,
+  ONECEO_INTERNAL_TOKEN: process.env.ONECEO_INTERNAL_TOKEN,
+  CONNECTOR_SECRET_KEY: process.env.CONNECTOR_SECRET_KEY,
   ONECEO_PROXY_ENABLED: process.env.ONECEO_PROXY_ENABLED,
   HTTP_PROXY: process.env.HTTP_PROXY,
   HTTPS_PROXY: process.env.HTTPS_PROXY,
@@ -43,10 +48,12 @@ beforeEach(() => {
   process.env.NOTION_CONNECTOR_CLIENT_SECRET = 'notion-secret';
   process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
   process.env.NOTION_CONNECTOR_REDIRECT_URI = '/notion/callback';
-  process.env.VERCEL_MCP_REMOTE_URL = 'https://vercel-mcp.example.com';
-  process.env.VERCEL_MCP_REMOTE_HEADERS_JSON = '{"Authorization":"Bearer ${token}","X-Test":"1"}';
+  process.env.VERCEL_CONNECTOR_REDIRECT_URI = '/vercel/callback';
+  process.env.VERCEL_INTERNAL_MCP_URL = 'https://dev.oneceo.ai/api/internal/connectors/vercel/mcp';
   process.env.VERCEL_CONNECTOR_CLIENT_ID = 'vercel-client';
   process.env.VERCEL_CONNECTOR_CLIENT_SECRET = 'vercel-secret';
+  process.env.ONECEO_INTERNAL_TOKEN = 'internal-token';
+  process.env.CONNECTOR_SECRET_KEY = 'unit-test-secret';
   process.env.ONECEO_PROXY_ENABLED = 'true';
   process.env.HTTP_PROXY = 'http://127.0.0.1:7890';
   process.env.HTTPS_PROXY = 'http://127.0.0.1:7890';
@@ -68,6 +75,7 @@ function buildAccount(
   secret: ConnectorAccountMaterial['secret']
 ): ConnectorAccountMaterial {
   return {
+    profileId: `${connectorKey}-profile`,
     connectorKey,
     authMode: connectorKey === 'postgres' ? 'dsn' : 'oauth',
     authStatus: 'authorized',
@@ -93,6 +101,10 @@ test('connector registry exposes built-in connectors with availability metadata'
   assert.equal(notionProvider?.redirectUri, 'https://dev.oneceo.ai/notion/callback');
   assert.equal(catalog.find((item) => item.key === 'vercel')?.available, true);
   assert.equal(catalog.find((item) => item.key === 'vercel')?.oauth?.supported, true);
+  assert.equal(
+    catalog.find((item) => item.key === 'vercel')?.configFields.find((field) => field.key === 'profileName')?.required,
+    false
+  );
   assert.equal(catalog.find((item) => item.key === 'postgres')?.visibleInMenu, false);
 });
 
@@ -139,11 +151,23 @@ test('connector registry materializes local and remote MCP configs', () => {
       ...buildAccount('vercel', { accessToken: 'vercel-token' }),
       configJson: { teamId: 'team_123' },
     },
+    runtimeContext: {
+      taskSessionId: 'task-1',
+      userId: 'user-1',
+    },
   });
   assert.equal(vercelConfig.type, 'remote');
-  assert.equal(vercelConfig.headers?.Authorization, 'Bearer vercel-token');
-  assert.equal(vercelConfig.headers?.['X-Test'], '1');
-  assert.equal(new URL(vercelConfig.url || '').searchParams.get('teamId'), 'team_123');
+  assert.equal(vercelConfig.transport, 'streamable_http');
+  assert.equal(vercelConfig.url, 'https://dev.oneceo.ai/api/internal/connectors/vercel/mcp');
+  assert.equal(vercelConfig.headers?.['x-oneceo-internal-token'], 'internal-token');
+  assert.ok(vercelConfig.headers?.['x-oneceo-connector-runtime-auth']);
+  const runtimeContext = parseInternalConnectorRuntimeToken(
+    String(vercelConfig.headers?.['x-oneceo-connector-runtime-auth'] || ''),
+    'vercel'
+  );
+  assert.equal(runtimeContext.taskSessionId, 'task-1');
+  assert.equal(runtimeContext.userId, 'user-1');
+  assert.equal(runtimeContext.profileId, 'vercel-profile');
 
   const supabaseConfig = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'supabase',
@@ -221,12 +245,12 @@ test('notion catalog is unavailable when remote url is not an sse endpoint', () 
   assert.match(String(notion?.availabilityReason || ''), /SSE.*\/sse/);
 });
 
-test('connector registry falls back to official vercel mcp url when remote url env is missing', () => {
-  delete process.env.VERCEL_MCP_REMOTE_URL;
+test('connector registry resolves vercel internal mcp url from FRONTEND_URL when explicit url is missing', () => {
+  delete process.env.VERCEL_INTERNAL_MCP_URL;
   const catalog = connectorRegistry.listCatalog();
   const vercel = catalog.find((item) => item.key === 'vercel');
   assert.equal(vercel?.available, true);
-  assert.equal(vercel?.runtime.urlDefault, 'https://mcp.vercel.com');
+  assert.equal(vercel?.runtime.urlDefault, 'https://dev.oneceo.ai/api/internal/connectors/vercel/mcp');
   assert.equal(vercel?.availabilityReason, undefined);
 
   const runtime = connectorRegistry.materializeRuntimeConfig({
@@ -235,8 +259,19 @@ test('connector registry falls back to official vercel mcp url when remote url e
       ...buildAccount('vercel', { accessToken: 'vercel-token' }),
       configJson: { teamId: 'team_fallback' },
     },
+    runtimeContext: {
+      taskSessionId: 'task-fallback',
+      userId: 'user-fallback',
+    },
   });
   assert.equal(runtime.type, 'remote');
-  assert.equal(new URL(runtime.url || '').origin, 'https://mcp.vercel.com');
-  assert.equal(new URL(runtime.url || '').searchParams.get('teamId'), 'team_fallback');
+  assert.equal(runtime.transport, 'streamable_http');
+  assert.equal(runtime.url, 'https://dev.oneceo.ai/api/internal/connectors/vercel/mcp');
+});
+
+test('vercel catalog is unavailable when internal token is missing', () => {
+  delete process.env.ONECEO_INTERNAL_TOKEN;
+  const vercel = connectorRegistry.listCatalog().find((item) => item.key === 'vercel');
+  assert.equal(vercel?.available, false);
+  assert.match(String(vercel?.availabilityReason || ''), /ONECEO_INTERNAL_TOKEN/);
 });

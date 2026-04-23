@@ -232,18 +232,20 @@ function buildSecretPayload(
     return dsn ? { dsn } : null;
   }
   const accessToken = asText(credentials.accessToken) || asText(current.accessToken);
-  if (!accessToken) return null;
+  const refreshToken = asText(credentials.refreshToken) || asText(current.refreshToken);
+  if (!accessToken && !refreshToken) return null;
   return {
-    accessToken,
-    refreshToken: asText(credentials.refreshToken) || asText(current.refreshToken) || undefined,
+    accessToken: accessToken || undefined,
+    refreshToken: refreshToken || undefined,
     tokenType: asText(credentials.tokenType) || asText(current.tokenType) || undefined,
     scope: asText(credentials.scope) || asText(current.scope) || undefined,
+    expiresAt: asText(credentials.expiresAt) || asText(current.expiresAt) || undefined,
   };
 }
 
 async function resolveVercelProfile(accessToken: string): Promise<{ displayName?: string }> {
-  const payload = await fetchJson('https://api.vercel.com/www/user', {
-    method: 'GET',
+  const payload = await fetchJson('https://api.vercel.com/login/oauth/userinfo', {
+    method: 'POST',
     headers: {
       Accept: 'application/json',
       Authorization: `Bearer ${accessToken}`,
@@ -256,8 +258,75 @@ async function resolveVercelProfile(accessToken: string): Promise<{ displayName?
       : payload;
   return {
     displayName:
-      asText(user.username) || asText(user.name) || asText(user.email) || undefined,
+      asText(user.preferred_username) ||
+      asText(user.username) ||
+      asText(user.name) ||
+      asText(user.email) ||
+      asText(user.sub) ||
+      undefined,
   };
+}
+
+function calculateSecretExpiresAt(tokenPayload: Record<string, unknown>): string | undefined {
+  const expiresAt = asText(tokenPayload.expires_at);
+  if (expiresAt) return expiresAt;
+  const expiresIn = Number(tokenPayload.expires_in);
+  if (Number.isFinite(expiresIn) && expiresIn > 0) {
+    return new Date(Date.now() + expiresIn * 1000).toISOString();
+  }
+  return undefined;
+}
+
+async function revokeVercelOauthGrant(token: string): Promise<void> {
+  const provider = connectorRegistry.getOauthProvider('vercel');
+  if (!provider) {
+    throw new Error('Vercel OAuth provider 未配置');
+  }
+
+  let response: Response;
+  try {
+    response = await fetch('https://api.vercel.com/login/oauth/token/revoke', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Basic ${Buffer.from(
+          `${provider.clientId}:${provider.clientSecret}`,
+          'utf8'
+        ).toString('base64')}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'oneceo-connectors',
+      },
+      body: new URLSearchParams({
+        token,
+      }).toString(),
+      signal: AbortSignal.timeout(3000),
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'TimeoutError') {
+      throw new Error('Vercel 撤销授权超时，请稍后重试');
+    }
+    throw error;
+  }
+
+  if (response.ok || response.status === 404) {
+    return;
+  }
+
+  const text = await response.text();
+  let payload: Record<string, unknown> = {};
+  if (text) {
+    try {
+      payload = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      payload = { raw: text };
+    }
+  }
+  throw new Error(
+    asText(payload.error_description) ||
+      asText(payload.error) ||
+      asText(payload.message) ||
+      `Vercel revoke grant failed: ${response.status}`
+  );
 }
 
 function sanitizeConfig(
@@ -292,7 +361,7 @@ function resolveAuthStatus(
 ): ConnectorAuthStatus {
   if (!catalogItem.available && !catalogItem.deprecated) return 'unavailable';
   if (explicitStatus === 'error') return 'error';
-  if (secret?.accessToken || secret?.dsn) return 'authorized';
+  if (secret?.accessToken || secret?.refreshToken || secret?.dsn) return 'authorized';
   if (catalogItem.oauth?.supported) return 'needs_auth';
   return 'not_configured';
 }
@@ -609,7 +678,7 @@ function resolveOauthRedirectUri(
   provider: { redirectUri?: string },
   inputRedirectUri: string
 ): string {
-  if (connectorKey === 'notion' || connectorKey === 'slack') {
+  if (connectorKey === 'notion' || connectorKey === 'slack' || connectorKey === 'vercel') {
     const fixedRedirectUri = asText(provider.redirectUri);
     if (!fixedRedirectUri) {
       throw new Error(`${connectorKey} OAuth 固定回调地址未配置`);
@@ -1066,15 +1135,22 @@ export class UserConnectorService {
     }
     let remoteGrantRevoked = true;
     let remoteGrantError: string | null = null;
-    if (existing.connectorKey === 'github' && existing.secretCiphertext) {
+    if ((existing.connectorKey === 'github' || existing.connectorKey === 'vercel') && existing.secretCiphertext) {
       const secret = connectorSecretService.decryptJson<ConnectorAccountSecret>(
         existing.secretCiphertext,
         existing.connectorKey as ConnectorKey
       );
-      const accessToken = asText(secret?.accessToken);
-      if (accessToken) {
+      const revokeToken =
+        existing.connectorKey === 'vercel'
+          ? asText(secret?.accessToken) || asText(secret?.refreshToken)
+          : asText(secret?.accessToken);
+      if (revokeToken) {
         try {
-          await revokeGithubOauthGrant(accessToken);
+          if (existing.connectorKey === 'github') {
+            await revokeGithubOauthGrant(revokeToken);
+          } else {
+            await revokeVercelOauthGrant(revokeToken);
+          }
         } catch (error) {
           remoteGrantRevoked = false;
           remoteGrantError = error instanceof Error ? error.message : String(error);
@@ -1298,6 +1374,7 @@ export class UserConnectorService {
               refreshToken: asText(tokenPayload.refresh_token) || undefined,
               tokenType: asText(tokenPayload.token_type) || undefined,
               scope: asText(tokenPayload.scope) || undefined,
+              expiresAt: calculateSecretExpiresAt(tokenPayload),
             };
       accessToken = asText(secret.accessToken);
       if (!accessToken) {

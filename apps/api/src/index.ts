@@ -20,6 +20,7 @@ import internalAdminAuthRoutes from './routes/internal-admin-auth-routes';
 import internalAdminAppUserRoutes from './routes/internal-admin-app-user-routes';
 import internalAdminDeploymentRoutes from './routes/internal-admin-deployment-routes';
 import internalTaskCreationRoutes from './routes/internal-task-creation-routes';
+import internalVercelMcpRoutes from './routes/internal-vercel-mcp-routes';
 import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
 import { closeDatabaseConnection, testDatabaseConnection } from './config/database';
 import { getPublicErrorMessage } from './utils/error-response';
@@ -170,6 +171,7 @@ app.use('/api/internal', internalAdminAuthRoutes);
 app.use('/api/internal', internalAdminAppUserRoutes);
 app.use('/api/internal', internalAdminDeploymentRoutes);
 app.use('/api/internal', internalTaskCreationRoutes);
+app.use('/api/internal', internalVercelMcpRoutes);
 
 // 任务相关 API
 app.get('/api/tasks', (req, res) => {

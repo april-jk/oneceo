@@ -434,12 +434,17 @@ export class SessionConnectorService {
   private buildProviderTransport(
     connectorKey: ConnectorKey,
     profileMaterial: NonNullable<Awaited<ReturnType<typeof userConnectorService.getProfileMaterial>>>,
-    sessionConfig: Record<string, unknown> | null
+    sessionConfig: Record<string, unknown> | null,
+    runtimeContext?: {
+      taskSessionId?: string;
+      userId?: string;
+    }
   ) {
     const runtimeConfig = connectorRegistry.materializeRuntimeConfig({
       connectorKey,
       account: profileMaterial,
       sessionConfig,
+      runtimeContext,
     });
     if (runtimeConfig.type === 'local') {
       return {
@@ -800,7 +805,15 @@ export class SessionConnectorService {
     const serverName = serverNameFor(connectorKey, taskSessionId);
     const providerId = providerIdFor(taskSessionId, connectorKey, profileId);
     const runtimeEnvVersion = Number(existingBinding?.runtimeEnvVersion || 0) + 1;
-    const providerConfig = this.buildProviderTransport(connectorKey, profileMaterial, normalizedSessionConfig);
+    const providerConfig = this.buildProviderTransport(
+      connectorKey,
+      profileMaterial,
+      normalizedSessionConfig,
+      {
+        taskSessionId,
+        userId,
+      }
+    );
     if (connectorKey === 'supabase') {
       const runtimeEnv =
         providerConfig.transport && typeof providerConfig.transport === 'object' && 'env' in providerConfig.transport

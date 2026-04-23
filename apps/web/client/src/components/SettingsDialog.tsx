@@ -26,6 +26,7 @@ import { normalizeLanguage } from "@/i18n";
 import {
   ChevronLeft,
   Copy,
+  Diamond,
   KeyRound,
   LogOut,
   Mail,
@@ -41,6 +42,7 @@ import {
 } from "lucide-react";
 import { ConnectorCenterPanel } from "@/components/ConnectorCenterPanel";
 import { UserSkillSettingsPanel } from "@/components/UserSkillSettingsPanel";
+import { BillingSettingsPanel } from "@/components/BillingSettingsPanel";
 import {
   getCodexRuntimeConfig,
   updateCodexRuntimeConfig,
@@ -85,6 +87,7 @@ const SETTINGS_TABS: SettingsTab[] = [
   "settings",
   "skills",
   "connectors",
+  "billing",
 ];
 const DEFAULT_CODEX_BASE_URL = "https://llmapi.oneceo.ai";
 const DEFAULT_CODEX_MODEL = "gpt-5.3-codex";
@@ -663,6 +666,15 @@ export function SettingsPanel({
                     <span className="truncate">
                       {t("settings.connectorsTab")}
                     </span>
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="billing"
+                    className="flex px-2 py-2.5 items-center text-[14px] leading-5 text-foreground max-md:whitespace-nowrap md:h-9 md:gap-2 md:self-stretch md:px-4 md:rounded-lg hover:bg-muted/60 data-[state=active]:bg-muted/60 data-[state=active]:font-medium max-md:border-b-2 max-md:border-foreground"
+                  >
+                    <span className="hidden md:block text-muted-foreground data-[state=active]:text-foreground">
+                      <Diamond className="h-4 w-4" />
+                    </span>
+                    <span className="truncate">积分与消费</span>
                   </TabsTrigger>
                 </div>
               </TabsList>
@@ -1582,6 +1594,10 @@ export function SettingsPanel({
                   targetSessionId={connectorTargetSessionId}
                   highlightedConnector={highlightedConnector}
                 />
+              </TabsContent>
+
+              <TabsContent value="billing" className="mt-0">
+                <BillingSettingsPanel />
               </TabsContent>
             </div>
           </div>

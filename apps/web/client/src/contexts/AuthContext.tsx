@@ -13,9 +13,17 @@ import {
 
 type AuthStatus = "loading" | "authenticated" | "anonymous";
 
+export type UserCredits = {
+  balance: number;
+  totalEarned: number;
+  totalConsumed: number;
+};
+
 type AuthContextValue = {
   user: AppAuthUser | null;
   status: AuthStatus;
+  credits: UserCredits | null;
+  refreshCredits: () => Promise<void>;
   login: (input: { email: string; password: string }) => Promise<AppAuthUser>;
   sendRegisterCode: (input: { email: string }) => Promise<{ cooldownSeconds?: number; expiresInSeconds?: number }>;
   register: (input: {
@@ -37,12 +45,30 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AppAuthUser | null>(null);
   const [status, setStatus] = useState<AuthStatus>("loading");
+  const [credits, setCredits] = useState<UserCredits | null>(null);
+
+  const refreshCredits = async () => {
+    try {
+      const response = await fetch('/api/billing/credits', {
+        credentials: 'include',
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setCredits(data);
+      }
+    } catch (error) {
+      console.error('获取积分余额失败:', error);
+    }
+  };
 
   const refresh = async () => {
     try {
       const currentUser = await resolveAppAuthSession();
       setUser(currentUser);
       setStatus(currentUser ? "authenticated" : "anonymous");
+      if (currentUser) {
+        await refreshCredits();
+      }
       return currentUser;
     } catch (error) {
       setUser(null);
@@ -60,11 +86,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value: AuthContextValue = {
     user,
     status,
+    credits,
+    refreshCredits,
     login: async (input) => {
       setStatus("loading");
       const nextUser = await loginAppUser(input);
       setUser(nextUser);
       setStatus("authenticated");
+      await refreshCredits();
       return nextUser;
     },
     sendRegisterCode: async (input) => await sendRegisterVerificationCode(input),
@@ -73,6 +102,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const nextUser = await registerAppUser(input);
       setUser(nextUser);
       setStatus("authenticated");
+      await refreshCredits();
       return nextUser;
     },
     updateProfile: async (input) => {
@@ -84,6 +114,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     logout: async () => {
       await logoutAppUser();
       setUser(null);
+      setCredits(null);
       setStatus("anonymous");
     },
     refresh,

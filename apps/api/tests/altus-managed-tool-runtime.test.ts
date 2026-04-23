@@ -761,3 +761,48 @@ test('deployment tools are blocked for website source sessions without an explic
 
   assert.equal(executeMock.mock.callCount(), 0);
 });
+
+test('todowrite accepts a valid in-progress todo snapshot', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-todo',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-todo',
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  const result = await runtime.execute('todowrite', {
+    todos: [
+      { content: '梳理需求边界', status: 'completed' },
+      { content: '修改后端主链', status: 'in_progress', activeForm: '正在修改后端主链' },
+      { content: '补充回归测试', status: 'pending' },
+    ],
+  });
+
+  assert.equal(result.type, 'result');
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.todos.length, 3);
+  assert.equal(payload.todos[1]?.status, 'in_progress');
+});
+
+test('todowrite rejects snapshots without exactly one in-progress item while work is ongoing', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-todo-invalid',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-todo-invalid',
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  await assert.rejects(
+    runtime.execute('todowrite', {
+      todos: [
+        { content: '修改后端主链', status: 'pending' },
+        { content: '补充回归测试', status: 'pending' },
+      ],
+    }),
+    /todowrite_requires_single_in_progress/
+  );
+});

@@ -162,3 +162,39 @@ test('captureMcpToolSnapshot only exposes connected bindings with live provider 
   assert.match(JSON.stringify(snapshotMock.mock.calls[0]?.arguments[0]), /github_list_repos/);
   assert.doesNotMatch(JSON.stringify(snapshotMock.mock.calls[0]?.arguments[0]), /notion_list_pages/);
 });
+
+test('buildConversationMessages injects latest successful todowrite snapshot as system context', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'agent',
+      messageType: 'executor_event',
+      content: '工具 todowrite 已完成',
+      metadata: {
+        eventType: 'tool_call_completed',
+        toolName: 'todowrite',
+        arguments: {
+          todos: [
+            { content: '梳理需求边界', status: 'completed' },
+            { content: '修改后端主链', status: 'in_progress', activeForm: '正在修改后端主链' },
+          ],
+        },
+      },
+    },
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '继续做',
+      metadata: {},
+    },
+  ] as any);
+
+  const service = new AltusManagedSetupService();
+  const messages = await service.buildConversationMessages('session-todo', '继续做', 'SYSTEM PROMPT');
+
+  assert.equal(messages[0]?.role, 'system');
+  assert.equal(messages[0]?.content, 'SYSTEM PROMPT');
+  assert.equal(messages[1]?.role, 'system');
+  assert.match(String(messages[1]?.content), /Current todo snapshot/);
+  assert.match(String(messages[1]?.content), /\[completed\] 梳理需求边界/);
+  assert.match(String(messages[1]?.content), /\[in_progress\] 修改后端主链/);
+});

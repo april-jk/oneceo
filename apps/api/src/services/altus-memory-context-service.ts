@@ -1,4 +1,4 @@
-import { appUserDAO, appUserProjectDAO, taskCreationSessionDAO, type AltusProjectMemory } from '../db/dao';
+import { appUserDAO, appUserProjectDAO, taskCreationSessionDAO, type ProjectInstructionMemory } from '../db/dao';
 import { altusMemoryRedisCacheService } from './altus-memory-redis-cache-service';
 import { readSessionAltusMemory, taskSessionAltusMemoryService, type AltusSessionMemory } from './task-session-altus-memory-service';
 
@@ -57,21 +57,24 @@ export class AltusMemoryContextService {
     return memory;
   }
 
-  async getProjectMemoryForSession(sessionId: string, userId: string): Promise<AltusProjectMemory | null> {
+  async getProjectMemoryForSession(sessionId: string, userId: string): Promise<ProjectInstructionMemory | null> {
     const session = await taskCreationSessionDAO.getSession(sessionId);
     const projectId = asText(session?.projectId);
     if (!projectId) return null;
 
-    const cached = await altusMemoryRedisCacheService.getProjectMemory<AltusProjectMemory>(userId, projectId);
+    const cached = await altusMemoryRedisCacheService.getProjectMemory<ProjectInstructionMemory>(userId, projectId);
     if (cached) {
-      return appUserProjectDAO.readAltusProjectMemory({ altusProjectMemory: cached });
+      const instruction = asText((cached as Record<string, unknown>)?.instruction);
+      return instruction ? { instruction } : null;
     }
 
     const project = await appUserProjectDAO.getOwnedProjectById(projectId, userId);
     if (!project || project.projectType !== 'standard' || project.status !== 'active') {
       return null;
     }
-    const memory = appUserProjectDAO.readAltusProjectMemory(project.metadataJson);
+    const instruction = appUserProjectDAO.readProjectInstruction(project.metadataJson);
+    if (!instruction) return null;
+    const memory = { instruction };
     await altusMemoryRedisCacheService.setProjectMemory(userId, projectId, memory);
     return memory;
   }
@@ -82,7 +85,7 @@ export class AltusMemoryContextService {
 
   buildPromptSection(input: {
     userMemory: AltusUserMemory;
-    projectMemory: AltusProjectMemory | null;
+    projectMemory: ProjectInstructionMemory | null;
     sessionMemory: AltusSessionMemory;
   }) {
     const lines: string[] = ['# Altus memory context'];
@@ -103,14 +106,13 @@ export class AltusMemoryContextService {
       lines.push('', '## User memory', '- Use this to adjust tone, address, and explanation defaults.', ...userLines);
     }
 
-    const projectLines = [
-      projectMemory?.context ? `- context: ${projectMemory.context}` : '',
-      projectMemory?.guidelines ? `- guidelines: ${projectMemory.guidelines}` : '',
-      projectMemory?.operatingRules ? `- operating_rules: ${projectMemory.operatingRules}` : '',
-      projectMemory?.executionManual ? `- execution_manual: ${projectMemory.executionManual}` : '',
-    ].filter(Boolean);
-    if (projectLines.length > 0) {
-      lines.push('', '## Project memory', '- Treat this as shared project-level operating context.', ...projectLines);
+    if (projectMemory?.instruction) {
+      lines.push(
+        '',
+        '## Project instruction',
+        '- Treat this as shared project-level instruction and default operating context.',
+        `- instruction: ${projectMemory.instruction}`
+      );
     }
 
     const sessionLines = [

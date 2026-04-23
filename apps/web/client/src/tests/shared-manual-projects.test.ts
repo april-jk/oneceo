@@ -15,10 +15,10 @@ function createProject(
     pinned: overrides.pinned ?? false,
     createdAt: overrides.createdAt || "2026-04-20T00:00:00.000Z",
     updatedAt: overrides.updatedAt || "2026-04-20T00:00:00.000Z",
-    description: overrides.description,
+    projectInstruction: overrides.projectInstruction,
     status: overrides.status,
     projectType: overrides.projectType,
-    altusProjectMemory: overrides.altusProjectMemory,
+    defaultConnectors: overrides.defaultConnectors,
   };
 }
 

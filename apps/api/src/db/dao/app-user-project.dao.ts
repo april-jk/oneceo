@@ -1,28 +1,30 @@
 import { and, asc, desc, eq } from 'drizzle-orm';
+import { type ConnectorKey, CONNECTOR_KEYS } from '../../services/connector-registry';
 import { db } from '../../config/database';
 import { appUserProjects } from '../schema';
 
 export type AppUserProjectRecord = typeof appUserProjects.$inferSelect;
-export type AltusProjectMemory = {
-  context: string;
-  guidelines: string;
-  operatingRules: string;
-  executionManual: string;
-  updatedAt: string | null;
+export type ProjectInstructionMemory = {
+  instruction: string;
+};
+
+export type ProjectDefaultConnectorProfile = {
+  connectorKey: ConnectorKey;
+  profileId: string;
 };
 
 export class AppUserProjectDAO {
   private static readonly PROJECT_NAME_LIMIT = 80;
   private static readonly PROJECT_DESCRIPTION_LIMIT = 500;
-  private static readonly ALTUS_PROJECT_MEMORY_MAX_LENGTH = {
-    context: 2000,
-    guidelines: 2000,
-    operatingRules: 2000,
-    executionManual: 3000,
-  } as const;
+  private static readonly PROJECT_INSTRUCTION_LIMIT = 8000;
+  private static readonly DEFAULT_CONNECTOR_PROFILE_LIMIT = 20;
 
   private asText(value: unknown) {
     return typeof value === 'string' ? value.trim() : '';
+  }
+
+  private asRecord(value: unknown) {
+    return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
   }
 
   normalizeName(value: unknown) {
@@ -42,54 +44,86 @@ export class AppUserProjectDAO {
   }
 
   private readPinned(metadataJson: unknown) {
-    const metadata =
-      metadataJson && typeof metadataJson === 'object'
-        ? (metadataJson as Record<string, unknown>)
-        : {};
+    const metadata = this.asRecord(metadataJson);
     return Boolean(metadata.pinned);
   }
 
-  readAltusProjectMemory(metadataJson: unknown): AltusProjectMemory {
-    const metadata =
-      metadataJson && typeof metadataJson === 'object'
-        ? (metadataJson as Record<string, unknown>)
-        : {};
-    const raw = metadata.altusProjectMemory;
-    const record = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-    return {
-      context: this.asText(record.context),
-      guidelines: this.asText(record.guidelines),
-      operatingRules: this.asText(record.operatingRules),
-      executionManual: this.asText(record.executionManual),
-      updatedAt: this.asText(record.updatedAt) || null,
-    };
+  private buildLegacyProjectInstruction(value: unknown) {
+    const record = this.asRecord(value);
+    const sections = [
+      { label: '背景', value: this.asText(record.context) },
+      { label: '指引', value: this.asText(record.guidelines) },
+      { label: '规则', value: this.asText(record.operatingRules) },
+      { label: '执行要求', value: this.asText(record.executionManual) },
+    ].filter((item) => item.value);
+    if (sections.length === 0) return '';
+    return sections
+      .map((item) => `${item.label}：\n${item.value}`)
+      .join('\n\n')
+      .slice(0, AppUserProjectDAO.PROJECT_INSTRUCTION_LIMIT);
   }
 
-  normalizeAltusProjectMemory(value: unknown): AltusProjectMemory {
-    const record = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
-    return {
-      context: this.normalizeBoundedText(
-        record.context,
-        AppUserProjectDAO.ALTUS_PROJECT_MEMORY_MAX_LENGTH.context,
-        '项目背景'
-      ),
-      guidelines: this.normalizeBoundedText(
-        record.guidelines,
-        AppUserProjectDAO.ALTUS_PROJECT_MEMORY_MAX_LENGTH.guidelines,
-        '项目指引'
-      ),
-      operatingRules: this.normalizeBoundedText(
-        record.operatingRules,
-        AppUserProjectDAO.ALTUS_PROJECT_MEMORY_MAX_LENGTH.operatingRules,
-        '操作规范'
-      ),
-      executionManual: this.normalizeBoundedText(
-        record.executionManual,
-        AppUserProjectDAO.ALTUS_PROJECT_MEMORY_MAX_LENGTH.executionManual,
-        '执行手册'
-      ),
-      updatedAt: null,
-    };
+  readProjectInstruction(metadataJson: unknown): string {
+    const metadata = this.asRecord(metadataJson);
+    const projectInstruction = this.asText(metadata.projectInstruction);
+    if (projectInstruction) {
+      return projectInstruction.slice(0, AppUserProjectDAO.PROJECT_INSTRUCTION_LIMIT);
+    }
+    return this.buildLegacyProjectInstruction(metadata.altusProjectMemory);
+  }
+
+  normalizeProjectInstruction(value: unknown) {
+    return this.normalizeBoundedText(
+      value,
+      AppUserProjectDAO.PROJECT_INSTRUCTION_LIMIT,
+      '项目指令'
+    );
+  }
+
+  readDefaultConnectorProfiles(metadataJson: unknown): ProjectDefaultConnectorProfile[] {
+    const value =
+      this.asRecord(metadataJson).defaultConnectorProfiles ??
+      this.asRecord(metadataJson).defaultConnectors;
+    if (!Array.isArray(value)) return [];
+    const dedup = new Map<string, ProjectDefaultConnectorProfile>();
+    for (const item of value) {
+      const record = this.asRecord(item);
+      const connectorKey = this.asText(record.connectorKey);
+      const profileId = this.asText(record.profileId);
+      if (!connectorKey || !profileId) continue;
+      if (!(CONNECTOR_KEYS as readonly string[]).includes(connectorKey)) continue;
+      dedup.set(`${connectorKey}:${profileId}`, {
+        connectorKey: connectorKey as ConnectorKey,
+        profileId,
+      });
+    }
+    return Array.from(dedup.values()).slice(0, AppUserProjectDAO.DEFAULT_CONNECTOR_PROFILE_LIMIT);
+  }
+
+  normalizeDefaultConnectorProfiles(value: unknown): ProjectDefaultConnectorProfile[] {
+    if (value == null) return [];
+    if (!Array.isArray(value)) {
+      throw new Error('默认连接器格式不正确');
+    }
+    const dedup = new Map<string, ProjectDefaultConnectorProfile>();
+    for (const item of value) {
+      const record = this.asRecord(item);
+      const connectorKey = this.asText(record.connectorKey);
+      const profileId = this.asText(record.profileId);
+      if (!connectorKey || !profileId) continue;
+      if (!(CONNECTOR_KEYS as readonly string[]).includes(connectorKey)) continue;
+      dedup.set(`${connectorKey}:${profileId}`, {
+        connectorKey: connectorKey as ConnectorKey,
+        profileId,
+      });
+    }
+    const normalized = Array.from(dedup.values());
+    if (normalized.length > AppUserProjectDAO.DEFAULT_CONNECTOR_PROFILE_LIMIT) {
+      throw new Error(
+        `默认连接器数量不能超过 ${AppUserProjectDAO.DEFAULT_CONNECTOR_PROFILE_LIMIT} 个`
+      );
+    }
+    return normalized;
   }
 
   async listByUser(userId: string, options?: { projectType?: string; status?: string }) {
@@ -142,30 +176,30 @@ export class AppUserProjectDAO {
   async create(input: {
     userId: string;
     name: string;
-    description?: string | null;
     projectType?: string;
     pinned?: boolean;
-    altusProjectMemory?: AltusProjectMemory | null;
+    projectInstruction?: string | null;
+    defaultConnectorProfiles?: ProjectDefaultConnectorProfile[] | null;
   }) {
-    const altusProjectMemory =
-      input.altusProjectMemory === undefined || input.altusProjectMemory === null
-        ? undefined
-        : {
-            ...input.altusProjectMemory,
-            updatedAt: new Date().toISOString(),
-          };
+    const metadataJson: Record<string, unknown> = {
+      pinned: Boolean(input.pinned),
+      defaultConnectorProfiles: Array.isArray(input.defaultConnectorProfiles)
+        ? input.defaultConnectorProfiles
+        : [],
+    };
+    const projectInstruction = this.asText(input.projectInstruction);
+    if (projectInstruction) {
+      metadataJson.projectInstruction = projectInstruction;
+    }
     const [created] = await db
       .insert(appUserProjects)
       .values({
         userId: input.userId as any,
         name: this.normalizeName(input.name),
-        description: this.normalizeDescription(input.description),
+        description: '',
         projectType: this.asText(input.projectType) || 'standard',
         status: 'active',
-        metadataJson: {
-          pinned: Boolean(input.pinned),
-          ...(altusProjectMemory ? { altusProjectMemory } : {}),
-        },
+        metadataJson,
         updatedAt: new Date(),
       })
       .returning();
@@ -177,38 +211,43 @@ export class AppUserProjectDAO {
     userId: string,
     patch: {
       name?: string;
-      description?: string | null;
       pinned?: boolean;
-      altusProjectMemory?: AltusProjectMemory | null;
+      projectInstruction?: string | null;
+      defaultConnectorProfiles?: ProjectDefaultConnectorProfile[] | null;
     }
   ) {
     const current = await this.getOwnedProjectById(projectId, userId);
     if (!current) return null;
     const nextName = patch.name === undefined ? current.name : this.normalizeName(patch.name);
-    const nextDescription =
-      patch.description === undefined ? current.description : this.normalizeDescription(patch.description);
     const nextPinned = patch.pinned === undefined ? this.readPinned(current.metadataJson) : Boolean(patch.pinned);
-    const currentAltusProjectMemory = this.readAltusProjectMemory(current.metadataJson);
-    const nextAltusProjectMemory =
-      patch.altusProjectMemory === undefined
-        ? currentAltusProjectMemory
-        : {
-            ...patch.altusProjectMemory,
-            updatedAt: new Date().toISOString(),
-          };
+    const nextProjectInstruction =
+      patch.projectInstruction === undefined
+        ? this.readProjectInstruction(current.metadataJson)
+        : this.asText(patch.projectInstruction);
+    const nextDefaultConnectorProfiles =
+      patch.defaultConnectorProfiles === undefined
+        ? this.readDefaultConnectorProfiles(current.metadataJson)
+        : patch.defaultConnectorProfiles;
+    const metadataJson = {
+      ...this.asRecord(current.metadataJson),
+      pinned: nextPinned,
+      defaultConnectorProfiles: Array.isArray(nextDefaultConnectorProfiles)
+        ? nextDefaultConnectorProfiles
+        : [],
+    } as Record<string, unknown>;
+    if (nextProjectInstruction) {
+      metadataJson.projectInstruction = nextProjectInstruction;
+    } else {
+      delete metadataJson.projectInstruction;
+    }
+    delete metadataJson.altusProjectMemory;
+    delete metadataJson.defaultConnectors;
 
     const [updated] = await db
       .update(appUserProjects)
       .set({
         name: nextName,
-        description: nextDescription,
-        metadataJson: {
-          ...(current.metadataJson && typeof current.metadataJson === 'object'
-            ? (current.metadataJson as Record<string, unknown>)
-            : {}),
-          pinned: nextPinned,
-          altusProjectMemory: nextAltusProjectMemory,
-        },
+        metadataJson,
         updatedAt: new Date(),
       })
       .where(

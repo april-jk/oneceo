@@ -24,13 +24,19 @@ afterEach(() => {
   global.fetch = originalFetch;
 });
 
-function createState(runId: string, sessionId: string, userInput = '帮我开发 2048 小游戏') {
+function createState(
+  runId: string,
+  sessionId: string,
+  userInput = '帮我开发 2048 小游戏',
+  messageType: 'user_input' | 'user_response' = 'user_input',
+) {
   return new AltusRunState({
     runId,
     sessionId,
     userId: 'user-1',
     model: 'altus-model',
     userInput,
+    messageType,
     sessionTitle: 'Build 2048',
     connectors: [],
     mcpProviders: [],
@@ -236,6 +242,102 @@ test('getModelRetryLimit defaults higher for transient upstream fetch failures w
       process.env.ALTUS_MANAGED_MODEL_RETRIES = originalValue;
     }
   }
+});
+
+test('execute requests clarification before sandbox when managed intent shape requires it', async () => {
+  const state = createState(
+    'run-coordinator-clarification-gate',
+    'session-coordinator-clarification-gate',
+    '帮我做一个企业管理系统。'
+  );
+  state.input.taskIntentProfile = {
+    mode: 'neutral',
+    reason: 'unknown',
+    recentUserMessages: ['帮我做一个企业管理系统。'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: false,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: false,
+    needsClarification: true,
+    clarificationQuestion: '请先确认这个系统的主要使用角色、必须包含的核心模块，以及本次是只要源码、本地运行，还是需要部署上线？',
+  };
+
+  const timelineCalls: Array<Record<string, unknown>> = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setPendingClarificationMock = mock.method(
+    taskCreationFileMemoryStore,
+    'setPendingClarification',
+    async () => undefined,
+  );
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-should-not-start',
+      workspaceRoot: '/workspace/should-not-start',
+      reused: false,
+    })),
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      timelineCalls.push(input);
+    }),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+    syncLoopSnapshot: mock.fn(async () => undefined),
+  };
+
+  global.fetch = mock.fn(async () => {
+    throw new Error('fetch_should_not_run_before_clarification');
+  }) as typeof fetch;
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal((setupService.ensureSandbox as any).mock.callCount(), 0);
+  assert.equal(setPendingClarificationMock.mock.callCount(), 1);
+  assert.deepEqual(lifecycleCalls, ['waiting_user']);
+  assert.equal(state.status, 'waiting_user');
+  assert.equal(timelineCalls.length, 1);
+  assert.equal(timelineCalls[0]?.messageType, 'clarification_request');
+  assert.match(String(timelineCalls[0]?.content || ''), /主要使用角色/);
+  assert.deepEqual(
+    eventCalls.map((entry) => entry.eventType),
+    ['clarification_requested'],
+  );
 });
 
 test('execute completes after tool round and final assistant response', async () => {

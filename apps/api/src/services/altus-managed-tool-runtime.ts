@@ -529,6 +529,8 @@ export class AltusManagedToolRuntime {
             scriptArtifactRequested: false,
             emailTemplateRequested: false,
             deploymentAllowed: true,
+            needsClarification: false,
+            clarificationQuestion: '',
           },
         });
       } catch (error) {

@@ -11,6 +11,7 @@ import {
   createTaskCreationSession,
   createTaskCreationDraftSession,
   createTaskCreationSocket,
+  getTaskCreationProject,
   getTaskCreationOlderMessages,
   getTaskCreationRecentMessages,
   getLatestTaskCreationManagedRun,
@@ -31,11 +32,14 @@ import {
 import {
   applySessionConnectorDraft,
   clearSessionConnectorDraft,
+  saveSessionConnectorDraft,
+  type SessionConnectorDraftEntry,
 } from '@/lib/connectors-client';
 import {
   clearSessionConnectorDraftState,
   getSessionConnectorDraftState,
   listSessionConnectorDraftEntries,
+  replaceSessionConnectorDraftEntries,
 } from '@/lib/session-connector-draft';
 import { ALTUS_MODE_STORAGE_KEY, readAltusMode } from '@/lib/altus-settings';
 
@@ -2693,6 +2697,76 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const [managedRunError, setManagedRunError] = useState<string | null>(null);
   const [hasOlderHistory, setHasOlderHistory] = useState(false);
   const [isLoadingOlderHistory, setIsLoadingOlderHistory] = useState(false);
+
+  useEffect(() => {
+    if (sessionId || !initialProjectIdForNewSession) return;
+    let cancelled = false;
+
+    const syncProjectDefaultConnectors = async () => {
+      try {
+        const project = await getTaskCreationProject(initialProjectIdForNewSession);
+        if (cancelled) return;
+
+        const nextEntries: SessionConnectorDraftEntry[] = Array.isArray(project?.defaultConnectors)
+          ? project.defaultConnectors
+              .filter(
+                (item) =>
+                  typeof item?.profileId === 'string' &&
+                  item.profileId.trim() &&
+                  (item.authStatus || '').trim().toLowerCase() !== 'deleted'
+              )
+              .map((item) => ({
+                connectorKey: item.connectorKey,
+                profileId: item.profileId,
+                desiredState: 'attached',
+                enabledTools: [],
+                sessionConfig: null,
+              }))
+          : [];
+
+        const state = getSessionConnectorDraftState();
+        const currentEntries = listSessionConnectorDraftEntries();
+        const isUntouchedProjectDraft =
+          Boolean(state) &&
+          state?.source === 'project_default' &&
+          state?.userTouched !== true;
+        const sameProjectDraft = isUntouchedProjectDraft && state?.sourceProjectId === initialProjectIdForNewSession;
+
+        if (nextEntries.length === 0) {
+          if (isUntouchedProjectDraft) {
+            const draftId = state?.draftId || '';
+            clearSessionConnectorDraftState();
+            if (draftId) {
+              await clearSessionConnectorDraft(draftId).catch(() => undefined);
+            }
+          }
+          return;
+        }
+
+        if (currentEntries.length > 0 && !isUntouchedProjectDraft) {
+          return;
+        }
+
+        if (sameProjectDraft) {
+          return;
+        }
+
+        const nextState = replaceSessionConnectorDraftEntries(nextEntries, {
+          source: 'project_default',
+          sourceProjectId: initialProjectIdForNewSession,
+          userTouched: false,
+        });
+        await saveSessionConnectorDraft(nextState.draftId, nextEntries);
+      } catch (error) {
+        console.warn('[TaskCreationAgent] sync project default connectors failed:', error);
+      }
+    };
+
+    void syncProjectDefaultConnectors();
+    return () => {
+      cancelled = true;
+    };
+  }, [initialProjectIdForNewSession, sessionId]);
   const [isInterrupting, setIsInterrupting] = useState(false);
   const [pendingSandboxPromptVersion, setPendingSandboxPromptVersion] = useState(0);
   const [location] = useLocation();

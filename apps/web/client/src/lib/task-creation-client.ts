@@ -25,21 +25,21 @@ export type TaskCreationSessionSummary = {
 export type TaskCreationProjectSummary = {
   id: string;
   name: string;
-  description?: string;
   projectType?: string;
   status?: string;
   pinned?: boolean;
-  altusProjectMemory?: AltusProjectMemory | null;
+  projectInstruction?: string;
+  defaultConnectors?: TaskCreationProjectDefaultConnector[];
   createdAt?: string | null;
   updatedAt?: string | null;
 };
 
-export type AltusProjectMemory = {
-  context: string;
-  guidelines: string;
-  operatingRules: string;
-  executionManual: string;
-  updatedAt?: string | null;
+export type TaskCreationProjectDefaultConnector = {
+  connectorKey: import("@/lib/connectors-client").ConnectorKey;
+  profileId: string;
+  profileName?: string | null;
+  displayName?: string | null;
+  authStatus?: string | null;
 };
 
 export type CreateTaskCreationSessionInput = {
@@ -1018,8 +1018,11 @@ export async function listTaskCreationProjectSessions(
 
 export async function createTaskCreationProject(input: {
   name: string;
-  description?: string | null;
-  altusProjectMemory?: AltusProjectMemory | null;
+  projectInstruction?: string | null;
+  defaultConnectors?: Array<{
+    connectorKey: import("@/lib/connectors-client").ConnectorKey;
+    profileId: string;
+  }>;
 }): Promise<TaskCreationProjectSummary | null> {
   const url = `${getApiBaseUrl()}/api/task-creation/projects`;
   const response = await fetch(url, {
@@ -1029,8 +1032,8 @@ export async function createTaskCreationProject(input: {
     }),
     body: JSON.stringify({
       name: input.name,
-      description: input.description ?? "",
-      altusProjectMemory: input.altusProjectMemory ?? null,
+      projectInstruction: input.projectInstruction ?? "",
+      defaultConnectors: input.defaultConnectors ?? [],
     }),
   });
   if (!response.ok) {
@@ -1044,9 +1047,12 @@ export async function updateTaskCreationProject(
   projectId: string,
   input: {
     name?: string;
-    description?: string | null;
     pinned?: boolean;
-    altusProjectMemory?: AltusProjectMemory | null;
+    projectInstruction?: string | null;
+    defaultConnectors?: Array<{
+      connectorKey: import("@/lib/connectors-client").ConnectorKey;
+      profileId: string;
+    }>;
   }
 ): Promise<TaskCreationProjectSummary | null> {
   const safeProjectId = encodeURIComponent(projectId);
@@ -1058,9 +1064,13 @@ export async function updateTaskCreationProject(
     }),
     body: JSON.stringify({
       ...(input.name !== undefined ? { name: input.name } : {}),
-      ...(input.description !== undefined ? { description: input.description ?? "" } : {}),
       ...(input.pinned !== undefined ? { pinned: Boolean(input.pinned) } : {}),
-      ...(input.altusProjectMemory !== undefined ? { altusProjectMemory: input.altusProjectMemory } : {}),
+      ...(input.projectInstruction !== undefined
+        ? { projectInstruction: input.projectInstruction ?? "" }
+        : {}),
+      ...(input.defaultConnectors !== undefined
+        ? { defaultConnectors: input.defaultConnectors }
+        : {}),
     }),
   });
   if (!response.ok) {
@@ -1080,6 +1090,22 @@ export async function deleteTaskCreationProject(projectId: string): Promise<void
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));
   }
+}
+
+export function summarizeProjectInstruction(
+  value?: string | null,
+  options?: { maxLength?: number }
+) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text) return "";
+  const normalized = text.replace(/\s+/g, " ").trim();
+  const maxLength = typeof options?.maxLength === "number" && options.maxLength > 0
+    ? Math.floor(options.maxLength)
+    : 140;
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
 export async function updateTaskCreationSessionProject(

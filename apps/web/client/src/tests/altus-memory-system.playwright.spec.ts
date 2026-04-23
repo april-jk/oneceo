@@ -34,12 +34,7 @@ type ProjectPayload = {
   data?: {
     id: string;
     name: string;
-    altusProjectMemory?: {
-      context?: string;
-      guidelines?: string;
-      operatingRules?: string;
-      executionManual?: string;
-    } | null;
+    projectInstruction?: string;
   };
 };
 
@@ -65,10 +60,7 @@ type InternalMemorySnapshot = {
     responsePreferences: string;
   };
   projectMemory: {
-    context?: string;
-    guidelines?: string;
-    operatingRules?: string;
-    executionManual?: string;
+    instruction?: string;
   } | null;
   sessionMemory: {
     version: number;
@@ -231,11 +223,16 @@ test('altus 三级记忆在单次登录复用下保持正确', async ({ browser 
   const location = `Shanghai-${token}`;
   const responsePreferences = `回答必须先称呼 ${preferredName}，并保持冷静专业。`;
   const projectName = `Memory Project ${token}`;
-  const projectDescription = `Playwright memory test ${token}`;
   const projectContext = `项目代号 MemoryProject-${token}，用于验证项目级记忆继承。`;
   const projectGuidelines = '所有回答先给结论，再给一句依据。';
   const projectOperatingRules = '回答中必须明确提到项目代号。';
   const projectExecutionManual = '不要提问；两句话内回答；优先复用已有记忆。';
+  const projectInstruction = [
+    `背景：\n${projectContext}`,
+    `指引：\n${projectGuidelines}`,
+    `规则：\n${projectOperatingRules}`,
+    `执行要求：\n${projectExecutionManual}`,
+  ].join('\n\n');
   const prompt1 = '请只用两句话回答：你现在应该如何称呼我，并说明当前项目代号。不要提问。';
   const prompt2 = '继续当前会话：只用一句话复述上一轮确认的称呼和项目代号。不要提问。';
   const prompt3 = '我是谁';
@@ -318,14 +315,9 @@ test('altus 三级记忆在单次登录复用下保持正确', async ({ browser 
     const projectCreateResponse = await api.post('/api/task-creation/projects', {
       data: {
         name: projectName,
-        description: projectDescription,
+        projectInstruction,
         projectType: 'standard',
-        altusProjectMemory: {
-          context: projectContext,
-          guidelines: projectGuidelines,
-          operatingRules: projectOperatingRules,
-          executionManual: projectExecutionManual,
-        },
+        defaultConnectors: [],
       },
     });
     expect(projectCreateResponse.ok()).toBe(true);
@@ -367,10 +359,7 @@ test('altus 三级记忆在单次登录复用下保持正确', async ({ browser 
     );
     expect(projectDetailResponse.ok()).toBe(true);
     const projectDetail = (await projectDetailResponse.json()) as ProjectPayload;
-    expect(projectDetail.data?.altusProjectMemory?.context).toBe(projectContext);
-    expect(projectDetail.data?.altusProjectMemory?.guidelines).toBe(projectGuidelines);
-    expect(projectDetail.data?.altusProjectMemory?.operatingRules).toBe(projectOperatingRules);
-    expect(projectDetail.data?.altusProjectMemory?.executionManual).toBe(projectExecutionManual);
+    expect(projectDetail.data?.projectInstruction).toBe(projectInstruction);
 
     const firstMemorySnapshot = await waitForInternalMemorySnapshot(
       createdSessionId,
@@ -381,13 +370,12 @@ test('altus 三级记忆在单次登录复用下保持正确', async ({ browser 
     expect(firstMemorySnapshot.userMemory.occupation).toBe(occupation);
     expect(firstMemorySnapshot.userMemory.location).toBe(location);
     expect(firstMemorySnapshot.userMemory.responsePreferences).toBe(responsePreferences);
-    expect(firstMemorySnapshot.projectMemory?.context).toBe(projectContext);
-    expect(firstMemorySnapshot.projectMemory?.guidelines).toBe(projectGuidelines);
+    expect(firstMemorySnapshot.projectMemory?.instruction).toBe(projectInstruction);
     expect(firstMemorySnapshot.sessionMemory.version).toBeGreaterThan(0);
     expect(firstMemorySnapshot.sessionMemory.summary.goal).toContain('请只用两句话回答');
     expect(firstMemorySnapshot.promptSection).toContain(`# Altus memory context`);
     expect(firstMemorySnapshot.promptSection).toContain(`preferred_name: ${preferredName}`);
-    expect(firstMemorySnapshot.promptSection).toContain(`context: ${projectContext}`);
+    expect(firstMemorySnapshot.promptSection).toContain(`instruction: ${projectInstruction}`);
 
     const firstMessages = await waitForMessages(api, createdSessionId);
     const firstAssistantMessage = [...firstMessages]
@@ -437,7 +425,7 @@ test('altus 三级记忆在单次登录复用下保持正确', async ({ browser 
     expect(secondMemorySnapshot.sessionMemory.summary.latestOutcome.length).toBeGreaterThan(0);
     expect(secondMemorySnapshot.sessionMemory.workingNotes.length).toBeGreaterThan(0);
     expect(secondMemorySnapshot.promptSection).toContain(`preferred_name: ${preferredName}`);
-    expect(secondMemorySnapshot.promptSection).toContain(`context: ${projectContext}`);
+    expect(secondMemorySnapshot.promptSection).toContain(`instruction: ${projectInstruction}`);
 
     const secondMessages = await waitForMessages(api, createdSessionId);
     const userTurns = secondMessages.filter(

@@ -31,6 +31,7 @@ import { SELF_ORGANIZED_PROJECTS } from "@/lib/self-organized-projects";
 import { useSharedManualProjects } from "@/lib/shared-manual-projects";
 import {
   listTaskCreationProjectSessions,
+  summarizeProjectInstruction,
   type TaskCreationSessionSummary,
 } from "@/lib/task-creation-client";
 
@@ -326,7 +327,8 @@ export default function ManagerView() {
                             </Badge>
                           </div>
                           <p className="text-sm text-muted-foreground">
-                            {project.description?.trim() || t("projectsPage.projectDescriptionPlaceholder")}
+                            {summarizeProjectInstruction(project.projectInstruction) ||
+                              t("projectsPage.projectDescriptionPlaceholder")}
                           </p>
                           <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
                             <span className="inline-flex items-center gap-1.5">

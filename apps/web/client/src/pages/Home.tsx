@@ -96,6 +96,7 @@ import { useIsMobile } from "@/hooks/useMobile";
 import { buildPreviewItems, extractDiffPayload } from "@/lib/opencode-preview";
 import {
   getWorkspaceRawFileUrl,
+  getTaskCreationProject,
   listTaskCreationSkills,
   uploadTaskCreationAttachment,
   type TaskCreationDeliverableArtifact,
@@ -284,6 +285,17 @@ function readPersistedPreviewState(
   }
 }
 
+function clampProjectHintLabel(
+  value: string | null,
+  maxLength = 8,
+): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.length <= maxLength) return trimmed;
+  return `${trimmed.slice(0, maxLength)}...`;
+}
+
 export default function Home() {
   const { t } = useTranslation();
   const MESSAGE_SCROLL_CACHE_PREFIX = "task_creation_history_scroll:";
@@ -299,6 +311,8 @@ export default function Home() {
       kind: "manual",
     };
   }, [search]);
+  const [inputProjectName, setInputProjectName] = useState<string | null>(null);
+  const [inputProjectNameLoading, setInputProjectNameLoading] = useState(false);
   const [mode, setMode] = useState<PageMode>("input");
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
@@ -1618,6 +1632,14 @@ export default function Home() {
 
   const showDesktopPreview = previewOpen && !isMobile;
   const showMobilePreview = previewOpen && isMobile;
+  const inputProjectHintLabel = inputProjectNameLoading
+    ? t("homePage.projectContextLoading")
+    : clampProjectHintLabel(inputProjectName, 8);
+  const showInputProjectHint =
+    mode === "input" &&
+    location.startsWith("/new-task") &&
+    selectedProject?.kind === "manual" &&
+    Boolean(inputProjectHintLabel);
   const activeAltusReplay = altusReplayRunId
     ? managedReplayByRun.get(altusReplayRunId) || null
     : latestManagedReplay;
@@ -1683,6 +1705,44 @@ export default function Home() {
       setPreviewMaximized(false);
     }
   }, [previewOpen, previewMaximized]);
+
+  useEffect(() => {
+    if (
+      !location.startsWith("/new-task") ||
+      selectedProject?.kind !== "manual" ||
+      !selectedProject.id
+    ) {
+      setInputProjectName(null);
+      setInputProjectNameLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setInputProjectName(null);
+    setInputProjectNameLoading(true);
+
+    void getTaskCreationProject(selectedProject.id)
+      .then((project) => {
+        if (cancelled) return;
+        const nextName =
+          typeof project?.name === "string" && project.name.trim()
+            ? project.name.trim()
+            : null;
+        setInputProjectName(nextName);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setInputProjectName(null);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setInputProjectNameLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [location, selectedProject]);
 
   const handlePreviewResizeDragging = useCallback((isDragging: boolean) => {
     previewResizeDraggingRef.current = isDragging;
@@ -2191,153 +2251,165 @@ export default function Home() {
                     transition={{ delay: 0.3, duration: 0.4 }}
                     className="relative"
                   >
-                    {slashSuggestionPanel ? (
-                      <div className="mx-auto mb-2 w-[92%] max-w-full">
-                        {slashSuggestionPanel}
-                      </div>
-                    ) : null}
-                    {/* Text Area and Actions - Single Container */}
-                    <div className="space-y-3 rounded-[2rem] border border-border/70 bg-card p-4 shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)]">
-                      {/* Textarea */}
-                      <Textarea
-                        placeholder={t("homePage.textareaPlaceholder")}
-                        value={message}
-                        onChange={(e) =>
-                          handleComposerInputChange(e.target.value)
-                        }
-                        onKeyDown={(e) =>
-                          handleComposerKeyDown(e, {
-                            submit: () => handleSend(),
-                          })
-                        }
-                        className="min-h-[100px] resize-none border-0 bg-transparent px-0 py-0 text-base text-foreground placeholder:text-muted-foreground focus-visible:ring-0"
-                        rows={4}
-                      />
-                      {composerReferenceTokens}
+                    <div className="relative pt-1">
+                      {slashSuggestionPanel ? (
+                        <div className="mx-auto mb-2 w-[92%] max-w-full">
+                          {slashSuggestionPanel}
+                        </div>
+                      ) : null}
+                      {/* Text Area and Actions - Single Container */}
+                      <div className="relative z-10 space-y-3 rounded-[2rem] border border-border/70 bg-card p-4 shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)]">
+                        {/* Textarea */}
+                        <Textarea
+                          placeholder={t("homePage.textareaPlaceholder")}
+                          value={message}
+                          onChange={(e) =>
+                            handleComposerInputChange(e.target.value)
+                          }
+                          onKeyDown={(e) =>
+                            handleComposerKeyDown(e, {
+                              submit: () => handleSend(),
+                            })
+                          }
+                          className="min-h-[100px] resize-none border-0 bg-transparent px-0 py-0 text-base text-foreground placeholder:text-muted-foreground focus-visible:ring-0"
+                          rows={4}
+                        />
+                        {composerReferenceTokens}
 
-                      <AttachmentChipList
-                        attachments={attachments}
-                        onRemove={removeAttachment}
-                      />
+                        <AttachmentChipList
+                          attachments={attachments}
+                          onRemove={removeAttachment}
+                        />
 
-                      {/* Bottom Action Bar */}
-                      <TooltipProvider>
-                        <div className="flex items-center justify-between pt-2">
-                          {/* Left Side Actions */}
-                          <div className="flex items-center gap-1">
-                            <AttachmentPickerButton
-                              onSelectFiles={handleAttachmentSelect}
-                              onSelectSkills={handleSkillSelect}
-                            />
+                        {/* Bottom Action Bar */}
+                        <TooltipProvider>
+                          <div className="flex items-center justify-between pt-2">
+                            {/* Left Side Actions */}
+                            <div className="flex items-center gap-1">
+                              <AttachmentPickerButton
+                                onSelectFiles={handleAttachmentSelect}
+                                onSelectSkills={handleSkillSelect}
+                              />
 
-                            <ConnectorDialog sessionId={sessionId} />
+                              <ConnectorDialog sessionId={sessionId} />
 
-                            {/* Model Selection Button */}
-                            <DropdownMenu>
+                              {/* Model Selection Button */}
+                              <DropdownMenu>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <DropdownMenuTrigger asChild>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-9 gap-2 rounded-xl transition-colors hover:bg-accent"
+                                      >
+                                        <Sparkles className="w-4 h-4 text-muted-foreground" />
+                                        <span className="text-sm text-muted-foreground">
+                                          {t(`homePage.models.${selectedModel}`)}
+                                        </span>
+                                      </Button>
+                                    </DropdownMenuTrigger>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>{t("homePage.selectModel")}</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                                <DropdownMenuContent
+                                  align="start"
+                                  className="w-40"
+                                >
+                                  <DropdownMenuItem
+                                    onClick={() => setSelectedModel("lite")}
+                                  >
+                                    <div className="flex flex-col">
+                                      <span className="font-medium">
+                                        {t("homePage.models.lite")}
+                                      </span>
+                                      <span className="text-xs text-muted-foreground">
+                                        {t("ceoView.modelLiteHint")}
+                                      </span>
+                                    </div>
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() => setSelectedModel("pro")}
+                                  >
+                                    <div className="flex flex-col">
+                                      <span className="font-medium">
+                                        {t("homePage.models.pro")}
+                                      </span>
+                                      <span className="text-xs text-muted-foreground">
+                                        {t("ceoView.modelProHint")}
+                                      </span>
+                                    </div>
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() => setSelectedModel("max")}
+                                  >
+                                    <div className="flex flex-col">
+                                      <span className="font-medium">
+                                        {t("homePage.models.max")}
+                                      </span>
+                                      <span className="text-xs text-muted-foreground">
+                                        {t("ceoView.modelMaxHint")}
+                                      </span>
+                                    </div>
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </div>
+
+                            {/* Right Side Actions */}
+                            <div className="flex items-center gap-1">
+                              {/* Voice Input Button */}
                               <Tooltip>
                                 <TooltipTrigger asChild>
-                                  <DropdownMenuTrigger asChild>
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      className="h-9 gap-2 rounded-xl transition-colors hover:bg-accent"
-                                    >
-                                      <Sparkles className="w-4 h-4 text-muted-foreground" />
-                                      <span className="text-sm text-muted-foreground">
-                                        {t(`homePage.models.${selectedModel}`)}
-                                      </span>
-                                    </Button>
-                                  </DropdownMenuTrigger>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-9 w-9 rounded-full transition-colors hover:bg-accent"
+                                  >
+                                    <Mic className="w-4 h-4 text-muted-foreground" />
+                                  </Button>
                                 </TooltipTrigger>
                                 <TooltipContent>
-                                  <p>{t("homePage.selectModel")}</p>
+                                  <p>{t("homePage.voiceInput")}</p>
                                 </TooltipContent>
                               </Tooltip>
-                              <DropdownMenuContent
-                                align="start"
-                                className="w-40"
-                              >
-                                <DropdownMenuItem
-                                  onClick={() => setSelectedModel("lite")}
-                                >
-                                  <div className="flex flex-col">
-                                    <span className="font-medium">
-                                      {t("homePage.models.lite")}
-                                    </span>
-                                    <span className="text-xs text-muted-foreground">
-                                      {t("ceoView.modelLiteHint")}
-                                    </span>
-                                  </div>
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() => setSelectedModel("pro")}
-                                >
-                                  <div className="flex flex-col">
-                                    <span className="font-medium">
-                                      {t("homePage.models.pro")}
-                                    </span>
-                                    <span className="text-xs text-muted-foreground">
-                                      {t("ceoView.modelProHint")}
-                                    </span>
-                                  </div>
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() => setSelectedModel("max")}
-                                >
-                                  <div className="flex flex-col">
-                                    <span className="font-medium">
-                                      {t("homePage.models.max")}
-                                    </span>
-                                    <span className="text-xs text-muted-foreground">
-                                      {t("ceoView.modelMaxHint")}
-                                    </span>
-                                  </div>
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
+
+                              {/* Send Button */}
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    onClick={handleSend}
+                                    disabled={
+                                      !message.trim() &&
+                                      attachments.length === 0 &&
+                                      composerReferences.length === 0
+                                    }
+                                    size="icon"
+                                    className="h-9 w-9 rounded-full bg-primary text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+                                  >
+                                    <Send className="w-4 h-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>{t("homePage.sendMessage")}</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
                           </div>
-
-                          {/* Right Side Actions */}
-                          <div className="flex items-center gap-1">
-                            {/* Voice Input Button */}
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-9 w-9 rounded-full transition-colors hover:bg-accent"
-                                >
-                                  <Mic className="w-4 h-4 text-muted-foreground" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>{t("homePage.voiceInput")}</p>
-                              </TooltipContent>
-                            </Tooltip>
-
-                            {/* Send Button */}
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  onClick={handleSend}
-                                  disabled={
-                                    !message.trim() &&
-                                    attachments.length === 0 &&
-                                    composerReferences.length === 0
-                                  }
-                                  size="icon"
-                                  className="h-9 w-9 rounded-full bg-primary text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
-                                >
-                                  <Send className="w-4 h-4" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>{t("homePage.sendMessage")}</p>
-                              </TooltipContent>
-                            </Tooltip>
+                        </TooltipProvider>
+                      </div>
+                      {showInputProjectHint ? (
+                        <div className="relative z-0 -mt-5 mx-auto w-[94%] rounded-b-[1.65rem] rounded-t-[0.9rem] border border-t-0 border-border/35 bg-muted/42 px-5 pb-3 pt-7 shadow-[0_16px_28px_rgba(15,23,42,0.07)] backdrop-blur-[2px] dark:bg-muted/24 dark:shadow-[0_18px_32px_rgba(0,0,0,0.18)]">
+                          <div className="flex items-center justify-end gap-2 text-right">
+                            <FolderSearch2 className="h-4 w-4 shrink-0 text-foreground/42" />
+                            <span className="block truncate text-sm font-medium tracking-[0.01em] text-foreground/72">
+                              {inputProjectHintLabel}
+                            </span>
                           </div>
                         </div>
-                      </TooltipProvider>
+                      ) : null}
                     </div>
                   </motion.div>
 

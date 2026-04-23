@@ -44,6 +44,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -96,9 +98,10 @@ import { useIsMobile } from "@/hooks/useMobile";
 import { buildPreviewItems, extractDiffPayload } from "@/lib/opencode-preview";
 import {
   getWorkspaceRawFileUrl,
-  getTaskCreationProject,
+  listTaskCreationProjects,
   listTaskCreationSkills,
   uploadTaskCreationAttachment,
+  type TaskCreationProjectSummary,
   type TaskCreationDeliverableArtifact,
   type TaskCreationPlatformSkill,
   type TaskCreationUploadedAttachment as UploadedTaskAttachment,
@@ -296,23 +299,35 @@ function clampProjectHintLabel(
   return `${trimmed.slice(0, maxLength)}...`;
 }
 
+const NO_PROJECT_VALUE = "__no_project__";
+
 export default function Home() {
   const { t } = useTranslation();
   const MESSAGE_SCROLL_CACHE_PREFIX = "task_creation_history_scroll:";
   const PREVIEW_STATE_CACHE_PREFIX = "task_creation_preview_state:";
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   const search = useSearch();
-  const selectedProject = useMemo<TaskProjectSelection | null>(() => {
+  const queryProjectId = useMemo(() => {
     const params = new URLSearchParams(search);
     const projectId = params.get("projectId")?.trim();
-    if (!projectId) return null;
+    return projectId || null;
+  }, [search]);
+  const [pendingProjectId, setPendingProjectId] = useState<string | null>(
+    queryProjectId,
+  );
+  const selectedProject = useMemo<TaskProjectSelection | null>(() => {
+    if (!pendingProjectId) return null;
     return {
-      id: projectId,
+      id: pendingProjectId,
       kind: "manual",
     };
-  }, [search]);
-  const [inputProjectName, setInputProjectName] = useState<string | null>(null);
-  const [inputProjectNameLoading, setInputProjectNameLoading] = useState(false);
+  }, [pendingProjectId]);
+  const [projectOptions, setProjectOptions] = useState<TaskCreationProjectSummary[]>(
+    [],
+  );
+  const [projectOptionsLoading, setProjectOptionsLoading] = useState(false);
+  const [projectOptionsLoaded, setProjectOptionsLoaded] = useState(false);
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [mode, setMode] = useState<PageMode>("input");
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
@@ -479,7 +494,8 @@ export default function Home() {
     autoRuntime: !isHistoryView,
     compactHistory: false,
     runtimeLogPollingEnabled: false,
-    initialProjectId: selectedProject?.kind === "manual" ? selectedProject.id : null,
+    initialProjectId:
+      selectedProject?.kind === "manual" ? selectedProject.id : null,
     onPlanGenerated: (plan) => {
       console.log("计划生成:", plan);
       // TODO: 跳转到项目详情页面或更新左侧项目列表
@@ -490,6 +506,38 @@ export default function Home() {
   });
 
   const slashQuery = useMemo(() => parseTrailingSlashQuery(message), [message]);
+
+  useEffect(() => {
+    setPendingProjectId(queryProjectId);
+  }, [queryProjectId]);
+
+  const syncPendingProjectToUrl = useCallback(
+    (nextProjectId: string | null) => {
+      if (!location.startsWith("/new-task")) return;
+      const params = new URLSearchParams(search);
+      if (nextProjectId) {
+        params.set("projectId", nextProjectId);
+      } else {
+        params.delete("projectId");
+      }
+      const nextQuery = params.toString();
+      const nextUrl = nextQuery ? `${location}?${nextQuery}` : location;
+      setLocation(nextUrl, { replace: true });
+    },
+    [location, search, setLocation],
+  );
+
+  const loadProjectOptions = useCallback(async () => {
+    if (projectOptionsLoading) return;
+    setProjectOptionsLoading(true);
+    try {
+      const result = await listTaskCreationProjects();
+      setProjectOptions(Array.isArray(result) ? result : []);
+    } finally {
+      setProjectOptionsLoaded(true);
+      setProjectOptionsLoading(false);
+    }
+  }, [projectOptionsLoading]);
 
   useEffect(() => {
     if (!slashQuery || slashCatalogLoaded || slashCatalogLoading) {
@@ -560,6 +608,19 @@ export default function Home() {
       cancelled = true;
     };
   }, [slashCatalogLoaded, slashQuery]);
+
+  useEffect(() => {
+    if (location.startsWith("/new-task") && !projectOptionsLoaded) {
+      void loadProjectOptions();
+    }
+  }, [loadProjectOptions, location, projectOptionsLoaded]);
+
+  useEffect(() => {
+    if (!projectMenuOpen || projectOptionsLoaded) {
+      return;
+    }
+    void loadProjectOptions();
+  }, [loadProjectOptions, projectMenuOpen, projectOptionsLoaded]);
 
   const slashSuggestions = useMemo<SlashSuggestion[]>(() => {
     if (!slashQuery) return [];
@@ -1632,14 +1693,22 @@ export default function Home() {
 
   const showDesktopPreview = previewOpen && !isMobile;
   const showMobilePreview = previewOpen && isMobile;
-  const inputProjectHintLabel = inputProjectNameLoading
-    ? t("homePage.projectContextLoading")
-    : clampProjectHintLabel(inputProjectName, 8);
+  const currentProjectOption = useMemo(
+    () =>
+      pendingProjectId
+        ? projectOptions.find((item) => item.id === pendingProjectId) || null
+        : null,
+    [pendingProjectId, projectOptions],
+  );
+  const inputProjectHintLabel =
+    projectOptionsLoading && pendingProjectId && !currentProjectOption
+      ? t("homePage.projectContextLoading")
+      : clampProjectHintLabel(
+          currentProjectOption?.name || t("homePage.projectNoProject"),
+          8,
+        );
   const showInputProjectHint =
-    mode === "input" &&
-    location.startsWith("/new-task") &&
-    selectedProject?.kind === "manual" &&
-    Boolean(inputProjectHintLabel);
+    mode === "input" && location.startsWith("/new-task");
   const activeAltusReplay = altusReplayRunId
     ? managedReplayByRun.get(altusReplayRunId) || null
     : latestManagedReplay;
@@ -1707,42 +1776,25 @@ export default function Home() {
   }, [previewOpen, previewMaximized]);
 
   useEffect(() => {
-    if (
-      !location.startsWith("/new-task") ||
-      selectedProject?.kind !== "manual" ||
-      !selectedProject.id
-    ) {
-      setInputProjectName(null);
-      setInputProjectNameLoading(false);
+    if (!location.startsWith("/new-task") || !projectOptionsLoaded) {
       return;
     }
-
-    let cancelled = false;
-    setInputProjectName(null);
-    setInputProjectNameLoading(true);
-
-    void getTaskCreationProject(selectedProject.id)
-      .then((project) => {
-        if (cancelled) return;
-        const nextName =
-          typeof project?.name === "string" && project.name.trim()
-            ? project.name.trim()
-            : null;
-        setInputProjectName(nextName);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setInputProjectName(null);
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setInputProjectNameLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [location, selectedProject]);
+    if (!pendingProjectId) {
+      return;
+    }
+    const exists = projectOptions.some((item) => item.id === pendingProjectId);
+    if (exists) {
+      return;
+    }
+    setPendingProjectId(null);
+    syncPendingProjectToUrl(null);
+  }, [
+    location,
+    pendingProjectId,
+    projectOptions,
+    projectOptionsLoaded,
+    syncPendingProjectToUrl,
+  ]);
 
   const handlePreviewResizeDragging = useCallback((isDragging: boolean) => {
     previewResizeDraggingRef.current = isDragging;
@@ -2401,14 +2453,76 @@ export default function Home() {
                         </TooltipProvider>
                       </div>
                       {showInputProjectHint ? (
-                        <div className="relative z-0 -mt-5 mx-auto w-[94%] rounded-b-[1.65rem] rounded-t-[0.9rem] border border-t-0 border-border/35 bg-muted/42 px-5 pb-3 pt-7 shadow-[0_16px_28px_rgba(15,23,42,0.07)] backdrop-blur-[2px] dark:bg-muted/24 dark:shadow-[0_18px_32px_rgba(0,0,0,0.18)]">
-                          <div className="flex items-center justify-end gap-2 text-right">
-                            <FolderSearch2 className="h-4 w-4 shrink-0 text-foreground/42" />
-                            <span className="block truncate text-sm font-medium tracking-[0.01em] text-foreground/72">
-                              {inputProjectHintLabel}
-                            </span>
-                          </div>
-                        </div>
+                        <DropdownMenu
+                          open={projectMenuOpen}
+                          onOpenChange={setProjectMenuOpen}
+                        >
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              className="relative z-0 -mt-5 mx-auto flex w-[94%] items-center justify-end rounded-b-[1.65rem] rounded-t-[0.9rem] border border-t-0 border-border/35 bg-muted/42 px-5 pb-3 pt-7 text-right shadow-[0_16px_28px_rgba(15,23,42,0.07)] backdrop-blur-[2px] transition-colors hover:bg-muted/54 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 dark:bg-muted/24 dark:hover:bg-muted/32 dark:shadow-[0_18px_32px_rgba(0,0,0,0.18)]"
+                            aria-label={t("homePage.projectSelectorLabel")}
+                          >
+                            <div className="flex min-w-0 items-center justify-end gap-2 text-right">
+                              <FolderSearch2 className="h-4 w-4 shrink-0 text-foreground/42" />
+                              <span className="block truncate text-sm font-medium tracking-[0.01em] text-foreground/72">
+                                {inputProjectHintLabel}
+                              </span>
+                              <ChevronDown className="h-4 w-4 shrink-0 text-foreground/42" />
+                            </div>
+                          </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent
+                            align="end"
+                            side="bottom"
+                            sideOffset={2}
+                            className="w-[22rem] max-w-[calc(100vw-2.5rem)] rounded-2xl border-border/70 p-1.5 shadow-xl"
+                          >
+                            {projectOptionsLoading ? (
+                              <DropdownMenuItem disabled className="rounded-xl px-3 py-2.5">
+                                {t("homePage.projectListLoading")}
+                              </DropdownMenuItem>
+                            ) : (
+                              <DropdownMenuRadioGroup
+                                value={pendingProjectId || NO_PROJECT_VALUE}
+                                onValueChange={(value) => {
+                                  const nextProjectId =
+                                    value === NO_PROJECT_VALUE ? null : value;
+                                  setPendingProjectId(nextProjectId);
+                                  syncPendingProjectToUrl(nextProjectId);
+                                }}
+                              >
+                                <DropdownMenuRadioItem
+                                  value={NO_PROJECT_VALUE}
+                                  hideIndicator
+                                  className="rounded-xl px-3 py-2.5"
+                                >
+                                  <span className="block truncate">
+                                    {t("homePage.projectNoProject")}
+                                  </span>
+                                </DropdownMenuRadioItem>
+                                {projectOptions.length > 0 ? (
+                                  projectOptions.map((project) => (
+                                    <DropdownMenuRadioItem
+                                      key={project.id}
+                                      value={project.id}
+                                      hideIndicator
+                                      className="rounded-xl px-3 py-2.5"
+                                    >
+                                      <span className="block truncate">
+                                        {project.name}
+                                      </span>
+                                    </DropdownMenuRadioItem>
+                                  ))
+                                ) : (
+                                  <DropdownMenuItem disabled className="rounded-xl px-3 py-2.5">
+                                    {t("homePage.projectListEmpty")}
+                                  </DropdownMenuItem>
+                                )}
+                              </DropdownMenuRadioGroup>
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       ) : null}
                     </div>
                   </motion.div>

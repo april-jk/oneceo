@@ -473,16 +473,28 @@ export class AltusRunCoordinator {
   }
 
   private resolvePreExecutionClarificationQuestion(state: AltusRunState) {
-    const messageType = state.input.messageType || 'user_input';
     const profile = state.input.taskIntentProfile;
     const question = asText(profile?.clarificationQuestion);
-    if (messageType !== 'user_input') {
-      return '';
-    }
     if (!profile?.needsClarification || !question) {
       return '';
     }
     return question;
+  }
+
+  private resolvePreExecutionClarificationOptions(state: AltusRunState) {
+    const profile = state.input.taskIntentProfile;
+    if (!profile?.needsClarification || !Array.isArray(profile.clarificationOptions)) {
+      return undefined;
+    }
+    const options = profile.clarificationOptions.map((item) => asText(item)).filter(Boolean);
+    return options.length > 0 ? options : undefined;
+  }
+
+  private resolvePreExecutionClarificationType(state: AltusRunState) {
+    const profile = state.input.taskIntentProfile;
+    return profile?.needsClarification && profile.clarificationType !== 'none'
+      ? profile.clarificationType
+      : undefined;
   }
 
   private async finalizePlainTextConversationCompletion(
@@ -911,12 +923,20 @@ export class AltusRunCoordinator {
     return '发布暂未完成，内部调试信息已记录。';
   }
 
-  private async requestClarification(state: AltusRunState, input: { question: string; options?: string[] }) {
+  private async requestClarification(
+    state: AltusRunState,
+    input: {
+      question: string;
+      options?: string[];
+      clarificationType?: Exclude<AltusManagedTaskIntentProfile['clarificationType'], 'none'>;
+    }
+  ) {
     const clarificationMessageKey = `managed:${state.input.runId}:clarification`;
     await taskCreationFileMemoryStore.setPendingClarification(
       state.input.sessionId,
       input.question,
-      input.options
+      input.options,
+      input.clarificationType
     );
     await this.setupService.persistTimelineMessage({
       sessionId: state.input.sessionId,
@@ -926,6 +946,7 @@ export class AltusRunCoordinator {
       metadata: {
         question: input.question,
         options: input.options,
+        clarificationType: input.clarificationType,
         runId: state.input.runId,
       },
       messageKey: clarificationMessageKey,
@@ -938,6 +959,7 @@ export class AltusRunCoordinator {
       {
       question: input.question,
       options: input.options,
+      clarificationType: input.clarificationType,
       content: input.question,
       messageKey: clarificationMessageKey,
       transitionReason: 'clarification_requested',
@@ -1887,6 +1909,8 @@ export class AltusRunCoordinator {
     try {
       const preExecutionClarificationQuestion = this.resolvePreExecutionClarificationQuestion(state);
       if (preExecutionClarificationQuestion) {
+        const preExecutionClarificationOptions = this.resolvePreExecutionClarificationOptions(state);
+        const preExecutionClarificationType = this.resolvePreExecutionClarificationType(state);
         state.markWaitingUser();
         await this.syncLoopSnapshot(state, {
           lastTransitionReason: 'clarification_requested',
@@ -1897,6 +1921,8 @@ export class AltusRunCoordinator {
         });
         await this.requestClarification(state, {
           question: preExecutionClarificationQuestion,
+          options: preExecutionClarificationOptions,
+          clarificationType: preExecutionClarificationType,
         });
         await this.lifecycleService.markWaitingUser(state);
         return;

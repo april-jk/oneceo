@@ -706,6 +706,11 @@ test('deployment tools are blocked for non-deployable artifact sessions', async 
       scriptArtifactRequested: false,
       emailTemplateRequested: true,
       deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
     },
   });
 
@@ -742,6 +747,11 @@ test('deployment tools are blocked for website source sessions without an explic
       scriptArtifactRequested: false,
       emailTemplateRequested: false,
       deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
     },
   });
 

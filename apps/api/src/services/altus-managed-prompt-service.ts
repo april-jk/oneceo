@@ -1,6 +1,6 @@
 import type { ManagedSkillCatalogEntry, ManagedSkillContext } from './altus-managed-shared';
 import type { SessionConnectorStatus } from './session-connector-service';
-import { classifyTaskIntentShape } from './task-intent-shape-service';
+import { classifyTaskIntentShape, type TaskClarificationType } from './task-intent-shape-service';
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -265,6 +265,16 @@ export type AltusManagedTaskIntentProfile = {
   deploymentAllowed: boolean;
   needsClarification: boolean;
   clarificationQuestion: string;
+  clarificationType: TaskClarificationType;
+  clarificationOptions?: string[];
+  todoRequired: boolean;
+  todoReason:
+    | 'multi_step'
+    | 'multi_target'
+    | 'debug_chain'
+    | 'integration_chain'
+    | 'explicit_user_request'
+    | 'none';
 };
 
 export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTaskIntentProfile {
@@ -328,8 +338,29 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
     scriptArtifactRequested,
     emailTemplateRequested,
     deploymentAllowed,
-    needsClarification: intentShape.needsClarification,
-    clarificationQuestion: intentShape.clarificationQuestion,
+    needsClarification:
+      intentShape.needsClarification || intentShape.candidateClarificationType !== 'none',
+    clarificationQuestion:
+      intentShape.clarificationQuestion || intentShape.candidateClarificationQuestion,
+    clarificationType: intentShape.candidateClarificationType,
+    clarificationOptions:
+      intentShape.candidateClarificationOptions.length > 0
+        ? intentShape.candidateClarificationOptions
+        : undefined,
+    todoRequired:
+      intentShape.candidateTodoSignals.explicitTodoRequest ||
+      intentShape.candidateTodoSignals.hasMultipleSubtasks ||
+      intentShape.candidateTodoSignals.hasDebugChain ||
+      intentShape.candidateTodoSignals.hasIntegrationChain,
+    todoReason: intentShape.candidateTodoSignals.explicitTodoRequest
+      ? 'explicit_user_request'
+      : intentShape.candidateTodoSignals.hasMultipleSubtasks
+        ? 'multi_step'
+        : intentShape.candidateTodoSignals.hasDebugChain
+          ? 'debug_chain'
+          : intentShape.candidateTodoSignals.hasIntegrationChain
+            ? 'integration_chain'
+            : 'none',
   };
 }
 
@@ -460,6 +491,39 @@ export class AltusManagedPromptService {
             '',
           ].join('\n')
         : '';
+    const clarificationFocusSection =
+      taskIntentProfile?.needsClarification && taskIntentProfile.clarificationType !== 'none'
+        ? [
+            '# Clarification focus',
+            `- Active clarification type: ${taskIntentProfile.clarificationType}.`,
+            ...(Array.isArray(taskIntentProfile.clarificationOptions) &&
+            taskIntentProfile.clarificationOptions.length > 0
+              ? [
+                  `- Available clarification options: ${taskIntentProfile.clarificationOptions
+                    .map((item) => `\`${item}\``)
+                    .join(', ')}.`,
+                ]
+              : []),
+            '',
+          ].join('\n')
+        : '';
+    const todoGateSection =
+      taskIntentProfile && !taskIntentProfile.needsClarification
+        ? taskIntentProfile.todoRequired
+          ? [
+              '# Todo gate',
+              `- The current request requires a pre-execution todo snapshot (reason=${taskIntentProfile.todoReason}).`,
+              '- Call `todowrite` before the first execution step, then update it after each major step.',
+              '- While work is ongoing, `todowrite` must contain exactly one `in_progress` item.',
+              '',
+            ].join('\n')
+          : [
+              '# Simple-task gate',
+              '- The current request does not require a pre-execution todo snapshot.',
+              '- Do not call `todowrite` just because the request sounds non-trivial; execute directly with the minimum correct tool path.',
+              '',
+            ].join('\n')
+        : '';
 
     return [
       'You are Altus, the managed-mode engineering agent inside OneCEO.',
@@ -472,14 +536,14 @@ export class AltusManagedPromptService {
       '- Think through the task, but only output short user-facing messages.',
       '- Use tools to inspect files, run commands, search code, and update files when needed.',
       '- Before acting, judge the task complexity as simple, normal, or complex based on scope, uncertainty, dependencies, and verification cost.',
-      '- For simple tasks, proceed directly with the minimum correct tool path.',
-      '- For normal tasks, keep a short execution checklist in mind and verify each meaningful change before finishing.',
-      '- For complex tasks, you must first form a detailed step-by-step todo list, then execute it one step at a time in a stable order.',
-      '- A task is complex when it involves multiple files, multiple subsystems, unclear dependencies, staged verification, migrations, infrastructure/runtime changes, or a non-trivial debugging chain.',
-      '- For complex tasks, do not jump straight to the final implementation. First inspect the relevant context, break the work into concrete steps, then complete and verify them sequentially.',
-      '- For complex tasks, keep the todo detailed enough to cover discovery, implementation, verification, and completion; do not collapse multiple risky changes into one step.',
-      '- When substantial work requires a todo, call `todowrite` before the first execution step and update it after each major step.',
-      '- While work is still ongoing, `todowrite` must contain exactly one `in_progress` item. Use zero `in_progress` only when every todo is completed and `complete_task` is your immediate next action.',
+      '- Treat simple, normal, or complex as descriptive working language only. Do not use that grading as an independent todo trigger.',
+      '- If `taskIntentProfile.needsClarification=true`, clarify first. Do not call `todowrite`, do not start execution tools, and do not enter implementation before the user answers.',
+      '- If `taskIntentProfile.todoRequired=true`, you must call `todowrite` before the first execution step and update it after each major step.',
+      '- If `taskIntentProfile.todoRequired=false`, do not preemptively call `todowrite` for trivial or simple work; execute directly with the minimum correct tool path.',
+      '- A task can still be described as complex when it involves multiple files, multiple subsystems, unclear dependencies, staged verification, migrations, infrastructure/runtime changes, or a non-trivial debugging chain.',
+      '- When `taskIntentProfile.todoRequired=true`, inspect the relevant context, break the work into concrete steps, then complete and verify them sequentially.',
+      '- When `taskIntentProfile.todoRequired=true`, keep the todo detailed enough to cover discovery, implementation, verification, and completion; do not collapse multiple risky changes into one step.',
+      '- While `taskIntentProfile.todoRequired=true` and work is still ongoing, `todowrite` must contain exactly one `in_progress` item. Use zero `in_progress` only when every todo is completed and `complete_task` is your immediate next action.',
       '- If the task requires creating or modifying files, you must use tools such as write_file, read_file, list_directory, search_code, or shell_execute before replying.',
       '- Do not paste full implementation code into the chat as the main answer when the request is to modify the workspace; perform the file operation instead, then summarize the result.',
       '- Do not claim success unless the result is verified from tool output.',
@@ -536,6 +600,8 @@ export class AltusManagedPromptService {
       nonDeployableTaskSection,
       noAutoDeploySection,
       clarificationGateSection,
+      clarificationFocusSection,
+      todoGateSection,
       '# OneCEO web app contract',
       '- When the user asks for a website, web app, dashboard, admin panel, SaaS UI, landing page with working product flow, or other deployable browser product, you must build it as a OneCEO deployable web app instead of an ad-hoc static artifact.',
       '- For deployable web app tasks, you must produce a root `package.json` with working `build` and `start` scripts.',

@@ -10,6 +10,24 @@ function countHits(text: string, keywords: readonly string[]) {
   return keywords.reduce((count, keyword) => count + (text.includes(keyword) ? 1 : 0), 0);
 }
 
+export type TaskClarificationType =
+  | 'artifact_type'
+  | 'tech_stack'
+  | 'scope_boundary'
+  | 'integration_target'
+  | 'acceptance_requirement'
+  | 'none';
+
+export type TaskTodoSignalSummary = {
+  explicitTodoRequest: boolean;
+  hasMultipleSubtasks: boolean;
+  hasDebugChain: boolean;
+  hasIntegrationChain: boolean;
+  looksTrivial: boolean;
+  isSingleCommandLike: boolean;
+  isSinglePointEditLike: boolean;
+};
+
 const EXPLICIT_NO_DEPLOY_KEYWORDS = [
   '不要部署',
   '不需要部署',
@@ -213,6 +231,159 @@ const BUSINESS_PLANNING_KEYWORDS = [
   'business plan',
 ] as const;
 
+const EXPLICIT_TODO_REQUEST_KEYWORDS = [
+  'todo',
+  'todo list',
+  'to-do',
+  '待办',
+  '待办列表',
+  '任务列表',
+] as const;
+
+const MULTI_TASK_HINT_KEYWORDS = [
+  '并',
+  '以及',
+  '并且',
+  '同时',
+  '分别',
+  '以及',
+  '、',
+  '，',
+  ',',
+  ' and ',
+  ' then ',
+] as const;
+
+const VERIFICATION_HINT_KEYWORDS = [
+  '测试',
+  '验证',
+  'test',
+  'tests',
+  'build',
+  '检查',
+] as const;
+
+const DEBUG_CHAIN_KEYWORDS = [
+  '修复',
+  '排查',
+  'debug',
+  'bug',
+  '报错',
+  '错误',
+  '问题',
+  '故障',
+  '卡住',
+  '崩溃',
+] as const;
+
+const INTEGRATION_CHAIN_KEYWORDS = [
+  '部署',
+  '上线',
+  '迁移',
+  '联调',
+  '集成',
+  '接入',
+  '打通',
+  '接口',
+  'api',
+  '数据库',
+  '登录',
+  '权限',
+  'connector',
+] as const;
+
+const TRIVIAL_EDIT_KEYWORDS = [
+  '注释',
+  'comment',
+  '文案',
+  'copy',
+  '按钮文案',
+  '样式',
+  '颜色',
+  '一行',
+  '改单词',
+  '改个字',
+  '改一下文案',
+] as const;
+
+const SINGLE_COMMAND_HINT_KEYWORDS = [
+  'npm install',
+  'pnpm install',
+  'yarn install',
+  'git status',
+  'git diff',
+  'ls',
+  'pwd',
+  '执行一次',
+  'run ',
+] as const;
+
+const TECH_STACK_KEYWORDS = [
+  'react',
+  'vue',
+  'next',
+  'typescript',
+  'javascript',
+  'node',
+  'express',
+  'fastify',
+  'python',
+  'fastapi',
+  'flask',
+  'java',
+  'spring',
+  'go',
+  'rust',
+  'php',
+] as const;
+
+const SCOPE_BOUNDARY_KEYWORDS = [
+  '前端',
+  '后端',
+  '数据库',
+  '登录',
+  '权限',
+  'auth',
+  'api',
+  'frontend',
+  'backend',
+  'full stack',
+  'full-stack',
+] as const;
+
+const ACCEPTANCE_REQUIREMENT_KEYWORDS = [
+  '源码',
+  '本地运行',
+  '测试通过',
+  '测试',
+  '部署',
+  '上线',
+  'build',
+  'run',
+  '可运行',
+] as const;
+
+const INTEGRATION_VERB_KEYWORDS = ['接入', '打通', '集成', '对接', 'integrate'] as const;
+
+const INTEGRATION_TARGET_HINT_KEYWORDS = [
+  'github',
+  'notion',
+  'slack',
+  'supabase',
+  'vercel',
+  'stripe',
+  '数据库',
+  'postgres',
+  'mysql',
+  'crm',
+  'erp',
+  'oa',
+  'sap',
+] as const;
+
+const ARTIFACT_TYPE_OPTIONS = ['网页应用', '后端 API', '本地脚本', '完整业务系统'] as const;
+const ACCEPTANCE_REQUIREMENT_OPTIONS = ['只要源码', '本地可运行', '测试通过', '可直接部署'] as const;
+
 export type TaskArtifactKind =
   | 'web_app'
   | 'script_artifact'
@@ -248,6 +419,10 @@ export type TaskIntentShape = {
   needsClarification: boolean;
   clarificationQuestions: string[];
   clarificationQuestion: string;
+  candidateTodoSignals: TaskTodoSignalSummary;
+  candidateClarificationType: TaskClarificationType;
+  candidateClarificationQuestion: string;
+  candidateClarificationOptions: string[];
   reasoningTags: string[];
 };
 
@@ -313,6 +488,83 @@ export function classifyTaskIntentShape(input: string | string[]): TaskIntentSha
       !deployRequested) ||
     boundaryOnlySoftwareRequest;
 
+  const explicitTodoRequest = includesAny(combinedText, EXPLICIT_TODO_REQUEST_KEYWORDS);
+  const hasMultipleSubtasks =
+    softwareRequested &&
+    includesAny(combinedText, MULTI_TASK_HINT_KEYWORDS) &&
+    (countHits(combinedText, SOFTWARE_DETAIL_KEYWORDS) >= 2 ||
+      includesAny(combinedText, VERIFICATION_HINT_KEYWORDS));
+  const hasDebugChain = includesAny(combinedText, DEBUG_CHAIN_KEYWORDS);
+  const hasIntegrationChain = includesAny(combinedText, INTEGRATION_CHAIN_KEYWORDS);
+  const isSingleCommandLike = includesAny(latestText, SINGLE_COMMAND_HINT_KEYWORDS);
+  const isSinglePointEditLike = includesAny(combinedText, TRIVIAL_EDIT_KEYWORDS);
+  const looksTrivial =
+    !needsClarification &&
+    !explicitTodoRequest &&
+    (isSingleCommandLike || isSinglePointEditLike) &&
+    !hasDebugChain &&
+    !hasIntegrationChain;
+
+  const hasExplicitTechStack = includesAny(combinedText, TECH_STACK_KEYWORDS);
+  const hasScopeBoundaryDetail = includesAny(combinedText, SCOPE_BOUNDARY_KEYWORDS);
+  const hasAcceptanceRequirement = includesAny(combinedText, ACCEPTANCE_REQUIREMENT_KEYWORDS);
+  const hasIntegrationVerb = includesAny(combinedText, INTEGRATION_VERB_KEYWORDS);
+  const hasIntegrationTargetHint = includesAny(combinedText, INTEGRATION_TARGET_HINT_KEYWORDS);
+  const artifactTypeUnclear =
+    softwareRequested &&
+    !researchAnalysisRequested &&
+    !businessPlanningRequested &&
+    !webArtifactRequested &&
+    !scriptArtifactRequested &&
+    !includesAny(combinedText, ['后端 api', 'backend api', '后端', 'backend', '网页应用', '移动端']) &&
+    (broadSoftwareRequested || includesAny(combinedText, ['工具', 'tool', '应用', 'app', '后台']));
+  const techStackUnclear =
+    softwareRequested &&
+    !hasExplicitTechStack &&
+    !artifactTypeUnclear &&
+    !researchAnalysisRequested &&
+    !businessPlanningRequested;
+  const scopeBoundaryUnclear =
+    softwareRequested &&
+    !artifactTypeUnclear &&
+    (artifactKind === 'business_system' || includesAny(combinedText, ['后台', 'dashboard', 'admin', 'crm', 'erp'])) &&
+    !hasScopeBoundaryDetail;
+  const integrationTargetUnclear = hasIntegrationVerb && !hasIntegrationTargetHint;
+  const acceptanceRequirementUnclear =
+    softwareRequested &&
+    !artifactTypeUnclear &&
+    !scopeBoundaryUnclear &&
+    !hasAcceptanceRequirement &&
+    !researchAnalysisRequested &&
+    !businessPlanningRequested;
+
+  let candidateClarificationType: TaskClarificationType = 'none';
+  let candidateClarificationQuestion = '';
+  let candidateClarificationOptions: string[] = [];
+  if (artifactTypeUnclear || boundaryOnlySoftwareRequest) {
+    candidateClarificationType = 'artifact_type';
+    candidateClarificationQuestion =
+      '这次要交付的是网页应用、后端 API、本地脚本，还是完整业务系统？';
+    candidateClarificationOptions = [...ARTIFACT_TYPE_OPTIONS];
+  } else if (techStackUnclear) {
+    candidateClarificationType = 'tech_stack';
+    candidateClarificationQuestion =
+      '这次希望使用哪种开发语言或框架？如果没有指定，我将按仓库现有技术栈继续。';
+  } else if (scopeBoundaryUnclear) {
+    candidateClarificationType = 'scope_boundary';
+    candidateClarificationQuestion =
+      '这次只需要前端页面，还是需要包含后端、数据库和登录权限？';
+  } else if (integrationTargetUnclear) {
+    candidateClarificationType = 'integration_target';
+    candidateClarificationQuestion =
+      '这次需要接入现有系统吗？如果需要，请说明目标系统或接口边界。';
+  } else if (acceptanceRequirementUnclear) {
+    candidateClarificationType = 'acceptance_requirement';
+    candidateClarificationQuestion =
+      '这次只需要源码，还是还需要本地可运行、测试通过，或可以直接部署？';
+    candidateClarificationOptions = [...ACCEPTANCE_REQUIREMENT_OPTIONS];
+  }
+
   const clarificationQuestions = !needsClarification
     ? []
     : boundaryOnlySoftwareRequest
@@ -359,6 +611,18 @@ export function classifyTaskIntentShape(input: string | string[]): TaskIntentSha
     needsClarification,
     clarificationQuestions,
     clarificationQuestion: clarificationQuestions[0] || '',
+    candidateTodoSignals: {
+      explicitTodoRequest,
+      hasMultipleSubtasks,
+      hasDebugChain,
+      hasIntegrationChain,
+      looksTrivial,
+      isSingleCommandLike,
+      isSinglePointEditLike,
+    },
+    candidateClarificationType,
+    candidateClarificationQuestion,
+    candidateClarificationOptions,
     reasoningTags,
   };
 }

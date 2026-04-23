@@ -51,3 +51,17 @@ test('task intent shape classifier keeps company website requests deployable whe
   assert.equal(shape.deliveryMode, 'deployable');
   assert.equal(shape.needsClarification, false);
 });
+
+test('task intent shape classifier emits todo candidate signals for debugging chains', () => {
+  const shape = classifyTaskIntentShape('帮我排查这个登录 bug，修复后补测试并验证。');
+
+  assert.equal(shape.candidateTodoSignals.hasDebugChain, true);
+  assert.equal(shape.candidateTodoSignals.looksTrivial, false);
+});
+
+test('task intent shape classifier emits structured clarification candidates for tech stack questions', () => {
+  const shape = classifyTaskIntentShape('写一个后端 API');
+
+  assert.equal(shape.candidateClarificationType, 'tech_stack');
+  assert.match(shape.candidateClarificationQuestion, /开发语言或框架/);
+});

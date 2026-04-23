@@ -31,6 +31,11 @@ function createState(runId: string, sessionId: string) {
       scriptArtifactRequested: false,
       emailTemplateRequested: false,
       deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
     },
   });
 }

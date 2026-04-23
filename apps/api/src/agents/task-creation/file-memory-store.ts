@@ -86,6 +86,12 @@ export interface FileSessionRecord {
   };
   pendingQuestion?: string;
   pendingOptions?: string[];
+  pendingClarificationType?:
+    | 'artifact_type'
+    | 'tech_stack'
+    | 'scope_boundary'
+    | 'integration_target'
+    | 'acceptance_requirement';
   pendingResume?: {
     stage: NonNullable<FileSessionRecord['stage']>;
     reason?: string;
@@ -904,13 +910,19 @@ class TaskCreationFileMemoryStore {
     });
   }
 
-  async setPendingClarification(sessionId: string, question: string, options?: string[]): Promise<void> {
+  async setPendingClarification(
+    sessionId: string,
+    question: string,
+    options?: string[],
+    clarificationType?: FileSessionRecord['pendingClarificationType']
+  ): Promise<void> {
     await this.withLock(async () => {
       const memory = await this.readMemory();
       const session = memory.sessions.find((s) => s.id === sessionId);
       if (!session) return;
       session.pendingQuestion = question;
       session.pendingOptions = options;
+      session.pendingClarificationType = clarificationType;
       session.status = 'waiting_user';
       session.stage = 'clarifying';
       session.updatedAt = new Date().toISOString();
@@ -925,6 +937,7 @@ class TaskCreationFileMemoryStore {
       if (!session) return;
       session.pendingQuestion = undefined;
       session.pendingOptions = undefined;
+      session.pendingClarificationType = undefined;
       if (session.status === 'waiting_user') {
         session.status = 'in_progress';
       }

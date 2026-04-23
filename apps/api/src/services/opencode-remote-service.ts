@@ -139,6 +139,9 @@ function buildNeutralTaskIntentProfile(): AltusManagedTaskIntentProfile {
     deploymentAllowed: true,
     needsClarification: false,
     clarificationQuestion: '',
+    clarificationType: 'none',
+    todoRequired: false,
+    todoReason: 'none',
   };
 }
 

@@ -11708,7 +11708,14 @@ export default function App() {
     if (activeSection === 'billing') {
       return (
         <Suspense fallback={<div className="p-6">加载中...</div>}>
-          <BillingManagementSection />
+          <BillingManagementSection
+            onOpenUser={(userId) => {
+              openUserManagementView(userId, { section: 'billing', trail: '计费管理' });
+            }}
+            onOpenConversation={(sessionId) => {
+              openConversationDialog(sessionId, 'overview', { section: 'billing', trail: '计费管理' });
+            }}
+          />
         </Suspense>
       );
     }

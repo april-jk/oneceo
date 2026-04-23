@@ -472,6 +472,19 @@ export class AltusRunCoordinator {
     return `${reminder.join(' ')} Latest plain assistant text: ${excerpt}`;
   }
 
+  private resolvePreExecutionClarificationQuestion(state: AltusRunState) {
+    const messageType = state.input.messageType || 'user_input';
+    const profile = state.input.taskIntentProfile;
+    const question = asText(profile?.clarificationQuestion);
+    if (messageType !== 'user_input') {
+      return '';
+    }
+    if (!profile?.needsClarification || !question) {
+      return '';
+    }
+    return question;
+  }
+
   private async finalizePlainTextConversationCompletion(
     state: AltusRunState,
     assistantContent: string,
@@ -1872,6 +1885,23 @@ export class AltusRunCoordinator {
 
   async execute(state: AltusRunState, abortController: AbortController) {
     try {
+      const preExecutionClarificationQuestion = this.resolvePreExecutionClarificationQuestion(state);
+      if (preExecutionClarificationQuestion) {
+        state.markWaitingUser();
+        await this.syncLoopSnapshot(state, {
+          lastTransitionReason: 'clarification_requested',
+          recoveryMode: 'awaiting_user',
+          currentRound: 0,
+          maxRounds: this.getMaxToolRounds(),
+          plainTextRecoveryUsed: false,
+        });
+        await this.requestClarification(state, {
+          question: preExecutionClarificationQuestion,
+        });
+        await this.lifecycleService.markWaitingUser(state);
+        return;
+      }
+
       await this.eventWriter.appendRunEvent(
         state.input.runId,
         state.input.sessionId,

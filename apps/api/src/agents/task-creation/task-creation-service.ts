@@ -709,6 +709,7 @@ export class TaskCreationService {
           userId: payload.userId,
           model: run.model || this.resolveAltusModel(),
           userInput: this.buildExecutionBrief(payload, 'development'),
+          messageType: 'user_input',
           sessionTitle: sessionMemory?.title || null,
           memoryContextPrompt: memoryContext.promptSection,
           userMemory: memoryContext.userMemory,

@@ -482,6 +482,41 @@ export function buildManagedToolDefinitions() {
     {
       type: 'function',
       function: {
+        name: 'todowrite',
+        description:
+          'Write or update the current execution todo list before starting substantial work and after each major step.',
+        parameters: objectSchema(
+          {
+            todos: {
+              type: 'array',
+              description:
+                'Ordered todo list. Use exactly one in_progress item while work is still ongoing; use zero only when every item is completed and complete_task is the immediate next action.',
+              items: objectSchema(
+                {
+                  content: {
+                    type: 'string',
+                    description: 'Concrete todo item text visible to the user.',
+                  },
+                  status: {
+                    type: 'string',
+                    description: 'Todo status: pending, in_progress, or completed.',
+                  },
+                  activeForm: {
+                    type: 'string',
+                    description: 'Optional present-tense short form of the active step.',
+                  },
+                },
+                ['content', 'status']
+              ),
+            },
+          },
+          ['todos']
+        ),
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'ask_user',
         description: 'Ask the user one precise clarification question when blocked by missing requirements.',
         parameters: objectSchema(

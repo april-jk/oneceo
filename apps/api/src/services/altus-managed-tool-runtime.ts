@@ -35,6 +35,14 @@ export type ManagedToolResult =
       activatedSkills?: ManagedSkillContext[];
     };
 
+type ManagedTodoStatus = 'pending' | 'in_progress' | 'completed';
+
+type ManagedTodoItem = {
+  content: string;
+  status: ManagedTodoStatus;
+  activeForm?: string;
+};
+
 function asPositiveInt(value: unknown, fallback: number, max: number) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
@@ -64,6 +72,10 @@ function asStringArray(value: unknown, maxItems: number) {
     if (result.length >= maxItems) break;
   }
   return result;
+}
+
+function isManagedTodoStatus(value: string): value is ManagedTodoStatus {
+  return value === 'pending' || value === 'in_progress' || value === 'completed';
 }
 
 function shellEscape(value: string): string {
@@ -306,6 +318,47 @@ export class AltusManagedToolRuntime {
       }
     }
     return Array.from(deduped.values());
+  }
+
+  private parseTodos(raw: unknown) {
+    if (!Array.isArray(raw)) {
+      throw new Error('todowrite_missing_todos');
+    }
+    const todos = raw
+      .map((item) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+        const record = item as Record<string, unknown>;
+        const content = asText(record.content);
+        const status = asText(record.status);
+        const activeForm = asText(record.activeForm);
+        if (!content || !isManagedTodoStatus(status)) {
+          return null;
+        }
+        return {
+          content,
+          status,
+          ...(activeForm ? { activeForm } : {}),
+        } satisfies ManagedTodoItem;
+      })
+      .filter((item): item is ManagedTodoItem => Boolean(item))
+      .slice(0, 12);
+
+    if (todos.length === 0) {
+      throw new Error('todowrite_missing_valid_todos');
+    }
+
+    const inProgressCount = todos.filter((item) => item.status === 'in_progress').length;
+    const allCompleted = todos.every((item) => item.status === 'completed');
+    if (allCompleted) {
+      if (inProgressCount !== 0) {
+        throw new Error('todowrite_completed_list_invalid');
+      }
+      return todos;
+    }
+    if (inProgressCount !== 1) {
+      throw new Error('todowrite_requires_single_in_progress');
+    }
+    return todos;
   }
 
   private async runShell(
@@ -964,6 +1017,15 @@ export class AltusManagedToolRuntime {
         activatedSkills,
         question,
         options: options.length > 0 ? options : undefined,
+      };
+    }
+
+    if (toolName === 'todowrite') {
+      const todos = this.parseTodos(rawArgs.todos);
+      return {
+        type: 'result',
+        activatedSkills,
+        content: JSON.stringify({ todos }),
       };
     }
 

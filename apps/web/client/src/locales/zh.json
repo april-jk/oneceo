@@ -1395,6 +1395,7 @@
     "title": "AI Agent",
     "subtitle": "今天我可以帮你做什么？",
     "textareaPlaceholder": "在这里输入你的消息...",
+    "projectContextLoading": "正在加载项目...",
     "selectModel": "选择 AI 模型",
     "voiceInput": "语音输入",
     "sendMessage": "发送消息",

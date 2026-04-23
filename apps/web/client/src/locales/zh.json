@@ -116,8 +116,6 @@
     "deleting": "删除中..."
   },
   "projectEditor": {
-    "createDescription": "设置项目名称、项目指令，以及该项目内新会话默认带入的连接器。可选择多个。项目内新建会话时会默认带入这些连接器。",
-    "editDescription": "更新项目名称、项目指令，以及该项目内新会话默认带入的连接器。可选择多个。项目内新建会话时会默认带入这些连接器。",
     "projectInstructionLabel": "项目指令",
     "projectInstructionPlaceholder": "例如：数据库使用 Railway Postgres，推送到 GitHub 后自动部署；保持专业语气，关键结论附来源。",
     "defaultConnectorsLabel": "默认连接器",

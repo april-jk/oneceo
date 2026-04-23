@@ -824,24 +824,24 @@
         }
       },
       "vercel": {
-        "intro": "The Vercel connector uses the official MCP endpoint at https://mcp.vercel.com. Prefer Vercel OAuth. If OAuth is not configured in the current environment yet, use a Personal Access Token as a temporary path.",
+        "intro": "The Vercel connector is now OAuth-only. After authorization completes, the platform calls the Vercel REST API through the oneceo internal MCP wrapper instead of exposing the official MCP endpoint or a personal token inside the sandbox.",
         "steps": {
-          "0": "If Vercel OAuth is configured in the deployment, click connect and complete the official authorization first.",
-          "1": "If OAuth is not configured in the current environment, create a Personal Access Token in Vercel account settings.",
-          "2": "After saving, the sandbox reuses the authorization through the official MCP endpoint."
+          "0": "Click connect and finish the Vercel OAuth authorization flow.",
+          "1": "If you want a default team or project scope, fill in teamId, projectId, or projectSlug on the profile.",
+          "2": "After authorization, the platform mounts the profile as an internal MCP provider. The agent sees Vercel MCP tools, not a personal token."
         },
         "tips": {
-          "0": "Team ID is still optional and can be used to constrain the team context.",
-          "1": "If deployment or project capabilities behave unexpectedly, first check the token scope or confirm that OAuth was authorized for the target team."
+          "0": "Use separate profiles for different teams or projects so deployment, domain, and env-var context does not get mixed.",
+          "1": "Before changing env vars or production-facing settings, make the target project and environment explicit."
         },
         "links": {
-          "tokens": {
-            "label": "Vercel Tokens",
-            "description": "Create or manage access tokens"
+          "oauthDocs": {
+            "label": "Vercel OAuth docs",
+            "description": "Read the authorization server and callback requirements"
           },
-          "mcpDocs": {
-            "label": "Vercel MCP docs",
-            "description": "Review official MCP capabilities and authorization guidance"
+          "restApi": {
+            "label": "Vercel REST API",
+            "description": "Review project, deployment, domain, and env-var endpoints"
           }
         }
       },

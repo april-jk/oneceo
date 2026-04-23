@@ -23,6 +23,7 @@ import internalAdminOperationsAnalyticsRoutes from './routes/internal-admin-oper
 import internalTaskCreationRoutes from './routes/internal-task-creation-routes';
 import billingRoutes from './routes/billing-routes';
 import internalBillingRoutes from './routes/internal-billing-routes';
+import internalVercelMcpRoutes from './routes/internal-vercel-mcp-routes';
 import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
 import { closeDatabaseConnection, testDatabaseConnection } from './config/database';
 import { getPublicErrorMessage } from './utils/error-response';
@@ -176,6 +177,7 @@ app.use('/api/internal/admin/operations/analytics', internalAdminOperationsAnaly
 app.use('/api/internal', internalTaskCreationRoutes);
 app.use('/api/billing', billingRoutes);
 app.use('/api/internal/billing', internalBillingRoutes);
+app.use('/api/internal', internalVercelMcpRoutes);
 
 // 任务相关 API
 app.get('/api/tasks', (req, res) => {

@@ -10,6 +10,7 @@ const originalFetch = global.fetch;
 const originalConnectorSecretKey = process.env.CONNECTOR_SECRET_KEY;
 const originalVercelClientId = process.env.VERCEL_CONNECTOR_CLIENT_ID;
 const originalVercelClientSecret = process.env.VERCEL_CONNECTOR_CLIENT_SECRET;
+const originalVercelRedirectUri = process.env.VERCEL_CONNECTOR_REDIRECT_URI;
 const originalNotionClientId = process.env.NOTION_CONNECTOR_CLIENT_ID;
 const originalNotionClientSecret = process.env.NOTION_CONNECTOR_CLIENT_SECRET;
 const originalNotionRedirectUri = process.env.NOTION_CONNECTOR_REDIRECT_URI;
@@ -37,6 +38,11 @@ afterEach(() => {
     delete process.env.VERCEL_CONNECTOR_CLIENT_SECRET;
   } else {
     process.env.VERCEL_CONNECTOR_CLIENT_SECRET = originalVercelClientSecret;
+  }
+  if (originalVercelRedirectUri === undefined) {
+    delete process.env.VERCEL_CONNECTOR_REDIRECT_URI;
+  } else {
+    process.env.VERCEL_CONNECTOR_REDIRECT_URI = originalVercelRedirectUri;
   }
   if (originalNotionClientId === undefined) {
     delete process.env.NOTION_CONNECTOR_CLIENT_ID;
@@ -203,8 +209,10 @@ test('createProfile allows Supabase token-only save with empty profile/display n
 });
 
 test('startOAuthForProfile generates PKCE challenge for vercel oauth', async () => {
+  process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
   process.env.VERCEL_CONNECTOR_CLIENT_ID = 'vercel-client';
   process.env.VERCEL_CONNECTOR_CLIENT_SECRET = 'vercel-secret';
+  process.env.VERCEL_CONNECTOR_REDIRECT_URI = '/vercel/callback';
 
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
@@ -228,6 +236,7 @@ test('startOAuthForProfile generates PKCE challenge for vercel oauth', async () 
   assert.ok(result.authUrl.startsWith('https://vercel.com/oauth/authorize?'));
   const authUrl = new URL(result.authUrl);
   assert.equal(authUrl.searchParams.get('client_id'), 'vercel-client');
+  assert.equal(authUrl.searchParams.get('redirect_uri'), 'https://dev.oneceo.ai/vercel/callback');
   assert.equal(authUrl.searchParams.get('response_type'), 'code');
   assert.equal(authUrl.searchParams.get('code_challenge_method'), 'S256');
   assert.ok(authUrl.searchParams.get('code_challenge'));
@@ -236,8 +245,11 @@ test('startOAuthForProfile generates PKCE challenge for vercel oauth', async () 
 });
 
 test('completeOAuthByProfile uses stored PKCE verifier for vercel oauth token exchange', async () => {
+  process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
+  process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
   process.env.VERCEL_CONNECTOR_CLIENT_ID = 'vercel-client';
   process.env.VERCEL_CONNECTOR_CLIENT_SECRET = 'vercel-secret';
+  process.env.VERCEL_CONNECTOR_REDIRECT_URI = '/vercel/callback';
 
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
@@ -282,23 +294,27 @@ test('completeOAuthByProfile uses stored PKCE verifier for vercel oauth token ex
   global.fetch = mock.fn(async (input: string | URL | Request, init?: RequestInit) => {
     fetchCount += 1;
     if (fetchCount === 1) {
-      assert.equal(String(input), 'https://api.vercel.com/v2/oauth/access_token');
+      assert.equal(String(input), 'https://api.vercel.com/login/oauth/token');
       assert.match(String(init?.body || ''), /code_verifier=pkce-verifier-123/);
+      assert.match(
+        String(init?.body || ''),
+        /redirect_uri=https%3A%2F%2Fdev.oneceo.ai%2Fvercel%2Fcallback/
+      );
       return new Response(
         JSON.stringify({
           access_token: 'vercel-access-token',
+          refresh_token: 'vercel-refresh-token',
           token_type: 'Bearer',
+          expires_in: 3600,
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } }
       );
     }
 
-    assert.equal(String(input), 'https://api.vercel.com/www/user');
+    assert.equal(String(input), 'https://api.vercel.com/login/oauth/userinfo');
     return new Response(
       JSON.stringify({
-        user: {
-          username: 'vercel-user',
-        },
+        preferred_username: 'vercel-user',
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     );
@@ -318,6 +334,17 @@ test('completeOAuthByProfile uses stored PKCE verifier for vercel oauth token ex
       String(capturedUpdate?.secretCiphertext || '')
     )?.accessToken,
     'vercel-access-token'
+  );
+  assert.equal(
+    connectorSecretService.decryptJson<{ refreshToken?: string }>(
+      String(capturedUpdate?.secretCiphertext || '')
+    )?.refreshToken,
+    'vercel-refresh-token'
+  );
+  assert.ok(
+    connectorSecretService.decryptJson<{ expiresAt?: string }>(
+      String(capturedUpdate?.secretCiphertext || '')
+    )?.expiresAt
   );
 });
 

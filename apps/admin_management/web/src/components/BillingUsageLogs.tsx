@@ -16,12 +16,17 @@ interface UsageLog {
   createdAt: string;
 }
 
+interface BillingUsageLogsProps {
+  onOpenUser?: (userId: string) => void;
+  onOpenConversation?: (sessionId: string) => void;
+}
+
 function formatDateTime(value?: string | null) {
   if (!value) return '-';
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
 }
 
-export function BillingUsageLogs() {
+export function BillingUsageLogs({ onOpenUser, onOpenConversation }: BillingUsageLogsProps) {
   const [logs, setLogs] = useState<UsageLog[]>([]);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
@@ -206,7 +211,23 @@ export function BillingUsageLogs() {
                         <small>{new Date(log.createdAt).toLocaleTimeString('zh-CN')}</small>
                       </div>
                     </td>
-                    <td><span className="mono">{log.userId.slice(0, 8)}...</span></td>
+                    <td>
+                      {onOpenUser ? (
+                        <button
+                          type="button"
+                          className="management-title-link mono"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenUser(log.userId);
+                          }}
+                          title={log.userId}
+                        >
+                          {log.userId.slice(0, 8)}...
+                        </button>
+                      ) : (
+                        <span className="mono">{log.userId.slice(0, 8)}...</span>
+                      )}
+                    </td>
                     <td><strong>{log.model.split('/').pop() || log.model}</strong></td>
                     <td>
                       <div className="user-management-table-cell-stack user-management-table-metric">
@@ -373,11 +394,35 @@ export function BillingUsageLogs() {
                       </div>
                       <div>
                         <dt>用户ID</dt>
-                        <dd><span className="mono">{selectedLog.userId}</span></dd>
+                        <dd>
+                          {onOpenUser ? (
+                            <button
+                              type="button"
+                              className="management-title-link mono"
+                              onClick={() => onOpenUser(selectedLog.userId)}
+                            >
+                              {selectedLog.userId}
+                            </button>
+                          ) : (
+                            <span className="mono">{selectedLog.userId}</span>
+                          )}
+                        </dd>
                       </div>
                       <div>
                         <dt>会话ID</dt>
-                        <dd><span className="mono">{selectedLog.sessionId || '-'}</span></dd>
+                        <dd>
+                          {selectedLog.sessionId && onOpenConversation ? (
+                            <button
+                              type="button"
+                              className="management-title-link mono"
+                              onClick={() => onOpenConversation(selectedLog.sessionId!)}
+                            >
+                              {selectedLog.sessionId}
+                            </button>
+                          ) : (
+                            <span className="mono">{selectedLog.sessionId || '-'}</span>
+                          )}
+                        </dd>
                       </div>
                       <div>
                         <dt>运行ID</dt>

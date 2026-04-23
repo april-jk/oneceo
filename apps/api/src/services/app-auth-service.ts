@@ -223,6 +223,13 @@ export class AppAuthService {
         personalization: normalizeAppUserPersonalization(undefined),
       },
     });
+    // 初始化用户积分（新用户赠送 500 积分）
+    try {
+      const { billingService } = await import('./billing-service');
+      await billingService.initUserCredits(String(created.id), 500);
+    } catch (error) {
+      console.error('[Billing] 初始化用户积分失败:', error);
+    }
     return this.createSessionForUser(String(created.id), req);
   }
 

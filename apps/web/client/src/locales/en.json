@@ -116,8 +116,6 @@
     "deleting": "Deleting..."
   },
   "projectEditor": {
-    "createDescription": "Set the project name, project instruction, and the connectors that should be preselected for new sessions in this project. You can select multiple connectors. New sessions in this project will start with these connectors preselected.",
-    "editDescription": "Update the project name, project instruction, and the connectors that should be preselected for new sessions in this project. You can select multiple connectors. New sessions in this project will start with these connectors preselected.",
     "projectInstructionLabel": "Project instruction",
     "projectInstructionPlaceholder": "For example: Use Railway Postgres, deploy automatically after pushing to GitHub, keep a professional tone, and cite important conclusions.",
     "defaultConnectorsLabel": "Default connectors",

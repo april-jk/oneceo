@@ -77,6 +77,7 @@ type ConnectorFormValues = Record<string, string>;
 const NEW_PROFILE_ID = "__new__";
 export const NOTION_FIXED_CALLBACK_PATH = "/notion/callback";
 export const SLACK_FIXED_CALLBACK_PATH = "/slack/callback";
+export const VERCEL_FIXED_CALLBACK_PATH = "/vercel/callback";
 const GITHUB_APP_AUTHORIZATIONS_URL = "https://github.com/settings/apps/authorizations";
 const GITHUB_APP_INSTALLATIONS_URL = "https://github.com/settings/installations";
 const GITHUB_INSTALLATION_MISSING_PATTERN = /没有任何可用安装|未安装到任何账号|installation/i;
@@ -178,7 +179,11 @@ function buildConnectorRedirectUri(
 }
 
 function isFixedConnectorCallbackPath(pathname: string) {
-  return pathname === NOTION_FIXED_CALLBACK_PATH || pathname === SLACK_FIXED_CALLBACK_PATH;
+  return (
+    pathname === NOTION_FIXED_CALLBACK_PATH ||
+    pathname === SLACK_FIXED_CALLBACK_PATH ||
+    pathname === VERCEL_FIXED_CALLBACK_PATH
+  );
 }
 
 export function resolveConnectorOauthCallbackContext(location: string, params: URLSearchParams) {
@@ -189,7 +194,9 @@ export function resolveConnectorOauthCallbackContext(location: string, params: U
       ? "notion"
       : currentPath === SLACK_FIXED_CALLBACK_PATH
         ? "slack"
-        : null;
+        : currentPath === VERCEL_FIXED_CALLBACK_PATH
+          ? "vercel"
+          : null;
   const connector =
     (params.get("connector") as ConnectorKey | null) ||
     (hasOauthCallbackParams ? fixedPathConnector : null);
@@ -349,7 +356,7 @@ export function shouldUseConnectorLevelOauth(connectorKey: ConnectorKey | null |
 }
 
 export function shouldUseUnifiedConnectorCard(connectorKey: ConnectorKey | null | undefined) {
-  return connectorKey === "github" || shouldUseConnectorLevelOauth(connectorKey);
+  return connectorKey === "github" || connectorKey === "vercel" || shouldUseConnectorLevelOauth(connectorKey);
 }
 
 function getGithubAppReauthHint() {
@@ -457,9 +464,10 @@ export function ConnectorCenterPanel({
     const connector = callbackContext.connector;
     const profileId = params.get("profileId");
     const useConnectorLevelOauth = shouldUseConnectorLevelOauth(connector);
+    const useConnectorLevelCallback = useConnectorLevelOauth || (connector === "vercel" && !profileId);
     if (!callbackContext.shouldHandle) return;
     if (!code || !state || !connector) return;
-    if (!useConnectorLevelOauth && !profileId) return;
+    if (!useConnectorLevelCallback && !profileId) return;
     if (callbackHandled.current) return;
     callbackHandled.current = true;
 
@@ -489,6 +497,10 @@ export function ConnectorCenterPanel({
               ? {
                   callbackPath: SLACK_FIXED_CALLBACK_PATH,
                 }
+              : connector === "vercel"
+                ? {
+                    callbackPath: VERCEL_FIXED_CALLBACK_PATH,
+                  }
             : undefined
         );
         let completedProfileId = profileId || null;
@@ -496,7 +508,7 @@ export function ConnectorCenterPanel({
         let authStatus = "";
         let callbackLastError = "";
 
-        if (useConnectorLevelOauth) {
+        if (useConnectorLevelCallback) {
           const result = await completeConnectorOauth(connector, {
             code,
             state,
@@ -663,7 +675,10 @@ export function ConnectorCenterPanel({
       formOverride || formState[editorKey(item.key, profileId)] || {}
     );
     const requiresExplicitProfileName =
-      item.key !== "github" && item.key !== "supabase" && item.key !== "notion";
+      item.key !== "github" &&
+      item.key !== "supabase" &&
+      item.key !== "notion" &&
+      item.key !== "vercel";
 
     if (requiresExplicitProfileName && !payload.profileName) {
       throw new Error(i18n.t("connectors.errors.profileNameRequired"));
@@ -849,7 +864,12 @@ export function ConnectorCenterPanel({
         search,
         detailItem.key,
         profile.profileId,
-        effectiveTargetSessionId
+        effectiveTargetSessionId,
+        detailItem.key === "vercel"
+          ? {
+              callbackPath: VERCEL_FIXED_CALLBACK_PATH,
+            }
+          : undefined
       );
       const { authUrl } = await startConnectorProfileOauth(profile.profileId, {
         redirectUri,

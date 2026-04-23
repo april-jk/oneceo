@@ -143,14 +143,14 @@ export function getConnectorGuides(t: TFunction): Record<ConnectorKey, Connector
       intro: t("connectors.guides.vercel.intro"),
       quickLinks: [
         {
-          label: t("connectors.guides.vercel.links.tokens.label"),
-          href: "https://vercel.com/account/tokens",
-          description: t("connectors.guides.vercel.links.tokens.description"),
+          label: t("connectors.guides.vercel.links.oauthDocs.label"),
+          href: "https://vercel.com/docs/sign-in-with-vercel/authorization-server-api",
+          description: t("connectors.guides.vercel.links.oauthDocs.description"),
         },
         {
-          label: t("connectors.guides.vercel.links.mcpDocs.label"),
-          href: "https://vercel.com/docs/agent-resources/vercel-mcp",
-          description: t("connectors.guides.vercel.links.mcpDocs.description"),
+          label: t("connectors.guides.vercel.links.restApi.label"),
+          href: "https://vercel.com/docs/rest-api/reference",
+          description: t("connectors.guides.vercel.links.restApi.description"),
         },
       ],
       steps: [

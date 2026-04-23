@@ -824,24 +824,24 @@
         }
       },
       "vercel": {
-        "intro": "Vercel 连接器使用官方 MCP 地址 https://mcp.vercel.com。优先使用 Vercel OAuth；如果当前环境尚未配置 OAuth，再使用 Personal Access Token 作为过渡。",
+        "intro": "Vercel 连接器现在只保留 OAuth 授权路径。完成授权后，平台会通过 oneceo 内部 MCP 包装层在服务端代调 Vercel REST API，不再把官方 MCP 或个人 Token 直接暴露到 sandbox。",
         "steps": {
-          "0": "如果部署已配置 Vercel OAuth，优先点击连接并完成官方授权。",
-          "1": "如果当前环境尚未配置 OAuth，就在 Vercel 账号设置中创建 Personal Access Token。",
-          "2": "保存后，sandbox 会通过官方 MCP 地址复用该授权。"
+          "0": "点击连接并完成 Vercel OAuth 授权。",
+          "1": "如果你希望默认锁定团队或项目，请在 profile 中填写 teamId、projectId 或 projectSlug。",
+          "2": "授权完成后，平台会把当前 profile 挂载为内部 MCP provider，Agent 看到的是 Vercel MCP 工具，不是个人 Token。"
         },
         "tips": {
-          "0": "Team ID 仍然是可选项，用于限定团队上下文。",
-          "1": "如果部署或项目能力异常，先检查 token 权限范围，或确认 OAuth 已授权到目标团队。"
+          "0": "建议为不同团队或项目分别创建独立 profile，避免部署、域名和环境变量上下文混用。",
+          "1": "涉及环境变量或生产流量变更时，请先明确目标项目和目标环境。"
         },
         "links": {
-          "tokens": {
-            "label": "Vercel Tokens",
-            "description": "创建或管理 access token"
+          "oauthDocs": {
+            "label": "Vercel OAuth 文档",
+            "description": "查看 Authorization Server API 与回调要求"
           },
-          "mcpDocs": {
-            "label": "Vercel MCP 文档",
-            "description": "查看官方 MCP 能力与授权方式"
+          "restApi": {
+            "label": "Vercel REST API",
+            "description": "查看项目、部署、域名和环境变量接口"
           }
         }
       },

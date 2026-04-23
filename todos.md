@@ -143,7 +143,7 @@
 ### 文档
 
 - 管理文档：
-  - [20260423_首轮澄清优先与Todo前置方案_[尚未采用].md](/Users/watson/codingProj/oneceo/docs/agent研发文档/20260423_首轮澄清优先与Todo前置方案_[尚未采用].md)
+  - [20260423_首轮澄清优先与Todo前置方案_[20260423-1503已采用].md](/Users/watson/codingProj/oneceo/docs/agent研发文档/20260423_首轮澄清优先与Todo前置方案_[20260423-1503已采用].md)
 
 ### TODO 列表
 

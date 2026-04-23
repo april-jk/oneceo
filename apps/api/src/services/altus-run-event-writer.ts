@@ -21,6 +21,19 @@ function shouldProjectManagedToolEvent(eventType: string) {
   return MANAGED_TOOL_EVENT_TYPES.has(asText(eventType).toLowerCase());
 }
 
+function shouldProjectManagedToolPayload(eventType: string, payload: Record<string, unknown>) {
+  const normalizedEventType = asText(eventType).toLowerCase();
+  const toolName = asText(payload.toolName).toLowerCase();
+  if (!toolName) return true;
+  if (toolName === 'ask_user') {
+    return false;
+  }
+  if (toolName === 'todowrite') {
+    return normalizedEventType === 'tool_call_completed';
+  }
+  return true;
+}
+
 function shouldProjectManagedStatusEvent(eventType: string) {
   return MANAGED_STATUS_TIMELINE_EVENT_TYPES.has(asText(eventType).toLowerCase());
 }
@@ -100,7 +113,7 @@ export class AltusRunEventWriter {
       envelopePayload.messageKey = timelineProjectionMessageKey;
     }
     const userVisiblePayload = stripManagedDebugPayload(envelopePayload);
-    if (shouldProjectManagedToolEvent(normalizedEventType)) {
+    if (shouldProjectManagedToolEvent(normalizedEventType) && shouldProjectManagedToolPayload(normalizedEventType, envelopePayload)) {
       const messageKey = timelineProjectionMessageKey;
       const content = asText(envelopePayload.content) || normalizedEventType;
       await taskCreationSessionDAO.addMessage({

@@ -84,6 +84,53 @@ function collectAttachmentContextPrompt(history: Array<{ metadata?: unknown }>):
   return buildAttachmentContextPrompt(contexts.slice(-6));
 }
 
+function collectLatestManagedTodoSnapshot(history: Array<{ metadata?: unknown }>) {
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const metadata = pickObject(history[index]?.metadata);
+    const eventType = asText(metadata.eventType).toLowerCase();
+    const toolName = asText(metadata.toolName).toLowerCase();
+    if (eventType !== 'tool_call_completed' || toolName !== 'todowrite') {
+      continue;
+    }
+    const args = pickObject(metadata.arguments);
+    if (!Array.isArray(args.todos)) {
+      continue;
+    }
+    const todos = args.todos
+      .map((item) => {
+        const record = pickObject(item);
+        const content = asText(record.content);
+        const status = asText(record.status);
+        const activeForm = asText(record.activeForm);
+        if (!content || !status) {
+          return null;
+        }
+        return {
+          content,
+          status,
+          ...(activeForm ? { activeForm } : {}),
+        };
+      })
+      .filter((item): item is { content: string; status: string; activeForm?: string } => Boolean(item));
+    if (todos.length > 0) {
+      return todos;
+    }
+  }
+  return [];
+}
+
+function buildTodoContextPrompt(history: Array<{ metadata?: unknown }>) {
+  const todos = collectLatestManagedTodoSnapshot(history);
+  if (todos.length === 0) {
+    return '';
+  }
+  return [
+    '# Current todo snapshot',
+    'These todos are the latest successful execution snapshot for this session. Reuse and update them instead of inventing a separate plan.',
+    ...todos.map((item) => `- [${item.status}] ${item.content}${item.activeForm ? ` | activeForm=${item.activeForm}` : ''}`),
+  ].join('\n');
+}
+
 function normalizeAttachmentRecord(raw: unknown) {
   const record = pickObject(raw);
   const path = asText(record.path);
@@ -401,6 +448,7 @@ export class AltusManagedSetupService {
   ): Promise<ChatMessage[]> {
     const history = await taskCreationSessionDAO.getMessages(sessionId);
     const attachmentContextPrompt = collectAttachmentContextPrompt(history);
+    const todoContextPrompt = buildTodoContextPrompt(history);
     const inlineImageCache = new Map<string, ChatMessageContentPart>();
     const relevantHistory = history
       .filter((item) => isHistoryMessageRelevant({ role: item.role, messageType: item.messageType }))
@@ -463,6 +511,14 @@ export class AltusManagedSetupService {
             {
               role: 'system' as const,
               content: attachmentContextPrompt,
+            },
+          ]
+        : []),
+      ...(todoContextPrompt
+        ? [
+            {
+              role: 'system' as const,
+              content: todoContextPrompt,
             },
           ]
         : []),

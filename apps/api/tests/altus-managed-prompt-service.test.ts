@@ -20,6 +20,9 @@ test('managed prompt requires task grading and detailed todo for complex tasks',
     /multiple files, multiple subsystems, unclear dependencies, staged verification, migrations, infrastructure\/runtime changes, or a non-trivial debugging chain/i,
   );
   assert.match(prompt, /complete one step, validate it, then move to the next step/i);
+  assert.match(prompt, /call `todowrite` before the first execution step/i);
+  assert.match(prompt, /exactly one `in_progress` item/i);
+  assert.match(prompt, /After a clarification answer arrives, reassess the request from scratch/i);
 });
 
 test('managed prompt enforces multi-phase PPT collaboration and QA gate', () => {

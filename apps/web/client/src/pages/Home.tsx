@@ -6157,12 +6157,7 @@ function OpencodeToolCard({
                     : statusText === "in_progress"
                       ? i18n.t("homeWorkspace.inProgress")
                       : i18n.t("homeWorkspace.pending");
-                const statusTone =
-                  statusText === "completed"
-                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
-                    : statusText === "in_progress"
-                      ? "border-[var(--brand-border)] bg-[var(--brand-soft)] text-[var(--brand-soft-foreground)]"
-                      : "border-border bg-muted/50 text-muted-foreground";
+                const statusTone = getTodoStatusTone(statusText);
                 return (
                   <div
                     key={`${content}-${index}`}
@@ -7420,7 +7415,7 @@ function getTodoStatusLabel(status: string) {
 
 function getTodoStatusTone(status: string) {
   if (status === "completed") {
-    return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
+    return "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-200";
   }
   if (status === "in_progress") {
     return "border-[var(--brand-border)] bg-[var(--brand-soft)] text-[var(--brand-soft-foreground)]";

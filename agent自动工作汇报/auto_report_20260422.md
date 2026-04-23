@@ -21,3 +21,11 @@
 - 已新增 `docs/网络安全/` 文档目录，并补齐“登录接口网络安全测试 TODO”初稿，覆盖越权、会话混淆、爆破/撞库、跨站边界、枚举侧信道、审计与部署配置等测试项；同步将摘要待办写入 `todos.md`，待审核后执行。
 - 已收到“逐条进行测试，确保安全”的执行指令，登录接口网络安全 TODO 已切换为 `[20260422-1307已采用]`，并开始按 P0 优先级进入真实测试与修复阶段。
 - 已完成登录接口第一轮真实安全加固与验证：新增登录失败限流、显式 JSON 边界、账户枚举时间侧信道收口，并补齐 API/Playwright 安全测试，确认跨站 `fetch` 与跨站表单均不能建立登录态。
+- 已确认并采用 Vercel “内部 MCP 包装层 + OAuth-only” 执行方案，文档状态已从 `[尚未采用]` 更新为 `[20260422-2201已采用]`。
+- 已完成后端主链改造：`vercel` connector 改为 OAuth-only，runtime 改挂 oneceo internal MCP，sandbox 不再接收 Vercel access token，而是改用内部 token + 加密 session/profile 上下文头。
+- 已新增 internal Vercel MCP server、Vercel REST client、token refresh service，并接入 session attach / sandbox bootstrap 两条 provider materialize 链路。
+- 已同步更新前端 Vercel guide/locale，删除 Personal Access Token 过渡文案，统一改为 OAuth-only + internal MCP 说明。
+- 已完成定向验证：`tests/vercel-mcp-service.test.ts`、`tests/connector-registry.test.ts`、`tests/session-connector-service.test.ts` 通过；`user-connector-service.test.ts` 在当前环境中执行会长时间卡住，已额外补充更聚焦的 Vercel OAuth 测试文件，待继续排查该大文件测试环境问题。
+- 已补齐 `/vercel/callback` 前端回调函数链路：新增路由、固定回调路径识别、Settings 弹窗自动打开、回调后清理并回跳 session；Vercel 固定回调无 `profileId` 时改用 connector-level callback 通过 state 反查 profile。
+- 已验证 `/vercel/callback` 前端逻辑：`pnpm.cmd --filter web exec vitest run client/src/tests/connector-center-panel.test.ts` 与 `pnpm.cmd --filter web check` 通过。
+- 已按用户反馈移除 Vercel 连接前必须填写 Profile Name 的要求：Vercel 改用统一 OAuth 卡片，点击“连接”即可自动创建默认 profile 并进入 OAuth；API catalog 也不再把 Vercel `profileName` 标记为必填。

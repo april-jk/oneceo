@@ -115,6 +115,27 @@
     "deleteDescription": "删除后将无法恢复该任务会话。",
     "deleting": "删除中..."
   },
+  "projectEditor": {
+    "createDescription": "设置项目名称、项目指令，以及该项目内新会话默认带入的连接器。可选择多个。项目内新建会话时会默认带入这些连接器。",
+    "editDescription": "更新项目名称、项目指令，以及该项目内新会话默认带入的连接器。可选择多个。项目内新建会话时会默认带入这些连接器。",
+    "projectInstructionLabel": "项目指令",
+    "projectInstructionPlaceholder": "例如：数据库使用 Railway Postgres，推送到 GitHub 后自动部署；保持专业语气，关键结论附来源。",
+    "defaultConnectorsLabel": "默认连接器",
+    "optionalSuffix": "（可选）",
+    "defaultConnectorsHint": "可选择多个。项目内新建会话时会默认带入这些连接器。",
+    "emptyDefaultConnectors": "暂未选择默认连接器。项目内新会话将从空连接器状态开始。",
+    "emptySelectionShort": "未选择",
+    "selectedCount": "已选 {{count}} 个",
+    "connectorProfileCount": "{{count}} 个可选 profile",
+    "connectorEmptyState": "当前还没有可选 profile，点击后前往连接器设置完成授权或创建 profile。",
+    "connectorAuthorized": "可用",
+    "connectorNeedsAuth": "需授权",
+    "connectorDeleted": "已失效",
+    "connectorUnknown": "未知",
+    "removeConnector": "移除默认连接器",
+    "noConnectorProfiles": "当前没有可用连接器 profile。",
+    "loadConnectorsFailed": "加载默认连接器候选项失败"
+  },
   "settings": {
     "title": "设置",
     "personalizationTab": "个性化",

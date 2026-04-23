@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   getTaskCreationProject,
   listTaskCreationProjectSessions,
+  summarizeProjectInstruction,
   type TaskCreationProjectSummary,
   type TaskCreationSessionSummary,
 } from "@/lib/task-creation-client";
@@ -39,6 +40,9 @@ export default function StandardProjectDetail({
   const [project, setProject] = useState<TaskCreationProjectSummary | null>(null);
   const [sessions, setSessions] = useState<TaskCreationSessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const projectInstructionSummary = summarizeProjectInstruction(project?.projectInstruction, {
+    maxLength: 240,
+  });
 
   useEffect(() => {
     let disposed = false;
@@ -158,9 +162,7 @@ export default function StandardProjectDetail({
             {project.name}
           </h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-            {project.description?.trim()
-              ? project.description
-              : t("standardProjectDetail.emptyDescription")}
+            {projectInstructionSummary || t("standardProjectDetail.emptyDescription")}
           </p>
           <p className="mt-3 text-sm leading-6 text-muted-foreground">
             {t("standardProjectDetail.pageHint")}

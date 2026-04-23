@@ -70,6 +70,7 @@ import { taskSessionDeliverableService } from '../services/task-session-delivera
 import { platformSkillService } from '../services/platform-skill-service';
 import { userSkillService } from '../services/user-skill-service';
 import { altusMemoryContextService } from '../services/altus-memory-context-service';
+import { projectDefaultConnectorService } from '../services/project-default-connector-service';
 import { taskCreationProjectRedisCacheService } from '../services/task-creation-project-redis-cache-service';
 import { isLegacyClientUserId, isSameUserId, normalizeUserId } from '../utils/user-id';
 
@@ -385,18 +386,21 @@ router.post('/projects', express.json({ limit: '256kb' }), async (req, res) => {
         error: '项目名称已存在',
       });
     }
+    if (Array.isArray(input.defaultConnectors) && input.defaultConnectors.length > 0) {
+      await projectDefaultConnectorService.assertValidForWrite(currentUser.userId, input.defaultConnectors);
+    }
     const created = await appUserProjectDAO.create({
       userId: currentUser.userId,
       name: input.name,
-      description: input.description,
       projectType: 'standard',
-      altusProjectMemory: input.altusProjectMemory,
+      projectInstruction: input.projectInstruction,
+      defaultConnectorProfiles: input.defaultConnectors,
     });
     await altusMemoryContextService.invalidateProjectMemory(currentUser.userId, String(created.id));
     await taskCreationProjectRedisCacheService.invalidateProjectList(currentUser.userId);
     return res.status(201).json({
       success: true,
-      data: toTaskCreationProjectSummary(created),
+      data: await toTaskCreationProjectSummary(currentUser.userId, created),
     });
   } catch (error: any) {
     const authError = resolveCurrentUserError(error);
@@ -440,6 +444,12 @@ router.put('/projects/:projectId', express.json({ limit: '256kb' }), async (req,
         });
       }
     }
+    if (Array.isArray(input.defaultConnectorProfiles) && input.defaultConnectorProfiles.length > 0) {
+      await projectDefaultConnectorService.assertValidForWrite(
+        currentUser.userId,
+        input.defaultConnectorProfiles
+      );
+    }
 
     const updated = await appUserProjectDAO.updateOwnedProject(projectId, currentUser.userId, input);
     if (!updated) {
@@ -461,7 +471,7 @@ router.put('/projects/:projectId', express.json({ limit: '256kb' }), async (req,
 
     return res.json({
       success: true,
-      data: toTaskCreationProjectSummary(updated),
+      data: await toTaskCreationProjectSummary(currentUser.userId, updated),
     });
   } catch (error: any) {
     const authError = resolveCurrentUserError(error);
@@ -2348,7 +2358,9 @@ function normalizeSessionProjectAssignmentInput(body: any): {
 }
 
 async function listCachedTaskCreationProjects(userId: string) {
-  const cached = await taskCreationProjectRedisCacheService.getProjectList<ReturnType<typeof toTaskCreationProjectSummary>>(userId);
+  const cached = await taskCreationProjectRedisCacheService.getProjectList<
+    Awaited<ReturnType<typeof toTaskCreationProjectSummary>>
+  >(userId);
   if (Array.isArray(cached)) {
     return cached;
   }
@@ -2356,7 +2368,7 @@ async function listCachedTaskCreationProjects(userId: string) {
     projectType: 'standard',
     status: 'active',
   });
-  const summaries = projects.map(toTaskCreationProjectSummary);
+  const summaries = await Promise.all(projects.map((project) => toTaskCreationProjectSummary(userId, project)));
   await taskCreationProjectRedisCacheService.setProjectList(userId, summaries);
   return summaries;
 }
@@ -2364,7 +2376,9 @@ async function listCachedTaskCreationProjects(userId: string) {
 async function getCachedOwnedTaskCreationProject(userId: string, projectId: string) {
   const normalizedProjectId = asText(projectId);
   if (!normalizedProjectId) return null;
-  const cached = await taskCreationProjectRedisCacheService.getProjectDetail<ReturnType<typeof toTaskCreationProjectSummary>>(
+  const cached = await taskCreationProjectRedisCacheService.getProjectDetail<
+    Awaited<ReturnType<typeof toTaskCreationProjectSummary>>
+  >(
     userId,
     normalizedProjectId
   );
@@ -2375,7 +2389,7 @@ async function getCachedOwnedTaskCreationProject(userId: string, projectId: stri
   if (!project || project.projectType !== 'standard' || project.status !== 'active') {
     return null;
   }
-  const summary = toTaskCreationProjectSummary(project);
+  const summary = await toTaskCreationProjectSummary(userId, project);
   await taskCreationProjectRedisCacheService.setProjectDetail(userId, normalizedProjectId, summary);
   return summary;
 }
@@ -2396,46 +2410,61 @@ async function listCachedTaskCreationProjectSessions(userId: string, projectId: 
   return summaries;
 }
 
-function toTaskCreationProjectSummary(project: any) {
+async function toTaskCreationProjectSummary(userId: string, project: any) {
   const metadata =
     project?.metadataJson && typeof project.metadataJson === 'object'
       ? (project.metadataJson as Record<string, unknown>)
       : {};
+  const defaultConnectorProfiles = appUserProjectDAO.readDefaultConnectorProfiles(project?.metadataJson);
   return {
     id: String(project.id),
     name: asText(project.name),
-    description: asText(project.description),
     projectType: asText(project.projectType) || 'standard',
     status: asText(project.status) || 'active',
     pinned: Boolean(metadata.pinned),
-    altusProjectMemory: appUserProjectDAO.readAltusProjectMemory(project?.metadataJson),
+    projectInstruction: appUserProjectDAO.readProjectInstruction(project?.metadataJson),
+    defaultConnectors: await projectDefaultConnectorService.resolveForProject(
+      userId,
+      defaultConnectorProfiles
+    ),
     createdAt: project.createdAt ? new Date(project.createdAt).toISOString() : null,
     updatedAt: project.updatedAt ? new Date(project.updatedAt).toISOString() : null,
   };
 }
 
 function normalizeTaskCreationProjectCreateInput(body: any) {
+  const defaultConnectors = body?.defaultConnectors ?? body?.defaultConnectorProfiles;
   return {
     name: appUserProjectDAO.normalizeName(body?.name),
-    description: appUserProjectDAO.normalizeDescription(body?.description),
-    altusProjectMemory:
-      body && Object.prototype.hasOwnProperty.call(body, 'altusProjectMemory')
-        ? appUserProjectDAO.normalizeAltusProjectMemory(body?.altusProjectMemory)
+    projectInstruction:
+      body && Object.prototype.hasOwnProperty.call(body, 'projectInstruction')
+        ? appUserProjectDAO.normalizeProjectInstruction(body?.projectInstruction)
+        : undefined,
+    defaultConnectors:
+      body &&
+      (Object.prototype.hasOwnProperty.call(body, 'defaultConnectors') ||
+        Object.prototype.hasOwnProperty.call(body, 'defaultConnectorProfiles'))
+        ? appUserProjectDAO.normalizeDefaultConnectorProfiles(defaultConnectors)
         : undefined,
   };
 }
 
 function normalizeTaskCreationProjectUpdateInput(body: any) {
   const hasName = Object.prototype.hasOwnProperty.call(body || {}, 'name');
-  const hasDescription = Object.prototype.hasOwnProperty.call(body || {}, 'description');
   const hasPinned = Object.prototype.hasOwnProperty.call(body || {}, 'pinned');
-  const hasAltusProjectMemory = Object.prototype.hasOwnProperty.call(body || {}, 'altusProjectMemory');
+  const hasProjectInstruction = Object.prototype.hasOwnProperty.call(body || {}, 'projectInstruction');
+  const hasDefaultConnectors =
+    Object.prototype.hasOwnProperty.call(body || {}, 'defaultConnectors') ||
+    Object.prototype.hasOwnProperty.call(body || {}, 'defaultConnectorProfiles');
+  const defaultConnectors = body?.defaultConnectors ?? body?.defaultConnectorProfiles;
   return {
     ...(hasName ? { name: appUserProjectDAO.normalizeName(body?.name) } : {}),
-    ...(hasDescription ? { description: appUserProjectDAO.normalizeDescription(body?.description) } : {}),
     ...(hasPinned ? { pinned: Boolean(body?.pinned) } : {}),
-    ...(hasAltusProjectMemory
-      ? { altusProjectMemory: appUserProjectDAO.normalizeAltusProjectMemory(body?.altusProjectMemory) }
+    ...(hasProjectInstruction
+      ? { projectInstruction: appUserProjectDAO.normalizeProjectInstruction(body?.projectInstruction) }
+      : {}),
+    ...(hasDefaultConnectors
+      ? { defaultConnectorProfiles: appUserProjectDAO.normalizeDefaultConnectorProfiles(defaultConnectors) }
       : {}),
   };
 }

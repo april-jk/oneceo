@@ -531,6 +531,9 @@ export class AltusManagedToolRuntime {
             deploymentAllowed: true,
             needsClarification: false,
             clarificationQuestion: '',
+            clarificationType: 'none',
+            todoRequired: false,
+            todoReason: 'none',
           },
         });
       } catch (error) {

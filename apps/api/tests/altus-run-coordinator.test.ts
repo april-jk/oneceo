@@ -53,6 +53,11 @@ function createState(
       scriptArtifactRequested: false,
       emailTemplateRequested: false,
       deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
     },
   });
 }
@@ -263,6 +268,10 @@ test('execute requests clarification before sandbox when managed intent shape re
     deploymentAllowed: false,
     needsClarification: true,
     clarificationQuestion: '请先确认这个系统的主要使用角色、必须包含的核心模块，以及本次是只要源码、本地运行，还是需要部署上线？',
+    clarificationType: 'artifact_type',
+    clarificationOptions: ['网页应用', '后端 API', '本地脚本', '完整业务系统'],
+    todoRequired: false,
+    todoReason: 'none',
   };
 
   const timelineCalls: Array<Record<string, unknown>> = [];
@@ -334,10 +343,111 @@ test('execute requests clarification before sandbox when managed intent shape re
   assert.equal(timelineCalls.length, 1);
   assert.equal(timelineCalls[0]?.messageType, 'clarification_request');
   assert.match(String(timelineCalls[0]?.content || ''), /主要使用角色/);
+  assert.deepEqual(timelineCalls[0]?.metadata?.options, ['网页应用', '后端 API', '本地脚本', '完整业务系统']);
+  assert.equal(timelineCalls[0]?.metadata?.clarificationType, 'artifact_type');
   assert.deepEqual(
     eventCalls.map((entry) => entry.eventType),
     ['clarification_requested'],
   );
+  assert.equal(eventCalls[0]?.payload.options?.[0], '网页应用');
+  assert.equal(eventCalls[0]?.payload.clarificationType, 'artifact_type');
+});
+
+test('execute re-enters clarification gate for unresolved user_response before sandbox', async () => {
+  const state = createState(
+    'run-coordinator-repeat-clarify',
+    'session-coordinator-repeat-clarify',
+    '先按你觉得合适的方式做'
+  );
+  state.input.messageType = 'user_response';
+  state.input.taskIntentProfile = {
+    mode: 'neutral',
+    reason: 'unknown',
+    recentUserMessages: ['帮我做一个企业管理系统。', '先按你觉得合适的方式做'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: false,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: false,
+    needsClarification: true,
+    clarificationQuestion: '我还需要先确认这一点：这次要交付的是网页应用、后端 API、本地脚本，还是完整业务系统？',
+    clarificationType: 'artifact_type',
+    clarificationOptions: ['网页应用', '后端 API', '本地脚本', '完整业务系统'],
+    todoRequired: false,
+    todoReason: 'none',
+  };
+
+  const timelineCalls: Array<Record<string, unknown>> = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setPendingClarificationMock = mock.method(
+    taskCreationFileMemoryStore,
+    'setPendingClarification',
+    async () => undefined,
+  );
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-should-not-start',
+      workspaceRoot: '/workspace/should-not-start',
+      reused: false,
+    })),
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      timelineCalls.push(input);
+    }),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+    syncLoopSnapshot: mock.fn(async () => undefined),
+  };
+
+  global.fetch = mock.fn(async () => {
+    throw new Error('fetch_should_not_run_before_repeated_clarification');
+  }) as typeof fetch;
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal((setupService.ensureSandbox as any).mock.callCount(), 0);
+  assert.equal(setPendingClarificationMock.mock.callCount(), 1);
+  assert.deepEqual(lifecycleCalls, ['waiting_user']);
+  assert.equal(state.status, 'waiting_user');
+  assert.equal(timelineCalls[0]?.metadata?.clarificationType, 'artifact_type');
+  assert.deepEqual(timelineCalls[0]?.metadata?.options, ['网页应用', '后端 API', '本地脚本', '完整业务系统']);
+  assert.equal(eventCalls[0]?.payload.clarificationType, 'artifact_type');
 });
 
 test('execute completes after tool round and final assistant response', async () => {
@@ -1052,6 +1162,11 @@ test('execute injects skill catalog prompt before active skill body', async () =
       scriptArtifactRequested: false,
       emailTemplateRequested: false,
       deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
     },
   });
 
@@ -1173,6 +1288,11 @@ test('execute syncs resolved skills after sandbox becomes ready', async () => {
       scriptArtifactRequested: false,
       emailTemplateRequested: false,
       deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
     },
   });
 
@@ -2114,6 +2234,11 @@ test('execute recovers from connector guide block by loading the guide and retry
       scriptArtifactRequested: false,
       emailTemplateRequested: false,
       deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
     },
   });
   const setupCalls: Record<string, unknown>[] = [];
@@ -2384,6 +2509,11 @@ test('execute recovers from connector guide block by loading the guide and retry
       scriptArtifactRequested: false,
       emailTemplateRequested: false,
       deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
     },
   });
   const setupCalls: Record<string, unknown>[] = [];

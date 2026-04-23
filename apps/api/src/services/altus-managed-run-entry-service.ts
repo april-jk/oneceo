@@ -137,7 +137,11 @@ export class AltusManagedRunEntryService {
       },
       messageKey,
     });
-    const taskIntentProfile = await this.setupService.buildTaskIntentProfile(sessionId, content);
+    const taskIntentProfile = await this.setupService.buildTaskIntentProfile(
+      sessionId,
+      content,
+      messageType
+    );
     const skillCatalog = await userSkillService.listAvailableSkills(userId);
     const preparedSkills = await taskSessionSkillStateService.prepareRunState({
       sessionId,
@@ -154,7 +158,6 @@ export class AltusManagedRunEntryService {
       userId,
     });
     const shouldEnterClarificationGate =
-      messageType === 'user_input' &&
       taskIntentProfile.needsClarification &&
       Boolean(asText(taskIntentProfile.clarificationQuestion));
     if (!shouldEnterClarificationGate) {
@@ -303,6 +306,9 @@ export class AltusManagedRunEntryService {
         deploymentAllowed: false,
         needsClarification: false,
         clarificationQuestion: '',
+        clarificationType: 'none',
+        todoRequired: false,
+        todoReason: 'none',
       },
     });
     state.markStopped(reason || 'user_interrupt');

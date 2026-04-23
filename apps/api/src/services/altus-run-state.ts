@@ -1,5 +1,5 @@
 import type { ManagedRunStatus } from '../db/dao/task-session-run.dao';
-import type { AltusProjectMemory } from '../db/dao/app-user-project.dao';
+import type { ProjectInstructionMemory } from '../db/dao/app-user-project.dao';
 import type { AltusUserMemory } from './altus-memory-context-service';
 import type { TaskSessionDeliverableArtifactRecord } from './task-session-deliverable-service';
 import type { ManagedMcpProvider, ManagedSkillCatalogEntry, ManagedSkillContext } from './altus-managed-shared';
@@ -28,7 +28,7 @@ export class AltusRunState {
       sessionTitle?: string | null;
       memoryContextPrompt?: string | null;
       userMemory: AltusUserMemory;
-      projectMemory: AltusProjectMemory | null;
+      projectMemory: ProjectInstructionMemory | null;
       sessionAltusMemory: AltusSessionMemory;
       connectors: unknown[];
       mcpProviders: ManagedMcpProvider[];

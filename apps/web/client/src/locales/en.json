@@ -115,6 +115,27 @@
     "deleteDescription": "This task session cannot be restored after deletion.",
     "deleting": "Deleting..."
   },
+  "projectEditor": {
+    "createDescription": "Set the project name, project instruction, and the connectors that should be preselected for new sessions in this project. You can select multiple connectors. New sessions in this project will start with these connectors preselected.",
+    "editDescription": "Update the project name, project instruction, and the connectors that should be preselected for new sessions in this project. You can select multiple connectors. New sessions in this project will start with these connectors preselected.",
+    "projectInstructionLabel": "Project instruction",
+    "projectInstructionPlaceholder": "For example: Use Railway Postgres, deploy automatically after pushing to GitHub, keep a professional tone, and cite important conclusions.",
+    "defaultConnectorsLabel": "Default connectors",
+    "optionalSuffix": "(Optional)",
+    "defaultConnectorsHint": "You can select multiple profiles. New sessions in this project will start with these connectors preselected.",
+    "emptyDefaultConnectors": "No default connectors selected yet. New sessions in this project will start with an empty connector draft.",
+    "emptySelectionShort": "None selected",
+    "selectedCount": "{{count}} selected",
+    "connectorProfileCount": "{{count}} available profiles",
+    "connectorEmptyState": "There are no selectable profiles yet. Click to open connector settings and finish authorization or create a profile first.",
+    "connectorAuthorized": "Ready",
+    "connectorNeedsAuth": "Needs auth",
+    "connectorDeleted": "Unavailable",
+    "connectorUnknown": "Unknown",
+    "removeConnector": "Remove default connector",
+    "noConnectorProfiles": "There are no connector profiles available right now.",
+    "loadConnectorsFailed": "Failed to load default connector candidates"
+  },
   "settings": {
     "title": "Settings",
     "personalizationTab": "Personalization",

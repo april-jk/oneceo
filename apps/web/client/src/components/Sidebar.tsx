@@ -15,7 +15,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -46,7 +45,6 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Textarea } from "@/components/ui/textarea";
 import {
   FileText,
   FolderOpen,
@@ -79,13 +77,13 @@ import { useTranslation } from "react-i18next";
 import React from "react";
 import { toast } from "sonner";
 import {
-  type AltusProjectMemory,
   createTaskCreationProject,
   deleteTaskCreationProject,
   deleteTaskCreationSession,
   listTaskCreationProjectSessions,
   listTaskCreationSessions,
   renameTaskCreationSessionTitle,
+  summarizeProjectInstruction,
   type TaskCreationProjectSummary,
   toggleTaskCreationSessionFavorite,
   updateTaskCreationProject,
@@ -101,6 +99,7 @@ import { SELF_ORGANIZED_PROJECTS } from "@/lib/self-organized-projects";
 import type { TaskProjectSelection } from "@/lib/task-project-selection";
 import { openSettingsDialog } from "@/lib/settings-dialog-events";
 import { useAuth } from "@/contexts/AuthContext";
+import { ProjectEditorDialog } from "@/components/ProjectEditorDialog";
 
 interface SidebarProps {
   className?: string;
@@ -110,25 +109,6 @@ interface SidebarProps {
 }
 
 const WAITING_USER_TEXT_CLASS = "text-[var(--function-warning,rgb(217_119_6))]";
-const EMPTY_ALTUS_PROJECT_MEMORY: AltusProjectMemory = {
-  context: "",
-  guidelines: "",
-  operatingRules: "",
-  executionManual: "",
-};
-
-function normalizeAltusProjectMemory(
-  value: AltusProjectMemory | null | undefined,
-): AltusProjectMemory {
-  return {
-    context: value?.context?.trim?.() || "",
-    guidelines: value?.guidelines?.trim?.() || "",
-    operatingRules: value?.operatingRules?.trim?.() || "",
-    executionManual: value?.executionManual?.trim?.() || "",
-    updatedAt: value?.updatedAt || null,
-  };
-}
-
 function WaitingUserIcon({ className = "h-3.5 w-3.5" }: { className?: string }) {
   return (
     <svg
@@ -272,17 +252,9 @@ export default function Sidebar({
   const [projectSessionLoadingByProjectId, setProjectSessionLoadingByProjectId] =
     React.useState<Record<string, boolean>>({});
   const [createProjectDialogOpen, setCreateProjectDialogOpen] = React.useState(false);
-  const [createProjectName, setCreateProjectName] = React.useState("");
-  const [createProjectDescription, setCreateProjectDescription] = React.useState("");
-  const [createProjectMemory, setCreateProjectMemory] =
-    React.useState<AltusProjectMemory>(EMPTY_ALTUS_PROJECT_MEMORY);
   const [createProjectSubmitting, setCreateProjectSubmitting] = React.useState(false);
   const [editProjectDialogOpen, setEditProjectDialogOpen] = React.useState(false);
   const [editProjectTarget, setEditProjectTarget] = React.useState<TaskCreationProjectSummary | null>(null);
-  const [editProjectName, setEditProjectName] = React.useState("");
-  const [editProjectDescription, setEditProjectDescription] = React.useState("");
-  const [editProjectMemory, setEditProjectMemory] =
-    React.useState<AltusProjectMemory>(EMPTY_ALTUS_PROJECT_MEMORY);
   const [editProjectSubmitting, setEditProjectSubmitting] = React.useState(false);
   const [renameDialogOpen, setRenameDialogOpen] = React.useState(false);
   const [renameTarget, setRenameTarget] = React.useState<SessionTask | null>(null);
@@ -698,7 +670,7 @@ export default function Sidebar({
       manualProjects.map((project) => ({
         id: project.id,
         name: project.name,
-        description: project.description,
+        description: summarizeProjectInstruction(project.projectInstruction),
         pinned: Boolean(project.pinned),
         managers: [],
         kind: "manual" as const,
@@ -826,17 +798,11 @@ export default function Sidebar({
   }, []);
 
   const openCreateProjectDialog = React.useCallback(() => {
-    setCreateProjectName("");
-    setCreateProjectDescription("");
-    setCreateProjectMemory(EMPTY_ALTUS_PROJECT_MEMORY);
     setCreateProjectDialogOpen(true);
   }, []);
 
   const openEditProjectDialog = React.useCallback((project: TaskCreationProjectSummary) => {
     setEditProjectTarget(project);
-    setEditProjectName(project.name || "");
-    setEditProjectDescription(project.description || "");
-    setEditProjectMemory(normalizeAltusProjectMemory(project.altusProjectMemory));
     setEditProjectDialogOpen(true);
   }, []);
 
@@ -845,15 +811,20 @@ export default function Sidebar({
     setDeleteProjectDialogOpen(true);
   }, []);
 
-  const handleCreateProjectSubmit = React.useCallback(async () => {
-    const nextName = createProjectName.trim();
-    if (!nextName) return;
+  const handleCreateProjectSubmit = React.useCallback(async (input: {
+    name: string;
+    projectInstruction: string;
+    defaultConnectors: NonNullable<TaskCreationProjectSummary["defaultConnectors"]>;
+  }) => {
     setCreateProjectSubmitting(true);
     try {
       const created = await createTaskCreationProject({
-        name: nextName,
-        description: createProjectDescription,
-        altusProjectMemory: createProjectMemory,
+        name: input.name,
+        projectInstruction: input.projectInstruction,
+        defaultConnectors: input.defaultConnectors.map((item) => ({
+          connectorKey: item.connectorKey,
+          profileId: item.profileId,
+        })),
       });
       if (!created?.id) {
         throw new Error(t("sidebar.projectCreateFailed"));
@@ -868,18 +839,24 @@ export default function Sidebar({
     } finally {
       setCreateProjectSubmitting(false);
     }
-  }, [createProjectDescription, createProjectMemory, createProjectName, t, user?.id]);
+  }, [t, user?.id]);
 
-  const handleEditProjectSubmit = React.useCallback(async () => {
+  const handleEditProjectSubmit = React.useCallback(async (input: {
+    name: string;
+    projectInstruction: string;
+    defaultConnectors: NonNullable<TaskCreationProjectSummary["defaultConnectors"]>;
+  }) => {
     const target = editProjectTarget;
-    const nextName = editProjectName.trim();
-    if (!target || !nextName) return;
+    if (!target) return;
     setEditProjectSubmitting(true);
     try {
       const updated = await updateTaskCreationProject(target.id, {
-        name: nextName,
-        description: editProjectDescription,
-        altusProjectMemory: editProjectMemory,
+        name: input.name,
+        projectInstruction: input.projectInstruction,
+        defaultConnectors: input.defaultConnectors.map((item) => ({
+          connectorKey: item.connectorKey,
+          profileId: item.profileId,
+        })),
       });
       if (!updated?.id) {
         throw new Error(t("sidebar.projectUpdateFailed"));
@@ -893,7 +870,7 @@ export default function Sidebar({
     } finally {
       setEditProjectSubmitting(false);
     }
-  }, [editProjectDescription, editProjectMemory, editProjectName, editProjectTarget, t, user?.id]);
+  }, [editProjectTarget, t, user?.id]);
 
   const handleToggleProjectPinned = React.useCallback(async (project: TaskCreationProjectSummary) => {
     try {
@@ -1785,262 +1762,27 @@ export default function Sidebar({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={createProjectDialogOpen} onOpenChange={setCreateProjectDialogOpen}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{t("sidebar.createProjectTitle")}</DialogTitle>
-            <DialogDescription>{t("sidebar.createProjectDescription")}</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="sidebar-create-project-name">{t("sidebar.projectNameLabel")}</Label>
-              <Input
-                id="sidebar-create-project-name"
-                value={createProjectName}
-                onChange={(event) => setCreateProjectName(event.target.value)}
-                placeholder={t("sidebar.projectNamePlaceholder")}
-                maxLength={80}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    void handleCreateProjectSubmit();
-                  }
-                }}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="sidebar-create-project-description">
-                {t("sidebar.projectDescriptionLabel")}
-              </Label>
-              <Textarea
-                id="sidebar-create-project-description"
-                value={createProjectDescription}
-                onChange={(event) => setCreateProjectDescription(event.target.value)}
-                placeholder={t("sidebar.projectDescriptionPlaceholder")}
-                maxLength={300}
-                className="min-h-[112px] resize-none"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="sidebar-create-project-context">
-                {t("sidebar.projectContextLabel")}
-              </Label>
-              <Textarea
-                id="sidebar-create-project-context"
-                value={createProjectMemory.context}
-                onChange={(event) =>
-                  setCreateProjectMemory((current) => ({
-                    ...current,
-                    context: event.target.value.slice(0, 2000),
-                  }))
-                }
-                placeholder={t("sidebar.projectContextPlaceholder")}
-                maxLength={2000}
-                className="min-h-[112px] resize-none"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="sidebar-create-project-guidelines">
-                {t("sidebar.projectGuidelinesLabel")}
-              </Label>
-              <Textarea
-                id="sidebar-create-project-guidelines"
-                value={createProjectMemory.guidelines}
-                onChange={(event) =>
-                  setCreateProjectMemory((current) => ({
-                    ...current,
-                    guidelines: event.target.value.slice(0, 2000),
-                  }))
-                }
-                placeholder={t("sidebar.projectGuidelinesPlaceholder")}
-                maxLength={2000}
-                className="min-h-[112px] resize-none"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="sidebar-create-project-operating-rules">
-                {t("sidebar.projectOperatingRulesLabel")}
-              </Label>
-              <Textarea
-                id="sidebar-create-project-operating-rules"
-                value={createProjectMemory.operatingRules}
-                onChange={(event) =>
-                  setCreateProjectMemory((current) => ({
-                    ...current,
-                    operatingRules: event.target.value.slice(0, 2000),
-                  }))
-                }
-                placeholder={t("sidebar.projectOperatingRulesPlaceholder")}
-                maxLength={2000}
-                className="min-h-[112px] resize-none"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="sidebar-create-project-execution-manual">
-                {t("sidebar.projectExecutionManualLabel")}
-              </Label>
-              <Textarea
-                id="sidebar-create-project-execution-manual"
-                value={createProjectMemory.executionManual}
-                onChange={(event) =>
-                  setCreateProjectMemory((current) => ({
-                    ...current,
-                    executionManual: event.target.value.slice(0, 3000),
-                  }))
-                }
-                placeholder={t("sidebar.projectExecutionManualPlaceholder")}
-                maxLength={3000}
-                className="min-h-[132px] resize-none"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setCreateProjectDialogOpen(false);
-              }}
-            >
-              {t("common.cancel")}
-            </Button>
-            <Button
-              onClick={() => void handleCreateProjectSubmit()}
-              disabled={createProjectSubmitting || !createProjectName.trim()}
-            >
-              {createProjectSubmitting ? t("sidebar.creatingProject") : t("sidebar.createProjectAction")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ProjectEditorDialog
+        open={createProjectDialogOpen}
+        mode="create"
+        submitting={createProjectSubmitting}
+        onOpenChange={setCreateProjectDialogOpen}
+        onSubmit={handleCreateProjectSubmit}
+      />
 
-      <Dialog open={editProjectDialogOpen} onOpenChange={setEditProjectDialogOpen}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{t("sidebar.projectEditTitle")}</DialogTitle>
-            <DialogDescription>{t("sidebar.projectEditDescription")}</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="sidebar-edit-project-name">{t("sidebar.projectNameLabel")}</Label>
-              <Input
-                id="sidebar-edit-project-name"
-                value={editProjectName}
-                onChange={(event) => setEditProjectName(event.target.value)}
-                placeholder={t("sidebar.projectNamePlaceholder")}
-                maxLength={80}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    void handleEditProjectSubmit();
-                  }
-                }}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="sidebar-edit-project-description">
-                {t("sidebar.projectDescriptionLabel")}
-              </Label>
-              <Textarea
-                id="sidebar-edit-project-description"
-                value={editProjectDescription}
-                onChange={(event) => setEditProjectDescription(event.target.value)}
-                placeholder={t("sidebar.projectDescriptionPlaceholder")}
-                maxLength={300}
-                className="min-h-[112px] resize-none"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="sidebar-edit-project-context">
-                {t("sidebar.projectContextLabel")}
-              </Label>
-              <Textarea
-                id="sidebar-edit-project-context"
-                value={editProjectMemory.context}
-                onChange={(event) =>
-                  setEditProjectMemory((current) => ({
-                    ...current,
-                    context: event.target.value.slice(0, 2000),
-                  }))
-                }
-                placeholder={t("sidebar.projectContextPlaceholder")}
-                maxLength={2000}
-                className="min-h-[112px] resize-none"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="sidebar-edit-project-guidelines">
-                {t("sidebar.projectGuidelinesLabel")}
-              </Label>
-              <Textarea
-                id="sidebar-edit-project-guidelines"
-                value={editProjectMemory.guidelines}
-                onChange={(event) =>
-                  setEditProjectMemory((current) => ({
-                    ...current,
-                    guidelines: event.target.value.slice(0, 2000),
-                  }))
-                }
-                placeholder={t("sidebar.projectGuidelinesPlaceholder")}
-                maxLength={2000}
-                className="min-h-[112px] resize-none"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="sidebar-edit-project-operating-rules">
-                {t("sidebar.projectOperatingRulesLabel")}
-              </Label>
-              <Textarea
-                id="sidebar-edit-project-operating-rules"
-                value={editProjectMemory.operatingRules}
-                onChange={(event) =>
-                  setEditProjectMemory((current) => ({
-                    ...current,
-                    operatingRules: event.target.value.slice(0, 2000),
-                  }))
-                }
-                placeholder={t("sidebar.projectOperatingRulesPlaceholder")}
-                maxLength={2000}
-                className="min-h-[112px] resize-none"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="sidebar-edit-project-execution-manual">
-                {t("sidebar.projectExecutionManualLabel")}
-              </Label>
-              <Textarea
-                id="sidebar-edit-project-execution-manual"
-                value={editProjectMemory.executionManual}
-                onChange={(event) =>
-                  setEditProjectMemory((current) => ({
-                    ...current,
-                    executionManual: event.target.value.slice(0, 3000),
-                  }))
-                }
-                placeholder={t("sidebar.projectExecutionManualPlaceholder")}
-                maxLength={3000}
-                className="min-h-[132px] resize-none"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setEditProjectDialogOpen(false);
-                setEditProjectTarget(null);
-              }}
-            >
-              {t("common.cancel")}
-            </Button>
-            <Button
-              onClick={() => void handleEditProjectSubmit()}
-              disabled={editProjectSubmitting || !editProjectName.trim()}
-            >
-              {editProjectSubmitting ? t("sidebar.saving") : t("common.save")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ProjectEditorDialog
+        open={editProjectDialogOpen}
+        mode="edit"
+        project={editProjectTarget}
+        submitting={editProjectSubmitting}
+        onOpenChange={(open) => {
+          setEditProjectDialogOpen(open);
+          if (!open) {
+            setEditProjectTarget(null);
+          }
+        }}
+        onSubmit={handleEditProjectSubmit}
+      />
 
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>

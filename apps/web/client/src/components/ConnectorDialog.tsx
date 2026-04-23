@@ -52,6 +52,7 @@ import {
   ensureSessionConnectorDraftId,
   listSessionConnectorDraftEntries,
   removeSessionConnectorDraftEntry,
+  updateSessionConnectorDraftMetadata,
   upsertSessionConnectorDraftEntry,
 } from "@/lib/session-connector-draft";
 import { resolveConnectorIcon } from "@/lib/connector-ui";
@@ -514,6 +515,13 @@ export default function ConnectorDialog({
           const next = removeSessionConnectorDraftEntry(connectorKey);
           const draftId = next?.draftId || ensureSessionConnectorDraftId();
           const entries = next ? listSessionConnectorDraftEntries() : [];
+          if (next) {
+            updateSessionConnectorDraftMetadata({
+              source: "manual",
+              sourceProjectId: undefined,
+              userTouched: true,
+            });
+          }
           await saveSessionConnectorDraft(draftId, entries);
           applySessionStatusOverride(
             buildOptimisticSessionStatus({
@@ -545,6 +553,10 @@ export default function ConnectorDialog({
           desiredState: "attached",
           sessionConfig: sessionConfig || null,
           enabledTools: [],
+        }, {
+          source: "manual",
+          sourceProjectId: undefined,
+          userTouched: true,
         });
         await saveSessionConnectorDraft(nextState.draftId, listSessionConnectorDraftEntries());
         applySessionStatusOverride(

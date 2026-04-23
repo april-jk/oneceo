@@ -31,13 +31,13 @@ async function createApiContextFromBrowser(context: BrowserContext) {
 
 async function createProject(
   api: APIRequestContext,
-  input: { name: string; description?: string },
+  input: { name: string; projectInstruction?: string },
 ) {
   const response = await api.post("/api/task-creation/projects", {
     data: {
       name: input.name,
-      description: input.description || "",
-      altusProjectMemory: null,
+      projectInstruction: input.projectInstruction || "",
+      defaultConnectors: [],
     },
   });
   expect(response.ok()).toBe(true);
@@ -117,7 +117,7 @@ test("sidebar keeps session order stable when clicking project or session", asyn
   try {
     const project = await createProject(api, {
       name: projectName,
-      description: `Playwright sidebar ordering verification ${token}`,
+      projectInstruction: `Playwright sidebar ordering verification ${token}`,
     });
     projectId = project.id;
 

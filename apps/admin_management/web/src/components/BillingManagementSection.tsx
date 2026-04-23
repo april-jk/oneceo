@@ -31,7 +31,12 @@ interface BillingStats {
   totalSessions: number;
 }
 
-export function BillingManagementSection() {
+interface BillingManagementSectionProps {
+  onOpenUser?: (userId: string) => void;
+  onOpenConversation?: (sessionId: string) => void;
+}
+
+export function BillingManagementSection({ onOpenUser, onOpenConversation }: BillingManagementSectionProps) {
   const [activeTab, setActiveTab] = useState<'users' | 'pricing' | 'stats' | 'logs'>('users');
   const [users, setUsers] = useState<UserCredit[]>([]);
   const [pricing, setPricing] = useState<Pricing[]>([]);
@@ -105,6 +110,18 @@ export function BillingManagementSection() {
     setDetailOpen(true);
   }, []);
 
+  const handleJumpToUser = useCallback((userId: string) => {
+    if (onOpenUser) {
+      onOpenUser(userId);
+    }
+  }, [onOpenUser]);
+
+  const handleJumpToConversation = useCallback((sessionId: string) => {
+    if (onOpenConversation) {
+      onOpenConversation(sessionId);
+    }
+  }, [onOpenConversation]);
+
   const totalBalance = useMemo(() => users.reduce((sum, u) => sum + u.balance, 0), [users]);
   const totalConsumed = useMemo(() => users.reduce((sum, u) => sum + u.totalConsumed, 0), [users]);
 
@@ -114,6 +131,18 @@ export function BillingManagementSection() {
     { key: 'stats' as const, label: '平台统计' },
     { key: 'logs' as const, label: '使用明细' },
   ];
+
+  const handleUserIdClick = useCallback((userId: string) => {
+    if (onOpenUser) {
+      onOpenUser(userId);
+    }
+  }, [onOpenUser]);
+
+  const handleSessionIdClick = useCallback((sessionId: string) => {
+    if (onOpenConversation) {
+      onOpenConversation(sessionId);
+    }
+  }, [onOpenConversation]);
 
   const handleCreatePricing = async () => {
     if (!pricingForm.model || !pricingForm.promptPricePer1kTokens || !pricingForm.completionPricePer1kTokens) return;
@@ -482,7 +511,10 @@ export function BillingManagementSection() {
 
       {/* Logs Tab */}
       {activeTab === 'logs' && (
-        <BillingUsageLogs />
+        <BillingUsageLogs
+          onOpenUser={handleUserIdClick}
+          onOpenConversation={handleSessionIdClick}
+        />
       )}
 
       {/* Detail Modal */}

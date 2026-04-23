@@ -1395,6 +1395,7 @@
     "title": "AI Agent",
     "subtitle": "What can I help you with today?",
     "textareaPlaceholder": "Type your message here...",
+    "projectContextLoading": "Loading project...",
     "selectModel": "Select AI model",
     "voiceInput": "Voice input",
     "sendMessage": "Send message",

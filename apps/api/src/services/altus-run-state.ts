@@ -24,6 +24,7 @@ export class AltusRunState {
       userId: string;
       model: string;
       userInput: string;
+      messageType?: 'user_input' | 'user_response';
       sessionTitle?: string | null;
       memoryContextPrompt?: string | null;
       userMemory: AltusUserMemory;

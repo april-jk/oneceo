@@ -153,12 +153,18 @@ export class AltusManagedRunEntryService {
       sessionId,
       userId,
     });
-    await this.setupService.updateSessionLifecycle(sessionId, {
-      status: 'in_progress',
-      stage: 'executing',
-      phase: 'analysis',
-      clearClarification: true,
-    });
+    const shouldEnterClarificationGate =
+      messageType === 'user_input' &&
+      taskIntentProfile.needsClarification &&
+      Boolean(asText(taskIntentProfile.clarificationQuestion));
+    if (!shouldEnterClarificationGate) {
+      await this.setupService.updateSessionLifecycle(sessionId, {
+        status: 'in_progress',
+        stage: 'executing',
+        phase: 'analysis',
+        clearClarification: true,
+      });
+    }
 
     await this.eventWriter.appendRunEvent(run.id, sessionId, userId, 'run_ack', {
       status: 'queued',
@@ -173,6 +179,7 @@ export class AltusManagedRunEntryService {
       userId,
       model: run.model || this.getModelName(),
       userInput: content,
+      messageType,
       sessionTitle: sessionMemory?.title || null,
       memoryContextPrompt: memoryContext.promptSection,
       userMemory: memoryContext.userMemory,
@@ -294,6 +301,8 @@ export class AltusManagedRunEntryService {
         scriptArtifactRequested: false,
         emailTemplateRequested: false,
         deploymentAllowed: false,
+        needsClarification: false,
+        clarificationQuestion: '',
       },
     });
     state.markStopped(reason || 'user_interrupt');

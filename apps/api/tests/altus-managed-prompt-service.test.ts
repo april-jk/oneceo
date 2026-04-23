@@ -25,6 +25,30 @@ test('managed prompt requires task grading and detailed todo for complex tasks',
   assert.match(prompt, /After a clarification answer arrives, reassess the request from scratch/i);
 });
 
+test('managed task intent profile carries a hard clarification gate for broad business-system requests', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '帮我做一个企业管理系统。',
+  ]);
+
+  assert.equal(profile.needsClarification, true);
+  assert.match(profile.clarificationQuestion, /主要使用角色/);
+  assert.match(profile.clarificationQuestion, /核心模块/);
+  assert.match(profile.clarificationQuestion, /源码/);
+  assert.match(profile.clarificationQuestion, /部署/);
+
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-clarification-gate-test',
+    sessionTitle: 'clarification gate',
+    workspaceRoot: '/workspace/session-clarification-gate-test',
+    connectors: [],
+    taskIntentProfile: profile,
+  });
+
+  assert.match(prompt, /under-specified and requires clarification before execution/i);
+  assert.match(prompt, /Your next step must be `ask_user`/i);
+  assert.match(prompt, /Do not call `todowrite`/i);
+});
+
 test('managed prompt enforces multi-phase PPT collaboration and QA gate', () => {
   const prompt = altusManagedPromptService.buildSystemPrompt({
     sessionId: 'session-ppt-test',

@@ -5,7 +5,6 @@ import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -235,11 +234,6 @@ export function ProjectEditorDialog({
           <DialogTitle className="text-center">
             {mode === "create" ? t("sidebar.createProjectTitle") : t("sidebar.projectEditTitle")}
           </DialogTitle>
-          <DialogDescription className="text-center">
-            {mode === "create"
-              ? t("projectEditor.createDescription")
-              : t("projectEditor.editDescription")}
-          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-5">

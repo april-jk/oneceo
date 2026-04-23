@@ -28,6 +28,7 @@ import { opencodeRemoteService } from '../services/opencode-remote-service';
 import { opencodeEventStreamService } from '../services/opencode-event-stream-service';
 import { sandboxAgentProvisionService } from '../services/sandbox-agent-provision-service';
 import { sandboxEnvironmentService } from '../services/sandbox-environment-service';
+import { creditCheckMiddleware } from '../middleware/credit-check';
 import { hasRenderableAssistantReply } from '../utils/opencode-history-recovery';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { setSandboxMetadata, touchSandbox } from '../services/sandbox-activity-service';
@@ -3927,7 +3928,7 @@ function updateSseClientCursor(key: string, cursor: number) {
  * POST /api/task-creation/sessions
  * 先创建任务会话（可选写入首条用户消息），用于前端在 runtime 连接前先落盘任务
  */
-router.post('/sessions', async (req, res) => {
+router.post('/sessions', creditCheckMiddleware, async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const requestedSessionId = asText(req.body?.sessionId);

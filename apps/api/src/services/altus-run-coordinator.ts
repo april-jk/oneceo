@@ -34,6 +34,8 @@ import {
   TaskSessionDeliverableService,
   taskSessionDeliverableService,
 } from './task-session-deliverable-service';
+import { billingService } from './billing-service';
+import { pricingService } from './pricing-service';
 
 const DELIVERABLES_READY_TEXT = '交付文件已生成';
 const DEPLOYMENT_COMPLETION_BLOCKED_PREFIX = 'deployment_completion_blocked:';
@@ -261,6 +263,93 @@ export class AltusRunCoordinator {
   private async delay(ms: number) {
     if (ms <= 0) return;
     await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * 计费：根据模型调用估算并扣减积分
+   */
+  private async chargeForModelCall(state: AltusRunState, input: {
+    messages: ChatMessage[];
+    assistant: { content?: string | null; tool_calls?: ToolCall[]; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } };
+    model: string;
+  }) {
+    try {
+      const userId = state.input.userId;
+      const sessionId = state.input.sessionId;
+      const runId = state.input.runId;
+
+      if (!userId) {
+        console.warn('[Billing] 无法计费：缺少 userId');
+        return;
+      }
+
+      let promptTokens: number;
+      let completionTokens: number;
+
+      const usage = input.assistant?.usage;
+      if (usage && typeof usage.prompt_tokens === 'number' && typeof usage.completion_tokens === 'number') {
+        promptTokens = usage.prompt_tokens;
+        completionTokens = usage.completion_tokens;
+      } else {
+        // 无真实 usage 时回退到字符估算（每 4 字符 ≈ 1 token）
+        const promptText = JSON.stringify(input.messages);
+        promptTokens = Math.ceil(promptText.length / 4);
+        const completionText = JSON.stringify(input.assistant);
+        completionTokens = Math.ceil(completionText.length / 4);
+      }
+
+      // 获取定价
+      const pricing = await pricingService.getActivePricing(input.model);
+      if (!pricing) {
+        console.warn(`[Billing] 模型 ${input.model} 无定价配置，跳过计费`);
+        return;
+      }
+
+      // 计算积分消耗（无缓存估算）
+      const creditsConsumed = pricingService.calculateCredits(
+        {
+          promptTokens,
+          completionTokens,
+        },
+        pricing
+      );
+
+      // 扣减积分
+      const result = await billingService.deductCredits(userId, creditsConsumed, {
+        sessionId,
+        runId,
+        model: input.model,
+        description: `Managed Run 调用: ${input.model}`,
+      });
+
+      if (result.success) {
+        console.log(`[Billing] 扣费成功: ${creditsConsumed} 积分, 余额: ${result.balanceAfter}, run: ${runId}`);
+        
+        // 记录 token 使用日志
+        await billingService.logTokenUsage({
+          userId,
+          sessionId,
+          runId,
+          model: input.model,
+          promptTokens,
+          cachedPromptTokens: 0,
+          nonCachedPromptTokens: promptTokens,
+          cacheCreationTokens: 0,
+          completionTokens,
+          totalTokens: promptTokens + completionTokens,
+          creditsConsumed,
+          pricingSnapshot: pricing,
+        });
+      } else {
+        throw new Error(`insufficient_credits: 用户 ${userId} 余额不足，无法继续运行`);
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('insufficient_credits:')) {
+        throw error;
+      }
+      console.error('[Billing] 计费失败:', error);
+      // 非余额不足的计费失败不影响主流程
+    }
   }
 
   private async flushSandboxSkillMemory(
@@ -944,7 +1033,11 @@ export class AltusRunCoordinator {
     onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
     onAssistantTextDelta?: (deltaText: string, fullText: string) => Promise<void> | void;
     fallbackModel?: string | null;
-  }) {
+  }): Promise<{
+    content?: string | null;
+    tool_calls?: ToolCall[];
+    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  }> {
     const baseUrl = `http://127.0.0.1:${process.env.PORT || '4000'}/api/llm-proxy/v1/chat/completions`;
     const projectedMessages = this.budgetService.projectMessagesForModel(input.messages);
     const response = await fetch(baseUrl, {
@@ -985,9 +1078,10 @@ export class AltusRunCoordinator {
     if (!choice || typeof choice !== 'object') {
       throw new Error('managed_model_empty_choice');
     }
-    return choice as {
-      content?: string | null;
-      tool_calls?: ToolCall[];
+    return {
+      content: choice.content,
+      tool_calls: choice.tool_calls,
+      usage: payload?.usage,
     };
   }
 
@@ -999,7 +1093,11 @@ export class AltusRunCoordinator {
     onAssistantTextDelta?: (deltaText: string, fullText: string) => Promise<void> | void;
     onRetryableError?: (error: unknown, attempt: number, delayMs: number) => Promise<void> | void;
     fallbackModel?: string | null;
-  }) {
+  }): Promise<{
+    content?: string | null;
+    tool_calls?: ToolCall[];
+    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  }> {
     const maxAttempts = Math.max(1, this.getModelRetryLimit() + 1);
     let lastError: unknown = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -1129,11 +1227,16 @@ export class AltusRunCoordinator {
     signal: AbortSignal;
     onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
     onAssistantTextDelta?: (deltaText: string, fullText: string) => Promise<void> | void;
-  }) {
+  }): Promise<{
+    content?: string | null;
+    tool_calls?: ToolCall[];
+    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  }> {
     const decoder = new TextDecoder();
     let buffer = '';
     let assistantContent = '';
     const toolCallsByIndex = new Map<number, StreamedToolCallState>();
+    let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
 
     const flushBlock = async (rawBlock: string) => {
       const parsed = this.parseSseBlock(rawBlock);
@@ -1143,6 +1246,18 @@ export class AltusRunCoordinator {
       const payload = parsed.payload;
       if (payload?.error && typeof payload.error === 'object') {
         throw new Error(JSON.stringify(payload));
+      }
+
+      // 捕获流式响应中的 usage（部分 provider 在最后一个 chunk 返回）
+      if (payload?.usage && typeof payload.usage === 'object') {
+        const u = payload.usage as any;
+        if (typeof u.prompt_tokens === 'number' && typeof u.completion_tokens === 'number') {
+          usage = {
+            prompt_tokens: u.prompt_tokens,
+            completion_tokens: u.completion_tokens,
+            total_tokens: u.total_tokens ?? u.prompt_tokens + u.completion_tokens,
+          };
+        }
       }
 
       const choice = payload?.choices?.[0];
@@ -1189,6 +1304,7 @@ export class AltusRunCoordinator {
           return {
             content: assistantContent,
             tool_calls: this.toToolCalls(toolCallsByIndex),
+            usage,
           };
         }
       }
@@ -1202,6 +1318,7 @@ export class AltusRunCoordinator {
     return {
       content: assistantContent,
       tool_calls: this.toToolCalls(toolCallsByIndex),
+      usage,
     };
   }
 
@@ -1344,6 +1461,8 @@ export class AltusRunCoordinator {
       await this.setupService.refreshInlineImageUrls(messages);
 
       const toolProgressLengths = new Map<string, number>();
+      const modelName = this.getModelName(messages, state.input.model);
+      
       const assistant = await this.callModelWithRetry({
         messages,
         signal,
@@ -1421,6 +1540,14 @@ export class AltusRunCoordinator {
           );
         },
       });
+
+      // 计费
+      await this.chargeForModelCall(state, {
+        messages,
+        assistant,
+        model: modelName,
+      });
+
       const assistantContent = truncate(asText(assistant.content), 24000);
       const toolCalls = Array.isArray(assistant.tool_calls) ? assistant.tool_calls : [];
 
@@ -1872,6 +1999,26 @@ export class AltusRunCoordinator {
 
   async execute(state: AltusRunState, abortController: AbortController) {
     try {
+      // 余额检查
+      const userId = state.input.userId;
+      if (userId) {
+        const hasEnough = await billingService.hasEnoughCredits(userId, 0);
+        if (!hasEnough) {
+          const credits = await billingService.getUserCredits(userId);
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            userId,
+            'run_status',
+            {
+              status: 'failed',
+              content: `积分不足，无法启动运行。当前余额: ${credits?.balance || 0} 积分`,
+            }
+          );
+          throw new Error(`insufficient_credits: 积分不足，无法启动运行`);
+        }
+      }
+
       await this.eventWriter.appendRunEvent(
         state.input.runId,
         state.input.sessionId,

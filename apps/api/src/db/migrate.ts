@@ -55,6 +55,10 @@ const REQUIRED_TABLES = [
   'connector_auth_requests',
   'platform_runtime_artifact_releases',
   'platform_runtime_artifact_channels',
+  'user_credits',
+  'credit_transactions',
+  'token_usage_logs',
+  'model_pricing',
 ] as const;
 
 const REQUIRED_COLUMNS = [
@@ -246,6 +250,15 @@ const REQUIRED_INDEXES = [
   'idx_task_session_connector_guides_session_connector',
   'idx_platform_runtime_artifacts_type_version',
   'idx_platform_runtime_artifact_channels_unique',
+  'idx_user_credits_user_id',
+  'idx_credit_transactions_user_id',
+  'idx_credit_transactions_type',
+  'idx_credit_transactions_created_at',
+  'idx_token_usage_logs_user_id',
+  'idx_token_usage_logs_session_id',
+  'idx_token_usage_logs_created_at',
+  'idx_model_pricing_model_active',
+  'idx_model_pricing_active',
 ] as const;
 
 /**
@@ -1383,6 +1396,76 @@ CREATE INDEX IF NOT EXISTS idx_task_session_workspace_cache_updated_at
   ON task_session_workspace_cache(updated_at);
 `;
 
+const billingTablesSQL = `
+-- 用户积分余额表
+CREATE TABLE IF NOT EXISTS user_credits (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  balance INTEGER NOT NULL DEFAULT 0,
+  total_earned INTEGER NOT NULL DEFAULT 0,
+  total_consumed INTEGER NOT NULL DEFAULT 0,
+  last_recharge_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_credits_user_id ON user_credits(user_id);
+
+-- 积分交易记录表
+CREATE TABLE IF NOT EXISTS credit_transactions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  amount INTEGER NOT NULL,
+  balance_after INTEGER NOT NULL,
+  source_id UUID,
+  source_type TEXT,
+  description TEXT,
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_credit_transactions_user_id ON credit_transactions(user_id);
+CREATE INDEX IF NOT EXISTS idx_credit_transactions_type ON credit_transactions(type);
+CREATE INDEX IF NOT EXISTS idx_credit_transactions_created_at ON credit_transactions(created_at);
+
+-- Token 使用明细表
+CREATE TABLE IF NOT EXISTS token_usage_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  session_id UUID REFERENCES task_creation_sessions(id) ON DELETE SET NULL,
+  run_id UUID REFERENCES task_session_runs(id) ON DELETE SET NULL,
+  model TEXT NOT NULL,
+  prompt_tokens INTEGER NOT NULL DEFAULT 0,
+  cached_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+  non_cached_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  total_tokens INTEGER NOT NULL DEFAULT 0,
+  credits_consumed INTEGER NOT NULL DEFAULT 0,
+  pricing_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_token_usage_logs_user_id ON token_usage_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_token_usage_logs_session_id ON token_usage_logs(session_id);
+CREATE INDEX IF NOT EXISTS idx_token_usage_logs_created_at ON token_usage_logs(created_at);
+
+-- 模型定价配置表
+CREATE TABLE IF NOT EXISTS model_pricing (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  model TEXT NOT NULL,
+  model_provider TEXT NOT NULL,
+  prompt_price_per_1k_tokens INTEGER NOT NULL,
+  completion_price_per_1k_tokens INTEGER NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  effective_from TIMESTAMP NOT NULL DEFAULT NOW(),
+  effective_until TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_model_pricing_model_active ON model_pricing(model, is_active);
+CREATE INDEX IF NOT EXISTS idx_model_pricing_active ON model_pricing(is_active);
+`;
+
 export async function inspectDatabaseSchemaReadiness(): Promise<SchemaReadinessReport> {
   await ensureDatabaseConnection({ retries: 3, delayMs: 500 });
 
@@ -1460,6 +1543,19 @@ export async function runMigration() {
     await db.execute(sql.raw(deliverableTablesSQL));
     await db.execute(sql.raw(backfillMessageStorageSQL));
     
+    // 创建计费相关表
+    await db.execute(sql.raw(billingTablesSQL));
+
+    // 插入当前使用的模型默认定价（如不存在）
+    await db.execute(sql.raw(`
+      INSERT INTO model_pricing (model, model_provider, prompt_price_per_1k_tokens, completion_price_per_1k_tokens, is_active, effective_from)
+      VALUES
+        ('qwen3-max-2026-01-23', 'openai', 3, 6, true, NOW()),
+        ('qwen3-vl-plus', 'openai', 5, 10, true, NOW()),
+        ('claude-haiku-4-5-20251001', 'anthropic', 5, 10, true, NOW())
+      ON CONFLICT (model, is_active) DO NOTHING;
+    `));
+
     console.log('✅ 数据库迁移完成！');
     console.log('已创建以下表：');
     console.log('  - task_creation_sessions');
@@ -1481,6 +1577,10 @@ export async function runMigration() {
     console.log('  - user_codex_runtime_configs');
     console.log('  - platform_runtime_artifact_releases');
     console.log('  - platform_runtime_artifact_channels');
+    console.log('  - user_credits');
+    console.log('  - credit_transactions');
+    console.log('  - token_usage_logs');
+    console.log('  - model_pricing');
     
     return true;
   } catch (error) {

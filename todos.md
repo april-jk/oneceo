@@ -152,9 +152,9 @@
    - 后续需要补齐：明确首轮缺失信息判定、纯问答直答豁免，以及执行前的澄清优先顺序。
 
 2. Altus 开工前 Todo 前置
-   - 现状：当前 prompt 已要求复杂任务先形成 Todo，但没有把“开始工作前先写 Todo、再执行”落实为主链纪律。
-   - 后续需要补齐：把首个 `todowrite` 前置到实际执行前，并收口 `pending / in_progress / completed` 更新规则。
+   - 现状：当前 prompt 已要求复杂任务先形成 Todo，但 managed 主链还没有正式 `todowrite` 工具。
+   - 后续需要补齐：新增最小 `todowrite` 工具，并以最新成功 `todowrite` 快照同时支撑 UI 回放与模型续跑，收口 `pending / in_progress / completed` 更新规则。
 
 3. 首轮消息顺序与回归测试
-   - 现状：前端已能展示 `question` 与 `todowrite`，但还未验证“先澄清/先 Todo，再执行”的稳定顺序。
-   - 后续需要补齐：增加 managed prompt / run coordinator / 前端回放顺序的回归测试，避免再次退回“先盲目执行再补问题”。
+   - 现状：前端已能展示 `clarification_request`、`question` 与 `todowrite`，但 Altus managed 还未验证“先澄清/先 Todo，再执行”的稳定顺序。
+   - 后续需要补齐：增加 managed prompt / run coordinator / 前端回放顺序的回归测试，并避免 `ask_user` tool 卡与 `clarification_request` 重复出现。

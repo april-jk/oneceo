@@ -5,24 +5,71 @@ import {
   deriveManagedTaskIntentProfile,
 } from '../src/services/altus-managed-prompt-service';
 
-test('managed prompt requires task grading and detailed todo for complex tasks', () => {
+test('managed prompt treats task grading as descriptive language and uses taskIntentProfile as the only todo gate', () => {
   const prompt = altusManagedPromptService.buildSystemPrompt({
     sessionId: 'session-prompt-test',
     sessionTitle: 'complex task prompt',
     workspaceRoot: '/workspace/session-prompt-test',
     connectors: [],
+    taskIntentProfile: {
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: ['帮我排查这个会话卡住的问题并修复'],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: true,
+      todoReason: 'debug_chain',
+    },
   });
 
   assert.match(prompt, /judge the task complexity as simple, normal, or complex/i);
-  assert.match(prompt, /for complex tasks, you must first form a detailed step-by-step todo list/i);
+  assert.match(prompt, /do not use that grading as an independent todo trigger/i);
+  assert.match(prompt, /if `taskIntentProfile\.todoRequired=true`, you must call `todowrite` before the first execution step/i);
+  assert.match(prompt, /The current request requires a pre-execution todo snapshot/i);
   assert.match(
     prompt,
     /multiple files, multiple subsystems, unclear dependencies, staged verification, migrations, infrastructure\/runtime changes, or a non-trivial debugging chain/i,
   );
-  assert.match(prompt, /complete one step, validate it, then move to the next step/i);
-  assert.match(prompt, /call `todowrite` before the first execution step/i);
+  assert.match(prompt, /break the work into concrete steps, then complete and verify them sequentially/i);
   assert.match(prompt, /exactly one `in_progress` item/i);
   assert.match(prompt, /After a clarification answer arrives, reassess the request from scratch/i);
+});
+
+test('managed prompt explicitly skips pre-execution todo for simple tasks when taskIntentProfile says no', () => {
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-simple-task-test',
+    sessionTitle: 'simple task prompt',
+    workspaceRoot: '/workspace/session-simple-task-test',
+    connectors: [],
+    taskIntentProfile: {
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: ['把这个按钮文案改成提交'],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
+    },
+  });
+
+  assert.match(prompt, /does not require a pre-execution todo snapshot/i);
+  assert.match(prompt, /do not call `todowrite` just because the request sounds non-trivial/i);
 });
 
 test('managed task intent profile carries a hard clarification gate for broad business-system requests', () => {
@@ -35,6 +82,8 @@ test('managed task intent profile carries a hard clarification gate for broad bu
   assert.match(profile.clarificationQuestion, /核心模块/);
   assert.match(profile.clarificationQuestion, /源码/);
   assert.match(profile.clarificationQuestion, /部署/);
+  assert.equal(profile.todoRequired, false);
+  assert.equal(profile.todoReason, 'none');
 
   const prompt = altusManagedPromptService.buildSystemPrompt({
     sessionId: 'session-clarification-gate-test',
@@ -47,6 +96,7 @@ test('managed task intent profile carries a hard clarification gate for broad bu
   assert.match(prompt, /under-specified and requires clarification before execution/i);
   assert.match(prompt, /Your next step must be `ask_user`/i);
   assert.match(prompt, /Do not call `todowrite`/i);
+  assert.match(prompt, /Active clarification type/i);
 });
 
 test('managed prompt enforces multi-phase PPT collaboration and QA gate', () => {

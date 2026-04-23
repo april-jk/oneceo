@@ -506,6 +506,163 @@ test('startRun does not pre-mark session executing when the first turn must clar
   );
 });
 
+test('startRun keeps user_response out of executing lifecycle when clarification remains unresolved', async () => {
+  const run = {
+    id: 'run-clarify-response-1',
+    sessionId: 'session-clarify-response-1',
+    status: 'queued',
+    model: 'altus-model',
+    stopReason: null,
+    startedAt: null,
+    completedAt: null,
+    updatedAt: new Date('2026-03-24T04:00:00.000Z'),
+  };
+
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    id: 'session-clarify-response-1',
+    title: 'Clarify response',
+    pendingQuestion: '这次要交付的是网页应用、后端 API、本地脚本，还是完整业务系统？',
+    pendingOptions: ['网页应用', '后端 API', '本地脚本', '完整业务系统'],
+    pendingClarificationType: 'artifact_type',
+  }) as any);
+  mock.method(altusMemoryContextService, 'buildPromptSectionForRun', async () => ({
+    promptSection: '',
+    userMemory: null,
+    projectMemory: null,
+    sessionMemory: await taskSessionAltusMemoryService.getSessionAltusMemory('session-clarify-response-1'),
+  }));
+  mock.method(taskSessionAltusMemoryService, 'getSessionAltusMemory', async () => ({
+    version: 0,
+    summary: {
+      goal: '',
+      latestOutcome: '',
+      openQuestions: [],
+    },
+    constraints: [],
+    decisions: [],
+    workingNotes: [],
+    updatedAt: '2026-04-21T16:00:00.000Z',
+  }));
+  mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  mock.method(taskSessionRunDAO, 'getLatestRun', async () => null);
+  mock.method(taskSessionRunDAO, 'createRun', async () => run as any);
+  mock.method(userSkillService, 'listAvailableSkills', async () => [] as any);
+  mock.method(taskSessionSkillStateService, 'prepareRunState', async () => ({
+    skillCatalog: [],
+    skills: [],
+    activeSkillsForTurn: [],
+    residentSkillSelections: [],
+    sessionSkillState: null,
+    residentSelectionsForSync: [],
+  }) as any);
+
+  const setupCalls: Record<string, unknown>[] = [];
+  const setupService = {
+    ensureSessionOwnership: mock.fn(async () => {}),
+    buildTaskIntentProfile: mock.fn(async () => ({
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: ['帮我做一个企业管理系统。', '先按你觉得合适的方式做'],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+      needsClarification: true,
+      clarificationQuestion: '我还需要先确认这一点：这次要交付的是网页应用、后端 API、本地脚本，还是完整业务系统？',
+      clarificationType: 'artifact_type',
+      clarificationOptions: ['网页应用', '后端 API', '本地脚本', '完整业务系统'],
+      todoRequired: false,
+      todoReason: 'none',
+    })),
+    captureConnectorSnapshot: mock.fn(async () => ({
+      snapshotId: 'snapshot-clarify-response-1',
+      statuses: [],
+    })),
+    captureMcpToolSnapshot: mock.fn(async () => ({
+      snapshotId: 'mcp-snapshot-clarify-response-1',
+      providers: [],
+    })),
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      setupCalls.push({ type: 'timeline', input });
+    }),
+    updateSessionLifecycle: mock.fn(async (sessionId: string, input: Record<string, unknown>) => {
+      setupCalls.push({ type: 'lifecycle', sessionId, input });
+    }),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (...args: unknown[]) => {
+      setupCalls.push({ type: 'event', args });
+      return { sequence: 1, payload: {} };
+    }),
+    toSummary: mock.fn(async (value: any) => ({
+      id: value.id,
+      sessionId: value.sessionId,
+      status: value.status,
+      model: value.model,
+      streamUrl: `/api/altus-managed/runs/${value.id}/stream`,
+      sequence: 1,
+    })),
+  };
+
+  let capturedState: any = null;
+  const coordinator = {
+    execute: mock.fn(async (state: any) => {
+      capturedState = state;
+    }),
+  };
+  const recoveryService = {
+    reconcileLatestRun: mock.fn(async () => null),
+    buildRecoverySnapshot: mock.fn(async () => ({
+      model: 'altus-model',
+      status: 'queued',
+      sequence: 1,
+      sandbox: {
+        sandboxId: null,
+        workspaceRoot: null,
+        reused: false,
+        updatedAt: null,
+      },
+      connectorRuntime: {
+        providerIds: [],
+        updatedAt: null,
+      },
+      stream: {
+        latestSequence: 1,
+        latestEventType: null,
+      },
+    })),
+  };
+  const redisStateService = {
+    registerRun: mock.fn(async () => {}),
+    setRecoverySnapshot: mock.fn(async () => {}),
+    touchHeartbeat: mock.fn(async () => {}),
+  };
+
+  const service = new AltusManagedRunEntryService(
+    setupService as any,
+    eventWriter as any,
+    {} as any,
+    coordinator as any,
+    redisStateService as any,
+    recoveryService as any
+  );
+
+  await service.startRun('session-clarify-response-1', 'user-clarify-response-1', {
+    content: '先按你觉得合适的方式做',
+  });
+
+  assert.equal(capturedState?.input.messageType, 'user_response');
+  assert.equal(capturedState?.input.taskIntentProfile?.clarificationType, 'artifact_type');
+  assert.equal(
+    setupCalls.filter((entry) => entry.type === 'lifecycle').length,
+    0,
+  );
+});
+
 test('stopRun aborts active controller for in-flight run', async () => {
   const run = {
     id: 'run-2',

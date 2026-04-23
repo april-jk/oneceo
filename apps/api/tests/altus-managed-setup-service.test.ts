@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, mock, test } from 'node:test';
 import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-memory-store';
 import { taskCreationSessionDAO, taskSessionRunDAO } from '../src/db/dao';
@@ -7,9 +10,20 @@ import { managedImageObjectService } from '../src/services/managed-image-object-
 import { AltusManagedSetupService } from '../src/services/altus-managed-setup-service';
 import { sandboxAgentProvisionService } from '../src/services/sandbox-agent-provision-service';
 import { sessionMcpRecoveryService } from '../src/services/session-mcp-recovery-service';
+import { resolveOpencodeWorkspacePath } from '../src/utils/opencode-workspace';
 
 afterEach(() => {
   mock.reset();
+  delete process.env.OPENCODE_TASK_WORKSPACE_ROOT;
+});
+
+const tmpDirsToRemove = new Set<string>();
+
+afterEach(async () => {
+  for (const target of tmpDirsToRemove) {
+    await rm(target, { recursive: true, force: true });
+  }
+  tmpDirsToRemove.clear();
 });
 
 test('buildConversationMessages injects attachment context and avoids duplicating current user input', async () => {
@@ -197,4 +211,96 @@ test('buildConversationMessages injects latest successful todowrite snapshot as 
   assert.match(String(messages[1]?.content), /Current todo snapshot/);
   assert.match(String(messages[1]?.content), /\[completed\] 梳理需求边界/);
   assert.match(String(messages[1]?.content), /\[in_progress\] 修改后端主链/);
+});
+
+test('buildTaskIntentProfile keeps trivial single-point tasks off the todo path', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '把这个按钮文案改成提交',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => null as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile('session-simple-task', '把这个按钮文案改成提交', 'user_input');
+
+  assert.equal(profile.todoRequired, false);
+  assert.equal(profile.todoReason, 'none');
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.clarificationType, 'none');
+});
+
+test('buildTaskIntentProfile suppresses tech-stack clarification when workspace root already constrains the stack', async () => {
+  const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), 'oneceo-managed-setup-'));
+  tmpDirsToRemove.add(workspaceRoot);
+  process.env.OPENCODE_TASK_WORKSPACE_ROOT = workspaceRoot;
+  const sessionId = 'session-tech-stack-hint';
+  const sessionWorkspaceRoot = resolveOpencodeWorkspacePath(sessionId);
+  await mkdir(sessionWorkspaceRoot, { recursive: true });
+  await writeFile(
+    path.join(sessionWorkspaceRoot, 'package.json'),
+    JSON.stringify(
+      {
+        name: 'tech-stack-hint',
+        dependencies: {
+          react: '^19.0.0',
+          vite: '^7.0.0',
+        },
+      },
+      null,
+      2
+    ),
+    { encoding: 'utf8' }
+  );
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '开发一个管理后台',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => null as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(sessionId, '开发一个管理后台', 'user_input');
+
+  assert.equal(profile.clarificationType, 'scope_boundary');
+  assert.doesNotMatch(profile.clarificationQuestion, /开发语言或框架/);
+});
+
+test('buildTaskIntentProfile keeps clarifying the same field when a user response does not answer the pending clarification type', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我做一个企业管理系统',
+      metadata: {},
+    },
+    {
+      role: 'user',
+      messageType: 'user_response',
+      content: '先按你觉得合适的方式做',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    pendingQuestion: '这次要交付的是网页应用、后端 API、本地脚本，还是完整业务系统？',
+    pendingOptions: ['网页应用', '后端 API', '本地脚本', '完整业务系统'],
+    pendingClarificationType: 'artifact_type',
+  }) as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-repeat-clarification',
+    '先按你觉得合适的方式做',
+    'user_response'
+  );
+
+  assert.equal(profile.needsClarification, true);
+  assert.equal(profile.clarificationType, 'artifact_type');
+  assert.match(profile.clarificationQuestion, /我还需要先确认这一点/);
 });

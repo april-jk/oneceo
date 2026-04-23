@@ -2527,25 +2527,6 @@ export default function Home() {
                     </div>
                   </motion.div>
 
-                  {/* Quick Actions */}
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={{ delay: 0.4, duration: 0.4 }}
-                    className="grid grid-cols-2 gap-3"
-                  >
-                    {quickActions.map((action) => (
-                      <Button
-                        key={action.label}
-                        variant="outline"
-                        className="h-auto py-3 px-4 rounded-xl border-border hover:bg-accent hover:border-primary/30 transition-all duration-200 text-sm font-medium text-left whitespace-normal"
-                        onClick={() => handleQuickAction(action.label)}
-                      >
-                        <span className="mr-2">{action.icon}</span>
-                        {action.label}
-                      </Button>
-                    ))}
-                  </motion.div>
                 </motion.div>
               </motion.div>
             ) : (

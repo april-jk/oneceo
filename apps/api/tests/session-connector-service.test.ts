@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { sessionConnectorService } from '../src/services/session-connector-service';
+import { parseInternalConnectorRuntimeToken } from '../src/services/internal-mcp-auth-service';
 
 const envBackup = {
   ONECEO_PROXY_ENABLED: process.env.ONECEO_PROXY_ENABLED,
@@ -15,6 +16,11 @@ const envBackup = {
   NOTION_CONNECTOR_CLIENT_ID: process.env.NOTION_CONNECTOR_CLIENT_ID,
   NOTION_CONNECTOR_CLIENT_SECRET: process.env.NOTION_CONNECTOR_CLIENT_SECRET,
   NOTION_CONNECTOR_REDIRECT_URI: process.env.NOTION_CONNECTOR_REDIRECT_URI,
+  VERCEL_CONNECTOR_CLIENT_ID: process.env.VERCEL_CONNECTOR_CLIENT_ID,
+  VERCEL_CONNECTOR_CLIENT_SECRET: process.env.VERCEL_CONNECTOR_CLIENT_SECRET,
+  VERCEL_CONNECTOR_REDIRECT_URI: process.env.VERCEL_CONNECTOR_REDIRECT_URI,
+  ONECEO_INTERNAL_TOKEN: process.env.ONECEO_INTERNAL_TOKEN,
+  CONNECTOR_SECRET_KEY: process.env.CONNECTOR_SECRET_KEY,
   FRONTEND_URL: process.env.FRONTEND_URL,
 };
 
@@ -69,12 +75,29 @@ test('buildProviderTransport keeps non-supabase remote transport unchanged', () 
   process.env.ONECEO_PROXY_ENABLED = 'true';
   process.env.HTTP_PROXY = 'http://127.0.0.1:7890';
   process.env.HTTPS_PROXY = 'http://127.0.0.1:7890';
+  process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
+  process.env.VERCEL_CONNECTOR_CLIENT_ID = 'vercel-client';
+  process.env.VERCEL_CONNECTOR_CLIENT_SECRET = 'vercel-secret';
+  process.env.VERCEL_CONNECTOR_REDIRECT_URI = '/vercel/callback';
+  process.env.ONECEO_INTERNAL_TOKEN = 'internal-token';
+  process.env.CONNECTOR_SECRET_KEY = 'unit-test-secret';
 
   const serviceAny = sessionConnectorService as any;
-  const result = serviceAny.buildProviderTransport('vercel', buildProfile('vercel'), null);
+  const result = serviceAny.buildProviderTransport('vercel', buildProfile('vercel'), null, {
+    taskSessionId: 'task-1',
+    userId: 'user-1',
+  });
 
-  assert.equal(result.transport.type, 'remote_sse');
+  assert.equal(result.transport.type, 'streamable_http');
   assert.deepEqual(result.transport.env, {});
+  assert.equal(result.transport.headers['x-oneceo-internal-token'], 'internal-token');
+  const runtimeContext = parseInternalConnectorRuntimeToken(
+    String(result.transport.headers['x-oneceo-connector-runtime-auth'] || ''),
+    'vercel'
+  );
+  assert.equal(runtimeContext.taskSessionId, 'task-1');
+  assert.equal(runtimeContext.userId, 'user-1');
+  assert.equal(runtimeContext.profileId, 'profile-vercel');
 });
 
 test('buildProviderTransport honors explicit notion remote transport', () => {

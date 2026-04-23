@@ -11,6 +11,7 @@ import {
   buildSupabaseBridgeEnvironment,
   buildSupabaseStdioBridgeCommand,
 } from '../connectors/bridges/supabase-stdio-bridge';
+import { createInternalConnectorRuntimeToken } from './internal-mcp-auth-service';
 
 export { CONNECTOR_KEYS, type ConnectorKey };
 
@@ -41,6 +42,7 @@ export type ConnectorAccountSecret = {
   refreshToken?: string;
   tokenType?: string;
   scope?: string;
+  expiresAt?: string;
   dsn?: string;
 };
 
@@ -242,8 +244,33 @@ function buildRemoteHeaders(
   input: {
     accessToken?: string;
     teamId?: string;
+    taskSessionId?: string;
+    userId?: string;
+    profileId?: string;
   }
 ): Record<string, string> {
+  if (connectorKey === 'vercel') {
+    const internalToken = asText(process.env.ONECEO_INTERNAL_TOKEN);
+    if (!internalToken) {
+      throw new Error('ONECEO_INTERNAL_TOKEN 未配置，无法构建 Vercel internal MCP 鉴权头');
+    }
+    const taskSessionId = asText(input.taskSessionId);
+    const userId = asText(input.userId);
+    const profileId = asText(input.profileId);
+    if (!taskSessionId || !userId || !profileId) {
+      throw new Error('Vercel internal MCP 缺少 session/profile 鉴权上下文');
+    }
+    return {
+      'x-oneceo-internal-token': internalToken,
+      'x-oneceo-connector-runtime-auth': createInternalConnectorRuntimeToken({
+        connectorKey,
+        taskSessionId,
+        userId,
+        profileId,
+      }),
+    };
+  }
+
   const template = item.runtime.headersEnv
     ? parseHeadersTemplate(process.env[item.runtime.headersEnv])
     : {};
@@ -277,7 +304,6 @@ function buildRemoteUrl(
   item: ConnectorCatalogItem,
   input: {
     connectorKey: ConnectorKey;
-    teamId?: string;
   }
 ): string {
   const configured = item.runtime.urlEnv ? asText(process.env[item.runtime.urlEnv]) : '';
@@ -286,12 +312,6 @@ function buildRemoteUrl(
     throw new Error(`${item.name} MCP remote URL 未配置`);
   }
   const url = new URL(baseUrl);
-  if (input.connectorKey === 'vercel') {
-    const teamId = asText(input.teamId);
-    if (teamId) {
-      url.searchParams.set('teamId', teamId);
-    }
-  }
   if (input.connectorKey === 'notion') {
     const normalizedPath = url.pathname.replace(/\/+$/, '') || '/';
     if (!normalizedPath.endsWith('/sse')) {
@@ -326,6 +346,10 @@ export class ConnectorRegistry {
     connectorKey: ConnectorKey;
     account: ConnectorProfileMaterial;
     sessionConfig?: Record<string, unknown> | null;
+    runtimeContext?: {
+      taskSessionId?: string;
+      userId?: string;
+    };
   }): ConnectorRuntimeConfig {
     const { connectorKey, account } = input;
     const item = this.getCatalogItem(connectorKey);
@@ -391,16 +415,23 @@ export class ConnectorRegistry {
     }
 
     const accessToken = asText(secret.accessToken);
-    if (!accessToken) {
+    const refreshToken = asText(secret.refreshToken);
+    if (connectorKey === 'vercel') {
+      if (!accessToken && !refreshToken) {
+        throw new Error('Vercel 连接器缺少 access token 或 refresh token');
+      }
+    } else if (!accessToken) {
       throw new Error(`${item.name} 连接器缺少 access token`);
     }
     const url = buildRemoteUrl(item, {
       connectorKey,
-      teamId: asText(configJson.teamId),
     });
     const headers = buildRemoteHeaders(connectorKey, item, {
       accessToken,
       teamId: asText(configJson.teamId),
+      taskSessionId: asText(input.runtimeContext?.taskSessionId),
+      userId: asText(input.runtimeContext?.userId),
+      profileId: asText(account.profileId),
     });
     return {
       type: 'remote',

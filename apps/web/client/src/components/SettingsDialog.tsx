@@ -1422,15 +1422,18 @@ export function GlobalSettingsDialogHost() {
       callbackPath === "/notion/callback" && hasOauthCallbackParams;
     const isSlackCallback =
       callbackPath === "/slack/callback" && hasOauthCallbackParams;
+    const isVercelCallback =
+      callbackPath === "/vercel/callback" && hasOauthCallbackParams;
     return {
       shouldOpen:
         params.get("settings") === "open" ||
         params.get("settingsTab") === "connectors" ||
         params.get("connector_oauth") === "1" ||
         isNotionCallback ||
-        isSlackCallback,
+        isSlackCallback ||
+        isVercelCallback,
       settingsTab:
-        isNotionCallback || isSlackCallback
+        isNotionCallback || isSlackCallback || isVercelCallback
           ? "connectors"
           : params.get("settingsTab"),
       targetSessionId: params.get("targetSessionId"),
@@ -1438,7 +1441,9 @@ export function GlobalSettingsDialogHost() {
         ? "notion"
         : isSlackCallback
           ? "slack"
-          : params.get("connector"),
+          : isVercelCallback
+            ? "vercel"
+            : params.get("connector"),
     };
   }, [location, search]);
 

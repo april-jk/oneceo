@@ -83,7 +83,6 @@ import {
   createTaskCreationProject,
   deleteTaskCreationProject,
   deleteTaskCreationSession,
-  listTaskCreationProjects,
   listTaskCreationProjectSessions,
   listTaskCreationSessions,
   renameTaskCreationSessionTitle,
@@ -93,6 +92,12 @@ import {
   updateTaskCreationSessionProject,
   type TaskCreationSessionSummary,
 } from "@/lib/task-creation-client";
+import {
+  removeSharedManualProject,
+  upsertSharedManualProject,
+  useSharedManualProjects,
+} from "@/lib/shared-manual-projects";
+import { SELF_ORGANIZED_PROJECTS } from "@/lib/self-organized-projects";
 import type { TaskProjectSelection } from "@/lib/task-project-selection";
 import { openSettingsDialog } from "@/lib/settings-dialog-events";
 import { useAuth } from "@/contexts/AuthContext";
@@ -254,7 +259,7 @@ export default function Sidebar({
   const [location, setLocation] = useLocation();
   const { t } = useTranslation();
   const { user } = useAuth();
-  const [manualProjects, setManualProjects] = React.useState<TaskCreationProjectSummary[]>([]);
+  const { projects: manualProjects } = useSharedManualProjects(user?.id);
   const [expandedProjectGroups, setExpandedProjectGroups] = React.useState<string[]>([]);
   const [expandedProjects, setExpandedProjects] = React.useState<string[]>([]);
   const [expandedManagers, setExpandedManagers] = React.useState<string[]>([]);
@@ -293,23 +298,9 @@ export default function Sidebar({
   const listLoadingRef = React.useRef(false);
   const lastListFetchRef = React.useRef(0);
   const lastListErrorToastAtRef = React.useRef(0);
-  const projectListLoadingRef = React.useRef(false);
   const projectSessionLoadingRef = React.useRef<Record<string, boolean>>({});
   const projectSessionsByProjectIdRef = React.useRef<Record<string, SessionTask[]>>({});
   const LIST_POLL_MS = 30000;
-
-  const sortManualProjects = React.useCallback((projects: TaskCreationProjectSummary[]) => {
-    return [...projects].sort((left, right) => {
-      const pinnedDelta = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
-      if (pinnedDelta !== 0) return pinnedDelta;
-      const leftTime = Date.parse(left.updatedAt || left.createdAt || "");
-      const rightTime = Date.parse(right.updatedAt || right.createdAt || "");
-      const safeLeft = Number.isFinite(leftTime) ? leftTime : 0;
-      const safeRight = Number.isFinite(rightTime) ? rightTime : 0;
-      if (safeRight !== safeLeft) return safeRight - safeLeft;
-      return (left.name || "").localeCompare(right.name || "", "zh-CN");
-    });
-  }, []);
 
   const mapSessionTask = React.useCallback(
     (session: TaskCreationSessionSummary | any, index: number): SessionTask & { originalIndex: number } => ({
@@ -650,32 +641,6 @@ export default function Sidebar({
     };
   }, [mapSessionTask, sortSessionTasks, t]);
 
-  React.useEffect(() => {
-    let disposed = false;
-    const loadProjects = async () => {
-      if (disposed || projectListLoadingRef.current) return;
-      projectListLoadingRef.current = true;
-      try {
-        const projects = await listTaskCreationProjects();
-        if (disposed) return;
-        setManualProjects(sortManualProjects(projects));
-      } catch (error) {
-        console.error("[Sidebar] failed to load projects:", error);
-        toast.error(
-          error instanceof Error && error.message.trim()
-            ? error.message.trim()
-            : t("sidebar.loadProjectsFailed"),
-        );
-      } finally {
-        projectListLoadingRef.current = false;
-      }
-    };
-    void loadProjects();
-    return () => {
-      disposed = true;
-    };
-  }, [sortManualProjects, t, user?.id]);
-
   const toggleProjectGroup = (groupId: string) => {
     setExpandedProjectGroups((prev) =>
       prev.includes(groupId)
@@ -712,68 +677,22 @@ export default function Sidebar({
     { icon: Network, label: t("sidebar.ceoView"), href: "/ceo-view" },
   ];
 
-  // Preview-only scaffold for the upcoming self-organized projects feature.
-  // AI maintainers: do not reshape or replace this block unless the request
-  // explicitly targets that future feature.
-  // This block must stay excluded from session-parent project choices.
-  const selfOrganizedProjectsData: SidebarProjectNode[] = [
-    {
-      id: "1",
-      name: "oneceo.ai",
-      description: "",
-      managers: [
-        {
-          id: "m1",
-          name: "开发经理",
-          type: "development",
-          tasks: [
-            { id: "t1", name: "API 设计与实现", status: "in_progress" },
-            { id: "t2", name: "数据库优化", status: "completed" },
-          ],
-        },
-        {
-          id: "m2",
-          name: "运营经理",
-          type: "operations",
-          tasks: [{ id: "t3", name: "用户增长策略", status: "in_progress" }],
-        },
-      ],
-    },
-    {
-      id: "2",
-      name: "artgen ai",
-      description: "",
-      managers: [
-        {
-          id: "m3",
-          name: "设计经理",
-          type: "design",
-          tasks: [{ id: "t4", name: "UI/UX 设计", status: "in_progress" }],
-        },
-      ],
-    },
-    {
-      id: "3",
-      name: "voiceClone",
-      description: "",
-      managers: [],
-    },
-    {
-      id: "4",
-      name: "AI员工",
-      description: "",
-      managers: [],
-    },
-    {
-      id: "5",
-      name: "opencode相关",
-      description: "",
-      managers: [],
-    },
-  ].map((project) => ({
-    ...project,
-    kind: "self-organized" as const,
-  }));
+  const selfOrganizedProjectsData = React.useMemo<SidebarProjectNode[]>(
+    () =>
+      SELF_ORGANIZED_PROJECTS.map((project) => ({
+        id: project.id,
+        name: project.name,
+        description: project.description,
+        managers: project.managers.map((manager) => ({
+          id: manager.id,
+          name: manager.name,
+          type: manager.type,
+          tasks: manager.tasks,
+        })),
+        kind: "self-organized" as const,
+      })),
+    [],
+  );
   const manualProjectNodes = React.useMemo<SidebarProjectNode[]>(
     () =>
       manualProjects.map((project) => ({
@@ -794,7 +713,6 @@ export default function Sidebar({
       })),
     [manualProjects],
   );
-  // End of preview-only self-organized projects scaffold.
   const activeSessionId = React.useMemo(() => {
     const matched = location.match(/^\/session\/([^/?]+)/);
     return matched?.[1] || null;
@@ -940,7 +858,7 @@ export default function Sidebar({
       if (!created?.id) {
         throw new Error(t("sidebar.projectCreateFailed"));
       }
-      setManualProjects((prev) => sortManualProjects([created, ...prev]));
+      upsertSharedManualProject(created, user?.id);
       setProjectSessionsByProjectId((prev) => ({ ...prev, [created.id]: [] }));
       setExpandedProjects((prev) => (prev.includes(created.id) ? prev : [...prev, created.id]));
       setCreateProjectDialogOpen(false);
@@ -950,7 +868,7 @@ export default function Sidebar({
     } finally {
       setCreateProjectSubmitting(false);
     }
-  }, [createProjectDescription, createProjectMemory, createProjectName, sortManualProjects, t]);
+  }, [createProjectDescription, createProjectMemory, createProjectName, t, user?.id]);
 
   const handleEditProjectSubmit = React.useCallback(async () => {
     const target = editProjectTarget;
@@ -966,9 +884,7 @@ export default function Sidebar({
       if (!updated?.id) {
         throw new Error(t("sidebar.projectUpdateFailed"));
       }
-      setManualProjects((prev) =>
-        sortManualProjects(prev.map((project) => (project.id === updated.id ? updated : project))),
-      );
+      upsertSharedManualProject(updated, user?.id);
       setEditProjectDialogOpen(false);
       setEditProjectTarget(null);
       toast.success(t("sidebar.projectUpdated"));
@@ -977,7 +893,7 @@ export default function Sidebar({
     } finally {
       setEditProjectSubmitting(false);
     }
-  }, [editProjectDescription, editProjectMemory, editProjectName, editProjectTarget, sortManualProjects, t]);
+  }, [editProjectDescription, editProjectMemory, editProjectName, editProjectTarget, t, user?.id]);
 
   const handleToggleProjectPinned = React.useCallback(async (project: TaskCreationProjectSummary) => {
     try {
@@ -987,14 +903,12 @@ export default function Sidebar({
       if (!updated?.id) {
         throw new Error(t("sidebar.projectUpdateFailed"));
       }
-      setManualProjects((prev) =>
-        sortManualProjects(prev.map((item) => (item.id === updated.id ? updated : item))),
-      );
+      upsertSharedManualProject(updated, user?.id);
       toast.success(updated.pinned ? t("sidebar.projectPinned") : t("sidebar.projectUnpinned"));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("sidebar.projectUpdateFailed"));
     }
-  }, [sortManualProjects, t]);
+  }, [t, user?.id]);
 
   const handleDeleteProjectConfirm = React.useCallback(async () => {
     const target = deleteProjectTarget;
@@ -1002,7 +916,7 @@ export default function Sidebar({
     setDeleteProjectSubmitting(true);
     try {
       await deleteTaskCreationProject(target.id);
-      setManualProjects((prev) => prev.filter((project) => project.id !== target.id));
+      removeSharedManualProject(target.id);
       setProjectSessionsByProjectId((prev) => {
         if (!Object.prototype.hasOwnProperty.call(prev, target.id)) return prev;
         const next = { ...prev };
@@ -1039,6 +953,19 @@ export default function Sidebar({
       setDeleteProjectSubmitting(false);
     }
   }, [deleteProjectTarget, selectedProject, setLocation, sortSessionTasks, t]);
+
+  React.useEffect(() => {
+    const handleCreateProjectRequest = () => {
+      openCreateProjectDialog();
+    };
+    window.addEventListener("task-creation-project-create-requested", handleCreateProjectRequest);
+    return () => {
+      window.removeEventListener(
+        "task-creation-project-create-requested",
+        handleCreateProjectRequest,
+      );
+    };
+  }, [openCreateProjectDialog]);
 
   const handleProjectAssign = React.useCallback(async (
     session: SessionTask,

@@ -1,5 +1,6 @@
 import type { ManagedSkillCatalogEntry, ManagedSkillContext } from './altus-managed-shared';
 import type { SessionConnectorStatus } from './session-connector-service';
+import { classifyTaskIntentShape } from './task-intent-shape-service';
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -262,12 +263,15 @@ export type AltusManagedTaskIntentProfile = {
   scriptArtifactRequested: boolean;
   emailTemplateRequested: boolean;
   deploymentAllowed: boolean;
+  needsClarification: boolean;
+  clarificationQuestion: string;
 };
 
 export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTaskIntentProfile {
   const normalizedTexts = normalizeIntentTexts(texts);
   const latest = normalizedTexts[normalizedTexts.length - 1] || '';
   const combined = normalizedTexts.join('\n');
+  const intentShape = classifyTaskIntentShape(texts);
 
   const latestExplicitNoDeploy = includesAnyKeyword(latest, EXPLICIT_NO_DEPLOY_KEYWORDS);
   const latestExplicitNoWeb = includesAnyKeyword(latest, EXPLICIT_NO_WEB_KEYWORDS);
@@ -324,6 +328,8 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
     scriptArtifactRequested,
     emailTemplateRequested,
     deploymentAllowed,
+    needsClarification: intentShape.needsClarification,
+    clarificationQuestion: intentShape.clarificationQuestion,
   };
 }
 
@@ -444,6 +450,16 @@ export class AltusManagedPromptService {
             '- For deploy/redeploy/rollback requests, do not call `complete_task` until deployment is actually ready online. Treat `bindingState=ready` plus a non-transient deployment status as the success condition. If the deployment tool reports `deployment_pending`, keep polling with `get_application_deployment_status`. If deployment is still failing, continue repairing or clearly report that the online deployment is not complete yet.',
             '- Keep deployment debug details internal. In user-facing replies, summarize only the current phase, whether auto-repair is happening, and the final result.',
           ].join('\n');
+    const clarificationGateSection =
+      taskIntentProfile?.needsClarification && asText(taskIntentProfile.clarificationQuestion)
+        ? [
+            '# Clarification gate',
+            '- The current request is under-specified and requires clarification before execution.',
+            '- Your next step must be `ask_user` with the focused clarification question from session context.',
+            '- Do not call `todowrite`, do not start execution tools, and do not enter implementation before the user answers.',
+            '',
+          ].join('\n')
+        : '';
 
     return [
       'You are Altus, the managed-mode engineering agent inside OneCEO.',
@@ -519,6 +535,7 @@ export class AltusManagedPromptService {
       '',
       nonDeployableTaskSection,
       noAutoDeploySection,
+      clarificationGateSection,
       '# OneCEO web app contract',
       '- When the user asks for a website, web app, dashboard, admin panel, SaaS UI, landing page with working product flow, or other deployable browser product, you must build it as a OneCEO deployable web app instead of an ad-hoc static artifact.',
       '- For deployable web app tasks, you must produce a root `package.json` with working `build` and `start` scripts.',

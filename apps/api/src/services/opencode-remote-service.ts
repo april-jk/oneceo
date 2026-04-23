@@ -137,6 +137,8 @@ function buildNeutralTaskIntentProfile(): AltusManagedTaskIntentProfile {
     scriptArtifactRequested: false,
     emailTemplateRequested: false,
     deploymentAllowed: true,
+    needsClarification: false,
+    clarificationQuestion: '',
   };
 }
 

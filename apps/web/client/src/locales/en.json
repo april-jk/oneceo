@@ -468,7 +468,22 @@
   },
   "searchPage": {
     "title": "Search",
-    "description": "Search functionality will be available here."
+    "description": "Search all session titles and message content, then group the results by project.",
+    "placeholder": "Search all conversations",
+    "clear": "Clear search",
+    "hint": "Enter at least 2 characters to search across all conversations.",
+    "loading": "Searching...",
+    "empty": "No matching conversations found.",
+    "searchFailed": "Search failed. Please try again later.",
+    "totalResults": "{{count}} results",
+    "titleHits": "{{count}} title hits",
+    "messageHits": "{{count}} message hits",
+    "projectGroups": "{{count}} project groups",
+    "ungrouped": "Unassigned sessions",
+    "groupCount": "{{count}} sessions",
+    "titleMatch": "Title hit",
+    "messageMatch": "Message hit",
+    "updatedAt": "Updated {{value}}"
   },
   "libraryPage": {
     "title": "Library",

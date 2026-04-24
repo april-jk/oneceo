@@ -21,3 +21,10 @@
 - 将 grip 显示改为直接响应 `react-resizable-panels` 的 `data-resize-handle-state=hover/drag` 与 `data-resize-handle-active`，避免普通 DOM hover 在扩展 hit area 下不触发导致看不到拖动柄。
 - 将 `AltusArtifactPreviewCard` 的网页预览改为按容器缩放的只读 iframe，卡片内不再上下滚动，完整交互继续走 `Open`。
 - 补充缩放计算单元测试，覆盖小卡片缩放和大容器原始比例两类场景。
+
+## Altus 完成消息 Markdown 列表格式修复
+
+- 排查完成消息格式丢失问题，定位为 `resolveFinalAssistantContent` 会优先保留更长 assistant 原文，但这条路径未规范化模型输出中的 `• item • item` 非标准列表。
+- 在 `altus-run-coordinator` 增加完成消息 Markdown 规范化，把行首或同段内的 bullet glyph 转为标准 `- item` 列表，并让 summary 构建和 assistant 原文优先路径共用该边界。
+- 将完成消息的验证区块调整为标题后留空行再接 Markdown 列表，避免列表和标题黏连。
+- 在 Altus managed prompt 中补充约束，要求 `complete_task.summary` 使用分行 Markdown bullet，不要把多个 `• item` 拼成一段。

@@ -34,6 +34,8 @@ import {
   Search,
   Plug,
   Terminal,
+  Bug,
+  Rocket,
   ChevronDown,
   ChevronRight,
   Check,
@@ -77,6 +79,7 @@ import AltusArtifactPreviewCard, {
 } from "@/components/AltusArtifactPreviewCard";
 import TaskDeliverableCard from "@/components/TaskDeliverableCard";
 import AltusRunReplayDrawer, {
+  type AltusDrawerView,
   type AltusReplayAction,
   type AltusReplayFile,
 } from "@/components/AltusRunReplayDrawer";
@@ -354,6 +357,8 @@ export default function Home() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [altusReplayRunId, setAltusReplayRunId] = useState<string | null>(null);
   const [altusReplayIndex, setAltusReplayIndex] = useState(0);
+  const [altusReplayView, setAltusReplayView] =
+    useState<AltusDrawerView>("actions");
   const [pendingAltusReplayToolCallId, setPendingAltusReplayToolCallId] =
     useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">(
@@ -1750,11 +1755,12 @@ export default function Home() {
     runId: string,
     options?: {
       toolCallId?: string | null;
-      view?: "actions" | "files";
+      view?: AltusDrawerView;
     },
   ) => {
     if (!runId) return;
     setAltusReplayRunId(runId);
+    setAltusReplayView(options?.view || "actions");
     setPreviewOpen(true);
     setPreviewMaximized(false);
     if (options?.toolCallId) {
@@ -1894,6 +1900,8 @@ export default function Home() {
             0,
             (activeAltusReplay?.actions.length || 1) - 1,
           )}
+          activeView={altusReplayView}
+          onActiveViewChange={setAltusReplayView}
           onSelectIndex={setAltusReplayIndex}
           onJumpToLatest={() =>
             setAltusReplayIndex(
@@ -2613,6 +2621,8 @@ export default function Home() {
           files={activeAltusReplay.files}
           currentIndex={activeAltusReplayIndex}
           latestIndex={Math.max(0, activeAltusReplay.actions.length - 1)}
+          activeView={altusReplayView}
+          onActiveViewChange={setAltusReplayView}
           onSelectIndex={setAltusReplayIndex}
           onJumpToLatest={() =>
             setAltusReplayIndex(
@@ -4967,7 +4977,7 @@ function MessageBubble({
     runId: string,
     options?: {
       toolCallId?: string | null;
-      view?: "actions" | "files";
+      view?: AltusDrawerView;
     },
   ) => void;
   onOpenWorkspacePreview?: (path: string) => void;
@@ -5176,8 +5186,11 @@ function MessageBubble({
       <div data-message-key={item.messageKey}>
         <ManagedActivityGroup
           item={item}
-          onOpenReplay={(runId, toolCallId) =>
-            onOpenManagedReplay?.(runId, { toolCallId, view: "actions" })
+          onOpenReplay={(runId, toolCallId, toolName) =>
+            onOpenManagedReplay?.(runId, {
+              toolCallId,
+              view: resolveManagedToolReplayView(toolName),
+            })
           }
         />
       </div>
@@ -5189,8 +5202,11 @@ function MessageBubble({
       <div data-message-key={item.messageKey}>
         <ManagedToolCard
           item={item}
-          onOpenReplay={(runId, toolCallId) =>
-            onOpenManagedReplay?.(runId, { toolCallId, view: "actions" })
+          onOpenReplay={(runId, toolCallId, toolName) =>
+            onOpenManagedReplay?.(runId, {
+              toolCallId,
+              view: resolveManagedToolReplayView(toolName),
+            })
           }
         />
       </div>
@@ -6859,6 +6875,8 @@ function getManagedToolStatusPresentation(status: string) {
 
 function getManagedToolIcon(toolName: string): LucideIcon {
   if (toolName === "shell_execute") return Terminal;
+  if (toolName === "debug_open_page") return Bug;
+  if (isManagedDeploymentTool(toolName)) return Rocket;
   if (toolName === "write_file") return FilePenLine;
   if (toolName === "read_file") return FileText;
   if (toolName === "search_code") return Search;
@@ -6872,7 +6890,7 @@ function ManagedActivityGroup({
   onOpenReplay,
 }: {
   item: Extract<ChatItem, { kind: "managed_activity_group" }>;
-  onOpenReplay?: (runId: string, toolCallId: string) => void;
+  onOpenReplay?: (runId: string, toolCallId: string, toolName: string) => void;
 }) {
   const [expanded, setExpanded] = useState(item.defaultExpanded ?? true);
   useEffect(() => {
@@ -6969,7 +6987,7 @@ function ManagedActivityToolRow({
   onOpenReplay,
 }: {
   item: Extract<ChatItem, { kind: "managed_tool" }>;
-  onOpenReplay?: (runId: string, toolCallId: string) => void;
+  onOpenReplay?: (runId: string, toolCallId: string, toolName: string) => void;
 }) {
   const Icon = getManagedToolIcon(item.toolName);
   const title =
@@ -6985,7 +7003,7 @@ function ManagedActivityToolRow({
           type="button"
           onClick={() => {
             if (onOpenReplay && item.runId && item.toolCallId) {
-              onOpenReplay(item.runId, item.toolCallId);
+              onOpenReplay(item.runId, item.toolCallId, item.toolName);
             }
           }}
           className="inline-flex h-full max-w-full items-center gap-1 overflow-hidden rounded-full border border-border/70 bg-background/85 px-2.5 py-1 text-left transition hover:bg-muted/40"
@@ -7009,7 +7027,7 @@ function ManagedToolCard({
   onOpenReplay,
 }: {
   item: Extract<ChatItem, { kind: "managed_tool" }>;
-  onOpenReplay?: (runId: string, toolCallId: string) => void;
+  onOpenReplay?: (runId: string, toolCallId: string, toolName: string) => void;
 }) {
   const displayName = getManagedToolDisplayName(item.toolName);
   const Icon = getManagedToolIcon(item.toolName);
@@ -7073,7 +7091,7 @@ function ManagedToolCard({
           type="button"
           onClick={() => {
             if (onOpenReplay && item.runId && item.toolCallId) {
-              onOpenReplay(item.runId, item.toolCallId);
+              onOpenReplay(item.runId, item.toolCallId, item.toolName);
             }
           }}
           className={`w-full max-w-[min(100%,42rem)] rounded-2xl border px-4 py-3 text-left transition ${chipToneClass}`}
@@ -7135,7 +7153,7 @@ function ManagedToolCard({
             type="button"
             onClick={() => {
               if (onOpenReplay && item.runId && item.toolCallId) {
-                onOpenReplay(item.runId, item.toolCallId);
+                onOpenReplay(item.runId, item.toolCallId, item.toolName);
               }
             }}
             data-managed-tool-layout={
@@ -7754,6 +7772,18 @@ function inferManagedArtifactPreviewType(
   return /\.(html?)$/i.test(path) ? "web" : "code";
 }
 
+export function resolveManagedToolReplayView(
+  toolName: string,
+): AltusDrawerView {
+  if (toolName === "debug_open_page") {
+    return "debug";
+  }
+  if (isManagedDeploymentTool(toolName)) {
+    return "deployment";
+  }
+  return "actions";
+}
+
 function isManagedDeploymentTool(toolName: string) {
   return (
     toolName === "deploy_application" ||
@@ -7882,6 +7912,8 @@ function getManagedToolDisplayName(toolName: string) {
       return i18n.t("homeWorkspace.codeSearch");
     case "ask_user":
       return i18n.t("homeWorkspace.requestClarification");
+    case "debug_open_page":
+      return i18n.t("replayDrawer.tabs.debug");
     case "deploy_application":
       return i18n.t("homeWorkspace.deployApplication");
     case "redeploy_application":

@@ -11715,6 +11715,7 @@ export default function App() {
             onOpenConversation={(sessionId) => {
               openConversationDialog(sessionId, 'overview', { section: 'billing', trail: '计费管理' });
             }}
+            onNotify={pushToast}
           />
         </Suspense>
       );

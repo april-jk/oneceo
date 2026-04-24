@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { UserDetailDialog } from './UserDetailDialog';
 import { BillingStatsDashboard } from './BillingStatsDashboard';
 import { BillingUsageLogs } from './BillingUsageLogs';
+import { getBillingErrorMessage, readBillingResponseError, type BillingNotify } from './billing-feedback';
 
 interface UserCredit {
   userId: string;
@@ -24,23 +25,16 @@ interface Pricing {
   cacheCreationRatio: number;
 }
 
-interface BillingStats {
-  totalUsers: number;
-  totalCreditsConsumed: number;
-  totalTokensUsed: number;
-  totalSessions: number;
-}
-
 interface BillingManagementSectionProps {
   onOpenUser?: (userId: string) => void;
   onOpenConversation?: (sessionId: string) => void;
+  onNotify?: BillingNotify;
 }
 
-export function BillingManagementSection({ onOpenUser, onOpenConversation }: BillingManagementSectionProps) {
+export function BillingManagementSection({ onOpenUser, onOpenConversation, onNotify }: BillingManagementSectionProps) {
   const [activeTab, setActiveTab] = useState<'users' | 'pricing' | 'stats' | 'logs'>('users');
   const [users, setUsers] = useState<UserCredit[]>([]);
   const [pricing, setPricing] = useState<Pricing[]>([]);
-  const [stats, setStats] = useState<BillingStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserCredit | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -62,13 +56,16 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation }: Bil
       if (response.ok) {
         const data = await response.json();
         setUsers(data.items || []);
+      } else {
+        onNotify?.('error', '加载失败', await readBillingResponseError(response, '无法获取用户积分列表'));
       }
     } catch (error) {
       console.error('获取用户积分列表失败:', error);
+      onNotify?.('error', '加载失败', getBillingErrorMessage(error, '无法获取用户积分列表'));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [onNotify]);
 
   const fetchPricing = useCallback(async () => {
     try {
@@ -76,34 +73,19 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation }: Bil
       if (response.ok) {
         const data = await response.json();
         setPricing(data.items || []);
+      } else {
+        onNotify?.('error', '加载失败', await readBillingResponseError(response, '无法获取模型定价列表'));
       }
     } catch (error) {
       console.error('获取定价列表失败:', error);
+      onNotify?.('error', '加载失败', getBillingErrorMessage(error, '无法获取模型定价列表'));
     }
-  }, []);
-
-  const fetchStats = useCallback(async () => {
-    try {
-      const response = await fetch('/api/internal/billing/stats?period=today', { credentials: 'include' });
-      if (response.ok) {
-        const data = await response.json();
-        setStats({
-          totalUsers: data.totalUsers || 0,
-          totalCreditsConsumed: data.totalCreditsConsumed || 0,
-          totalTokensUsed: data.totalTokensUsed || 0,
-          totalSessions: data.totalSessions || 0,
-        });
-      }
-    } catch (error) {
-      console.error('获取统计失败:', error);
-    }
-  }, []);
+  }, [onNotify]);
 
   useEffect(() => {
     if (activeTab === 'users') fetchUsers();
     if (activeTab === 'pricing') fetchPricing();
-    if (activeTab === 'stats') fetchStats();
-  }, [activeTab, fetchUsers, fetchPricing, fetchStats]);
+  }, [activeTab, fetchUsers, fetchPricing]);
 
   const handleUserDetail = useCallback((user: UserCredit) => {
     setSelectedUser(user);
@@ -144,8 +126,36 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation }: Bil
     }
   }, [onOpenConversation]);
 
+  const promptPrice = Number(pricingForm.promptPricePer1kTokens);
+  const completionPrice = Number(pricingForm.completionPricePer1kTokens);
+  const canSubmitPricing = Boolean(pricingForm.model.trim()) &&
+    Number.isInteger(promptPrice) &&
+    Number.isInteger(completionPrice) &&
+    promptPrice > 0 &&
+    completionPrice > 0;
+
+  const handleUserAdjusted = useCallback((result: { amount: number; balanceAfter: number }) => {
+    setUsers((current) => current.map((item) => (
+      selectedUser && item.userId === selectedUser.userId
+        ? {
+            ...item,
+            balance: result.balanceAfter,
+            totalEarned: item.totalEarned + result.amount,
+          }
+        : item
+    )));
+    setSelectedUser((current) => current
+      ? {
+          ...current,
+          balance: result.balanceAfter,
+          totalEarned: current.totalEarned + result.amount,
+        }
+      : current);
+    void fetchUsers();
+  }, [fetchUsers, selectedUser]);
+
   const handleCreatePricing = async () => {
-    if (!pricingForm.model || !pricingForm.promptPricePer1kTokens || !pricingForm.completionPricePer1kTokens) return;
+    if (!canSubmitPricing) return;
     setPricingFormLoading(true);
     try {
       const response = await fetch('/api/internal/billing/pricing', {
@@ -153,19 +163,23 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation }: Bil
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          model: pricingForm.model,
+          model: pricingForm.model.trim(),
           modelProvider: pricingForm.modelProvider,
-          promptPricePer1kTokens: parseInt(pricingForm.promptPricePer1kTokens),
-          completionPricePer1kTokens: parseInt(pricingForm.completionPricePer1kTokens),
+          promptPricePer1kTokens: promptPrice,
+          completionPricePer1kTokens: completionPrice,
         }),
       });
       if (response.ok) {
         setPricingForm({ model: '', modelProvider: 'openai', promptPricePer1kTokens: '', completionPricePer1kTokens: '' });
         setPricingFormOpen(false);
-        fetchPricing();
+        onNotify?.('success', '定价已创建', `${pricingForm.model.trim()} 的模型定价已创建`);
+        void fetchPricing();
+      } else {
+        onNotify?.('error', '创建失败', await readBillingResponseError(response, '创建模型定价失败'));
       }
     } catch (error) {
       console.error('创建定价失败:', error);
+      onNotify?.('error', '创建失败', getBillingErrorMessage(error, '创建模型定价失败'));
     } finally {
       setPricingFormLoading(false);
     }
@@ -179,10 +193,14 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation }: Bil
         credentials: 'include',
       });
       if (response.ok) {
-        fetchPricing();
+        onNotify?.('success', '定价已停用', '模型定价已停用');
+        void fetchPricing();
+      } else {
+        onNotify?.('error', '停用失败', await readBillingResponseError(response, '停用模型定价失败'));
       }
     } catch (error) {
       console.error('停用定价失败:', error);
+      onNotify?.('error', '停用失败', getBillingErrorMessage(error, '停用模型定价失败'));
     }
   };
 
@@ -469,7 +487,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation }: Bil
                       </select>
                     </label>
                     <label>
-                      <span>输入单价（credits / 1k tokens）</span>
+                      <span>输入单价（正整数 credits / 1k tokens）</span>
                       <input
                         type="number"
                         placeholder="如 25"
@@ -478,7 +496,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation }: Bil
                       />
                     </label>
                     <label>
-                      <span>输出单价（credits / 1k tokens）</span>
+                      <span>输出单价（正整数 credits / 1k tokens）</span>
                       <input
                         type="number"
                         placeholder="如 50"
@@ -492,7 +510,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation }: Bil
                       type="button"
                       className="secondary-btn"
                       onClick={handleCreatePricing}
-                      disabled={pricingFormLoading || !pricingForm.model || !pricingForm.promptPricePer1kTokens || !pricingForm.completionPricePer1kTokens}
+                      disabled={pricingFormLoading || !canSubmitPricing}
                     >
                       {pricingFormLoading ? '创建中...' : '创建定价'}
                     </button>
@@ -506,7 +524,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation }: Bil
 
       {/* Stats Tab */}
       {activeTab === 'stats' && (
-        <BillingStatsDashboard />
+        <BillingStatsDashboard onNotify={onNotify} />
       )}
 
       {/* Logs Tab */}
@@ -514,6 +532,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation }: Bil
         <BillingUsageLogs
           onOpenUser={handleUserIdClick}
           onOpenConversation={handleSessionIdClick}
+          onNotify={onNotify}
         />
       )}
 
@@ -541,6 +560,8 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation }: Bil
                 user={selectedUser}
                 open={true}
                 onOpenChange={setDetailOpen}
+                onAdjusted={handleUserAdjusted}
+                onNotify={onNotify}
               />
             </div>
           </aside>

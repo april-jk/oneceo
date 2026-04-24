@@ -1,5 +1,16 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, Bug, Check, ChevronLeft, ChevronRight, Clock3, FileText, ListTodo, Rocket, XCircle } from "lucide-react";
+import {
+  Activity,
+  Bug,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Clock3,
+  FileText,
+  ListTodo,
+  Rocket,
+  XCircle,
+} from "lucide-react";
 import type { AltusArtifactFile } from "@/components/AltusArtifactPreviewCard";
 import {
   DebugPreview,
@@ -73,15 +84,12 @@ type AltusRunReplayDrawerProps = {
   onRequestDeployByMessage?: () => void;
   onRequestRedeployByMessage?: () => void;
   onRequestRollbackByMessage?: () => void;
-  onOpenPreviewTab?: (tab: "files" | "changes" | "debug" | "deployment") => void;
+  onOpenPreviewTab?: (
+    tab: "files" | "changes" | "debug" | "deployment",
+  ) => void;
 };
 
-type AltusDrawerView =
-  | "actions"
-  | "files"
-  | "changes"
-  | "debug"
-  | "deployment";
+type AltusDrawerView = "actions" | "files" | "changes" | "debug" | "deployment";
 
 function getStatusIcon(status: AltusReplayActionStatus) {
   if (status === "completed") {
@@ -119,7 +127,10 @@ function getStatusBadgeClass(status: AltusReplayActionStatus) {
 function uniqueFiles(files: AltusReplayFile[], sessionId: string) {
   const map = new Map<string, AltusReplayFile>();
   for (const file of files) {
-    const normalizedPath = normalizeWorkspaceRelativePath(file.path || "", sessionId);
+    const normalizedPath = normalizeWorkspaceRelativePath(
+      file.path || "",
+      sessionId,
+    );
     if (!normalizedPath || map.has(normalizedPath)) continue;
     map.set(normalizedPath, {
       ...file,
@@ -157,7 +168,10 @@ export function resolveReplaySelectedFilePath(input: {
   if (forcePreferred) {
     return preferredPath;
   }
-  if (currentSelectedPath && files.some((file) => file.path === currentSelectedPath)) {
+  if (
+    currentSelectedPath &&
+    files.some((file) => file.path === currentSelectedPath)
+  ) {
     return currentSelectedPath;
   }
   return preferredPath;
@@ -200,7 +214,9 @@ export default function AltusRunReplayDrawer({
     [files, sessionId],
   );
   const selectedAction =
-    currentIndex >= 0 && currentIndex < actions.length ? actions[currentIndex] : null;
+    currentIndex >= 0 && currentIndex < actions.length
+      ? actions[currentIndex]
+      : null;
   const [selectedFilePath, setSelectedFilePath] = useState<string>(
     normalizedFiles[0]?.path || "",
   );
@@ -222,7 +238,9 @@ export default function AltusRunReplayDrawer({
     useState<TaskCreationDeploymentInfo | null>(null);
   const [deploymentLoading, setDeploymentLoading] = useState(false);
   const [deploymentError, setDeploymentError] = useState<string | null>(null);
-  const effectiveEnsureRuntime = runtimeSwitchBlocked ? undefined : onEnsureRuntime;
+  const effectiveEnsureRuntime = runtimeSwitchBlocked
+    ? undefined
+    : onEnsureRuntime;
   const filePreview = useWorkspaceFilePreviewState({
     sessionId,
     open: open && drawerView === "files",
@@ -246,7 +264,8 @@ export default function AltusRunReplayDrawer({
   const selectedActionPanelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    const actionChanged = previousSelectedActionKeyRef.current !== selectedActionKey;
+    const actionChanged =
+      previousSelectedActionKeyRef.current !== selectedActionKey;
     setSelectedFilePath((prev) =>
       resolveReplaySelectedFilePath({
         currentSelectedPath: prev,
@@ -332,7 +351,9 @@ export default function AltusRunReplayDrawer({
 
   const canGoPrev = currentIndex > 0;
   const canGoNext = currentIndex < latestIndex;
-  const completedCount = actions.filter((action) => action.status === "completed").length;
+  const completedCount = actions.filter(
+    (action) => action.status === "completed",
+  ).length;
   const currentDiff =
     diffItems.find((item) => item.id === selectedDiffId) ||
     diffItems[diffItems.length - 1] ||
@@ -351,15 +372,14 @@ export default function AltusRunReplayDrawer({
     setDeploymentLoading(true);
     setDeploymentError(null);
     try {
-      const targetDeploymentId = deploymentId || selectedDeploymentId || undefined;
+      const targetDeploymentId =
+        deploymentId || selectedDeploymentId || undefined;
       const info = await getTaskCreationDeploymentInfo(
         sessionId,
         targetDeploymentId,
       );
       setDeploymentInfo(info);
-      setSelectedDeploymentId(
-        info?.deploymentId || targetDeploymentId || null,
-      );
+      setSelectedDeploymentId(info?.deploymentId || targetDeploymentId || null);
     } catch (error) {
       setDeploymentError(
         error instanceof Error
@@ -424,12 +444,17 @@ export default function AltusRunReplayDrawer({
   const content = (
     <div
       ref={drawerContentRef}
-      className="flex h-full min-h-0 flex-col overflow-hidden"
+      className={cn(
+        "flex h-full min-h-0 flex-col overflow-hidden",
+        embedded ? "gap-3 p-2" : "",
+      )}
     >
       <div
         className={cn(
-          "h-12 flex-shrink-0 px-3 flex items-center justify-between border-b border-border",
-          embedded ? "bg-card" : "bg-background/95 backdrop-blur-sm",
+          "h-12 flex-shrink-0 px-3 flex items-center justify-between",
+          embedded
+            ? "rounded-xl border border-border/60 bg-card/80"
+            : "border-b border-border bg-background/95 backdrop-blur-sm",
         )}
       >
         <div className="flex items-center min-w-0">
@@ -499,111 +524,184 @@ export default function AltusRunReplayDrawer({
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+      <div
+        className={cn(
+          "flex-1 min-h-0 flex flex-col overflow-hidden",
+          embedded ? "rounded-xl border border-border/60 bg-card/60" : "",
+        )}
+      >
         {drawerView === "actions" ? (
           <div className="h-full w-full overflow-hidden">
-            <div className="flex h-full flex-col overflow-hidden bg-card">
-                <div className="h-14 border-b bg-zinc-50/80 px-4 py-2 backdrop-blur-sm dark:bg-zinc-900/80">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <div className="rounded-lg border bg-zinc-100 p-2 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700">
-                        <ListTodo className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="truncate text-base font-medium text-zinc-900 dark:text-zinc-100">
-                          {i18n.t("replayDrawer.updateTasks")}
-                        </div>
-                      </div>
+            <div
+              className={cn(
+                "flex h-full flex-col overflow-hidden",
+                embedded ? "bg-transparent" : "bg-card",
+              )}
+            >
+              <div
+                className={cn(
+                  "h-14 px-4 py-2 backdrop-blur-sm",
+                  embedded
+                    ? "bg-transparent"
+                    : "border-b bg-zinc-50/80 dark:bg-zinc-900/80",
+                )}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div
+                      className={cn(
+                        "rounded-lg p-2",
+                        embedded
+                          ? "bg-zinc-100/70 dark:bg-zinc-800/60"
+                          : "border bg-zinc-100 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700",
+                      )}
+                    >
+                      <ListTodo className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="inline-flex items-center justify-center rounded-2xl border px-3 py-1.5 text-xs font-normal text-foreground">
-                        {i18n.t("replayDrawer.tasksProgress", {
-                          completed: completedCount,
-                          total: actions.length,
-                        })}
-                      </span>
+                    <div className="min-w-0">
+                      <div className="truncate text-base font-medium text-zinc-900 dark:text-zinc-100">
+                        {i18n.t("replayDrawer.updateTasks")}
+                      </div>
                     </div>
                   </div>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={cn(
+                        "inline-flex items-center justify-center rounded-2xl px-3 py-1.5 text-xs font-normal text-foreground",
+                        embedded
+                          ? "bg-zinc-100/70 dark:bg-zinc-800/60"
+                          : "border",
+                      )}
+                    >
+                      {i18n.t("replayDrawer.tasksProgress", {
+                        completed: completedCount,
+                        total: actions.length,
+                      })}
+                    </span>
+                  </div>
                 </div>
+              </div>
 
-                <ScrollArea className="flex-1 min-h-0">
-                  <div className="py-0">
-                    {actions.length === 0 ? (
-                      <div className="px-4 py-8 text-sm text-muted-foreground">
-                        {i18n.t("replayDrawer.emptyActions")}
-                      </div>
-                    ) : (
-                      <div className="border-b border-zinc-200 dark:border-zinc-800 last:border-b-0">
-                        <div className="flex items-center justify-between bg-zinc-50/80 px-4 py-3 border-b border-zinc-200 dark:border-zinc-700 dark:bg-zinc-900/80">
-                          <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                            {runTitle || i18n.t("replayDrawer.currentTask")}
-                          </h3>
-                          <div className="flex items-center gap-2">
-                            <span className="inline-flex items-center justify-center rounded-2xl border bg-white px-2 py-0 text-xs font-normal text-foreground dark:bg-zinc-800">
-                              {Math.min(currentIndex + 1, actions.length)}/{actions.length}
-                            </span>
-                            <span className={cn("inline-flex items-center justify-center rounded-2xl border px-2 py-0 text-xs h-5", getStatusBadgeClass(selectedAction?.status || "unknown"))}>
-                              {getStatusBadgeCopy(selectedAction?.status || "unknown")}
-                            </span>
-                          </div>
+              <ScrollArea className="flex-1 min-h-0">
+                <div className="py-0">
+                  {actions.length === 0 ? (
+                    <div className="px-4 py-8 text-sm text-muted-foreground">
+                      {i18n.t("replayDrawer.emptyActions")}
+                    </div>
+                  ) : (
+                    <div
+                      className={cn(
+                        "last:border-b-0",
+                        embedded
+                          ? ""
+                          : "border-b border-zinc-200 dark:border-zinc-800",
+                      )}
+                    >
+                      <div
+                        className={cn(
+                          "flex items-center justify-between px-4 py-3",
+                          embedded
+                            ? "bg-transparent"
+                            : "bg-zinc-50/80 border-b border-zinc-200 dark:border-zinc-700 dark:bg-zinc-900/80",
+                        )}
+                      >
+                        <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                          {runTitle || i18n.t("replayDrawer.currentTask")}
+                        </h3>
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex items-center justify-center rounded-2xl border bg-white px-2 py-0 text-xs font-normal text-foreground dark:bg-zinc-800">
+                            {Math.min(currentIndex + 1, actions.length)}/
+                            {actions.length}
+                          </span>
+                          <span
+                            className={cn(
+                              "inline-flex items-center justify-center rounded-2xl border px-2 py-0 text-xs h-5",
+                              getStatusBadgeClass(
+                                selectedAction?.status || "unknown",
+                              ),
+                            )}
+                          >
+                            {getStatusBadgeCopy(
+                              selectedAction?.status || "unknown",
+                            )}
+                          </span>
                         </div>
+                      </div>
 
-                        <div className="bg-card">
-                          {actions.map((action) => {
-                            const isActive = action.stepIndex === currentIndex;
-                            return (
-                              <button
-                                key={action.toolCallId}
-                                type="button"
-                                onClick={() => handleSelectActionIndex(action.stepIndex)}
-                                className={cn(
-                                  "flex w-full items-start gap-3 border-b border-zinc-100 px-4 py-3 text-left transition-colors last:border-b-0 dark:border-zinc-800",
-                                  isActive
-                                    ? "bg-zinc-100/90 dark:bg-zinc-800/70"
-                                    : "hover:bg-zinc-50/60 dark:hover:bg-zinc-800/40",
-                                )}
-                              >
-                                <div className="flex-shrink-0 pt-0.5">
-                                  {getStatusIcon(action.status)}
-                                </div>
-                                <div className="min-w-0 flex-1 space-y-1">
-                                  <div className="flex items-center justify-between gap-2">
-                                    <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                                      {action.displayName}
-                                    </p>
-                                    <span className={cn("inline-flex shrink-0 items-center justify-center rounded-2xl border px-2 py-0 text-xs", getStatusBadgeClass(action.status))}>
-                                      {getStatusBadgeCopy(action.status)}
-                                    </span>
-                                  </div>
-                                  <p className="text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
-                                    {action.summary}
+                      <div
+                        className={cn(embedded ? "bg-transparent" : "bg-card")}
+                      >
+                        {actions.map((action) => {
+                          const isActive = action.stepIndex === currentIndex;
+                          return (
+                            <button
+                              key={action.toolCallId}
+                              type="button"
+                              onClick={() =>
+                                handleSelectActionIndex(action.stepIndex)
+                              }
+                              className={cn(
+                                "flex w-full items-start gap-3 border-b border-zinc-100 px-4 py-3 text-left transition-colors last:border-b-0 dark:border-zinc-800",
+                                isActive
+                                  ? "bg-zinc-100/90 dark:bg-zinc-800/70"
+                                  : "hover:bg-zinc-50/60 dark:hover:bg-zinc-800/40",
+                              )}
+                            >
+                              <div className="flex-shrink-0 pt-0.5">
+                                {getStatusIcon(action.status)}
+                              </div>
+                              <div className="min-w-0 flex-1 space-y-1">
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                                    {action.displayName}
                                   </p>
-                                  {action.artifactPaths.length > 0 ? (
-                                    <div className="flex flex-wrap gap-1.5 pt-1">
-                                      {action.artifactPaths.slice(0, 3).map((path) => (
+                                  <span
+                                    className={cn(
+                                      "inline-flex shrink-0 items-center justify-center rounded-2xl border px-2 py-0 text-xs",
+                                      getStatusBadgeClass(action.status),
+                                    )}
+                                  >
+                                    {getStatusBadgeCopy(action.status)}
+                                  </span>
+                                </div>
+                                <p className="text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
+                                  {action.summary}
+                                </p>
+                                {action.artifactPaths.length > 0 ? (
+                                  <div className="flex flex-wrap gap-1.5 pt-1">
+                                    {action.artifactPaths
+                                      .slice(0, 3)
+                                      .map((path) => (
                                         <span
                                           key={`${action.toolCallId}:${path}`}
                                           className="inline-flex max-w-full items-center rounded-full border border-zinc-200 bg-white px-2 py-0.5 text-[11px] text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
                                         >
-                                          <span className="truncate">{path}</span>
+                                          <span className="truncate">
+                                            {path}
+                                          </span>
                                         </span>
                                       ))}
-                                    </div>
-                                  ) : null}
-                                </div>
-                              </button>
-                            );
-                          })}
-                        </div>
+                                  </div>
+                                ) : null}
+                              </div>
+                            </button>
+                          );
+                        })}
                       </div>
-                    )}
-                  </div>
-                </ScrollArea>
+                    </div>
+                  )}
+                </div>
+              </ScrollArea>
 
-                {selectedActionVisible ? (
+              {selectedActionVisible ? (
                 <div
                   ref={selectedActionPanelRef}
-                  className="border-t border-zinc-200 bg-zinc-50/90 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/90"
+                  className={cn(
+                    "px-4 py-3",
+                    embedded
+                      ? "bg-transparent"
+                      : "border-t border-zinc-200 bg-zinc-50/90 dark:border-zinc-800 dark:bg-zinc-900/90",
+                  )}
                 >
                   <div className="space-y-2">
                     <div className="text-xs font-medium uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
@@ -621,7 +719,12 @@ export default function AltusRunReplayDrawer({
                                 {selectedAction.toolName}
                               </div>
                             </div>
-                            <span className={cn("inline-flex shrink-0 items-center justify-center rounded-2xl border px-2 py-0 text-xs", getStatusBadgeClass(selectedAction.status))}>
+                            <span
+                              className={cn(
+                                "inline-flex shrink-0 items-center justify-center rounded-2xl border px-2 py-0 text-xs",
+                                getStatusBadgeClass(selectedAction.status),
+                              )}
+                            >
                               {getStatusBadgeCopy(selectedAction.status)}
                             </span>
                           </div>
@@ -665,94 +768,105 @@ export default function AltusRunReplayDrawer({
                     </div>
                   </div>
                 </div>
-                ) : null}
-              </div>
+              ) : null}
             </div>
-          ) : drawerView === "files" ? (
-            <FilePreview
-              sessionId={sessionId}
-              tree={filePreview.effectiveTree}
-              loading={filePreview.treeLoading}
-              error={filePreview.treeError}
-              selectedPath={filePreview.selectedPath}
-              file={filePreview.fileData}
-              contentError={filePreview.fileError}
-              contentLoading={filePreview.fileLoading}
-              expandedPaths={filePreview.expandedPaths}
-              dirState={filePreview.dirState}
-              onTogglePath={filePreview.handleTogglePath}
-              onLoadMoreDir={filePreview.handleLoadMoreDirectory}
-              onRefresh={() => void filePreview.refreshTree("manual")}
-              onSelectFile={handleReplayFileSelect}
-              runtimeReady={runtimeReady !== false}
-              runtimeStarting={runtimeStarting === true}
-              runtimeSwitchBlocked={runtimeSwitchBlocked}
-            />
-          ) : drawerView === "changes" ? (
-            <AltusPreviewChangesPanel
-              diffItems={diffItems}
-              currentDiff={currentDiff}
-              onSelectDiff={setSelectedDiffId}
-              onOpenPreviewTab={onOpenPreviewTab}
-            />
-          ) : drawerView === "debug" ? (
-            <DebugPreview
-              info={debugPreview.debugInfo}
-              loading={debugPreview.debugLoading}
-              error={debugPreview.debugError}
-              runtimeReady={runtimeReady !== false}
-              starting={debugPreview.debugStarting}
-              onRequestStartDebugByMessage={onRequestStartDebugByMessage}
-              onStart={async () => {
-                if (runtimeReady === false) {
-                  if (runtimeSwitchBlocked) {
-                    debugPreview.setDebugError(i18n.t("previewPanel.runtimeSwitchBlocked"));
-                    return;
-                  }
-                  if (effectiveEnsureRuntime) {
-                    debugPreview.setDebugStarting(true);
-                    try {
-                      await effectiveEnsureRuntime();
-                    } finally {
-                      debugPreview.setDebugStarting(false);
-                    }
-                  }
+          </div>
+        ) : drawerView === "files" ? (
+          <FilePreview
+            sessionId={sessionId}
+            tree={filePreview.effectiveTree}
+            loading={filePreview.treeLoading}
+            error={filePreview.treeError}
+            selectedPath={filePreview.selectedPath}
+            file={filePreview.fileData}
+            contentError={filePreview.fileError}
+            contentLoading={filePreview.fileLoading}
+            expandedPaths={filePreview.expandedPaths}
+            dirState={filePreview.dirState}
+            onTogglePath={filePreview.handleTogglePath}
+            onLoadMoreDir={filePreview.handleLoadMoreDirectory}
+            onRefresh={() => void filePreview.refreshTree("manual")}
+            onSelectFile={handleReplayFileSelect}
+            runtimeReady={runtimeReady !== false}
+            runtimeStarting={runtimeStarting === true}
+            runtimeSwitchBlocked={runtimeSwitchBlocked}
+          />
+        ) : drawerView === "changes" ? (
+          <AltusPreviewChangesPanel
+            diffItems={diffItems}
+            currentDiff={currentDiff}
+            onSelectDiff={setSelectedDiffId}
+            onOpenPreviewTab={onOpenPreviewTab}
+          />
+        ) : drawerView === "debug" ? (
+          <DebugPreview
+            info={debugPreview.debugInfo}
+            loading={debugPreview.debugLoading}
+            error={debugPreview.debugError}
+            runtimeReady={runtimeReady !== false}
+            starting={debugPreview.debugStarting}
+            onRequestStartDebugByMessage={onRequestStartDebugByMessage}
+            onStart={async () => {
+              if (runtimeReady === false) {
+                if (runtimeSwitchBlocked) {
+                  debugPreview.setDebugError(
+                    i18n.t("previewPanel.runtimeSwitchBlocked"),
+                  );
                   return;
                 }
-                if (!onRequestStartDebugByMessage) {
-                  debugPreview.setDebugError(i18n.t("previewPanel.debug.missingStartEntry"));
-                  return;
+                if (effectiveEnsureRuntime) {
+                  debugPreview.setDebugStarting(true);
+                  try {
+                    await effectiveEnsureRuntime();
+                  } finally {
+                    debugPreview.setDebugStarting(false);
+                  }
                 }
-                onRequestStartDebugByMessage();
-              }}
-            />
-          ) : (
-            <DeploymentPreview
-              sessionId={sessionId}
-              info={deploymentInfo}
-              templateBaseline={null}
-              templateBaselineLoading={false}
-              templateBaselineError={null}
-              loading={deploymentLoading}
-              error={deploymentError}
-              actionLoading={deploymentAction}
-              selectedDeploymentId={selectedDeploymentId}
-              onRefresh={(deploymentId) => void refreshDeployment(deploymentId)}
-              onSelectDeployment={(deploymentId) => {
-                setSelectedDeploymentId(deploymentId);
-                void refreshDeployment(deploymentId);
-              }}
-              onDeploy={() => void runDeploymentAction("deploy")}
-              onRedeploy={() => void runDeploymentAction("redeploy")}
-              onRollback={() => void runDeploymentAction("rollback")}
-              tokenRotationLoading={false}
-              onRotateDeploymentToken={() => undefined}
-            />
-          )}
-        </div>
+                return;
+              }
+              if (!onRequestStartDebugByMessage) {
+                debugPreview.setDebugError(
+                  i18n.t("previewPanel.debug.missingStartEntry"),
+                );
+                return;
+              }
+              onRequestStartDebugByMessage();
+            }}
+          />
+        ) : (
+          <DeploymentPreview
+            sessionId={sessionId}
+            info={deploymentInfo}
+            templateBaseline={null}
+            templateBaselineLoading={false}
+            templateBaselineError={null}
+            loading={deploymentLoading}
+            error={deploymentError}
+            actionLoading={deploymentAction}
+            selectedDeploymentId={selectedDeploymentId}
+            onRefresh={(deploymentId) => void refreshDeployment(deploymentId)}
+            onSelectDeployment={(deploymentId) => {
+              setSelectedDeploymentId(deploymentId);
+              void refreshDeployment(deploymentId);
+            }}
+            onDeploy={() => void runDeploymentAction("deploy")}
+            onRedeploy={() => void runDeploymentAction("redeploy")}
+            onRollback={() => void runDeploymentAction("rollback")}
+            tokenRotationLoading={false}
+            onRotateDeploymentToken={() => undefined}
+          />
+        )}
+      </div>
 
       {drawerView === "actions" ? (
-        <div className="flex-shrink-0 border-t border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900">
+        <div
+          className={cn(
+            "flex-shrink-0 p-3",
+            embedded
+              ? "bg-transparent"
+              : "border-t border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900",
+          )}
+        >
           <div className="flex items-center justify-between">
             <Button
               type="button"
@@ -760,14 +874,18 @@ export default function AltusRunReplayDrawer({
               size="sm"
               disabled={!canGoPrev}
               className="h-8 rounded-2xl text-xs"
-              onClick={() => handleSelectActionIndex(Math.max(0, currentIndex - 1))}
+              onClick={() =>
+                handleSelectActionIndex(Math.max(0, currentIndex - 1))
+              }
             >
               <ChevronLeft className="mr-1 h-3.5 w-3.5" />
               <span>{i18n.t("replayDrawer.prev")}</span>
             </Button>
             <div className="flex items-center gap-1.5">
               <span className="min-w-[44px] text-xs font-medium tabular-nums text-zinc-600 dark:text-zinc-400">
-                {actions.length === 0 ? "0/0" : `${Math.min(currentIndex + 1, actions.length)}/${actions.length}`}
+                {actions.length === 0
+                  ? "0/0"
+                  : `${Math.min(currentIndex + 1, actions.length)}/${actions.length}`}
               </span>
               <button
                 type="button"
@@ -786,20 +904,22 @@ export default function AltusRunReplayDrawer({
               size="sm"
               disabled={!canGoNext}
               className="h-8 rounded-2xl text-xs"
-              onClick={() => handleSelectActionIndex(Math.min(latestIndex, currentIndex + 1))}
+              onClick={() =>
+                handleSelectActionIndex(Math.min(latestIndex, currentIndex + 1))
+              }
             >
               <span>{i18n.t("replayDrawer.next")}</span>
               <ChevronRight className="ml-1 h-3.5 w-3.5" />
             </Button>
           </div>
         </div>
-        ) : null}
+      ) : null}
     </div>
   );
 
   if (embedded) {
     return (
-      <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm">
+      <div className="flex h-full min-h-0 flex-col overflow-hidden bg-transparent">
         {content}
       </div>
     );
@@ -863,7 +983,9 @@ function AltusPreviewChangesPanel({
   diffItems: PreviewDiffItem[];
   currentDiff: PreviewDiffItem | null;
   onSelectDiff: (id: string) => void;
-  onOpenPreviewTab?: (tab: "files" | "changes" | "debug" | "deployment") => void;
+  onOpenPreviewTab?: (
+    tab: "files" | "changes" | "debug" | "deployment",
+  ) => void;
 }) {
   useTranslation();
   return (
@@ -871,7 +993,9 @@ function AltusPreviewChangesPanel({
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center gap-2 text-sm font-medium text-foreground">
           {i18n.t("replayDrawer.changesTitle")}
-          <span className="text-xs text-muted-foreground">{diffItems.length}</span>
+          <span className="text-xs text-muted-foreground">
+            {diffItems.length}
+          </span>
         </div>
         <Button
           variant="ghost"
@@ -892,7 +1016,9 @@ function AltusPreviewChangesPanel({
                 </span>
                 <select
                   className="text-xs border border-border rounded-md bg-background px-2 py-1 flex-1"
-                  value={currentDiff?.id || diffItems[diffItems.length - 1]?.id || ""}
+                  value={
+                    currentDiff?.id || diffItems[diffItems.length - 1]?.id || ""
+                  }
                   onChange={(event) => onSelectDiff(event.target.value)}
                 >
                   {diffItems
@@ -915,7 +1041,8 @@ function AltusPreviewChangesPanel({
                       {i18n.t("replayDrawer.currentChange")}
                     </div>
                     <div className="mt-1 truncate text-sm font-medium text-slate-900">
-                      {currentDiff.title || i18n.t("replayDrawer.recentChangeFallback")}
+                      {currentDiff.title ||
+                        i18n.t("replayDrawer.recentChangeFallback")}
                     </div>
                   </div>
                   <span className="text-xs text-slate-500">

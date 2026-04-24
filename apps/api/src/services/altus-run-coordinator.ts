@@ -1362,6 +1362,7 @@ export class AltusRunCoordinator {
     );
     let plainTextRecoveryUsed = false;
     const assistantStreamMessageKey = `managed:${state.input.runId}:assistant`;
+    const finalAssistantMessageKey = `managed:${state.input.runId}:assistant:final`;
     const deploymentCompletionIntent = this.resolveDeploymentCompletionIntent(
       state.input.userInput,
       state.input.taskIntentProfile
@@ -1824,19 +1825,6 @@ export class AltusRunCoordinator {
                 }
               );
             }
-            await this.setupService.persistTimelineMessage({
-              sessionId: state.input.sessionId,
-              role: 'agent',
-              messageType: 'assistant_message',
-              content: finalContent,
-              metadata: {
-                agent: 'altus',
-                runId: state.input.runId,
-                verification: result.verification,
-                deliverables,
-              },
-              messageKey: assistantStreamMessageKey,
-            });
             await this.eventWriter.appendRunEvent(
               state.input.runId,
               state.input.sessionId,
@@ -1859,6 +1847,19 @@ export class AltusRunCoordinator {
               ),
               }
             );
+            await this.setupService.persistTimelineMessage({
+              sessionId: state.input.sessionId,
+              role: 'agent',
+              messageType: 'assistant_message',
+              content: finalContent,
+              metadata: {
+                agent: 'altus',
+                runId: state.input.runId,
+                verification: result.verification,
+                deliverables,
+              },
+              messageKey: finalAssistantMessageKey,
+            });
             await this.eventWriter.appendRunEvent(
               state.input.runId,
               state.input.sessionId,
@@ -1866,7 +1867,7 @@ export class AltusRunCoordinator {
               'assistant_message',
               {
               content: finalContent,
-              messageKey: assistantStreamMessageKey,
+              messageKey: finalAssistantMessageKey,
               deliverables,
               }
             );

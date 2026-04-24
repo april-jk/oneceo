@@ -4088,14 +4088,19 @@ export function getActiveManagedStatusText(items: ChatItem[]): string {
   return "";
 }
 
+type ManagedActivityTimelineItem = Extract<
+  ChatItem,
+  { kind: "managed_status" | "managed_tool" }
+>;
+
 function isManagedActivityTimelineItem(
   item: ChatItem,
-): item is Extract<ChatItem, { kind: "managed_status" | "managed_tool" }> {
+): item is ManagedActivityTimelineItem {
   return item.kind === "managed_status" || item.kind === "managed_tool";
 }
 
 function getManagedActivityTitle(
-  items: Array<Extract<ChatItem, { kind: "managed_status" | "managed_tool" }>>,
+  items: ManagedActivityTimelineItem[],
 ) {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
@@ -4114,7 +4119,7 @@ function getManagedActivityTitle(
 }
 
 function getManagedActivityState(
-  items: Array<Extract<ChatItem, { kind: "managed_status" | "managed_tool" }>>,
+  items: ManagedActivityTimelineItem[],
 ) {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
@@ -4126,25 +4131,52 @@ function getManagedActivityState(
   return "completed";
 }
 
+function normalizeManagedStageTitle(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function getManagedTodoStageTitle(item: ManagedActivityTimelineItem) {
+  if (item.kind !== "managed_tool" || item.toolName !== "todowrite") {
+    return "";
+  }
+  const activeTodo = readManagedTodoItems(item.metadata).find(
+    (todo) => todo.status === "in_progress",
+  );
+  return activeTodo
+    ? normalizeManagedStageTitle(activeTodo.activeForm || activeTodo.content)
+    : "";
+}
+
 export function groupManagedActivityItems(items: ChatItem[]): ChatItem[] {
   const grouped: ChatItem[] = [];
-  let buffer: Array<
-    Extract<ChatItem, { kind: "managed_status" | "managed_tool" }>
-  > = [];
+  let buffer: ManagedActivityTimelineItem[] = [];
+  let bufferTitle = "";
 
   const flush = () => {
     if (buffer.length === 0) return;
     grouped.push({
       kind: "managed_activity_group",
-      title: getManagedActivityTitle(buffer),
+      title: bufferTitle || getManagedActivityTitle(buffer),
       messageKey: buffer.map((item) => item.messageKey).filter(Boolean).join("|"),
       items: buffer,
     });
     buffer = [];
+    bufferTitle = "";
   };
 
   for (const item of items) {
     if (isManagedActivityTimelineItem(item)) {
+      const todoStageTitle = getManagedTodoStageTitle(item);
+      if (todoStageTitle) {
+        const isSameStage =
+          bufferTitle &&
+          normalizeManagedStageTitle(bufferTitle) ===
+            normalizeManagedStageTitle(todoStageTitle);
+        if (!isSameStage) {
+          flush();
+          bufferTitle = todoStageTitle;
+        }
+      }
       buffer.push(item);
       continue;
     }

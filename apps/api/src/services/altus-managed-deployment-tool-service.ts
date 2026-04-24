@@ -5,7 +5,10 @@ import {
   getTaskSessionDeploymentErrorMessage,
   resolveTaskSessionRecord,
 } from './task-session-deployment-runtime-service';
-import type { RailwayDeploymentPanelData } from './railway-deployment-service';
+import {
+  classifyRailwayDeploymentError,
+  type RailwayDeploymentPanelData,
+} from './railway-deployment-service';
 
 export const ALTUS_MANAGED_DEPLOYMENT_TOOL_NAMES = [
   'deploy_application',
@@ -19,7 +22,9 @@ export type AltusManagedDeploymentToolName = (typeof ALTUS_MANAGED_DEPLOYMENT_TO
 type RepairCategory =
   | 'workspace_missing'
   | 'template_compliance'
-  | 'deployment_configuration';
+  | 'deployment_configuration'
+  | 'resource_binding'
+  | 'deployment_pending';
 
 type AltusManagedDeploymentToolRepair = {
   category: RepairCategory;
@@ -137,6 +142,68 @@ function buildRepairResult(
       rawError: asText(rawError) || undefined,
       baselineStatus: baseline.status,
       baselineErrors: baseline.errors,
+    },
+  };
+}
+
+function buildResourceBindingRepairResult(
+  action: AltusManagedDeploymentToolName,
+  rawError: string,
+  baseline?: DeploymentTemplateBaselineData | null
+): AltusManagedDeploymentToolResult {
+  const classified = classifyRailwayDeploymentError(rawError);
+  return {
+    action,
+    phase: 'repair_required',
+    status: 'retryable_repair_required',
+    summary: classified.userMessage,
+    repair: {
+      category: 'resource_binding',
+      checks: [classified.code],
+      suggestedActions: [
+        '优先修复 Railway 部署资源绑定，不要继续修改工作区模板或本地启动脚本',
+        '修复完成后直接再次调用部署工具，重新校验部署状态',
+      ],
+    },
+    baseline: baseline || undefined,
+    debug: {
+      rawError,
+      baselineStatus: baseline?.status,
+      baselineErrors: baseline?.errors,
+    },
+  };
+}
+
+function buildPendingResult(
+  action: AltusManagedDeploymentToolName,
+  panel: RailwayDeploymentPanelData
+): AltusManagedDeploymentToolResult {
+  const deploymentStatus = asText(panel.latestStatus);
+  const url = asText(panel.latestStaticUrl || panel.latestUrl);
+  return {
+    action,
+    phase: 'repair_required',
+    status: 'retryable_repair_required',
+    summary:
+      panel.message ||
+      (deploymentStatus
+        ? `部署仍在进行中，当前状态 ${deploymentStatus}。`
+        : '部署仍在进行中，后台正在同步最新状态。'),
+    deploymentStatus: deploymentStatus || undefined,
+    url: url || undefined,
+    deploymentId: asText(panel.deploymentId) || undefined,
+    repair: {
+      category: 'deployment_pending',
+      checks: [asText(panel.bindingState) || 'provisioning', deploymentStatus || 'unknown'].filter(Boolean),
+      suggestedActions: [
+        '继续调用 get_application_deployment_status，直到 bindingState=ready 且部署状态不再是 BUILDING/DEPLOYING/INITIALIZING/QUEUED/WAITING',
+        '在 deployment_pending 阶段不要继续修改工作区文件，除非后续返回新的模板或配置修复项',
+      ],
+    },
+    debug: {
+      latestStatus: deploymentStatus || undefined,
+      latestUrl: url || undefined,
+      deploymentId: asText(panel.deploymentId) || undefined,
     },
   };
 }
@@ -304,6 +371,9 @@ export class AltusManagedDeploymentToolService {
         workspacePath: input.workspaceRoot,
         resolvedOrchestratorSessionId: input.sandboxId,
       });
+      if (result.panel.activeDeploymentPending || asText(result.panel.bindingState) === 'provisioning') {
+        return buildPendingResult(input.action, result.panel);
+      }
       return buildSuccessResult({
         action: input.action,
         panel: result.panel,
@@ -317,6 +387,10 @@ export class AltusManagedDeploymentToolService {
               workspaceRoot: input.workspaceRoot,
             }).catch(() => null);
       const rawError = this.deps.getErrorMessage(error);
+      const classified = classifyRailwayDeploymentError(rawError);
+      if (classified.bindingState === 'repair_required') {
+        return buildResourceBindingRepairResult(input.action, rawError, latestBaseline);
+      }
       if (latestBaseline && latestBaseline.status !== 'ready') {
         return buildRepairResult(input.action, latestBaseline, rawError);
       }

@@ -4,6 +4,7 @@ import { AltusRunState } from './altus-run-state';
 import { AltusManagedSetupService, altusManagedSetupService } from './altus-managed-setup-service';
 import { AltusRunEventWriter, altusRunEventWriter } from './altus-run-event-writer';
 import { altusRunRecoveryService, AltusRunRecoveryService } from './altus-run-recovery-service';
+import { createAltusRunLoopSnapshot, type AltusRunLoopUpdate } from './altus-run-loop-state';
 
 const RUN_COMPLETED_TEXT = 'managed run 已完成';
 const RUN_STOPPED_TEXT = '已停止当前处理';
@@ -64,6 +65,7 @@ export class AltusRunLifecycleService {
           .filter(Boolean),
         updatedAt: new Date(),
       },
+      loop: createAltusRunLoopSnapshot(),
     });
     await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, state.input.userId, 'run_status', {
       status: 'running',
@@ -87,6 +89,32 @@ export class AltusRunLifecycleService {
       status: 'waiting_user',
       stage: 'clarifying',
       phase: 'analysis',
+    });
+  }
+
+  async syncLoopSnapshot(state: AltusRunState, loop: AltusRunLoopUpdate) {
+    if (state.status !== 'running' && state.status !== 'waiting_user') {
+      return;
+    }
+    await this.redisStateService.setRecoverySnapshot({
+      runId: state.input.runId,
+      sessionId: state.input.sessionId,
+      userId: state.input.userId,
+      model: state.input.model,
+      status: state.status,
+      sandbox: {
+        sandboxId: state.sandboxId,
+        workspaceRoot: state.workspaceRoot,
+        reused: state.sandboxReused,
+        updatedAt: new Date(),
+      },
+      connectorRuntime: {
+        providerIds: state.input.mcpProviders
+          .map((item) => typeof item?.providerId === 'string' ? item.providerId.trim() : '')
+          .filter(Boolean),
+        updatedAt: new Date(),
+      },
+      loop,
     });
   }
 

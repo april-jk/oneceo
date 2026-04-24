@@ -18,6 +18,7 @@ export type RedisCommandPort = {
   getJson<T>(key: string): Promise<T | null>;
   setJson(key: string, value: unknown, ttlSeconds?: number): Promise<void>;
   setString(key: string, value: string, options?: RedisSetStringOptions): Promise<boolean>;
+  incrementCounter(key: string, ttlSeconds?: number): Promise<number>;
   getString(key: string): Promise<string | null>;
   delete(key: string): Promise<void>;
   addSetMember(key: string, member: string): Promise<void>;
@@ -137,6 +138,20 @@ export class RedisClientService implements RedisCommandPort {
         return result === 'OK';
       },
       false
+    );
+  }
+
+  async incrementCounter(key: string, ttlSeconds?: number) {
+    return this.withClient(
+      'increment_counter',
+      async (client) => {
+        const count = await client.incr(key);
+        if (ttlSeconds && ttlSeconds > 0 && count === 1) {
+          await client.expire(key, Math.floor(ttlSeconds));
+        }
+        return count;
+      },
+      0
     );
   }
 

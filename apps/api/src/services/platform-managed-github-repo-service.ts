@@ -34,7 +34,16 @@ type GithubBranchResponse = {
 type GithubDeploymentAuth = {
   token: string;
   owner: string;
+  expiresAt: number;
 };
+
+type GithubInstallationTokenResponse = {
+  token?: string;
+  expires_at?: string;
+};
+
+let githubDeploymentAuthCache: GithubDeploymentAuth | null = null;
+let githubDeploymentAuthInflight: Promise<GithubDeploymentAuth> | null = null;
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -245,29 +254,58 @@ async function createGithubInstallationToken() {
   const owner = requireEnv('GITHUB_DEPLOYMENT_OWNER');
   const privateKey = normalizeGithubAppPrivateKey(requireEnv('GITHUB_DEPLOYMENT_APP_PRIVATE_KEY'));
   const jwt = createGithubAppJwt(appId, privateKey);
-  const payload = await githubRequest<{
-    token?: string;
-  }>(jwt, `/app/installations/${encodeURIComponent(installationId)}/access_tokens`, {
-    method: 'POST',
-    headers: {
-      'X-GitHub-Api-Version': '2022-11-28',
-    },
-  });
+  const payload = await githubRequest<GithubInstallationTokenResponse>(
+    jwt,
+    `/app/installations/${encodeURIComponent(installationId)}/access_tokens`,
+    {
+      method: 'POST',
+      headers: {
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    }
+  );
   const token = asText(payload?.token);
   if (!token) {
     throw new Error('GitHub App installation token 获取失败');
   }
+  const expiresAtMs = Date.parse(asText(payload?.expires_at));
+  const expiresAt =
+    Number.isFinite(expiresAtMs) && expiresAtMs > 0
+      ? expiresAtMs
+      : Date.now() + 50 * 60 * 1000;
   return {
     token,
     owner,
+    expiresAt,
   } satisfies GithubDeploymentAuth;
+}
+
+function hasUsableGithubDeploymentAuthCache() {
+  if (!githubDeploymentAuthCache) {
+    return false;
+  }
+  return githubDeploymentAuthCache.expiresAt - Date.now() > 5 * 60 * 1000;
 }
 
 async function getGithubDeploymentAuth(): Promise<GithubDeploymentAuth> {
   if (!hasGithubAppDeploymentConfig()) {
     throw new Error('GitHub App 部署配置未完成，缺少 GITHUB_DEPLOYMENT_APP_* 环境变量');
   }
-  return createGithubInstallationToken();
+  if (hasUsableGithubDeploymentAuthCache()) {
+    return githubDeploymentAuthCache as GithubDeploymentAuth;
+  }
+  if (githubDeploymentAuthInflight) {
+    return githubDeploymentAuthInflight;
+  }
+  githubDeploymentAuthInflight = createGithubInstallationToken()
+    .then((auth) => {
+      githubDeploymentAuthCache = auth;
+      return auth;
+    })
+    .finally(() => {
+      githubDeploymentAuthInflight = null;
+    });
+  return githubDeploymentAuthInflight;
 }
 
 async function getRepositoryBranch(

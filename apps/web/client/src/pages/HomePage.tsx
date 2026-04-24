@@ -7,6 +7,7 @@ import ConnectorDialog from "@/components/ConnectorDialog";
 import AttachmentChipList from "@/components/AttachmentChipList";
 import AttachmentPickerButton from "@/components/AttachmentPickerButton";
 import { motion } from "framer-motion";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
   Tooltip,
@@ -30,11 +31,53 @@ import {
   type PendingAttachment,
 } from "@/lib/task-attachments";
 
+function QuickActionRow({
+  actions,
+  direction,
+  durationSeconds,
+  onSelect,
+}: {
+  actions: readonly string[];
+  direction: "left" | "right";
+  durationSeconds: number;
+  onSelect: (value: string) => void;
+}) {
+  const loopedActions = [...actions, ...actions, ...actions, ...actions];
+
+  return (
+    <div className="relative left-1/2 min-w-[280px] -translate-x-1/2 w-[min(calc(100%+30vw),calc(100vw-2rem))] sm:w-[min(calc(100%+30vw),calc(100vw-3rem))]">
+      <div className="homepage-marquee-mask relative overflow-hidden">
+        <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-12 bg-gradient-to-r from-background via-background/80 to-transparent sm:w-16" />
+        <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-12 bg-gradient-to-l from-background via-background/80 to-transparent sm:w-16" />
+
+        <div
+          className="homepage-marquee-track py-1"
+          data-direction={direction}
+          style={{ animationDuration: `${durationSeconds}s` }}
+        >
+          {loopedActions.map((action, index) => (
+            <Button
+              key={`${action}-${index}`}
+              variant="outline"
+              className="h-11 shrink-0 rounded-xl border-border bg-background px-4 text-sm font-medium text-foreground shadow-sm transition-colors hover:border-foreground/15 hover:bg-accent"
+              onClick={() => onSelect(action)}
+            >
+              {action}
+            </Button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function HomePage() {
   const [, setLocation] = useLocation();
+  const { t } = useTranslation();
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
-  const [selectedModel, setSelectedModel] = useState("Agent Pro");
+  const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">("pro");
+  const quickActionRows = t("homePage.quickActions", { returnObjects: true }) as string[][];
 
   const goToNewTask = (input: string) => {
     const value = input.trim() || (attachments.length ? DEFAULT_ATTACHMENT_PROMPT : "");
@@ -62,10 +105,10 @@ export default function HomePage() {
       <nav className="border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
         <div className="container mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <img src="/logo.png" alt="oneceo" className="w-9 h-9 rounded-xl" />
+            <img src="/logo.png" alt="oneceo" className="w-9 h-9 rounded-lg" />
             <div className="flex flex-col">
               <span className="text-sm font-semibold text-foreground leading-tight">oneceo</span>
-              <span className="text-xs text-muted-foreground leading-tight">AI Agent Platform</span>
+              <span className="text-xs text-muted-foreground leading-tight">{t("homePage.platformSubtitle")}</span>
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -91,7 +134,7 @@ export default function HomePage() {
               <div className="w-12 h-12 bg-foreground rounded-2xl flex items-center justify-center shadow-lg">
                 <span className="text-background font-bold text-xl">M</span>
               </div>
-              <h1 className="text-3xl font-semibold text-foreground tracking-tight">AI Agent</h1>
+              <h1 className="text-3xl font-semibold text-foreground tracking-tight">{t("homePage.title")}</h1>
             </motion.div>
             <motion.p
               initial={{ opacity: 0 }}
@@ -99,7 +142,7 @@ export default function HomePage() {
               transition={{ delay: 0.2, duration: 0.4 }}
               className="text-muted-foreground text-lg"
             >
-              What can I help you with today?
+              {t("homePage.subtitle")}
             </motion.p>
           </div>
 
@@ -111,7 +154,7 @@ export default function HomePage() {
           >
             <div className="p-4 space-y-3">
               <Textarea
-                placeholder="Type your message here..."
+                placeholder={t("homePage.textareaPlaceholder")}
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
                 onKeyDown={(e) => {
@@ -142,16 +185,16 @@ export default function HomePage() {
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" size="sm" className="h-9 px-3 rounded-xl gap-2 hover:bg-muted">
                               <Sparkles className="w-4 h-4 text-muted-foreground" />
-                              <span className="text-sm text-muted-foreground">{selectedModel}</span>
+                              <span className="text-sm text-muted-foreground">{t(`homePage.models.${selectedModel}`)}</span>
                             </Button>
                           </DropdownMenuTrigger>
                         </TooltipTrigger>
-                        <TooltipContent><p>Select AI model</p></TooltipContent>
+                        <TooltipContent><p>{t("homePage.selectModel")}</p></TooltipContent>
                       </Tooltip>
                       <DropdownMenuContent align="start" className="w-40">
-                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Lite")}>Agent Lite</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Pro")}>Agent Pro</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Max")}>Agent Max</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setSelectedModel("lite")}>{t("homePage.models.lite")}</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setSelectedModel("pro")}>{t("homePage.models.pro")}</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setSelectedModel("max")}>{t("homePage.models.max")}</DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
@@ -163,7 +206,7 @@ export default function HomePage() {
                           <Mic className="w-4 h-4 text-muted-foreground" />
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent><p>Voice input</p></TooltipContent>
+                      <TooltipContent><p>{t("homePage.voiceInput")}</p></TooltipContent>
                     </Tooltip>
 
                     <Tooltip>
@@ -177,7 +220,7 @@ export default function HomePage() {
                           <Send className="w-4 h-4" />
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent><p>Send message</p></TooltipContent>
+                      <TooltipContent><p>{t("homePage.sendMessage")}</p></TooltipContent>
                     </Tooltip>
                   </div>
                 </div>
@@ -185,31 +228,33 @@ export default function HomePage() {
             </div>
           </motion.div>
 
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.4, duration: 0.4 }}
-            className="grid grid-cols-2 gap-3"
-          >
-            {[
-              "我想做一个Python开发行业的市场调研",
-              "帮我分析竞争对手的产品策略",
-              "创建一个新产品的营销计划",
-              "生成季度业务报告",
-            ].map((action) => (
-              <Button
-                key={action}
-                variant="outline"
-                className="h-auto py-3 px-4 rounded-xl border-border hover:bg-accent hover:border-primary/30 text-sm font-medium text-left whitespace-normal"
-                onClick={() => goToNewTask(action)}
-              >
-                {action}
-              </Button>
-            ))}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.4, duration: 0.4 }}
+          className="pt-3 space-y-3"
+        >
+            <QuickActionRow
+              actions={quickActionRows[0] || []}
+              direction="left"
+              durationSeconds={28}
+              onSelect={goToNewTask}
+            />
+            <QuickActionRow
+              actions={quickActionRows[1] || []}
+              direction="right"
+              durationSeconds={32}
+              onSelect={goToNewTask}
+            />
+            <QuickActionRow
+              actions={quickActionRows[2] || []}
+              direction="left"
+              durationSeconds={36}
+              onSelect={goToNewTask}
+            />
           </motion.div>
         </motion.div>
       </div>
-
     </div>
   );
 }

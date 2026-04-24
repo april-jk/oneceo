@@ -1,22 +1,102 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { altusManagedPromptService } from '../src/services/altus-managed-prompt-service';
+import {
+  altusManagedPromptService,
+  deriveManagedTaskIntentProfile,
+} from '../src/services/altus-managed-prompt-service';
 
-test('managed prompt requires task grading and detailed todo for complex tasks', () => {
+test('managed prompt treats task grading as descriptive language and uses taskIntentProfile as the only todo gate', () => {
   const prompt = altusManagedPromptService.buildSystemPrompt({
     sessionId: 'session-prompt-test',
     sessionTitle: 'complex task prompt',
     workspaceRoot: '/workspace/session-prompt-test',
     connectors: [],
+    taskIntentProfile: {
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: ['帮我排查这个会话卡住的问题并修复'],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: true,
+      todoReason: 'debug_chain',
+    },
   });
 
   assert.match(prompt, /judge the task complexity as simple, normal, or complex/i);
-  assert.match(prompt, /for complex tasks, you must first form a detailed step-by-step todo list/i);
+  assert.match(prompt, /do not use that grading as an independent todo trigger/i);
+  assert.match(prompt, /if `taskIntentProfile\.todoRequired=true`, you must call `todowrite` before the first execution step/i);
+  assert.match(prompt, /The current request requires a pre-execution todo snapshot/i);
   assert.match(
     prompt,
     /multiple files, multiple subsystems, unclear dependencies, staged verification, migrations, infrastructure\/runtime changes, or a non-trivial debugging chain/i,
   );
-  assert.match(prompt, /complete one step, validate it, then move to the next step/i);
+  assert.match(prompt, /break the work into concrete steps, then complete and verify them sequentially/i);
+  assert.match(prompt, /exactly one `in_progress` item/i);
+  assert.match(prompt, /After a clarification answer arrives, reassess the request from scratch/i);
+});
+
+test('managed prompt explicitly skips pre-execution todo for simple tasks when taskIntentProfile says no', () => {
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-simple-task-test',
+    sessionTitle: 'simple task prompt',
+    workspaceRoot: '/workspace/session-simple-task-test',
+    connectors: [],
+    taskIntentProfile: {
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: ['把这个按钮文案改成提交'],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
+    },
+  });
+
+  assert.match(prompt, /does not require a pre-execution todo snapshot/i);
+  assert.match(prompt, /do not call `todowrite` just because the request sounds non-trivial/i);
+});
+
+test('managed task intent profile carries a hard clarification gate for broad business-system requests', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '帮我做一个企业管理系统。',
+  ]);
+
+  assert.equal(profile.needsClarification, true);
+  assert.match(profile.clarificationQuestion, /主要使用角色/);
+  assert.match(profile.clarificationQuestion, /核心模块/);
+  assert.match(profile.clarificationQuestion, /源码/);
+  assert.match(profile.clarificationQuestion, /部署/);
+  assert.equal(profile.todoRequired, false);
+  assert.equal(profile.todoReason, 'none');
+
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-clarification-gate-test',
+    sessionTitle: 'clarification gate',
+    workspaceRoot: '/workspace/session-clarification-gate-test',
+    connectors: [],
+    taskIntentProfile: profile,
+  });
+
+  assert.match(prompt, /under-specified and requires clarification before execution/i);
+  assert.match(prompt, /Your next step must be `ask_user`/i);
+  assert.match(prompt, /Do not call `todowrite`/i);
+  assert.match(prompt, /Active clarification type/i);
 });
 
 test('managed prompt enforces multi-phase PPT collaboration and QA gate', () => {
@@ -87,6 +167,19 @@ test('managed prompt instructs direct multimodal image analysis instead of OCR-f
   assert.match(prompt, /do not ask the user to describe an uploaded image/i);
 });
 
+test('managed prompt allows direct plain-text reply for pure identity and memory questions', () => {
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-memory-chat-test',
+    sessionTitle: 'memory chat contract',
+    workspaceRoot: '/workspace/session-memory-chat-test',
+    connectors: [],
+  });
+
+  assert.match(prompt, /pure identity or memory question/i);
+  assert.match(prompt, /reply directly with plain assistant text/i);
+  assert.match(prompt, /instead of forcing tool calls or complete_task/i);
+});
+
 test('managed prompt requires deployment tools and auto-repair loop for publish requests', () => {
   const prompt = altusManagedPromptService.buildSystemPrompt({
     sessionId: 'session-deploy-test',
@@ -97,8 +190,52 @@ test('managed prompt requires deployment tools and auto-repair loop for publish 
 
   assert.match(prompt, /use the managed deployment tools instead of replying with plain text/i);
   assert.match(prompt, /use `deploy_application` for first publish or publishing the latest workspace changes/i);
-  assert.match(prompt, /returns `status=retryable_repair_required`, do not stop/i);
+  assert.match(prompt, /returns `status=retryable_repair_required`, inspect `repair\.category` first/i);
   assert.match(prompt, /keep deployment debug details internal/i);
+});
+
+test('managed prompt derives non-deployable artifact intent and emits a hard no-deploy contract', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '请帮我写一个 HTML 邮件模板，用于报价通知邮件。只需要输出源码文件，不需要做网站，也不要部署。',
+    '请按最佳方案直接继续，不需要再提问。',
+  ]);
+  assert.equal(profile.mode, 'non_deployable_artifact');
+  assert.equal(profile.deploymentAllowed, false);
+
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-non-deploy-test',
+    sessionTitle: 'non deploy contract',
+    workspaceRoot: '/workspace/session-non-deploy-test',
+    connectors: [],
+    taskIntentProfile: profile,
+  });
+
+  assert.match(prompt, /# Non-deployable task contract/);
+  assert.match(prompt, /do not transform this task into a website/i);
+  assert.match(prompt, /do not call `deploy_application`, `redeploy_application`, or `rollback_application_deployment`/i);
+});
+
+test('managed prompt does not authorize deployment for website source tasks without an explicit deploy request', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '做一个纯 HTML 企业官网，包含首页、关于我们和联系我们，先给我源码文件。',
+  ]);
+
+  assert.equal(profile.mode, 'deployable_web_app');
+  assert.equal(profile.deployRequested, false);
+  assert.equal(profile.deploymentAllowed, false);
+
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-web-source-only-test',
+    sessionTitle: 'web source only contract',
+    workspaceRoot: '/workspace/session-web-source-only-test',
+    connectors: [],
+    taskIntentProfile: profile,
+  });
+
+  assert.match(prompt, /# Deployment trigger contract/);
+  assert.match(prompt, /is not an explicit deployment request/i);
+  assert.match(prompt, /does not by itself authorize deployment/i);
+  assert.doesNotMatch(prompt, /use `deploy_application` for first publish or publishing the latest workspace changes/i);
 });
 
 test('managed prompt builds minimal skill catalog index without full body', () => {
@@ -150,8 +287,38 @@ test('managed prompt shows active skill resource summary alongside full body', (
   ]);
 
   assert.match(prompt, /# Active skills/);
+  assert.match(prompt, /currently active for the run/i);
   assert.match(prompt, /resources: 1 references, 1 templates/);
   assert.match(prompt, /# Skill Brief/);
+});
+
+test('managed prompt can append auto-attached skill instructions after a governed tool call', () => {
+  const prompt = altusManagedPromptService.buildAutoAttachedSkillPrompt(
+    [
+      {
+        sourceType: 'platform',
+        skillId: 'skill-1',
+        revisionId: 'rev-1',
+        slug: 'deployment-orchestrator',
+        name: '部署编排',
+        description: '自动处理部署工作流',
+        category: 'deployment',
+        renderedMarkdown: '# Skill Brief\n\nUse deployment tools carefully.',
+        revisionNumber: 1,
+        resourceSummary: {
+          totalCount: 2,
+          referenceCount: 2,
+          templateCount: 0,
+          paths: ['references/runtime-classifier.md', 'references/nodejs.md'],
+        },
+      },
+    ],
+    'deploy_application'
+  );
+
+  assert.match(prompt, /newly auto-attached skills/i);
+  assert.match(prompt, /because tool `deploy_application` was used/i);
+  assert.match(prompt, /use deployment tools carefully/i);
 });
 
 test('managed prompt labels attached connectors by runtime status instead of treating all attached connectors as callable', () => {

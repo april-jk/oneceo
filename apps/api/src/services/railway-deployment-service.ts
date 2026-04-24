@@ -41,7 +41,13 @@ export type DeploymentAnalyticsPanelData = {
   provider: 'umami';
   configured: boolean;
   enabled: boolean;
-  status: 'ready' | 'pending' | 'unconfigured' | 'error';
+  status:
+    | 'bound'
+    | 'tracking'
+    | 'pending'
+    | 'pending_domain'
+    | 'unconfigured'
+    | 'error';
   host?: string;
   websiteId?: string;
   websiteName?: string;
@@ -74,10 +80,40 @@ export type DeploymentResourceBindingData = {
   repositoryBranch?: string;
 };
 
+export type RailwayDeploymentBindingState =
+  | 'uninitialized'
+  | 'provisioning'
+  | 'ready'
+  | 'repair_required'
+  | 'provider_error';
+
+export type RailwayDeploymentProvisioningPhase =
+  | 'resource_provisioning'
+  | 'workspace_publish'
+  | 'source_sync'
+  | 'deployment_trigger'
+  | 'public_reachability'
+  | 'analytics_binding'
+  | 'status_read'
+  | string;
+
+export type RailwayDeploymentProviderErrorCode =
+  | 'railway_project_not_found'
+  | 'railway_environment_not_found'
+  | 'railway_service_not_found'
+  | 'railway_repo_access_denied'
+  | 'deployment_provider_error'
+  | string;
+
 export type RailwayDeploymentPanelData = {
   configured: boolean;
   canDeploy: boolean;
   message?: string;
+  bindingState?: RailwayDeploymentBindingState;
+  provisioningPhase?: RailwayDeploymentProvisioningPhase;
+  providerErrorCode?: RailwayDeploymentProviderErrorCode;
+  providerErrorMessage?: string;
+  lastVerifiedAt?: string;
   projectId?: string;
   projectName?: string;
   environmentId?: string;
@@ -113,6 +149,122 @@ type RailwayBinding = {
   serviceName?: string;
   lastDeploymentId?: string;
 };
+
+export function resolveRailwaySelectedDeploymentId(input: {
+  requestedDeploymentId?: string;
+  deployments: RailwayDeploymentListItem[];
+  fallbackDeploymentId?: string;
+}): string {
+  const requestedDeploymentId = firstText(input.requestedDeploymentId);
+  if (
+    requestedDeploymentId &&
+    input.deployments.some((item) => item.id === requestedDeploymentId)
+  ) {
+    return requestedDeploymentId;
+  }
+
+  return input.deployments[0]?.id || '';
+}
+
+export function isRailwayBindingNotFoundError(message: string): boolean {
+  const normalized = asText(message).toLowerCase();
+  return (
+    normalized.includes('project not found') ||
+    normalized.includes('environment not found') ||
+    normalized.includes('service not found')
+  );
+}
+
+export function classifyRailwayDeploymentError(message: string): {
+  code: RailwayDeploymentProviderErrorCode;
+  bindingState: RailwayDeploymentBindingState;
+  userMessage: string;
+} {
+  const normalized = asText(message).toLowerCase();
+  if (normalized.includes('project not found')) {
+    return {
+      code: 'railway_project_not_found',
+      bindingState: 'repair_required',
+      userMessage:
+        '当前部署绑定的 Railway Project 已不存在，平台需要重建部署资源后才能继续发布。',
+    };
+  }
+  if (normalized.includes('environment not found')) {
+    return {
+      code: 'railway_environment_not_found',
+      bindingState: 'repair_required',
+      userMessage:
+        '当前部署绑定的 Railway Environment 已不存在，平台需要修复环境资源后才能继续发布。',
+    };
+  }
+  if (normalized.includes('service not found')) {
+    return {
+      code: 'railway_service_not_found',
+      bindingState: 'repair_required',
+      userMessage:
+        '当前部署绑定的 Railway Service 已不存在，平台需要重建服务资源后才能继续发布。',
+    };
+  }
+  if (
+    normalized.includes('user does not have access to the repo') ||
+    normalized.includes('无权访问目标 github 仓库') ||
+    normalized.includes('托管仓库尚未授权')
+  ) {
+    return {
+      code: 'railway_repo_access_denied',
+      bindingState: 'repair_required',
+      userMessage:
+        'Railway 当前无权访问托管仓库，平台需要先修复仓库授权后才能继续发布。',
+    };
+  }
+  return {
+    code: 'deployment_provider_error',
+    bindingState: 'provider_error',
+    userMessage: asText(message) || '发布暂未完成，部署供应链返回异常。',
+  };
+}
+
+export function buildRailwayBindingUnavailablePanel(input: {
+  binding: RailwayBinding;
+  providerErrorCode?: RailwayDeploymentProviderErrorCode;
+  reason?: string;
+}): RailwayDeploymentPanelData {
+  const reason = asText(input.reason);
+  const classified = classifyRailwayDeploymentError(reason);
+  const providerErrorCode = input.providerErrorCode || classified.code;
+  const bindingState =
+    providerErrorCode === 'railway_project_not_found' ||
+    providerErrorCode === 'railway_environment_not_found' ||
+    providerErrorCode === 'railway_service_not_found' ||
+    providerErrorCode === 'railway_repo_access_denied'
+      ? 'repair_required'
+      : classified.bindingState;
+  return {
+    configured: false,
+    canDeploy: true,
+    bindingState,
+    provisioningPhase: 'resource_provisioning',
+    providerErrorCode,
+    providerErrorMessage:
+      reason ||
+      '当前部署绑定的 Railway 资源已失效，请重新发布以重建部署资源，或联系平台管理员检查部署绑定。',
+    lastVerifiedAt: new Date().toISOString(),
+    message:
+      reason ||
+      '当前部署绑定的 Railway 资源已失效，请重新发布以重建部署资源，或联系平台管理员检查部署绑定。',
+    projectId: input.binding.projectId || undefined,
+    projectName: input.binding.projectName,
+    environmentId: input.binding.environmentId || undefined,
+    environmentName: input.binding.environmentName,
+    serviceId: input.binding.serviceId || undefined,
+    serviceName: input.binding.serviceName,
+    activeDeploymentPending: false,
+    domains: [],
+    deployments: [],
+    logs: [],
+    missing: [],
+  };
+}
 
 function pickRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === 'object') return value as Record<string, unknown>;
@@ -471,7 +623,11 @@ export async function getRailwayDeploymentPanel(
     return {
       configured: false,
       canDeploy: false,
+      bindingState: 'uninitialized',
+      provisioningPhase: 'resource_provisioning',
       message: buildMissingMessage(missing),
+      providerErrorMessage: buildMissingMessage(missing) || undefined,
+      lastVerifiedAt: new Date().toISOString(),
       activeDeploymentPending: false,
       domains: [],
       deployments: [],
@@ -480,11 +636,28 @@ export async function getRailwayDeploymentPanel(
     };
   }
 
-  const [projectResult, deploymentsResult, domainsResult] = await Promise.all([
-    loadProjectSummary(binding),
-    loadDeployments(binding),
-    loadDomains(binding),
-  ]);
+  let projectResult: Awaited<ReturnType<typeof loadProjectSummary>>;
+  let deploymentsResult: Awaited<ReturnType<typeof loadDeployments>>;
+  let domainsResult: Awaited<ReturnType<typeof loadDomains>>;
+
+  try {
+    [projectResult, deploymentsResult, domainsResult] = await Promise.all([
+      loadProjectSummary(binding),
+      loadDeployments(binding),
+      loadDomains(binding),
+    ]);
+  } catch (error: any) {
+    const message = firstText(error?.message);
+    if (isRailwayBindingNotFoundError(message)) {
+      const classified = classifyRailwayDeploymentError(message);
+      return buildRailwayBindingUnavailablePanel({
+        binding,
+        providerErrorCode: classified.code,
+        reason: classified.userMessage,
+      });
+    }
+    throw error;
+  }
 
   const services =
     projectResult.project?.services?.edges
@@ -523,11 +696,11 @@ export async function getRailwayDeploymentPanel(
     resolvedServiceName
   );
 
-  const selectedDeploymentId =
-    firstText(options?.deploymentId) ||
-    deployments[0]?.id ||
-    firstText(binding.lastDeploymentId) ||
-    '';
+  const selectedDeploymentId = resolveRailwaySelectedDeploymentId({
+    requestedDeploymentId: options?.deploymentId,
+    deployments,
+    fallbackDeploymentId: binding.lastDeploymentId,
+  });
   const selectedDeployment = selectedDeploymentId
     ? deployments.find((item) => item.id === selectedDeploymentId) || null
     : null;
@@ -536,22 +709,31 @@ export async function getRailwayDeploymentPanel(
   let logs: RailwayDeploymentLogEntry[] = [];
 
   if (selectedDeploymentId) {
-    const [detailResult, logsResult] = await Promise.all([
-      loadDeploymentDetail(binding.token, binding.tokenKind, selectedDeploymentId),
-      loadDeploymentLogs(
-        binding.token,
-        binding.tokenKind,
-        selectedDeploymentId,
-        Math.max(20, options?.logLimit || 80)
-      ),
-    ]);
-    detail = detailResult.deployment || null;
-    logs =
-      logsResult.deploymentLogs?.map((entry) => ({
-        timestamp: toIso(entry.timestamp),
-        message: asText(entry.message),
-        severity: asText(entry.severity) || undefined,
-      })).filter((entry) => entry.message) || [];
+    try {
+      const [detailResult, logsResult] = await Promise.all([
+        loadDeploymentDetail(binding.token, binding.tokenKind, selectedDeploymentId),
+        loadDeploymentLogs(
+          binding.token,
+          binding.tokenKind,
+          selectedDeploymentId,
+          Math.max(20, options?.logLimit || 80)
+        ),
+      ]);
+      detail = detailResult.deployment || null;
+      logs =
+        logsResult.deploymentLogs?.map((entry) => ({
+          timestamp: toIso(entry.timestamp),
+          message: asText(entry.message),
+          severity: asText(entry.severity) || undefined,
+        })).filter((entry) => entry.message) || [];
+    } catch (error: any) {
+      const message = firstText(error?.message);
+      if (!message.toLowerCase().includes('deployment not found')) {
+        throw error;
+      }
+      detail = null;
+      logs = [];
+    }
   }
 
   const activeStatus = asText(detail?.status) || selectedDeployment?.status || '';
@@ -570,7 +752,18 @@ export async function getRailwayDeploymentPanel(
   return {
     configured: true,
     canDeploy,
+    bindingState:
+      !canDeploy
+        ? 'repair_required'
+        : DEPLOYMENT_TRANSIENT_STATUSES.has(activeStatus)
+          ? 'provisioning'
+          : 'ready',
+    provisioningPhase:
+      DEPLOYMENT_TRANSIENT_STATUSES.has(activeStatus) || !canDeploy ? 'deployment_trigger' : undefined,
     message: canDeploy ? undefined : buildMissingMessage(missingForDeploy),
+    providerErrorCode: !canDeploy ? 'deployment_provider_error' : undefined,
+    providerErrorMessage: !canDeploy ? buildMissingMessage(missingForDeploy) : undefined,
+    lastVerifiedAt: new Date().toISOString(),
     projectId: binding.projectId,
     projectName: asText(projectResult.project?.name) || binding.projectName,
     environmentId: binding.environmentId,
@@ -644,15 +837,46 @@ function buildPublicProbeUrls(baseUrl: string, healthPath?: string): string[] {
   return [...new Set(candidates)];
 }
 
-async function probePublicUrl(url: string): Promise<number> {
+function buildPublicRootUrl(baseUrl: string): string {
+  const normalizedBase = toPublicUrl(baseUrl)?.replace(/\/+$/, '');
+  return normalizedBase ? `${normalizedBase}/` : '';
+}
+
+function containsPublicErrorMarker(input: string): boolean {
+  const normalized = asText(input).toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes('internal server error') ||
+    normalized.includes('服务器内部错误') ||
+    normalized.includes('application error') ||
+    normalized.includes('application failed to respond') ||
+    normalized.includes('bad gateway') ||
+    normalized.includes('502 bad gateway') ||
+    normalized.includes('503 service unavailable')
+  );
+}
+
+async function probePublicUrlDetailed(
+  url: string,
+): Promise<{ status: number; excerpt?: string }> {
   try {
     const response = await fetch(url, {
       method: 'GET',
       redirect: 'follow',
     });
-    return response.status;
+    const contentType = asText(response.headers.get('content-type'));
+    const shouldReadBody =
+      contentType.includes('text/') ||
+      contentType.includes('json') ||
+      contentType.includes('html');
+    const body = shouldReadBody ? await response.text().catch(() => '') : '';
+    const excerpt = asText(body).replace(/\s+/g, ' ').slice(0, 240) || undefined;
+    return {
+      status: response.status,
+      excerpt,
+    };
   } catch {
-    return 0;
+    return { status: 0 };
   }
 }
 
@@ -666,7 +890,9 @@ export async function waitForRailwayDeploymentPublicReachability(
     pollIntervalMs?: number;
   }
 ): Promise<{ url: string; status: number }> {
-  const probeUrls = buildPublicProbeUrls(asText(input.baseUrl), input.healthPath);
+  const baseUrl = asText(input.baseUrl);
+  const probeUrls = buildPublicProbeUrls(baseUrl, input.healthPath);
+  const rootUrl = buildPublicRootUrl(baseUrl);
   if (probeUrls.length === 0) {
     throw new Error('部署已完成，但未返回公网访问地址');
   }
@@ -674,22 +900,37 @@ export async function waitForRailwayDeploymentPublicReachability(
   const timeoutMs = Math.max(5_000, options?.timeoutMs || 90_000);
   const pollIntervalMs = Math.max(1_000, options?.pollIntervalMs || 5_000);
   const deadline = Date.now() + timeoutMs;
-  let lastStatuses: Array<{ url: string; status: number }> = [];
+  let lastStatuses: Array<{ url: string; status: number; excerpt?: string }> = [];
 
   while (Date.now() < deadline) {
     lastStatuses = [];
     for (const url of probeUrls) {
-      const status = await probePublicUrl(url);
-      lastStatuses.push({ url, status });
-      if (status >= 200 && status < 400) {
-        return { url, status };
-      }
+      const result = await probePublicUrlDetailed(url);
+      lastStatuses.push({ url, ...result });
+    }
+
+    const rootProbe =
+      lastStatuses.find((item) => item.url === rootUrl) ||
+      lastStatuses.find((item) => item.url.endsWith('/'));
+    if (
+      rootProbe &&
+      rootProbe.status >= 200 &&
+      rootProbe.status < 400 &&
+      !containsPublicErrorMarker(rootProbe.excerpt || '')
+    ) {
+      return { url: rootProbe.url, status: rootProbe.status };
     }
     await sleep(pollIntervalMs);
   }
 
   const summary = lastStatuses
-    .map((item) => `${item.url} -> ${item.status || 'unreachable'}`)
+    .map((item) => {
+      const statusText = `${item.url} -> ${item.status || 'unreachable'}`;
+      if (!item.excerpt) {
+        return statusText;
+      }
+      return `${statusText} (${item.excerpt})`;
+    })
     .join(', ');
   throw new Error(`部署已完成，但公网地址尚未就绪: ${summary || 'no probe results'}`);
 }

@@ -1,9 +1,11 @@
 import { expect, request as playwrightRequest, test, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { bootstrapSharedAuthenticatedUser } from './playwright-auth';
+import { composerTextarea } from './playwright-locators';
 
-const WEB_URL = 'http://localhost:3000';
-const API_URL = 'http://localhost:4000';
+const WEB_URL = 'http://oneceo.ai:3000';
+const API_URL = 'http://oneceo.ai:3000';
 
 const SESSION_URL_TIMEOUT_MS = 20_000;
 const RUN_COMPLETE_TIMEOUT_MS = 180_000;
@@ -102,24 +104,6 @@ async function installManagedEventRecorder(page: Page) {
   });
 }
 
-async function bootstrapAuthenticatedUser(browser: import('@playwright/test').Browser, token: string) {
-  const api = await playwrightRequest.newContext({ baseURL: API_URL });
-  try {
-    const response = await api.post('/api/auth/register', {
-      data: {
-        displayName: `playwright-${token}`,
-        email: `playwright-${token}@example.com`,
-        password: 'deliverable-test-123',
-      },
-    });
-    expect(response.ok()).toBe(true);
-    const storageState = await api.storageState();
-    return await browser.newContext({ storageState });
-  } finally {
-    await api.dispose();
-  }
-}
-
 async function enableManagedMode(page: Page) {
   await page.goto(WEB_URL, { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => {
@@ -127,7 +111,7 @@ async function enableManagedMode(page: Page) {
     localStorage.removeItem('task_creation_session_id');
   });
   await page.goto(WEB_URL, { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('textbox', { name: 'Type your message here...' })).toBeVisible();
+  await expect(composerTextarea(page)).toBeVisible();
 }
 
 async function openManagedSession(page: Page, sessionId: string, view: 'chat' | 'history' = 'chat') {
@@ -304,13 +288,13 @@ test('managed deliverable stays stable from realtime stream to reload and re-ent
   const fileName = `deliverable-stability-${token}.md`;
   const prompt = buildPrompt(fileName, token);
 
-  const context = await bootstrapAuthenticatedUser(browser, token);
+  const context = await bootstrapSharedAuthenticatedUser(browser, WEB_URL);
   const page = await context.newPage();
   await installManagedEventRecorder(page);
   await enableManagedMode(page);
 
   try {
-    const composer = page.getByRole('textbox', { name: 'Type your message here...' });
+    const composer = composerTextarea(page);
     await composer.fill(prompt);
     await composer.press('Enter');
 

@@ -1,0 +1,254 @@
+{
+  "caseId": "ALTUS-CLARIFY-001",
+  "prompts": [
+    "帮我做一个客户管理系统。"
+  ],
+  "turnResults": [
+    {
+      "prompt": "帮我做一个客户管理系统。",
+      "outcome": "waiting_user"
+    }
+  ],
+  "sessionId": "c36b1ac4-7511-4b85-a445-63207cd14361",
+  "sessionDetail": {
+    "success": true,
+    "data": {
+      "id": "c36b1ac4-7511-4b85-a445-63207cd14361",
+      "title": "帮我做一个客户管理系统。",
+      "titleLocked": false,
+      "titleSource": "placeholder",
+      "isFavorite": false,
+      "projectId": null,
+      "projectName": null,
+      "shareEnabled": false,
+      "shareToken": null,
+      "status": "waiting_user",
+      "stage": "clarifying",
+      "phase": "ideation",
+      "phaseCycle": 0,
+      "mode": "altus",
+      "driver": "altus",
+      "createdAt": "2026-04-20T08:50:38.310Z",
+      "updatedAt": "2026-04-20T08:50:38.387Z",
+      "messages": [],
+      "runtimeStatus": null,
+      "connectorsSummary": {
+        "total": 6,
+        "attached": 0,
+        "active": 0,
+        "needsAuth": 0,
+        "failed": 0
+      }
+    }
+  },
+  "recentMessages": {
+    "success": true,
+    "data": {
+      "messages": [
+        {
+          "id": "c25d0481-114e-4b8d-9f64-cfa7b3805827",
+          "messageKey": "runtime:na:1776675038378000:user_input",
+          "role": "user",
+          "messageType": "user_input",
+          "content": "帮我做一个客户管理系统。",
+          "metadata": {
+            "messageKey": "runtime:na:1776675038378000:user_input",
+            "timestamp": 1776675038378,
+            "sessionEventSeq": 1776675038378000,
+            "timelineCursor": 7459,
+            "runtimeGeneration": 1
+          },
+          "createdAt": "2026-04-20T08:50:38.378Z"
+        },
+        {
+          "id": "d98b75b2-485b-484a-813c-cbcdec086287",
+          "messageKey": "runtime:na:1776675038387000:status_update",
+          "role": "agent",
+          "messageType": "status_update",
+          "content": "分析阶段：正在分析您的任务需求...",
+          "metadata": {
+            "messageKey": "runtime:na:1776675038387000:status_update",
+            "timestamp": 1776675038387,
+            "sessionEventSeq": 1776675038387000,
+            "timelineCursor": 7460,
+            "stage": "collecting",
+            "tone": "intent",
+            "runtimeGeneration": 1
+          },
+          "createdAt": "2026-04-20T08:50:38.387Z"
+        }
+      ],
+      "oldestCursor": 1776675038378000,
+      "newestCursor": 1776675038387000,
+      "hasOlderHistory": false,
+      "source": "recent_cache"
+    }
+  },
+  "fullMessages": {
+    "success": true,
+    "data": [
+      {
+        "id": "msg_1776675038327_77dx29ip",
+        "messageKey": "runtime:na:1:session_started",
+        "role": "system",
+        "messageType": "session_started",
+        "content": "会话已创建",
+        "metadata": {
+          "timestamp": 1776675038327,
+          "sessionEventSeq": 1,
+          "messageKey": "runtime:na:1:session_started",
+          "runtimeGeneration": 1
+        },
+        "createdAt": "2026-04-20T08:50:38.327Z"
+      },
+      {
+        "id": "msg_1776675038365_pljupc2z",
+        "messageKey": "runtime:na:2:user_input",
+        "role": "user",
+        "messageType": "user_input",
+        "content": "帮我做一个客户管理系统。",
+        "metadata": {
+          "timestamp": 1776675038365,
+          "sessionEventSeq": 2,
+          "messageKey": "runtime:na:2:user_input",
+          "runtimeGeneration": 1
+        },
+        "createdAt": "2026-04-20T08:50:38.365Z"
+      },
+      {
+        "id": "msg_1776675038438_h4e0zphc",
+        "messageKey": "runtime:na:3:status_update",
+        "role": "agent",
+        "messageType": "status_update",
+        "content": "构思阶段：正在整理需求...",
+        "metadata": {
+          "timestamp": 1776675038438,
+          "sessionEventSeq": 3,
+          "stage": "collecting",
+          "tone": "system",
+          "messageKey": "runtime:na:3:status_update",
+          "runtimeGeneration": 1
+        },
+        "createdAt": "2026-04-20T08:50:38.438Z"
+      },
+      {
+        "id": "msg_1776675038494_l5qkivfz",
+        "messageKey": "runtime:na:4:status_update",
+        "role": "agent",
+        "messageType": "status_update",
+        "content": "分析阶段：正在分析您的任务需求...",
+        "metadata": {
+          "timestamp": 1776675038494,
+          "sessionEventSeq": 4,
+          "stage": "collecting",
+          "tone": "intent",
+          "messageKey": "runtime:na:4:status_update",
+          "runtimeGeneration": 1
+        },
+        "createdAt": "2026-04-20T08:50:38.494Z"
+      },
+      {
+        "id": "msg_1776675038536_n7ai88ah",
+        "messageKey": "runtime:na:5:status_update",
+        "role": "agent",
+        "messageType": "status_update",
+        "content": "需要你补充关键信息",
+        "metadata": {
+          "timestamp": 1776675038536,
+          "sessionEventSeq": 5,
+          "stage": "clarifying",
+          "tone": "planning",
+          "messageKey": "runtime:na:5:status_update",
+          "runtimeGeneration": 1
+        },
+        "createdAt": "2026-04-20T08:50:38.536Z"
+      },
+      {
+        "id": "msg_1776675038557_onnr1gvo",
+        "messageKey": "runtime:na:6:clarification_request",
+        "role": "agent",
+        "messageType": "clarification_request",
+        "content": "请先确认这个系统的主要使用角色、必须包含的核心模块，以及本次是只要源码、本地运行，还是需要部署上线？",
+        "metadata": {
+          "timestamp": 1776675038557,
+          "sessionEventSeq": 6,
+          "messageKey": "runtime:na:6:clarification_request",
+          "runtimeGeneration": 1
+        },
+        "createdAt": "2026-04-20T08:50:38.557Z"
+      }
+    ]
+  },
+  "workspaceTree": null,
+  "latestRun": {
+    "success": true,
+    "data": null
+  },
+  "deployment": {
+    "success": true,
+    "data": {
+      "configured": false,
+      "canDeploy": true,
+      "bindingState": "uninitialized",
+      "provisioningPhase": "resource_provisioning",
+      "message": "首次部署时将自动准备托管仓库与部署资源，并发布当前工作区内容。",
+      "activeDeploymentPending": false,
+      "domains": [],
+      "deployments": [],
+      "logs": [],
+      "missing": [],
+      "analytics": {
+        "provider": "umami",
+        "configured": true,
+        "enabled": false,
+        "status": "pending_domain",
+        "host": "https://analytics.oneceo.ai",
+        "message": "等待首次部署后绑定 Umami website"
+      }
+    }
+  },
+  "transcript": [
+    {
+      "type": "agent_message",
+      "agent": "system",
+      "content": "欢迎使用 Altus 任务创建助手！请描述您想要创建的任务。",
+      "metadata": {}
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "system",
+      "stage": "collecting",
+      "phase": "ideation",
+      "content": "构思阶段：正在整理需求...",
+      "metadata": {
+        "phase": "ideation",
+        "sessionId": "c36b1ac4-7511-4b85-a445-63207cd14361"
+      },
+      "sessionId": "c36b1ac4-7511-4b85-a445-63207cd14361"
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "intent",
+      "stage": "collecting",
+      "phase": "analysis",
+      "content": "分析阶段：正在分析您的任务需求...",
+      "metadata": {
+        "phase": "analysis",
+        "sessionId": "c36b1ac4-7511-4b85-a445-63207cd14361"
+      },
+      "sessionId": "c36b1ac4-7511-4b85-a445-63207cd14361"
+    },
+    {
+      "type": "status_update",
+      "content": "需要你补充关键信息",
+      "stage": "clarifying",
+      "tone": "planning",
+      "sessionId": "c36b1ac4-7511-4b85-a445-63207cd14361",
+      "metadata": {
+        "sessionId": "c36b1ac4-7511-4b85-a445-63207cd14361"
+      }
+    }
+  ]
+}

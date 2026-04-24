@@ -1,5 +1,6 @@
 import type {
   AdminThemeKey,
+  AdminThemeMode,
   AdminThemeSettings,
   AgentManagementOverview,
   AppUserDetailResponse,
@@ -9,6 +10,13 @@ import type {
   ConversationSessionDetailResponse,
   ConversationSessionInfraResponse,
   ConversationSessionsResponse,
+  DeploymentConversationListResponse,
+  DeploymentManagementListResponse,
+  DeploymentManagementOverview,
+  DeploymentRecord,
+  DeploymentUserListResponse,
+  RailwayBatchActionResponse,
+  RailwayServiceListResponse,
   ConnectorGuidePolicy,
   ConnectorGuideCatalogSummary,
   ConnectorGuidePolicyDetail,
@@ -20,6 +28,7 @@ import type {
   OsacReleaseDetailResponse,
   OsacReleaseListResponse,
   SkillDetail,
+  SkillGovernanceOptions,
   SkillImportJob,
   SkillImportResult,
   SkillImportPreview,
@@ -44,6 +53,7 @@ import type {
   SandboxRuntimeDetail,
   SandboxRuntimeRegistry,
   SandboxManagementOverview,
+  SandboxLiveSummary,
   SandboxArchiveHistoryEntry,
   VmDetailResponse,
   VmIpInfo,
@@ -167,13 +177,32 @@ export const api = {
     }),
 
   getAdminTheme: () => request<AdminThemeSettings>('/api/theme'),
-  updateAdminTheme: (themeKey: AdminThemeKey) =>
+  updateAdminTheme: (payload: { themeKey: AdminThemeKey; mode: AdminThemeMode }) =>
     request<AdminThemeSettings>('/api/theme', {
       method: 'PUT',
-      body: JSON.stringify({ themeKey }),
+      body: JSON.stringify(payload),
     }),
 
   getOverview: () => request<DashboardOverview>('/api/dashboard/overview'),
+
+  getDeploymentOverview: (query: {
+    limit?: number;
+    query?: string;
+    status?: string;
+    hasUrl?: string;
+    userId?: string;
+    taskSessionId?: string;
+  } = {}) => {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set('limit', String(query.limit));
+    if (query.query) params.set('query', query.query);
+    if (query.status) params.set('status', query.status);
+    if (query.hasUrl) params.set('hasUrl', query.hasUrl);
+    if (query.userId) params.set('userId', query.userId);
+    if (query.taskSessionId) params.set('taskSessionId', query.taskSessionId);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<DeploymentManagementOverview>(`/api/deployment-management/overview${suffix}`);
+  },
 
   listVms: (query: { withState?: boolean; limit?: number; offset?: number } = {}) => {
     const params = new URLSearchParams();
@@ -342,12 +371,23 @@ export const api = {
     const suffix = params.toString() ? `?${params.toString()}` : '';
     return request<SkillSummary[]>(`/api/skill-management${suffix}`);
   },
+  getSkillGovernanceOptions: () => request<SkillGovernanceOptions>('/api/skill-management/governance-options'),
   getSkill: (skillId: string) => request<SkillDetail>(`/api/skill-management/${encodeURIComponent(skillId)}`),
   createSkill: (payload: {
     slug: string;
     name: string;
     description?: string;
     category?: string;
+    governance?: {
+      systemRole?: string | null;
+      adminManaged?: boolean;
+      required?: boolean;
+      autoActivation?: {
+        enabled?: boolean;
+        triggers?: string[];
+        toolNames?: string[];
+      };
+    };
     bodyMarkdown: string;
     resources?: Array<{
       resourcePath: string;
@@ -366,6 +406,16 @@ export const api = {
       name?: string;
       description?: string;
       category?: string;
+      governance?: {
+        systemRole?: string | null;
+        adminManaged?: boolean;
+        required?: boolean;
+        autoActivation?: {
+          enabled?: boolean;
+          triggers?: string[];
+          toolNames?: string[];
+        };
+      };
       bodyMarkdown?: string;
       resources?: Array<{
         resourcePath: string;
@@ -585,6 +635,103 @@ export const api = {
   listHosts: () => request<HostListResponse>('/api/hosts'),
   listConversationSessions: (limit = 30) =>
     request<ConversationSessionsResponse>(`/api/conversations/sessions?limit=${limit}`),
+  listDeploymentRecords: (query: {
+    limit?: number;
+    query?: string;
+    status?: string;
+    hasUrl?: string;
+    userId?: string;
+    taskSessionId?: string;
+  } = {}) => {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set('limit', String(query.limit));
+    if (query.query) params.set('query', query.query);
+    if (query.status) params.set('status', query.status);
+    if (query.hasUrl) params.set('hasUrl', query.hasUrl);
+    if (query.userId) params.set('userId', query.userId);
+    if (query.taskSessionId) params.set('taskSessionId', query.taskSessionId);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<DeploymentManagementListResponse>(`/api/deployment-management${suffix}`);
+  },
+  listDeploymentConversations: (query: {
+    limit?: number;
+    query?: string;
+    status?: string;
+    hasUrl?: string;
+    userId?: string;
+    taskSessionId?: string;
+  } = {}) => {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set('limit', String(query.limit));
+    if (query.query) params.set('query', query.query);
+    if (query.status) params.set('status', query.status);
+    if (query.hasUrl) params.set('hasUrl', query.hasUrl);
+    if (query.userId) params.set('userId', query.userId);
+    if (query.taskSessionId) params.set('taskSessionId', query.taskSessionId);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<DeploymentConversationListResponse>(`/api/deployment-management/conversations${suffix}`);
+  },
+  listDeploymentUsers: (query: {
+    limit?: number;
+    query?: string;
+    status?: string;
+    hasUrl?: string;
+    userId?: string;
+  } = {}) => {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set('limit', String(query.limit));
+    if (query.query) params.set('query', query.query);
+    if (query.status) params.set('status', query.status);
+    if (query.hasUrl) params.set('hasUrl', query.hasUrl);
+    if (query.userId) params.set('userId', query.userId);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<DeploymentUserListResponse>(`/api/deployment-management/users${suffix}`);
+  },
+  getDeploymentDetail: (taskSessionId: string) =>
+    request<DeploymentRecord>(`/api/deployment-management/task-sessions/${encodeURIComponent(taskSessionId)}`),
+  listRailwayServices: (query: {
+    limit?: number;
+    query?: string;
+    status?: string;
+    risk?: string;
+  } = {}) => {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set('limit', String(query.limit));
+    if (query.query) params.set('query', query.query);
+    if (query.status) params.set('status', query.status);
+    if (query.risk) params.set('risk', query.risk);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<RailwayServiceListResponse>(`/api/deployment-management/railway/services${suffix}`);
+  },
+  batchDeleteRailwayServices: (serviceKeys: string[]) =>
+    request<RailwayBatchActionResponse>('/api/deployment-management/railway/services/batch-delete', {
+      method: 'POST',
+      body: JSON.stringify({ serviceKeys }),
+    }),
+  batchConfigureRailwayServices: (
+    serviceKeys: string[],
+    patch: {
+      builder?: string;
+      buildCommand?: string;
+      startCommand?: string;
+      rootDirectory?: string;
+      healthcheckPath?: string;
+      sourceImage?: string;
+    }
+  ) =>
+    request<RailwayBatchActionResponse>('/api/deployment-management/railway/services/batch-configure', {
+      method: 'POST',
+      body: JSON.stringify({ serviceKeys, patch }),
+    }),
+  batchUpsertRailwayServiceVariables: (
+    serviceKeys: string[],
+    variables: Record<string, string>,
+    replace?: boolean
+  ) =>
+    request<RailwayBatchActionResponse>('/api/deployment-management/railway/services/batch-variables', {
+      method: 'POST',
+      body: JSON.stringify({ serviceKeys, variables, replace: replace === true }),
+    }),
   listAppUsers: (query?: {
     limit?: number;
     query?: string;
@@ -594,6 +741,8 @@ export const api = {
     hasConversation?: string;
     hasSandbox?: string;
     ownershipHealth?: string;
+    sortKey?: string;
+    sortDirection?: string;
   }) => {
     const params = new URLSearchParams();
     if (query?.limit !== undefined) params.set('limit', String(query.limit));
@@ -604,6 +753,8 @@ export const api = {
     if (query?.hasConversation) params.set('hasConversation', query.hasConversation);
     if (query?.hasSandbox) params.set('hasSandbox', query.hasSandbox);
     if (query?.ownershipHealth) params.set('ownershipHealth', query.ownershipHealth);
+    if (query?.sortKey) params.set('sortKey', query.sortKey);
+    if (query?.sortDirection) params.set('sortDirection', query.sortDirection);
     const suffix = params.toString() ? `?${params.toString()}` : '';
     return request<AppUserListResponse>(`/api/user-management/app-users${suffix}`);
   },
@@ -613,11 +764,6 @@ export const api = {
     request<AppUserDetailResponse>(`/api/user-management/app-users/${encodeURIComponent(userId)}/status`, {
       method: 'POST',
       body: JSON.stringify({ status }),
-    }),
-  revokeAppUserSessions: (userId: string) =>
-    request<AppUserDetailResponse>(`/api/user-management/app-users/${encodeURIComponent(userId)}/revoke-sessions`, {
-      method: 'POST',
-      body: JSON.stringify({}),
     }),
   getConversationSessionCore: (sessionId: string) =>
     request<ConversationSessionDetailResponse>(`/api/conversations/sessions/${encodeURIComponent(sessionId)}/core`, {
@@ -633,6 +779,11 @@ export const api = {
     request<AgentManagementOverview>('/api/agent-management/overview'),
   getSandboxManagementOverview: (limit = 50) =>
     request<SandboxManagementOverview>(`/api/sandbox-management/overview?limit=${limit}`),
+  getSandboxLiveSummary: (options?: { forceRefresh?: boolean }) =>
+    request<SandboxLiveSummary>(`/api/sandbox-management/live-summary${options?.forceRefresh ? '?refresh=1' : ''}`, {
+      timeoutMs: 30000,
+      abortMessage: '加载 E2B Sandbox 数量超时，请稍后重试',
+    }),
   getSandboxRuntimeRegistry: (limit = 100) =>
     request<SandboxRuntimeRegistry>(`/api/sandbox-management/runtime-registry?limit=${limit}`, {
       timeoutMs: 30000,

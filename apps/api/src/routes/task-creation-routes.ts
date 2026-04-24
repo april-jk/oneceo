@@ -7,6 +7,7 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import {
+  appUserProjectDAO,
   appUserLegacyIdMappingDAO,
   sandboxExecutionEnvironmentDAO,
   taskCreationSessionDAO,
@@ -42,6 +43,7 @@ import {
   buildTaskSessionDeploymentResponse,
   executeTaskSessionDeploymentAction,
   getTaskSessionDeploymentErrorMessage,
+  resolveTaskSessionEnvironment,
 } from '../services/task-session-deployment-runtime-service';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { currentUserResolver } from '../services/current-user-resolver';
@@ -67,13 +69,18 @@ import { downloadFromR2 } from '../services/r2-client';
 import { taskSessionDeliverableService } from '../services/task-session-deliverable-service';
 import { platformSkillService } from '../services/platform-skill-service';
 import { userSkillService } from '../services/user-skill-service';
+import { altusMemoryContextService } from '../services/altus-memory-context-service';
+import { projectDefaultConnectorService } from '../services/project-default-connector-service';
+import { taskCreationProjectRedisCacheService } from '../services/task-creation-project-redis-cache-service';
 import { isLegacyClientUserId, isSameUserId, normalizeUserId } from '../utils/user-id';
 
 const router = express.Router();
 const TASK_ATTACHMENT_DIR = '.attachments';
 const recentHistoryHydrationInFlight = new Map<string, Promise<void>>();
 const recentHistoryHydrationQueuedAt = new Map<string, number>();
-const DEFAULT_SESSION_TITLE = '新建任务会话';
+const DEFAULT_SESSION_TITLE = '待识别任务';
+const WAITING_SESSION_TITLE = '待补充需求';
+const LEGACY_DEFAULT_SESSION_TITLE = '新建任务会话';
 const WEAK_INTENT_TITLE_INPUTS = new Set([
   '你好',
   '您好',
@@ -293,6 +300,233 @@ router.put('/codex/runtime-config', express.json({ limit: '2mb' }), async (req, 
   }
 });
 
+router.get('/projects', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const projects = await listCachedTaskCreationProjects(currentUser.userId);
+    return res.json({
+      success: true,
+      data: projects,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    console.error('获取项目列表失败:', error);
+    return res.status(authError?.status || 500).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '获取项目列表失败'),
+    });
+  }
+});
+
+router.get('/projects/:projectId', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { projectId } = req.params;
+    const project = await getCachedOwnedTaskCreationProject(currentUser.userId, projectId);
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        error: '项目不存在或当前用户无权访问该项目',
+      });
+    }
+    return res.json({
+      success: true,
+      data: project,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    console.error('获取项目详情失败:', error);
+    return res.status(authError?.status || 500).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '获取项目详情失败'),
+    });
+  }
+});
+
+router.get('/projects/:projectId/sessions', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { projectId } = req.params;
+    const project = await getCachedOwnedTaskCreationProject(currentUser.userId, projectId);
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        error: '项目不存在或当前用户无权访问该项目',
+      });
+    }
+    const sessions = await listCachedTaskCreationProjectSessions(currentUser.userId, projectId);
+    return res.json({
+      success: true,
+      data: sessions,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    console.error('获取项目会话列表失败:', error);
+    return res.status(authError?.status || 500).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '获取项目会话列表失败'),
+    });
+  }
+});
+
+router.post('/projects', express.json({ limit: '256kb' }), async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const input = normalizeTaskCreationProjectCreateInput(req.body);
+    if (!input.name) {
+      return res.status(400).json({
+        success: false,
+        error: '项目名称不能为空',
+      });
+    }
+    const existed = await appUserProjectDAO.getOwnedProjectByName(currentUser.userId, input.name);
+    if (existed) {
+      return res.status(409).json({
+        success: false,
+        error: '项目名称已存在',
+      });
+    }
+    if (Array.isArray(input.defaultConnectors) && input.defaultConnectors.length > 0) {
+      await projectDefaultConnectorService.assertValidForWrite(currentUser.userId, input.defaultConnectors);
+    }
+    const created = await appUserProjectDAO.create({
+      userId: currentUser.userId,
+      name: input.name,
+      projectType: 'standard',
+      projectInstruction: input.projectInstruction,
+      defaultConnectorProfiles: input.defaultConnectors,
+    });
+    await altusMemoryContextService.invalidateProjectMemory(currentUser.userId, String(created.id));
+    await taskCreationProjectRedisCacheService.invalidateProjectList(currentUser.userId);
+    return res.status(201).json({
+      success: true,
+      data: await toTaskCreationProjectSummary(currentUser.userId, created),
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    console.error('创建项目失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    return res.status(authError?.status || 500).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '创建项目失败'),
+    });
+  }
+});
+
+router.put('/projects/:projectId', express.json({ limit: '256kb' }), async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { projectId } = req.params;
+    const currentProject = await appUserProjectDAO.getOwnedProjectById(projectId, currentUser.userId);
+    if (!currentProject || currentProject.projectType !== 'standard' || currentProject.status !== 'active') {
+      return res.status(404).json({
+        success: false,
+        error: '项目不存在或当前用户无权访问该项目',
+      });
+    }
+
+    const input = normalizeTaskCreationProjectUpdateInput(req.body);
+    if (input.name !== undefined && !input.name) {
+      return res.status(400).json({
+        success: false,
+        error: '项目名称不能为空',
+      });
+    }
+
+    if (input.name && input.name !== currentProject.name) {
+      const existed = await appUserProjectDAO.getOwnedProjectByName(currentUser.userId, input.name);
+      if (existed && String(existed.id) !== String(currentProject.id)) {
+        return res.status(409).json({
+          success: false,
+          error: '项目名称已存在',
+        });
+      }
+    }
+    if (Array.isArray(input.defaultConnectorProfiles) && input.defaultConnectorProfiles.length > 0) {
+      await projectDefaultConnectorService.assertValidForWrite(
+        currentUser.userId,
+        input.defaultConnectorProfiles
+      );
+    }
+
+    const updated = await appUserProjectDAO.updateOwnedProject(projectId, currentUser.userId, input);
+    if (!updated) {
+      return res.status(404).json({
+        success: false,
+        error: '项目不存在或当前用户无权访问该项目',
+      });
+    }
+
+    if (input.name && input.name !== currentProject.name) {
+      await taskCreationSessionDAO.syncOwnedProjectName(currentUser.userId, projectId, updated.name);
+      await taskCreationFileMemoryStore.syncProjectName(projectId, updated.name);
+    }
+    await altusMemoryContextService.invalidateProjectMemory(currentUser.userId, projectId);
+
+    await taskCreationProjectRedisCacheService.invalidateProjectReads(currentUser.userId, {
+      projectIds: [projectId],
+    });
+
+    return res.json({
+      success: true,
+      data: await toTaskCreationProjectSummary(currentUser.userId, updated),
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    console.error('更新项目失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    return res.status(authError?.status || 500).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '更新项目失败'),
+    });
+  }
+});
+
+router.delete('/projects/:projectId', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { projectId } = req.params;
+    const currentProject = await appUserProjectDAO.getOwnedProjectById(projectId, currentUser.userId);
+    if (!currentProject || currentProject.projectType !== 'standard' || currentProject.status !== 'active') {
+      return res.status(404).json({
+        success: false,
+        error: '项目不存在或当前用户无权访问该项目',
+      });
+    }
+
+    const assignedSessionCount = await taskCreationSessionDAO.countOwnedProjectSessions(currentUser.userId, projectId);
+    if (assignedSessionCount > 0) {
+      return res.status(409).json({
+        success: false,
+        error: '当前项目下仍有关联会话，请先移出这些会话后再删除项目',
+      });
+    }
+    await appUserProjectDAO.deleteOwnedProject(projectId, currentUser.userId);
+    await altusMemoryContextService.invalidateProjectMemory(currentUser.userId, projectId);
+    await taskCreationProjectRedisCacheService.invalidateProjectReads(currentUser.userId, {
+      projectIds: [projectId],
+    });
+
+    return res.json({
+      success: true,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    console.error('删除项目失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    return res.status(authError?.status || 500).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '删除项目失败'),
+    });
+  }
+});
+
 function clampNumber(value: number, min: number, max: number) {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
@@ -363,34 +597,8 @@ function resolveCurrentUserError(error: unknown): { status: number; message: str
   return null;
 }
 
-function resolveLegacyUserIdHint(req: express.Request, currentUserId: string): string {
-  const candidate = asText(req.header('X-Legacy-User-Id') || req.header('X-User-Id') || req.query.legacyUserId);
-  if (!candidate) return '';
-  if (isSameUserId(candidate, currentUserId)) return '';
-  if (!isLegacyClientUserId(candidate)) return '';
-  return candidate;
-}
-
-async function upsertLegacyUserMapping(appUserId: string, legacyUserIdHint: string) {
-  if (!legacyUserIdHint) return;
-  try {
-    await appUserLegacyIdMappingDAO.upsert({
-      appUserId,
-      legacyUserId: legacyUserIdHint,
-      source: 'request_header',
-    });
-  } catch (error) {
-    console.warn('[TASK_SESSION_LEGACY_MAPPING_UPSERT_FAILED]', {
-      appUserId,
-      legacyUserId: legacyUserIdHint,
-      error,
-    });
-  }
-}
-
-async function collectLegacyUserIdsForMigration(appUserId: string, legacyUserIdHint: string): Promise<string[]> {
+async function collectLegacyUserIdsForMigration(appUserId: string): Promise<string[]> {
   const values = new Set<string>();
-  if (legacyUserIdHint) values.add(legacyUserIdHint);
   try {
     const mapped = await appUserLegacyIdMappingDAO.listLegacyIdsByAppUserId(appUserId, 200);
     for (const legacyUserId of mapped) {
@@ -405,7 +613,97 @@ async function collectLegacyUserIdsForMigration(appUserId: string, legacyUserIdH
   return [...values];
 }
 
-async function requireOwnedTaskSession(sessionId: string, userId: string, legacyUserIdHint?: string) {
+async function listOwnedDbSessionsWithLegacyRebind(userId: string, limit: number) {
+  let ownedDbSessions = await taskCreationSessionDAO.getRecentSessions(limit, userId);
+  if (ownedDbSessions.length > 0) {
+    return ownedDbSessions;
+  }
+
+  try {
+    const legacyUserIds = await collectLegacyUserIdsForMigration(userId);
+    if (legacyUserIds.length === 0) {
+      return ownedDbSessions;
+    }
+
+    for (const legacyUserId of legacyUserIds) {
+      const reboundLegacy = await taskCreationSessionDAO.rebindSessionsFromLegacyUserId(
+        userId,
+        legacyUserId,
+        limit
+      );
+      if (reboundLegacy.length === 0) {
+        continue;
+      }
+      ownedDbSessions = reboundLegacy;
+      console.warn('[TASK_SESSION_LIST_REBOUND_LEGACY_USER]', {
+        userId,
+        legacyUserId,
+        reboundCount: reboundLegacy.length,
+      });
+      break;
+    }
+  } catch (error) {
+    console.warn('[TASK_SESSION_LIST_REBOUND_LEGACY_FAILED]', {
+      userId,
+      error,
+    });
+  }
+
+  return ownedDbSessions;
+}
+
+function normalizeSessionSearchQuery(value: unknown): string {
+  return asText(value).replace(/\s+/g, ' ').slice(0, 100);
+}
+
+function buildSessionSearchSnippet(content: unknown, query: string): string {
+  const normalizedContent = asText(content).replace(/\s+/g, ' ');
+  const normalizedQuery = normalizeSessionSearchQuery(query);
+  if (!normalizedContent) return '';
+  if (!normalizedQuery) {
+    return normalizedContent.slice(0, 80);
+  }
+
+  const haystack = normalizedContent.toLowerCase();
+  const needle = normalizedQuery.toLowerCase();
+  const matchedIndex = haystack.indexOf(needle);
+  if (matchedIndex < 0) {
+    return normalizedContent.slice(0, 80);
+  }
+
+  const radius = 40;
+  const start = Math.max(0, matchedIndex - radius);
+  const end = Math.min(normalizedContent.length, matchedIndex + normalizedQuery.length + radius);
+  const prefix = start > 0 ? '...' : '';
+  const suffix = end < normalizedContent.length ? '...' : '';
+  return `${prefix}${normalizedContent.slice(start, end).trim()}${suffix}`;
+}
+
+async function adoptLegacyOwnedSessionIfMapped(sessionId: string, userId: string, sessionUserId: string) {
+  const normalizedUserId = normalizeUserId(userId);
+  const legacyOwner = normalizeUserId(sessionUserId);
+  if (!normalizedUserId || !isLegacyClientUserId(legacyOwner)) {
+    return null;
+  }
+
+  try {
+    const mappedAppUserId = await appUserLegacyIdMappingDAO.resolveAppUserIdByLegacyUserId(legacyOwner);
+    if (!isSameUserId(mappedAppUserId, normalizedUserId)) {
+      return null;
+    }
+    return await taskCreationSessionDAO.adoptSessionFromLegacyUserId(sessionId, normalizedUserId, legacyOwner);
+  } catch (error) {
+    console.warn('[TASK_SESSION_REQUIRE_OWNED_LEGACY_RESOLVE_FAILED]', {
+      sessionId,
+      userId: normalizedUserId,
+      legacyOwner,
+      error,
+    });
+    return null;
+  }
+}
+
+async function requireOwnedTaskSession(sessionId: string, userId: string) {
   const normalizedUserId = normalizeUserId(userId);
   let session = await taskCreationSessionDAO.getSession(sessionId);
   if (!session) {
@@ -418,40 +716,13 @@ async function requireOwnedTaskSession(sessionId: string, userId: string, legacy
     }
     session = rebound;
   }
-  const normalizedSessionUserId = normalizeUserId(session.userId);
-  if (!isSameUserId(normalizedSessionUserId, normalizedUserId) && legacyUserIdHint) {
-    const adopted = await taskCreationSessionDAO.adoptSessionFromLegacyUserId(
-      sessionId,
-      normalizedUserId,
-      legacyUserIdHint
-    );
-    if (adopted?.userId) {
-      session = adopted;
-    }
+  if (!session) {
+    throw new Error('会话不存在');
   }
   if (!isSameUserId(normalizeUserId(session.userId), normalizedUserId)) {
-    const legacyOwner = normalizeUserId(session.userId);
-    if (isLegacyClientUserId(legacyOwner)) {
-      try {
-        const mappedAppUserId = await appUserLegacyIdMappingDAO.resolveAppUserIdByLegacyUserId(legacyOwner);
-        if (isSameUserId(mappedAppUserId, normalizedUserId)) {
-          const adopted = await taskCreationSessionDAO.adoptSessionFromLegacyUserId(
-            sessionId,
-            normalizedUserId,
-            legacyOwner
-          );
-          if (adopted?.userId) {
-            session = adopted;
-          }
-        }
-      } catch (error) {
-        console.warn('[TASK_SESSION_REQUIRE_OWNED_LEGACY_RESOLVE_FAILED]', {
-          sessionId,
-          userId: normalizedUserId,
-          legacyOwner,
-          error,
-        });
-      }
+    const adopted = await adoptLegacyOwnedSessionIfMapped(sessionId, normalizedUserId, session.userId || '');
+    if (adopted?.userId) {
+      session = adopted;
     }
   }
   if (!isSameUserId(normalizeUserId(session.userId), normalizedUserId)) {
@@ -505,11 +776,18 @@ function toIso(value: Date | string | null | undefined): string {
 
 function toSessionSummary(session: any) {
   const normalizedStage = normalizeLiveSessionStage(session);
+  const titleResolution = resolveDisplaySessionTitle({
+    storedTitle: session.title,
+    storedTitleSource: session.titleSource,
+    storedTitleState: session.titleState,
+    status: session.status,
+  });
   return {
     id: session.id,
-    title: session.title,
-    titleLocked: Boolean(session.titleLocked),
-    titleSource: session.titleSource,
+    title: titleResolution.title,
+    titleLocked: Boolean(session.titleLocked) || titleResolution.titleSource !== 'placeholder',
+    titleSource: titleResolution.titleSource,
+    titleState: titleResolution.titleState,
     titleResolvedAt: session.titleResolvedAt,
     isFavorite: Boolean(session.isFavorite),
     projectId: session.projectId || null,
@@ -544,13 +822,19 @@ function mergeSessionLifecycleFromDb(memorySession: any, dbSession: any) {
     (dbStatus === 'completed' || dbStatus === 'failed' || dbStatus === 'waiting_user') && dbStatus !== memoryStatus;
 
   if (!shouldPreferDbLifecycle) {
-    return memorySession;
+    return {
+      ...memorySession,
+      projectId: dbSession.projectId || memorySession.projectId || null,
+      projectName: dbSession.projectName || memorySession.projectName || null,
+    };
   }
 
   return {
     ...memorySession,
     status: dbSession.status,
     stage: dbSession.stage || mapStageFromStatus(dbSession.status),
+    projectId: dbSession.projectId || memorySession.projectId || null,
+    projectName: dbSession.projectName || memorySession.projectName || null,
     updatedAt: dbSession.updatedAt || memorySession.updatedAt,
   };
 }
@@ -671,11 +955,6 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
     }
     console.warn('[TASK_SESSION_DB_HYDRATE_PARTIAL]', { sessionId, error });
   }
-  const titleCandidate =
-    taskDescription?.title ||
-    messages?.find((m) => m.role === 'user')?.content ||
-    '新建任务会话';
-
   const status: FileSessionRecord['status'] =
     session.status === 'completed' || session.status === 'failed' || session.status === 'waiting_user'
       ? session.status
@@ -720,13 +999,21 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
       })
     : false;
   const sandboxExecutor = inferredExecutor || (hasSandboxHistory ? 'opencode' : '');
+  const titleResolution = resolveDisplaySessionTitle({
+    taskDescriptionTitle: taskDescription?.title,
+    firstUserMessage: messages?.find((m) => m.role === 'user')?.content,
+    status,
+  });
 
   return {
     id: session.id,
-    title: String(titleCandidate).trim().slice(0, 80) || '新建任务会话',
+    title: titleResolution.title,
+    titleLocked: titleResolution.titleSource !== 'placeholder',
+    titleSource: titleResolution.titleSource,
+    titleState: titleResolution.titleState,
     isFavorite: false,
-    projectId: null,
-    projectName: null,
+    projectId: session.projectId || null,
+    projectName: session.projectName || null,
     shareEnabled: false,
     shareToken: null,
     status,
@@ -817,10 +1104,6 @@ async function buildLightweightFileSessionFromDb(sessionId: string): Promise<Fil
       );
     });
   const sandboxExecutor = inferredExecutor || (hasSandboxSignals ? 'opencode' : '');
-  const titleCandidate =
-    taskDescription?.title ||
-    normalizedRecentMessages.find((message) => asText(message.role) === 'user')?.content ||
-    '新建任务会话';
 
   const status: FileSessionRecord['status'] =
     session.status === 'completed' || session.status === 'failed' || session.status === 'waiting_user'
@@ -831,13 +1114,23 @@ async function buildLightweightFileSessionFromDb(sessionId: string): Promise<Fil
       ? 'completed'
       : status === 'failed'
         ? 'failed'
-        : status === 'waiting_user'
+      : status === 'waiting_user'
           ? 'clarifying'
           : 'executing';
+  const titleResolution = resolveDisplaySessionTitle({
+    taskDescriptionTitle: taskDescription?.title,
+    firstUserMessage: normalizedRecentMessages.find((message) => asText(message.role) === 'user')?.content,
+    status,
+  });
 
   return {
     id: session.id,
-    title: String(titleCandidate).trim().slice(0, 80) || '新建任务会话',
+    title: titleResolution.title,
+    titleLocked: titleResolution.titleSource !== 'placeholder',
+    titleSource: titleResolution.titleSource,
+    titleState: titleResolution.titleState,
+    projectId: session.projectId || null,
+    projectName: session.projectName || null,
     status,
     stage,
     mode: hasSandboxSignals ? 'sandbox' : undefined,
@@ -875,6 +1168,13 @@ async function hydrateFileSessionFromDb(sessionId: string) {
   const record = await buildFileSessionFromDb(sessionId);
   if (!record) return null;
   await taskCreationFileMemoryStore.createSession(record.title, record.id);
+  await taskCreationFileMemoryStore.updateSessionTitle(record.id, record.title, {
+    lock: Boolean(record.titleLocked),
+    source: record.titleSource,
+    state: record.titleState,
+    force: true,
+    resolvedAt: record.titleResolvedAt,
+  });
   await taskCreationFileMemoryStore.updateSessionStatus(record.id, record.status as any);
   if (record.runtime?.orchestratorSessionId) {
     await taskCreationFileMemoryStore.updateRuntimeBinding(record.id, {
@@ -905,6 +1205,28 @@ async function resolveTaskSessionRecord(sessionId: string) {
   session = await mergeSessionLifecycleFromDbBestEffort(sessionId, session);
   if (!session) {
     session = await hydrateFileSessionFromDb(sessionId);
+  } else {
+    try {
+      const lightweight = await buildLightweightFileSessionFromDb(sessionId);
+      if (
+        lightweight &&
+        getSessionTitleSourcePriority(lightweight.titleSource) >= getSessionTitleSourcePriority(session.titleSource)
+      ) {
+        session = {
+          ...session,
+          title: lightweight.title,
+          titleLocked: lightweight.titleLocked,
+          titleSource: lightweight.titleSource,
+          titleState: lightweight.titleState,
+          titleResolvedAt: lightweight.titleResolvedAt,
+        };
+      }
+    } catch (error) {
+      if (!isTransientDatabaseError(error)) {
+        throw error;
+      }
+      console.warn('[TASK_SESSION_TITLE_RECONCILE_SKIPPED]', { sessionId, error });
+    }
   }
   session = await reconcileRecoveredOpencodeCompletion(session);
   return session;
@@ -1030,8 +1352,9 @@ function mapStageFromStatus(status: string | null | undefined) {
   return 'executing';
 }
 
-async function buildSessionSummaryFromDb(limit: number, userId: string) {
-  const sessions = await taskCreationSessionDAO.getRecentSessions(limit, userId);
+async function buildSessionSummaryFromDbSessions(
+  sessions: Awaited<ReturnType<typeof taskCreationSessionDAO.getRecentSessions>>
+) {
   const result: any[] = [];
   for (const session of sessions) {
     let description: Awaited<ReturnType<typeof taskCreationSessionDAO.getTaskDescription>> | null = null;
@@ -1049,15 +1372,18 @@ async function buildSessionSummaryFromDb(limit: number, userId: string) {
     }
     const firstUserMessage =
       messages?.find((message) => message.role === 'user' && asText(message.content))?.content || '';
-    const title =
-      description?.title ||
-      (isExplicitSessionTitleInput(String(firstUserMessage))
-        ? deriveResolvedSessionTitle(firstUserMessage)
-        : '') ||
-      `任务会话 ${String(session.id).slice(-6)}`;
+    const titleResolution = resolveDisplaySessionTitle({
+      taskDescriptionTitle: description?.title,
+      firstUserMessage,
+      status: session.status,
+    });
     result.push({
       id: session.id,
-      title: title.trim().slice(0, 80),
+      title: titleResolution.title,
+      titleSource: titleResolution.titleSource,
+      titleState: titleResolution.titleState,
+      projectId: session.projectId || null,
+      projectName: session.projectName || null,
       status: session.status,
       stage: mapStageFromStatus(session.status),
       createdAt: toIso(session.createdAt as any),
@@ -1068,6 +1394,37 @@ async function buildSessionSummaryFromDb(limit: number, userId: string) {
   return result;
 }
 
+function mergeDbSessionSummaryWithMemory(dbSummary: any, memorySession: FileSessionRecord | null) {
+  if (!memorySession) return dbSummary;
+
+  const memorySummary = toSessionSummary(memorySession);
+  const mergedLifecycle = mergeSessionLifecycleFromDb(memorySummary, dbSummary);
+  const dbPriority = getSessionTitleSourcePriority(dbSummary.titleSource);
+  const memoryPriority = getSessionTitleSourcePriority(memorySummary.titleSource);
+  const preferMemoryTitle =
+    memoryPriority > dbPriority ||
+    (memoryPriority === dbPriority &&
+      !isPlaceholderSessionTitle(memorySummary.title) &&
+      isPlaceholderSessionTitle(dbSummary.title));
+  const titleSummary = preferMemoryTitle ? memorySummary : dbSummary;
+
+  return {
+    ...dbSummary,
+    ...mergedLifecycle,
+    id: dbSummary.id,
+    title: titleSummary.title,
+    titleLocked: titleSummary.titleLocked,
+    titleSource: titleSummary.titleSource,
+    titleState: titleSummary.titleState,
+    titleResolvedAt: titleSummary.titleResolvedAt || mergedLifecycle.titleResolvedAt || null,
+    projectId: dbSummary.projectId || mergedLifecycle.projectId || null,
+    projectName: dbSummary.projectName || mergedLifecycle.projectName || null,
+    createdAt: dbSummary.createdAt,
+    updatedAt: mergedLifecycle.updatedAt || dbSummary.updatedAt,
+    messages: [],
+  };
+}
+
 async function createDraftTaskSession(title: string | undefined, userId: string) {
   const created = await taskCreationSessionDAO.createSession({
     id: randomUUID(),
@@ -1075,6 +1432,14 @@ async function createDraftTaskSession(title: string | undefined, userId: string)
     status: 'in_progress',
   });
   await taskCreationFileMemoryStore.createSession(title || DEFAULT_SESSION_TITLE, created.id);
+  if (title && !isPlaceholderSessionTitle(title) && !isWeakIntentTitleInput(title)) {
+    await taskCreationFileMemoryStore.updateSessionTitle(created.id, title, {
+      lock: true,
+      source: 'manual',
+      state: 'manual',
+      force: true,
+    });
+  }
   await taskCreationFileMemoryStore.updateSessionStatus(created.id, 'in_progress');
   return created.id;
 }
@@ -1127,18 +1492,84 @@ function isAltusManagedSession(session: Pick<FileSessionRecord, 'mode' | 'driver
   return asText(session.mode) === 'altus' || asText(session.driver) === 'altus';
 }
 
+const ACTIVE_MANAGED_RUNTIME_SWITCH_BLOCKED_MESSAGE = '当前存在进行中的开发任务，暂不允许切换执行环境';
+
+function createActiveManagedRuntimeSwitchBlockedError() {
+  const error = new Error(ACTIVE_MANAGED_RUNTIME_SWITCH_BLOCKED_MESSAGE);
+  (error as Error & { code?: string }).code = 'active_managed_runtime_switch_blocked';
+  return error;
+}
+
+function isActiveManagedRuntimeSwitchBlockedError(error: unknown): boolean {
+  return (
+    (error instanceof Error && error.message === ACTIVE_MANAGED_RUNTIME_SWITCH_BLOCKED_MESSAGE) ||
+    ((error as { code?: string } | null | undefined)?.code === 'active_managed_runtime_switch_blocked')
+  );
+}
+
+async function findActiveManagedRun(sessionId: string) {
+  const run = await taskSessionRunDAO.findActiveRun(sessionId).catch(() => null);
+  if (!run) return null;
+  const mode = asText(run.mode) || 'managed';
+  return mode === 'managed' ? run : null;
+}
+
+export async function assertTaskSessionRuntimeStartAllowed(sessionId: string) {
+  const activeManagedRun = await findActiveManagedRun(sessionId);
+  if (activeManagedRun) {
+    throw createActiveManagedRuntimeSwitchBlockedError();
+  }
+}
+
+async function resolveTaskSessionRuntimeReadContext(
+  sessionId: string,
+  session?: FileSessionRecord | null
+) {
+  const resolvedSession = session || (await resolveTaskSessionRecord(sessionId));
+  if (!resolvedSession) {
+    throw new Error('会话不存在');
+  }
+
+  const binding = await taskSessionRunDAO.getSandboxBindingBySession(sessionId).catch(() => null);
+  const resolved = await resolveTaskSessionEnvironment({
+    session: resolvedSession,
+    orchestratorSessionId:
+      asText(binding?.sandboxId) || asText(resolvedSession.runtime?.orchestratorSessionId) || undefined,
+  });
+  const environment = resolved.environment;
+  const environmentMetadata = pickRecord(environment?.metadata);
+  const orchestratorSessionId =
+    asText(resolved.orchestratorSessionId) ||
+    asText(binding?.sandboxId) ||
+    asText(resolvedSession.runtime?.orchestratorSessionId);
+  const workspaceRoot =
+    asText(binding?.workspaceRoot) ||
+    asText((environmentMetadata as any).opencodeWorkspaceRoot) ||
+    asText(resolvedSession.runtime?.workspaceRoot) ||
+    resolveOpencodeWorkspacePath(sessionId);
+
+  return {
+    session: resolvedSession,
+    binding,
+    environment,
+    orchestratorSessionId,
+    workspaceRoot,
+  };
+}
+
 export async function ensureTaskSessionRuntime(sessionId: string) {
+  const ensureStartedAt = Date.now();
   const session = await resolveTaskSessionRecord(sessionId);
   if (!session) {
     throw new Error('会话不存在');
   }
 
+  const activeManagedRun = await findActiveManagedRun(sessionId);
   const executor = resolveRuntimeExecutor(session);
   const altusManaged = isAltusManagedSession(session);
-  const workspaceRoot =
-    asText(session.runtime?.workspaceRoot) ||
-    resolveOpencodeWorkspacePath(sessionId);
-  const orchestratorSessionId = asText(session.runtime?.orchestratorSessionId);
+  const runtimeContext = await resolveTaskSessionRuntimeReadContext(sessionId, session);
+  const workspaceRoot = runtimeContext.workspaceRoot;
+  const orchestratorSessionId = runtimeContext.orchestratorSessionId;
   writeConnectorDebugLog('[CONNECTOR_RUNTIME_ENSURE_START]', {
     taskSessionId: sessionId,
     executor,
@@ -1146,12 +1577,21 @@ export async function ensureTaskSessionRuntime(sessionId: string) {
     mode: asText(session.mode),
     driver: asText(session.driver),
     orchestratorSessionId: orchestratorSessionId || null,
+    activeManagedRun: Boolean(activeManagedRun),
   });
   if (orchestratorSessionId) {
-    const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
+    const environment =
+      runtimeContext.environment ||
+      (await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId));
     if (environment?.status === 'ready') {
       try {
-        if (executor === 'opencode') {
+        if (activeManagedRun) {
+          writeConnectorDebugLog('[CONNECTOR_RUNTIME_ACTIVE_MANAGED_REUSE_ONLY]', {
+            taskSessionId: sessionId,
+            orchestratorSessionId,
+            executor,
+          });
+        } else if (executor === 'opencode') {
           if (!altusManaged) {
             writeConnectorDebugLog('[CONNECTOR_RUNTIME_REUSE_SYNC_OPENCODE]', {
               taskSessionId: sessionId,
@@ -1184,14 +1624,18 @@ export async function ensureTaskSessionRuntime(sessionId: string) {
         }
         await syncTaskSessionSandboxBinding(sessionId, orchestratorSessionId, workspaceRoot);
         await touchSandbox(orchestratorSessionId, 'runtime_start_reuse');
-        await reconcileTaskSessionDuplicateEnvironments(sessionId, orchestratorSessionId);
+        if (!activeManagedRun) {
+          await reconcileTaskSessionDuplicateEnvironments(sessionId, orchestratorSessionId);
+        }
         const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
         writeConnectorDebugLog('[CONNECTOR_RUNTIME_ENSURE_REUSED]', {
           taskSessionId: sessionId,
           orchestratorSessionId,
           executor,
           altusManaged,
+          activeManagedRun: Boolean(activeManagedRun),
           runtimeStatus: runtimeStatus?.status || 'ready',
+          durationMs: Date.now() - ensureStartedAt,
         });
         return {
           orchestratorSessionId,
@@ -1212,6 +1656,16 @@ export async function ensureTaskSessionRuntime(sessionId: string) {
         await markSandboxClosed(orchestratorSessionId);
       }
     }
+  }
+
+  if (activeManagedRun) {
+    writeConnectorDebugLog('[CONNECTOR_RUNTIME_ACTIVE_MANAGED_REBOUND_BLOCKED]', {
+      taskSessionId: sessionId,
+      executor,
+      altusManaged,
+      orchestratorSessionId: orchestratorSessionId || null,
+    }, 'warn');
+    throw createActiveManagedRuntimeSwitchBlockedError();
   }
 
   const provision = await sandboxAgentProvisionService.provisionWithLock({
@@ -1246,6 +1700,7 @@ export async function ensureTaskSessionRuntime(sessionId: string) {
     executor,
     altusManaged,
     runtimeStatus: runtimeStatus?.status || provision.status || 'ready',
+    durationMs: Date.now() - ensureStartedAt,
   });
 
   return {
@@ -1722,7 +2177,7 @@ function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function normalizeSessionTitleText(value: unknown): string {
+function sanitizeSessionTitleText(value: unknown): string {
   return asText(value).replace(/\s+/g, ' ').trim();
 }
 
@@ -1743,7 +2198,7 @@ function isWeakIntentTitleInput(value: string): boolean {
 }
 
 function isExplicitSessionTitleInput(value: string): boolean {
-  const normalized = normalizeSessionTitleText(value);
+  const normalized = sanitizeSessionTitleText(value);
   if (!normalized) return false;
   if (isWeakIntentTitleInput(normalized)) return false;
   if (normalized.length >= 12) return true;
@@ -1753,7 +2208,331 @@ function isExplicitSessionTitleInput(value: string): boolean {
 }
 
 function deriveResolvedSessionTitle(value: unknown): string {
-  return normalizeSessionTitleText(value).slice(0, 80);
+  return sanitizeSessionTitleText(value).slice(0, 80);
+}
+
+function resolvePlaceholderSessionTitle(status: unknown): string {
+  return asText(status) === 'waiting_user' ? WAITING_SESSION_TITLE : DEFAULT_SESSION_TITLE;
+}
+
+function isLegacyIdStyleSessionTitle(value: string): boolean {
+  return /^任务会话\s+[a-z0-9]{4,}$/i.test(value.trim());
+}
+
+function isPlaceholderSessionTitle(value: unknown): boolean {
+  const normalized = deriveResolvedSessionTitle(value);
+  if (!normalized) return true;
+  return (
+    normalized === DEFAULT_SESSION_TITLE ||
+    normalized === WAITING_SESSION_TITLE ||
+    normalized === LEGACY_DEFAULT_SESSION_TITLE ||
+    isLegacyIdStyleSessionTitle(normalized)
+  );
+}
+
+function cleanupSessionTitleObject(value: string): string {
+  return value
+    .replace(/^(?:这个|该|当前|目前|刚才的?|一下|一轮|一次|关于)\s*/i, '')
+    .replace(/(?:的根因|根因|原因)$/i, '')
+    .replace(/[，,。；;：:!！?？]+$/g, '')
+    .replace(/\bhtml\b/gi, 'HTML')
+    .replace(/\bcss\b/gi, 'CSS')
+    .replace(/\bnode(?:\.js|js)\b/gi, 'Node.js')
+    .replace(/\breact\b/gi, 'React')
+    .replace(/\bvue\b/gi, 'Vue')
+    .replace(/\brailway\b/gi, 'Railway')
+    .replace(/\bapi\b/gi, 'API')
+    .replace(/\bdb\b/gi, 'DB')
+    .replace(/\b(v\d+)(?=[\u4e00-\u9fff])/gi, '$1 ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripSessionTitleLeadPhrases(value: string): string {
+  let text = value.trim();
+  const patterns = [
+    /^(?:你好|您好|嗨|hi|hello|hey)[，,\s:：-]*/i,
+    /^(?:请问|请帮我|请帮|请你|帮我|麻烦你|想请你|我想让你|我想|我需要)[，,\s:：-]*/i,
+    /^(?:继续|再|然后|现在|目前)[，,\s:：-]*/i,
+    /^(?:做一次|来一次|做个|看下|看一下|处理一下|处理下|帮我看下|帮我看一下|帮我处理一下)[，,\s:：-]*/i,
+  ];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const pattern of patterns) {
+      const next = text.replace(pattern, '').trim();
+      if (next !== text) {
+        text = next;
+        changed = true;
+      }
+    }
+  }
+  return text.trim();
+}
+
+function deriveAutoSessionTitle(value: unknown): string {
+  const normalized = sanitizeSessionTitleText(value);
+  if (!normalized || isWeakIntentTitleInput(normalized)) return '';
+
+  let text =
+    normalized
+      .split(/[。！？!?；;\n]/)
+      .map((part) => part.trim())
+      .find(Boolean) || normalized;
+  text = stripSessionTitleLeadPhrases(text);
+  text = cleanupSessionTitleObject(text);
+
+  if (!text || isWeakIntentTitleInput(text)) return '';
+
+  if (/(?:2048).*(?:小游戏|游戏)|(?:小游戏|游戏).*(?:2048)/i.test(text) && /\bhtml\b/i.test(text)) {
+    return 'HTML 2048 小游戏';
+  }
+
+  const issueMatch = text.match(/^(.*?)(报错|错误|失败|异常)(?:的)?(?:根因|原因)?$/);
+  if (issueMatch) {
+    const objectText = cleanupSessionTitleObject(issueMatch[1]);
+    const issueText = cleanupSessionTitleObject(issueMatch[2]);
+    return deriveResolvedSessionTitle(`${objectText}${issueText}分析`);
+  }
+
+  const questionMatch = text.match(/^(?:为什么|怎么|如何)(.+)$/);
+  if (questionMatch) {
+    const objectText = cleanupSessionTitleObject(questionMatch[1]);
+    return deriveResolvedSessionTitle(objectText ? `${objectText}问题` : '');
+  }
+
+  const actionSuffixMap: Record<string, string> = {
+    分析: '分析',
+    排查: '排查',
+    定位: '定位',
+    修复: '修复',
+    优化: '优化',
+    重构: '重构',
+    整理: '整理',
+    总结: '总结',
+    调研: '调研',
+  };
+  const actionMatch = text.match(/^(分析|排查|定位|修复|优化|重构|整理|总结|调研)(.+)$/);
+  if (actionMatch) {
+    const objectText = cleanupSessionTitleObject(actionMatch[2]);
+    return deriveResolvedSessionTitle(objectText ? `${objectText}${actionSuffixMap[actionMatch[1]]}` : actionMatch[1]);
+  }
+
+  const buildMatch = text.match(/^(开发|实现|创建|生成|制作|设计|编写|写)(.+)$/);
+  if (buildMatch) {
+    const objectText = cleanupSessionTitleObject(buildMatch[2]);
+    return deriveResolvedSessionTitle(objectText);
+  }
+
+  const changeMatch = text.match(/^把(.+?)(?:改成|改为|做成|改到)(.+)$/);
+  if (changeMatch) {
+    const fromText = cleanupSessionTitleObject(changeMatch[1]);
+    const toText = cleanupSessionTitleObject(changeMatch[2]);
+    return deriveResolvedSessionTitle([fromText, toText ? `改为${toText}` : ''].filter(Boolean).join(' '));
+  }
+
+  return deriveResolvedSessionTitle(text).slice(0, 32);
+}
+
+function resolveDisplaySessionTitle(input: {
+  storedTitle?: unknown;
+  storedTitleSource?: unknown;
+  storedTitleState?: unknown;
+  taskDescriptionTitle?: unknown;
+  firstUserMessage?: unknown;
+  status?: unknown;
+}) {
+  const storedTitle = deriveResolvedSessionTitle(input.storedTitle);
+  const storedTitleSource = asText(input.storedTitleSource);
+  const storedTitleState = asText(input.storedTitleState);
+  const taskDescriptionTitle = deriveResolvedSessionTitle(input.taskDescriptionTitle);
+  const firstUserMessageTitle = deriveAutoSessionTitle(input.firstUserMessage);
+
+  if (storedTitle && !isPlaceholderSessionTitle(storedTitle)) {
+    return {
+      title: storedTitle,
+      titleSource:
+        storedTitleSource === 'first_explicit_user_input' ||
+        storedTitleSource === 'task_description' ||
+        storedTitleSource === 'clarification_summary' ||
+        storedTitleSource === 'manual'
+          ? (storedTitleSource as 'first_explicit_user_input' | 'task_description' | 'clarification_summary' | 'manual')
+          : ('manual' as const),
+      titleState:
+        storedTitleState === 'provisional' || storedTitleState === 'resolved' || storedTitleState === 'manual'
+          ? (storedTitleState as 'provisional' | 'resolved' | 'manual')
+          : storedTitleSource === 'first_explicit_user_input'
+            ? ('provisional' as const)
+            : storedTitleSource === 'task_description' || storedTitleSource === 'clarification_summary'
+              ? ('resolved' as const)
+              : ('manual' as const),
+    };
+  }
+  if (taskDescriptionTitle) {
+    return {
+      title: taskDescriptionTitle,
+      titleSource: 'task_description' as const,
+      titleState: 'resolved' as const,
+    };
+  }
+  if (firstUserMessageTitle) {
+    return {
+      title: firstUserMessageTitle,
+      titleSource: 'first_explicit_user_input' as const,
+      titleState: 'provisional' as const,
+    };
+  }
+  return {
+    title: resolvePlaceholderSessionTitle(input.status),
+    titleSource: 'placeholder' as const,
+    titleState: 'provisional' as const,
+  };
+}
+
+function getSessionTitleSourcePriority(value: unknown): number {
+  switch (asText(value)) {
+    case 'manual':
+      return 5;
+    case 'task_description':
+      return 4;
+    case 'clarification_summary':
+      return 3;
+    case 'first_explicit_user_input':
+      return 2;
+    case 'placeholder':
+    default:
+      return 1;
+  }
+}
+
+function normalizeSessionProjectAssignmentInput(body: any): {
+  projectId: string | null;
+  projectName: string | null;
+} {
+  const projectId = asText(body?.projectId) || null;
+  const projectName = deriveResolvedSessionTitle(body?.projectName) || null;
+  if (!projectId || !projectName) {
+    return {
+      projectId: null,
+      projectName: null,
+    };
+  }
+  return {
+    projectId,
+    projectName,
+  };
+}
+
+async function listCachedTaskCreationProjects(userId: string) {
+  const cached = await taskCreationProjectRedisCacheService.getProjectList<
+    Awaited<ReturnType<typeof toTaskCreationProjectSummary>>
+  >(userId);
+  if (Array.isArray(cached)) {
+    return cached;
+  }
+  const projects = await appUserProjectDAO.listByUser(userId, {
+    projectType: 'standard',
+    status: 'active',
+  });
+  const summaries = await Promise.all(projects.map((project) => toTaskCreationProjectSummary(userId, project)));
+  await taskCreationProjectRedisCacheService.setProjectList(userId, summaries);
+  return summaries;
+}
+
+async function getCachedOwnedTaskCreationProject(userId: string, projectId: string) {
+  const normalizedProjectId = asText(projectId);
+  if (!normalizedProjectId) return null;
+  const cached = await taskCreationProjectRedisCacheService.getProjectDetail<
+    Awaited<ReturnType<typeof toTaskCreationProjectSummary>>
+  >(
+    userId,
+    normalizedProjectId
+  );
+  if (cached) {
+    return cached;
+  }
+  const project = await appUserProjectDAO.getOwnedProjectById(normalizedProjectId, userId);
+  if (!project || project.projectType !== 'standard' || project.status !== 'active') {
+    return null;
+  }
+  const summary = await toTaskCreationProjectSummary(userId, project);
+  await taskCreationProjectRedisCacheService.setProjectDetail(userId, normalizedProjectId, summary);
+  return summary;
+}
+
+async function listCachedTaskCreationProjectSessions(userId: string, projectId: string) {
+  const normalizedProjectId = asText(projectId);
+  if (!normalizedProjectId) return [];
+  const cached = await taskCreationProjectRedisCacheService.getProjectSessions<ReturnType<typeof toSessionSummary>>(
+    userId,
+    normalizedProjectId
+  );
+  if (Array.isArray(cached)) {
+    return cached;
+  }
+  const sessions = await taskCreationSessionDAO.listOwnedProjectSessions(userId, normalizedProjectId);
+  const summaries = sessions.map(toSessionSummary);
+  await taskCreationProjectRedisCacheService.setProjectSessions(userId, normalizedProjectId, summaries);
+  return summaries;
+}
+
+async function toTaskCreationProjectSummary(userId: string, project: any) {
+  const metadata =
+    project?.metadataJson && typeof project.metadataJson === 'object'
+      ? (project.metadataJson as Record<string, unknown>)
+      : {};
+  const defaultConnectorProfiles = appUserProjectDAO.readDefaultConnectorProfiles(project?.metadataJson);
+  return {
+    id: String(project.id),
+    name: asText(project.name),
+    projectType: asText(project.projectType) || 'standard',
+    status: asText(project.status) || 'active',
+    pinned: Boolean(metadata.pinned),
+    projectInstruction: appUserProjectDAO.readProjectInstruction(project?.metadataJson),
+    defaultConnectors: await projectDefaultConnectorService.resolveForProject(
+      userId,
+      defaultConnectorProfiles
+    ),
+    createdAt: project.createdAt ? new Date(project.createdAt).toISOString() : null,
+    updatedAt: project.updatedAt ? new Date(project.updatedAt).toISOString() : null,
+  };
+}
+
+function normalizeTaskCreationProjectCreateInput(body: any) {
+  const defaultConnectors = body?.defaultConnectors ?? body?.defaultConnectorProfiles;
+  return {
+    name: appUserProjectDAO.normalizeName(body?.name),
+    projectInstruction:
+      body && Object.prototype.hasOwnProperty.call(body, 'projectInstruction')
+        ? appUserProjectDAO.normalizeProjectInstruction(body?.projectInstruction)
+        : undefined,
+    defaultConnectors:
+      body &&
+      (Object.prototype.hasOwnProperty.call(body, 'defaultConnectors') ||
+        Object.prototype.hasOwnProperty.call(body, 'defaultConnectorProfiles'))
+        ? appUserProjectDAO.normalizeDefaultConnectorProfiles(defaultConnectors)
+        : undefined,
+  };
+}
+
+function normalizeTaskCreationProjectUpdateInput(body: any) {
+  const hasName = Object.prototype.hasOwnProperty.call(body || {}, 'name');
+  const hasPinned = Object.prototype.hasOwnProperty.call(body || {}, 'pinned');
+  const hasProjectInstruction = Object.prototype.hasOwnProperty.call(body || {}, 'projectInstruction');
+  const hasDefaultConnectors =
+    Object.prototype.hasOwnProperty.call(body || {}, 'defaultConnectors') ||
+    Object.prototype.hasOwnProperty.call(body || {}, 'defaultConnectorProfiles');
+  const defaultConnectors = body?.defaultConnectors ?? body?.defaultConnectorProfiles;
+  return {
+    ...(hasName ? { name: appUserProjectDAO.normalizeName(body?.name) } : {}),
+    ...(hasPinned ? { pinned: Boolean(body?.pinned) } : {}),
+    ...(hasProjectInstruction
+      ? { projectInstruction: appUserProjectDAO.normalizeProjectInstruction(body?.projectInstruction) }
+      : {}),
+    ...(hasDefaultConnectors
+      ? { defaultConnectorProfiles: appUserProjectDAO.normalizeDefaultConnectorProfiles(defaultConnectors) }
+      : {}),
+  };
 }
 
 function asPositiveInt(value: unknown): number | null {
@@ -1983,6 +2762,15 @@ function normalizeUserReferenceText(contentRaw: unknown, metadataRaw: unknown): 
     .toLowerCase();
 }
 
+function isRenderableUserTimelineMessage(message: TimelineMessage | null | undefined): boolean {
+  if (message?.role !== 'user') return false;
+  return (
+    message.messageType === 'user_input' ||
+    message.messageType === 'user_response' ||
+    message.messageType === 'opencode_user_input'
+  );
+}
+
 function mergeUserReferenceMetadataFromPersisted(
   primaryMessages: TimelineMessage[],
   persistedMessages: TimelineMessage[]
@@ -2005,11 +2793,15 @@ function mergeUserReferenceMetadataFromPersisted(
     referenceQueueByText.set(key, queue);
   }
 
-  if (referenceQueueByText.size === 0) {
-    return primaryMessages;
+  const remainingPrimaryUserCounts = new Map<string, number>();
+  for (const message of primaryMessages) {
+    if (!isRenderableUserTimelineMessage(message)) continue;
+    const key = normalizeUserReferenceText(message.content, message.metadata);
+    if (!key) continue;
+    remainingPrimaryUserCounts.set(key, (remainingPrimaryUserCounts.get(key) || 0) + 1);
   }
 
-  return primaryMessages.map((message) => {
+  const mergedPrimaryMessages = primaryMessages.map((message) => {
     if (message?.role !== 'user') return message;
     if (hasUserReferenceMetadata(message?.metadata)) return message;
     const key = normalizeUserReferenceText(message?.content, message?.metadata);
@@ -2026,6 +2818,25 @@ function mergeUserReferenceMetadataFromPersisted(
       },
     };
   });
+
+  const appendedMessages: TimelineMessage[] = [];
+  for (const message of persistedMessages) {
+    if (!isRenderableUserTimelineMessage(message)) continue;
+    const key = normalizeUserReferenceText(message.content, message.metadata);
+    if (!key) continue;
+    const remainingPrimary = remainingPrimaryUserCounts.get(key) || 0;
+    if (remainingPrimary > 0) {
+      remainingPrimaryUserCounts.set(key, remainingPrimary - 1);
+      continue;
+    }
+    appendedMessages.push(message);
+  }
+
+  if (appendedMessages.length === 0) {
+    return mergedPrimaryMessages;
+  }
+
+  return mergedPrimaryMessages.concat(appendedMessages);
 }
 
 function normalizeRuntimeGenerationValue(value: unknown): number | null {
@@ -3214,14 +4025,13 @@ function updateSseClientCursor(key: string, cursor: number) {
 router.post('/sessions', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
-    const legacyUserIdHint = resolveLegacyUserIdHint(req, currentUser.userId);
-    await upsertLegacyUserMapping(currentUser.userId, legacyUserIdHint);
     const requestedSessionId = asText(req.body?.sessionId);
     const requestedTitle = asText(req.body?.title);
     const requestedMode = asText(req.body?.mode);
     const requestedExecutor = asText(req.body?.executor);
     const requestedCodexExecutionMode = asText(req.body?.codexExecutionMode);
     const requestedDriver = asText(req.body?.driver);
+    const requestedProjectId = asText(req.body?.projectId);
     const initialMessage = asText(req.body?.initialMessage);
     const initialMessageTypeRaw = asText(req.body?.initialMessageType);
     const initialMessageType = initialMessageTypeRaw === 'user_response' ? 'user_response' : 'user_input';
@@ -3237,11 +4047,36 @@ router.post('/sessions', async (req, res) => {
         ? normalizedRequestedTitle
         : '') ||
       DEFAULT_SESSION_TITLE;
+    let initialProjectAssignment: { projectId: string | null; projectName: string | null } = {
+      projectId: null,
+      projectName: null,
+    };
+    if (requestedProjectId) {
+      const ownedProject = await appUserProjectDAO.getOwnedProjectById(requestedProjectId, currentUser.userId);
+      if (!ownedProject || ownedProject.projectType !== 'standard' || ownedProject.status !== 'active') {
+        return res.status(404).json({
+          success: false,
+          error: '项目不存在或当前用户无权访问该项目',
+        });
+      }
+      initialProjectAssignment = normalizeSessionProjectAssignmentInput({
+        projectId: ownedProject.id,
+        projectName: ownedProject.name,
+      });
+    }
 
     const session = await taskCreationFileMemoryStore.createSession(
       isNewSession ? title : '',
       effectiveSessionId
     );
+    if (isNewSession && normalizedRequestedTitle && !isPlaceholderSessionTitle(normalizedRequestedTitle)) {
+      await taskCreationFileMemoryStore.updateSessionTitle(session.id, normalizedRequestedTitle, {
+        lock: true,
+        source: 'manual',
+        state: 'manual',
+        force: true,
+      });
+    }
 
     if (requestedMode === 'sandbox' || requestedMode === 'altus') {
       await taskCreationFileMemoryStore.updateSessionMode(session.id, requestedMode as any);
@@ -3268,6 +4103,9 @@ router.post('/sessions', async (req, res) => {
       });
     if (derivedDriver) {
       await taskCreationFileMemoryStore.updateSessionDriver(session.id, derivedDriver);
+    }
+    if (initialProjectAssignment.projectId) {
+      await taskCreationFileMemoryStore.updateSessionProject(session.id, initialProjectAssignment);
     }
 
     if (isNewSession) {
@@ -3317,13 +4155,12 @@ router.post('/sessions', async (req, res) => {
       } else {
         const normalizedExistingUserId = normalizeUserId(existingDbSession.userId);
         if (normalizedExistingUserId && !isSameUserId(normalizedExistingUserId, currentUser.userId)) {
-          if (legacyUserIdHint && isSameUserId(normalizedExistingUserId, legacyUserIdHint)) {
-            await taskCreationSessionDAO.adoptSessionFromLegacyUserId(
-              session.id,
-              currentUser.userId,
-              legacyUserIdHint
-            );
-          } else {
+          const adopted = await adoptLegacyOwnedSessionIfMapped(
+            session.id,
+            currentUser.userId,
+            normalizedExistingUserId
+          );
+          if (!adopted?.userId) {
             return res.status(403).json({
               success: false,
               error: '当前用户无权访问该会话',
@@ -3331,6 +4168,9 @@ router.post('/sessions', async (req, res) => {
           }
         }
         await taskCreationSessionDAO.bindUserIfMissing(session.id, currentUser.userId);
+      }
+      if (initialProjectAssignment.projectId) {
+        await taskCreationSessionDAO.updateSessionProject(session.id, initialProjectAssignment);
       }
       if (isNewSession) {
         await taskCreationSessionDAO.addMessage({
@@ -3377,8 +4217,6 @@ router.post('/sessions', async (req, res) => {
 router.get('/sessions', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
-    const legacyUserIdHint = resolveLegacyUserIdHint(req, currentUser.userId);
-    await upsertLegacyUserMapping(currentUser.userId, legacyUserIdHint);
     const rawLimit = (req.query.limit as string | undefined)?.trim();
     let limit = 200;
     if (rawLimit === 'all') {
@@ -3396,54 +4234,24 @@ router.get('/sessions', async (req, res) => {
       60000
     );
     const now = Date.now();
-    let ownedDbSessions = await taskCreationSessionDAO.getRecentSessions(limit, currentUser.userId);
-    if (ownedDbSessions.length === 0) {
-      try {
-        const legacyUserIds = await collectLegacyUserIdsForMigration(currentUser.userId, legacyUserIdHint);
-        if (legacyUserIds.length > 0) {
-          for (const legacyUserId of legacyUserIds) {
-            const reboundLegacy = await taskCreationSessionDAO.rebindSessionsFromLegacyUserId(
-              currentUser.userId,
-              legacyUserId,
-              limit
-            );
-            if (reboundLegacy.length > 0) {
-              ownedDbSessions = reboundLegacy;
-              console.warn('[TASK_SESSION_LIST_REBOUND_LEGACY_USER]', {
-                userId: currentUser.userId,
-                legacyUserId,
-                reboundCount: reboundLegacy.length,
-              });
-              break;
-            }
-          }
-        }
-      } catch (error) {
-        console.warn('[TASK_SESSION_LIST_REBOUND_LEGACY_FAILED]', {
-          userId: currentUser.userId,
-          error,
-        });
-      }
-    }
-    const ownedSessionIds = new Set(ownedDbSessions.map((item) => String(item.id)));
-
+    const ownedDbSessions = await listOwnedDbSessionsWithLegacyRebind(currentUser.userId, limit);
     const rawSessions = await taskCreationFileMemoryStore.listSessions(limit);
-    let sessions = rawSessions
-      .filter((session) => ownedSessionIds.has(String(session.id)))
-      .map(toSessionSummary);
-    if (!refresh && sessions.length > 0) {
-      return res.json({
-        success: true,
-        data: sessions,
-      });
-    }
+    const ownedSessionIds = new Set(ownedDbSessions.map((item) => String(item.id)));
+    const ownedMemorySessions = rawSessions.filter((session) => ownedSessionIds.has(String(session.id)));
+    const ownedMemoryById = new Map(ownedMemorySessions.map((session) => [String(session.id), session]));
 
     const sessionListCache = sessionListCacheByUser.get(currentUser.userId) || null;
+    const cacheCoversRequestedLimit = Boolean(
+      sessionListCache &&
+      (sessionListCache.limit >= limit || sessionListCache.data.length < sessionListCache.limit) &&
+      sessionListCache.data.length >= ownedDbSessions.length
+    );
     if (
       !refresh &&
       sessionListCache &&
       now - sessionListCache.fetchedAt < cacheTtlMs &&
-      sessionListCache.data.length > 0
+      sessionListCache.data.length > 0 &&
+      cacheCoversRequestedLimit
     ) {
       const cached = limit >= sessionListCache.data.length
         ? sessionListCache.data
@@ -3455,39 +4263,17 @@ router.get('/sessions', async (req, res) => {
       });
     }
 
-    if (sessions.length === 0) {
-      const summaries = await buildSessionSummaryFromDb(limit, currentUser.userId);
-      if (summaries.length === 0) {
-        logSessionListEmpty({
-          userId: currentUser.userId,
-          source: 'db_summary',
-          ownedDbCount: ownedDbSessions.length,
-          memoryCount: rawSessions.length,
-          refresh,
-        });
-      }
-      sessionListCacheByUser.set(currentUser.userId, {
-        fetchedAt: now,
-        limit,
-        data: summaries,
-      });
-      return res.json({
-        success: true,
-        data: summaries,
-        cache: { hit: false },
+    let sessions = await buildSessionSummaryFromDbSessions(ownedDbSessions);
+    if (sessions.length > ownedMemorySessions.length && ownedMemorySessions.length > 0) {
+      console.warn('[TASK_SESSION_LIST_MEMORY_PARTIAL]', {
+        userId: currentUser.userId,
+        ownedDbCount: sessions.length,
+        ownedMemoryCount: ownedMemorySessions.length,
+        memoryCount: rawSessions.length,
+        refresh,
       });
     }
-
-    try {
-      const dbSummaries = await buildSessionSummaryFromDb(limit, currentUser.userId);
-      const dbById = new Map(dbSummaries.map((item) => [String(item.id), item]));
-      sessions = sessions.map((session) => mergeSessionLifecycleFromDb(session, dbById.get(String(session.id))));
-    } catch (error) {
-      if (!isTransientDatabaseError(error)) {
-        throw error;
-      }
-      console.warn('[TASK_SESSION_LIST_DB_RECONCILE_FAILED]', error);
-    }
+    sessions = sessions.map((session) => mergeDbSessionSummaryWithMemory(session, ownedMemoryById.get(String(session.id)) || null));
 
     sessionListCacheByUser.set(currentUser.userId, {
       fetchedAt: now,
@@ -3536,6 +4322,195 @@ router.get('/sessions', async (req, res) => {
   }
 });
 
+router.get('/sessions/search', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const query = normalizeSessionSearchQuery(req.query.q);
+    const limit = clampNumber(Number(req.query.limit) || 20, 1, 50);
+    if (query.length < 2) {
+      return res.json({
+        success: true,
+        data: [],
+      });
+    }
+
+    const ownedDbSessions = await listOwnedDbSessionsWithLegacyRebind(currentUser.userId, 5000);
+    if (ownedDbSessions.length === 0) {
+      return res.json({
+        success: true,
+        data: [],
+      });
+    }
+
+    const ownedDbById = new Map(ownedDbSessions.map((session) => [String(session.id), session]));
+    const ownedSessionIds = new Set(ownedDbById.keys());
+    const rawSessions = await taskCreationFileMemoryStore.listSessions(5000);
+    const ownedMemorySessions = rawSessions.filter((session) => ownedSessionIds.has(String(session.id)));
+    const ownedMemoryById = new Map(ownedMemorySessions.map((session) => [String(session.id), session]));
+    const normalizedNeedle = query.toLowerCase();
+    const titleSearchLimit = Math.min(limit * 3, 50);
+
+    const [dbTitleHits, messageHits] = await Promise.all([
+      taskCreationSessionDAO.searchOwnedSessionTitles(currentUser.userId, query, titleSearchLimit),
+      taskCreationSessionDAO.searchOwnedSessionMessages(currentUser.userId, query, titleSearchLimit),
+    ]);
+
+    const memoryTitleHits = ownedMemorySessions
+      .filter((session) => {
+        const title = asText(session.title).toLowerCase();
+        return title.length > 0 && title.includes(normalizedNeedle);
+      })
+      .map((session) => ({
+        sessionId: String(session.id),
+        matchedTitle: asText(session.title),
+        matchedAt: session.updatedAt || null,
+        updatedAt: session.updatedAt || null,
+      }));
+
+    const rankedHits = new Map<
+      string,
+      {
+        sessionId: string;
+        titleMatched: boolean;
+        titleSnippet: string;
+        titleMatchedAt: number;
+        messageSnippet: string;
+        messageMatchedAt: number;
+        updatedAt: number;
+      }
+    >();
+
+    const ensureRankedHit = (sessionId: string) => {
+      const existing = rankedHits.get(sessionId);
+      if (existing) return existing;
+      const dbSession = ownedDbById.get(sessionId);
+      const next = {
+        sessionId,
+        titleMatched: false,
+        titleSnippet: '',
+        titleMatchedAt: 0,
+        messageSnippet: '',
+        messageMatchedAt: 0,
+        updatedAt: Date.parse(String(dbSession?.updatedAt || '')) || 0,
+      };
+      rankedHits.set(sessionId, next);
+      return next;
+    };
+
+    for (const hit of [...memoryTitleHits, ...dbTitleHits]) {
+      if (!ownedSessionIds.has(hit.sessionId)) continue;
+      const next = ensureRankedHit(hit.sessionId);
+      const matchedAt = Date.parse(String(hit.matchedAt || '')) || 0;
+      next.titleMatched = true;
+      if (!next.titleSnippet) {
+        next.titleSnippet = hit.matchedTitle;
+      }
+      if (matchedAt > next.titleMatchedAt) {
+        next.titleMatchedAt = matchedAt;
+      }
+      const updatedAt = Date.parse(String(hit.updatedAt || '')) || 0;
+      if (updatedAt > next.updatedAt) {
+        next.updatedAt = updatedAt;
+      }
+    }
+
+    for (const hit of messageHits) {
+      if (!ownedSessionIds.has(hit.sessionId)) continue;
+      const next = ensureRankedHit(hit.sessionId);
+      const matchedAt = Date.parse(String(hit.matchedAt || '')) || 0;
+      if (!next.messageSnippet) {
+        next.messageSnippet = buildSessionSearchSnippet(hit.snippet, query);
+      }
+      if (matchedAt > next.messageMatchedAt) {
+        next.messageMatchedAt = matchedAt;
+      }
+      const updatedAt = Date.parse(String(hit.updatedAt || '')) || 0;
+      if (updatedAt > next.updatedAt) {
+        next.updatedAt = updatedAt;
+      }
+    }
+
+    const topHits = [...rankedHits.values()]
+      .sort((left, right) => {
+        if (left.titleMatched !== right.titleMatched) {
+          return Number(right.titleMatched) - Number(left.titleMatched);
+        }
+        const leftMatchedAt = Math.max(left.titleMatchedAt, left.messageMatchedAt);
+        const rightMatchedAt = Math.max(right.titleMatchedAt, right.messageMatchedAt);
+        if (rightMatchedAt !== leftMatchedAt) {
+          return rightMatchedAt - leftMatchedAt;
+        }
+        if (right.updatedAt !== left.updatedAt) {
+          return right.updatedAt - left.updatedAt;
+        }
+        return right.sessionId.localeCompare(left.sessionId);
+      })
+      .slice(0, limit);
+
+    const data = [];
+    for (const hit of topHits) {
+      const dbSession = ownedDbById.get(hit.sessionId);
+      if (!dbSession) {
+        continue;
+      }
+      const memorySession = ownedMemoryById.get(hit.sessionId) || null;
+      const dbFileSession = await buildLightweightFileSessionFromDb(hit.sessionId);
+      const titleResolution = resolveDisplaySessionTitle({
+        storedTitle: memorySession?.title,
+        storedTitleSource: (memorySession as any)?.titleSource,
+        storedTitleState: (memorySession as any)?.titleState,
+        taskDescriptionTitle: dbFileSession?.title,
+        status: memorySession?.status || dbFileSession?.status || dbSession.status,
+      });
+      const snippetSource = hit.messageSnippet || buildSessionSearchSnippet(hit.titleSnippet, query);
+      data.push({
+        sessionId: hit.sessionId,
+        title: titleResolution.title,
+        updatedAt: toIso(
+          (memorySession?.updatedAt as string | undefined) ||
+            (dbFileSession?.updatedAt as string | undefined) ||
+            dbSession.updatedAt
+        ),
+        matchType: hit.titleMatched ? 'title' : 'message',
+        snippet: snippetSource || null,
+        projectId:
+          memorySession?.projectId ||
+          dbFileSession?.projectId ||
+          dbSession.projectId ||
+          null,
+        projectName:
+          memorySession?.projectName ||
+          dbFileSession?.projectName ||
+          dbSession.projectName ||
+          null,
+        isFavorite: Boolean(memorySession?.isFavorite),
+        status: asText(memorySession?.status || dbFileSession?.status || dbSession.status) || 'in_progress',
+      });
+    }
+
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    console.error('搜索会话失败:', error);
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    return res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage('搜索会话失败，请稍后重试'),
+    });
+  }
+});
+
 router.post('/sessions/draft', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
@@ -3573,8 +4548,8 @@ router.post('/sessions/:sessionId/title/resolve', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
-    const input = normalizeSessionTitleText(req.body?.message);
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
+    const input = sanitizeSessionTitleText(req.body?.message);
     const session = await resolveTaskSessionRecord(sessionId);
     if (!session) {
       return res.status(404).json({
@@ -3583,36 +4558,53 @@ router.post('/sessions/:sessionId/title/resolve', async (req, res) => {
       });
     }
 
-    const titleLocked = Boolean(session.titleLocked);
-    const currentTitle = asText(session.title) || DEFAULT_SESSION_TITLE;
+    const currentTitleResolution = resolveDisplaySessionTitle({
+      storedTitle: session.title,
+      storedTitleSource: session.titleSource,
+      storedTitleState: session.titleState,
+      status: session.status,
+    });
+    const titleLocked = Boolean(session.titleLocked) || currentTitleResolution.titleSource !== 'placeholder';
     if (!input || titleLocked || !isExplicitSessionTitleInput(input)) {
       return res.json({
         success: true,
         data: {
           id: session.id,
-          title: currentTitle,
+          title: currentTitleResolution.title,
           titleLocked,
-          titleSource: session.titleSource || 'placeholder',
+          titleSource: currentTitleResolution.titleSource,
+          titleState: currentTitleResolution.titleState,
           titleResolvedAt: session.titleResolvedAt || null,
           resolved: false,
         },
       });
     }
 
-    const nextTitle = deriveResolvedSessionTitle(input) || DEFAULT_SESSION_TITLE;
+    const nextTitle = deriveAutoSessionTitle(input) || resolvePlaceholderSessionTitle(session.status);
     await taskCreationFileMemoryStore.updateSessionTitle(session.id, nextTitle, {
       lock: true,
       source: 'first_explicit_user_input',
+      state: 'provisional',
     });
     const updated = await resolveTaskSessionRecord(session.id);
+    const updatedSummary = toSessionSummary(
+      updated || {
+        ...session,
+        title: nextTitle,
+        titleLocked: true,
+        titleSource: 'first_explicit_user_input',
+        titleState: 'provisional',
+      }
+    );
     return res.json({
       success: true,
       data: {
         id: session.id,
-        title: updated?.title || nextTitle,
-        titleLocked: Boolean(updated?.titleLocked),
-        titleSource: updated?.titleSource || 'first_explicit_user_input',
-        titleResolvedAt: updated?.titleResolvedAt || null,
+        title: updatedSummary.title,
+        titleLocked: updatedSummary.titleLocked,
+        titleSource: updatedSummary.titleSource,
+        titleState: updatedSummary.titleState,
+        titleResolvedAt: updatedSummary.titleResolvedAt || null,
         resolved: true,
       },
     });
@@ -3646,7 +4638,7 @@ router.post('/sessions/:sessionId/title/rename', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await resolveTaskSessionRecord(sessionId);
     if (!session) {
       return res.status(404).json({
@@ -3666,6 +4658,7 @@ router.post('/sessions/:sessionId/title/rename', async (req, res) => {
     await taskCreationFileMemoryStore.updateSessionTitle(session.id, nextTitle, {
       lock: true,
       source: 'manual',
+      state: 'manual',
       force: true,
     });
     const updated = await resolveTaskSessionRecord(session.id);
@@ -3703,7 +4696,7 @@ router.post('/sessions/:sessionId/favorite', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await resolveTaskSessionRecord(sessionId);
     if (!session) {
       return res.status(404).json({
@@ -3744,6 +4737,93 @@ router.post('/sessions/:sessionId/favorite', async (req, res) => {
   }
 });
 
+router.post('/sessions/:sessionId/project', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { sessionId } = req.params;
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: '会话不存在',
+      });
+    }
+    const dbSession = await taskCreationSessionDAO.getSession(session.id);
+    const sessionMetadata =
+      dbSession?.metadataJson && typeof dbSession.metadataJson === 'object'
+        ? (dbSession.metadataJson as Record<string, unknown>)
+        : {};
+    const altusSessionMemory =
+      sessionMetadata.altusSessionMemory && typeof sessionMetadata.altusSessionMemory === 'object'
+        ? (sessionMetadata.altusSessionMemory as Record<string, unknown>)
+        : {};
+    const hasEnteredEffectiveRun =
+      typeof altusSessionMemory.version === 'number' && Number.isFinite(altusSessionMemory.version)
+        ? altusSessionMemory.version > 0
+        : false;
+    if (hasEnteredEffectiveRun) {
+      return res.status(409).json({
+        success: false,
+        error: '会话已进入有效运行阶段，当前版本不支持再变更项目归属',
+      });
+    }
+    const previousProjectId = asText(session.projectId);
+
+    const requestedProjectId = asText(req.body?.projectId);
+    let nextProject = normalizeSessionProjectAssignmentInput({
+      projectId: null,
+      projectName: null,
+    });
+    if (requestedProjectId) {
+      const ownedProject = await appUserProjectDAO.getOwnedProjectById(requestedProjectId, currentUser.userId);
+      if (!ownedProject || ownedProject.projectType !== 'standard' || ownedProject.status !== 'active') {
+        return res.status(404).json({
+          success: false,
+          error: '项目不存在或当前用户无权访问该项目',
+        });
+      }
+      nextProject = normalizeSessionProjectAssignmentInput({
+        projectId: ownedProject.id,
+        projectName: ownedProject.name,
+      });
+    }
+    await taskCreationSessionDAO.updateSessionProject(session.id, nextProject);
+    await taskCreationFileMemoryStore.updateSessionProject(session.id, nextProject);
+    await taskCreationProjectRedisCacheService.invalidateProjectReads(currentUser.userId, {
+      projectIds: [previousProjectId, nextProject.projectId],
+    });
+    const updated = await resolveTaskSessionRecord(session.id);
+    return res.json({
+      success: true,
+      data: toSessionSummary(updated || { ...session, ...nextProject }),
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
+    console.error('更新会话项目归属失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    return res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage('更新会话项目归属失败，请稍后重试'),
+    });
+  }
+});
+
 /**
  * GET /api/task-creation/sessions/:sessionId
  * 获取会话的完整信息（包括所有关联数据）
@@ -3752,7 +4832,7 @@ router.get('/sessions/:sessionId', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const sessionData = await resolveTaskSessionMeta(sessionId);
 
     if (!sessionData) {
@@ -3813,7 +4893,7 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await resolveTaskSessionMeta(sessionId);
     const tenantKey = resolveTenantKey(currentUser);
     const shouldPreferOpencodeNativeHistory =
@@ -3953,7 +5033,7 @@ router.get('/sessions/:sessionId/messages/history', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await resolveTaskSessionMeta(sessionId);
     const beforeCursor = asTimelineCursor(req.query.before);
     const limit = clampNumber(Number(req.query.limit) || 50, 1, 200);
@@ -4017,7 +5097,7 @@ router.get('/sessions/:sessionId/messages', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await resolveTaskSessionMeta(sessionId);
     const messages = await resolveRenderableTimelineMessages(sessionId, session);
 
@@ -4260,6 +5340,7 @@ router.post('/sessions/:sessionId/runtime/start', async (req, res) => {
         error: getPublicErrorMessage('会话不存在'),
       });
     }
+    await assertTaskSessionRuntimeStartAllowed(sessionId);
     const runtime = await ensureTaskSessionRuntime(sessionId);
     return res.json({
       success: true,
@@ -4277,6 +5358,12 @@ router.post('/sessions/:sessionId/runtime/start', async (req, res) => {
       return res.status(404).json({
         success: false,
         error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+    if (isActiveManagedRuntimeSwitchBlockedError(error)) {
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage(ACTIVE_MANAGED_RUNTIME_SWITCH_BLOCKED_MESSAGE),
       });
     }
     console.error('启动执行环境失败:', error);
@@ -4733,7 +5820,7 @@ router.get('/sessions/:sessionId/debug', async (req, res) => {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
     const tenantKey = resolveTenantKey(currentUser);
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     let session = await taskCreationFileMemoryStore.getSession(sessionId);
     if (!session) {
       session = await hydrateFileSessionFromDb(sessionId);
@@ -4836,7 +5923,7 @@ router.post('/sessions/:sessionId/debug/start', async (req, res) => {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
     const tenantKey = resolveTenantKey(currentUser);
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     let session = await taskCreationFileMemoryStore.getSession(sessionId);
     if (!session) {
       session = await hydrateFileSessionFromDb(sessionId);
@@ -4937,11 +6024,14 @@ router.get('/sessions/:sessionId/deployment', async (req, res) => {
       });
     }
 
+    const runtimeContext = await resolveTaskSessionRuntimeReadContext(sessionId, session);
     const deploymentId = asText(req.query.deploymentId);
     const data = await buildTaskSessionDeploymentResponse({
       userId: currentUser.userId,
       session,
       selectedDeploymentId: deploymentId || undefined,
+      resolvedEnvironment: runtimeContext.environment || undefined,
+      resolvedOrchestratorSessionId: runtimeContext.orchestratorSessionId || undefined,
     });
     return res.json({
       success: true,
@@ -4975,18 +6065,11 @@ router.get('/sessions/:sessionId/deployment/template', async (req, res) => {
       });
     }
 
-    const runtime = await ensureTaskSessionRuntime(sessionId);
-    const orchestratorSessionId = asText(runtime.orchestratorSessionId);
-    const environment = orchestratorSessionId
-      ? await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId)
-      : null;
-    const workspaceRoot =
-      asText((pickRecord(environment?.metadata) as any).opencodeWorkspaceRoot) ||
-      resolveOpencodeWorkspacePath(sessionId);
+    const runtimeContext = await resolveTaskSessionRuntimeReadContext(sessionId, session);
 
     const data = await inspectTaskSessionDeploymentTemplate({
-      orchestratorSessionId,
-      workspaceRoot,
+      orchestratorSessionId: runtimeContext.orchestratorSessionId,
+      workspaceRoot: runtimeContext.workspaceRoot,
     });
     return res.json({
       success: true,
@@ -5026,9 +6109,12 @@ router.post('/sessions/:sessionId/deployment/token/rotate', async (req, res) => 
     }
 
     await platformDeploymentAccountService.rotateProjectToken(currentUser.userId, sessionId);
+    const runtimeContext = await resolveTaskSessionRuntimeReadContext(sessionId, session);
     const data = await buildTaskSessionDeploymentResponse({
       userId: currentUser.userId,
       session,
+      resolvedEnvironment: runtimeContext.environment || undefined,
+      resolvedOrchestratorSessionId: runtimeContext.orchestratorSessionId || undefined,
     });
     return res.json({
       success: true,
@@ -5064,14 +6150,10 @@ router.post('/sessions/:sessionId/deployment/deploy', async (req, res) => {
       });
     }
 
-    const runtime = await ensureTaskSessionRuntime(sessionId);
-    const orchestratorSessionId = asText(runtime.orchestratorSessionId);
-    const environment = orchestratorSessionId
-      ? await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId)
-      : null;
-    const workspaceRoot =
-      asText((pickRecord(environment?.metadata) as any).opencodeWorkspaceRoot) ||
-      resolveOpencodeWorkspacePath(sessionId);
+    const runtimeContext = await resolveTaskSessionRuntimeReadContext(sessionId, session);
+    const orchestratorSessionId = runtimeContext.orchestratorSessionId;
+    const environment = runtimeContext.environment;
+    const workspaceRoot = runtimeContext.workspaceRoot;
     if (!orchestratorSessionId || !workspaceRoot) {
       return res.status(400).json({
         success: false,
@@ -5106,7 +6188,8 @@ router.post('/sessions/:sessionId/deployment/deploy', async (req, res) => {
 
 /**
  * POST /api/task-creation/sessions/:sessionId/deployment/redeploy
- * 重新部署指定版本
+ * 重新部署指定版本；当上次部署已失败时允许不传 deploymentId，
+ * 直接按当前工作区重新发布
  */
 router.post('/sessions/:sessionId/deployment/redeploy', async (req, res) => {
   try {
@@ -5121,13 +6204,7 @@ router.post('/sessions/:sessionId/deployment/redeploy', async (req, res) => {
       });
     }
 
-    const deploymentId = asText(req.body?.deploymentId);
-    if (!deploymentId) {
-      return res.status(400).json({
-        success: false,
-        error: getPublicErrorMessage('缺少 deploymentId'),
-      });
-    }
+    const deploymentId = asText(req.body?.deploymentId) || undefined;
 
     const result = await executeTaskSessionDeploymentAction({
       action: 'redeploy',
@@ -5439,7 +6516,7 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     const tenantKey = resolveTenantKey(currentUser);
     const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
@@ -5746,7 +6823,7 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     const refresh = parseRefreshFlag(req.query.refresh);
     const tenantKey = resolveTenantKey(currentUser);
@@ -5960,7 +7037,7 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const rawRequestPath = String(req.query.path || '').trim();
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
@@ -6290,7 +7367,7 @@ async function handleWorkspaceRawRequest(
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
     const tenantKey = resolveTenantKey(currentUser);
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const wildcardPath = String((req.params as Record<string, string | undefined>)['0'] || '').trim();
     const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
     const normalizedPath = resolveWorkspaceRelativeRequestPath(wildcardPath, workspaceRoot);
@@ -6448,7 +7525,7 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
   let currentUser: ReturnType<typeof currentUserResolver.require> | null = null;
   try {
     currentUser = currentUserResolver.require(req);
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
   } catch (error) {
     const authError = resolveCurrentUserError(error);
     if (authError) {
@@ -6918,7 +7995,7 @@ router.get('/sessions/:sessionId/intent', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
 
     const intentResult = await taskCreationSessionDAO.getIntentResult(sessionId);
 
@@ -6967,7 +8044,7 @@ router.get('/sessions/:sessionId/task-description', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
 
     const taskDescription = await taskCreationSessionDAO.getTaskDescription(sessionId);
 
@@ -7016,7 +8093,7 @@ router.get('/sessions/:sessionId/execution-plan', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
 
     const executionPlan = await taskCreationSessionDAO.getExecutionPlan(sessionId);
 
@@ -7065,7 +8142,7 @@ router.delete('/sessions/:sessionId', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
-    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
 
     await taskCreationSessionDAO.deleteSession(sessionId);
     await taskCreationFileMemoryStore.deleteSession(sessionId);

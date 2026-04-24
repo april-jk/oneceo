@@ -11,6 +11,7 @@ import {
   createTaskCreationSession,
   createTaskCreationDraftSession,
   createTaskCreationSocket,
+  getTaskCreationProject,
   getTaskCreationOlderMessages,
   getTaskCreationRecentMessages,
   getLatestTaskCreationManagedRun,
@@ -31,12 +32,16 @@ import {
 import {
   applySessionConnectorDraft,
   clearSessionConnectorDraft,
+  saveSessionConnectorDraft,
+  type SessionConnectorDraftEntry,
 } from '@/lib/connectors-client';
 import {
   clearSessionConnectorDraftState,
   getSessionConnectorDraftState,
   listSessionConnectorDraftEntries,
+  replaceSessionConnectorDraftEntries,
 } from '@/lib/session-connector-draft';
+import { ALTUS_MODE_STORAGE_KEY, readAltusMode } from '@/lib/altus-settings';
 
 export interface AgentMessage {
   id?: string;
@@ -89,6 +94,7 @@ export interface UseTaskCreationAgentOptions {
   autoRuntime?: boolean;
   compactHistory?: boolean;
   runtimeLogPollingEnabled?: boolean;
+  initialProjectId?: string | null;
 }
 
 type SendInputOptions = {
@@ -183,51 +189,8 @@ function extractOrchestratorSessionId(message: AgentMessage): string | null {
   return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
 }
 
-const WEAK_INTENT_TITLE_INPUTS = new Set([
-  '你好',
-  '您好',
-  '嗨',
-  'hi',
-  'hello',
-  'hey',
-  '在吗',
-  '有人吗',
-  'help',
-  '帮我一下',
-  '开始',
-  '继续',
-  'ok',
-  'okay',
-  '好的',
-  '收到',
-  '1',
-  '？',
-  '?',
-]);
-
-function normalizeSessionTitleInput(value: string): string {
-  return value.replace(/\s+/g, ' ').trim();
-}
-
-function toComparableSessionTitleInput(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[，。、“”"'!！?？,.；;:：()\[\]{}<>《》【】\-_`~]/g, '')
-    .replace(/\s+/g, '');
-}
-
 function shouldAttemptSessionTitleResolve(value: string): boolean {
-  const normalized = normalizeSessionTitleInput(value);
-  if (!normalized) return false;
-  const comparable = toComparableSessionTitleInput(normalized);
-  if (!comparable || WEAK_INTENT_TITLE_INPUTS.has(comparable) || comparable.length <= 2) {
-    return false;
-  }
-  if (normalized.length >= 12) return true;
-  return /(帮我|请|请帮|分析|排查|修复|开发|实现|优化|重构|设计|生成|创建|制作|写|继续|修改|整理|总结|如何|怎么|为什么|报错|bug|问题|页面|功能|css|html|nodejs|代码|接口|数据库|deploy|build|fix|debug|analy[sz]e|implement|optimi[sz]e|refactor|create|write)/i.test(
-    normalized
-  );
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
 function dispatchTaskCreationSessionUpdated(detail: {
@@ -402,30 +365,23 @@ function mergeUploadedAttachments(
   return Array.from(merged.values());
 }
 
+// These are written into the message stream and must stay fixed once generated.
+const WELCOME_MESSAGE_TEXT = '欢迎使用 Altus 任务创建助手！请描述您想要创建的任务。';
 const INTERRUPT_CONFIRMATION_TEXT = '消息发送被中止，等待进一步指令';
+const MANAGED_RUN_CREATED_TEXT = 'managed run 已创建';
+const MANAGED_RUN_RUNNING_TEXT = '运行中';
+const MANAGED_RUN_DELIVERABLES_READY_TEXT = '交付文件已生成';
+const MANAGED_RUN_COMPLETED_TEXT = 'managed run 已完成';
+const MANAGED_RUN_FAILED_TEXT = 'managed run 已失败';
+const REQUEST_FAILED_RETRY_TEXT = '请求失败，请稍后重试';
 
 // Altus 控制模式存储键：
 // - sandbox: 直通 sandbox 执行器（OpenCode/ClaudeCode/Codex 等）
 // - managed: Altus 三层智能体编排
 // 注意：直通模式不应触发 Altus 编排与澄清逻辑，避免误走流程。
-const ALTUS_MODE_STORAGE_KEY = 'altus_mode';
 const EXECUTOR_STORAGE_KEY = 'altus_executor';
 const CODEX_EXECUTION_MODE_STORAGE_KEY = 'codex_execution_mode';
 const SSE_CLIENT_ID_STORAGE_KEY = 'task_creation_sse_client_id';
-
-function readAltusMode(): 'sandbox' | 'managed' {
-  if (typeof window === 'undefined') return 'sandbox';
-  try {
-    const stored = window.localStorage.getItem(ALTUS_MODE_STORAGE_KEY);
-    if (stored === 'managed' || stored === 'sandbox') {
-      return stored;
-    }
-    window.localStorage.setItem(ALTUS_MODE_STORAGE_KEY, 'sandbox');
-  } catch {
-    // ignore storage failures
-  }
-  return 'sandbox';
-}
 
 function readExecutor(): 'opencode' | 'claudecode' | 'codex' {
   if (typeof window === 'undefined') return 'opencode';
@@ -1478,6 +1434,17 @@ function isManagedSystemEventType(eventType: string): boolean {
   );
 }
 
+function shouldDisplayManagedRunStatusMessage(
+  status: unknown,
+  content: unknown,
+): boolean {
+  const normalizedStatus = asText(status).toLowerCase();
+  const normalizedContent = asText(content);
+  if (!normalizedContent) return false;
+  if (normalizedStatus === 'starting') return false;
+  return true;
+}
+
 export function resolveManagedStreamMessageKey(input: {
   eventType: string;
   runId?: string | null;
@@ -1501,6 +1468,14 @@ export function resolveManagedStreamMessageKey(input: {
       payloadMessageKey ||
       envelopeMessageKey ||
       (runId ? `managed:${runId}:clarification` : 'managed:clarification')
+    );
+  }
+
+  if (eventType === 'run_status') {
+    return (
+      payloadMessageKey ||
+      envelopeMessageKey ||
+      (runId ? `managed:${runId}:run_status` : 'managed:run_status')
     );
   }
 
@@ -1699,6 +1674,52 @@ function buildClarificationSemanticKey(value: unknown): string {
   return normalizeClarificationComparableText(value).replace(/\s+/g, '');
 }
 
+function normalizeManagedAssistantComparableText(value: unknown): string {
+  const text = asText(value);
+  if (!text) return '';
+  return text
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function stripDuplicateManagedAssistantForFinalMessage(
+  prev: AgentMessage[],
+  incomingMessage: AgentMessage
+): AgentMessage[] {
+  if (!isManagedAssistantMessage(incomingMessage)) {
+    return prev;
+  }
+  const incomingMeta = toRecord(incomingMessage.metadata);
+  if (asText(incomingMeta.eventType).toLowerCase() !== 'assistant_message') {
+    return prev;
+  }
+
+  const baseKey = resolveManagedAssistantBaseKey(incomingMessage);
+  const currentKey = resolveAgentMessageKey(incomingMessage);
+  const incomingContent = normalizeManagedAssistantComparableText(incomingMessage.content);
+  if (!baseKey || !incomingContent) {
+    return prev;
+  }
+
+  let removed = false;
+  const next = prev.filter((item) => {
+    if (!isManagedAssistantMessage(item)) return true;
+    const itemKey = resolveAgentMessageKey(item);
+    if (!isManagedAssistantSegmentKeyForBase(itemKey, baseKey)) return true;
+    if (itemKey === currentKey) return true;
+    const itemContent = normalizeManagedAssistantComparableText(item.content);
+    if (!itemContent) return true;
+    if (itemContent === incomingContent) {
+      removed = true;
+      return false;
+    }
+    return true;
+  });
+  return removed ? next : prev;
+}
+
 function stripDuplicateManagedAssistantForClarification(
   prev: AgentMessage[],
   clarificationMessage: AgentMessage
@@ -1747,6 +1768,10 @@ export function mergeRealtimeMessage(
 ): AgentMessage[] {
   message = normalizeAgentMessageIdentity(normalizeTerminalDisplayMessage(message));
   message = normalizeManagedAssistantMessageIdentity(prev, message);
+  const dedupedManagedAssistantPrev = stripDuplicateManagedAssistantForFinalMessage(prev, message);
+  if (dedupedManagedAssistantPrev !== prev) {
+    return mergeRealtimeMessage(dedupedManagedAssistantPrev, message, welcomeMessage);
+  }
   if (message.type === 'clarification_request') {
     const dedupedPrev = stripDuplicateManagedAssistantForClarification(prev, message);
     if (dedupedPrev !== prev) {
@@ -2239,6 +2264,15 @@ export function mergeHistoryAgentMessages(base: AgentMessage[], incoming: AgentM
   });
   for (const rawItem of incoming) {
     const item = normalizeManagedAssistantMessageIdentity(merged, rawItem);
+    const dedupedMerged = stripDuplicateManagedAssistantForFinalMessage(merged, item);
+    if (dedupedMerged !== merged) {
+      merged.length = 0;
+      merged.push(...dedupedMerged);
+      indexByKey.clear();
+      merged.forEach((existingItem, index) => {
+        indexByKey.set(getHistoryMessageKey(existingItem), index);
+      });
+    }
     const key = getHistoryMessageKey(item);
     const existingIndex = indexByKey.get(key);
     if (existingIndex !== undefined) {
@@ -2539,6 +2573,12 @@ function mapHistoryMessageToAgentMessage(item: TaskCreationHistoryMessage, histo
     if (isCodexControlStatusContent(metadata, item?.content || '')) {
       return null;
     }
+    if (
+      asText(metadata?.eventType).toLowerCase() === 'run_status' &&
+      !shouldDisplayManagedRunStatusMessage(metadata?.status, item?.content || '')
+    ) {
+      return null;
+    }
     return {
       id,
       messageKey,
@@ -2624,10 +2664,14 @@ function mapHistoryMessageToAgentMessage(item: TaskCreationHistoryMessage, histo
 
 export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const SESSION_STORAGE_KEY = 'task_creation_session_id';
-  const WELCOME_MESSAGE = '欢迎使用 Altus 任务创建助手！请描述您想要创建的任务。';
+  const WELCOME_MESSAGE = WELCOME_MESSAGE_TEXT;
   const autoRuntime = options?.autoRuntime !== false;
   const compactHistory = options?.compactHistory !== false;
   const runtimeLogPollingEnabled = options?.runtimeLogPollingEnabled === true;
+  const initialProjectIdForNewSession =
+    typeof options?.initialProjectId === 'string' && options.initialProjectId.trim()
+      ? options.initialProjectId.trim()
+      : null;
   const [isConnected, setIsConnected] = useState(() => isManagedAltusMode());
   const [isProcessing, setIsProcessing] = useState(false);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
@@ -2653,6 +2697,76 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const [managedRunError, setManagedRunError] = useState<string | null>(null);
   const [hasOlderHistory, setHasOlderHistory] = useState(false);
   const [isLoadingOlderHistory, setIsLoadingOlderHistory] = useState(false);
+
+  useEffect(() => {
+    if (sessionId || !initialProjectIdForNewSession) return;
+    let cancelled = false;
+
+    const syncProjectDefaultConnectors = async () => {
+      try {
+        const project = await getTaskCreationProject(initialProjectIdForNewSession);
+        if (cancelled) return;
+
+        const nextEntries: SessionConnectorDraftEntry[] = Array.isArray(project?.defaultConnectors)
+          ? project.defaultConnectors
+              .filter(
+                (item) =>
+                  typeof item?.profileId === 'string' &&
+                  item.profileId.trim() &&
+                  (item.authStatus || '').trim().toLowerCase() !== 'deleted'
+              )
+              .map((item) => ({
+                connectorKey: item.connectorKey,
+                profileId: item.profileId,
+                desiredState: 'attached',
+                enabledTools: [],
+                sessionConfig: null,
+              }))
+          : [];
+
+        const state = getSessionConnectorDraftState();
+        const currentEntries = listSessionConnectorDraftEntries();
+        const isUntouchedProjectDraft =
+          Boolean(state) &&
+          state?.source === 'project_default' &&
+          state?.userTouched !== true;
+        const sameProjectDraft = isUntouchedProjectDraft && state?.sourceProjectId === initialProjectIdForNewSession;
+
+        if (nextEntries.length === 0) {
+          if (isUntouchedProjectDraft) {
+            const draftId = state?.draftId || '';
+            clearSessionConnectorDraftState();
+            if (draftId) {
+              await clearSessionConnectorDraft(draftId).catch(() => undefined);
+            }
+          }
+          return;
+        }
+
+        if (currentEntries.length > 0 && !isUntouchedProjectDraft) {
+          return;
+        }
+
+        if (sameProjectDraft) {
+          return;
+        }
+
+        const nextState = replaceSessionConnectorDraftEntries(nextEntries, {
+          source: 'project_default',
+          sourceProjectId: initialProjectIdForNewSession,
+          userTouched: false,
+        });
+        await saveSessionConnectorDraft(nextState.draftId, nextEntries);
+      } catch (error) {
+        console.warn('[TaskCreationAgent] sync project default connectors failed:', error);
+      }
+    };
+
+    void syncProjectDefaultConnectors();
+    return () => {
+      cancelled = true;
+    };
+  }, [initialProjectIdForNewSession, sessionId]);
   const [isInterrupting, setIsInterrupting] = useState(false);
   const [pendingSandboxPromptVersion, setPendingSandboxPromptVersion] = useState(0);
   const [location] = useLocation();
@@ -3220,8 +3334,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         }
         nextMessage = {
           type: 'status_update',
-          content: content || 'managed run 已创建',
-          message: content || 'managed run 已创建',
+          content: content || MANAGED_RUN_CREATED_TEXT,
+          message: content || MANAGED_RUN_CREATED_TEXT,
           stage: 'executing',
           tone: 'system',
           sessionId: sessionKey,
@@ -3237,15 +3351,17 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
             processing: managedStatus !== 'waiting_user',
           });
         }
-        nextMessage = {
-          type: 'status_update',
-          content: content || managedStatus || '运行中',
-          message: content || managedStatus || '运行中',
-          stage: managedStatus === 'waiting_user' ? 'clarifying' : 'executing',
-          tone: 'execution',
-          sessionId: sessionKey,
-          metadata: baseMetadata,
-        };
+        if (shouldDisplayManagedRunStatusMessage(managedStatus, content || managedStatus || MANAGED_RUN_RUNNING_TEXT)) {
+          nextMessage = {
+            type: 'status_update',
+            content: content || managedStatus || MANAGED_RUN_RUNNING_TEXT,
+            message: content || managedStatus || MANAGED_RUN_RUNNING_TEXT,
+            stage: managedStatus === 'waiting_user' ? 'clarifying' : 'executing',
+            tone: 'execution',
+            sessionId: sessionKey,
+            metadata: baseMetadata,
+          };
+        }
       } else if (eventType === 'assistant_delta' || eventType === 'assistant_message') {
         nextMessage = {
           type: 'agent_message',
@@ -3270,8 +3386,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         }
         nextMessage = {
           type: 'status_update',
-          content: content || '交付文件已生成',
-          message: content || '交付文件已生成',
+          content: content || MANAGED_RUN_DELIVERABLES_READY_TEXT,
+          message: content || MANAGED_RUN_DELIVERABLES_READY_TEXT,
           stage: 'reviewing',
           tone: 'review',
           sessionId: sessionKey,
@@ -3332,17 +3448,17 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           content:
             content ||
             (eventType === 'run_completed'
-              ? 'managed run 已完成'
+              ? MANAGED_RUN_COMPLETED_TEXT
               : eventType === 'run_stopped'
                 ? INTERRUPT_CONFIRMATION_TEXT
-                : 'managed run 已失败'),
+                : MANAGED_RUN_FAILED_TEXT),
           message:
             content ||
             (eventType === 'run_completed'
-              ? 'managed run 已完成'
+              ? MANAGED_RUN_COMPLETED_TEXT
               : eventType === 'run_stopped'
                 ? INTERRUPT_CONFIRMATION_TEXT
-                : 'managed run 已失败'),
+                : MANAGED_RUN_FAILED_TEXT),
           stage: terminalStage,
           tone: terminalStage === 'completed' ? 'review' : 'error',
           sessionId: sessionKey,
@@ -3653,7 +3769,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       };
       const message = normalizeRealtimeStatusMessage(rawMessage);
       if (message.type === 'error') {
-        const errorText = (message.message || message.content || '请求失败，请稍后重试').trim();
+        const errorText = (message.message || message.content || REQUEST_FAILED_RETRY_TEXT).trim();
         if (!shouldDisplayErrorText(errorText)) {
           return;
         }
@@ -3953,7 +4069,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         console.log('[TaskCreationAgent] 收到消息:', message);
         const altusMode = readAltusMode();
       if (message.type === 'error') {
-        const errorText = (message.message || message.content || '请求失败，请稍后重试').trim();
+        const errorText = (message.message || message.content || REQUEST_FAILED_RETRY_TEXT).trim();
         if (!shouldDisplayErrorText(errorText)) {
           setIsProcessing(false);
           activeProcessingMessageKeyRef.current = null;
@@ -5113,6 +5229,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         await interruptCurrentRun(activeSessionId || undefined);
       }
       let shouldBindCreatedSession = false;
+      const initialProjectId = !sessionId ? initialProjectIdForNewSession || undefined : undefined;
       if (!activeSessionId) {
         const created = await createTaskCreationDraftSession(text);
         const createdSessionId = (created?.id || '').trim();
@@ -5121,6 +5238,13 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         }
         activeSessionId = createdSessionId;
         shouldBindCreatedSession = true;
+        if (initialProjectId) {
+          await createTaskCreationSession({
+            sessionId: createdSessionId,
+            mode: 'altus',
+            projectId: initialProjectId,
+          });
+        }
         applyPendingConnectorDraftAsync(createdSessionId);
       }
 
@@ -5220,8 +5344,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
             {
               messageKey: runAckKey,
               type: 'status_update',
-              content: 'managed run 已创建',
-              message: 'managed run 已创建',
+              content: MANAGED_RUN_CREATED_TEXT,
+              message: MANAGED_RUN_CREATED_TEXT,
               stage: 'executing',
               tone: 'system',
               sessionId: activeSessionId || undefined,
@@ -5327,10 +5451,12 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       let prePersistedUserInput = false;
       if (activeSessionId) {
         try {
+          const initialProjectId = !sessionId ? initialProjectIdForNewSession || undefined : undefined;
           await createTaskCreationSession({
             sessionId: activeSessionId,
             mode: 'sandbox',
             executor,
+            ...(initialProjectId ? { projectId: initialProjectId } : {}),
             ...(codexExecutionMode ? { codexExecutionMode } : {}),
             ...(executor === 'codex'
               ? {}
@@ -5493,6 +5619,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     sendOrQueueMessage,
     sendUserInput,
     sessionId,
+    initialProjectIdForNewSession,
     syncRuntime,
     autoRuntime,
     runtimeEnabled,
@@ -5521,6 +5648,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   return {
     isConnected,
     isProcessing,
+    managedRunActive: isManagedRunActiveStatus(managedRunStatus),
+    managedRunStatus,
     messages,
     hasOlderHistory,
     isLoadingOlderHistory,

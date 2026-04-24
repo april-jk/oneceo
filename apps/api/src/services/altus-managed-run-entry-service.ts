@@ -5,8 +5,6 @@ import { altusManagedStreamService } from './altus-managed-stream-service';
 import {
   asText,
   isManagedRunTerminalStatus,
-  readManagedSkillCatalog,
-  readManagedSkillContext,
   type ManagedRunStartInput,
 } from './altus-managed-shared';
 import { AltusManagedSetupService, altusManagedSetupService } from './altus-managed-setup-service';
@@ -17,6 +15,10 @@ import { altusRunRedisStateService, AltusRunRedisStateService } from './altus-ru
 import { AltusRunState } from './altus-run-state';
 import { sessionMcpRecoveryService } from './session-mcp-recovery-service';
 import { altusRunRecoveryService, AltusRunRecoveryService } from './altus-run-recovery-service';
+import { altusMemoryContextService } from './altus-memory-context-service';
+import { userSkillService } from './user-skill-service';
+import { taskSessionAltusMemoryService } from './task-session-altus-memory-service';
+import { taskSessionSkillStateService } from './task-session-skill-state-service';
 
 export class AltusManagedRunEntryService {
   private readonly controllers = new Map<string, AbortController>();
@@ -135,12 +137,37 @@ export class AltusManagedRunEntryService {
       },
       messageKey,
     });
-    await this.setupService.updateSessionLifecycle(sessionId, {
-      status: 'in_progress',
-      stage: 'executing',
-      phase: 'analysis',
-      clearClarification: true,
+    const taskIntentProfile = await this.setupService.buildTaskIntentProfile(
+      sessionId,
+      content,
+      messageType
+    );
+    const skillCatalog = await userSkillService.listAvailableSkills(userId);
+    const preparedSkills = await taskSessionSkillStateService.prepareRunState({
+      sessionId,
+      skillCatalog: skillCatalog as any,
+      taskIntentProfile,
+      submittedSelections:
+        input.metadata && Object.prototype.hasOwnProperty.call(input.metadata, 'skills')
+          ? input.metadata.skills
+          : undefined,
+      messageType,
     });
+    const memoryContext = await altusMemoryContextService.buildPromptSectionForRun({
+      sessionId,
+      userId,
+    });
+    const shouldEnterClarificationGate =
+      taskIntentProfile.needsClarification &&
+      Boolean(asText(taskIntentProfile.clarificationQuestion));
+    if (!shouldEnterClarificationGate) {
+      await this.setupService.updateSessionLifecycle(sessionId, {
+        status: 'in_progress',
+        stage: 'executing',
+        phase: 'analysis',
+        clearClarification: true,
+      });
+    }
 
     await this.eventWriter.appendRunEvent(run.id, sessionId, userId, 'run_ack', {
       status: 'queued',
@@ -155,11 +182,19 @@ export class AltusManagedRunEntryService {
       userId,
       model: run.model || this.getModelName(),
       userInput: content,
+      messageType,
       sessionTitle: sessionMemory?.title || null,
+      memoryContextPrompt: memoryContext.promptSection,
+      userMemory: memoryContext.userMemory,
+      projectMemory: memoryContext.projectMemory,
+      sessionAltusMemory: memoryContext.sessionMemory,
       connectors: connectorSnapshot.statuses,
       mcpProviders: mcpToolSnapshot.providers as any,
-      skillCatalog: readManagedSkillCatalog(input.metadata?.managedSkillCatalog),
-      skills: readManagedSkillContext(input.metadata?.managedSkillContext),
+      skillCatalog: preparedSkills.skillCatalog,
+      skills: preparedSkills.activeSkillsForTurn,
+      residentSkillSelections: preparedSkills.residentSkillSelections,
+      sessionSkillState: preparedSkills.sessionSkillState,
+      taskIntentProfile,
     });
     const abortController = new AbortController();
     this.controllers.set(run.id, abortController);
@@ -175,7 +210,15 @@ export class AltusManagedRunEntryService {
 
   async getLatestRun(sessionId: string, userId: string) {
     await this.setupService.ensureSessionOwnership(sessionId, userId);
-    await this.recoveryService.reconcileLatestRun(sessionId, userId);
+    try {
+      await this.recoveryService.reconcileLatestRun(sessionId, userId);
+    } catch (error) {
+      console.warn('[ALTUS_MANAGED_LATEST_RECOVERY_WARN]', {
+        sessionId,
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     const latest = await taskSessionRunDAO.getLatestRun(sessionId);
     return this.eventWriter.toSummary(latest);
   }
@@ -211,10 +254,62 @@ export class AltusManagedRunEntryService {
       model: run.model || this.getModelName(),
       userInput: '',
       sessionTitle: null,
+      memoryContextPrompt: null,
+      userMemory: {
+        preferredName: '',
+        occupation: '',
+        identity: '',
+        location: '',
+        background: '',
+        preferences: '',
+        responsePreferences: '',
+      },
+      projectMemory: null,
+      sessionAltusMemory: await taskSessionAltusMemoryService.getSessionAltusMemory(run.sessionId),
       connectors: [],
       mcpProviders: [],
       skillCatalog: [],
       skills: [],
+      residentSkillSelections: [],
+      sessionSkillState: {
+        explicitSelections: [],
+        residentSelections: [],
+        bindings: [],
+        sandboxMaterialization: {
+          residentVersion: 0,
+          lastSandboxId: null,
+          lastSyncedAt: null,
+        },
+        fileMemorySnapshot: {
+          snapshotVersion: 0,
+          savedAt: null,
+          sourceSandboxId: null,
+          archiveId: null,
+          memorySummary: {
+            residentSelections: [],
+            lastToolActivations: [],
+            workspaceMemoryPath: '.oneceo/session-memory/skills-memory.json',
+          },
+        },
+        updatedAt: null,
+      },
+      taskIntentProfile: {
+        mode: 'neutral',
+        reason: 'unknown',
+        recentUserMessages: [],
+        explicitNoDeploy: false,
+        explicitNoWeb: false,
+        webArtifactRequested: false,
+        deployRequested: false,
+        scriptArtifactRequested: false,
+        emailTemplateRequested: false,
+        deploymentAllowed: false,
+        needsClarification: false,
+        clarificationQuestion: '',
+        clarificationType: 'none',
+        todoRequired: false,
+        todoReason: 'none',
+      },
     });
     state.markStopped(reason || 'user_interrupt');
     await this.lifecycleService.markStopped(state, reason || 'user_interrupt');

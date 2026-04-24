@@ -5,7 +5,8 @@ export type TaskCreationSessionSummary = {
   id: string;
   title?: string;
   titleLocked?: boolean;
-  titleSource?: "placeholder" | "first_explicit_user_input" | "manual";
+  titleSource?: "placeholder" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
+  titleState?: "provisional" | "resolved" | "manual";
   titleResolvedAt?: string;
   isFavorite?: boolean;
   projectId?: string | null;
@@ -21,12 +22,45 @@ export type TaskCreationSessionSummary = {
   updatedAt?: string;
 };
 
+export type TaskCreationSessionSearchResult = {
+  sessionId: string;
+  title: string;
+  updatedAt?: string;
+  matchType?: "title" | "message";
+  snippet?: string | null;
+  projectId?: string | null;
+  projectName?: string | null;
+  isFavorite?: boolean;
+  status?: string;
+};
+
+export type TaskCreationProjectSummary = {
+  id: string;
+  name: string;
+  projectType?: string;
+  status?: string;
+  pinned?: boolean;
+  projectInstruction?: string;
+  defaultConnectors?: TaskCreationProjectDefaultConnector[];
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
+export type TaskCreationProjectDefaultConnector = {
+  connectorKey: import("@/lib/connectors-client").ConnectorKey;
+  profileId: string;
+  profileName?: string | null;
+  displayName?: string | null;
+  authStatus?: string | null;
+};
+
 export type CreateTaskCreationSessionInput = {
   sessionId?: string;
   title?: string;
   mode?: "sandbox" | "altus";
   executor?: "opencode" | "claudecode" | "codex";
   codexExecutionMode?: "sdk" | "ws";
+  projectId?: string | null;
   initialMessage?: string;
   initialMessageType?: "user_input" | "user_response";
 };
@@ -207,7 +241,13 @@ export type TaskCreationAnalyticsInfo = {
   provider: "umami";
   configured: boolean;
   enabled: boolean;
-  status: "ready" | "pending" | "unconfigured" | "error";
+  status:
+    | "bound"
+    | "tracking"
+    | "pending"
+    | "pending_domain"
+    | "unconfigured"
+    | "error";
   host?: string;
   websiteId?: string;
   websiteName?: string;
@@ -244,6 +284,16 @@ export type TaskCreationDeploymentInfo = {
   configured: boolean;
   canDeploy: boolean;
   message?: string;
+  bindingState?:
+    | "uninitialized"
+    | "provisioning"
+    | "ready"
+    | "repair_required"
+    | "provider_error";
+  provisioningPhase?: string;
+  providerErrorCode?: string;
+  providerErrorMessage?: string;
+  lastVerifiedAt?: string;
   projectId?: string;
   projectName?: string;
   environmentId?: string;
@@ -353,7 +403,8 @@ export type TaskCreationSessionDetail = {
   id: string;
   title?: string;
   titleLocked?: boolean;
-  titleSource?: "placeholder" | "first_explicit_user_input" | "manual";
+  titleSource?: "placeholder" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
+  titleState?: "provisional" | "resolved" | "manual";
   titleResolvedAt?: string;
   isFavorite?: boolean;
   projectId?: string | null;
@@ -507,6 +558,18 @@ export async function listTaskCreationSessions(
 ): Promise<TaskCreationSessionSummary[]> {
   const url = `${getApiBaseUrl()}/api/task-creation/sessions?limit=${encodeURIComponent(String(limit))}`;
   const result = await fetchJson<{ data?: TaskCreationSessionSummary[] }>(url);
+  return Array.isArray(result?.data) ? result.data : [];
+}
+
+export async function searchTaskCreationSessions(
+  query: string,
+  limit: number = 20
+): Promise<TaskCreationSessionSearchResult[]> {
+  const safeQuery = query.trim();
+  if (safeQuery.length < 2) return [];
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.floor(limit), 50)) : 20;
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/search?q=${encodeURIComponent(safeQuery)}&limit=${safeLimit}`;
+  const result = await fetchJson<{ data?: TaskCreationSessionSearchResult[] }>(url);
   return Array.isArray(result?.data) ? result.data : [];
 }
 
@@ -771,7 +834,8 @@ export async function resolveTaskCreationSessionTitle(
   id: string;
   title?: string;
   titleLocked?: boolean;
-  titleSource?: "placeholder" | "first_explicit_user_input" | "manual";
+  titleSource?: "placeholder" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
+  titleState?: "provisional" | "resolved" | "manual";
   titleResolvedAt?: string | null;
   resolved?: boolean;
 } | null> {
@@ -926,6 +990,166 @@ export async function toggleTaskCreationSessionFavorite(
       "Content-Type": "application/json",
     }),
     body: JSON.stringify({ favorite }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationSessionSummary };
+  return result?.data || null;
+}
+
+export async function listTaskCreationProjects(): Promise<TaskCreationProjectSummary[]> {
+  const url = `${getApiBaseUrl()}/api/task-creation/projects`;
+  const response = await fetch(url, {
+    headers: buildClientIdentityHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationProjectSummary[] };
+  return Array.isArray(result?.data) ? result.data : [];
+}
+
+export async function getTaskCreationProject(
+  projectId: string
+): Promise<TaskCreationProjectSummary | null> {
+  const safeProjectId = encodeURIComponent(projectId);
+  const url = `${getApiBaseUrl()}/api/task-creation/projects/${safeProjectId}`;
+  const response = await fetch(url, {
+    headers: buildClientIdentityHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationProjectSummary };
+  return result?.data || null;
+}
+
+export async function listTaskCreationProjectSessions(
+  projectId: string
+): Promise<TaskCreationSessionSummary[]> {
+  const safeProjectId = encodeURIComponent(projectId);
+  const url = `${getApiBaseUrl()}/api/task-creation/projects/${safeProjectId}/sessions`;
+  const response = await fetch(url, {
+    headers: buildClientIdentityHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationSessionSummary[] };
+  return Array.isArray(result?.data) ? result.data : [];
+}
+
+export async function createTaskCreationProject(input: {
+  name: string;
+  projectInstruction?: string | null;
+  defaultConnectors?: Array<{
+    connectorKey: import("@/lib/connectors-client").ConnectorKey;
+    profileId: string;
+  }>;
+}): Promise<TaskCreationProjectSummary | null> {
+  const url = `${getApiBaseUrl()}/api/task-creation/projects`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      name: input.name,
+      projectInstruction: input.projectInstruction ?? "",
+      defaultConnectors: input.defaultConnectors ?? [],
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationProjectSummary };
+  return result?.data || null;
+}
+
+export async function updateTaskCreationProject(
+  projectId: string,
+  input: {
+    name?: string;
+    pinned?: boolean;
+    projectInstruction?: string | null;
+    defaultConnectors?: Array<{
+      connectorKey: import("@/lib/connectors-client").ConnectorKey;
+      profileId: string;
+    }>;
+  }
+): Promise<TaskCreationProjectSummary | null> {
+  const safeProjectId = encodeURIComponent(projectId);
+  const url = `${getApiBaseUrl()}/api/task-creation/projects/${safeProjectId}`;
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.pinned !== undefined ? { pinned: Boolean(input.pinned) } : {}),
+      ...(input.projectInstruction !== undefined
+        ? { projectInstruction: input.projectInstruction ?? "" }
+        : {}),
+      ...(input.defaultConnectors !== undefined
+        ? { defaultConnectors: input.defaultConnectors }
+        : {}),
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationProjectSummary };
+  return result?.data || null;
+}
+
+export async function deleteTaskCreationProject(projectId: string): Promise<void> {
+  const safeProjectId = encodeURIComponent(projectId);
+  const url = `${getApiBaseUrl()}/api/task-creation/projects/${safeProjectId}`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: buildClientIdentityHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+}
+
+export function summarizeProjectInstruction(
+  value?: string | null,
+  options?: { maxLength?: number }
+) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text) return "";
+  const normalized = text.replace(/\s+/g, " ").trim();
+  const maxLength = typeof options?.maxLength === "number" && options.maxLength > 0
+    ? Math.floor(options.maxLength)
+    : 140;
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+export async function updateTaskCreationSessionProject(
+  sessionId: string,
+  input: {
+    projectId?: string | null;
+    projectName?: string | null;
+  }
+): Promise<TaskCreationSessionSummary | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/project`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      projectId: input.projectId ?? null,
+      projectName: input.projectName ?? null,
+    }),
   });
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));
@@ -1132,7 +1356,7 @@ export async function startTaskCreationRuntime(sessionId: string): Promise<{
     headers: buildClientIdentityHeaders(),
   });
   if (!response.ok) {
-    throw new Error(`request failed: ${response.status}`);
+    throw new Error(await readErrorMessage(response));
   }
   const result = (await response.json()) as { data?: any };
   return result?.data || {};

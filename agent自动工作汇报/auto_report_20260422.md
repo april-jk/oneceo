@@ -1,0 +1,43 @@
+# 2026-04-22 自动工作汇报
+
+- 已定位“侧边栏最近会话显示不全”的确定性根因：`GET /api/task-creation/sessions` 旧逻辑会在 DB 已查到完整 owned sessions 后，只要 file-memory 命中任意一条就提前返回 memory 过滤结果，导致重登录或 Railway 重部署后常出现“后台多条、前台只剩 1 条”。
+- 已确认该问题不在 Redis，也不是本次样本中的用户标识识别错误。当前用户态列表链路实际依赖 DB + `taskCreationFileMemoryStore` + 进程内 `sessionListCacheByUser`，其中 memory 是造成结果集被截断的直接因素。
+- 已修复用户态会话列表路由：改为始终以 DB owned sessions 为返回基准，memory 仅用于补充实时状态；同时增加 `TASK_SESSION_LIST_MEMORY_PARTIAL` 诊断日志，便于在现网继续观测“DB 全量、memory 残缺”的样本。
+- 已补两条 API 回归测试：一条固定覆盖“DB 多条、memory 少量仍返回全量”，另一条覆盖“较小 limit 的缓存不会污染后续 `limit=all` 请求”。
+- 已完成定向验证：`pnpm --filter api exec tsx --test tests/task-creation-business-routes.test.ts` 与 `pnpm --filter api type-check` 均通过。
+- 已新增“会话自动命名优化方案”文档，并按采用状态收口为新的标题策略：用户侧主标题不再使用 `任务会话 {id后缀}`，统一切换为状态型占位标题与提炼后的短标题。
+- 已完成会话命名链路修复：后端统一负责标题提炼与来源优先级判定，列表/详情/侧边栏改为共用同一套标题决策；前端不再维护独立的“是否需要自动命名”规则，只将非空用户输入转交后端解析。
+- 已补充会话命名回归验证：`pnpm --filter api exec tsx --test tests/task-creation-business-routes.test.ts`、`pnpm --filter web exec vitest run client/src/tests/sidebar-session-status-visual.test.ts`、`pnpm --filter web check` 通过。
+- 已完成用户态认证链路第二轮收口：移除前端对 `X-Legacy-User-Id` 的全局透传，改为登录态下一次性调用 `POST /api/auth/legacy-client-id`，由服务端落 legacy 映射并立即回绑历史会话，绑定完成后清理浏览器本地 `oneceo_client_user_id`。
+- 已修复前端埋点噪音：`VITE_ANALYTICS_WEBSITE_ID` 非合法 UUID 时不再注入 analytics 脚本，避免首页稳定出现 `analytics.oneceo.ai/api/send 400`。
+- 已完成第三轮认证清理：`apps/api/src/routes/task-creation-routes.ts` 不再从 `X-Legacy-User-Id` 或 `legacyUserId` query 读取授权输入；legacy owner 认领只允许通过服务端映射表判定，映射元数据默认来源统一为 `auth_bootstrap`。
+- 已修复登录后首屏 401 竞态：前端不再把 `/api/auth/login` 的 `200` 直接当作“会话已落地”，而是轮询 `/api/auth/session` 直到服务端确认会话可读，再进入 `/home` 并执行 legacy 绑定；同时移除了 dev 环境下无效 analytics site id 的控制台告警噪音。
+- 已继续收口“登录成功但 `/api/auth/session` 仍返回 `authenticated:false`”问题：认证接口现在统一返回 `Cache-Control: private, no-store, max-age=0`、`Pragma: no-cache`、`Expires: 0` 与 `Vary: Cookie, Origin`，前端 `/api/auth/session` 轮询也改为每次携带唯一 `_ts` 参数，避免匿名态或旧会话快照被浏览器缓存复用。
+- 已完成对应回归验证：`pnpm --filter api exec tsx --test tests/auth-routes.test.ts`、`pnpm --filter api type-check`、`pnpm --filter web check` 通过。
+- 已完成第四轮认证诊断增强：`/api/auth/session`、`/api/auth/me`、`/api/auth/login` 等接口现在会返回不含敏感值的 `X-Oneceo-Auth-Debug-*` 响应头，前端在登录态 bootstrap 超时前会输出最后一次 session 诊断、浏览器可见 cookie 名称和 UA，用于直接判断“浏览器未存 cookie”还是“浏览器未回传 cookie”。
+- 已通过 Playwright 最小复现实验坐实根因：只要浏览器里残留旧的 `Secure app_session_id`，HTTP 页面上的登录接口即使返回新的 `Set-Cookie`，浏览器也不会用非 `Secure` 新值覆盖它，后续 `/api/auth/session` 会持续表现为 `authenticated:false`。
+- 已完成用户态会话 cookie 轮换：当前正式 cookie 名称切换为 `app_session_v2_id` / `app_session_v2_state`，服务端继续兼容读取旧的 `app_session_id` / `app_session_state`，登出与匿名态清理也会同步覆盖新旧两套名字，避免旧浏览器污染继续拦截 HTTP 登录。
+- 已新增浏览器级回归测试 `auth-cookie-rotation.playwright.spec.ts`，固定覆盖“预置旧 `Secure app_session_id` 后仍能成功登录并进入 `/home`”。
+- 已新增 `docs/网络安全/` 文档目录，并补齐“登录接口网络安全测试 TODO”初稿，覆盖越权、会话混淆、爆破/撞库、跨站边界、枚举侧信道、审计与部署配置等测试项；同步将摘要待办写入 `todos.md`，待审核后执行。
+- 已收到“逐条进行测试，确保安全”的执行指令，登录接口网络安全 TODO 已切换为 `[20260422-1307已采用]`，并开始按 P0 优先级进入真实测试与修复阶段。
+- 已完成登录接口第一轮真实安全加固与验证：新增登录失败限流、显式 JSON 边界、账户枚举时间侧信道收口，并补齐 API/Playwright 安全测试，确认跨站 `fetch` 与跨站表单均不能建立登录态。
+- 已按“ClaudeCode 启发的 Altus 二期方案”落地最小实现主线：新增 managed tool descriptor、串行 tool executor、context budget input projection，并在 coordinator 中接入，同时保留现有 `write_file` progress、timeline 投影和 deployment gate 语义。
+- 已在真实 E2E 中定位一个新的运行时 bug：managed run 在 `complete_task` 中附带目录型 attachments 时，会因为 deliverable 持久化直接 `readFile` 目录而把整个 run 打成 failed。现已改为目录附件自动归档为 `tar.gz` 后再上传，并补充单测锁定行为。
+- 已顺手修正两条 Playwright 长链路脚本的过时假设：`task-creation-deploy-e2e.mjs` 兼容当前中英文预览/发布入口与 artifact deploy 按钮；`website-build-and-managed-deploy-real-e2e.mjs` 兼容“项目生成在子目录下”的站点结构，不再死盯根目录 `index.html`。
+- 已完成定向验证：`pnpm --filter api type-check`、`pnpm --filter api exec tsx --test tests/altus-managed-context-budget-service.test.ts tests/altus-managed-tool-executor.test.ts tests/task-session-deliverable-service.test.ts` 通过；`altus-memory-system.playwright.spec.ts --repeat-each=2 --workers=1` 通过；`task-creation-deploy-e2e.mjs` 已跑通到真实 Railway 部署成功并验证公网 2048 页面可访问。
+- 当前仍有一条待继续跟进的现象：`website-build-and-managed-deploy-real-e2e.mjs` 在 deploy run 阶段曾出现脚本观测到 `waiting_user`，但随后 API 又表现为最新 run `completed` 且 deployment 面板回到 `uninitialized/resource_provisioning`，脚本轮询状态与平台当前状态存在不一致，后续需要单独收口这条 managed deploy 状态同步链路。
+- 已完成上述 deployment 状态链路排查并落地修复：问题不是 `deploymentState/deploymentPanel` 没有写入，而是同一 `taskSessionId` 下存在多个 sandbox environment 时，deployment 读路径会落到错误的 canonical environment；正确的 provider_error 状态写在 run binding 指向的 environment 上，但 `/deployment` 读取时没有优先使用 binding / runtime 指向的 sandbox。现已改为 deployment environment 解析优先使用 `taskSessionRunDAO.getSandboxBindingBySession()`，并让 `/deployment` 与 `/deployment/token/rotate` 路由显式传入当前 runtime orchestrator session/environment，避免再次读错 sandbox。
+- 已继续向下收口这条链路，确认上一条判断还不够完整：当 session 进入新的 runtime generation 后，`bindingSandboxId` 与当前 runtime 会一起切到新 sandbox，而真正的 deployment `provider_error` 仍然留在旧 environment 的 metadata 里，因此即使“binding 优先”也仍可能读不到历史部署状态。最终修复改为：deployment 读路径在当前 environment 缺少 deployment signal 时，回看同一 `taskSessionId` 下最近一个带 deployment metadata 的 environment，并将 `/deployment`、`/deployment/token/rotate` 恢复为走该读策略；已通过本地服务实测验证旧异常 session 现在会正确返回 `bindingState=provider_error`、`providerErrorCode=deployment_public_unreachable`，不再错误回落到 `uninitialized/resource_provisioning`。
+- 已按新采用文档 `20260422_Altus工具间延时体感最小修复方案_[20260422-1751已采用].md` 落地第一轮实现：1）在 model input budget 中新增 assistant `write_file` tool-call 参数压缩，只对发给模型的投影视图生效，不改历史消息；2）`shell_execute` 现在会快速拦截明显的本地常驻服务启动命令（如 `python3 -m http.server`、`npm/pnpm/yarn/bun dev`、`vite`），避免误用时稳定吃满 20 秒 timeout；3）round>0 的 `run_status` 文案改为“正在分析上一步结果并决定下一步操作”，减少工具完成后长空窗的“像卡住”体感。对应新增回归测试已通过：assistant write_file 参数 budget、persistent local server shell block、以及原有 coordinator/runtime/type-check 全部通过。
+- 已继续优化 Altus 工具间过程文案：确认“中间说明虽然出现了，但仍偏工程日志”后，把 `run_status` 生成规则改成更像阶段汇报的自然语言，避免继续回显长命令、完整 URL 和绝对路径；例如写完 `index.html` 后不再说“已写入 index.html，继续补齐其余文件”，而改为“页面框架已经搭好，我继续把样式和交互补完整”。对应补充了 coordinator 定向测试，锁定“亲民文案”和“不回显命令”两条约束。
+- 已继续收口 Altus 会话尾部冗余启动提示：`run_status(starting)` 的“正在准备 sandbox 与运行环境”现在仍保留为内部状态事件，但不再投影为会话消息，也不再进入前端实时对话流；同时展示层会忽略旧历史中的这类 starting 文案，避免会话结束后还残留一条无效准备提示。
+- 已继续优化 Altus 对话展示密度：把同一轮 managed 过程消息之间的工具卡片视为作者折叠中的中性节点，因此“Altus 过程说明 -> 工具卡片 -> Altus 过程说明”现在只在第一条过程说明显示一次 `ALTUS`；进入下一轮用户消息后，Altus 才会重新显示作者标签。对应补了前端回归测试，锁定“同轮只显示一次、跨轮重新显示一次”。
+- 已继续统一 Altus 作者名显示：确认部分 managed 历史 `assistant_message` 缺少统一 agent 标识后，会回退显示为“智能体”，导致与过程消息里的 `ALTUS` 混用。现已在后端把新写入的 managed assistant 文本统一标为 `altus`，并让前端对旧历史按 managed 元数据统一显示 `Altus`，补充了“缺少 agent 字段时仍显示 Altus”的回归测试。
+- 已修复 `Altus Actions` 文件预览选择失效：根因是 `AltusRunReplayDrawer` 与 `useWorkspaceFilePreviewState` 各自维护一份选中文件状态，点击其他文件时只更新了 preview hook，Drawer 仍把旧的默认 HTML 路径传回去，导致右侧预览被强制拉回 `index.html`。现已统一点击后的状态同步，并把“按 action 默认产物重置文件选择”的逻辑收窄到切换 run/toolCallId 时才触发；补了定向单测锁定“同一 action 内保留手动选中文件、切 action 时再回到推荐文件”。
+- 已继续收口 `Altus Actions` 的“已选动作”布局：为底部详情卡增加 `30vh` 最大高度和内部滚动，避免长详情无限撑高后遮挡上方动作列表。
+- 已补上 `Altus Actions` 的“点击外部隐藏已选动作”交互：已选动作详情现在支持点击抽屉内其外部区域收起；重新点击动作项或底部翻页导航后会再次显示，且不影响真实 step 选中状态。
+- 已继续收口 managed Altus 的右侧预览入口：`show preview` 以及相关预览跳转在 managed 模式下不再进入旧的 `内容预览` 卡片，而是直接把右侧整块替换为嵌入式 `Altus Actions`；现有 `Files / Changes / Debug / Deployment` 能力继续复用，但统一收进 `Altus Actions` 主卡片内部，避免同一会话里同时存在两套右侧面板心智。
+- 已继续优化 `Altus Actions` 的横向扩展体验：保留右侧 `ResizablePanel` 现有最大宽度作为第一临界值，但当用户继续向左拖动分隔条时，会自动折叠左侧全局 Sidebar，把额外横向空间继续让给 `Altus Actions`，避免拖到上限后手感突然“撞墙”。
+- 已完成对会话 `1aa95058-0c2d-4731-94ac-e1b044b2fc78` 的第二轮系统排查，并把问题重新定义为“开发态 sandbox 切换控制权泄漏”：根因不是正常归档或旧会话恢复，而是业务读路径触发了 runtime ensure / rebound，导致 duplicate reconcile 主动关闭正在被 managed run 使用的旧 sandbox。方案文档 `20260422_开发态Sandbox切换控制权收口修复方案_[20260422-1830已采用].md` 已进入采用状态，明确要求收回 sandbox 切换控制权，禁止 deployment / preview / replay 等业务模块触发 runtime rebound。
+- 已对上述方案再次做逻辑闭环审查，并补齐三个容易歧义的点：1）明确 `/runtime/start` 不是普通业务读路径，而是显式 sandbox 维护入口；2）写死当前代码基线下唯一合法切换入口只能是 sandbox 维护模块内部与 `/runtime/start`；3）把 preview/artifact/debug 等会间接调用 `startTaskCreationRuntime(sessionId)` 的前端恢复动作也纳入 active run 期间的阻止范围，同时明确本期不做运行中热切换，只做控制权收口。
+- 已按采用文档开始落实代码：后端新增 active managed run 的 runtime 切换阻止逻辑，并把 `/deployment`、`/deployment/template`、`/deployment/token/rotate`、`/deployment/deploy` 改为纯读当前 binding/runtime，不再触发 `ensureTaskSessionRuntime()`；前端新增 `runtimeSwitchBlocked` 透传到 preview/artifact/replay 面板，开发进行中不再自动读取 deployment 或隐式调用 `runtime/start`。已通过 `apps/api` 定向路由测试、`apps/api` type-check 和 `apps/web` TypeScript 编译检查。

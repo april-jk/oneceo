@@ -385,6 +385,7 @@ export class PlatformSkillDAO {
         .values({
           ...input.skill,
           slug: asText(input.skill.slug).toLowerCase(),
+          metadataJson: input.skill.metadataJson || {},
           updatedAt: new Date(),
         })
         .returning();
@@ -430,6 +431,7 @@ export class PlatformSkillDAO {
       name: string;
       description: string;
       category: string;
+      metadataJson?: Record<string, unknown> | null;
       bodyMarkdown: string;
       createdBy?: string | null;
       resources?: Array<Omit<NewPlatformSkillRevisionResource, 'id' | 'revisionId' | 'createdAt'>>;
@@ -487,6 +489,7 @@ export class PlatformSkillDAO {
           name: input.name,
           description: input.description,
           category: input.category,
+          metadataJson: input.metadataJson || {},
           publishedRevisionId: revision.id,
           updatedAt: new Date(),
         })
@@ -506,6 +509,18 @@ export class PlatformSkillDAO {
       .update(platformSkills)
       .set({
         status,
+        updatedAt: new Date(),
+      })
+      .where(eq(platformSkills.id, skillId))
+      .returning();
+    return row || null;
+  }
+
+  async updateSkillMetadata(skillId: string, metadataJson: Record<string, unknown> | null) {
+    const [row] = await db
+      .update(platformSkills)
+      .set({
+        metadataJson: metadataJson || {},
         updatedAt: new Date(),
       })
       .where(eq(platformSkills.id, skillId))

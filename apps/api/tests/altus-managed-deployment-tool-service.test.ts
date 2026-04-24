@@ -120,6 +120,49 @@ test('redeploy_application republishes current workspace through deployment runt
   assert.equal(result.url, 'https://demo.oneceo.app');
 });
 
+test('deploy_application returns deployment_pending while Railway is still provisioning', async () => {
+  const service = new AltusManagedDeploymentToolService({
+    inspectBaseline: async () => createReadyBaseline(),
+    resolveSession: async () => ({
+      id: 'session-1',
+      messages: [],
+    } as any),
+    buildDeploymentResponse: async () => {
+      throw new Error('should_not_build_response');
+    },
+    executeDeploymentAction: async () => {
+      return {
+        panel: {
+          bindingState: 'provisioning',
+          activeDeploymentPending: true,
+          latestStatus: 'INITIALIZING',
+          latestUrl: 'https://demo.oneceo.app',
+          deploymentId: 'dep_123',
+          message: 'Railway 已返回部署版本，后台正在同步公网可达性与部署状态。',
+        },
+        actionResult: {
+          action: 'deploy',
+          deploymentId: 'dep_123',
+        },
+      } as any;
+    },
+    getErrorMessage: (error) => String((error as Error)?.message || error),
+  });
+
+  const result = await service.execute({
+    action: 'deploy_application',
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+  });
+
+  assert.equal(result.status, 'retryable_repair_required');
+  assert.equal(result.repair?.category, 'deployment_pending');
+  assert.equal(result.deploymentStatus, 'INITIALIZING');
+  assert.equal(result.url, 'https://demo.oneceo.app');
+});
+
 test('get_application_deployment_status returns structured success payload', async () => {
   const service = new AltusManagedDeploymentToolService({
     inspectBaseline: async () => createReadyBaseline(),

@@ -8,26 +8,57 @@ import { buildManagedMcpToolName } from '../src/services/altus-managed-shared';
 import { connectorGuideService } from '../src/services/connector-guide-service';
 import { osacAgentService } from '../src/services/osac-agent-service';
 import { sandboxSkillSyncService } from '../src/services/sandbox-skill-sync-service';
+import { taskSessionAltusMemoryService } from '../src/services/task-session-altus-memory-service';
+import { taskSessionSkillStateService } from '../src/services/task-session-skill-state-service';
 
 const originalFetch = global.fetch;
+
+(connectorGuideService as any).buildPromptSections = async () => ({
+  instructionsSection: '',
+  reminderSection: '',
+  attachedConnectorKeys: [],
+});
 
 afterEach(() => {
   mock.reset();
   global.fetch = originalFetch;
 });
 
-function createState(runId: string, sessionId: string, userInput = '帮我开发 2048 小游戏') {
+function createState(
+  runId: string,
+  sessionId: string,
+  userInput = '帮我开发 2048 小游戏',
+  messageType: 'user_input' | 'user_response' = 'user_input',
+) {
   return new AltusRunState({
     runId,
     sessionId,
     userId: 'user-1',
     model: 'altus-model',
     userInput,
+    messageType,
     sessionTitle: 'Build 2048',
     connectors: [],
     mcpProviders: [],
     skillCatalog: [],
     skills: [],
+    taskIntentProfile: {
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: [],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
+    },
   });
 }
 
@@ -70,8 +101,370 @@ test('readStreamedModelChoice emits assistant delta callbacks while accumulating
   ]);
 });
 
+test('resolveDeploymentCompletionIntent accepts deployment status polling as completion evidence', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+
+  const intent = (coordinator as any).resolveDeploymentCompletionIntent('帮我部署当前项目');
+
+  assert.equal(intent.mode, 'deploy');
+  assert.equal(intent.requiresManagedSuccess, true);
+  assert.deepEqual(intent.acceptedToolNames, [
+    'deploy_application',
+    'redeploy_application',
+    'get_application_deployment_status',
+  ]);
+});
+
+test('resolveDeploymentCompletionIntent ignores negated deploy wording and non-deployable sessions', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+
+  const negatedIntent = (coordinator as any).resolveDeploymentCompletionIntent(
+    '请写一个 HTML 邮件模板，不要部署。'
+  );
+  assert.equal(negatedIntent.mode, 'none');
+  assert.equal(negatedIntent.requiresManagedSuccess, false);
+
+  const profiledIntent = (coordinator as any).resolveDeploymentCompletionIntent('请按最佳方案直接继续。', {
+    mode: 'non_deployable_artifact',
+    reason: 'historical_explicit_no_deploy',
+    recentUserMessages: ['请写一个 HTML 邮件模板，不要部署。'],
+    explicitNoDeploy: true,
+    explicitNoWeb: true,
+    webArtifactRequested: false,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: true,
+    deploymentAllowed: false,
+  });
+  assert.equal(profiledIntent.mode, 'none');
+  assert.equal(profiledIntent.requiresManagedSuccess, false);
+
+  const sourceOnlyWebsiteIntent = (coordinator as any).resolveDeploymentCompletionIntent(
+    '先给我源码文件。',
+    {
+      mode: 'deployable_web_app',
+      reason: 'historical_deployable_request',
+      recentUserMessages: ['做一个纯 HTML 企业官网，包含首页、关于我们和联系我们，先给我源码文件。'],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: true,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+    }
+  );
+  assert.equal(sourceOnlyWebsiteIntent.mode, 'none');
+  assert.equal(sourceOnlyWebsiteIntent.requiresManagedSuccess, false);
+});
+
+test('buildPostToolRunStatusContent uses user-friendly wording instead of command echo', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+
+  assert.equal(
+    (coordinator as any).buildPostToolRunStatusContent({
+      toolName: 'write_file',
+      args: { path: 'src/index.html' },
+      outcome: 'completed',
+    }),
+    '页面框架已经搭好，我继续把样式和交互补完整'
+  );
+
+  assert.equal(
+    (coordinator as any).buildPostToolRunStatusContent({
+      toolName: 'shell_execute',
+      args: { command: 'cd /workspace && npm install' },
+      outcome: 'completed',
+    }),
+    '这一步已经跑完了，我继续处理后面的内容'
+  );
+
+  assert.equal(
+    (coordinator as any).buildPostToolRunStatusContent({
+      toolName: 'shell_execute',
+      args: { command: 'cd /workspace && npm start' },
+      outcome: 'failed',
+    }),
+    '刚才那一步执行没成功，我换个方式继续'
+  );
+});
+
+test('deployment status evidence only unlocks completion after non-transient success state', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+  const intent = (coordinator as any).resolveDeploymentCompletionIntent('帮我部署当前项目');
+
+  assert.equal(
+    (coordinator as any).isManagedDeploymentEvidenceSuccessful(intent, {
+      toolName: 'get_application_deployment_status',
+      status: 'success',
+      deploymentStatus: 'building',
+      summary: 'still building',
+    }),
+    false
+  );
+  assert.equal(
+    (coordinator as any).isManagedDeploymentEvidenceSuccessful(intent, {
+      toolName: 'get_application_deployment_status',
+      status: 'success',
+      deploymentStatus: 'success',
+      summary: 'deployment ready',
+    }),
+    true
+  );
+});
+
+test('getMaxToolRounds allows larger website-generation budgets while keeping a hard ceiling', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+  const originalValue = process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS;
+  try {
+    process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS = '';
+    assert.equal((coordinator as any).getMaxToolRounds(), 192);
+
+    process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS = '600';
+    assert.equal((coordinator as any).getMaxToolRounds(), 384);
+  } finally {
+    if (originalValue === undefined) {
+      delete process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS;
+    } else {
+      process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS = originalValue;
+    }
+  }
+});
+
+test('getModelRetryLimit defaults higher for transient upstream fetch failures while keeping a ceiling', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+  const originalValue = process.env.ALTUS_MANAGED_MODEL_RETRIES;
+  try {
+    process.env.ALTUS_MANAGED_MODEL_RETRIES = '';
+    assert.equal((coordinator as any).getModelRetryLimit(), 3);
+
+    process.env.ALTUS_MANAGED_MODEL_RETRIES = '20';
+    assert.equal((coordinator as any).getModelRetryLimit(), 5);
+  } finally {
+    if (originalValue === undefined) {
+      delete process.env.ALTUS_MANAGED_MODEL_RETRIES;
+    } else {
+      process.env.ALTUS_MANAGED_MODEL_RETRIES = originalValue;
+    }
+  }
+});
+
+test('execute requests clarification before sandbox when managed intent shape requires it', async () => {
+  const state = createState(
+    'run-coordinator-clarification-gate',
+    'session-coordinator-clarification-gate',
+    '帮我做一个企业管理系统。'
+  );
+  state.input.taskIntentProfile = {
+    mode: 'neutral',
+    reason: 'unknown',
+    recentUserMessages: ['帮我做一个企业管理系统。'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: false,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: false,
+    needsClarification: true,
+    clarificationQuestion: '请先确认这个系统的主要使用角色、必须包含的核心模块，以及本次是只要源码、本地运行，还是需要部署上线？',
+    clarificationType: 'artifact_type',
+    clarificationOptions: ['网页应用', '后端 API', '本地脚本', '完整业务系统'],
+    todoRequired: false,
+    todoReason: 'none',
+  };
+
+  const timelineCalls: Array<Record<string, unknown>> = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setPendingClarificationMock = mock.method(
+    taskCreationFileMemoryStore,
+    'setPendingClarification',
+    async () => undefined,
+  );
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-should-not-start',
+      workspaceRoot: '/workspace/should-not-start',
+      reused: false,
+    })),
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      timelineCalls.push(input);
+    }),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+    syncLoopSnapshot: mock.fn(async () => undefined),
+  };
+
+  global.fetch = mock.fn(async () => {
+    throw new Error('fetch_should_not_run_before_clarification');
+  }) as typeof fetch;
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal((setupService.ensureSandbox as any).mock.callCount(), 0);
+  assert.equal(setPendingClarificationMock.mock.callCount(), 1);
+  assert.deepEqual(lifecycleCalls, ['waiting_user']);
+  assert.equal(state.status, 'waiting_user');
+  assert.equal(timelineCalls.length, 1);
+  assert.equal(timelineCalls[0]?.messageType, 'clarification_request');
+  assert.match(String(timelineCalls[0]?.content || ''), /主要使用角色/);
+  assert.deepEqual(timelineCalls[0]?.metadata?.options, ['网页应用', '后端 API', '本地脚本', '完整业务系统']);
+  assert.equal(timelineCalls[0]?.metadata?.clarificationType, 'artifact_type');
+  assert.deepEqual(
+    eventCalls.map((entry) => entry.eventType),
+    ['clarification_requested'],
+  );
+  assert.equal(eventCalls[0]?.payload.options?.[0], '网页应用');
+  assert.equal(eventCalls[0]?.payload.clarificationType, 'artifact_type');
+});
+
+test('execute re-enters clarification gate for unresolved user_response before sandbox', async () => {
+  const state = createState(
+    'run-coordinator-repeat-clarify',
+    'session-coordinator-repeat-clarify',
+    '先按你觉得合适的方式做'
+  );
+  state.input.messageType = 'user_response';
+  state.input.taskIntentProfile = {
+    mode: 'neutral',
+    reason: 'unknown',
+    recentUserMessages: ['帮我做一个企业管理系统。', '先按你觉得合适的方式做'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: false,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: false,
+    needsClarification: true,
+    clarificationQuestion: '我还需要先确认这一点：这次要交付的是网页应用、后端 API、本地脚本，还是完整业务系统？',
+    clarificationType: 'artifact_type',
+    clarificationOptions: ['网页应用', '后端 API', '本地脚本', '完整业务系统'],
+    todoRequired: false,
+    todoReason: 'none',
+  };
+
+  const timelineCalls: Array<Record<string, unknown>> = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setPendingClarificationMock = mock.method(
+    taskCreationFileMemoryStore,
+    'setPendingClarification',
+    async () => undefined,
+  );
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-should-not-start',
+      workspaceRoot: '/workspace/should-not-start',
+      reused: false,
+    })),
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      timelineCalls.push(input);
+    }),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+    syncLoopSnapshot: mock.fn(async () => undefined),
+  };
+
+  global.fetch = mock.fn(async () => {
+    throw new Error('fetch_should_not_run_before_repeated_clarification');
+  }) as typeof fetch;
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal((setupService.ensureSandbox as any).mock.callCount(), 0);
+  assert.equal(setPendingClarificationMock.mock.callCount(), 1);
+  assert.deepEqual(lifecycleCalls, ['waiting_user']);
+  assert.equal(state.status, 'waiting_user');
+  assert.equal(timelineCalls[0]?.metadata?.clarificationType, 'artifact_type');
+  assert.deepEqual(timelineCalls[0]?.metadata?.options, ['网页应用', '后端 API', '本地脚本', '完整业务系统']);
+  assert.equal(eventCalls[0]?.payload.clarificationType, 'artifact_type');
+});
+
 test('execute completes after tool round and final assistant response', async () => {
   const state = createState('run-coordinator-complete', 'session-coordinator-complete');
+  state.input.memoryContextPrompt = '## Altus Memory Context\n- 项目规范：输出需可直接运行';
+  state.input.sessionAltusMemory = {
+    version: 1,
+    summary: {
+      goal: '实现 2048 小游戏',
+      latestOutcome: '尚未开始',
+      openQuestions: [],
+    },
+    constraints: ['使用现有技术栈'],
+    decisions: [],
+    workingNotes: [],
+    updatedAt: '2026-04-21T16:10:00.000Z',
+  };
   const setupCalls: Record<string, unknown>[] = [];
   const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
   const lifecycleCalls: string[] = [];
@@ -84,6 +477,7 @@ test('execute completes after tool round and final assistant response', async ()
     })),
     buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => {
       assert.match(systemPrompt, /You are Altus/);
+      assert.match(systemPrompt, /Altus Memory Context/);
       return [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: input },
@@ -195,6 +589,28 @@ test('execute completes after tool round and final assistant response', async ()
           verification: ['已写入 index.html'],
         }),
   }));
+  mock.method(taskSessionSkillStateService, 'markResidentSkillsMaterialized', async () => undefined);
+  const markMaterializedMock = mock.method(taskSessionAltusMemoryService, 'markMaterialized', async (input: any) => ({
+    ...(input.state || {}),
+    sandboxMaterialization: {
+      sandboxId: input.sandboxId,
+      workspaceRoot: input.workspaceRoot,
+      materializedAt: '2026-04-21T16:11:00.000Z',
+    },
+  }));
+  const flushAltusMemoryMock = mock.method(taskSessionAltusMemoryService, 'saveSandboxFileMemoryToDb', async (input: any) => ({
+    version: 2,
+    summary: {
+      goal: '实现 2048 小游戏',
+      latestOutcome: '2048 已完成并写入 workspace。',
+      openQuestions: [],
+    },
+    constraints: ['使用现有技术栈'],
+    decisions: [],
+    workingNotes: [],
+    updatedAt: '2026-04-21T16:12:00.000Z',
+    lastWriterRunId: input.runId,
+  }));
 
   const coordinator = new AltusRunCoordinator(
     setupService as any,
@@ -210,6 +626,9 @@ test('execute completes after tool round and final assistant response', async ()
   assert.equal(state.status, 'completed');
   assert.equal(state.sandboxId, 'sandbox-1');
   assert.equal(state.workspaceRoot, '/workspace/session-coordinator-complete');
+  assert.equal(markMaterializedMock.mock.callCount(), 1);
+  assert.equal(flushAltusMemoryMock.mock.callCount(), 1);
+  assert.equal(state.input.sessionAltusMemory?.summary?.latestOutcome, '2048 已完成并写入 workspace。');
 
   const timelineCall = setupCalls.find((entry) => entry.type === 'timeline') as any;
   assert.equal(timelineCall.input.messageType, 'assistant_message');
@@ -222,6 +641,7 @@ test('execute completes after tool round and final assistant response', async ()
   assert.equal(eventCalls[0]?.payload.status, 'starting');
   assert.equal(eventCalls[2]?.payload.toolName, 'write_file');
   assert.equal(eventCalls[3]?.payload.toolName, 'write_file');
+  assert.match(String(eventCalls[4]?.payload.content || ''), /页面框架已经搭好|继续把样式和交互补完整/);
   assert.equal(eventCalls[5]?.payload.toolName, 'complete_task');
   assert.equal(eventCalls[6]?.payload.toolName, 'complete_task');
 });
@@ -329,6 +749,18 @@ test('execute blocks deployment completion until managed deployment succeeds', a
     'session-coordinator-deployment-guard',
     '帮我部署当前项目'
   );
+  state.input.taskIntentProfile = {
+    mode: 'deployable_web_app',
+    reason: 'latest_deployable_request',
+    recentUserMessages: ['帮我部署当前项目'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: false,
+    deployRequested: true,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: true,
+  };
   const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
   const lifecycleCalls: string[] = [];
 
@@ -719,6 +1151,23 @@ test('execute injects skill catalog prompt before active skill body', async () =
         },
       },
     ],
+    taskIntentProfile: {
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: [],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
+    },
   });
 
   const setupService = {
@@ -828,6 +1277,23 @@ test('execute syncs resolved skills after sandbox becomes ready', async () => {
         },
       },
     ],
+    taskIntentProfile: {
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: [],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
+    },
   });
 
   const setupService = {
@@ -1034,7 +1500,116 @@ test('execute does not complete on plain assistant text and continues until comp
   assert.equal((setupCalls[0] as any).input.content, '已确认当前工作空间为空，尚未进行文件创建。\n\n验证:\n- 工作空间目录已检查');
   assert.deepEqual(
     eventCalls.map((entry) => entry.eventType),
-    ['run_status', 'run_status', 'run_status', 'tool_call_started', 'tool_call_completed', 'assistant_message']
+    ['run_status', 'run_status', 'run_status', 'run_status', 'tool_call_started', 'tool_call_completed', 'assistant_message']
+  );
+  assert.equal(eventCalls[2]?.payload.transitionReason, 'plain_text_continuation_prompted');
+});
+
+test('execute accepts plain assistant text for pure memory identity questions', async () => {
+  const state = createState('run-coordinator-memory-chat', 'session-coordinator-memory-chat');
+  state.input.userInput = '我是谁';
+  const setupCalls: Record<string, unknown>[] = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+  const loopSnapshots: Record<string, unknown>[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-memory-chat',
+      workspaceRoot: '/workspace/session-coordinator-memory-chat',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      setupCalls.push(input);
+    }),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+    syncLoopSnapshot: mock.fn(async (_state: any, loop: Record<string, unknown>) => {
+      loopSnapshots.push(loop);
+    }),
+  };
+
+  global.fetch = mock.fn(async () =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '你是 watson，OneCEO 的用户，职业是 CEO，位于山东济南。',
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    )
+  ) as typeof fetch;
+
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => {
+    throw new Error('execute should not be called for pure memory identity replies');
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeMock.mock.callCount(), 0);
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+  assert.equal(state.status, 'completed');
+  assert.equal(
+    loopSnapshots.some((snapshot) => snapshot.lastTransitionReason === 'plain_text_conversation_completed'),
+    true
+  );
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'run_status' &&
+        entry.payload.transitionReason === 'plain_text_conversation_completed'
+    ),
+    true
+  );
+  assert.equal(
+    setupCalls.some(
+      (entry) =>
+        entry.messageType === 'assistant_message' &&
+        entry.metadata &&
+        (entry.metadata as Record<string, unknown>).completionMode === 'plain_text_conversation'
+    ),
+    true
   );
 });
 
@@ -1256,6 +1831,8 @@ test('execute converts plain assistant clarification into waiting_user', async (
 test('execute retries transient upstream timeout before completing', async () => {
   const state = createState('run-coordinator-retry', 'session-coordinator-retry');
   const lifecycleCalls: string[] = [];
+  const loopSnapshots: Array<Record<string, unknown>> = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
 
   const setupService = {
     ensureSandbox: mock.fn(async () => ({
@@ -1272,10 +1849,13 @@ test('execute retries transient upstream timeout before completing', async () =>
   };
 
   const eventWriter = {
-    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, _eventType: string, payload: Record<string, unknown>) => ({
-      sequence: 1,
-      payload,
-    })),
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
   };
 
   const lifecycleService = {
@@ -1293,6 +1873,9 @@ test('execute retries transient upstream timeout before completing', async () =>
     }),
     markStopped: mock.fn(async () => {
       lifecycleCalls.push('stopped');
+    }),
+    syncLoopSnapshot: mock.fn(async (_state: any, loop: Record<string, unknown>) => {
+      loopSnapshots.push(loop);
     }),
   };
 
@@ -1359,6 +1942,126 @@ test('execute retries transient upstream timeout before completing', async () =>
   assert.equal(executeMock.mock.callCount(), 1);
   assert.deepEqual(lifecycleCalls, ['running', 'completed']);
   assert.equal(state.status, 'completed');
+  assert.equal(
+    loopSnapshots.some((snapshot) => snapshot.lastTransitionReason === 'model_retryable_error'),
+    true
+  );
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'run_status' && entry.payload.transitionReason === 'model_retryable_error'
+    ),
+    true
+  );
+});
+
+test('execute records plain-text continuation recovery before failing the managed loop', async () => {
+  const state = createState('run-coordinator-plain-text-fail', 'session-coordinator-plain-text-fail');
+  const lifecycleCalls: string[] = [];
+  const loopSnapshots: Array<Record<string, unknown>> = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-plain-text-fail',
+      workspaceRoot: '/workspace/session-coordinator-plain-text-fail',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => {}),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+    syncLoopSnapshot: mock.fn(async (_state: any, loop: Record<string, unknown>) => {
+      loopSnapshots.push(loop);
+    }),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: fetchCount === 1 ? '我先分析现有文件结构。' : '继续分析现有文件结构。',
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => {
+    throw new Error('execute should not be called when the model never emits tool calls');
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(fetchCount, 2);
+  assert.equal(executeMock.mock.callCount(), 0);
+  assert.deepEqual(lifecycleCalls, ['running', 'failed']);
+  assert.equal(state.status, 'failed');
+  assert.match(state.stopReason || '', /managed_model_plain_text_without_tool_call/);
+  assert.equal(
+    loopSnapshots.some((snapshot) => snapshot.lastTransitionReason === 'plain_text_continuation_prompted'),
+    true
+  );
+  assert.equal(
+    loopSnapshots.some((snapshot) => snapshot.lastTransitionReason === 'plain_text_continuation_failed'),
+    true
+  );
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'run_status' && entry.payload.transitionReason === 'plain_text_continuation_prompted'
+    ),
+    true
+  );
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'run_status' && entry.payload.transitionReason === 'plain_text_continuation_failed'
+    ),
+    true
+  );
 });
 
 test('execute consumes streamed tool_call chunks and emits tool_call_progress', async () => {
@@ -1520,6 +2223,23 @@ test('execute recovers from connector guide block by loading the guide and retry
     ],
     skillCatalog: [],
     skills: [],
+    taskIntentProfile: {
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: [],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
+    },
   });
   const setupCalls: Record<string, unknown>[] = [];
   const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
@@ -1778,6 +2498,23 @@ test('execute recovers from connector guide block by loading the guide and retry
     ],
     skillCatalog: [],
     skills: [],
+    taskIntentProfile: {
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: [],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
+    },
   });
   const setupCalls: Record<string, unknown>[] = [];
   const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];

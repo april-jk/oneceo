@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
+import { Eye, EyeOff, LockKeyhole, Mail } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,10 +17,12 @@ function resolveRedirectTarget() {
 
 export default function Login() {
   const { login, status } = useAuth();
+  const { t } = useTranslation();
   const [, setLocation] = useLocation();
   const redirectTarget = useMemo(resolveRedirectTarget, []);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -36,99 +40,132 @@ export default function Login() {
       await login({ email: email.trim(), password });
       setLocation(redirectTarget);
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "登录失败");
+      setError(
+        submitError instanceof Error
+          ? submitError.message
+          : t("auth.loginFailed"),
+      );
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <div className="min-h-screen overflow-hidden bg-[linear-gradient(180deg,#ede6da_0%,#f8f7f2_35%,#ffffff_100%)] text-slate-900">
-      <div className="mx-auto grid min-h-screen max-w-6xl gap-10 px-6 py-8 lg:grid-cols-[1.1fr_0.9fr] lg:px-10">
-        <section className="relative flex min-h-[320px] flex-col justify-between rounded-[36px] border border-black/10 bg-[radial-gradient(circle_at_top_left,#d2c3aa_0%,rgba(255,255,255,0)_34%),linear-gradient(160deg,#1f2937_0%,#312e2b_56%,#8a6d46_100%)] p-8 text-white shadow-[0_24px_80px_rgba(15,23,42,0.16)]">
-          <div className="space-y-5">
-            <div className="inline-flex rounded-full border border-white/20 bg-white/10 px-4 py-1 text-xs uppercase tracking-[0.28em] text-white/80">
-              Oneceo Identity
-            </div>
-            <h1 className="max-w-xl text-4xl font-semibold leading-tight tracking-[-0.04em] lg:text-5xl">
-              登录后，所有对话、skills 与连接器授权都会固定回挂到你的个人身份。
-            </h1>
-            <p className="max-w-xl text-sm leading-6 text-white/78 lg:text-base">
-              这次切换不再依赖浏览器本地生成的伪用户头。主站会用真实用户会话来绑定任务、附件、Altus 输入和连接器配置。
-            </p>
-          </div>
-          <div className="grid gap-3 text-sm text-white/82 sm:grid-cols-3">
-            <div className="rounded-[22px] border border-white/12 bg-white/8 p-4 backdrop-blur">
-              <div className="text-2xl font-semibold">1</div>
-              <div className="mt-2">账户登录态</div>
-            </div>
-            <div className="rounded-[22px] border border-white/12 bg-white/8 p-4 backdrop-blur">
-              <div className="text-2xl font-semibold">1:1</div>
-              <div className="mt-2">会话与个人归属</div>
-            </div>
-            <div className="rounded-[22px] border border-white/12 bg-white/8 p-4 backdrop-blur">
-              <div className="text-2xl font-semibold">0</div>
-              <div className="mt-2">匿名入口保留</div>
+    <div className="min-h-screen bg-background px-4 py-10 text-foreground">
+      <div className="mx-auto flex min-h-[calc(100vh-5rem)] w-full max-w-[450px] items-center justify-center">
+        <div className="w-full rounded-[20px] border border-border bg-card p-[30px] shadow-xl shadow-black/5">
+          <div className="mb-6 flex items-center gap-3">
+            <img
+              src="/logo.png"
+              alt="oneceo"
+              className="size-11 rounded-[10px] object-cover"
+            />
+            <div className="space-y-1">
+              <p className="text-lg font-semibold leading-none text-foreground">
+                {t("auth.loginTitle")}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {t("auth.loginSubtitle")}
+              </p>
             </div>
           </div>
-        </section>
 
-        <section className="flex items-center justify-center">
-          <div className="w-full max-w-md rounded-[32px] border border-black/10 bg-white/92 p-8 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur-xl">
-            <div className="mb-8 space-y-2">
-              <p className="text-sm uppercase tracking-[0.24em] text-slate-500">用户登录</p>
-              <h2 className="text-3xl font-semibold tracking-[-0.04em] text-slate-900">进入你的工作区</h2>
-              <p className="text-sm leading-6 text-slate-500">使用已注册邮箱登录，服务端会恢复你的个人会话和身份绑定。</p>
-            </div>
-
-            <form className="space-y-5" onSubmit={handleSubmit}>
-              <div className="space-y-2">
-                <Label htmlFor="login-email">邮箱</Label>
+          <form className="flex flex-col gap-[10px]" onSubmit={handleSubmit}>
+            <div className="flex flex-col gap-2">
+              <Label
+                htmlFor="login-email"
+                className="text-sm font-semibold text-foreground"
+              >
+                {t("auth.emailLabel")}
+              </Label>
+              <div className="flex h-[50px] items-center rounded-[10px] border border-input bg-background px-[10px] transition-colors focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20">
+                <Mail
+                  className="size-5 shrink-0 text-muted-foreground"
+                  strokeWidth={1.9}
+                />
                 <Input
                   id="login-email"
                   type="email"
                   autoComplete="email"
-                  placeholder="you@example.com"
+                  placeholder={t("auth.emailPlaceholder")}
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                   required
+                  className="ml-[10px] h-full border-0 bg-transparent px-0 py-0 text-[15px] text-foreground shadow-none focus-visible:ring-0"
                 />
               </div>
+            </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="login-password">密码</Label>
+            <div className="flex flex-col gap-2">
+              <Label
+                htmlFor="login-password"
+                className="text-sm font-semibold text-foreground"
+              >
+                {t("auth.passwordLabel")}
+              </Label>
+              <div className="flex h-[50px] items-center rounded-[10px] border border-input bg-background px-[10px] transition-colors focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20">
+                <LockKeyhole
+                  className="size-5 shrink-0 text-muted-foreground"
+                  strokeWidth={1.9}
+                />
                 <Input
                   id="login-password"
-                  type="password"
+                  type={showPassword ? "text" : "password"}
                   autoComplete="current-password"
-                  placeholder="请输入密码"
+                  placeholder={t("auth.passwordPlaceholder")}
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   required
+                  className="ml-[10px] h-full border-0 bg-transparent px-0 py-0 text-[15px] text-foreground shadow-none focus-visible:ring-0"
                 />
+                <button
+                  type="button"
+                  aria-label={
+                    showPassword
+                      ? t("common.hidePassword")
+                      : t("common.showPassword")
+                  }
+                  onClick={() => setShowPassword((value) => !value)}
+                  className="ml-2 inline-flex size-8 items-center justify-center rounded-[8px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  {showPassword ? (
+                    <EyeOff className="size-4" />
+                  ) : (
+                    <Eye className="size-4" />
+                  )}
+                </button>
               </div>
-
-              {error ? (
-                <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
-              ) : null}
-
-              <Button
-                type="submit"
-                className="h-11 w-full rounded-2xl bg-slate-900 text-white hover:bg-slate-800"
-                disabled={submitting}
-              >
-                {submitting ? "登录中..." : "登录"}
-              </Button>
-            </form>
-
-            <div className="mt-6 flex items-center justify-between text-sm text-slate-500">
-              <span>还没有账号？</span>
-              <Link href={`/register?redirect=${encodeURIComponent(redirectTarget)}`} className="font-medium text-slate-900 underline-offset-4 hover:underline">
-                去注册
-              </Link>
             </div>
-          </div>
-        </section>
+
+            <p className="pt-1 text-sm text-muted-foreground">
+              {t("auth.loginHint")}
+            </p>
+
+            {error ? (
+              <div className="rounded-[10px] border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                {error}
+              </div>
+            ) : null}
+
+            <Button
+              type="submit"
+              className="mt-[10px] h-[50px] w-full rounded-[10px] bg-primary text-[15px] font-medium text-primary-foreground hover:bg-primary/90"
+              disabled={submitting}
+            >
+              {submitting ? t("auth.signingIn") : t("auth.signIn")}
+            </Button>
+          </form>
+
+          <p className="mt-5 text-center text-sm text-muted-foreground">
+            {t("auth.noAccount")}
+            <Link
+              href={`/register?redirect=${encodeURIComponent(redirectTarget)}`}
+              className="ml-1 font-medium text-primary"
+            >
+              {t("auth.signUp")}
+            </Link>
+          </p>
+        </div>
       </div>
     </div>
   );

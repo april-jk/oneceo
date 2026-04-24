@@ -21,7 +21,7 @@ test('ensureReady skips migration when latest schema is already ready', async ()
 test('ensureReady runs migration when schema is incomplete', async () => {
   const inspectSchema = mock.fn(async () => ({
     ready: false,
-    missing: ['table:task_session_runs'],
+    missing: ['column:platform_skills.metadata_json'],
   }));
   const runMigration = mock.fn(async () => true);
   const bootstrap = new ConnectorStorageBootstrap({ inspectSchema, runMigration });

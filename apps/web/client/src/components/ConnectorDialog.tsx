@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
   AlertCircle,
@@ -32,7 +33,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { CONNECTOR_GUIDES } from "@/lib/connector-guides";
+import { getConnectorGuides } from "@/lib/connector-guides";
 import {
   attachSessionConnector,
   detachSessionConnector,
@@ -51,6 +52,7 @@ import {
   ensureSessionConnectorDraftId,
   listSessionConnectorDraftEntries,
   removeSessionConnectorDraftEntry,
+  updateSessionConnectorDraftMetadata,
   upsertSessionConnectorDraftEntry,
 } from "@/lib/session-connector-draft";
 import { resolveConnectorIcon } from "@/lib/connector-ui";
@@ -62,13 +64,39 @@ interface ConnectorDialogProps {
   className?: string;
 }
 
-function formatStatus(value: string | null | undefined) {
-  if (!value) return "unknown";
-  switch (value) {
+function translateConnectorStatus(
+  t: ReturnType<typeof useTranslation>["t"],
+  value: string | null | undefined
+) {
+  if (!value) return t("connectors.dialog.status.unknown");
+  const key = value.toLowerCase();
+  switch (key) {
     case "pending_recover":
-      return "pending recover";
+      return t("connectors.dialog.status.pendingRecover");
     case "recovering":
-      return "recovering";
+      return t("connectors.dialog.status.recovering");
+    case "authorized":
+      return t("connectors.dialog.status.authorized");
+    case "connected":
+      return t("connectors.dialog.status.connected");
+    case "needs_auth":
+      return t("connectors.dialog.status.needsAuth");
+    case "not_configured":
+      return t("connectors.dialog.status.notConfigured");
+    case "connecting":
+      return t("connectors.dialog.status.connecting");
+    case "failed":
+      return t("connectors.dialog.status.failed");
+    case "error":
+      return t("connectors.dialog.status.error");
+    case "unavailable":
+      return t("connectors.dialog.status.unavailable");
+    case "idle":
+      return t("connectors.dialog.status.idle");
+    case "disconnected":
+      return t("connectors.dialog.status.disconnected");
+    case "detached":
+      return t("connectors.dialog.status.detached");
     default:
       return value.replaceAll("_", " ");
   }
@@ -94,10 +122,13 @@ function summarizeRepositoryLabel(fullName: string | null | undefined) {
   return parts.length > 1 ? parts[parts.length - 1] : fullName;
 }
 
-function splitSelectedRepositoriesSummary(repositories: string[]) {
+function splitSelectedRepositoriesSummary(
+  repositories: string[],
+  t: ReturnType<typeof useTranslation>["t"]
+) {
   if (repositories.length === 0) {
     return {
-      primary: "未选择代码库",
+      primary: t("connectors.dialog.github.noRepositorySelected"),
       extra: null as string | null,
     };
   }
@@ -172,6 +203,7 @@ export default function ConnectorDialog({
   sessionId,
   className,
 }: ConnectorDialogProps) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [detailKey, setDetailKey] = useState<ConnectorKey | null>(null);
   const [catalog, setCatalog] = useState<ConnectorCatalogItem[]>([]);
@@ -199,6 +231,7 @@ export default function ConnectorDialog({
   const [githubSelectedRepositories, setGithubSelectedRepositories] = useState<
     Partial<Record<string, string[]>>
   >({});
+  const connectorGuides = useMemo(() => getConnectorGuides(t), [t]);
 
   const load = async (options?: { allowClosed?: boolean; silent?: boolean }) => {
     const allowClosed = Boolean(options?.allowClosed);
@@ -267,7 +300,7 @@ export default function ConnectorDialog({
       });
     } catch (error) {
       if (!silent) {
-        toast.error(error instanceof Error ? error.message : "Failed to load connectors");
+        toast.error(error instanceof Error ? error.message : t("connectors.errors.loadFailed"));
       }
     } finally {
       if (!silent) {
@@ -287,7 +320,7 @@ export default function ConnectorDialog({
       void load();
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [open, sessionId]);
+  }, [open, sessionId, t]);
 
   useEffect(() => {
     void load({ allowClosed: true, silent: true });
@@ -364,7 +397,7 @@ export default function ConnectorDialog({
         }));
       })
       .catch((error) => {
-        toast.error(error instanceof Error ? error.message : "加载 GitHub 仓库失败");
+        toast.error(error instanceof Error ? error.message : t("connectors.dialog.github.loadRepositoriesFailed"));
         void load();
       })
       .finally(() => {
@@ -380,6 +413,7 @@ export default function ConnectorDialog({
     githubRepositories,
     githubRepositoriesLoading,
     open,
+    t,
   ]);
 
   useEffect(() => {
@@ -481,6 +515,13 @@ export default function ConnectorDialog({
           const next = removeSessionConnectorDraftEntry(connectorKey);
           const draftId = next?.draftId || ensureSessionConnectorDraftId();
           const entries = next ? listSessionConnectorDraftEntries() : [];
+          if (next) {
+            updateSessionConnectorDraftMetadata({
+              source: "manual",
+              sourceProjectId: undefined,
+              userTouched: true,
+            });
+          }
           await saveSessionConnectorDraft(draftId, entries);
           applySessionStatusOverride(
             buildOptimisticSessionStatus({
@@ -503,7 +544,7 @@ export default function ConnectorDialog({
               repositories: [],
             })
           );
-          toast.success("连接器草稿已移除，发送后将按当前配置同步");
+          toast.success(t("connectors.dialog.toasts.draftRemoved"));
           return;
         }
 
@@ -512,6 +553,10 @@ export default function ConnectorDialog({
           desiredState: "attached",
           sessionConfig: sessionConfig || null,
           enabledTools: [],
+        }, {
+          source: "manual",
+          sourceProjectId: undefined,
+          userTouched: true,
         });
         await saveSessionConnectorDraft(nextState.draftId, listSessionConnectorDraftEntries());
         applySessionStatusOverride(
@@ -535,7 +580,7 @@ export default function ConnectorDialog({
             repositories: (sessionConfig?.repositories as string[] | undefined) || [],
           })
         );
-        toast.success("连接器草稿已保存，发送后会自动同步到会话");
+        toast.success(t("connectors.dialog.toasts.draftSaved"));
         return;
       }
 
@@ -568,7 +613,7 @@ export default function ConnectorDialog({
             await saveSessionConnectorDraft(draftState.draftId, listSessionConnectorDraftEntries());
           }
         }
-        toast.success("连接器已从当前会话移除");
+        toast.success(t("connectors.dialog.toasts.detached"));
       } else {
         applySessionStatusOverride(
           buildOptimisticSessionStatus({
@@ -603,13 +648,13 @@ export default function ConnectorDialog({
         }
         toast.success(
           attachedStatus?.runtimeStatus === "pending_recover"
-            ? "连接器已记录，sandbox 恢复后会自动挂载"
-            : "连接器已挂载到当前会话"
+            ? t("connectors.dialog.toasts.attachedPendingRecover")
+            : t("connectors.dialog.toasts.attached")
         );
       }
       await load();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "连接器操作失败");
+      toast.error(error instanceof Error ? error.message : t("connectors.dialog.toasts.actionFailed"));
       void load();
     } finally {
       setActingKey(null);
@@ -678,6 +723,7 @@ export default function ConnectorDialog({
               variant="ghost"
               size="icon"
               className={cn("h-9 w-9 rounded-[10px] hover:bg-muted/80 transition-colors", className)}
+              aria-label={t("connectors.dialog.triggerLabel")}
             >
               {attachedConnectors.length === 0 ? (
                 <Plug className="h-4 w-4 text-muted-foreground" />
@@ -703,7 +749,7 @@ export default function ConnectorDialog({
           </PopoverTrigger>
         </TooltipTrigger>
         <TooltipContent>
-          <p>Connectors</p>
+          <p>{t("connectors.dialog.triggerLabel")}</p>
         </TooltipContent>
       </Tooltip>
 
@@ -723,7 +769,7 @@ export default function ConnectorDialog({
             }}
           >
             <div className="flex items-center justify-between border-b border-border/70 px-2.5 py-2">
-              <div className="text-[13px] font-medium text-foreground">Connectors</div>
+              <div className="text-[13px] font-medium text-foreground">{t("connectors.dialog.title")}</div>
               {loading ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
             </div>
 
@@ -756,7 +802,8 @@ export default function ConnectorDialog({
                         attachedAuthorizedRepositories ||
                         [];
                       const selectedRepositoriesSummary = splitSelectedRepositoriesSummary(
-                        selectedRepositories
+                        selectedRepositories,
+                        t
                       );
 
                       return (
@@ -858,7 +905,11 @@ export default function ConnectorDialog({
                                   attachedToSelected ? "detach" : "attach"
                                 );
                               }}
-                              aria-label={checked ? "Disable connector" : "Enable connector"}
+                              aria-label={
+                                checked
+                                  ? t("connectors.dialog.disableConnector")
+                                  : t("connectors.dialog.enableConnector")
+                              }
                             >
                               {busy ? (
                                 <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
@@ -923,8 +974,8 @@ export default function ConnectorDialog({
                     <Settings2 className="h-3.5 w-3.5" />
                   </div>
                   <div>
-                    <div className="text-[13px] font-medium text-foreground">管理连接器</div>
-                    <div className="text-[11px] text-muted-foreground">配置授权与默认项</div>
+                    <div className="text-[13px] font-medium text-foreground">{t("connectors.dialog.manageTitle")}</div>
+                    <div className="text-[11px] text-muted-foreground">{t("connectors.dialog.manageDescription")}</div>
                   </div>
                 </div>
                 <ArrowUpRight className="h-4 w-4 text-muted-foreground" />
@@ -949,7 +1000,7 @@ export default function ConnectorDialog({
                     session?.attachedProfileId === selectedProfileId;
                   const isGithubDetail = item.key === "github";
                   const DetailIcon = resolveConnectorIcon(item.icon) || Link2;
-                  const guide = CONNECTOR_GUIDES[item.key];
+                  const guide = connectorGuides[item.key];
                   const canAttach =
                     item.available &&
                     Boolean(selectedProfileId) &&
@@ -984,7 +1035,7 @@ export default function ConnectorDialog({
                     return (
                       <div className="flex h-full min-w-0 flex-col overflow-hidden">
                         <div className="flex min-h-0 flex-1 flex-col px-3 py-3">
-                          <div className="text-xs font-medium text-foreground">选择代码库</div>
+                          <div className="text-xs font-medium text-foreground">{t("connectors.dialog.github.selectRepository")}</div>
                           <div className="relative mt-2">
                             <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
                             <Input
@@ -995,7 +1046,7 @@ export default function ConnectorDialog({
                                   [githubRepoSelectionKey]: event.target.value,
                                 }))
                               }
-                              placeholder="搜索代码库"
+                              placeholder={t("connectors.dialog.github.searchPlaceholder")}
                               className="h-8 rounded-[8px] border-border/70 bg-background pl-7 text-[12px]"
                             />
                           </div>
@@ -1003,11 +1054,11 @@ export default function ConnectorDialog({
                           <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pt-2">
                             {!selectedProfileId ? (
                               <div className="px-2 py-2 text-[11px] text-muted-foreground">
-                                先选择一个 GitHub 账户，再继续选择仓库。
+                                {t("connectors.dialog.github.selectAccountFirst")}
                               </div>
                             ) : !selectedProfile ? (
                               <div className="px-2 py-2 text-[11px] text-muted-foreground">
-                                还没有可用的 GitHub 授权账户。
+                                {t("connectors.dialog.github.noAuthorizedAccount")}
                               </div>
                             ) : item.availabilityReason ? (
                               <div className="px-2 py-2 text-[11px] text-destructive">
@@ -1020,15 +1071,15 @@ export default function ConnectorDialog({
                             ) : githubRepositoriesLoading[selectedProfileId] ? (
                               <div className="flex items-center gap-2 px-2 py-2 text-[11px] text-muted-foreground">
                                 <Loader2 className="h-3 w-3 animate-spin" />
-                                加载中...
+                                {t("connectors.dialog.github.loading")}
                               </div>
                             ) : (githubRepositories[selectedProfileId] || []).length === 0 ? (
                               <div className="px-2 py-2 text-[11px] text-muted-foreground">
-                                没有可读取的仓库。
+                                {t("connectors.dialog.github.noReadableRepositories")}
                               </div>
                             ) : filteredRepositories.length === 0 ? (
                               <div className="px-2 py-2 text-[11px] text-muted-foreground">
-                                没有匹配的代码库。
+                                {t("connectors.dialog.github.noMatchingRepositories")}
                               </div>
                             ) : (
                               filteredRepositories.map((repository) => {
@@ -1086,7 +1137,7 @@ export default function ConnectorDialog({
                               onClick={() => openConnectorSettings(item.key)}
                             >
                               <Settings2 className="mr-2 h-4 w-4" />
-                              配置授权
+                              {t("connectors.dialog.configureAuth")}
                             </Button>
                           </div>
                         </div>
@@ -1120,7 +1171,8 @@ export default function ConnectorDialog({
                               )
                             )}
                           >
-                            {formatStatus(
+                            {translateConnectorStatus(
+                              t,
                               selectedProfile?.authStatus ||
                                 session?.globalAuthStatus ||
                                 "not_configured"
@@ -1136,12 +1188,12 @@ export default function ConnectorDialog({
                             )}
                           >
                             {session?.attached
-                              ? formatStatus(session?.runtimeStatus || "connecting")
-                              : "detached"}
+                              ? translateConnectorStatus(t, session?.runtimeStatus || "connecting")
+                              : t("connectors.dialog.status.detached")}
                           </span>
                           {!item.available ? (
                             <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[11px] text-destructive">
-                              unavailable
+                              {t("connectors.dialog.status.unavailable")}
                             </span>
                           ) : null}
                         </div>
@@ -1151,19 +1203,19 @@ export default function ConnectorDialog({
                         <div className="space-y-3 px-3 py-3">
                           <div className="rounded-[10px] bg-muted/45 px-3 py-2 text-xs text-muted-foreground">
                             <div className="flex items-center justify-between gap-3">
-                              <span>配置位置</span>
+                              <span>{t("connectors.dialog.info.location")}</span>
                               <span className="text-right text-foreground/80">
-                                Outside sandbox
+                                {t("connectors.dialog.info.outsideSandbox")}
                               </span>
                             </div>
                             <div className="mt-1 flex items-center justify-between gap-3">
-                              <span>当前用途</span>
+                              <span>{t("connectors.dialog.info.currentUsage")}</span>
                               <span className="text-right text-foreground/80">
-                                Inside this session
+                                {t("connectors.dialog.info.insideSession")}
                               </span>
                             </div>
                             <div className="mt-1 flex items-center justify-between gap-3">
-                              <span>可用 profiles</span>
+                              <span>{t("connectors.dialog.info.availableProfiles")}</span>
                               <span className="text-right text-foreground/80">
                                 {connectorProfiles.length}
                               </span>
@@ -1180,7 +1232,7 @@ export default function ConnectorDialog({
                           {connectorProfiles.length > 0 ? (
                             <div className="space-y-1.5">
                               <div className="text-xs font-medium text-foreground">
-                                Choose profile
+                                {t("connectors.selectProfile")}
                               </div>
                               <Select
                                 value={selectedProfileId || ""}
@@ -1192,7 +1244,7 @@ export default function ConnectorDialog({
                                 }}
                               >
                                 <SelectTrigger className="h-9 rounded-[10px]">
-                                  <SelectValue placeholder="Select a profile" />
+                                  <SelectValue placeholder={t("connectors.selectProfilePlaceholder")} />
                                 </SelectTrigger>
                                 <SelectContent className="rounded-[12px]">
                                   {connectorProfiles.map((profile) => (
@@ -1202,7 +1254,7 @@ export default function ConnectorDialog({
                                       className="rounded-[8px]"
                                     >
                                       {profile.profileName}
-                                      {profile.isDefault ? " · default" : ""}
+                                      {profile.isDefault ? ` · ${t("connectors.defaultProfileSuffix")}` : ""}
                                     </SelectItem>
                                   ))}
                                 </SelectContent>
@@ -1210,7 +1262,7 @@ export default function ConnectorDialog({
                             </div>
                           ) : (
                             <div className="rounded-[10px] border border-dashed border-border/70 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
-                              这个连接器还没有可用 profile。请先在设置面板完成外部授权或手动凭证配置。
+                              {t("connectors.dialog.noProfiles")}
                             </div>
                           )}
 
@@ -1222,14 +1274,14 @@ export default function ConnectorDialog({
                                 </div>
                                 {selectedProfile.isDefault ? (
                                   <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                                    default
+                                    {t("connectors.defaultProfileSuffix")}
                                   </span>
                                 ) : null}
                               </div>
                               <div className="text-[11px] leading-5 text-muted-foreground">
                                 {selectedProfile.displayName ||
                                   selectedProfile.secretSummary ||
-                                  "未设置 display name"}
+                                  t("connectors.dialog.noDisplayName")}
                               </div>
                               {selectedProfile.lastError ? (
                                 <div className="flex gap-2 rounded-[8px] bg-destructive/10 px-2.5 py-2 text-[11px] leading-5 text-destructive">
@@ -1271,11 +1323,11 @@ export default function ConnectorDialog({
                                 <Plug className="mr-2 h-4 w-4" />
                               )}
                               {attachedToSelected
-                                ? "Detach"
+                                ? t("connectors.dialog.detach")
                                 : session?.attachedProfileId &&
                                     session.attachedProfileId !== selectedProfileId
-                                  ? "Switch Profile"
-                                  : "Attach"}
+                                  ? t("connectors.dialog.switchProfile")
+                                  : t("connectors.dialog.attach")}
                             </Button>
                           ) : null}
 
@@ -1286,7 +1338,7 @@ export default function ConnectorDialog({
                             onClick={() => openConnectorSettings(item.key)}
                           >
                             <Settings2 className="mr-2 h-4 w-4" />
-                            Manage
+                            {t("connectors.dialog.manageButton")}
                           </Button>
 
                           {guide?.quickLinks?.[0] ? (
@@ -1297,7 +1349,7 @@ export default function ConnectorDialog({
                                 rel="noreferrer"
                               >
                                 <ArrowUpRight className="mr-2 h-4 w-4" />
-                                Docs
+                                {t("connectors.relatedDocs")}
                               </a>
                             </Button>
                           ) : null}

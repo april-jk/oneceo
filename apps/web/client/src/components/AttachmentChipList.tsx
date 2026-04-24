@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import { FileText, Wrench, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import type {
   PendingAttachment,
@@ -29,6 +30,7 @@ export default function AttachmentChipList({
 }: AttachmentChipListProps) {
   if (!attachments.length) return null;
 
+  const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<{
     pointerId: number | null;
@@ -145,7 +147,7 @@ export default function AttachmentChipList({
                   type="button"
                   className={cn("rounded-full p-0.5 transition-colors", removeTone)}
                   onClick={() => onRemove(id)}
-                  aria-label={`移除附件 ${attachment.name}`}
+                  aria-label={t("attachments.removeAttachment", { name: attachment.name })}
                 >
                   <X className="h-3 w-3" />
                 </button>

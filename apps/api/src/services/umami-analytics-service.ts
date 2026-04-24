@@ -18,6 +18,67 @@ export type UmamiWebsiteMetrics = {
   updatedAt: string;
 };
 
+export type UmamiWebsiteStats = {
+  pageviews: number;
+  visits: number;
+  visitors: number;
+  bounces: number;
+  totaltime: number;
+};
+
+export type UmamiTimeseriesPoint = {
+  x: string;
+  y: number;
+};
+
+export type UmamiWebsitePageviews = {
+  pageviews: UmamiTimeseriesPoint[];
+  sessions: UmamiTimeseriesPoint[];
+};
+
+export type UmamiMetricType =
+  | 'path'
+  | 'entry'
+  | 'exit'
+  | 'title'
+  | 'query'
+  | 'referrer'
+  | 'channel'
+  | 'domain'
+  | 'country'
+  | 'region'
+  | 'city'
+  | 'browser'
+  | 'os'
+  | 'device'
+  | 'language'
+  | 'screen'
+  | 'event'
+  | 'hostname'
+  | 'tag'
+  | 'distinctId';
+
+export type UmamiWebsiteMetric = {
+  name: string;
+  value: number;
+};
+
+export type UmamiWebsiteExpandedMetric = {
+  name: string;
+  pageviews: number;
+  visitors: number;
+  visits: number;
+  bounces: number;
+  totaltime: number;
+};
+
+export type UmamiWebsiteStatsRange = {
+  startAt: number;
+  endAt: number;
+  unit?: 'hour' | 'day' | 'month' | 'year';
+  timezone?: string;
+};
+
 type JsonValue =
   | string
   | number
@@ -128,6 +189,60 @@ function extractActiveVisitors(payload: unknown): number | undefined {
   return undefined;
 }
 
+function parseStatsPayload(payload: unknown): UmamiWebsiteStats {
+  const stats = asObject(unwrapPayload<unknown>(payload));
+  return {
+    pageviews: asNumber(stats.pageviews) || 0,
+    visits: asNumber(stats.visits) || 0,
+    visitors: asNumber(stats.visitors) || 0,
+    bounces: asNumber(stats.bounces) || 0,
+    totaltime: asNumber(stats.totaltime) || 0,
+  };
+}
+
+function parseTimeseriesList(payload: unknown): UmamiTimeseriesPoint[] {
+  return asArray(payload)
+    .map((item) => {
+      const record = asObject(item);
+      const x = asText(record.x);
+      return {
+        x,
+        y: asNumber(record.y) || 0,
+      };
+    })
+    .filter((item) => item.x);
+}
+
+function parseMetricList(payload: unknown): UmamiWebsiteMetric[] {
+  return asArray(unwrapPayload<unknown>(payload))
+    .map((item) => {
+      const record = asObject(item);
+      const name = asText(record.x || record.name);
+      return {
+        name,
+        value: asNumber(record.y || record.value || record.visitors || record.pageviews) || 0,
+      };
+    })
+    .filter((item) => item.name);
+}
+
+function parseExpandedMetricList(payload: unknown): UmamiWebsiteExpandedMetric[] {
+  return asArray(unwrapPayload<unknown>(payload))
+    .map((item) => {
+      const record = asObject(item);
+      const name = asText(record.name || record.x);
+      return {
+        name,
+        pageviews: asNumber(record.pageviews) || 0,
+        visitors: asNumber(record.visitors) || 0,
+        visits: asNumber(record.visits) || 0,
+        bounces: asNumber(record.bounces) || 0,
+        totaltime: asNumber(record.totaltime) || 0,
+      };
+    })
+    .filter((item) => item.name);
+}
+
 class UmamiAnalyticsService {
   private authToken: { token: string; expiresAt: number } | null = null;
 
@@ -151,6 +266,10 @@ class UmamiAnalyticsService {
     return asText(process.env.UMAMI_DEPLOYMENT_TEAM_ID);
   }
 
+  getPlatformWebsiteId(): string {
+    return asText(process.env.UMAMI_PLATFORM_WEBSITE_ID);
+  }
+
   private getTeamId(scope: UmamiTeamScope = 'deployment'): string {
     return scope === 'platform' ? this.getPlatformTeamId() : this.getDeploymentTeamId();
   }
@@ -170,6 +289,10 @@ class UmamiAnalyticsService {
       this.isEnabled(scope) &&
       Boolean(this.getHost() && this.getUsername() && this.getPassword() && this.getTeamId(scope))
     );
+  }
+
+  isPlatformWebsiteConfigured(): boolean {
+    return this.isConfigured('platform') && Boolean(this.getPlatformWebsiteId());
   }
 
   getTrackerHost(): string {
@@ -513,6 +636,121 @@ class UmamiAnalyticsService {
       activeVisitors: extractActiveVisitors(activePayload),
       updatedAt: new Date().toISOString(),
     };
+  }
+
+  async getWebsiteActiveVisitors(
+    websiteId: string,
+    input?: { scope?: UmamiTeamScope }
+  ): Promise<number | undefined> {
+    const scope = input?.scope || 'platform';
+    if (!this.isConfigured(scope)) {
+      return undefined;
+    }
+
+    const safeWebsiteId = asText(websiteId);
+    if (!safeWebsiteId) {
+      return undefined;
+    }
+
+    const activePayload = await this.request<unknown>(
+      `/api/websites/${encodeURIComponent(safeWebsiteId)}/active`,
+      {
+        method: 'GET',
+      }
+    );
+    return extractActiveVisitors(activePayload);
+  }
+
+  async getWebsiteStats(websiteId: string, range: UmamiWebsiteStatsRange): Promise<UmamiWebsiteStats | null> {
+    if (!this.isConfigured('platform')) {
+      return null;
+    }
+
+    const safeWebsiteId = asText(websiteId);
+    if (!safeWebsiteId) {
+      return null;
+    }
+
+    const params = new URLSearchParams({
+      startAt: String(range.startAt),
+      endAt: String(range.endAt),
+    });
+    const payload = await this.request<unknown>(
+      `/api/websites/${encodeURIComponent(safeWebsiteId)}/stats?${params.toString()}`,
+      {
+        method: 'GET',
+      }
+    );
+    return parseStatsPayload(payload);
+  }
+
+  async getWebsitePageviews(websiteId: string, range: UmamiWebsiteStatsRange): Promise<UmamiWebsitePageviews | null> {
+    if (!this.isConfigured('platform')) {
+      return null;
+    }
+
+    const safeWebsiteId = asText(websiteId);
+    if (!safeWebsiteId) {
+      return null;
+    }
+
+    const params = new URLSearchParams({
+      startAt: String(range.startAt),
+      endAt: String(range.endAt),
+      unit: range.unit || 'day',
+    });
+    if (range.timezone) {
+      params.set('timezone', range.timezone);
+    }
+
+    const payload = await this.request<unknown>(
+      `/api/websites/${encodeURIComponent(safeWebsiteId)}/pageviews?${params.toString()}`,
+      {
+        method: 'GET',
+      }
+    );
+    const record = asObject(unwrapPayload<unknown>(payload));
+    return {
+      pageviews: parseTimeseriesList(record.pageviews),
+      sessions: parseTimeseriesList(record.sessions),
+    };
+  }
+
+  async getWebsiteMetric(
+    websiteId: string,
+    range: UmamiWebsiteStatsRange & { type: UmamiMetricType; limit?: number; expanded?: false }
+  ): Promise<UmamiWebsiteMetric[]>;
+  async getWebsiteMetric(
+    websiteId: string,
+    range: UmamiWebsiteStatsRange & { type: UmamiMetricType; limit?: number; expanded: true }
+  ): Promise<UmamiWebsiteExpandedMetric[]>;
+  async getWebsiteMetric(
+    websiteId: string,
+    range: UmamiWebsiteStatsRange & { type: UmamiMetricType; limit?: number; expanded?: boolean }
+  ): Promise<UmamiWebsiteMetric[] | UmamiWebsiteExpandedMetric[]> {
+    if (!this.isConfigured('platform')) {
+      return [];
+    }
+
+    const safeWebsiteId = asText(websiteId);
+    if (!safeWebsiteId) {
+      return [];
+    }
+
+    const params = new URLSearchParams({
+      startAt: String(range.startAt),
+      endAt: String(range.endAt),
+      type: range.type,
+      limit: String(range.limit || 10),
+    });
+    const suffix = range.expanded ? '/expanded' : '';
+    const payload = await this.request<unknown>(
+      `/api/websites/${encodeURIComponent(safeWebsiteId)}/metrics${suffix}?${params.toString()}`,
+      {
+        method: 'GET',
+      }
+    );
+    return range.expanded ? parseExpandedMetricList(payload) : parseMetricList(payload);
   }
 }
 

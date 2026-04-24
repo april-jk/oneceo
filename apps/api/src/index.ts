@@ -19,6 +19,7 @@ import internalRuntimeArtifactRoutes from './routes/internal-runtime-artifact-ro
 import internalAdminAuthRoutes from './routes/internal-admin-auth-routes';
 import internalAdminAppUserRoutes from './routes/internal-admin-app-user-routes';
 import internalAdminDeploymentRoutes from './routes/internal-admin-deployment-routes';
+import internalAdminOperationsAnalyticsRoutes from './routes/internal-admin-operations-analytics-routes';
 import internalTaskCreationRoutes from './routes/internal-task-creation-routes';
 import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
 import { closeDatabaseConnection, testDatabaseConnection } from './config/database';
@@ -169,6 +170,7 @@ app.use('/api/internal', internalRuntimeArtifactRoutes);
 app.use('/api/internal', internalAdminAuthRoutes);
 app.use('/api/internal', internalAdminAppUserRoutes);
 app.use('/api/internal', internalAdminDeploymentRoutes);
+app.use('/api/internal/admin/operations/analytics', internalAdminOperationsAnalyticsRoutes);
 app.use('/api/internal', internalTaskCreationRoutes);
 
 // 任务相关 API

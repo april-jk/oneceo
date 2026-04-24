@@ -1253,6 +1253,8 @@ export default function Sidebar({
                   onClick={() => {
                     setLocation(`/new-task?new=${Date.now()}`);
                   }}
+                  data-umami-event="sidebar_new_task_click"
+                  data-umami-event-target="/new-task"
                 >
                   <Icon className="w-4 h-4" />
                   {!collapsed && (
@@ -1275,6 +1277,8 @@ export default function Sidebar({
                         ? "bg-sidebar-accent text-sidebar-accent-foreground"
                         : "text-sidebar-foreground hover:bg-sidebar-accent/50"
                   } ${collapsed ? "" : "min-w-0 overflow-hidden"}`}
+                  data-umami-event="sidebar_nav_click"
+                  data-umami-event-target={item.href}
                 >
                   <Icon className="w-4 h-4" />
                   {!collapsed && (

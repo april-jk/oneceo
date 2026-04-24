@@ -65,6 +65,9 @@ const UserManagementSection = lazy(() =>
 const DeploymentManagementSection = lazy(() =>
   import('./components/DeploymentManagementSection').then((module) => ({ default: module.DeploymentManagementSection }))
 );
+const OperationsAnalyticsSection = lazy(() =>
+  import('./components/OperationsAnalyticsSection').then((module) => ({ default: module.OperationsAnalyticsSection }))
+);
 const SkillManagementSection = lazy(() =>
   import('./components/SkillManagementSection').then((module) => ({ default: module.SkillManagementSection }))
 );
@@ -77,7 +80,7 @@ const OsacReleaseManagementSection = lazy(() =>
   import('./components/OsacReleaseManagementSection').then((module) => ({ default: module.OsacReleaseManagementSection }))
 );
 
-type SectionKey = 'kvm' | 'deployment' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit';
+type SectionKey = 'kvm' | 'operations' | 'deployment' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit';
 type NavGroupKey = 'runtime' | 'platform';
 type ToastTone = 'error' | 'success' | 'warning' | 'info';
 type SandboxDetailTab = 'overview' | 'files' | 'processes' | 'connectivity' | 'archive' | 'terminal';
@@ -336,6 +339,15 @@ const NAV_ITEMS: Array<{
     tag: 'DEP',
     description: '查看会话部署记录、访问地址和用户归属。',
     signal: '部署状态',
+  },
+  {
+    key: 'operations',
+    group: 'runtime',
+    label: '运营数据',
+    subtitle: '平台增长与使用',
+    tag: 'OPS',
+    description: '查看 OneCEO 平台流量、来源、页面、事件和业务转化。',
+    signal: '运营指标',
   },
   {
     key: 'conversation',
@@ -3229,6 +3241,7 @@ const OSAC_TAB_VALUES = new Set(['published', 'pending', 'all', 'upload']);
 
 function isSectionKey(value: string | null): value is SectionKey {
   return value === 'kvm'
+    || value === 'operations'
     || value === 'deployment'
     || value === 'conversation'
     || value === 'user'
@@ -3671,6 +3684,7 @@ export default function App() {
   const [transitionFilters, setTransitionFilters] = useState(DEFAULT_TRANSITION_FILTERS);
   const [transitionAdvancedFiltersOpen, setTransitionAdvancedFiltersOpen] = useState(false);
   const [deploymentManagementUpdatedAt, setDeploymentManagementUpdatedAt] = useState<string | null>(null);
+  const [operationsAnalyticsUpdatedAt, setOperationsAnalyticsUpdatedAt] = useState<string | null>(null);
   const [userManagementUpdatedAt, setUserManagementUpdatedAt] = useState<string | null>(null);
   const [skillManagementUpdatedAt, setSkillManagementUpdatedAt] = useState<string | null>(null);
   const [connectorGuideUpdatedAt, setConnectorGuideUpdatedAt] = useState<string | null>(null);
@@ -5375,6 +5389,8 @@ export default function App() {
       try {
         if (section === 'kvm') {
           await Promise.all([loadKvmSection(), loadAuditSection()]);
+        } else if (section === 'operations') {
+          setError(null);
         } else if (section === 'deployment') {
           setError(null);
         } else if (section === 'conversation') {
@@ -7315,6 +7331,8 @@ export default function App() {
   const activeServiceOnline =
     activeSection === 'agent'
       ? agentOverview?.agentApi.online
+      : activeSection === 'operations'
+        ? true
       : activeSection === 'deployment'
         ? true
       : activeSection === 'conversation'
@@ -7335,6 +7353,8 @@ export default function App() {
   const activeServiceLabel =
     activeSection === 'agent'
       ? '智能体服务'
+      : activeSection === 'operations'
+        ? '运营分析'
       : activeSection === 'deployment'
         ? '平台接口'
       : activeSection === 'conversation'
@@ -7355,6 +7375,8 @@ export default function App() {
   const updatedAtLabel =
     activeSection === 'sandbox'
       ? sandboxApi?.timestamp || sandboxOverviewItems[0]?.startedAt
+      : activeSection === 'operations'
+        ? operationsAnalyticsUpdatedAt
       : activeSection === 'deployment'
         ? deploymentManagementUpdatedAt
       : activeSection === 'conversation'
@@ -7373,6 +7395,7 @@ export default function App() {
           ? auditSummaryFetchedAt || auditEntries[0]?.timestamp
             : kvmOverview?.updatedAt;
   const lockMainAreaScroll =
+    activeSection === 'operations' ||
     activeSection === 'deployment' ||
     activeSection === 'conversation' ||
     activeSection === 'user' ||
@@ -11637,6 +11660,15 @@ export default function App() {
       );
     }
     if (activeSection === 'conversation') return renderConversationOpsSection();
+    if (activeSection === 'operations') {
+      return (
+        <OperationsAnalyticsSection
+          onError={setError}
+          onUpdatedAtChange={setOperationsAnalyticsUpdatedAt}
+          onRegisterRefresh={registerSectionRefresh}
+        />
+      );
+    }
     if (activeSection === 'user') {
       return (
         <UserManagementSection

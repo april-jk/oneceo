@@ -4122,6 +4122,207 @@ select:focus-visible {
   min-height: 0;
 }
 
+.operations-analytics-page {
+  gap: 12px;
+}
+
+.operations-analytics-actions {
+  align-items: start;
+}
+
+.operations-analytics-range {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.operations-analytics-range .secondary-btn.active {
+  border-color: color-mix(in srgb, var(--theme-primary) 52%, var(--border));
+  background: color-mix(in srgb, var(--theme-primary) 14%, var(--surface));
+  color: var(--primary-strong);
+}
+
+.operations-analytics-source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  background: color-mix(in srgb, var(--surface-strong) 86%, transparent);
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.operations-analytics-alerts {
+  display: grid;
+  gap: 6px;
+}
+
+.operations-analytics-alerts p {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, #f59e0b 32%, var(--border));
+  background: color-mix(in srgb, #f59e0b 10%, var(--surface));
+  color: var(--text);
+}
+
+.operations-analytics-summary {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.operations-analytics-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.operations-analytics-grid-main {
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.9fr);
+}
+
+.operations-analytics-panel {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  min-width: 0;
+  min-height: 210px;
+  padding: 14px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  background: color-mix(in srgb, var(--surface-strong) 92%, transparent);
+  box-shadow: var(--shadow-soft);
+}
+
+.operations-analytics-panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.operations-analytics-panel-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.operations-analytics-panel-head p {
+  margin: 4px 0 0;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.operations-analytics-list {
+  display: grid;
+  gap: 10px;
+}
+
+.operations-analytics-list-row {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.operations-analytics-list-main,
+.operations-analytics-list-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.operations-analytics-list-main span {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operations-analytics-list-main strong {
+  color: var(--text);
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.operations-analytics-list-meta {
+  justify-content: flex-start;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.operations-analytics-bar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--border) 56%, transparent);
+}
+
+.operations-analytics-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--theme-primary) 64%, #22c55e);
+}
+
+.operations-analytics-sparkline {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8px, 1fr));
+  align-items: end;
+  gap: 5px;
+  min-height: 150px;
+  padding: 8px 0 0;
+}
+
+.operations-analytics-sparkline > span {
+  display: flex;
+  align-items: end;
+  height: 140px;
+  min-width: 0;
+}
+
+.operations-analytics-sparkline i {
+  display: block;
+  width: 100%;
+  min-height: 6px;
+  border-radius: 6px 6px 2px 2px;
+  background: color-mix(in srgb, var(--theme-primary) 70%, #16a34a);
+}
+
+.operations-analytics-business-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.operations-analytics-business-card {
+  display: grid;
+  gap: 6px;
+  min-height: 70px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+}
+
+.operations-analytics-business-card span {
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.operations-analytics-business-card strong {
+  color: var(--text);
+  font-size: 1.18rem;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
 .deployment-railway-toolbar-copy {
   display: grid;
   gap: 3px;
@@ -11797,6 +11998,27 @@ tbody td,
     color-mix(in srgb, var(--surface-elevated) 92%, transparent),
     color-mix(in srgb, var(--surface-muted) 64%, transparent)
   );
+}
+
+@media (max-width: 1180px) {
+  .operations-analytics-summary,
+  .operations-analytics-grid,
+  .operations-analytics-grid-main {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .operations-analytics-summary,
+  .operations-analytics-grid,
+  .operations-analytics-grid-main,
+  .operations-analytics-business-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .operations-analytics-range {
+    justify-content: flex-start;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

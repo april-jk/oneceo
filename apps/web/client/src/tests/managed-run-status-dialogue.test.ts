@@ -66,6 +66,26 @@ function createManagedStartingStatusMessage(content: string): AgentMessage {
   };
 }
 
+function createManagedTodoWriteMessage(
+  toolCallId: string,
+  todos: Array<{ content: string; status: string; activeForm?: string }>,
+): AgentMessage {
+  return createManagedToolMessage({
+    eventType: "tool_call_completed",
+    content: "任务清单已更新",
+    toolCallId,
+    toolName: "todowrite",
+    metadata: {
+      arguments: {
+        todos,
+      },
+      outputPreview: {
+        todos,
+      },
+    },
+  });
+}
+
 describe("managed run status dialogue", () => {
   it("keeps managed run_status between two tool cards", () => {
     const items = buildChatItems([
@@ -282,6 +302,114 @@ describe("managed run status dialogue", () => {
     expect(writePurpose).not.toContain("<!DOCTYPE");
     expect(shellPurpose).toBe("检查项目文件和运行日志");
     expect(shellPurpose).not.toContain("total 20");
+  });
+
+  it("splits managed activity groups by active todowrite stages", () => {
+    const visibleItems = groupManagedActivityItems(
+      buildChatItems([
+        createManagedTodoWriteMessage("todo-stage-1", [
+          {
+            content: "搭建页面结构",
+            status: "in_progress",
+            activeForm: "正在搭建页面结构",
+          },
+          {
+            content: "验证最终效果",
+            status: "pending",
+            activeForm: "正在验证最终效果",
+          },
+        ]),
+        createManagedRunStatusMessage("运行环境已经准备好了，我开始生成项目内容"),
+        createManagedToolMessage({
+          eventType: "tool_call_completed",
+          content: "工具 write_file 已完成",
+          toolCallId: "tool-write-stage-1",
+          toolName: "write_file",
+          metadata: {
+            arguments: {
+              path: "game-2048/index.html",
+              content: "<!DOCTYPE html>",
+            },
+          },
+        }),
+        createManagedTodoWriteMessage("todo-stage-2", [
+          {
+            content: "搭建页面结构",
+            status: "completed",
+            activeForm: "正在搭建页面结构",
+          },
+          {
+            content: "验证最终效果",
+            status: "in_progress",
+            activeForm: "正在验证最终效果",
+          },
+        ]),
+        createManagedToolMessage({
+          eventType: "tool_call_completed",
+          content: "工具 shell_execute 已完成",
+          toolCallId: "tool-check-stage-2",
+          toolName: "shell_execute",
+          metadata: {
+            arguments: {
+              command: "pnpm test",
+            },
+          },
+        }),
+        createManagedTodoWriteMessage("todo-all-done", [
+          {
+            content: "搭建页面结构",
+            status: "completed",
+            activeForm: "正在搭建页面结构",
+          },
+          {
+            content: "验证最终效果",
+            status: "completed",
+            activeForm: "正在验证最终效果",
+          },
+        ]),
+        createManagedToolMessage({
+          eventType: "tool_call_completed",
+          content: "任务已完成",
+          toolCallId: "tool-complete",
+          toolName: "complete_task",
+          metadata: {
+            arguments: {
+              summary: "2048 小游戏已完成",
+            },
+          },
+        }),
+      ]).filter(
+        (item) =>
+          item.kind !== "managed_status" || item.displayInTimeline !== false,
+      ),
+    );
+
+    expect(visibleItems).toHaveLength(2);
+    expect(visibleItems.every((item) => item.kind === "managed_activity_group")).toBe(
+      true,
+    );
+
+    const firstGroup = visibleItems[0] as Extract<
+      ChatItem,
+      { kind: "managed_activity_group" }
+    >;
+    const secondGroup = visibleItems[1] as Extract<
+      ChatItem,
+      { kind: "managed_activity_group" }
+    >;
+
+    expect(firstGroup.title).toBe("正在搭建页面结构");
+    expect(secondGroup.title).toBe("正在验证最终效果");
+    expect(
+      secondGroup.items.filter(
+        (item) => item.kind === "managed_tool" && item.toolName === "todowrite",
+      ),
+    ).toHaveLength(2);
+    expect(secondGroup.items[secondGroup.items.length - 1]).toMatchObject({
+      kind: "managed_tool",
+      toolName: "complete_task",
+      status: "completed",
+    });
   });
 
   it("starts a fresh managed run_status after a new user round", () => {

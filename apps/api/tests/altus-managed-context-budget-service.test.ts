@@ -151,3 +151,36 @@ test('projectMessagesForModel budgets large assistant write_file tool arguments 
   assert.equal(summarizedArguments.contentChars, largeContent.length);
   assert.match(summarizedArguments.contentSummary, /\.\.\.\[budgeted\]\.\.\./);
 });
+
+test('projectMessagesForModel normalizes malformed assistant tool arguments before the next model round', () => {
+  const service = new AltusManagedContextBudgetService();
+
+  const projected = service.projectMessagesForModel([
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [
+        {
+          id: 'call-shell-1',
+          type: 'function',
+          function: {
+            name: 'shell_execute',
+            arguments: '{"command":"pnpm test"',
+          },
+        },
+        {
+          id: 'call-read-1',
+          type: 'function',
+          function: {
+            name: 'read_file',
+            arguments: JSON.stringify({ path: 'package.json' }),
+          },
+        },
+      ],
+    },
+  ]);
+
+  assert.equal(projected[0]?.tool_calls?.[0]?.function.arguments, '{}');
+  assert.equal(projected[0]?.tool_calls?.[1]?.function.arguments, '{"path":"package.json"}');
+  assert.doesNotThrow(() => JSON.parse(String(projected[0]?.tool_calls?.[0]?.function.arguments)));
+});

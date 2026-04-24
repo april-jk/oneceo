@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  sanitizeOpenAiChatCompletionProxyBody,
   toAnthropicRequest,
   toOpenAiChatCompletion,
   transformAnthropicStreamEvent,
@@ -113,6 +114,91 @@ test('toAnthropicRequest maps OpenAI tools and tool results into Anthropic messa
             path: 'index.html',
             bytes: 13,
           }),
+        },
+      ],
+    },
+  ]);
+});
+
+test('sanitizeOpenAiChatCompletionProxyBody normalizes malformed OpenAI tool arguments before upstream passthrough', () => {
+  const body = Buffer.from(
+    JSON.stringify({
+      model: 'code-model',
+      messages: [
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              id: 'call-1',
+              type: 'function',
+              function: {
+                name: 'shell_execute',
+                arguments: '{"command":"pnpm test"',
+              },
+            },
+            {
+              id: 'call-2',
+              type: 'function',
+              function: {
+                name: 'read_file',
+                arguments: { path: 'package.json' },
+              },
+            },
+          ],
+        },
+        {
+          role: 'assistant',
+          content: '',
+          function_call: {
+            name: 'legacy_tool',
+            arguments: '[1,2,3]',
+          },
+        },
+      ],
+    }),
+    'utf-8'
+  );
+
+  const sanitized = sanitizeOpenAiChatCompletionProxyBody('/v1/chat/completions', body);
+  assert.ok(Buffer.isBuffer(sanitized));
+  const payload = JSON.parse(sanitized.toString('utf-8'));
+
+  assert.equal(payload.messages[0].tool_calls[0].function.arguments, '{}');
+  assert.equal(payload.messages[0].tool_calls[1].function.arguments, '{"path":"package.json"}');
+  assert.equal(payload.messages[1].function_call.arguments, '{}');
+});
+
+test('toAnthropicRequest normalizes malformed tool arguments through the shared sanitizer', () => {
+  const payload = toAnthropicRequest({
+    model: 'claude-sonnet-4-6',
+    messages: [
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'call-shell-1',
+            type: 'function',
+            function: {
+              name: 'shell_execute',
+              arguments: '{"command":"pnpm test"',
+            },
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.deepEqual(payload.messages, [
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id: 'call-shell-1',
+          name: 'shell_execute',
+          input: {},
         },
       ],
     },

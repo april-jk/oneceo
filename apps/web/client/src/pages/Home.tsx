@@ -8226,6 +8226,34 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
     }
   };
 
+  if (toolName === "complete_task") {
+    const blocks: string[] = [];
+    const summary = asText(args.summary);
+    if (summary) {
+      blocks.push(summary);
+    }
+    if (Array.isArray(args.verification)) {
+      const checks = (args.verification as unknown[])
+        .map((item) => asText(item))
+        .filter(Boolean);
+      if (checks.length > 0) {
+        blocks.push(
+          [
+            `${i18n.t("homeWorkspace.verificationLabel")}:`,
+            "",
+            checks.map((item) => `- ${item.replace(/\n/g, "\n  ")}`).join("\n"),
+          ].join("\n"),
+        );
+      }
+    }
+    if (error) {
+      blocks.push(`${i18n.t("homeWorkspace.failureReasonLabel")}:\n\n${error}`);
+    }
+    return (
+      blocks.join("\n\n").trim() || formatManagedToolSummary(toolName, metadata)
+    );
+  }
+
   lines.push(
     `${i18n.t("homeWorkspace.toolLabel")}: ${getManagedToolDisplayName(toolName)} (${toolName})`,
   );
@@ -8318,15 +8346,6 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
         .filter(Boolean)
         .join(" / ");
       pushLine(i18n.t("homeWorkspace.suggestedOptionsLabel"), options);
-    }
-  } else if (toolName === "complete_task") {
-    pushLine(i18n.t("homeWorkspace.completionSummaryLabel"), args.summary);
-    if (Array.isArray(args.verification)) {
-      const checks = (args.verification as unknown[])
-        .map((item) => asText(item))
-        .filter(Boolean)
-        .join(" / ");
-      pushLine(i18n.t("homeWorkspace.verificationLabel"), checks);
     }
   } else {
     pushLine(i18n.t("homeWorkspace.summaryLabel"), asText(metadata.content));

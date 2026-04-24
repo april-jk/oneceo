@@ -59,6 +59,7 @@ const REQUIRED_TABLES = [
   'credit_transactions',
   'token_usage_logs',
   'model_pricing',
+  'cache_pricing_config',
 ] as const;
 
 const REQUIRED_COLUMNS = [
@@ -259,6 +260,7 @@ const REQUIRED_INDEXES = [
   'idx_token_usage_logs_created_at',
   'idx_model_pricing_model_active',
   'idx_model_pricing_active',
+  'idx_cache_pricing_config_provider_active',
 ] as const;
 
 /**
@@ -1409,6 +1411,7 @@ CREATE TABLE IF NOT EXISTS user_credits (
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_credits_user_id ON user_credits(user_id);
+DO $$ BEGIN ALTER TABLE user_credits ADD CONSTRAINT check_balance_non_negative CHECK (balance >= 0); EXCEPTION WHEN duplicate_object THEN null; END $$;
 
 -- 积分交易记录表
 CREATE TABLE IF NOT EXISTS credit_transactions (
@@ -1465,6 +1468,31 @@ CREATE TABLE IF NOT EXISTS model_pricing (
 DROP INDEX IF EXISTS idx_model_pricing_model_active;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_model_pricing_model_active ON model_pricing(model) WHERE is_active = TRUE;
 CREATE INDEX IF NOT EXISTS idx_model_pricing_active ON model_pricing(is_active);
+
+-- 缓存计费比例配置表
+CREATE TABLE IF NOT EXISTS cache_pricing_config (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider TEXT NOT NULL,
+  hit_ratio INTEGER NOT NULL,
+  creation_ratio INTEGER NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  effective_from TIMESTAMP NOT NULL DEFAULT NOW(),
+  effective_until TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+DROP INDEX IF EXISTS idx_cache_pricing_config_provider_active;
+CREATE UNIQUE INDEX idx_cache_pricing_config_provider_active
+  ON cache_pricing_config(provider)
+  WHERE is_active = TRUE;
+
+-- 初始默认配置（向后兼容：确保升级后现有计费不受影响）
+INSERT INTO cache_pricing_config (provider, hit_ratio, creation_ratio, is_active)
+VALUES
+  ('openai', 500, 0, true),
+  ('anthropic', 100, 1250, true)
+ON CONFLICT DO NOTHING;
 `;
 
 export async function inspectDatabaseSchemaReadiness(): Promise<SchemaReadinessReport> {
@@ -1534,6 +1562,14 @@ export async function inspectDatabaseSchemaReadiness(): Promise<SchemaReadinessR
     missing.push('index:idx_model_pricing_model_active(partial-active)');
   }
 
+  const cacheConfigActiveIndexDefinition = indexDefinitions.get('idx_cache_pricing_config_provider_active') || '';
+  if (
+    cacheConfigActiveIndexDefinition &&
+    !cacheConfigActiveIndexDefinition.toLowerCase().includes('where (is_active = true)')
+  ) {
+    missing.push('index:idx_cache_pricing_config_provider_active(partial-active)');
+  }
+
   return {
     ready: missing.length === 0,
     missing,
@@ -1591,6 +1627,7 @@ export async function runMigration() {
     console.log('  - credit_transactions');
     console.log('  - token_usage_logs');
     console.log('  - model_pricing');
+    console.log('  - cache_pricing_config');
     
     return true;
   } catch (error) {

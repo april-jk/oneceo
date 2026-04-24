@@ -77,6 +77,54 @@ type DeploymentToolViewProjection = {
   };
 };
 
+function normalizeInlineBulletGlyphLine(line: string): string {
+  const bulletCount = (line.match(/•/g) || []).length;
+  const trimmed = line.trimStart();
+  if (bulletCount < 2) {
+    if (trimmed.startsWith('•')) {
+      return `${line.slice(0, line.length - trimmed.length)}- ${trimmed.slice(1).trimStart()}`;
+    }
+    const bulletIndex = line.indexOf('•');
+    const prefix = bulletIndex >= 0 ? line.slice(0, bulletIndex).trimEnd() : '';
+    const item = bulletIndex >= 0 ? line.slice(bulletIndex + 1).trim() : '';
+    if (prefix && /[:：]$/.test(prefix) && item) {
+      return `${prefix}\n- ${item}`;
+    }
+    return line;
+  }
+  const firstBulletIndex = line.indexOf('•');
+  const prefix = line.slice(0, firstBulletIndex).trimEnd();
+  const items = line
+    .slice(firstBulletIndex)
+    .split(/\s*•\s*/g)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (items.length < 2) {
+    return line;
+  }
+  const list = items.map((item) => `- ${item}`).join('\n');
+  return prefix ? `${prefix}\n${list}` : list;
+}
+
+export function normalizeManagedCompletionMarkdown(value: string): string {
+  return asText(value)
+    .replace(/\r\n?/g, '\n')
+    .trim()
+    .split('\n')
+    .map((line) => normalizeInlineBulletGlyphLine(line))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function normalizeManagedCompletionCheck(value: string): string {
+  return normalizeManagedCompletionMarkdown(value)
+    .split('\n')
+    .map((line) => line.trim().replace(/^[-*•]\s+/, '').trim())
+    .filter(Boolean)
+    .join('；');
+}
+
 type StreamedToolCallDelta = {
   index?: number;
   id?: string;
@@ -1293,19 +1341,27 @@ export class AltusRunCoordinator {
   }
 
   private buildCompletionMessage(summary: string, verification?: string[]) {
-    const normalizedSummary = truncate(asText(summary), 8000) || '任务已处理完成。';
+    const normalizedSummary =
+      normalizeManagedCompletionMarkdown(truncate(asText(summary), 8000)) || '任务已处理完成。';
     const checks = Array.isArray(verification)
-      ? verification.map((item) => truncate(asText(item), 500)).filter(Boolean).slice(0, 8)
+      ? verification
+          .map((item) => truncate(asText(item), 500))
+          .filter(Boolean)
+          .slice(0, 8)
+          .map((item) => normalizeManagedCompletionCheck(item))
+          .filter(Boolean)
       : [];
     if (checks.length === 0) {
       return normalizedSummary;
     }
-    return `${normalizedSummary}\n\n验证:\n${checks.map((item) => `- ${item}`).join('\n')}`;
+    return `${normalizedSummary}\n\n验证:\n\n${checks.map((item) => `- ${item}`).join('\n')}`;
   }
 
   private resolveFinalAssistantContent(assistantContent: string, completionMessage: string): string {
-    const normalizedAssistantContent = truncate(asText(assistantContent), 24000).trim();
-    const normalizedCompletionMessage = asText(completionMessage);
+    const normalizedAssistantContent = normalizeManagedCompletionMarkdown(
+      truncate(asText(assistantContent), 24000)
+    );
+    const normalizedCompletionMessage = normalizeManagedCompletionMarkdown(asText(completionMessage));
     if (!normalizedAssistantContent) {
       return normalizedCompletionMessage;
     }

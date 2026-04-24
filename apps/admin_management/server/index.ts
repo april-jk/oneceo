@@ -19,6 +19,7 @@ import { createKvmRoutes } from './routes/kvm-routes';
 import { createSandboxManagementRoutes } from './routes/sandbox-management-routes';
 import { createSkillManagementRoutes } from './routes/skill-management-routes';
 import { createOsacReleaseRoutes } from './routes/osac-release-routes';
+import { createOperationsAnalyticsRoutes } from './routes/operations-analytics-routes';
 import { createUserManagementRoutes } from './routes/user-management-routes';
 import { AgentManagementService } from './services/agent-management-service';
 import { AdminThemeService } from './services/admin-theme-service';
@@ -32,6 +33,7 @@ import { KvmService } from './services/kvm-service';
 import { SandboxManagementService } from './services/sandbox-management-service';
 import { SkillManagementService } from './services/skill-management-service';
 import { OsacReleaseManagementService } from './services/osac-release-management-service';
+import { OperationsAnalyticsService } from './services/operations-analytics-service';
 import { UserManagementService } from './services/user-management-service';
 import { errorMiddleware, fail } from './utils/http';
 import { createAdminAuthMiddleware } from './middleware/admin-auth-middleware';
@@ -60,6 +62,7 @@ const sandboxManagementService = new SandboxManagementService();
 const skillManagementService = new SkillManagementService(oneceoApiConnector);
 const connectorGuideManagementService = new ConnectorGuideManagementService(oneceoApiConnector);
 const osacReleaseManagementService = new OsacReleaseManagementService(oneceoApiConnector);
+const operationsAnalyticsService = new OperationsAnalyticsService(oneceoApiConnector);
 const userManagementService = new UserManagementService(oneceoApiConnector);
 
 app.use(express.json({ limit: jsonBodyLimit }));
@@ -121,6 +124,7 @@ app.use('/api/user-management', createUserManagementRoutes(userManagementService
 app.use('/api/skill-management', createSkillManagementRoutes(skillManagementService));
 app.use('/api/connector-guides', createConnectorGuideRoutes(connectorGuideManagementService));
 app.use('/api/osac-releases', createOsacReleaseRoutes(osacReleaseManagementService));
+app.use('/api/operations-analytics', createOperationsAnalyticsRoutes(operationsAnalyticsService));
 
 if (hasBuiltAdminWeb) {
   app.get('*', (req, res, next) => {

@@ -25,6 +25,16 @@ interface Pricing {
   cacheCreationRatio: number;
 }
 
+interface BillingMeta {
+  creditToRmb: number;
+  rmbPer100Credits: number;
+  platformMargin: number;
+  cacheRatios: {
+    openai?: { hit: number; creation: number };
+    anthropic?: { hit: number; creation: number };
+  };
+}
+
 interface BillingManagementSectionProps {
   onOpenUser?: (userId: string) => void;
   onOpenConversation?: (sessionId: string) => void;
@@ -35,6 +45,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
   const [activeTab, setActiveTab] = useState<'users' | 'pricing' | 'stats' | 'logs'>('users');
   const [users, setUsers] = useState<UserCredit[]>([]);
   const [pricing, setPricing] = useState<Pricing[]>([]);
+  const [billingMeta, setBillingMeta] = useState<BillingMeta | null>(null);
   const [loading, setLoading] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserCredit | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -82,10 +93,27 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
     }
   }, [onNotify]);
 
+  const fetchBillingMeta = useCallback(async () => {
+    try {
+      const response = await fetch('/api/internal/billing/meta', { credentials: 'include' });
+      if (response.ok) {
+        setBillingMeta(await response.json());
+      } else {
+        onNotify?.('error', '加载失败', await readBillingResponseError(response, '无法获取计费规则'));
+      }
+    } catch (error) {
+      console.error('获取计费规则失败:', error);
+      onNotify?.('error', '加载失败', getBillingErrorMessage(error, '无法获取计费规则'));
+    }
+  }, [onNotify]);
+
   useEffect(() => {
     if (activeTab === 'users') fetchUsers();
-    if (activeTab === 'pricing') fetchPricing();
-  }, [activeTab, fetchUsers, fetchPricing]);
+    if (activeTab === 'pricing') {
+      fetchPricing();
+      fetchBillingMeta();
+    }
+  }, [activeTab, fetchUsers, fetchPricing, fetchBillingMeta]);
 
   const handleUserDetail = useCallback((user: UserCredit) => {
     setSelectedUser(user);
@@ -342,6 +370,37 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
       {/* Pricing Tab */}
       {activeTab === 'pricing' && (
         <>
+          <section className="sub-panel user-management-summary-strip" aria-label="计费规则说明">
+            <article className="user-management-summary-card">
+              <div className="user-management-summary-head">
+                <span>积分兑换</span>
+              </div>
+              <strong>{billingMeta ? `1 credit = ¥${billingMeta.creditToRmb.toFixed(2)}` : '未加载'}</strong>
+              <small>{billingMeta ? `100 credits = ¥${billingMeta.rmbPer100Credits.toFixed(2)}` : '请刷新后重试'}</small>
+            </article>
+            <article className="user-management-summary-card">
+              <div className="user-management-summary-head">
+                <span>平台 margin</span>
+              </div>
+              <strong>{billingMeta ? `${(billingMeta.platformMargin * 100).toFixed(0)}%` : '未加载'}</strong>
+              <small>只读规则，暂不支持后台编辑</small>
+            </article>
+            <article className="user-management-summary-card">
+              <div className="user-management-summary-head">
+                <span>OpenAI 缓存</span>
+              </div>
+              <strong>{billingMeta?.cacheRatios.openai ? `命中 ${(billingMeta.cacheRatios.openai.hit * 100).toFixed(0)}%` : '未加载'}</strong>
+              <small>{billingMeta?.cacheRatios.openai?.creation ? `创建 ${(billingMeta.cacheRatios.openai.creation * 100).toFixed(0)}%` : '无缓存创建费用'}</small>
+            </article>
+            <article className="user-management-summary-card">
+              <div className="user-management-summary-head">
+                <span>Anthropic 缓存</span>
+              </div>
+              <strong>{billingMeta?.cacheRatios.anthropic ? `命中 ${(billingMeta.cacheRatios.anthropic.hit * 100).toFixed(0)}%` : '未加载'}</strong>
+              <small>{billingMeta?.cacheRatios.anthropic ? `创建 ${(billingMeta.cacheRatios.anthropic.creation * 100).toFixed(0)}%` : '未加载'}</small>
+            </article>
+          </section>
+
           <section className="sub-panel user-management-list-panel">
             <div className="user-management-list-head">
               <div>

@@ -186,7 +186,8 @@
     "altusControlLabel": "Altus Control",
     "altusControlDescription": "Decide whether Altus manages the conversation",
     "altusSandboxDirect": "Sandbox direct",
-    "altusManaged": "Altus managed"
+    "altusManaged": "Altus managed",
+    "description": "Manage your personalization, account settings, model preferences, and billing."
   },
   "auth": {
     "nameLabel": "Name",

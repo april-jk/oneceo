@@ -7,3 +7,9 @@
 - 继续在 `AltusRunCoordinator.sanitizeMessagesForModel` 和 `llm-proxy` OpenAI-compatible 出站边界增加最后防线，避免未来有路径绕过 context budget service 后重新把非法 arguments 发给上游。
 - 对当前轮模型刚生成的 malformed tool arguments 不再执行工具，而是回填 `invalid_tool_arguments_json` 工具结果，要求模型用合法 JSON object 参数重试。
 - 补充 targeted 回归测试，验证 malformed assistant tool arguments 不会继续污染下一轮模型请求，并验证最终请求 body 已被 sanitize。
+
+## Altus Todo 活动组默认折叠优化
+
+- 调整前端 `groupManagedActivityItems`，为 Todo 驱动的活动组计算 `defaultExpanded`。
+- 只默认展开最后一次 `todowrite` 快照仍包含 `in_progress` 的 Todo 活动组；出现新 Todo 阶段时自动折叠旧阶段；最后阶段完成后所有 Todo 活动组默认折叠。
+- 补充 managed run status dialogue 回归测试，覆盖最新 running Todo 默认展开和 all-completed 后默认折叠。

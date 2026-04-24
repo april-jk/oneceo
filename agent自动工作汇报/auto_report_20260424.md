@@ -13,3 +13,11 @@
 - 调整前端 `groupManagedActivityItems`，为 Todo 驱动的活动组计算 `defaultExpanded`。
 - 只默认展开最后一次 `todowrite` 快照仍包含 `in_progress` 的 Todo 活动组；出现新 Todo 阶段时自动折叠旧阶段；最后阶段完成后所有 Todo 活动组默认折叠。
 - 补充 managed run status dialogue 回归测试，覆盖最新 running Todo 默认展开和 all-completed 后默认折叠。
+
+## Altus 网页交付卡片与拖动柄视觉优化
+
+- 收敛共享 `ResizableHandle` 和预览文件分栏拖动柄：handle 使用透明热区与负外边距抵消布局占位，不绘制可见分隔带，独立 grip 无容器、无底纹、无边框，只在 hover / drag / focus 时显示，鼠标移出立即隐藏。
+- 隐藏首页对话区贴近分栏边缘的原生滚动条，避免滚动条轨道继续像拖动柄边缘线一样切割画面。
+- 将 grip 显示改为直接响应 `react-resizable-panels` 的 `data-resize-handle-state=hover/drag` 与 `data-resize-handle-active`，避免普通 DOM hover 在扩展 hit area 下不触发导致看不到拖动柄。
+- 将 `AltusArtifactPreviewCard` 的网页预览改为按容器缩放的只读 iframe，卡片内不再上下滚动，完整交互继续走 `Open`。
+- 补充缩放计算单元测试，覆盖小卡片缩放和大容器原始比例两类场景。

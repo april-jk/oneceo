@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -42,6 +42,28 @@ type AltusArtifactPreviewCardProps = {
   runtimeSwitchBlocked?: boolean;
 };
 
+const WEB_PREVIEW_DESIGN_WIDTH = 1280;
+const WEB_PREVIEW_DEFAULT_HEIGHT = 720;
+
+export function getScaledWebPreviewFrame(
+  containerWidth: number,
+  containerHeight: number,
+) {
+  if (containerWidth <= 0 || containerHeight <= 0) {
+    return {
+      width: WEB_PREVIEW_DESIGN_WIDTH,
+      height: WEB_PREVIEW_DEFAULT_HEIGHT,
+      scale: 1,
+    };
+  }
+  const scale = Math.min(containerWidth / WEB_PREVIEW_DESIGN_WIDTH, 1);
+  return {
+    width: Math.ceil(containerWidth / scale),
+    height: Math.ceil(containerHeight / scale),
+    scale,
+  };
+}
+
 function getFilename(path: string): string {
   const normalized = String(path || "").replace(/\\/g, "/");
   const parts = normalized.split("/");
@@ -72,6 +94,79 @@ export function resolveArtifactDeploymentPreviewUrl(
     info.latestUrl ||
     info.domains[0] ||
     ""
+  );
+}
+
+function ScaledWebPreviewFrame({
+  src,
+  title,
+  sandbox,
+}: {
+  src: string;
+  title: string;
+  sandbox?: string;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [containerSize, setContainerSize] = useState({
+    width: 0,
+    height: 0,
+  });
+  const frame = getScaledWebPreviewFrame(
+    containerSize.width,
+    containerSize.height,
+  );
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element) return;
+
+    const updateSize = () => {
+      const rect = element.getBoundingClientRect();
+      const nextSize = {
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      };
+      setContainerSize((current) => {
+        if (
+          current.width === nextSize.width &&
+          current.height === nextSize.height
+        ) {
+          return current;
+        }
+        return nextSize;
+      });
+    };
+
+    updateSize();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateSize);
+      return () => window.removeEventListener("resize", updateSize);
+    }
+
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div ref={containerRef} className="absolute inset-0 overflow-hidden bg-white">
+      <iframe
+        src={src}
+        title={title}
+        className="absolute left-0 top-0 max-w-none border-0"
+        sandbox={sandbox}
+        scrolling="no"
+        style={{
+          width: `${frame.width}px`,
+          height: `${frame.height}px`,
+          transform: `scale(${frame.scale})`,
+          transformOrigin: "top left",
+          background: "white",
+          pointerEvents: "none",
+        }}
+      />
+    </div>
   );
 }
 
@@ -391,16 +486,14 @@ export default function AltusArtifactPreviewCard({
                     {previewPath ? (
                       <div className="absolute inset-0">
                         {webPreviewState === "ready" ? (
-                          <iframe
+                          <ScaledWebPreviewFrame
                             src={selectedPreviewUrl}
                             title={`${getFilename(previewPath)} preview`}
-                            className="absolute inset-0 h-full w-full border-0"
                             sandbox={
                               deploymentPreviewUrl
                                 ? undefined
                                 : "allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
                             }
-                            style={{ background: "white" }}
                           />
                         ) : (
                           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-muted/20 px-6 text-center">

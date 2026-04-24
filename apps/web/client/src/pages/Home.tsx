@@ -1994,7 +1994,7 @@ export default function Home() {
           onScroll={() => {
             void handleMessageScroll();
           }}
-          className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-5"
+          className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
         >
           <div className="mx-auto w-full space-y-4">
             {isLoadingOlderHistory && (
@@ -2566,7 +2566,7 @@ export default function Home() {
                     </ResizablePanel>
                     <ResizableHandle
                       withHandle
-                      className="w-1.5 bg-transparent after:w-1.5 after:rounded-full after:bg-transparent hover:after:bg-transparent data-[resize-handle-active]:after:bg-transparent [&>div]:hidden"
+                      className="bg-transparent after:bg-transparent"
                       onDragging={handlePreviewResizeDragging}
                     />
                     <ResizablePanel

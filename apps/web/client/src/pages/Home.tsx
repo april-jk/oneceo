@@ -1721,7 +1721,11 @@ export default function Home() {
       : 0;
   const previewResizeDraggingRef = useRef(false);
   const previewResizeLastClientXRef = useRef<number | null>(null);
-  const previewPanelMaxSize = 48;
+  const previewPanelMaxSize = managedAltusMode ? 70 : 48;
+  const previewPanelMinSize = managedAltusMode ? 50 : 30;
+  const previewPanelDefaultSize = managedAltusMode ? 50 : 34;
+  const chatPanelDefaultSize = 100 - previewPanelDefaultSize;
+  const chatPanelMinSize = managedAltusMode ? 30 : 42;
 
   const openAltusReplay = (
     runId: string,
@@ -2249,200 +2253,200 @@ export default function Home() {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.4, ease: "easeOut" }}
-                  className="w-full max-w-3xl space-y-8"
-                >
-                  {/* Logo and Title */}
-                  <div className="text-center space-y-4">
-                    <motion.div
-                      initial={{ scale: 0.9, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      transition={{ delay: 0.1, duration: 0.4 }}
-                      className="flex items-center justify-center gap-3"
-                    >
-                      <div className="w-12 h-12 bg-foreground rounded-2xl flex items-center justify-center shadow-lg">
-                        <span className="text-background font-bold text-xl">
-                          M
-                        </span>
-                      </div>
-                      <h1 className="text-3xl font-semibold text-foreground tracking-tight">
-                        {t("homePage.title")}
-                      </h1>
-                    </motion.div>
-                    <motion.p
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      transition={{ delay: 0.2, duration: 0.4 }}
-                      className="text-muted-foreground text-lg"
-                    >
-                      {t("homePage.subtitle")}
-                    </motion.p>
-                  </div>
-
-                  {/* Main Input Area */}
+                className="w-full max-w-3xl space-y-8"
+              >
+                {/* Logo and Title */}
+                <div className="text-center space-y-4">
                   <motion.div
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.3, duration: 0.4 }}
-                    className="relative"
+                    initial={{ scale: 0.9, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ delay: 0.1, duration: 0.4 }}
+                    className="flex items-center justify-center gap-3"
                   >
-                    <div className="relative pt-1">
-                      {slashSuggestionPanel ? (
-                        <div className="mx-auto mb-2 w-[92%] max-w-full">
-                          {slashSuggestionPanel}
-                        </div>
-                      ) : null}
-                      {/* Text Area and Actions - Single Container */}
-                      <div className="relative z-10 space-y-3 rounded-[2rem] border border-border/70 bg-card p-4 shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)]">
-                        {/* Textarea */}
-                        <Textarea
-                          placeholder={t("homePage.textareaPlaceholder")}
-                          value={message}
-                          onChange={(e) =>
-                            handleComposerInputChange(e.target.value)
-                          }
-                          onKeyDown={(e) =>
-                            handleComposerKeyDown(e, {
-                              submit: () => handleSend(),
-                            })
-                          }
-                          className="min-h-[100px] resize-none border-0 bg-transparent px-0 py-0 text-base text-foreground placeholder:text-muted-foreground focus-visible:ring-0"
-                          rows={4}
-                        />
-                        {composerReferenceTokens}
+                    <div className="w-12 h-12 bg-foreground rounded-2xl flex items-center justify-center shadow-lg">
+                      <span className="text-background font-bold text-xl">
+                        M
+                      </span>
+                    </div>
+                    <h1 className="text-3xl font-semibold text-foreground tracking-tight">
+                      {t("homePage.title")}
+                    </h1>
+                  </motion.div>
+                  <motion.p
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.2, duration: 0.4 }}
+                    className="text-muted-foreground text-lg"
+                  >
+                    {t("homePage.subtitle")}
+                  </motion.p>
+                </div>
 
-                        <AttachmentChipList
-                          attachments={attachments}
-                          onRemove={removeAttachment}
-                        />
-
-                        {/* Bottom Action Bar */}
-                        <TooltipProvider>
-                          <div className="flex items-center justify-between pt-2">
-                            {/* Left Side Actions */}
-                            <div className="flex items-center gap-1">
-                              <AttachmentPickerButton
-                                onSelectFiles={handleAttachmentSelect}
-                                onSelectSkills={handleSkillSelect}
-                              />
-
-                              <ConnectorDialog sessionId={sessionId} />
-
-                              {/* Model Selection Button */}
-                              <DropdownMenu>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <DropdownMenuTrigger asChild>
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        className="h-9 gap-2 rounded-xl transition-colors hover:bg-accent"
-                                      >
-                                        <Sparkles className="w-4 h-4 text-muted-foreground" />
-                                        <span className="text-sm text-muted-foreground">
-                                          {t(`homePage.models.${selectedModel}`)}
-                                        </span>
-                                      </Button>
-                                    </DropdownMenuTrigger>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p>{t("homePage.selectModel")}</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                                <DropdownMenuContent
-                                  align="start"
-                                  className="w-40"
-                                >
-                                  <DropdownMenuItem
-                                    onClick={() => setSelectedModel("lite")}
-                                  >
-                                    <div className="flex flex-col">
-                                      <span className="font-medium">
-                                        {t("homePage.models.lite")}
-                                      </span>
-                                      <span className="text-xs text-muted-foreground">
-                                        {t("ceoView.modelLiteHint")}
-                                      </span>
-                                    </div>
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    onClick={() => setSelectedModel("pro")}
-                                  >
-                                    <div className="flex flex-col">
-                                      <span className="font-medium">
-                                        {t("homePage.models.pro")}
-                                      </span>
-                                      <span className="text-xs text-muted-foreground">
-                                        {t("ceoView.modelProHint")}
-                                      </span>
-                                    </div>
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    onClick={() => setSelectedModel("max")}
-                                  >
-                                    <div className="flex flex-col">
-                                      <span className="font-medium">
-                                        {t("homePage.models.max")}
-                                      </span>
-                                      <span className="text-xs text-muted-foreground">
-                                        {t("ceoView.modelMaxHint")}
-                                      </span>
-                                    </div>
-                                  </DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            </div>
-
-                            {/* Right Side Actions */}
-                            <div className="flex items-center gap-1">
-                              {/* Voice Input Button */}
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-9 w-9 rounded-full transition-colors hover:bg-accent"
-                                  >
-                                    <Mic className="w-4 h-4 text-muted-foreground" />
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  <p>{t("homePage.voiceInput")}</p>
-                                </TooltipContent>
-                              </Tooltip>
-
-                              {/* Send Button */}
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button
-                                    onClick={handleSend}
-                                    disabled={
-                                      !message.trim() &&
-                                      attachments.length === 0 &&
-                                      composerReferences.length === 0
-                                    }
-                                    size="icon"
-                                    className="h-9 w-9 rounded-full bg-primary text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
-                                  >
-                                    <Send className="w-4 h-4" />
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  <p>{t("homePage.sendMessage")}</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            </div>
-                          </div>
-                        </TooltipProvider>
+                {/* Main Input Area */}
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.3, duration: 0.4 }}
+                  className="relative"
+                >
+                  <div className="relative pt-1">
+                    {slashSuggestionPanel ? (
+                      <div className="mx-auto mb-2 w-[92%] max-w-full">
+                        {slashSuggestionPanel}
                       </div>
-                      {showInputProjectHint ? (
-                        <DropdownMenu
-                          open={projectMenuOpen}
-                          onOpenChange={setProjectMenuOpen}
-                        >
-                          <DropdownMenuTrigger asChild>
-                            <button
-                              type="button"
-                              className="relative z-0 -mt-5 mx-auto flex w-[94%] items-center justify-end rounded-b-[1.65rem] rounded-t-[0.9rem] border border-t-0 border-border/35 bg-muted/42 px-5 pb-3 pt-7 text-right shadow-[0_16px_28px_rgba(15,23,42,0.07)] backdrop-blur-[2px] transition-colors hover:bg-muted/54 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 dark:bg-muted/24 dark:hover:bg-muted/32 dark:shadow-[0_18px_32px_rgba(0,0,0,0.18)]"
+                    ) : null}
+                    {/* Text Area and Actions - Single Container */}
+                    <div className="relative z-10 space-y-3 rounded-[2rem] border border-border/70 bg-card p-4 shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)]">
+                      {/* Textarea */}
+                      <Textarea
+                        placeholder={t("homePage.textareaPlaceholder")}
+                        value={message}
+                        onChange={(e) =>
+                          handleComposerInputChange(e.target.value)
+                        }
+                        onKeyDown={(e) =>
+                          handleComposerKeyDown(e, {
+                            submit: () => handleSend(),
+                          })
+                        }
+                        className="min-h-[100px] resize-none border-0 bg-transparent px-0 py-0 text-base text-foreground placeholder:text-muted-foreground focus-visible:ring-0"
+                        rows={4}
+                      />
+                      {composerReferenceTokens}
+
+                      <AttachmentChipList
+                        attachments={attachments}
+                        onRemove={removeAttachment}
+                      />
+
+                      {/* Bottom Action Bar */}
+                      <TooltipProvider>
+                        <div className="flex items-center justify-between pt-2">
+                          {/* Left Side Actions */}
+                          <div className="flex items-center gap-1">
+                            <AttachmentPickerButton
+                              onSelectFiles={handleAttachmentSelect}
+                              onSelectSkills={handleSkillSelect}
+                            />
+
+                            <ConnectorDialog sessionId={sessionId} />
+
+                            {/* Model Selection Button */}
+                            <DropdownMenu>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-9 gap-2 rounded-xl transition-colors hover:bg-accent"
+                                    >
+                                      <Sparkles className="w-4 h-4 text-muted-foreground" />
+                                      <span className="text-sm text-muted-foreground">
+                                        {t(`homePage.models.${selectedModel}`)}
+                                      </span>
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>{t("homePage.selectModel")}</p>
+                                </TooltipContent>
+                              </Tooltip>
+                              <DropdownMenuContent
+                                align="start"
+                                className="w-40"
+                              >
+                                <DropdownMenuItem
+                                  onClick={() => setSelectedModel("lite")}
+                                >
+                                  <div className="flex flex-col">
+                                    <span className="font-medium">
+                                      {t("homePage.models.lite")}
+                                    </span>
+                                    <span className="text-xs text-muted-foreground">
+                                      {t("ceoView.modelLiteHint")}
+                                    </span>
+                                  </div>
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => setSelectedModel("pro")}
+                                >
+                                  <div className="flex flex-col">
+                                    <span className="font-medium">
+                                      {t("homePage.models.pro")}
+                                    </span>
+                                    <span className="text-xs text-muted-foreground">
+                                      {t("ceoView.modelProHint")}
+                                    </span>
+                                  </div>
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => setSelectedModel("max")}
+                                >
+                                  <div className="flex flex-col">
+                                    <span className="font-medium">
+                                      {t("homePage.models.max")}
+                                    </span>
+                                    <span className="text-xs text-muted-foreground">
+                                      {t("ceoView.modelMaxHint")}
+                                    </span>
+                                  </div>
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
+
+                          {/* Right Side Actions */}
+                          <div className="flex items-center gap-1">
+                            {/* Voice Input Button */}
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-9 w-9 rounded-full transition-colors hover:bg-accent"
+                                >
+                                  <Mic className="w-4 h-4 text-muted-foreground" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>{t("homePage.voiceInput")}</p>
+                              </TooltipContent>
+                            </Tooltip>
+
+                            {/* Send Button */}
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  onClick={handleSend}
+                                  disabled={
+                                    !message.trim() &&
+                                    attachments.length === 0 &&
+                                    composerReferences.length === 0
+                                  }
+                                  size="icon"
+                                  className="h-9 w-9 rounded-full bg-primary text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+                                >
+                                  <Send className="w-4 h-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>{t("homePage.sendMessage")}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+                        </div>
+                      </TooltipProvider>
+                    </div>
+                    {showInputProjectHint ? (
+                      <DropdownMenu
+                        open={projectMenuOpen}
+                        onOpenChange={setProjectMenuOpen}
+                      >
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            className="relative z-0 -mt-5 mx-auto flex w-[94%] items-center justify-end rounded-b-[1.65rem] rounded-t-[0.9rem] border border-t-0 border-border/35 bg-muted/42 px-5 pb-3 pt-7 text-right shadow-[0_16px_28px_rgba(15,23,42,0.07)] backdrop-blur-[2px] transition-colors hover:bg-muted/54 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 dark:bg-muted/24 dark:hover:bg-muted/32 dark:shadow-[0_18px_32px_rgba(0,0,0,0.18)]"
                             aria-label={t("homePage.projectSelectorLabel")}
                           >
                             <div className="flex min-w-0 items-center justify-end gap-2 text-right">
@@ -2453,132 +2457,135 @@ export default function Home() {
                               <ChevronDown className="h-4 w-4 shrink-0 text-foreground/42" />
                             </div>
                           </button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent
-                            align="end"
-                            side="bottom"
-                            sideOffset={2}
-                            className="w-[22rem] max-w-[calc(100vw-2.5rem)] rounded-2xl border-border/70 p-1.5 shadow-xl"
-                          >
-                            {projectOptionsLoading ? (
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent
+                          align="end"
+                          side="bottom"
+                          sideOffset={2}
+                          className="w-[22rem] max-w-[calc(100vw-2.5rem)] rounded-2xl border-border/70 p-1.5 shadow-xl"
+                        >
+                          {projectOptionsLoading ? (
                               <DropdownMenuItem disabled className="rounded-xl px-3 py-2.5">
-                                {t("homePage.projectListLoading")}
-                              </DropdownMenuItem>
-                            ) : (
-                              <DropdownMenuRadioGroup
-                                value={pendingProjectId || NO_PROJECT_VALUE}
-                                onValueChange={(value) => {
-                                  const nextProjectId =
-                                    value === NO_PROJECT_VALUE ? null : value;
-                                  setPendingProjectId(nextProjectId);
-                                  syncPendingProjectToUrl(nextProjectId);
-                                }}
+                              {t("homePage.projectListLoading")}
+                            </DropdownMenuItem>
+                          ) : (
+                            <DropdownMenuRadioGroup
+                              value={pendingProjectId || NO_PROJECT_VALUE}
+                              onValueChange={(value) => {
+                                const nextProjectId =
+                                  value === NO_PROJECT_VALUE ? null : value;
+                                setPendingProjectId(nextProjectId);
+                                syncPendingProjectToUrl(nextProjectId);
+                              }}
+                            >
+                              <DropdownMenuRadioItem
+                                value={NO_PROJECT_VALUE}
+                                hideIndicator
+                                className="rounded-xl px-3 py-2.5"
                               >
-                                <DropdownMenuRadioItem
-                                  value={NO_PROJECT_VALUE}
-                                  hideIndicator
-                                  className="rounded-xl px-3 py-2.5"
-                                >
-                                  <span className="block truncate">
-                                    {t("homePage.projectNoProject")}
-                                  </span>
-                                </DropdownMenuRadioItem>
-                                {projectOptions.length > 0 ? (
-                                  projectOptions.map((project) => (
-                                    <DropdownMenuRadioItem
-                                      key={project.id}
-                                      value={project.id}
-                                      hideIndicator
-                                      className="rounded-xl px-3 py-2.5"
-                                    >
-                                      <span className="block truncate">
-                                        {project.name}
-                                      </span>
-                                    </DropdownMenuRadioItem>
-                                  ))
-                                ) : (
+                                <span className="block truncate">
+                                  {t("homePage.projectNoProject")}
+                                </span>
+                              </DropdownMenuRadioItem>
+                              {projectOptions.length > 0 ? (
+                                projectOptions.map((project) => (
+                                  <DropdownMenuRadioItem
+                                    key={project.id}
+                                    value={project.id}
+                                    hideIndicator
+                                    className="rounded-xl px-3 py-2.5"
+                                  >
+                                    <span className="block truncate">
+                                      {project.name}
+                                    </span>
+                                  </DropdownMenuRadioItem>
+                                ))
+                              ) : (
                                   <DropdownMenuItem disabled className="rounded-xl px-3 py-2.5">
-                                    {t("homePage.projectListEmpty")}
-                                  </DropdownMenuItem>
-                                )}
-                              </DropdownMenuRadioGroup>
-                            )}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      ) : null}
-                    </div>
-                  </motion.div>
-
+                                  {t("homePage.projectListEmpty")}
+                                </DropdownMenuItem>
+                              )}
+                            </DropdownMenuRadioGroup>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    ) : null}
+                  </div>
                 </motion.div>
+
               </motion.div>
-            ) : (
-              // 对话模式
-              <motion.div
-                key="chat-mode"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ duration: 0.3 }}
-                className="flex h-full flex-1 min-h-0 overflow-hidden overscroll-none"
-              >
-                {showDesktopPreview ? (
-                  previewMaximized ? (
-                    <div className="flex h-full min-h-0 flex-1 overflow-hidden">
+            </motion.div>
+          ) : (
+            // 对话模式
+            <motion.div
+              key="chat-mode"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.3 }}
+              className="flex h-full flex-1 min-h-0 overflow-hidden overscroll-none"
+            >
+              {showDesktopPreview ? (
+                previewMaximized ? (
+                  <div className="flex h-full min-h-0 flex-1 overflow-hidden">
                       <div className="h-full min-h-0 w-full">
                         {previewPanel}
                       </div>
-                    </div>
-                  ) : (
-                    <ResizablePanelGroup
-                      direction="horizontal"
-                      autoSaveId="task-creation-chat-layout"
-                      className="h-full min-h-0"
-                      onLayout={(sizes) => {
-                        if (sizes.length >= 2) {
-                          setDesktopPreviewLayout([sizes[0] || 0, sizes[1] || 0]);
-                        }
-                      }}
-                    >
-                      <ResizablePanel defaultSize={66} minSize={42}>
-                        <div className="h-full min-h-0 pr-2">{chatPanel}</div>
-                      </ResizablePanel>
-                      <ResizableHandle
-                        withHandle
-                        className="w-1.5 bg-transparent after:w-1.5 after:rounded-full after:bg-transparent hover:after:bg-transparent data-[resize-handle-active]:after:bg-transparent [&>div]:hidden"
-                        onDragging={handlePreviewResizeDragging}
-                      />
+                  </div>
+                ) : (
+                  <ResizablePanelGroup
+                    direction="horizontal"
+                    autoSaveId="task-creation-chat-layout"
+                    className="h-full min-h-0"
+                    onLayout={(sizes) => {
+                      if (sizes.length >= 2) {
+                        setDesktopPreviewLayout([sizes[0] || 0, sizes[1] || 0]);
+                      }
+                    }}
+                  >
                       <ResizablePanel
-                        defaultSize={34}
-                        minSize={30}
-                        maxSize={previewPanelMaxSize}
+                        defaultSize={chatPanelDefaultSize}
+                        minSize={chatPanelMinSize}
                       >
+                      <div className="h-full min-h-0 pr-2">{chatPanel}</div>
+                    </ResizablePanel>
+                    <ResizableHandle
+                      withHandle
+                      className="w-1.5 bg-transparent after:w-1.5 after:rounded-full after:bg-transparent hover:after:bg-transparent data-[resize-handle-active]:after:bg-transparent [&>div]:hidden"
+                      onDragging={handlePreviewResizeDragging}
+                    />
+                    <ResizablePanel
+                      defaultSize={previewPanelDefaultSize}
+                      minSize={previewPanelMinSize}
+                      maxSize={previewPanelMaxSize}
+                    >
                         <div className="h-full min-h-0 pl-2">
                           {previewPanel}
                         </div>
-                      </ResizablePanel>
-                    </ResizablePanelGroup>
-                  )
-                ) : (
-                  <div className="flex h-full min-h-0 flex-1 flex-col gap-4 overflow-hidden">
-                    {!previewMaximized ? (
-                      <div className="flex-1 min-h-0">{chatPanel}</div>
-                    ) : null}
-                    {showMobilePreview ? (
-                      <div
-                        className={
-                          previewMaximized
-                            ? "flex-1 min-h-0"
-                            : "h-[min(45vh,32rem)] min-h-[280px] shrink-0"
-                        }
-                      >
-                        {previewPanel}
-                      </div>
-                    ) : null}
-                  </div>
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
+                    </ResizablePanel>
+                  </ResizablePanelGroup>
+                )
+              ) : (
+                <div className="flex h-full min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+                  {!previewMaximized ? (
+                    <div className="flex-1 min-h-0">{chatPanel}</div>
+                  ) : null}
+                  {showMobilePreview ? (
+                    <div
+                      className={
+                        previewMaximized
+                          ? "flex-1 min-h-0"
+                          : "h-[min(45vh,32rem)] min-h-[280px] shrink-0"
+                      }
+                    >
+                      {previewPanel}
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
       {!managedAltusMode && activeAltusReplay && sessionId ? (
         <AltusRunReplayDrawer
           open={previewOpen}

@@ -28,3 +28,10 @@
 - 在 `altus-run-coordinator` 增加完成消息 Markdown 规范化，把行首或同段内的 bullet glyph 转为标准 `- item` 列表，并让 summary 构建和 assistant 原文优先路径共用该边界。
 - 将完成消息的验证区块调整为标题后留空行再接 Markdown 列表，避免列表和标题黏连。
 - 在 Altus managed prompt 中补充约束，要求 `complete_task.summary` 使用分行 Markdown bullet，不要把多个 `• item` 拼成一段。
+
+## Altus 工具调用消息跳转优化
+
+- 排查工具调用消息点击链路，确认当前只会打开 Altus Actions 的 actions 视图并按 `toolCallId` 选中步骤，未按工具类别切换到调试或部署视图。
+- 将点击目标视图收口为 `resolveManagedToolReplayView`：普通工具进 `actions`，`debug_open_page` 进 `debug`，部署类工具进 `deployment`。
+- 给 `AltusRunReplayDrawer` 增加外部可控的 `activeView`，并在 actions 视图中按选中 `toolCallId` 自动滚动到对应行。
+- 补充前端单元测试覆盖工具名到目标视图的映射。

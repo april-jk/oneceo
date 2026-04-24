@@ -95,7 +95,11 @@ import {
   type AgentMessage,
 } from "@/hooks/useTaskCreationAgent";
 import { useIsMobile } from "@/hooks/useMobile";
-import { buildPreviewItems, extractDiffPayload } from "@/lib/opencode-preview";
+import {
+  buildPreviewItems,
+  extractDiffPayload,
+  type PreviewDiffItem,
+} from "@/lib/opencode-preview";
 import {
   getWorkspaceRawFileUrl,
   listTaskCreationProjects,
@@ -1881,7 +1885,7 @@ export default function Home() {
               Math.max(0, (activeAltusReplay?.actions.length || 1) - 1),
             )
           }
-          diffItems={diffItems}
+          diffItems={activeAltusReplay?.diffItems || []}
           runtimeReady={runtime.ready}
           runtimeStarting={runtime.starting}
           onEnsureRuntime={runtime.ensure}
@@ -7112,8 +7116,10 @@ function collectManagedReplayArtifactPaths(
 function buildManagedReplayData(messages: AgentMessage[]) {
   const actionsByRun = new Map<string, AltusReplayAction[]>();
   const filesByRun = new Map<string, AltusReplayFile[]>();
+  const diffItemsByRun = new Map<string, PreviewDiffItem[]>();
   const actionIndexByRun = new Map<string, Map<string, number>>();
   const fileIndexByRun = new Map<string, Map<string, AltusReplayFile>>();
+  const diffIndexByRun = new Map<string, Map<string, PreviewDiffItem>>();
 
   const ensureActions = (runId: string) => {
     const existing = actionsByRun.get(runId);
@@ -7130,6 +7136,15 @@ function buildManagedReplayData(messages: AgentMessage[]) {
     const created: AltusReplayFile[] = [];
     filesByRun.set(runId, created);
     fileIndexByRun.set(runId, new Map<string, AltusReplayFile>());
+    return created;
+  };
+
+  const ensureDiffItems = (runId: string) => {
+    const existing = diffItemsByRun.get(runId);
+    if (existing) return existing;
+    const created: PreviewDiffItem[] = [];
+    diffItemsByRun.set(runId, created);
+    diffIndexByRun.set(runId, new Map<string, PreviewDiffItem>());
     return created;
   };
 
@@ -7162,6 +7177,73 @@ function buildManagedReplayData(messages: AgentMessage[]) {
     };
     files.push(file);
     index.set(path, file);
+  };
+
+  const upsertDiffItem = (
+    runId: string,
+    metadata: Record<string, unknown>,
+    action: AltusReplayAction,
+    message: AgentMessage,
+    eventIndex: number,
+  ) => {
+    if (action.toolName !== "write_file") return;
+    const path = extractManagedArtifactPath(action.toolName, metadata)
+      .trim()
+      .replace(/\\/g, "/");
+    if (!path) return;
+
+    const output = parseManagedToolOutputPreview(metadata.outputPreview);
+    const args = toRecord(metadata.arguments);
+    const progress = readManagedWriteFileProgress(metadata);
+    const rawPreview =
+      progress.preview ||
+      asText(args.content) ||
+      asText(output.content) ||
+      asText(output.preview) ||
+      asText(output.text);
+    const preview = truncateText(rawPreview, 4000).text;
+    const byteCount =
+      typeof output.bytes === "number" && Number.isFinite(output.bytes)
+        ? `${output.bytes}`
+        : asText(output.bytes);
+    const fallbackDetails = [
+      `${i18n.t("homeWorkspace.targetFileLabel")}: ${path}`,
+      byteCount ? `Bytes: ${byteCount}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    const diffItems = ensureDiffItems(runId);
+    const index = diffIndexByRun.get(runId)!;
+    const key = `${action.toolCallId}:${path}`;
+    const title = `${action.displayName} · ${getFilename(path) || path}`;
+    const item: PreviewDiffItem = {
+      id: `managed:${runId}:${action.toolCallId}:${path}`,
+      title,
+      diff: preview || fallbackDetails || undefined,
+      files: [
+        {
+          file: path,
+          before: "",
+          after: preview,
+          status: "modified",
+        },
+      ],
+      source: "managed.write_file",
+      createdAt:
+        asText(metadata.createdAt) || asText(metadata.timestamp) || null,
+      eventMessageKey: message.messageKey || null,
+      relatedMessageKeys: message.messageKey ? [message.messageKey] : [],
+      eventIndex,
+      relatedEventIndexes: [eventIndex],
+      canonicalFile: path,
+    };
+
+    if (index.has(key)) {
+      Object.assign(index.get(key)!, item);
+      return;
+    }
+    index.set(key, item);
+    diffItems.push(item);
   };
 
   for (let index = 0; index < messages.length; index += 1) {
@@ -7234,6 +7316,9 @@ function buildManagedReplayData(messages: AgentMessage[]) {
     for (const path of action.artifactPaths) {
       upsertFile(runId, path, action.toolCallId, action.stepIndex);
     }
+    if (eventType === "tool_call_completed") {
+      upsertDiffItem(runId, metadata, action, message, index);
+    }
   }
 
   return new Map(
@@ -7243,6 +7328,7 @@ function buildManagedReplayData(messages: AgentMessage[]) {
         runId,
         actions,
         files: filesByRun.get(runId) || [],
+        diffItems: diffItemsByRun.get(runId) || [],
       },
     ]),
   );

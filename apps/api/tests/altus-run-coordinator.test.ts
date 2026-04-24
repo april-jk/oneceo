@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { afterEach, mock, test } from 'node:test';
 import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-memory-store';
-import { AltusRunCoordinator } from '../src/services/altus-run-coordinator';
+import {
+  AltusRunCoordinator,
+  normalizeManagedCompletionMarkdown,
+} from '../src/services/altus-run-coordinator';
 import { AltusManagedToolRuntime } from '../src/services/altus-managed-tool-runtime';
 import { AltusRunState } from '../src/services/altus-run-state';
 import { buildManagedMcpToolName } from '../src/services/altus-managed-shared';
@@ -77,6 +80,36 @@ function createSseResponse(blocks: string[]) {
     headers: { 'Content-Type': 'text/event-stream; charset=utf-8' },
   });
 }
+
+test('normalizeManagedCompletionMarkdown converts bullet glyph lists to markdown lists', () => {
+  const markdown = normalizeManagedCompletionMarkdown(
+    [
+      '项目包含以下核心功能：',
+      '',
+      '• 完整的游戏前端：支持键盘和触摸操作 • 用户认证系统：支持注册和登录 • 数据库集成：保存分数和状态',
+      '',
+      '验证：',
+      '• 创建项目结构',
+      '• 运行健康检查',
+    ].join('\n')
+  );
+
+  assert.equal(
+    markdown,
+    [
+      '项目包含以下核心功能：',
+      '',
+      '- 完整的游戏前端：支持键盘和触摸操作',
+      '- 用户认证系统：支持注册和登录',
+      '- 数据库集成：保存分数和状态',
+      '',
+      '验证：',
+      '- 创建项目结构',
+      '- 运行健康检查',
+    ].join('\n')
+  );
+  assert.equal(normalizeManagedCompletionMarkdown('验证： • 已创建项目'), '验证：\n- 已创建项目');
+});
 
 test('readStreamedModelChoice emits assistant delta callbacks while accumulating final content', async () => {
   const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
@@ -877,7 +910,7 @@ test('execute completes after tool round and final assistant response', async ()
 
   const timelineCall = setupCalls.find((entry) => entry.type === 'timeline') as any;
   assert.equal(timelineCall.input.messageType, 'assistant_message');
-  assert.equal(timelineCall.input.content, '2048 已完成并写入 workspace。\n\n验证:\n- 已写入 index.html');
+  assert.equal(timelineCall.input.content, '2048 已完成并写入 workspace。\n\n验证:\n\n- 已写入 index.html');
 
   assert.deepEqual(
     eventCalls.map((entry) => entry.eventType),
@@ -938,7 +971,9 @@ test('execute preserves richer assistant text when complete_task summary is conc
   };
 
   const detailedAssistantContent =
-    '已查询并汇总 2026 年 4 月 9 日美股市场要点：\n- 标普与纳指期货盘前走强\n- 市场关注通胀与降息路径\n- 盘前成交情绪偏谨慎';
+    '已查询并汇总 2026 年 4 月 9 日美股市场要点：\n\n• 标普与纳指期货盘前走强 • 市场关注通胀与降息路径 • 盘前成交情绪偏谨慎';
+  const normalizedDetailedAssistantContent =
+    '已查询并汇总 2026 年 4 月 9 日美股市场要点：\n\n- 标普与纳指期货盘前走强\n- 市场关注通胀与降息路径\n- 盘前成交情绪偏谨慎';
 
   global.fetch = mock.fn(async () => {
     return new Response(
@@ -985,7 +1020,7 @@ test('execute preserves richer assistant text when complete_task summary is conc
 
   const timelineCall = setupCalls.find((entry) => (entry as any).input?.messageType === 'assistant_message') as any;
   assert.ok(timelineCall);
-  assert.equal(timelineCall.input.content, detailedAssistantContent);
+  assert.equal(timelineCall.input.content, normalizedDetailedAssistantContent);
 });
 
 test('execute blocks deployment completion until managed deployment succeeds', async () => {
@@ -1347,7 +1382,7 @@ test('execute emits deliverables_ready before final assistant message when compl
     (entry) => (entry as any).input?.messageType === 'assistant_message'
   ) as any;
   assert.ok(assistantTimeline);
-  assert.equal(assistantTimeline.input.content, '已完成最终文档交付。\n\n验证:\n- 已输出 final.docx');
+  assert.equal(assistantTimeline.input.content, '已完成最终文档交付。\n\n验证:\n\n- 已输出 final.docx');
 });
 
 test('execute injects skill catalog prompt before active skill body', async () => {
@@ -1742,7 +1777,7 @@ test('execute does not complete on plain assistant text and continues until comp
   assert.deepEqual(lifecycleCalls, ['running', 'completed']);
   assert.equal(state.status, 'completed');
   assert.equal(setupCalls.length, 1);
-  assert.equal((setupCalls[0] as any).input.content, '已确认当前工作空间为空，尚未进行文件创建。\n\n验证:\n- 工作空间目录已检查');
+  assert.equal((setupCalls[0] as any).input.content, '已确认当前工作空间为空，尚未进行文件创建。\n\n验证:\n\n- 工作空间目录已检查');
   assert.deepEqual(
     eventCalls.map((entry) => entry.eventType),
     ['run_status', 'run_status', 'run_status', 'run_status', 'tool_call_started', 'tool_call_completed', 'assistant_message']
@@ -2713,7 +2748,7 @@ test('execute recovers from connector guide block by loading the guide and retry
   const timelineCall = setupCalls.find((entry) => entry.type === 'timeline') as any;
   assert.equal(
     timelineCall.input.content,
-    '已先加载 connector guide，再成功读取 GitHub 仓库信息。\n\n验证:\n- 首次直连 GitHub MCP 被阻断\n- 加载 guide 后重试成功'
+    '已先加载 connector guide，再成功读取 GitHub 仓库信息。\n\n验证:\n\n- 首次直连 GitHub MCP 被阻断\n- 加载 guide 后重试成功'
   );
 });
 
@@ -2988,7 +3023,7 @@ test('execute recovers from connector guide block by loading the guide and retry
   const timelineCall = setupCalls.find((entry) => entry.type === 'timeline') as any;
   assert.equal(
     timelineCall.input.content,
-    '已先加载 Vercel connector guide，再成功读取 Vercel 项目信息。\n\n验证:\n- 首次直连 Vercel MCP 被阻断\n- 加载 guide 后重试成功'
+    '已先加载 Vercel connector guide，再成功读取 Vercel 项目信息。\n\n验证:\n\n- 首次直连 Vercel MCP 被阻断\n- 加载 guide 后重试成功'
   );
 });
 

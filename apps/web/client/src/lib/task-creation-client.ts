@@ -22,6 +22,18 @@ export type TaskCreationSessionSummary = {
   updatedAt?: string;
 };
 
+export type TaskCreationSessionSearchResult = {
+  sessionId: string;
+  title: string;
+  updatedAt?: string;
+  matchType?: "title" | "message";
+  snippet?: string | null;
+  projectId?: string | null;
+  projectName?: string | null;
+  isFavorite?: boolean;
+  status?: string;
+};
+
 export type TaskCreationProjectSummary = {
   id: string;
   name: string;
@@ -546,6 +558,18 @@ export async function listTaskCreationSessions(
 ): Promise<TaskCreationSessionSummary[]> {
   const url = `${getApiBaseUrl()}/api/task-creation/sessions?limit=${encodeURIComponent(String(limit))}`;
   const result = await fetchJson<{ data?: TaskCreationSessionSummary[] }>(url);
+  return Array.isArray(result?.data) ? result.data : [];
+}
+
+export async function searchTaskCreationSessions(
+  query: string,
+  limit: number = 20
+): Promise<TaskCreationSessionSearchResult[]> {
+  const safeQuery = query.trim();
+  if (safeQuery.length < 2) return [];
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.floor(limit), 50)) : 20;
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/search?q=${encodeURIComponent(safeQuery)}&limit=${safeLimit}`;
+  const result = await fetchJson<{ data?: TaskCreationSessionSearchResult[] }>(url);
   return Array.isArray(result?.data) ? result.data : [];
 }
 

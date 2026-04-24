@@ -3,6 +3,7 @@ import {
   isOpaqueManagedMcpTool,
   resolveManagedToolDescriptor,
 } from './altus-managed-tool-registry';
+import { normalizeOpenAiToolCallArguments } from '../utils/openai-chat-sanitizer';
 
 function safeJsonParse(raw: string): Record<string, unknown> | null {
   try {
@@ -137,7 +138,7 @@ function summarizeOpaqueMcp(raw: string) {
 
 function summarizeAssistantWriteFileArguments(raw: string) {
   const parsed = safeJsonParse(raw);
-  if (!parsed) return raw;
+  if (!parsed) return '{}';
   const content = typeof parsed.content === 'string' ? parsed.content : '';
   if (content.length <= 4000) return raw;
   return JSON.stringify({
@@ -191,10 +192,11 @@ export class AltusManagedContextBudgetService {
     const toolCalls = message.tool_calls.map((toolCall) => {
       const toolName = asText(toolCall?.function?.name);
       const rawArguments = typeof toolCall?.function?.arguments === 'string' ? toolCall.function.arguments : '';
-      if (toolName !== 'write_file' || !rawArguments) {
-        return toolCall;
-      }
-      const nextArguments = summarizeAssistantWriteFileArguments(rawArguments);
+      const normalizedArguments = normalizeOpenAiToolCallArguments(rawArguments);
+      const nextArguments =
+        toolName === 'write_file'
+          ? summarizeAssistantWriteFileArguments(normalizedArguments)
+          : normalizedArguments;
       if (nextArguments === rawArguments) {
         return toolCall;
       }

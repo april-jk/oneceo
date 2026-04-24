@@ -65,6 +65,7 @@ export function createBillingManagementRoutes() {
   router.post('/pricing', proxyToApi);
 
   // 停用定价
+  router.delete('/pricing/:pricingId', proxyToApi);
   router.post('/pricing/:pricingId/deactivate', proxyToApi);
 
   // 平台统计

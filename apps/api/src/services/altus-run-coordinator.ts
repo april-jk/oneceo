@@ -379,11 +379,16 @@ export class AltusRunCoordinator {
       'what would you like',
       'which option',
       'please specify',
+      'tell me what you want me to do',
       '请说明',
       '请确认',
       '请告诉我',
+      '请直接告诉我',
+      '请明确',
       '请问',
       '请补充',
+      '给出具体指令',
+      '具体任务',
       '为了更有针对性',
       '希望优化哪些方面',
       '是否需要',
@@ -396,10 +401,38 @@ export class AltusRunCoordinator {
     return keywords.some((keyword) => lower.includes(keyword.toLowerCase()));
   }
 
+  private isPlainTextCapabilityQuestion(userInput: string) {
+    const normalized = asText(userInput).toLowerCase();
+    if (!normalized) return false;
+    const capabilityKeywords = [
+      '你能做什么',
+      '你可以做什么',
+      '你会做什么',
+      '能做什么',
+      '还能做什么',
+      '有什么功能',
+      '怎么用',
+      '如何使用',
+      '什么？',
+      '什么?',
+      'what can you do',
+      'what else can you do',
+      'what do you do',
+      'how can i use you',
+      'help',
+      'capabilities',
+    ];
+    return capabilityKeywords.some((keyword) => normalized.includes(keyword));
+  }
+
   private shouldAcceptPlainTextConversationCompletion(userInput: string, assistantContent: string) {
     const normalizedInput = asText(userInput).toLowerCase();
     const normalizedAssistant = asText(assistantContent);
     if (!normalizedInput || !normalizedAssistant) return false;
+
+    if (this.isPlainTextCapabilityQuestion(normalizedInput)) {
+      return true;
+    }
 
     const conversationKeywords = [
       '我是谁',

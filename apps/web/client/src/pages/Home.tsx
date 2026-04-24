@@ -1367,6 +1367,14 @@ export default function Home() {
     () => collapseRepeatedChatAuthors(buildChatItems(messages)),
     [messages],
   );
+  const visibleChatItems = useMemo(
+    () => chatItems.filter((item) => item.kind !== "managed_status"),
+    [chatItems],
+  );
+  const managedProcessingText = useMemo(
+    () => getActiveManagedStatusText(chatItems),
+    [chatItems],
+  );
   const altusMode = readAltusMode();
   const managedAltusMode = altusMode === "managed";
   const managedReplayByRun = useMemo(
@@ -2013,7 +2021,7 @@ export default function Home() {
             )}
 
             <AnimatePresence>
-              {chatItems.map((item, index) => (
+              {visibleChatItems.map((item, index) => (
                 <MessageBubble
                   key={item.messageKey || `chat-item-${index}`}
                   item={item}
@@ -2030,7 +2038,7 @@ export default function Home() {
               <NoticeMessage
                 tone="info"
                 icon={<Loader2 className="w-4 h-4 animate-spin" />}
-                text={t("homeWorkspace.agentProcessing")}
+                text={managedProcessingText || t("homeWorkspace.agentProcessing")}
               />
             )}
 
@@ -2691,6 +2699,11 @@ export type ChatItem =
       showAuthor?: boolean;
     }
   | {
+      kind: "managed_status";
+      text: string;
+      messageKey?: string;
+    }
+  | {
       kind: "capsule";
       label: string;
       tone: "system" | "intent" | "planning" | "execution" | "review" | "error";
@@ -2973,6 +2986,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
   const lastCodexDiffIndexByTurn = new Map<string, number>();
   const managedArtifactsByRun = new Map<string, AltusArtifactFile[]>();
   const emittedManagedCompletionRuns = new Set<string>();
+  let managedStatusBuffer: { text: string; messageKey?: string } | null = null;
 
   const getPartIdFromMetadata = (metadata: Record<string, unknown>): string => {
     const explicit = asText(metadata.partId);
@@ -3235,6 +3249,29 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     progressBuffer = null;
   };
 
+  const flushManagedStatus = () => {
+    if (!managedStatusBuffer) return;
+    items.push({
+      kind: "managed_status",
+      text: managedStatusBuffer.text,
+      messageKey: managedStatusBuffer.messageKey,
+    });
+    managedStatusBuffer = null;
+  };
+
+  const clearManagedStatus = () => {
+    managedStatusBuffer = null;
+  };
+
+  const replaceManagedStatus = (text: string, messageKey?: string) => {
+    const normalized = normalizeForDedup(text);
+    if (!normalized) return;
+    managedStatusBuffer = {
+      text,
+      messageKey,
+    };
+  };
+
   const pushProgress = (
     rawLabel: string,
     displayLabel: string,
@@ -3252,6 +3289,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     if (message.type === "user_input" || message.type === "user_response") {
+      clearManagedStatus();
       flushProgress();
       const resolvedUser = resolveUserMessageReferences({
         content: message.content || "",
@@ -3273,6 +3311,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         emittedManagedCompletionRuns,
       });
       if (managedCompletionCard) {
+        clearManagedStatus();
         flushProgress();
         items.push(managedCompletionCard);
       }
@@ -3280,6 +3319,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       const parsed = extractCapsule(message.content || "");
       if (parsed) {
         if (isProgressStatusLabel(parsed.label) && !parsed.rest.trim()) {
+          clearManagedStatus();
           pushProgress(
             parsed.label,
             parsed.label,
@@ -3288,6 +3328,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           );
           continue;
         }
+        clearManagedStatus();
         flushProgress();
         items.push({
           kind: "capsule",
@@ -3296,26 +3337,35 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           messageKey: message.messageKey,
         });
         if (parsed.rest.trim()) {
+          const displayName = resolveAgentDisplayName({
+            agent: message.agent,
+            metadata: message.metadata,
+            messageKey: message.messageKey,
+          });
           pushAgentMarkdown(
-            `**${resolveAgentDisplayName({
-              agent: message.agent,
-              metadata: message.metadata,
-              messageKey: message.messageKey,
-            })}**\n\n${parsed.rest}`,
+            displayName === "Altus"
+              ? parsed.rest
+              : `**${displayName}**\n\n${parsed.rest}`,
             message.messageKey,
+            displayName === "Altus" ? displayName : undefined,
           );
         }
         continue;
       }
 
       flushProgress();
+      clearManagedStatus();
+      const displayName = resolveAgentDisplayName({
+        agent: message.agent,
+        metadata: message.metadata,
+        messageKey: message.messageKey,
+      });
       pushAgentMarkdown(
-        `**${resolveAgentDisplayName({
-          agent: message.agent,
-          metadata: message.metadata,
-          messageKey: message.messageKey,
-        })}**\n\n${message.content || ""}`,
+        displayName === "Altus"
+          ? message.content || ""
+          : `**${displayName}**\n\n${message.content || ""}`,
         message.messageKey,
+        displayName === "Altus" ? displayName : undefined,
       );
       continue;
     }
@@ -3328,6 +3378,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         emittedManagedCompletionRuns,
       });
       if (managedCompletionCard) {
+        clearManagedStatus();
         flushProgress();
         items.push(managedCompletionCard);
       }
@@ -3337,18 +3388,22 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       }
 
       if (isManagedStartingStatusMessage(message)) {
+        flushProgress();
+        replaceManagedStatus(rawLabel, message.messageKey);
         continue;
       }
 
       if (isManagedNarrationStatusMessage(message)) {
         flushProgress();
-        pushAgentPlain(rawLabel, "Altus", message.messageKey);
+        replaceManagedStatus(rawLabel, message.messageKey);
         continue;
       }
       const tone = message.tone || getCapsuleTone(rawLabel);
       if (isProgressStatusLabel(rawLabel)) {
+        clearManagedStatus();
         pushProgress(rawLabel, rawLabel, tone, message.messageKey);
       } else {
+        clearManagedStatus();
         flushProgress();
         items.push({
           kind: "capsule",
@@ -3390,6 +3445,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           managedEventType === "tool_call_completed" ||
           managedEventType === "tool_call_failed"
         ) {
+          clearManagedStatus();
           flushProgress();
           items.push({
             kind: "managed_tool",
@@ -3415,6 +3471,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           continue;
         }
         if (managedEventType === "artifact_updated") {
+          clearManagedStatus();
           flushProgress();
           items.push({
             kind: "capsule",
@@ -3442,6 +3499,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         (message.content || "").trim();
 
       if (eventType === "turn.started") {
+        clearManagedStatus();
         const progressLabel = `${executorLabel} ${i18n.t("homeWorkspace.executionStarted")}`;
         pushProgress(
           progressLabel,
@@ -3456,6 +3514,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         const turnStatus = asText(metadata.turnStatus).toLowerCase();
         const errorMessage = asText(metadata.errorMessage) || content;
         if (message.stage === "failed" || turnStatus === "failed") {
+          clearManagedStatus();
           flushProgress();
           items.push({
             kind: "capsule",
@@ -3467,6 +3526,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           });
           continue;
         }
+        clearManagedStatus();
         flushProgress();
         items.push({
           kind: "capsule",
@@ -3478,6 +3538,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       }
 
       if (eventType === "turn.failed" || eventType === "turn.interrupted") {
+        clearManagedStatus();
         flushProgress();
         items.push({
           kind: "capsule",
@@ -3496,6 +3557,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         if (!content) {
           continue;
         }
+        clearManagedStatus();
         pushCodexExplanation(content, message.messageKey, executorLabel, {
           collapsedMarkdown: extractCodexPlanCollapsedMarkdown(content),
         });
@@ -3511,6 +3573,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       }
 
       flushProgress();
+      clearManagedStatus();
       if (itemType === "command_execution" || itemType === "commandexecution") {
         const commandText =
           asText(metadata.command) ||
@@ -3775,6 +3838,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
 
     if (message.type === "opencode_event") {
       flushProgress();
+      clearManagedStatus();
       const metadata = toRecord(message.metadata);
       const eventInfo = getOpencodeEventInfo(metadata);
       const content = (message.content || "").trim();
@@ -3859,6 +3923,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     }
 
     if (message.type === "error") {
+      clearManagedStatus();
       flushProgress();
       pushAgentMarkdown(
         `**${i18n.t("homeWorkspace.errorTitle")}**\n\n> ${message.message || i18n.t("homeWorkspace.requestFailedRetry")}`,
@@ -3868,6 +3933,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     }
 
     if (message.type === "clarification_request") {
+      clearManagedStatus();
       flushProgress();
       const question =
         message.question || i18n.t("homeWorkspace.provideMoreInfo");
@@ -3920,6 +3986,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     }
 
     if (message.type === "plan_generated") {
+      clearManagedStatus();
       flushProgress();
       pushAgentMarkdown(
         `**${i18n.t("homeWorkspace.planGenerated")}**\n\n${i18n.t("homeWorkspace.projectLabel")}：${message.plan?.project?.title || i18n.t("homeWorkspace.unnamedProject")}`,
@@ -3927,6 +3994,8 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       );
     }
   }
+
+  flushManagedStatus();
 
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
@@ -3946,10 +4015,21 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
 function isAuthorNeutralSeparator(item: ChatItem): boolean {
   return (
     item.kind === "capsule" ||
+    item.kind === "managed_status" ||
     item.kind === "managed_tool" ||
     item.kind === "managed_artifact_card" ||
     item.kind === "managed_deliverable_card"
   );
+}
+
+export function getActiveManagedStatusText(items: ChatItem[]): string {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item?.kind === "managed_status") {
+      return item.text;
+    }
+  }
+  return "";
 }
 
 export function collapseRepeatedChatAuthors(items: ChatItem[]): ChatItem[] {
@@ -4935,6 +5015,10 @@ function MessageBubble({
         />
       </div>
     );
+  }
+
+  if (item.kind === "managed_status") {
+    return null;
   }
 
   if (item.kind === "agent_plain") {

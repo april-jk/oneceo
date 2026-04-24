@@ -237,6 +237,7 @@ export default function Sidebar({
   };
   const SESSION_PREVIEW_COUNT = 6;
   const [location, setLocation] = useLocation();
+  const currentPath = React.useMemo(() => location.split("?")[0] || location, [location]);
   const { t } = useTranslation();
   const { user } = useAuth();
   const { projects: manualProjects } = useSharedManualProjects(user?.id);
@@ -1191,7 +1192,6 @@ export default function Sidebar({
     },
     [assignableProjects, handleFavoriteToggle, handleProjectAssign, moveProjectSubmitting, navigateToSessionHistory, openCreateProjectDialog, openDeleteDialog, openRenameDialog, t],
   );
-
   return (
     <aside
       className={`fixed left-4 top-4 bottom-4 ${collapsed ? "w-16" : "w-60"} overflow-hidden bg-sidebar border border-sidebar-border flex flex-col shadow-lg rounded-3xl backdrop-blur-sm transition-all duration-300 ${className}`}
@@ -1235,7 +1235,7 @@ export default function Sidebar({
         >
           {navItems.map((item, index) => {
             const Icon = item.icon;
-            const isActive = location === item.href;
+            const isActive = currentPath === item.href;
             const isNewTask = index === 0; // First item is New Task
 
             if (isNewTask) {
@@ -1293,21 +1293,21 @@ export default function Sidebar({
         {/* Projects Section */}
         {!collapsed && (
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="shrink-0 px-2.5 pb-2.5 pr-3">
-              <div className="mb-2 flex min-w-0 items-center justify-between gap-2 px-3">
-                <span className="truncate text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  {t("sidebar.projects").toUpperCase()}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6 shrink-0"
-                  onClick={openCreateProjectDialog}
-                >
-                  <PlusCircle className="w-4 h-4" />
-                </Button>
-              </div>
-            </div>
+                <div className="shrink-0 px-2.5 pb-2.5 pr-3">
+                  <div className="mb-2 flex min-w-0 items-center justify-between gap-2 px-3">
+                    <span className="truncate text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                      {t("sidebar.projects").toUpperCase()}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 shrink-0"
+                      onClick={openCreateProjectDialog}
+                    >
+                      <PlusCircle className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
 
             <ScrollArea
               data-sidebar-project-scroll="true"

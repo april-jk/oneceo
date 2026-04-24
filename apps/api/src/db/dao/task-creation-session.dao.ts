@@ -38,6 +38,20 @@ type TaskCreationSessionRecord = typeof taskCreationSessions.$inferSelect & {
   projectName: string | null;
 };
 
+type TaskCreationSessionTitleSearchHit = {
+  sessionId: string;
+  matchedTitle: string;
+  matchedAt: Date | string | null;
+  updatedAt: Date | string | null;
+};
+
+type TaskCreationSessionMessageSearchHit = {
+  sessionId: string;
+  snippet: string;
+  matchedAt: Date | string | null;
+  updatedAt: Date | string | null;
+};
+
 type ConversationMessageWriteInput = {
   id?: string;
   sessionId: string;
@@ -76,6 +90,10 @@ export class TaskCreationSessionDAO {
 
   private asRecord(value: unknown): Record<string, unknown> {
     return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  }
+
+  private escapeLikePattern(value: string): string {
+    return value.replace(/[\\%_]/g, '\\$&');
   }
 
   private readSessionProject(metadataRaw: unknown) {
@@ -1450,6 +1468,97 @@ export class TaskCreationSessionDAO {
     return sessions
       .map((session) => this.decorateSessionRecord(session))
       .filter((session): session is TaskCreationSessionRecord => Boolean(session));
+  }
+
+  async searchOwnedSessionTitles(
+    userId: string,
+    query: string,
+    limit: number = 20
+  ): Promise<TaskCreationSessionTitleSearchHit[]> {
+    const normalizedUserId = normalizeUserId(userId);
+    const normalizedQuery = this.asText(query);
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.floor(limit), 50)) : 20;
+    if (!normalizedUserId || !normalizedQuery) return [];
+
+    const likePattern = `%${this.escapeLikePattern(normalizedQuery)}%`;
+    const result = await db.execute(sql`
+      SELECT *
+      FROM (
+        SELECT DISTINCT ON (td.session_id)
+          td.session_id AS "sessionId",
+          td.title AS "matchedTitle",
+          td.created_at AS "matchedAt",
+          tcs.updated_at AS "updatedAt"
+        FROM task_descriptions td
+        JOIN task_creation_sessions tcs ON tcs.id = td.session_id
+        WHERE btrim(coalesce(tcs.user_id, '')) = ${normalizedUserId}
+          AND btrim(coalesce(td.title, '')) <> ''
+          AND td.title ILIKE ${likePattern} ESCAPE '\\'
+        ORDER BY td.session_id, td.created_at DESC, td.id DESC
+      ) hits
+      ORDER BY hits."updatedAt" DESC, hits."matchedAt" DESC, hits."sessionId" DESC
+      LIMIT ${safeLimit}
+    `);
+
+    const rows: any[] = Array.isArray((result as any)?.rows) ? (result as any).rows : [];
+    return rows
+      .map((row) => ({
+        sessionId: this.asText(row?.sessionId),
+        matchedTitle: this.asText(row?.matchedTitle),
+        matchedAt: row?.matchedAt ?? null,
+        updatedAt: row?.updatedAt ?? null,
+      }))
+      .filter((row): row is TaskCreationSessionTitleSearchHit => Boolean(row.sessionId && row.matchedTitle));
+  }
+
+  async searchOwnedSessionMessages(
+    userId: string,
+    query: string,
+    limit: number = 20
+  ): Promise<TaskCreationSessionMessageSearchHit[]> {
+    const normalizedUserId = normalizeUserId(userId);
+    const normalizedQuery = this.asText(query);
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.floor(limit), 50)) : 20;
+    if (!normalizedUserId || !normalizedQuery) return [];
+
+    const likePattern = `%${this.escapeLikePattern(normalizedQuery)}%`;
+    const result = await db.execute(sql`
+      SELECT *
+      FROM (
+        SELECT DISTINCT ON (cm.session_id)
+          cm.session_id AS "sessionId",
+          cm.content AS "snippet",
+          cm.created_at AS "matchedAt",
+          tcs.updated_at AS "updatedAt"
+        FROM conversation_messages cm
+        JOIN task_creation_sessions tcs ON tcs.id = cm.session_id
+        WHERE btrim(coalesce(tcs.user_id, '')) = ${normalizedUserId}
+          AND btrim(coalesce(cm.content, '')) <> ''
+          AND lower(coalesce(cm.role, '')) IN ('user', 'assistant', 'agent')
+          AND coalesce(cm.message_type, 'message') NOT IN (
+            'session_started',
+            'status_update',
+            'executor_event',
+            'opencode_event',
+            'error',
+            'opencode_error'
+          )
+          AND cm.content ILIKE ${likePattern} ESCAPE '\\'
+        ORDER BY cm.session_id, cm.created_at DESC, cm.id DESC
+      ) hits
+      ORDER BY hits."updatedAt" DESC, hits."matchedAt" DESC, hits."sessionId" DESC
+      LIMIT ${safeLimit}
+    `);
+
+    const rows: any[] = Array.isArray((result as any)?.rows) ? (result as any).rows : [];
+    return rows
+      .map((row) => ({
+        sessionId: this.asText(row?.sessionId),
+        snippet: this.asText(row?.snippet),
+        matchedAt: row?.matchedAt ?? null,
+        updatedAt: row?.updatedAt ?? null,
+      }))
+      .filter((row): row is TaskCreationSessionMessageSearchHit => Boolean(row.sessionId && row.snippet));
   }
 
   /**

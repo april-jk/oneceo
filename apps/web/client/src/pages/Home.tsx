@@ -36,6 +36,7 @@ import {
   Terminal,
   ChevronDown,
   ChevronRight,
+  Check,
   Trash2,
   X,
 } from "lucide-react";
@@ -1368,7 +1369,13 @@ export default function Home() {
     [messages],
   );
   const visibleChatItems = useMemo(
-    () => chatItems.filter((item) => item.kind !== "managed_status"),
+    () =>
+      groupManagedActivityItems(
+        chatItems.filter(
+          (item) =>
+            item.kind !== "managed_status" || item.displayInTimeline !== false,
+        ),
+      ),
     [chatItems],
   );
   const managedProcessingText = useMemo(
@@ -2702,6 +2709,7 @@ export type ChatItem =
       kind: "managed_status";
       text: string;
       messageKey?: string;
+      displayInTimeline?: boolean;
     }
   | {
       kind: "capsule";
@@ -2733,6 +2741,32 @@ export type ChatItem =
       artifactPaths?: string[];
       metadata?: Record<string, unknown>;
       messageKey?: string;
+    }
+  | {
+      kind: "managed_activity_group";
+      title: string;
+      messageKey?: string;
+      items: Array<
+        | {
+            kind: "managed_status";
+            text: string;
+            messageKey?: string;
+            displayInTimeline?: boolean;
+          }
+        | {
+            kind: "managed_tool";
+            runId: string;
+            toolCallId: string;
+            eventType: string;
+            toolName: string;
+            status: "running" | "completed" | "failed" | "unknown";
+            summary?: string;
+            detail?: string;
+            artifactPaths?: string[];
+            metadata?: Record<string, unknown>;
+            messageKey?: string;
+          }
+      >;
     }
   | {
       kind: "managed_artifact_card";
@@ -2986,7 +3020,11 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
   const lastCodexDiffIndexByTurn = new Map<string, number>();
   const managedArtifactsByRun = new Map<string, AltusArtifactFile[]>();
   const emittedManagedCompletionRuns = new Set<string>();
-  let managedStatusBuffer: { text: string; messageKey?: string } | null = null;
+  let managedStatusBuffer: {
+    text: string;
+    messageKey?: string;
+    displayInTimeline: boolean;
+  } | null = null;
 
   const getPartIdFromMetadata = (metadata: Record<string, unknown>): string => {
     const explicit = asText(metadata.partId);
@@ -3249,12 +3287,22 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     progressBuffer = null;
   };
 
-  const flushManagedStatus = () => {
+  const flushManagedStatus = (options?: {
+    displayInTimeline?: boolean;
+    skipHidden?: boolean;
+  }) => {
     if (!managedStatusBuffer) return;
+    const displayInTimeline =
+      options?.displayInTimeline ?? managedStatusBuffer.displayInTimeline;
+    if (options?.skipHidden && !displayInTimeline) {
+      managedStatusBuffer = null;
+      return;
+    }
     items.push({
       kind: "managed_status",
       text: managedStatusBuffer.text,
       messageKey: managedStatusBuffer.messageKey,
+      displayInTimeline,
     });
     managedStatusBuffer = null;
   };
@@ -3263,12 +3311,17 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     managedStatusBuffer = null;
   };
 
-  const replaceManagedStatus = (text: string, messageKey?: string) => {
+  const replaceManagedStatus = (
+    text: string,
+    messageKey?: string,
+    options?: { displayInTimeline?: boolean },
+  ) => {
     const normalized = normalizeForDedup(text);
     if (!normalized) return;
     managedStatusBuffer = {
       text,
       messageKey,
+      displayInTimeline: options?.displayInTimeline ?? true,
     };
   };
 
@@ -3389,7 +3442,9 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
 
       if (isManagedStartingStatusMessage(message)) {
         flushProgress();
-        replaceManagedStatus(rawLabel, message.messageKey);
+        replaceManagedStatus(rawLabel, message.messageKey, {
+          displayInTimeline: false,
+        });
         continue;
       }
 
@@ -3445,7 +3500,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           managedEventType === "tool_call_completed" ||
           managedEventType === "tool_call_failed"
         ) {
-          clearManagedStatus();
+          flushManagedStatus({ skipHidden: true });
           flushProgress();
           items.push({
             kind: "managed_tool",
@@ -3995,7 +4050,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     }
   }
 
-  flushManagedStatus();
+  flushManagedStatus({ displayInTimeline: false });
 
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
@@ -4017,6 +4072,7 @@ function isAuthorNeutralSeparator(item: ChatItem): boolean {
     item.kind === "capsule" ||
     item.kind === "managed_status" ||
     item.kind === "managed_tool" ||
+    item.kind === "managed_activity_group" ||
     item.kind === "managed_artifact_card" ||
     item.kind === "managed_deliverable_card"
   );
@@ -4030,6 +4086,73 @@ export function getActiveManagedStatusText(items: ChatItem[]): string {
     }
   }
   return "";
+}
+
+function isManagedActivityTimelineItem(
+  item: ChatItem,
+): item is Extract<ChatItem, { kind: "managed_status" | "managed_tool" }> {
+  return item.kind === "managed_status" || item.kind === "managed_tool";
+}
+
+function getManagedActivityTitle(
+  items: Array<Extract<ChatItem, { kind: "managed_status" | "managed_tool" }>>,
+) {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (!item) continue;
+    if (item.kind === "managed_status" && item.text.trim()) return item.text;
+    if (item.kind === "managed_tool" && item.toolName !== "complete_task") {
+      return (
+        getManagedToolPurposeSummary(item.toolName, item.metadata) ||
+        item.summary?.trim() ||
+        getManagedToolDisplayName(item.toolName) ||
+        i18n.t("homeWorkspace.toolCall")
+      );
+    }
+  }
+  return i18n.t("homeWorkspace.agentProcessing");
+}
+
+function getManagedActivityState(
+  items: Array<Extract<ChatItem, { kind: "managed_status" | "managed_tool" }>>,
+) {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item?.kind !== "managed_tool") continue;
+    if (item.status === "failed") return "failed";
+    if (item.status === "running") return "running";
+    if (item.status === "completed") return "completed";
+  }
+  return "completed";
+}
+
+export function groupManagedActivityItems(items: ChatItem[]): ChatItem[] {
+  const grouped: ChatItem[] = [];
+  let buffer: Array<
+    Extract<ChatItem, { kind: "managed_status" | "managed_tool" }>
+  > = [];
+
+  const flush = () => {
+    if (buffer.length === 0) return;
+    grouped.push({
+      kind: "managed_activity_group",
+      title: getManagedActivityTitle(buffer),
+      messageKey: buffer.map((item) => item.messageKey).filter(Boolean).join("|"),
+      items: buffer,
+    });
+    buffer = [];
+  };
+
+  for (const item of items) {
+    if (isManagedActivityTimelineItem(item)) {
+      buffer.push(item);
+      continue;
+    }
+    flush();
+    grouped.push(item);
+  }
+  flush();
+  return grouped;
 }
 
 export function collapseRepeatedChatAuthors(items: ChatItem[]): ChatItem[] {
@@ -4975,6 +5098,19 @@ function MessageBubble({
     return (
       <div data-message-key={item.messageKey}>
         <OpencodeToolCard item={item} onOpenDiffPreview={onOpenDiffPreview} />
+      </div>
+    );
+  }
+
+  if (item.kind === "managed_activity_group") {
+    return (
+      <div data-message-key={item.messageKey}>
+        <ManagedActivityGroup
+          item={item}
+          onOpenReplay={(runId, toolCallId) =>
+            onOpenManagedReplay?.(runId, { toolCallId, view: "actions" })
+          }
+        />
       </div>
     );
   }
@@ -6652,6 +6788,150 @@ function getManagedToolStatusPresentation(status: string) {
   } as const;
 }
 
+function getManagedToolIcon(toolName: string): LucideIcon {
+  if (toolName === "shell_execute") return Terminal;
+  if (toolName === "write_file") return FilePenLine;
+  if (toolName === "read_file") return FileText;
+  if (toolName === "search_code") return Search;
+  if (toolName === "list_directory") return FolderSearch2;
+  if (toolName === "ask_user") return Sparkles;
+  return FileSearch;
+}
+
+function ManagedActivityGroup({
+  item,
+  onOpenReplay,
+}: {
+  item: Extract<ChatItem, { kind: "managed_activity_group" }>;
+  onOpenReplay?: (runId: string, toolCallId: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const toolCount = item.items.filter((entry) => entry.kind === "managed_tool").length;
+  const completedToolCount = item.items.filter(
+    (entry) => entry.kind === "managed_tool" && entry.status === "completed",
+  ).length;
+  const activityState = getManagedActivityState(item.items);
+  const StatusIcon =
+    activityState === "failed"
+      ? X
+      : activityState === "running"
+        ? Loader2
+        : Check;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.18 }}
+      className="w-full"
+    >
+      <div className="flex max-w-[min(100%,44rem)] flex-col gap-0">
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          className="group/header flex w-full items-center justify-between gap-3 rounded-lg px-1 py-1 text-left text-sm text-foreground transition hover:bg-muted/35"
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            <span
+              className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full ${
+                activityState === "failed"
+                  ? "bg-destructive text-destructive-foreground"
+                  : activityState === "running"
+                    ? "bg-muted text-muted-foreground"
+                    : "bg-muted-foreground text-background"
+              }`}
+            >
+              <StatusIcon
+                className={`h-2.5 w-2.5 ${
+                  activityState === "running" ? "animate-spin" : ""
+                }`}
+              />
+            </span>
+            <span className="truncate font-medium" title={item.title}>
+              {item.title}
+            </span>
+            <ChevronDown
+              className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${
+                expanded ? "rotate-180" : ""
+              }`}
+            />
+          </div>
+          {toolCount > 0 ? (
+            <span className="shrink-0 text-[12px] text-muted-foreground opacity-0 transition group-hover/header:opacity-100">
+              {completedToolCount}/{toolCount}
+            </span>
+          ) : null}
+        </button>
+        {expanded ? (
+          <div className="flex">
+            <div className="relative w-6 shrink-0">
+              <div className="absolute left-2 top-0 bottom-0 border-l border-dashed border-border" />
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col gap-2 overflow-hidden pt-2">
+              {item.items.map((entry, index) =>
+                entry.kind === "managed_status" ? (
+                  <p
+                    key={entry.messageKey || `managed-status-${index}`}
+                    className="text-[14px] leading-6 text-muted-foreground"
+                  >
+                    {entry.text}
+                  </p>
+                ) : (
+                  <ManagedActivityToolRow
+                    key={entry.messageKey || entry.toolCallId || `managed-tool-${index}`}
+                    item={entry}
+                    onOpenReplay={onOpenReplay}
+                  />
+                ),
+              )}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </motion.div>
+  );
+}
+
+function ManagedActivityToolRow({
+  item,
+  onOpenReplay,
+}: {
+  item: Extract<ChatItem, { kind: "managed_tool" }>;
+  onOpenReplay?: (runId: string, toolCallId: string) => void;
+}) {
+  const Icon = getManagedToolIcon(item.toolName);
+  const title =
+    getManagedToolPurposeSummary(item.toolName, item.metadata) ||
+    item.summary?.trim() ||
+    getManagedToolDisplayName(item.toolName);
+  const statusUi = getManagedToolStatusPresentation(item.status);
+
+  return (
+    <div className="group flex w-full items-center gap-2">
+      <div className="h-7 min-w-0 flex-1">
+        <button
+          type="button"
+          onClick={() => {
+            if (onOpenReplay && item.runId && item.toolCallId) {
+              onOpenReplay(item.runId, item.toolCallId);
+            }
+          }}
+          className="inline-flex h-full max-w-full items-center gap-1 overflow-hidden rounded-full border border-border/70 bg-background/85 px-2.5 py-1 text-left transition hover:bg-muted/40"
+        >
+          <span
+            className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md ${statusUi.iconClass}`}
+          >
+            <Icon className="h-3.5 w-3.5" />
+          </span>
+          <span className="truncate text-[13px] text-muted-foreground" title={title}>
+            {title}
+          </span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ManagedToolCard({
   item,
   onOpenReplay,
@@ -6660,21 +6940,7 @@ function ManagedToolCard({
   onOpenReplay?: (runId: string, toolCallId: string) => void;
 }) {
   const displayName = getManagedToolDisplayName(item.toolName);
-  const icon =
-    item.toolName === "shell_execute"
-      ? Terminal
-      : item.toolName === "write_file"
-        ? FilePenLine
-        : item.toolName === "read_file"
-          ? FileText
-          : item.toolName === "search_code"
-            ? Search
-            : item.toolName === "list_directory"
-              ? FolderSearch2
-              : item.toolName === "ask_user"
-                ? Sparkles
-                : FileSearch;
-  const Icon = icon;
+  const Icon = getManagedToolIcon(item.toolName);
   const statusLabel =
     item.status === "failed"
       ? i18n.t("homeWorkspace.failedShort")
@@ -7439,6 +7705,82 @@ function readManagedDeploymentToolOutput(metadataRaw: unknown) {
     deploymentId: asText(output.deploymentId),
     repairCategory: asText(repair.category),
   };
+}
+
+export function getManagedToolPurposeSummary(
+  toolName: string,
+  metadataRaw: unknown,
+) {
+  const metadata = toRecord(metadataRaw);
+  const args = toRecord(metadata.arguments);
+  const output = parseManagedToolOutputPreview(metadata.outputPreview);
+  const progress = readManagedWriteFileProgress(metadata);
+  const path = asText(args.path) || asText(output.path) || progress.path;
+  const command = asText(args.command);
+  const query = asText(args.query);
+  const target = asText(args.path) || asText(output.path);
+  const filename = path ? getFilename(path) || path : "";
+
+  if (toolName === "shell_execute") {
+    if (/pnpm|npm|yarn|tsc|typecheck|type-check|check|test|vitest|playwright/i.test(command)) {
+      return "检查项目是否正常运行";
+    }
+    if (/ls|find|tree|pwd|cat|sed|tail|head|rg|grep/i.test(command)) {
+      return "检查项目文件和运行日志";
+    }
+    if (/dev|serve|preview|start|node|vite/i.test(command)) {
+      return "启动或检查本地预览服务";
+    }
+    return "执行项目命令";
+  }
+
+  if (toolName === "write_file") {
+    if (filename) return `更新${filename}`;
+    return "更新项目文件";
+  }
+
+  if (toolName === "read_file") {
+    if (filename) return `读取${filename}检查内容`;
+    return "读取项目文件";
+  }
+
+  if (toolName === "list_directory") {
+    if (target) return "检查项目目录结构";
+    return "查看项目目录";
+  }
+
+  if (toolName === "search_code") {
+    if (query) return "搜索相关代码位置";
+    return "搜索项目代码";
+  }
+
+  if (toolName === "todowrite") {
+    const todos = readManagedTodoItems(metadataRaw);
+    const activeTodo = todos.find((todo) => todo.status === "in_progress");
+    if (activeTodo) return activeTodo.activeForm || activeTodo.content;
+    return "更新任务清单";
+  }
+
+  if (toolName === "ask_user") {
+    return "请求补充必要信息";
+  }
+
+  if (isManagedDeploymentTool(toolName)) {
+    const projectedView = readManagedToolViewProjection(metadata);
+    const deploymentOutput = readManagedDeploymentToolOutput(metadata);
+    if (projectedView.userSummary) return projectedView.userSummary;
+    if (deploymentOutput.summary) return deploymentOutput.summary;
+    if (toolName === "get_application_deployment_status") return "检查部署状态";
+    if (toolName === "rollback_application_deployment") return "回滚部署版本";
+    if (toolName === "redeploy_application") return "重新部署应用";
+    return "部署应用";
+  }
+
+  if (toolName === "complete_task") {
+    return "完成任务并整理结果";
+  }
+
+  return getManagedToolDisplayName(toolName);
 }
 
 function extractManagedArtifactPath(

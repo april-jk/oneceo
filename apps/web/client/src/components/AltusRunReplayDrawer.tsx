@@ -62,6 +62,13 @@ export type AltusReplayFile = AltusArtifactFile & {
   lastSourceStepIndex?: number;
 };
 
+export type AltusDrawerView =
+  | "actions"
+  | "files"
+  | "changes"
+  | "debug"
+  | "deployment";
+
 type AltusRunReplayDrawerProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -73,6 +80,8 @@ type AltusRunReplayDrawerProps = {
   files: AltusReplayFile[];
   currentIndex: number;
   latestIndex: number;
+  activeView?: AltusDrawerView;
+  onActiveViewChange?: (view: AltusDrawerView) => void;
   onSelectIndex: (index: number) => void;
   onJumpToLatest: () => void;
   diffItems: PreviewDiffItem[];
@@ -85,8 +94,6 @@ type AltusRunReplayDrawerProps = {
   onRequestRedeployByMessage?: () => void;
   onRequestRollbackByMessage?: () => void;
 };
-
-type AltusDrawerView = "actions" | "files" | "changes" | "debug" | "deployment";
 
 function getStatusIcon(status: AltusReplayActionStatus) {
   if (status === "completed") {
@@ -192,6 +199,8 @@ export default function AltusRunReplayDrawer({
   files = [],
   currentIndex,
   latestIndex,
+  activeView,
+  onActiveViewChange,
   onSelectIndex,
   onJumpToLatest,
   diffItems = [],
@@ -216,7 +225,9 @@ export default function AltusRunReplayDrawer({
   const [selectedFilePath, setSelectedFilePath] = useState<string>(
     normalizedFiles[0]?.path || "",
   );
-  const [drawerView, setDrawerView] = useState<AltusDrawerView>("actions");
+  const [drawerView, setDrawerViewState] = useState<AltusDrawerView>(
+    activeView || "actions",
+  );
   const [selectedDiffId, setSelectedDiffId] = useState<string>(
     diffItems.at(-1)?.id || "",
   );
@@ -258,6 +269,16 @@ export default function AltusRunReplayDrawer({
   const previousSelectedActionKeyRef = useRef(selectedActionKey);
   const drawerContentRef = useRef<HTMLDivElement | null>(null);
   const selectedActionPanelRef = useRef<HTMLDivElement | null>(null);
+  const actionButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const setDrawerView = (view: AltusDrawerView) => {
+    setDrawerViewState(view);
+    onActiveViewChange?.(view);
+  };
+
+  useEffect(() => {
+    if (!activeView) return;
+    setDrawerViewState(activeView);
+  }, [activeView, runId]);
 
   useEffect(() => {
     const actionChanged =
@@ -274,8 +295,9 @@ export default function AltusRunReplayDrawer({
   }, [normalizedFiles, selectedActionKey]);
 
   useEffect(() => {
-    setDrawerView("actions");
-  }, [runId]);
+    if (activeView) return;
+    setDrawerViewState("actions");
+  }, [activeView, runId]);
 
   useEffect(() => {
     setDetailViewMode("user");
@@ -300,6 +322,18 @@ export default function AltusRunReplayDrawer({
       document.removeEventListener("pointerdown", handlePointerDown);
     };
   }, [drawerView, open, selectedActionVisible]);
+
+  useEffect(() => {
+    if (!open || drawerView !== "actions" || !selectedAction?.toolCallId) {
+      return;
+    }
+    const node = actionButtonRefs.current.get(selectedAction.toolCallId);
+    if (!node) return;
+    const frame = window.requestAnimationFrame(() => {
+      node.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [drawerView, open, selectedAction?.toolCallId]);
 
   useEffect(() => {
     if (!diffItems.length) {
@@ -633,6 +667,18 @@ export default function AltusRunReplayDrawer({
                             <button
                               key={action.toolCallId}
                               type="button"
+                              ref={(node) => {
+                                if (node) {
+                                  actionButtonRefs.current.set(
+                                    action.toolCallId,
+                                    node,
+                                  );
+                                } else {
+                                  actionButtonRefs.current.delete(
+                                    action.toolCallId,
+                                  );
+                                }
+                              }}
                               onClick={() =>
                                 handleSelectActionIndex(action.stepIndex)
                               }

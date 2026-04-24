@@ -2058,7 +2058,7 @@ export function FilePreview({
           </div>
         </div>
       </ResizablePanel>
-      <ResizableHandle className="w-[2px] bg-border/80 transition-colors hover:bg-[var(--brand-soft-foreground)] data-[resize-handle-state=drag]:bg-[var(--brand-solid)]" />
+      <ResizableHandle withHandle className="border-0 bg-transparent" />
       <ResizablePanel defaultSize={72} minSize={55}>
         <div className="h-full min-h-0 overflow-hidden bg-background p-3">
           {selectedPath ? (

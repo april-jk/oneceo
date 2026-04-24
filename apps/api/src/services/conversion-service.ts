@@ -1,6 +1,3 @@
-import { eq, and } from 'drizzle-orm';
-import { db } from '../config/database';
-import { modelPricing, userCredits } from '../db/schema';
 import { pricingService } from './pricing-service';
 
 /**
@@ -84,7 +81,7 @@ export class ConversionService {
     costPrompt: number;
     costCompletion: number;
   }> {
-    return Object.entries(API_COST_RMB).map(([model, cost]) =&gt; {
+    return Object.entries(API_COST_RMB).map(([model, cost]) => {
       const suggested = this.calculateSuggestedPricing(model, margin)!;
       return {
         model,
@@ -113,12 +110,12 @@ export class ConversionService {
   /**
    * 估算一次调用的成本（RMB）
    */
-  estimateCallCost(
+  async estimateCallCost(
     model: string,
     promptTokens: number,
     completionTokens: number
-  ): { credits: number; rmb: number } | null {
-    const pricing = pricingService.getActivePricing(model);
+  ): Promise<{ credits: number; rmb: number } | null> {
+    const pricing = await pricingService.getActivePricing(model);
     if (!pricing) return null;
 
     const credits = pricingService.calculateCredits(

@@ -1,7 +1,7 @@
 import type express from 'express';
 import { appAuthService } from '../services/app-auth-service';
-import { APP_SESSION_COOKIE_NAME } from '../utils/auth-session';
-import { readCookie } from '../utils/http-cookie';
+import { APP_SESSION_COOKIE_NAMES } from '../utils/auth-session';
+import { readCookieValuesByNames } from '../utils/http-cookie';
 
 export async function appAuthMiddleware(
   req: express.Request,
@@ -9,13 +9,17 @@ export async function appAuthMiddleware(
   next: express.NextFunction
 ) {
   try {
-    const sessionToken = readCookie(req, APP_SESSION_COOKIE_NAME);
-    if (!sessionToken) {
+    const sessionTokens = readCookieValuesByNames(req, APP_SESSION_COOKIE_NAMES);
+    if (sessionTokens.length === 0) {
       next();
       return;
     }
-    const resolved = await appAuthService.resolveUserBySessionToken(sessionToken);
-    if (resolved?.user) {
+
+    for (const sessionToken of sessionTokens) {
+      const resolved = await appAuthService.resolveUserBySessionToken(sessionToken);
+      if (!resolved?.user) {
+        continue;
+      }
       (req as any).user = {
         id: resolved.user.id,
         userId: resolved.user.id,
@@ -26,6 +30,8 @@ export async function appAuthMiddleware(
         userId: resolved.user.id,
       };
       (req as any).currentAppUser = resolved.user;
+      (req as any).currentAppSession = resolved.session;
+      break;
     }
     next();
   } catch (error) {

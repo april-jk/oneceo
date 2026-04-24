@@ -7,6 +7,7 @@ import type {
   PlatformSkillRevisionResource,
   PlatformSkillRevisionResourceIndex,
 } from '../db/schema';
+import { ensurePlatformSkillGovernanceSchema } from '../db/migrate';
 import { platformSkillImportService } from './platform-skill-import-service';
 import type { SkillImportPreview } from './platform-skill-import-service';
 import { PLATFORM_SKILL_SEEDS } from './platform-skill-seeds';
@@ -19,6 +20,17 @@ export type PlatformSkillResourceSummary = {
   paths: string[];
 };
 
+export type PlatformSkillGovernance = {
+  systemRole: string | null;
+  adminManaged: boolean;
+  required: boolean;
+  autoActivation: {
+    enabled: boolean;
+    triggers: string[];
+    toolNames: string[];
+  };
+};
+
 export type PlatformSkillReference = {
   skillId: string;
   revisionId: string;
@@ -28,6 +40,7 @@ export type PlatformSkillReference = {
   category: string;
   revisionNumber: number;
   resourceSummary: PlatformSkillResourceSummary;
+  governance: PlatformSkillGovernance;
 };
 
 export type AdminPlatformSkillSummary = {
@@ -41,6 +54,7 @@ export type AdminPlatformSkillSummary = {
   publishedRevisionNumber: number | null;
   publishedAt: string | null;
   updatedAt: string;
+  governance: PlatformSkillGovernance;
 };
 
 function asText(value: unknown) {
@@ -158,6 +172,73 @@ function readObjectKey(value: unknown) {
   return asText((value as Record<string, unknown>).objectKey);
 }
 
+function asObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+export function normalizePlatformSkillGovernance(input: unknown): PlatformSkillGovernance {
+  const metadata = asObject(input);
+  const autoActivation = asObject(metadata.autoActivation);
+  const triggers = Array.isArray(autoActivation.triggers)
+    ? autoActivation.triggers
+        .map((item) => asText(item).toLowerCase())
+        .filter(Boolean)
+    : [];
+  const toolNames = Array.isArray(autoActivation.toolNames)
+    ? autoActivation.toolNames
+        .map((item) => asText(item).toLowerCase())
+        .filter(Boolean)
+    : [];
+  return {
+    systemRole: asText(metadata.systemRole) || null,
+    adminManaged: Boolean(metadata.adminManaged),
+    required: Boolean(metadata.required),
+    autoActivation: {
+      enabled: Boolean(autoActivation.enabled),
+      triggers: Array.from(new Set(triggers)),
+      toolNames: Array.from(new Set(toolNames)),
+    },
+  };
+}
+
+function governanceToMetadataJson(value: PlatformSkillGovernance | Partial<PlatformSkillGovernance> | null | undefined) {
+  const normalized = normalizePlatformSkillGovernance(value);
+  return {
+    systemRole: normalized.systemRole,
+    adminManaged: normalized.adminManaged,
+    required: normalized.required,
+    autoActivation: {
+      enabled: normalized.autoActivation.enabled,
+      triggers: normalized.autoActivation.triggers,
+      toolNames: normalized.autoActivation.toolNames,
+    },
+  };
+}
+
+function isMissingPlatformSkillGovernanceColumnError(error: unknown) {
+  if (!error || typeof error !== 'object') return false;
+  const payload = error as {
+    code?: unknown;
+    message?: unknown;
+    cause?: { code?: unknown; message?: unknown };
+  };
+  const code = payload.code ?? payload.cause?.code;
+  const message = String(payload.message ?? payload.cause?.message ?? '');
+  return code === '42703' && message.includes('metadata_json');
+}
+
+let platformSkillGovernanceRepairPromise: Promise<void> | null = null;
+
+async function ensurePlatformSkillGovernanceSchemaReady() {
+  if (!platformSkillGovernanceRepairPromise) {
+    platformSkillGovernanceRepairPromise = ensurePlatformSkillGovernanceSchema().finally(() => {
+      platformSkillGovernanceRepairPromise = null;
+    });
+  }
+  await platformSkillGovernanceRepairPromise;
+}
+
 export function computeSkillSignature(markdown: string) {
   return createHash('sha256').update(markdown).digest('hex');
 }
@@ -188,47 +269,70 @@ export class PlatformSkillService {
     return payload.code === '23505' || payload.cause?.code === '23505';
   }
 
+  private async ensureGovernanceSchemaReady() {
+    await ensurePlatformSkillGovernanceSchemaReady();
+  }
+
   async ensureSeeded() {
     if (this.seeded) return;
-    for (const seed of PLATFORM_SKILL_SEEDS) {
-      const existed = await platformSkillDAO.getSkillBySlug(seed.slug);
-      if (existed) {
-        continue;
-      }
+    let repairedGovernanceSchema = false;
+
+    while (!this.seeded) {
       try {
-        await platformSkillDAO.createSkillWithRevision({
-          skill: {
-            slug: seed.slug,
-            name: seed.name,
-            description: seed.description,
-            category: seed.category,
-            status: 'active',
-          },
-          revision: {
-            slugSnapshot: seed.slug,
-            nameSnapshot: seed.name,
-            descriptionSnapshot: seed.description,
-            categorySnapshot: seed.category,
-            bodyMarkdown: seed.bodyMarkdown,
-            createdBy: 'seed',
-          },
-          resources: Array.isArray(seed.resources)
-            ? seed.resources.map((item) => ({
-                resourcePath: normalizeResourcePath(item.resourcePath),
-                resourceType: assertResourceType(item.resourceType),
-                contentMarkdown: assertNonEmpty(item.contentMarkdown, 'skill resource 正文'),
-              }))
-            : [],
-        });
+        for (const seed of PLATFORM_SKILL_SEEDS) {
+          const existed = await platformSkillDAO.getSkillBySlug(seed.slug);
+          if (existed) {
+            const expected = governanceToMetadataJson(seed.metadataJson as any);
+            const current = governanceToMetadataJson(existed.metadataJson as any);
+            if (JSON.stringify(expected) !== JSON.stringify(current)) {
+              await platformSkillDAO.updateSkillMetadata(existed.id, expected);
+            }
+            continue;
+          }
+          try {
+            await platformSkillDAO.createSkillWithRevision({
+              skill: {
+                slug: seed.slug,
+                name: seed.name,
+                description: seed.description,
+                category: seed.category,
+                status: 'active',
+                metadataJson: governanceToMetadataJson(seed.metadataJson as any),
+              },
+              revision: {
+                slugSnapshot: seed.slug,
+                nameSnapshot: seed.name,
+                descriptionSnapshot: seed.description,
+                categorySnapshot: seed.category,
+                bodyMarkdown: seed.bodyMarkdown,
+                createdBy: 'seed',
+              },
+              resources: Array.isArray(seed.resources)
+                ? seed.resources.map((item) => ({
+                    resourcePath: normalizeResourcePath(item.resourcePath),
+                    resourceType: assertResourceType(item.resourceType),
+                    contentMarkdown: assertNonEmpty(item.contentMarkdown, 'skill resource 正文'),
+                  }))
+                : [],
+            });
+          } catch (error) {
+            if (this.isUniqueViolation(error)) {
+              // 并发启动时可能同时写入同一个 seed，唯一键冲突可安全忽略。
+              continue;
+            }
+            throw error;
+          }
+        }
+        this.seeded = true;
       } catch (error) {
-        if (this.isUniqueViolation(error)) {
-          // 并发启动时可能同时写入同一个 seed，唯一键冲突可安全忽略。
+        if (!repairedGovernanceSchema && isMissingPlatformSkillGovernanceColumnError(error)) {
+          repairedGovernanceSchema = true;
+          await this.ensureGovernanceSchemaReady();
           continue;
         }
         throw error;
       }
     }
-    this.seeded = true;
   }
 
   parseFolderImport(input: { rootFolderName?: string; files: Array<{ relativePath: string; content: string }> }) {
@@ -330,6 +434,7 @@ export class PlatformSkillService {
       category: revision.categorySnapshot || skill.category,
       revisionNumber: revision.revisionNumber,
       resourceSummary,
+      governance: normalizePlatformSkillGovernance(skill.metadataJson),
     };
   }
 
@@ -363,6 +468,7 @@ export class PlatformSkillService {
         publishedRevisionNumber: revision?.revisionNumber ?? null,
         publishedAt: toIso(revision?.publishedAt),
         updatedAt: toIso(skill.updatedAt) || new Date().toISOString(),
+        governance: normalizePlatformSkillGovernance(skill.metadataJson),
       });
     }
     return results;
@@ -398,6 +504,7 @@ export class PlatformSkillService {
           })
         : null,
       resourceSummary,
+      governance: normalizePlatformSkillGovernance(skill.metadataJson),
       resources: resources.map((item) => ({
         id: item.id,
         resourcePath: item.resourcePath,
@@ -507,6 +614,7 @@ export class PlatformSkillService {
     name: string;
     description?: string;
     category?: string;
+    governance?: Partial<PlatformSkillGovernance> | null;
     bodyMarkdown: string;
     createdBy?: string | null;
     resources?: Array<{ resourcePath: string; resourceType?: 'reference' | 'template'; contentMarkdown: string }>;
@@ -525,6 +633,7 @@ export class PlatformSkillService {
         description: asText(input.description),
         category: asText(input.category) || 'general',
         status: 'active',
+        metadataJson: governanceToMetadataJson(input.governance),
       },
       revision: {
         slugSnapshot: slug,
@@ -553,16 +662,25 @@ export class PlatformSkillService {
     name: string;
     description?: string;
     category?: string;
+    governance?: Partial<PlatformSkillGovernance> | null;
     bodyMarkdown: string;
     createdBy?: string | null;
     resources?: Array<{ resourcePath: string; resourceType?: 'reference' | 'template'; contentMarkdown: string }>;
     layeredImport?: SkillImportPreview | null;
   }) {
     await this.ensureSeeded();
+    const existing = await platformSkillDAO.getSkill(skillId);
+    if (!existing) {
+      throw new Error('skill 不存在');
+    }
     return platformSkillDAO.createPublishedRevision(skillId, {
       name: assertNonEmpty(input.name, 'skill 名称'),
       description: asText(input.description),
       category: asText(input.category) || 'general',
+      metadataJson:
+        input.governance === undefined
+          ? governanceToMetadataJson(existing.metadataJson as any)
+          : governanceToMetadataJson(input.governance),
       bodyMarkdown: assertNonEmpty(input.bodyMarkdown, 'skill 正文'),
       createdBy: asText(input.createdBy) || null,
       resources: Array.isArray(input.resources)
@@ -672,6 +790,13 @@ export class PlatformSkillService {
 
   async archiveSkill(skillId: string) {
     await this.ensureSeeded();
+    const skill = await platformSkillDAO.getSkill(skillId);
+    if (!skill) {
+      throw new Error('skill 不存在');
+    }
+    if (normalizePlatformSkillGovernance(skill.metadataJson).required) {
+      throw new Error('系统必需 skill 不允许归档');
+    }
     const updated = await platformSkillDAO.updateSkillStatus(skillId, 'archived');
     if (!updated) {
       throw new Error('skill 不存在');

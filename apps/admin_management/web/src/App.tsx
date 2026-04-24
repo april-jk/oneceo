@@ -1,31 +1,26 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type * as React from 'react';
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
 
 // 管理后台主页面：统一组装导航、区块切换和会话/主机/技能/发布等能力面板。
 import { api } from './api';
 import type { AdminUser } from './api';
-import { ConnectorGuideManagementSection } from './components/ConnectorGuideManagementSection';
-import { KvmControlCenter } from './components/KvmControlCenter';
-import { OsacReleaseManagementSection } from './components/OsacReleaseManagementSection';
-import { SkillManagementSection } from './components/SkillManagementSection';
-import { UserManagementSection } from './components/UserManagementSection';
+import {
+  DEFAULT_DEPLOYMENT_MANAGEMENT_VIEW_STATE,
+  DEFAULT_CONNECTOR_GUIDE_MANAGEMENT_VIEW_STATE,
+  DEFAULT_OSAC_RELEASE_MANAGEMENT_VIEW_STATE,
+  DEFAULT_SKILL_MANAGEMENT_VIEW_STATE,
+  DEFAULT_USER_MANAGEMENT_VIEW_STATE,
+} from './components/adminViewState';
+import type {
+  DeploymentManagementViewState,
+  ConnectorGuideManagementViewState,
+  OsacReleaseManagementViewState,
+  SkillManagementViewState,
+  UserManagementViewState,
+} from './components/adminViewState';
 import type {
   AdminThemeKey,
+  AdminThemeMode,
   AdminThemeSettings,
   AgentManagementOverview,
   AuditDetailResponse,
@@ -35,6 +30,7 @@ import type {
   ConversationSession,
   ConversationSessionDetailResponse,
   DashboardOverview,
+  DeploymentRecord,
   E2bSandboxDetail,
   E2bSandboxFullInfo,
   E2bTemplate,
@@ -47,10 +43,41 @@ import type {
   SandboxRuntimeDetail,
   SandboxRuntimeRegistry,
   SandboxManagementOverview,
+  SandboxLiveSummary,
   VmItem,
 } from './types';
 
-type SectionKey = 'kvm' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit';
+const KvmControlCenter = lazy(() =>
+  import('./components/KvmControlCenter').then((module) => ({ default: module.KvmControlCenter }))
+);
+const KvmHostTrendChart = lazy(() =>
+  import('./components/KvmCharts').then((module) => ({ default: module.KvmHostTrendChart }))
+);
+const KvmVmStatusPieChart = lazy(() =>
+  import('./components/KvmCharts').then((module) => ({ default: module.KvmVmStatusPieChart }))
+);
+const KvmSessionStatusBarChart = lazy(() =>
+  import('./components/KvmCharts').then((module) => ({ default: module.KvmSessionStatusBarChart }))
+);
+const UserManagementSection = lazy(() =>
+  import('./components/UserManagementSection').then((module) => ({ default: module.UserManagementSection }))
+);
+const DeploymentManagementSection = lazy(() =>
+  import('./components/DeploymentManagementSection').then((module) => ({ default: module.DeploymentManagementSection }))
+);
+const SkillManagementSection = lazy(() =>
+  import('./components/SkillManagementSection').then((module) => ({ default: module.SkillManagementSection }))
+);
+const ConnectorGuideManagementSection = lazy(() =>
+  import('./components/ConnectorGuideManagementSection').then((module) => ({
+    default: module.ConnectorGuideManagementSection,
+  }))
+);
+const OsacReleaseManagementSection = lazy(() =>
+  import('./components/OsacReleaseManagementSection').then((module) => ({ default: module.OsacReleaseManagementSection }))
+);
+
+type SectionKey = 'kvm' | 'deployment' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit';
 type NavGroupKey = 'runtime' | 'platform';
 type ToastTone = 'error' | 'success' | 'warning' | 'info';
 type SandboxDetailTab = 'overview' | 'files' | 'processes' | 'connectivity' | 'archive' | 'terminal';
@@ -62,6 +89,12 @@ type SandboxFileTransferProgress = {
   detail: string;
   percent: number | null;
 };
+type SandboxLoadStepKey = 'overview' | 'runtime' | 'templates' | 'live';
+type SandboxLoadProgressState = {
+  active: boolean;
+  startedAt: number | null;
+  completed: Record<SandboxLoadStepKey, boolean>;
+};
 
 type UiToast = {
   id: number;
@@ -70,18 +103,31 @@ type UiToast = {
   message: string;
 };
 
+function sandboxDisplayLabel(detail: SandboxRuntimeDetail | null | undefined, fallback?: string | null) {
+  return (
+    detail?.runtime.taskTitle ||
+    detail?.runtime.sandboxId ||
+    detail?.liveSandboxDetail?.sandboxId ||
+    detail?.liveSandbox?.sandboxId ||
+    fallback ||
+    '当前环境'
+  );
+}
+
 type AuditFilterState = {
   query: string;
   operator: string;
   action: string;
   result: string;
-  sessionId: string;
-  targetVmId: string;
   from: string;
   to: string;
 };
 
 type ConversationDialogTab = 'overview' | 'interaction' | 'infra' | 'raw' | 'transitions';
+type AdminDetailOrigin = {
+  section: SectionKey;
+  trail: string;
+};
 
 // 左侧主导航分组：区分“运行态能力”和“平台配置能力”。
 type HostTrendPoint = {
@@ -95,89 +141,129 @@ type HostTrendPoint = {
 const SIDEBAR_STACK_BREAKPOINT = 920;
 const WHEEL_LINE_HEIGHT_PX = 16;
 const ADMIN_THEME_STORAGE_KEY = 'oneceo-admin-management-theme';
-const DEFAULT_ADMIN_THEME: AdminThemeKey = 'everforest-light';
+const ADMIN_THEME_MODE_STORAGE_KEY = 'oneceo-admin-management-theme-mode';
+const ADMIN_SIDEBAR_STORAGE_KEY = 'oneceo-admin-management-sidebar-collapsed';
+const DEFAULT_ADMIN_THEME: AdminThemeKey = 'github';
+const DEFAULT_ADMIN_THEME_MODE: AdminThemeMode = 'system';
 const FALLBACK_ADMIN_THEME_OPTIONS: AdminThemeSettings['themes'] = [
-  { key: 'github-light', label: 'GitHub Light', family: 'GitHub', variant: 'Light', tone: 'light', description: '清爽浅色，适合白天处理表格和日志。', swatches: ['#f6f8fa', '#24292f', '#0969da'] },
-  { key: 'github-dark', label: 'GitHub Dark', family: 'GitHub', variant: 'Dark', tone: 'dark', description: 'GitHub 暗色语义，适合夜间阅读。', swatches: ['#0d1117', '#e6edf3', '#2f81f7'] },
-  { key: 'github-dimmed', label: 'GitHub Dimmed', family: 'GitHub', variant: 'Dimmed', tone: 'dark', description: '低对比暗色，减少长时间日志阅读疲劳。', swatches: ['#22272e', '#adbac7', '#539bf5'] },
-  { key: 'dracula-classic', label: 'Dracula Classic', family: 'Dracula', variant: 'Classic', tone: 'dark', description: '高对比暗色，适合长时间排障。', swatches: ['#282a36', '#f8f8f2', '#bd93f9'] },
-  { key: 'dracula-soft', label: 'Dracula Soft', family: 'Dracula', variant: 'Soft', tone: 'dark', description: '降低紫色饱和度，保留 Dracula 的辨识度。', swatches: ['#2b2d3a', '#f3eefc', '#a98df2'] },
-  { key: 'everforest-light', label: 'Everforest Light', family: 'Everforest', variant: 'Light', tone: 'light', description: '柔和绿灰，适合默认运维控制台。', swatches: ['#f3f5f1', '#1f261f', '#16785f'] },
-  { key: 'everforest-dark', label: 'Everforest Dark', family: 'Everforest', variant: 'Dark', tone: 'dark', description: '森林暗色，兼顾控制台状态色可读性。', swatches: ['#2b3339', '#d3c6aa', '#a7c080'] },
-  { key: 'everforest-hard', label: 'Everforest Hard', family: 'Everforest', variant: 'Hard', tone: 'dark', description: '更深背景，适合大屏值守。', swatches: ['#1e2326', '#d3c6aa', '#83c092'] },
-  { key: 'onedark-classic', label: 'One Dark Classic', family: 'One Dark', variant: 'Classic', tone: 'dark', description: '克制暗色，偏工程编辑器风格。', swatches: ['#282c34', '#abb2bf', '#61afef'] },
-  { key: 'onedark-pro', label: 'One Dark Pro', family: 'One Dark', variant: 'Pro', tone: 'dark', description: '更强蓝绿强调，适合高频操作界面。', swatches: ['#1f2329', '#d7dae0', '#4fa6ed'] },
-  { key: 'catppuccin-latte', label: 'Catppuccin Latte', family: 'Catppuccin', variant: 'Latte', tone: 'light', description: '柔和浅色，保留 Catppuccin 的粉彩强调。', swatches: ['#eff1f5', '#4c4f69', '#8839ef'] },
-  { key: 'catppuccin-macchiato', label: 'Catppuccin Macchiato', family: 'Catppuccin', variant: 'Macchiato', tone: 'dark', description: '中等暗度，适合日夜混合使用。', swatches: ['#24273a', '#cad3f5', '#c6a0f6'] },
-  { key: 'catppuccin-mocha', label: 'Catppuccin Mocha', family: 'Catppuccin', variant: 'Mocha', tone: 'dark', description: '温和暗色，低疲劳阅读。', swatches: ['#1e1e2e', '#cdd6f4', '#cba6f7'] },
-  { key: 'tokyo-night-day', label: 'Tokyo Night Day', family: 'Tokyo Night', variant: 'Day', tone: 'light', description: 'Tokyo Night 的浅色变体，适合白天办公。', swatches: ['#e1e2e7', '#3760bf', '#2e7de9'] },
-  { key: 'tokyo-night-storm', label: 'Tokyo Night Storm', family: 'Tokyo Night', variant: 'Storm', tone: 'dark', description: '灰蓝暗色，适合控制台密集信息。', swatches: ['#24283b', '#c0caf5', '#7aa2f7'] },
-  { key: 'tokyo-night-night', label: 'Tokyo Night Night', family: 'Tokyo Night', variant: 'Night', tone: 'dark', description: '深夜蓝黑，突出状态色和代码块。', swatches: ['#1a1b26', '#c0caf5', '#7aa2f7'] },
-  { key: 'nord-polar-night', label: 'Nord Polar Night', family: 'Nord', variant: 'Polar Night', tone: 'dark', description: '冷静蓝灰，适合低饱和监控界面。', swatches: ['#2e3440', '#d8dee9', '#88c0d0'] },
-  { key: 'nord-frost', label: 'Nord Frost', family: 'Nord', variant: 'Frost', tone: 'light', description: 'Nord 的浅色霜感变体。', swatches: ['#eceff4', '#2e3440', '#5e81ac'] },
-  { key: 'solarized-light', label: 'Solarized Light', family: 'Solarized', variant: 'Light', tone: 'light', description: '经典低对比浅色，适合长文档阅读。', swatches: ['#fdf6e3', '#586e75', '#268bd2'] },
-  { key: 'solarized-dark', label: 'Solarized Dark', family: 'Solarized', variant: 'Dark', tone: 'dark', description: '经典低对比暗色，适合长时间终端风工作。', swatches: ['#002b36', '#93a1a1', '#268bd2'] },
-  { key: 'gruvbox-light', label: 'Gruvbox Light', family: 'Gruvbox', variant: 'Light', tone: 'light', description: '复古暖色浅色，适合低刺激阅读。', swatches: ['#fbf1c7', '#3c3836', '#b57614'] },
-  { key: 'gruvbox-dark', label: 'Gruvbox Dark', family: 'Gruvbox', variant: 'Dark', tone: 'dark', description: '复古暗色，高辨识度状态色。', swatches: ['#282828', '#ebdbb2', '#fabd2f'] },
-  { key: 'gruvbox-material', label: 'Gruvbox Material', family: 'Gruvbox', variant: 'Material', tone: 'dark', description: '更柔和的 Gruvbox 暗色变体。', swatches: ['#1d2021', '#ddc7a1', '#a9b665'] },
-  { key: 'monokai-classic', label: 'Monokai Classic', family: 'Monokai', variant: 'Classic', tone: 'dark', description: '经典高对比代码主题。', swatches: ['#272822', '#f8f8f2', '#a6e22e'] },
-  { key: 'monokai-pro', label: 'Monokai Pro', family: 'Monokai', variant: 'Pro', tone: 'dark', description: '更现代的 Monokai 暗色控制台。', swatches: ['#2d2a2e', '#fcfcfa', '#ffd866'] },
-  { key: 'material-ocean', label: 'Material Ocean', family: 'Material', variant: 'Ocean', tone: 'dark', description: 'Material 深海蓝，适合监控大屏。', swatches: ['#0f111a', '#b8c6db', '#82aaff'] },
-  { key: 'material-palenight', label: 'Material Palenight', family: 'Material', variant: 'Palenight', tone: 'dark', description: '柔和蓝紫暗色，适合夜间后台。', swatches: ['#292d3e', '#a6accd', '#c792ea'] },
-  { key: 'material-lighter', label: 'Material Lighter', family: 'Material', variant: 'Lighter', tone: 'light', description: 'Material 浅色，高可读表格体验。', swatches: ['#fafafa', '#546e7a', '#00bcd4'] },
-  { key: 'ayu-light', label: 'Ayu Light', family: 'Ayu', variant: 'Light', tone: 'light', description: '干净浅色，突出金色操作焦点。', swatches: ['#fafafa', '#5c6773', '#ff9940'] },
-  { key: 'ayu-mirage', label: 'Ayu Mirage', family: 'Ayu', variant: 'Mirage', tone: 'dark', description: '不太深的暗色，适合昼夜切换。', swatches: ['#1f2430', '#cbccc6', '#ffcc66'] },
-  { key: 'ayu-dark', label: 'Ayu Dark', family: 'Ayu', variant: 'Dark', tone: 'dark', description: '深色 Ayu，适合专注编辑。', swatches: ['#0f1419', '#bfbdb6', '#ffb454'] },
-  { key: 'rose-pine-dawn', label: 'Rose Pine Dawn', family: 'Rose Pine', variant: 'Dawn', tone: 'light', description: '柔和浅色，减少后台的冷硬感。', swatches: ['#faf4ed', '#575279', '#d7827e'] },
-  { key: 'rose-pine-moon', label: 'Rose Pine Moon', family: 'Rose Pine', variant: 'Moon', tone: 'dark', description: '中深玫瑰暗色，适合信息面板。', swatches: ['#232136', '#e0def4', '#c4a7e7'] },
-  { key: 'rose-pine-main', label: 'Rose Pine Main', family: 'Rose Pine', variant: 'Main', tone: 'dark', description: '经典 Rose Pine 暗色。', swatches: ['#191724', '#e0def4', '#ebbcba'] },
-  { key: 'kanagawa-lotus', label: 'Kanagawa Lotus', family: 'Kanagawa', variant: 'Lotus', tone: 'light', description: '水墨浅色，适合白天管理任务。', swatches: ['#f2ecbc', '#545464', '#b35b79'] },
-  { key: 'kanagawa-wave', label: 'Kanagawa Wave', family: 'Kanagawa', variant: 'Wave', tone: 'dark', description: '经典 Kanagawa 暗色。', swatches: ['#1f1f28', '#dcd7ba', '#7e9cd8'] },
-  { key: 'kanagawa-dragon', label: 'Kanagawa Dragon', family: 'Kanagawa', variant: 'Dragon', tone: 'dark', description: '更深的水墨暗色，适合夜间值守。', swatches: ['#181616', '#c5c9c5', '#8ba4b0'] },
-  { key: 'synthwave-84', label: 'SynthWave 84', family: 'SynthWave', variant: '84', tone: 'dark', description: '霓虹复古暗色，适合个性化后台。', swatches: ['#262335', '#f92aad', '#72f1b8'] },
-  { key: 'synthwave-dim', label: 'SynthWave Dim', family: 'SynthWave', variant: 'Dim', tone: 'dark', description: '降低霓虹亮度，兼顾可读性。', swatches: ['#241b2f', '#f6d5ff', '#36f9f6'] },
-  { key: 'night-owl', label: 'Night Owl', family: 'Night Owl', variant: 'Dark', tone: 'dark', description: '夜间编码经典主题，高可读蓝色调。', swatches: ['#011627', '#d6deeb', '#82aaff'] },
-  { key: 'night-owl-light', label: 'Night Owl Light', family: 'Night Owl', variant: 'Light', tone: 'light', description: 'Night Owl 的浅色变体。', swatches: ['#fbfbfb', '#403f53', '#4876d6'] },
-  { key: 'arc-light', label: 'Arc Light', family: 'Arc', variant: 'Light', tone: 'light', description: '现代 Linux 风浅色。', swatches: ['#f5f6f7', '#2f343f', '#5294e2'] },
-  { key: 'arc-dark', label: 'Arc Dark', family: 'Arc', variant: 'Dark', tone: 'dark', description: '现代 Linux 风暗色。', swatches: ['#2f343f', '#d3dae3', '#5294e2'] },
+  {
+    key: 'github',
+    label: 'GitHub',
+    description: '中性克制，适合高密度表格、索引和日志。',
+    lightSwatches: ['#f6f8fa', '#24292f', '#0969da'],
+    darkSwatches: ['#0d1117', '#e6edf3', '#2f81f7'],
+  },
+  {
+    key: 'nord',
+    label: 'Nord',
+    description: '冷静蓝灰，长时间值守也不刺眼。',
+    lightSwatches: ['#eceff4', '#2e3440', '#5e81ac'],
+    darkSwatches: ['#2e3440', '#e5e9f0', '#88c0d0'],
+  },
+  {
+    key: 'rose-pine',
+    label: 'Rose Pine',
+    description: '柔和暖调，让后台界面更温和但不发灰。',
+    lightSwatches: ['#faf4ed', '#575279', '#b4637a'],
+    darkSwatches: ['#191724', '#e0def4', '#c4a7e7'],
+  },
+  {
+    key: 'one-dark-light',
+    label: 'One Dark Light',
+    description: 'Atom One 风格，代码、日志和表格更利落。',
+    lightSwatches: ['#fafafa', '#383a42', '#4078f2'],
+    darkSwatches: ['#282c34', '#abb2bf', '#61afef'],
+  },
+];
+const FALLBACK_ADMIN_THEME_MODES: AdminThemeSettings['modes'] = [
+  { key: 'light', label: '亮色', description: '始终使用亮色外观。' },
+  { key: 'dark', label: '暗色', description: '始终使用暗色外观。' },
+  { key: 'system', label: '跟随系统', description: '自动跟随设备当前的明暗模式。' },
 ];
 const FALLBACK_ADMIN_THEME_KEYS = new Set(FALLBACK_ADMIN_THEME_OPTIONS.map((item) => item.key));
-const ADMIN_THEME_ALIASES = new Map<string, AdminThemeKey>([
-  ['github', 'github-light'],
-  ['dracula', 'dracula-classic'],
-  ['everforest', 'everforest-light'],
-  ['onedark', 'onedark-classic'],
-  ['catppuccin', 'catppuccin-mocha'],
-  ['tokyo-night', 'tokyo-night-night'],
-  ['nord', 'nord-polar-night'],
-  ['solarized', 'solarized-light'],
-  ['gruvbox', 'gruvbox-dark'],
-  ['monokai', 'monokai-classic'],
-  ['material', 'material-ocean'],
-  ['ayu', 'ayu-mirage'],
-  ['rose-pine', 'rose-pine-main'],
-  ['kanagawa', 'kanagawa-wave'],
-  ['synthwave', 'synthwave-84'],
-  ['night-owl-dark', 'night-owl'],
-  ['arc', 'arc-light'],
-]);
 
 function normalizeAdminThemeKey(value: unknown): AdminThemeKey {
   const key = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  if (ADMIN_THEME_ALIASES.has(key)) {
-    return ADMIN_THEME_ALIASES.get(key) || DEFAULT_ADMIN_THEME;
-  }
   return FALLBACK_ADMIN_THEME_KEYS.has(key) ? key : DEFAULT_ADMIN_THEME;
 }
 
-function getAdminThemeTone(themeKey: AdminThemeKey): 'light' | 'dark' {
+function normalizeAdminThemeMode(value: unknown): AdminThemeMode {
+  const mode = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return mode === 'light' || mode === 'dark' || mode === 'system' ? mode : DEFAULT_ADMIN_THEME_MODE;
+}
+
+function readLegacyAdminThemePreference(value: unknown): { theme: AdminThemeKey; mode: AdminThemeMode | null } {
+  const key = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (FALLBACK_ADMIN_THEME_KEYS.has(key)) {
+    return { theme: key, mode: null };
+  }
+  if (key === 'github' || key.startsWith('github-')) {
+    return { theme: 'github', mode: key === 'github' || key.includes('light') ? 'light' : 'dark' };
+  }
+  if (key === 'nord' || key.startsWith('nord-')) {
+    return { theme: 'nord', mode: key.includes('frost') ? 'light' : 'dark' };
+  }
+  if (key === 'rosepine' || key === 'rose-pine' || key.startsWith('rose-pine-')) {
+    return { theme: 'rose-pine', mode: key.includes('dawn') ? 'light' : 'dark' };
+  }
+  if (
+    key === 'one'
+    || key === 'one-light'
+    || key === 'one-dark'
+    || key === 'one-dark-light'
+    || key.startsWith('one-dark-light-')
+  ) {
+    return {
+      theme: 'one-dark-light',
+      mode: key === 'one-light' || key.includes('light') ? 'light' : key.includes('dark') ? 'dark' : null,
+    };
+  }
+  if (key.includes('light') || key.includes('dawn') || key.includes('day') || key.includes('frost')) {
+    return { theme: DEFAULT_ADMIN_THEME, mode: 'light' };
+  }
+  if (
+    key.includes('dark') ||
+    key.includes('night') ||
+    key.includes('moon') ||
+    key.includes('main') ||
+    key.includes('dimmed') ||
+    key.includes('storm') ||
+    key.includes('hard') ||
+    key.includes('mocha') ||
+    key.includes('macchiato') ||
+    key.includes('polar')
+  ) {
+    return { theme: DEFAULT_ADMIN_THEME, mode: 'dark' };
+  }
+  return { theme: DEFAULT_ADMIN_THEME, mode: null };
+}
+
+function getSystemThemeTone() {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return 'light';
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function resolveAdminThemeTone(mode: AdminThemeMode, systemTone: 'light' | 'dark') {
+  return mode === 'system' ? systemTone : mode;
+}
+
+function resolveAdminThemeVariant(themeKey: AdminThemeKey, tone: 'light' | 'dark') {
   const normalizedTheme = normalizeAdminThemeKey(themeKey);
-  return FALLBACK_ADMIN_THEME_OPTIONS.find((item) => item.key === normalizedTheme)?.tone || 'light';
+  if (normalizedTheme === 'nord') {
+    return tone === 'dark' ? 'nord-polar-night' : 'nord-frost';
+  }
+  if (normalizedTheme === 'rose-pine') {
+    return tone === 'dark' ? 'rose-pine-main' : 'rose-pine-dawn';
+  }
+  if (normalizedTheme === 'one-dark-light') {
+    return tone === 'dark' ? 'one-dark-light-dark' : 'one-dark-light';
+  }
+  return tone === 'dark' ? 'github-dark' : 'github-light';
 }
 
 function readStoredAdminTheme(): AdminThemeKey {
   if (typeof window === 'undefined') return DEFAULT_ADMIN_THEME;
-  return normalizeAdminThemeKey(window.localStorage.getItem(ADMIN_THEME_STORAGE_KEY));
+  return readLegacyAdminThemePreference(window.localStorage.getItem(ADMIN_THEME_STORAGE_KEY)).theme;
 }
 
 function persistStoredAdminTheme(themeKey: AdminThemeKey) {
@@ -185,12 +271,36 @@ function persistStoredAdminTheme(themeKey: AdminThemeKey) {
   window.localStorage.setItem(ADMIN_THEME_STORAGE_KEY, themeKey);
 }
 
-function applyAdminTheme(themeKey: AdminThemeKey) {
+function readStoredAdminThemeMode(): AdminThemeMode {
+  if (typeof window === 'undefined') return DEFAULT_ADMIN_THEME_MODE;
+  const storedMode = window.localStorage.getItem(ADMIN_THEME_MODE_STORAGE_KEY);
+  if (storedMode) return normalizeAdminThemeMode(storedMode);
+  const legacy = readLegacyAdminThemePreference(window.localStorage.getItem(ADMIN_THEME_STORAGE_KEY));
+  return legacy.mode || DEFAULT_ADMIN_THEME_MODE;
+}
+
+function persistStoredAdminThemeMode(mode: AdminThemeMode) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(ADMIN_THEME_MODE_STORAGE_KEY, mode);
+}
+
+function readStoredSidebarCollapsed() {
+  if (typeof window === 'undefined') return false;
+  return window.localStorage.getItem(ADMIN_SIDEBAR_STORAGE_KEY) === 'true';
+}
+
+function persistStoredSidebarCollapsed(collapsed: boolean) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(ADMIN_SIDEBAR_STORAGE_KEY, collapsed ? 'true' : 'false');
+}
+
+function applyAdminTheme(themeKey: AdminThemeKey, mode: AdminThemeMode, systemTone: 'light' | 'dark') {
   if (typeof document === 'undefined') return;
-  const normalizedTheme = normalizeAdminThemeKey(themeKey);
-  const tone = getAdminThemeTone(normalizedTheme);
-  document.documentElement.dataset.adminTheme = normalizedTheme;
+  const tone = resolveAdminThemeTone(mode, systemTone);
+  const resolvedTheme = resolveAdminThemeVariant(themeKey, tone);
+  document.documentElement.dataset.adminTheme = resolvedTheme;
   document.documentElement.dataset.adminTone = tone;
+  document.documentElement.dataset.adminThemeMode = mode;
   document.documentElement.style.colorScheme = tone;
 }
 
@@ -219,6 +329,15 @@ const NAV_ITEMS: Array<{
     signal: 'Sandbox 状态',
   },
   {
+    key: 'deployment',
+    group: 'runtime',
+    label: '部署管理',
+    subtitle: '发布与访问状态',
+    tag: 'DEP',
+    description: '查看会话部署记录、访问地址和用户归属。',
+    signal: '部署状态',
+  },
+  {
     key: 'conversation',
     group: 'runtime',
     label: '对话管理',
@@ -231,10 +350,10 @@ const NAV_ITEMS: Array<{
     key: 'user',
     group: 'runtime',
     label: '用户管理',
-    subtitle: 'App User',
+    subtitle: '普通用户账号',
     tag: 'USR',
-    description: '查看 app_users 账号状态、登录来源和对话/Sandbox 归属。',
-    signal: '账号归属',
+    description: '查看普通用户账号状态、登录来源，以及对话和 Sandbox 的关联情况。',
+    signal: '账号关联',
   },
   {
     key: 'audit',
@@ -303,48 +422,81 @@ const VM_STATE_COLORS: Record<string, string> = {
 // 列表默认分页和“加载更多”步长，控制 Sandbox 运行时列表的性能与体验。
 const SANDBOX_RUNTIME_PAGE_SIZE = 80;
 const SANDBOX_RUNTIME_LOAD_MORE_STEP = 40;
+const SANDBOX_LOAD_STEPS: Array<{ key: SandboxLoadStepKey; label: string; detail: string }> = [
+  { key: 'overview', label: '概览', detail: '同步运行概览' },
+  { key: 'runtime', label: '列表', detail: '拉取 Runtime 列表' },
+  { key: 'templates', label: '模板', detail: '准备模板入口' },
+  { key: 'live', label: 'Live', detail: '统计 live 数量' },
+];
+const EMPTY_SANDBOX_LOAD_PROGRESS: Record<SandboxLoadStepKey, boolean> = {
+  overview: false,
+  runtime: false,
+  templates: false,
+  live: false,
+};
 
 // 运行时列表排序参数。
-type RuntimeSortKey = 'task_session' | 'sandbox' | 'executor' | 'status' | 'risk' | 'last_active';
+type RuntimeSortKey = 'task_session' | 'sandbox' | 'executor' | 'status' | 'last_active';
 type RuntimeSortDirection = 'asc' | 'desc';
 type RuntimeSortState = {
   key: RuntimeSortKey;
   direction: RuntimeSortDirection;
 };
-type RuntimeColumnKey = 'task_session' | 'sandbox' | 'executor' | 'status' | 'risk' | 'last_active' | 'actions';
+type RuntimeColumnKey = 'task_session' | 'sandbox' | 'executor' | 'status' | 'last_active' | 'actions';
 type ArchiveSortKey = 'time' | 'type' | 'size' | 'reason' | 'status';
 type ArchiveSortState = {
   key: ArchiveSortKey;
   direction: RuntimeSortDirection;
 };
 type ArchiveColumnKey = 'time' | 'type' | 'size' | 'reason' | 'status' | 'actions';
+type ConversationSortKey = 'session' | 'user' | 'executor' | 'session_id' | 'status' | 'updated_at' | 'created_at';
+type AuditSortKey = 'id' | 'time' | 'action' | 'result' | 'operator' | 'target' | 'session';
+type SortDirection = 'asc' | 'desc';
+
+type ConversationSortState = {
+  key: ConversationSortKey;
+  direction: SortDirection;
+};
+
+type AuditSortState = {
+  key: AuditSortKey;
+  direction: SortDirection;
+};
 
 const DEFAULT_RUNTIME_SORT: RuntimeSortState = {
-  key: 'risk',
+  key: 'last_active',
   direction: 'desc',
 };
 
 const DEFAULT_RUNTIME_COLUMN_WIDTHS: Record<RuntimeColumnKey, number> = {
-  task_session: 228,
-  sandbox: 212,
-  executor: 128,
-  status: 232,
-  risk: 174,
-  last_active: 170,
-  actions: 236,
+  task_session: 190,
+  sandbox: 176,
+  executor: 108,
+  status: 128,
+  last_active: 132,
+  actions: 178,
 };
 
 const RUNTIME_COLUMN_MIN_WIDTHS: Record<RuntimeColumnKey, number> = {
-  task_session: 168,
-  sandbox: 156,
-  executor: 108,
-  status: 186,
-  risk: 132,
-  last_active: 130,
-  actions: 206,
+  task_session: 150,
+  sandbox: 132,
+  executor: 92,
+  status: 112,
+  last_active: 110,
+  actions: 154,
 };
 
 const DEFAULT_ARCHIVE_SORT: ArchiveSortState = {
+  key: 'time',
+  direction: 'desc',
+};
+
+const DEFAULT_CONVERSATION_SORT: ConversationSortState = {
+  key: 'updated_at',
+  direction: 'desc',
+};
+
+const DEFAULT_AUDIT_SORT: AuditSortState = {
   key: 'time',
   direction: 'desc',
 };
@@ -391,6 +543,28 @@ function toTimestamp(value?: string | null) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function formatRelativeTime(value?: string | null) {
+  const timestamp = toTimestamp(value);
+  if (!timestamp) return '-';
+  const deltaMs = Date.now() - timestamp;
+  if (deltaMs < 60 * 1000) return '刚刚';
+  if (deltaMs < 60 * 60 * 1000) return `${Math.floor(deltaMs / (60 * 1000))} 分钟前`;
+  if (deltaMs < 24 * 60 * 60 * 1000) return `${Math.floor(deltaMs / (60 * 60 * 1000))} 小时前`;
+  if (deltaMs < 30 * 24 * 60 * 60 * 1000) return `${Math.floor(deltaMs / (24 * 60 * 60 * 1000))} 天前`;
+  return formatDateTime(value);
+}
+
+function formatCompactRelativeTime(value?: string | null, now = Date.now()) {
+  const timestamp = toTimestamp(value);
+  if (!timestamp) return '-';
+  const deltaMs = Math.max(0, now - timestamp);
+  if (deltaMs < 60 * 1000) return `${Math.max(1, Math.floor(deltaMs / 1000))}秒前`;
+  if (deltaMs < 60 * 60 * 1000) return `${Math.floor(deltaMs / (60 * 1000))}分钟前`;
+  if (deltaMs < 24 * 60 * 60 * 1000) return `${Math.floor(deltaMs / (60 * 60 * 1000))}小时前`;
+  if (deltaMs < 30 * 24 * 60 * 60 * 1000) return `${Math.floor(deltaMs / (24 * 60 * 60 * 1000))}天前`;
+  return formatDateTime(value);
+}
+
 function stateClassName(state: string) {
   return `status-pill status-${state}`;
 }
@@ -398,10 +572,26 @@ function stateClassName(state: string) {
 function statusLabel(status: string) {
   if (status === 'in_progress') return '进行中';
   if (status === 'waiting_user') return '待用户确认';
-  if (status === 'completed') return '已完成';
+  if (status === 'completed') return '完成';
   if (status === 'failed') return '失败';
   if (status === 'unknown') return '未知';
   return status;
+}
+
+function deploymentStatusLabel(status?: string | null) {
+  if (status === 'success') return '成功';
+  if (status === 'failed') return '失败';
+  if (status === 'pending') return '处理中';
+  if (status === 'ready') return '已就绪';
+  if (status === 'uninitialized') return '未初始化';
+  return status || '-';
+}
+
+function deploymentStatusTone(status?: string | null) {
+  if (status === 'success' || status === 'ready') return 'status-running';
+  if (status === 'failed') return 'status-error';
+  if (status === 'pending') return 'status-paused';
+  return 'status-stopped';
 }
 
 function conversationStageLabel(stage?: string | null) {
@@ -409,8 +599,8 @@ function conversationStageLabel(stage?: string | null) {
   if (stage === 'clarifying') return '等待补充';
   if (stage === 'planning') return '方案规划';
   if (stage === 'executing') return '执行中';
-  if (stage === 'completed') return '已完成';
-  if (stage === 'failed') return '已失败';
+  if (stage === 'completed') return '完成';
+  if (stage === 'failed') return '失败';
   if (stage === 'unknown') return '未知阶段';
   return stage || '-';
 }
@@ -439,7 +629,7 @@ function conversationUserMeta(user?: ConversationSession['user'] | null) {
 
 function conversationUserSourceLabel(source?: string | null) {
   if (source === 'app_user') return '用户账号';
-  if (source === 'legacy_user_id') return '旧版用户标识';
+  if (source === 'legacy_user_id') return '旧账号标识';
   if (source === 'missing_app_user') return '账号记录缺失';
   return source || '未知来源';
 }
@@ -470,7 +660,7 @@ function conversationMessageTypeLabel(messageType?: string | null) {
   if (messageType === 'opencode_event') return 'OpenCode 事件';
   if (messageType === 'opencode_status') return 'OpenCode 状态';
   if (messageType === 'opencode_error') return 'OpenCode 异常';
-  if (messageType === 'opencode_user_input') return '执行器转发输入';
+  if (messageType === 'opencode_user_input') return '系统转发输入';
   if (messageType === 'codex_user_input') return 'Codex 转发输入';
   if (messageType === 'status_update') return '状态更新';
   if (messageType === 'session_started') return '会话开始';
@@ -513,6 +703,19 @@ function adminRoleLabel(role?: string | null) {
 function adminDisplayNameLabel(displayName?: string | null, loginName?: string | null) {
   if (displayName === 'Platform Admin') return '平台管理员';
   return displayName || loginName || '-';
+}
+
+function adminInitials(displayName?: string | null, loginName?: string | null) {
+  const source = adminDisplayNameLabel(displayName, loginName).trim();
+  const parts = source.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return parts
+      .slice(0, 2)
+      .map((part) => Array.from(part)[0] || '')
+      .join('')
+      .toUpperCase();
+  }
+  return Array.from(source.replace(/\s+/g, '')).slice(0, 2).join('').toUpperCase() || 'AD';
 }
 
 function capabilityStatusLabel(status?: string | null) {
@@ -1473,10 +1676,10 @@ function messageMetaSummary(message: ConversationMessage): string[] {
 
   if (toolName) parts.push(`工具: ${toolName}`);
   if (eventType) parts.push(`事件: ${eventType}`);
-  if (executor) parts.push(`执行器: ${executorLabel(executor)}`);
+  if (executor) parts.push(`处理方式: ${executorLabel(executor)}`);
   if (stage) parts.push(`阶段: ${conversationStageLabel(stage)}`);
   if (tone) parts.push(`语气: ${conversationToneLabel(tone)}`);
-  if (runId) parts.push(`Run: ${runId.slice(0, 8)}`);
+  if (runId) parts.push(`运行批次: ${runId.slice(0, 8)}`);
   if (!parts.length && question) parts.push(`问题: ${summarizeText(question, 80)}`);
   if (!parts.length && outputPreview) parts.push(`输出: ${summarizeText(outputPreview, 80)}`);
   return parts;
@@ -1528,19 +1731,19 @@ function messageDiagnosticSummary(message: ConversationMessage): string | null {
   const toolName = messageToolName(message);
   const metadata = toRecord(message.metadata);
   if (type === 'opencode_error') {
-    return '执行器链路异常，优先确认 sandbox 端口、订阅状态和 OpenCode 可达性。';
+    return '处理链路异常，优先确认 Sandbox 端口、订阅状态和 OpenCode 是否可用。';
   }
   if (type === 'error') {
-    return '当前轮次出现显式错误，需要结合 metadata 与时间线继续排障。';
+    return '当前这一轮出现明确错误，建议结合附带信息和时间线继续排查。';
   }
   if (type === 'clarification_request') {
     return '当前轮次在等待用户补充信息或确认下一步。';
   }
   if (type === 'executor_event' && eventType === 'tool_call_failed') {
-    return `${toolName || '工具'} 执行失败，优先检查参数、workspace 与 runtime 状态。`;
+    return `${toolName || '工具'} 执行失败，优先检查参数、工作目录和运行状态。`;
   }
   if (type === 'executor_event' && eventType === 'tool_call_completed') {
-    return `${toolName || '工具'} 已完成，可结合 outputPreview 判断是否产生有效结果。`;
+    return `${toolName || '工具'} 已完成，可结合结果摘要判断是否真的产出了可用结果。`;
   }
   if (type === 'status_update' && metadataString(metadata, 'stage') === 'failed') {
     return '会话进入 failed 阶段，本轮已终止。';
@@ -1549,10 +1752,10 @@ function messageDiagnosticSummary(message: ConversationMessage): string | null {
     return '交付已生成，建议核对文件与最终回复是否一致。';
   }
   if (type === 'status_update' && eventType === 'run_completed') {
-    return '本轮 managed run 已结束。';
+    return '这一轮自动处理已经结束。';
   }
   if (type === 'opencode_event') {
-    return '执行器原始事件，通常用于补充上下文，不代表用户可见主回复。';
+    return '这是系统底层记录，主要用于补充上下文，不代表用户会直接看到的回复。';
   }
   return null;
 }
@@ -2203,7 +2406,7 @@ function buildConversationOpencodeToolCard(input: {
       title: commandCard.title,
       subtitle: statusLabel,
       statusLabel,
-      tone: errorText ? 'error' : statusLabel === '已完成' ? 'success' : 'default',
+      tone: errorText ? 'error' : statusLabel === '完成' ? 'success' : 'default',
       command: commandText,
       preview: truncateConversationReplayText(outputText, 900).text,
       previewMode: 'code',
@@ -2919,23 +3122,517 @@ const DEFAULT_AUDIT_FILTERS: AuditFilterState = {
   operator: 'all',
   action: 'all',
   result: 'all',
-  sessionId: '',
-  targetVmId: '',
   from: '',
   to: '',
 };
 
+type AdminUrlState = {
+  activeSection: SectionKey;
+  deployment: DeploymentManagementViewState;
+  conversation: {
+    query: string;
+    status: 'all' | 'in_progress' | 'waiting_user' | 'failed' | 'completed';
+    stage: string;
+    user: string;
+    executor: string;
+    updatedFrom: string;
+    updatedTo: string;
+    selectedSessionId: string | null;
+  };
+  sandbox: {
+    tab: 'runtime';
+    query: string;
+    executor: string;
+    status: string;
+    risk: string;
+    selectedSandboxId: string | null;
+    detailTab: SandboxDetailTab;
+  };
+  user: UserManagementViewState;
+  skill: SkillManagementViewState;
+  connectorGuide: ConnectorGuideManagementViewState;
+  osacRelease: OsacReleaseManagementViewState;
+  audit: AuditFilterState;
+};
+
+const ADMIN_URL_QUERY_KEYS = [
+  'section',
+  'dep_view',
+  'dep_q',
+  'dep_status',
+  'dep_has_url',
+  'dep_user',
+  'dep_session',
+  'dep_detail',
+  'dep_tab',
+  'conv_q',
+  'conv_status',
+  'conv_stage',
+  'conv_user',
+  'conv_exec',
+  'conv_from',
+  'conv_to',
+  'conv_session',
+  'sbx_tab',
+  'sbx_q',
+  'sbx_exec',
+  'sbx_status',
+  'sbx_risk',
+  'sbx_id',
+  'sbx_detail_tab',
+  'user_q',
+  'user_status',
+  'user_activity',
+  'user_session',
+  'user_conv',
+  'user_sort',
+  'user_dir',
+  'user_id',
+  'user_tab',
+  'skill_q',
+  'skill_status',
+  'skill_category',
+  'skill_view',
+  'skill_id',
+  'skill_dialog',
+  'skill_tab',
+  'skill_rev',
+  'guide_connector',
+  'guide_status',
+  'guide_q',
+  'guide_id',
+  'guide_rev',
+  'osac_tab',
+  'osac_q',
+  'osac_id',
+  'osac_dialog',
+  'audit_q',
+  'audit_operator',
+  'audit_action',
+  'audit_result',
+  'audit_session',
+  'audit_target',
+  'audit_from',
+  'audit_to',
+] as const;
+
+const USER_DETAIL_TAB_VALUES = new Set(['overview', 'conversations', 'sandboxes', 'deployments']);
+const DEPLOYMENT_VIEW_VALUES = new Set(['records', 'conversations', 'users', 'railway']);
+const DEPLOYMENT_DETAIL_TAB_VALUES = new Set(['overview', 'history', 'logs', 'relations', 'raw']);
+const SANDBOX_TAB_VALUES = new Set(['runtime']);
+const SANDBOX_DETAIL_TAB_VALUES = new Set(['overview', 'files', 'processes', 'connectivity', 'archive', 'terminal']);
+const USER_SORT_KEY_VALUES = new Set(['user', 'status', 'last_activity', 'sessions', 'conversations', 'sandboxes']);
+const USER_SORT_DIRECTION_VALUES = new Set(['asc', 'desc']);
+const SKILL_VIEW_VALUES = new Set(['all', 'active', 'archived', 'published', 'unpublished']);
+const SKILL_DETAIL_TAB_VALUES = new Set(['editor', 'resources', 'validation']);
+const OSAC_TAB_VALUES = new Set(['published', 'pending', 'all', 'upload']);
+
+function isSectionKey(value: string | null): value is SectionKey {
+  return value === 'kvm'
+    || value === 'deployment'
+    || value === 'conversation'
+    || value === 'user'
+    || value === 'agent'
+    || value === 'skill'
+    || value === 'connectorGuide'
+    || value === 'osacRelease'
+    || value === 'sandbox'
+    || value === 'audit';
+}
+
+function cloneDeploymentManagementViewState(
+  state: DeploymentManagementViewState = DEFAULT_DEPLOYMENT_MANAGEMENT_VIEW_STATE
+): DeploymentManagementViewState {
+  return {
+    view: state.view,
+    filters: { ...state.filters },
+    selectedTaskSessionId: state.selectedTaskSessionId,
+    detailDialogOpen: state.detailDialogOpen,
+    detailTab: state.detailTab,
+  };
+}
+
+function cloneUserManagementViewState(state: UserManagementViewState = DEFAULT_USER_MANAGEMENT_VIEW_STATE): UserManagementViewState {
+  return {
+    filters: { ...state.filters },
+    sort: { ...state.sort },
+    selectedUserId: state.selectedUserId,
+    selectedUserLabel: state.selectedUserLabel,
+    drawerOpen: state.drawerOpen,
+    detailTab: state.detailTab,
+  };
+}
+
+function cloneSkillManagementViewState(
+  state: SkillManagementViewState = DEFAULT_SKILL_MANAGEMENT_VIEW_STATE
+): SkillManagementViewState {
+  return {
+    filters: { ...state.filters },
+    skillView: state.skillView,
+    selectedSkillId: state.selectedSkillId,
+    detailDialogOpen: state.detailDialogOpen,
+    detailTab: state.detailTab,
+    selectedRevisionId: state.selectedRevisionId,
+    selectedResourcePath: state.selectedResourcePath,
+  };
+}
+
+function cloneConnectorGuideManagementViewState(
+  state: ConnectorGuideManagementViewState = DEFAULT_CONNECTOR_GUIDE_MANAGEMENT_VIEW_STATE
+): ConnectorGuideManagementViewState {
+  return {
+    filters: { ...state.filters },
+    selectedPolicyId: state.selectedPolicyId,
+    selectedRevisionId: state.selectedRevisionId,
+  };
+}
+
+function cloneOsacReleaseManagementViewState(
+  state: OsacReleaseManagementViewState = DEFAULT_OSAC_RELEASE_MANAGEMENT_VIEW_STATE
+): OsacReleaseManagementViewState {
+  return {
+    tab: state.tab,
+    query: state.query,
+    selectedReleaseId: state.selectedReleaseId,
+    detailDialogOpen: state.detailDialogOpen,
+  };
+}
+
+function readAdminUrlState(): AdminUrlState {
+  const deploymentState = cloneDeploymentManagementViewState();
+  const userState = cloneUserManagementViewState();
+  const skillState = cloneSkillManagementViewState();
+  const connectorGuideState = cloneConnectorGuideManagementViewState();
+  const osacReleaseState = cloneOsacReleaseManagementViewState();
+  const auditState = { ...DEFAULT_AUDIT_FILTERS };
+
+  if (typeof window === 'undefined') {
+    return {
+      activeSection: 'sandbox',
+      deployment: deploymentState,
+      conversation: {
+        query: '',
+        status: 'all',
+        stage: 'all',
+        user: 'all',
+        executor: 'all',
+        updatedFrom: '',
+        updatedTo: '',
+        selectedSessionId: null,
+      },
+      sandbox: {
+        tab: 'runtime',
+        query: '',
+        executor: 'all',
+        status: 'all',
+        risk: 'all',
+        selectedSandboxId: null,
+        detailTab: 'overview',
+      },
+      user: userState,
+      skill: skillState,
+      connectorGuide: connectorGuideState,
+      osacRelease: osacReleaseState,
+      audit: auditState,
+    };
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const sectionParam = params.get('section');
+  const activeSection = isSectionKey(sectionParam) ? sectionParam : 'sandbox';
+  const conversationStatus = params.get('conv_status');
+  const deploymentView = params.get('dep_view');
+  const deploymentDetailTab = params.get('dep_tab');
+  const sandboxTab = params.get('sbx_tab');
+  const sandboxDetailTab = params.get('sbx_detail_tab');
+  const userSortKey = params.get('user_sort');
+  const userSortDirection = params.get('user_dir');
+  const userDetailTab = params.get('user_tab');
+  const skillView = params.get('skill_view');
+  const skillDetailTab = params.get('skill_tab');
+  const osacTab = params.get('osac_tab');
+
+  deploymentState.view = DEPLOYMENT_VIEW_VALUES.has(deploymentView || '')
+    ? (deploymentView as DeploymentManagementViewState['view'])
+    : DEFAULT_DEPLOYMENT_MANAGEMENT_VIEW_STATE.view;
+  deploymentState.filters = {
+    query: params.get('dep_q') || '',
+    status: params.get('dep_status') || 'all',
+    hasUrl: params.get('dep_has_url') || 'all',
+    userId: params.get('dep_user') || '',
+    taskSessionId: params.get('dep_session') || '',
+  };
+  deploymentState.selectedTaskSessionId = params.get('dep_detail') || null;
+  deploymentState.detailDialogOpen = params.get('dep_detail') !== null;
+  deploymentState.detailTab = DEPLOYMENT_DETAIL_TAB_VALUES.has(deploymentDetailTab || '')
+    ? (deploymentDetailTab as DeploymentManagementViewState['detailTab'])
+    : DEFAULT_DEPLOYMENT_MANAGEMENT_VIEW_STATE.detailTab;
+
+  userState.filters = {
+    query: params.get('user_q') || '',
+    status: params.get('user_status') || 'all',
+    activity: params.get('user_activity') || 'all',
+    hasSession: params.get('user_session') || 'all',
+    hasConversation: params.get('user_conv') || 'all',
+  };
+  userState.sort = {
+    key: USER_SORT_KEY_VALUES.has(userSortKey || '') ? (userSortKey as UserManagementViewState['sort']['key']) : DEFAULT_USER_MANAGEMENT_VIEW_STATE.sort.key,
+    direction: USER_SORT_DIRECTION_VALUES.has(userSortDirection || '') ? (userSortDirection as UserManagementViewState['sort']['direction']) : DEFAULT_USER_MANAGEMENT_VIEW_STATE.sort.direction,
+  };
+  userState.selectedUserId = params.get('user_id') || null;
+  userState.selectedUserLabel = null;
+  userState.drawerOpen = Boolean(userState.selectedUserId);
+  userState.detailTab = USER_DETAIL_TAB_VALUES.has(userDetailTab || '')
+    ? (userDetailTab as UserManagementViewState['detailTab'])
+    : DEFAULT_USER_MANAGEMENT_VIEW_STATE.detailTab;
+
+  skillState.filters = {
+    query: params.get('skill_q') || '',
+    status: params.get('skill_status') || 'all',
+    category: params.get('skill_category') || '',
+  };
+  skillState.skillView = SKILL_VIEW_VALUES.has(skillView || '')
+    ? (skillView as SkillManagementViewState['skillView'])
+    : DEFAULT_SKILL_MANAGEMENT_VIEW_STATE.skillView;
+  skillState.selectedSkillId = params.get('skill_id') || null;
+  skillState.detailDialogOpen = params.get('skill_dialog') === '1' && Boolean(skillState.selectedSkillId);
+  skillState.detailTab = SKILL_DETAIL_TAB_VALUES.has(skillDetailTab || '')
+    ? (skillDetailTab as SkillManagementViewState['detailTab'])
+    : DEFAULT_SKILL_MANAGEMENT_VIEW_STATE.detailTab;
+  skillState.selectedRevisionId = params.get('skill_rev') || null;
+
+  connectorGuideState.filters = {
+    connectorKey: params.get('guide_connector') || '',
+    status: params.get('guide_status') || 'all',
+    query: params.get('guide_q') || '',
+  };
+  connectorGuideState.selectedPolicyId = params.get('guide_id') || null;
+  connectorGuideState.selectedRevisionId = params.get('guide_rev') || null;
+
+  osacReleaseState.tab = OSAC_TAB_VALUES.has(osacTab || '')
+    ? (osacTab as OsacReleaseManagementViewState['tab'])
+    : DEFAULT_OSAC_RELEASE_MANAGEMENT_VIEW_STATE.tab;
+  osacReleaseState.query = params.get('osac_q') || '';
+  osacReleaseState.selectedReleaseId = params.get('osac_id') || null;
+  osacReleaseState.detailDialogOpen = params.get('osac_dialog') === '1' && Boolean(osacReleaseState.selectedReleaseId);
+
+  auditState.query = params.get('audit_q') || '';
+  auditState.operator = params.get('audit_operator') || 'all';
+  auditState.action = params.get('audit_action') || 'all';
+  auditState.result = params.get('audit_result') || 'all';
+  auditState.from = params.get('audit_from') || '';
+  auditState.to = params.get('audit_to') || '';
+
+  return {
+    activeSection,
+    deployment: deploymentState,
+    conversation: {
+      query: params.get('conv_q') || '',
+      status:
+        conversationStatus === 'in_progress'
+        || conversationStatus === 'waiting_user'
+        || conversationStatus === 'failed'
+        || conversationStatus === 'completed'
+          ? conversationStatus
+          : 'all',
+      stage: params.get('conv_stage') || 'all',
+      user: params.get('conv_user') || 'all',
+      executor: params.get('conv_exec') || 'all',
+      updatedFrom: params.get('conv_from') || '',
+      updatedTo: params.get('conv_to') || '',
+      selectedSessionId: params.get('conv_session') || null,
+    },
+    sandbox: {
+      tab: SANDBOX_TAB_VALUES.has(sandboxTab || '') ? (sandboxTab as AdminUrlState['sandbox']['tab']) : 'runtime',
+      query: params.get('sbx_q') || '',
+      executor: params.get('sbx_exec') || 'all',
+      status: params.get('sbx_status') || 'all',
+      risk: params.get('sbx_risk') || 'all',
+      selectedSandboxId: params.get('sbx_id') || null,
+      detailTab: SANDBOX_DETAIL_TAB_VALUES.has(sandboxDetailTab || '')
+        ? (sandboxDetailTab as SandboxDetailTab)
+        : 'overview',
+    },
+    user: userState,
+    skill: skillState,
+    connectorGuide: connectorGuideState,
+    osacRelease: osacReleaseState,
+    audit: auditState,
+  };
+}
+
+function writeAdminUrlState(input: {
+  activeSection: SectionKey;
+  deployment: DeploymentManagementViewState;
+  conversation: AdminUrlState['conversation'];
+  sandbox: AdminUrlState['sandbox'] & { modalOpen: boolean };
+  user: UserManagementViewState;
+  skill: SkillManagementViewState;
+  connectorGuide: ConnectorGuideManagementViewState;
+  osacRelease: OsacReleaseManagementViewState;
+  audit: AuditFilterState;
+}) {
+  if (typeof window === 'undefined') return;
+
+  const url = new URL(window.location.href);
+  for (const key of ADMIN_URL_QUERY_KEYS) {
+    url.searchParams.delete(key);
+  }
+
+  url.searchParams.set('section', input.activeSection);
+
+  if (input.activeSection === 'deployment') {
+    if (input.deployment.view !== DEFAULT_DEPLOYMENT_MANAGEMENT_VIEW_STATE.view) {
+      url.searchParams.set('dep_view', input.deployment.view);
+    }
+    if (input.deployment.filters.query) url.searchParams.set('dep_q', input.deployment.filters.query);
+    if (input.deployment.filters.status !== 'all') url.searchParams.set('dep_status', input.deployment.filters.status);
+    if (input.deployment.filters.hasUrl !== 'all') url.searchParams.set('dep_has_url', input.deployment.filters.hasUrl);
+    if (input.deployment.filters.userId) url.searchParams.set('dep_user', input.deployment.filters.userId);
+    if (input.deployment.filters.taskSessionId) url.searchParams.set('dep_session', input.deployment.filters.taskSessionId);
+    if (input.deployment.detailDialogOpen && input.deployment.selectedTaskSessionId) {
+      url.searchParams.set('dep_detail', input.deployment.selectedTaskSessionId);
+      if (input.deployment.detailTab !== DEFAULT_DEPLOYMENT_MANAGEMENT_VIEW_STATE.detailTab) {
+        url.searchParams.set('dep_tab', input.deployment.detailTab);
+      }
+    }
+  }
+
+  if (input.activeSection === 'conversation') {
+    if (input.conversation.query) url.searchParams.set('conv_q', input.conversation.query);
+    if (input.conversation.status !== 'all') url.searchParams.set('conv_status', input.conversation.status);
+    if (input.conversation.stage !== 'all') url.searchParams.set('conv_stage', input.conversation.stage);
+    if (input.conversation.user !== 'all') url.searchParams.set('conv_user', input.conversation.user);
+    if (input.conversation.executor !== 'all') url.searchParams.set('conv_exec', input.conversation.executor);
+    if (input.conversation.updatedFrom) url.searchParams.set('conv_from', input.conversation.updatedFrom);
+    if (input.conversation.updatedTo) url.searchParams.set('conv_to', input.conversation.updatedTo);
+    if (input.conversation.selectedSessionId) url.searchParams.set('conv_session', input.conversation.selectedSessionId);
+  }
+
+  if (input.activeSection === 'sandbox') {
+    if (input.sandbox.query) url.searchParams.set('sbx_q', input.sandbox.query);
+    if (input.sandbox.executor !== 'all') url.searchParams.set('sbx_exec', input.sandbox.executor);
+    if (input.sandbox.status !== 'all') url.searchParams.set('sbx_status', input.sandbox.status);
+    if (input.sandbox.risk !== 'all') url.searchParams.set('sbx_risk', input.sandbox.risk);
+    if (input.sandbox.modalOpen && input.sandbox.selectedSandboxId) {
+      url.searchParams.set('sbx_id', input.sandbox.selectedSandboxId);
+      if (input.sandbox.detailTab !== 'overview') {
+        url.searchParams.set('sbx_detail_tab', input.sandbox.detailTab);
+      }
+    }
+  }
+
+  if (input.activeSection === 'user') {
+    const filters = input.user.filters;
+    if (filters.query) url.searchParams.set('user_q', filters.query);
+    if (filters.status !== 'all') url.searchParams.set('user_status', filters.status);
+    if (filters.activity !== 'all') url.searchParams.set('user_activity', filters.activity);
+    if (filters.hasSession !== 'all') url.searchParams.set('user_session', filters.hasSession);
+    if (filters.hasConversation !== 'all') url.searchParams.set('user_conv', filters.hasConversation);
+    if (input.user.sort.key !== DEFAULT_USER_MANAGEMENT_VIEW_STATE.sort.key) {
+      url.searchParams.set('user_sort', input.user.sort.key);
+    }
+    if (input.user.sort.direction !== DEFAULT_USER_MANAGEMENT_VIEW_STATE.sort.direction) {
+      url.searchParams.set('user_dir', input.user.sort.direction);
+    }
+    if (input.user.drawerOpen && input.user.selectedUserId) {
+      url.searchParams.set('user_id', input.user.selectedUserId);
+      if (input.user.detailTab !== 'overview') {
+        url.searchParams.set('user_tab', input.user.detailTab);
+      }
+    }
+  }
+
+  if (input.activeSection === 'skill') {
+    if (input.skill.filters.query) url.searchParams.set('skill_q', input.skill.filters.query);
+    if (input.skill.filters.status !== 'all') url.searchParams.set('skill_status', input.skill.filters.status);
+    if (input.skill.filters.category) url.searchParams.set('skill_category', input.skill.filters.category);
+    if (input.skill.skillView !== DEFAULT_SKILL_MANAGEMENT_VIEW_STATE.skillView) {
+      url.searchParams.set('skill_view', input.skill.skillView);
+    }
+    if (input.skill.detailDialogOpen && input.skill.selectedSkillId) {
+      url.searchParams.set('skill_id', input.skill.selectedSkillId);
+      url.searchParams.set('skill_dialog', '1');
+      if (input.skill.detailTab !== DEFAULT_SKILL_MANAGEMENT_VIEW_STATE.detailTab) {
+        url.searchParams.set('skill_tab', input.skill.detailTab);
+      }
+      if (input.skill.selectedRevisionId) {
+        url.searchParams.set('skill_rev', input.skill.selectedRevisionId);
+      }
+    }
+  }
+
+  if (input.activeSection === 'connectorGuide') {
+    if (input.connectorGuide.filters.connectorKey) {
+      url.searchParams.set('guide_connector', input.connectorGuide.filters.connectorKey);
+    }
+    if (input.connectorGuide.filters.status !== 'all') {
+      url.searchParams.set('guide_status', input.connectorGuide.filters.status);
+    }
+    if (input.connectorGuide.filters.query) {
+      url.searchParams.set('guide_q', input.connectorGuide.filters.query);
+    }
+    if (input.connectorGuide.selectedPolicyId) {
+      url.searchParams.set('guide_id', input.connectorGuide.selectedPolicyId);
+    }
+    if (input.connectorGuide.selectedRevisionId) {
+      url.searchParams.set('guide_rev', input.connectorGuide.selectedRevisionId);
+    }
+  }
+
+  if (input.activeSection === 'osacRelease') {
+    if (input.osacRelease.tab !== DEFAULT_OSAC_RELEASE_MANAGEMENT_VIEW_STATE.tab) {
+      url.searchParams.set('osac_tab', input.osacRelease.tab);
+    }
+    if (input.osacRelease.query) {
+      url.searchParams.set('osac_q', input.osacRelease.query);
+    }
+    if (input.osacRelease.detailDialogOpen && input.osacRelease.selectedReleaseId) {
+      url.searchParams.set('osac_id', input.osacRelease.selectedReleaseId);
+      url.searchParams.set('osac_dialog', '1');
+    }
+  }
+
+  if (input.activeSection === 'audit') {
+    if (input.audit.query) url.searchParams.set('audit_q', input.audit.query);
+    if (input.audit.operator !== 'all') url.searchParams.set('audit_operator', input.audit.operator);
+    if (input.audit.action !== 'all') url.searchParams.set('audit_action', input.audit.action);
+    if (input.audit.result !== 'all') url.searchParams.set('audit_result', input.audit.result);
+    if (input.audit.from) url.searchParams.set('audit_from', input.audit.from);
+    if (input.audit.to) url.searchParams.set('audit_to', input.audit.to);
+  }
+
+  const nextQuery = url.searchParams.toString();
+  const nextUrl = `${url.pathname}${nextQuery ? `?${nextQuery}` : ''}${url.hash}`;
+  const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (nextUrl !== currentUrl) {
+    window.history.replaceState(window.history.state, '', nextUrl);
+  }
+}
+
 export default function App() {
+  const initialUrlStateRef = useRef<AdminUrlState | null>(null);
+  const initialUrlState = initialUrlStateRef.current || readAdminUrlState();
+  initialUrlStateRef.current = initialUrlState;
+  const sectionRefreshHandlerRef = useRef<(() => Promise<void>) | null>(null);
+  const initialSandboxDeepLinkHandledRef = useRef(false);
+
   const [authStatus, setAuthStatus] = useState<'loading' | 'authenticated' | 'anonymous'>('loading');
   const [adminUser, setAdminUser] = useState<AdminUser | null>(null);
   const [loginName, setLoginName] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<SectionKey>('sandbox');
+  const [activeSection, setActiveSection] = useState<SectionKey>(initialUrlState.activeSection);
   const [themeSettings, setThemeSettings] = useState<AdminThemeSettings | null>(null);
   const [currentTheme, setCurrentTheme] = useState<AdminThemeKey>(() => readStoredAdminTheme());
+  const [currentThemeMode, setCurrentThemeMode] = useState<AdminThemeMode>(() => readStoredAdminThemeMode());
   const [themeSaving, setThemeSaving] = useState(false);
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const [systemThemeTone, setSystemThemeTone] = useState<'light' | 'dark'>(() => getSystemThemeTone());
+  const settingsMenuRef = useRef<HTMLDivElement | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readStoredSidebarCollapsed());
+  const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
 
   const [kvmOverview, setKvmOverview] = useState<DashboardOverview | null>(null);
   const [vms, setVms] = useState<VmItem[]>([]);
@@ -2944,41 +3641,64 @@ export default function App() {
   const [busyVmIds, setBusyVmIds] = useState<Record<string, boolean>>({});
 
   const [conversationSessions, setConversationSessions] = useState<ConversationSession[]>([]);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(initialUrlState.conversation.selectedSessionId);
   const [conversationDetail, setConversationDetail] = useState<ConversationSessionDetailResponse | null>(null);
   const [conversationDetailLoading, setConversationDetailLoading] = useState(false);
   const [conversationInfraError, setConversationInfraError] = useState<string | null>(null);
-  const [conversationSearchQuery, setConversationSearchQuery] = useState('');
-  const [conversationStatusFilter, setConversationStatusFilter] = useState<'all' | 'in_progress' | 'waiting_user' | 'failed' | 'completed'>('all');
-  const [conversationStageFilter, setConversationStageFilter] = useState('all');
-  const [conversationUserFilter, setConversationUserFilter] = useState('all');
-  const [conversationExecutorFilter, setConversationExecutorFilter] = useState('all');
-  const [conversationUpdatedFromDate, setConversationUpdatedFromDate] = useState('');
-  const [conversationUpdatedToDate, setConversationUpdatedToDate] = useState('');
-  const [conversationAutoRefreshEnabled, setConversationAutoRefreshEnabled] = useState(true);
+  const [conversationSearchQuery, setConversationSearchQuery] = useState(initialUrlState.conversation.query);
+  const [conversationStatusFilter, setConversationStatusFilter] = useState<'all' | 'in_progress' | 'waiting_user' | 'failed' | 'completed'>(initialUrlState.conversation.status);
+  const [conversationStageFilter, setConversationStageFilter] = useState(initialUrlState.conversation.stage);
+  const [conversationUserFilter, setConversationUserFilter] = useState(initialUrlState.conversation.user);
+  const [conversationExecutorFilter, setConversationExecutorFilter] = useState(initialUrlState.conversation.executor);
+  const [conversationUpdatedFromDate, setConversationUpdatedFromDate] = useState(initialUrlState.conversation.updatedFrom);
+  const [conversationUpdatedToDate, setConversationUpdatedToDate] = useState(initialUrlState.conversation.updatedTo);
+  const [conversationSort, setConversationSort] = useState<ConversationSortState>(DEFAULT_CONVERSATION_SORT);
+  const [conversationSummaryRefreshing, setConversationSummaryRefreshing] = useState(false);
+  const [conversationSummaryFetchedAt, setConversationSummaryFetchedAt] = useState<string | null>(null);
+  const [conversationSummaryClock, setConversationSummaryClock] = useState(() => Date.now());
   const [conversationDialog, setConversationDialog] = useState<{ sessionId: string } | null>(null);
+  const [conversationDialogOrigin, setConversationDialogOrigin] = useState<AdminDetailOrigin | null>(null);
+  const [conversationDialogZIndex, setConversationDialogZIndex] = useState(240);
+  const [conversationSectionOrigin, setConversationSectionOrigin] = useState<AdminDetailOrigin | null>(null);
   const [showOpencodePayload, setShowOpencodePayload] = useState(false);
   const [conversationGovernanceFilter, setConversationGovernanceFilter] = useState<string | null>(null);
   const [conversationEnvironmentGroupFilter, setConversationEnvironmentGroupFilter] = useState<string | null>(null);
   const [conversationDialogTab, setConversationDialogTab] = useState<ConversationDialogTab>('overview');
+  const [conversationDeploymentSummary, setConversationDeploymentSummary] = useState<DeploymentRecord | null>(null);
+  const [conversationDeploymentLoading, setConversationDeploymentLoading] = useState(false);
   const [transitionView, setTransitionView] = useState<'timeline' | 'list'>('timeline');
   const [transitionQuery, setTransitionQuery] = useState('');
   const [transitionFilters, setTransitionFilters] = useState(DEFAULT_TRANSITION_FILTERS);
   const [transitionAdvancedFiltersOpen, setTransitionAdvancedFiltersOpen] = useState(false);
+  const [deploymentManagementUpdatedAt, setDeploymentManagementUpdatedAt] = useState<string | null>(null);
   const [userManagementUpdatedAt, setUserManagementUpdatedAt] = useState<string | null>(null);
+  const [skillManagementUpdatedAt, setSkillManagementUpdatedAt] = useState<string | null>(null);
+  const [connectorGuideUpdatedAt, setConnectorGuideUpdatedAt] = useState<string | null>(null);
+  const [osacReleaseUpdatedAt, setOsacReleaseUpdatedAt] = useState<string | null>(null);
+  const [deploymentManagementViewState, setDeploymentManagementViewState] = useState<DeploymentManagementViewState>(() => cloneDeploymentManagementViewState(initialUrlState.deployment));
+  const [userManagementViewState, setUserManagementViewState] = useState<UserManagementViewState>(() => cloneUserManagementViewState(initialUrlState.user));
+  const [skillManagementViewState, setSkillManagementViewState] = useState<SkillManagementViewState>(() => cloneSkillManagementViewState(initialUrlState.skill));
+  const [connectorGuideManagementViewState, setConnectorGuideManagementViewState] = useState<ConnectorGuideManagementViewState>(() => cloneConnectorGuideManagementViewState(initialUrlState.connectorGuide));
+  const [osacReleaseManagementViewState, setOsacReleaseManagementViewState] = useState<OsacReleaseManagementViewState>(() => cloneOsacReleaseManagementViewState(initialUrlState.osacRelease));
 
   const [agentOverview, setAgentOverview] = useState<AgentManagementOverview | null>(null);
   const [sandboxOverview, setSandboxOverview] = useState<SandboxManagementOverview | null>(null);
+  const [sandboxLiveSummary, setSandboxLiveSummary] = useState<SandboxLiveSummary | null>(null);
+  const [sandboxLiveSummaryRefreshing, setSandboxLiveSummaryRefreshing] = useState(false);
+  const [sandboxLiveSummaryClock, setSandboxLiveSummaryClock] = useState(() => Date.now());
   const [sandboxRuntimeRegistry, setSandboxRuntimeRegistry] = useState<SandboxRuntimeRegistry | null>(null);
   const [sandboxRuntimeDetail, setSandboxRuntimeDetail] = useState<SandboxRuntimeDetail | null>(null);
   const [sandboxDetail, setSandboxDetail] = useState<E2bSandboxDetail | null>(null);
   const [sandboxArchiveHistory, setSandboxArchiveHistory] = useState<SandboxArchiveHistoryEntry[]>([]);
   const [sandboxModalOpen, setSandboxModalOpen] = useState(false);
-  const [sandboxTab, setSandboxTab] = useState<'overview' | 'runtime' | 'templates'>('runtime');
-  const [sandboxRuntimeQuery, setSandboxRuntimeQuery] = useState('');
-  const [sandboxExecutorFilter, setSandboxExecutorFilter] = useState('all');
-  const [sandboxStatusFilter, setSandboxStatusFilter] = useState('all');
-  const [sandboxRiskFilter, setSandboxRiskFilter] = useState('all');
+  const [sandboxModalOrigin, setSandboxModalOrigin] = useState<AdminDetailOrigin | null>(null);
+  const [sandboxModalZIndex, setSandboxModalZIndex] = useState(250);
+  const [sandboxSectionOrigin, setSandboxSectionOrigin] = useState<AdminDetailOrigin | null>(null);
+  const [sandboxRuntimeQuery, setSandboxRuntimeQuery] = useState(initialUrlState.sandbox.query);
+  const [sandboxExecutorFilter, setSandboxExecutorFilter] = useState(initialUrlState.sandbox.executor);
+  const [sandboxStatusFilter, setSandboxStatusFilter] = useState(initialUrlState.sandbox.status);
+  const [sandboxRiskFilter, setSandboxRiskFilter] = useState(initialUrlState.sandbox.risk);
+  const [sandboxDeepLinkId, setSandboxDeepLinkId] = useState<string | null>(initialUrlState.sandbox.selectedSandboxId);
   const [runtimeSort, setRuntimeSort] = useState<RuntimeSortState>(DEFAULT_RUNTIME_SORT);
   const [runtimeColumnWidths, setRuntimeColumnWidths] = useState<Record<RuntimeColumnKey, number>>(DEFAULT_RUNTIME_COLUMN_WIDTHS);
   const [archiveSort, setArchiveSort] = useState<ArchiveSortState>(DEFAULT_ARCHIVE_SORT);
@@ -2986,10 +3706,9 @@ export default function App() {
   const [sandboxRegistryLimit, setSandboxRegistryLimit] = useState(SANDBOX_RUNTIME_PAGE_SIZE);
   const [sandboxRegistryLoadingMore, setSandboxRegistryLoadingMore] = useState(false);
   const [sandboxRegistryLoadMoreError, setSandboxRegistryLoadMoreError] = useState<string | null>(null);
-  const [sandboxDetailTab, setSandboxDetailTab] = useState<SandboxDetailTab>('overview');
+  const [sandboxDetailTab, setSandboxDetailTab] = useState<SandboxDetailTab>(initialUrlState.sandbox.detailTab);
   const [sandboxProcessToolView, setSandboxProcessToolView] = useState<SandboxProcessToolView>('processes');
   const [sandboxFullInfo, setSandboxFullInfo] = useState<E2bSandboxFullInfo | null>(null);
-  const [pendingSandboxJumpId, setPendingSandboxJumpId] = useState<string | null>(null);
   const [sandboxConnectivityResult, setSandboxConnectivityResult] = useState<unknown>(null);
   const [sandboxCommandInput, setSandboxCommandInput] = useState('pwd && ls -la');
   const [sandboxTerminalOutput, setSandboxTerminalOutput] = useState('');
@@ -3013,6 +3732,7 @@ export default function App() {
     '{"template":"opencode-playwright-mcp-v4-neko-lockapi-20260413","timeoutMs":300000}'
   );
   const [sandboxCreateDrawerOpen, setSandboxCreateDrawerOpen] = useState(false);
+  const overlayZIndexRef = useRef(260);
   const [archiveDetailRow, setArchiveDetailRow] = useState<{
     id: string;
     snapshotKey: string | null;
@@ -3026,6 +3746,7 @@ export default function App() {
 
   const [templates, setTemplates] = useState<E2bTemplate[]>([]);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [templateWorkbenchMode, setTemplateWorkbenchMode] = useState<'detail' | 'create'>('detail');
   const [templateDetail, setTemplateDetail] = useState<E2bTemplateWithBuilds | null>(null);
   const [templateBuildLogs, setTemplateBuildLogs] = useState<E2bTemplateBuildLogsResponse | null>(null);
   const [templateBuildStatus, setTemplateBuildStatus] = useState<E2bTemplateBuildInfo | null>(null);
@@ -3044,12 +3765,21 @@ export default function App() {
     availableOperators: [],
     availableTargets: [],
   });
-  const [auditFilters, setAuditFilters] = useState<AuditFilterState>(DEFAULT_AUDIT_FILTERS);
-  const [auditAppliedFilters, setAuditAppliedFilters] = useState<AuditFilterState>(DEFAULT_AUDIT_FILTERS);
+  const [auditFilters, setAuditFilters] = useState<AuditFilterState>({ ...initialUrlState.audit });
+  const [auditSort, setAuditSort] = useState<AuditSortState>(DEFAULT_AUDIT_SORT);
   const [auditDetail, setAuditDetail] = useState<AuditDetailResponse | null>(null);
+  const [auditSummaryRefreshing, setAuditSummaryRefreshing] = useState(false);
+  const [auditSummaryFetchedAt, setAuditSummaryFetchedAt] = useState<string | null>(null);
+  const [auditSummaryClock, setAuditSummaryClock] = useState(() => Date.now());
   const [selectedAgentStageKey, setSelectedAgentStageKey] = useState<string | null>(null);
   const [toasts, setToasts] = useState<UiToast[]>([]);
   const [operationOverlay, setOperationOverlay] = useState<{ message: string } | null>(null);
+  const [sandboxLoadProgress, setSandboxLoadProgress] = useState<SandboxLoadProgressState>({
+    active: false,
+    startedAt: null,
+    completed: { ...EMPTY_SANDBOX_LOAD_PROGRESS },
+  });
+  const [sandboxLoadProgressClock, setSandboxLoadProgressClock] = useState(() => Date.now());
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -3057,6 +3787,7 @@ export default function App() {
   const sandboxSectionRequestRef = useRef<Promise<void> | null>(null);
   const sandboxOverviewRequestRef = useRef<Promise<void> | null>(null);
   const sandboxRuntimeRegistryRequestRef = useRef<Promise<void> | null>(null);
+  const sandboxRuntimeRegistryRequestVersionRef = useRef(0);
   const sandboxRegistryLimitRef = useRef(SANDBOX_RUNTIME_PAGE_SIZE);
   const runtimeColumnResizeRef = useRef<{
     columnKey: RuntimeColumnKey;
@@ -3069,7 +3800,8 @@ export default function App() {
     startWidth: number;
   } | null>(null);
   const conversationDetailCacheRef = useRef<Map<string, ConversationSessionDetailResponse>>(new Map());
-  const auditAppliedFiltersRef = useRef(DEFAULT_AUDIT_FILTERS);
+  const auditRequestVersionRef = useRef(0);
+  const auditFiltersRef = useRef<AuditFilterState>({ ...initialUrlState.audit });
   const toastIdRef = useRef(1);
   const lastErrorToastRef = useRef<string | null>(null);
   const sidebarNavRef = useRef<HTMLElement | null>(null);
@@ -3103,31 +3835,43 @@ export default function App() {
     [dismissToast]
   );
 
-  const handleThemeChange = useCallback(
-    async (event: React.ChangeEvent<HTMLSelectElement>) => {
-      const nextTheme = normalizeAdminThemeKey(event.target.value);
+  const saveThemePreferences = useCallback(
+    async (nextThemeRaw: AdminThemeKey, nextModeRaw: AdminThemeMode) => {
+      const nextTheme = normalizeAdminThemeKey(nextThemeRaw);
+      const nextMode = normalizeAdminThemeMode(nextModeRaw);
+      if (nextTheme === currentTheme && nextMode === currentThemeMode) return;
+
       const previousTheme = currentTheme;
+      const previousMode = currentThemeMode;
       setCurrentTheme(nextTheme);
+      setCurrentThemeMode(nextMode);
       persistStoredAdminTheme(nextTheme);
+      persistStoredAdminThemeMode(nextMode);
       setThemeSaving(true);
 
       try {
-        const settings = await api.updateAdminTheme(nextTheme);
+        const settings = await api.updateAdminTheme({ themeKey: nextTheme, mode: nextMode });
         setThemeSettings(settings);
         setCurrentTheme(settings.currentTheme);
+        setCurrentThemeMode(settings.currentMode);
         persistStoredAdminTheme(settings.currentTheme);
+        persistStoredAdminThemeMode(settings.currentMode);
         const themeLabel =
           settings.themes.find((item) => item.key === settings.currentTheme)?.label || settings.currentTheme;
-        pushToast('success', '主题已保存', `${themeLabel} 已写入 ${settings.envKey}`);
+        const modeLabel =
+          settings.modes.find((item) => item.key === settings.currentMode)?.label || settings.currentMode;
+        pushToast('success', '外观已保存', `${themeLabel} · ${modeLabel} 已写入 ${settings.envKey} / ${settings.envModeKey}`);
       } catch (themeError) {
         setCurrentTheme(previousTheme);
+        setCurrentThemeMode(previousMode);
         persistStoredAdminTheme(previousTheme);
-        setError(themeError instanceof Error ? themeError.message : '主题保存失败');
+        persistStoredAdminThemeMode(previousMode);
+        setError(themeError instanceof Error ? themeError.message : '外观保存失败');
       } finally {
         setThemeSaving(false);
       }
     },
-    [currentTheme, pushToast]
+    [currentTheme, currentThemeMode, pushToast]
   );
 
   const runBlockingTask = useCallback(
@@ -3203,14 +3947,15 @@ export default function App() {
     }
   }, []);
 
-  const loadConversationSessions = useCallback(async () => {
-    const result = await api.listConversationSessions(200);
-    setConversationSessions(result.sessions);
+  const applyConversationSessions = useCallback((sessions: ConversationSession[], refreshedAt = new Date().toISOString()) => {
+    setConversationSessions(sessions);
+    setConversationSummaryFetchedAt(refreshedAt);
+    setConversationSummaryClock(Date.now());
 
-    if (result.sessions.length > 0) {
-      const nextId = selectedSessionId && result.sessions.some((item) => item.id === selectedSessionId)
+    if (sessions.length > 0) {
+      const nextId = selectedSessionId && sessions.some((item) => item.id === selectedSessionId)
         ? selectedSessionId
-        : result.sessions[0].id;
+        : sessions[0].id;
       setSelectedSessionId(nextId);
     } else {
       setSelectedSessionId(null);
@@ -3218,6 +3963,11 @@ export default function App() {
       setConversationDetailLoading(false);
     }
   }, [selectedSessionId]);
+
+  const loadConversationSessions = useCallback(async () => {
+    const result = await api.listConversationSessions(200);
+    applyConversationSessions(result.sessions);
+  }, [applyConversationSessions]);
 
   const selectConversationSession = useCallback((sessionId: string) => {
     if (selectedSessionId === sessionId) {
@@ -3227,17 +3977,25 @@ export default function App() {
     setConversationDetailLoading(true);
   }, [selectedSessionId]);
 
+  const claimOverlayZIndex = useCallback(() => {
+    overlayZIndexRef.current += 10;
+    return overlayZIndexRef.current;
+  }, []);
+
   const openConversationDialog = useCallback(
-    (sessionId: string, initialTab: ConversationDialogTab = 'overview') => {
+    (sessionId: string, initialTab: ConversationDialogTab = 'overview', origin: AdminDetailOrigin | null = null) => {
       selectConversationSession(sessionId);
       setConversationDialog({ sessionId });
+      setConversationDialogOrigin(origin);
       setConversationDialogTab(initialTab);
+      setConversationDialogZIndex(claimOverlayZIndex());
     },
-    [selectConversationSession]
+    [claimOverlayZIndex, selectConversationSession]
   );
 
   const closeConversationDialog = useCallback(() => {
     setConversationDialog(null);
+    setConversationDialogOrigin(null);
   }, []);
 
   const exportConversationDetail = useCallback(() => {
@@ -3280,10 +4038,40 @@ export default function App() {
           direction: previous.direction === 'asc' ? 'desc' : 'asc',
         };
       }
-      const initialDirection: RuntimeSortDirection = key === 'risk' || key === 'last_active' ? 'desc' : 'asc';
+      const initialDirection: RuntimeSortDirection = key === 'last_active' ? 'desc' : 'asc';
       return {
         key,
         direction: initialDirection,
+      };
+    });
+  }, []);
+
+  const toggleConversationSort = useCallback((key: ConversationSortKey) => {
+    setConversationSort((previous) => {
+      if (previous.key === key) {
+        return {
+          key,
+          direction: previous.direction === 'asc' ? 'desc' : 'asc',
+        };
+      }
+      return {
+        key,
+        direction: key === 'updated_at' || key === 'created_at' ? 'desc' : 'asc',
+      };
+    });
+  }, []);
+
+  const toggleAuditSort = useCallback((key: AuditSortKey) => {
+    setAuditSort((previous) => {
+      if (previous.key === key) {
+        return {
+          key,
+          direction: previous.direction === 'asc' ? 'desc' : 'asc',
+        };
+      }
+      return {
+        key,
+        direction: key === 'time' ? 'desc' : 'asc',
       };
     });
   }, []);
@@ -3395,14 +4183,84 @@ export default function App() {
     }
   }, []);
 
+  const loadSandboxLiveSummary = useCallback(async (options?: { forceRefresh?: boolean }) => {
+    const summary = await api.getSandboxLiveSummary(options);
+    setSandboxLiveSummary(summary);
+    setSandboxLiveSummaryClock(Date.now());
+  }, []);
+
+  const beginSandboxLoadProgress = useCallback(() => {
+    const startedAt = Date.now();
+    setSandboxLoadProgress({
+      active: true,
+      startedAt,
+      completed: { ...EMPTY_SANDBOX_LOAD_PROGRESS },
+    });
+    setSandboxLoadProgressClock(startedAt);
+  }, []);
+
+  const markSandboxLoadProgressStep = useCallback((step: SandboxLoadStepKey) => {
+    setSandboxLoadProgress((current) => {
+      if (!current.active || current.completed[step]) {
+        return current;
+      }
+      return {
+        ...current,
+        completed: {
+          ...current.completed,
+          [step]: true,
+        },
+      };
+    });
+  }, []);
+
+  const finishSandboxLoadProgress = useCallback(() => {
+    setSandboxLoadProgress((current) => {
+      if (!current.active) {
+        return current;
+      }
+      return {
+        ...current,
+        active: false,
+      };
+    });
+  }, []);
+
+  const refreshSandboxLiveSummary = useCallback(async () => {
+    setSandboxLiveSummaryRefreshing(true);
+    try {
+      await loadSandboxLiveSummary({ forceRefresh: true });
+      setError(null);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '刷新 E2B live 数量失败');
+    } finally {
+      setSandboxLiveSummaryRefreshing(false);
+    }
+  }, [loadSandboxLiveSummary]);
+
+  const refreshConversationSummary = useCallback(async () => {
+    setConversationSummaryRefreshing(true);
+    try {
+      await loadConversationSessions();
+      setError(null);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '刷新会话列表失败');
+    } finally {
+      setConversationSummaryRefreshing(false);
+    }
+  }, [loadConversationSessions]);
+
   const loadSandboxRuntimeRegistry = useCallback(async () => {
     if (sandboxRuntimeRegistryRequestRef.current) {
       return sandboxRuntimeRegistryRequestRef.current;
     }
 
     const request = (async () => {
+      const requestVersion = ++sandboxRuntimeRegistryRequestVersionRef.current;
       const registry = await api.getSandboxRuntimeRegistry(sandboxRegistryLimitRef.current);
-      setSandboxRuntimeRegistry(registry);
+      if (requestVersion === sandboxRuntimeRegistryRequestVersionRef.current) {
+        setSandboxRuntimeRegistry(registry);
+      }
     })();
 
     sandboxRuntimeRegistryRequestRef.current = request;
@@ -3418,14 +4276,20 @@ export default function App() {
       return sandboxSectionRequestRef.current;
     }
 
-    const request = Promise.all([loadSandboxOverview(), loadSandboxRuntimeRegistry()]).then(() => undefined);
+    const request = (async () => {
+      await Promise.all([
+        loadSandboxOverview(),
+        loadSandboxRuntimeRegistry(),
+      ]);
+      await loadSandboxLiveSummary().catch(() => undefined);
+    })();
     sandboxSectionRequestRef.current = request;
     try {
       await request;
     } finally {
       sandboxSectionRequestRef.current = null;
     }
-  }, [loadSandboxOverview, loadSandboxRuntimeRegistry]);
+  }, [loadSandboxLiveSummary, loadSandboxOverview, loadSandboxRuntimeRegistry]);
 
   const loadMoreSandboxRuntime = useCallback(async () => {
     const previousLimit = sandboxRegistryLimitRef.current;
@@ -3435,7 +4299,11 @@ export default function App() {
     setSandboxRegistryLoadingMore(true);
     setSandboxRegistryLoadMoreError(null);
     try {
-      await loadSandboxRuntimeRegistry();
+      const requestVersion = ++sandboxRuntimeRegistryRequestVersionRef.current;
+      const registry = await api.getSandboxRuntimeRegistry(nextLimit);
+      if (requestVersion === sandboxRuntimeRegistryRequestVersionRef.current) {
+        setSandboxRuntimeRegistry(registry);
+      }
       setError(null);
       setSandboxRegistryLoadMoreError(null);
     } catch (requestError) {
@@ -3447,12 +4315,47 @@ export default function App() {
     } finally {
       setSandboxRegistryLoadingMore(false);
     }
-  }, [loadSandboxRuntimeRegistry]);
+  }, []);
 
   const loadTemplates = useCallback(async () => {
     const result = await api.listTemplates();
     setTemplates(result);
+    return result;
   }, []);
+
+  const loadSandboxSectionWithProgress = useCallback(async () => {
+    beginSandboxLoadProgress();
+    try {
+      await Promise.all([
+        loadSandboxOverview().then(() => {
+          markSandboxLoadProgressStep('overview');
+        }),
+        loadSandboxRuntimeRegistry().then(() => {
+          markSandboxLoadProgressStep('runtime');
+        }),
+        loadTemplates()
+          .catch(() => undefined)
+          .finally(() => {
+            markSandboxLoadProgressStep('templates');
+          }),
+      ]);
+      await loadSandboxLiveSummary()
+        .catch(() => undefined)
+        .finally(() => {
+          markSandboxLoadProgressStep('live');
+        });
+    } finally {
+      finishSandboxLoadProgress();
+    }
+  }, [
+    beginSandboxLoadProgress,
+    finishSandboxLoadProgress,
+    loadSandboxLiveSummary,
+    loadSandboxOverview,
+    loadSandboxRuntimeRegistry,
+    loadTemplates,
+    markSandboxLoadProgressStep,
+  ]);
 
   const loadSandboxDetail = useCallback(async (sandboxId: string) => {
     const result = await api.getSandboxEnvironment(sandboxId);
@@ -3480,12 +4383,99 @@ export default function App() {
     setSandboxFullInfo(result);
   }, []);
 
+  const currentConversationOrigin = useCallback((): AdminDetailOrigin | null => {
+    if (conversationDialog) {
+      const dialogLabel = conversationDetail?.session.title || conversationDialog.sessionId;
+      return {
+        section: 'conversation',
+        trail: conversationDialogOrigin?.trail
+          ? `${conversationDialogOrigin.trail} / ${dialogLabel}`
+          : `对话详情 / ${dialogLabel}`,
+      };
+    }
+    if (activeSection === 'conversation' && selectedSessionId) {
+      return {
+        section: 'conversation',
+        trail: `对话管理 / ${conversationDetail?.session.title || selectedSessionId}`,
+      };
+    }
+    return null;
+  }, [activeSection, conversationDetail?.session.title, conversationDialog, conversationDialogOrigin?.trail, selectedSessionId]);
+
+  const currentSandboxOrigin = useCallback((): AdminDetailOrigin | null => {
+    if (sandboxModalOpen && sandboxRuntimeDetail) {
+      const sandboxLabel = sandboxDisplayLabel(sandboxRuntimeDetail);
+      return {
+        section: 'sandbox',
+        trail: sandboxModalOrigin?.trail
+          ? `${sandboxModalOrigin.trail} / ${sandboxLabel}`
+          : `Sandbox 详情 / ${sandboxLabel}`,
+      };
+    }
+    if (activeSection === 'sandbox') {
+      return {
+        section: 'sandbox',
+        trail: `Sandbox 管理 / ${sandboxDisplayLabel(sandboxRuntimeDetail)}`,
+      };
+    }
+    return null;
+  }, [activeSection, sandboxModalOpen, sandboxModalOrigin?.trail, sandboxRuntimeDetail]);
+
+  const openUserManagementView = useCallback((userId: string, origin: AdminDetailOrigin | null = null) => {
+    if (!userId) return;
+    setUserManagementViewState((current) => ({
+      ...current,
+      selectedUserId: userId,
+      selectedUserLabel: current.selectedUserLabel,
+      drawerOpen: true,
+      detailTab: origin?.section === 'deployment' ? 'deployments' : 'overview',
+    }));
+    setActiveSection('user');
+    setError(null);
+  }, []);
+
+  const openDeploymentManagementView = useCallback(
+    (taskSessionId: string, origin: AdminDetailOrigin | null = null) => {
+      if (!taskSessionId) return;
+      const nextView: DeploymentManagementViewState['view'] =
+        origin?.section === 'user'
+          ? 'users'
+          : origin?.section === 'conversation'
+            ? 'conversations'
+            : 'records';
+      setDeploymentManagementViewState((current) => ({
+        ...current,
+        view: nextView,
+        selectedTaskSessionId: taskSessionId,
+        detailDialogOpen: true,
+        detailTab: 'overview',
+        filters: {
+          ...current.filters,
+          taskSessionId: nextView === 'records' ? taskSessionId : current.filters.taskSessionId,
+          userId: nextView === 'users' ? origin?.section === 'user' ? current.filters.userId : current.filters.userId : current.filters.userId,
+        },
+      }));
+      setActiveSection('deployment');
+      setError(null);
+    },
+    []
+  );
+
+  const auditOriginForEntry = useCallback(
+    (entry: AuditLogEntry): AdminDetailOrigin => ({
+      section: 'audit',
+      trail: `审计日志 / ${auditActionLabel(entry.action)} / ${entry.id}`,
+    }),
+    []
+  );
+
   const openTemplateDetail = useCallback(async (templateId: string) => {
     try {
       await runBlockingTask(
         '正在加载模板详情',
         async () => {
           const result = await api.getTemplate(templateId);
+          setTemplateWorkbenchMode('detail');
           setTemplateDetail(result);
           setTemplateAliasDraft(templateAliasOf(result));
           setTemplateAliasResult(null);
@@ -3500,14 +4490,44 @@ export default function App() {
     }
   }, [runBlockingTask]);
 
+  const openTemplateCreateWorkbench = useCallback(() => {
+    setTemplateModalOpen(true);
+    setTemplateWorkbenchMode('create');
+    setTemplateBuildLogs(null);
+    setTemplateBuildStatus(null);
+    setTemplateAliasResult(null);
+    if (!templateActionPayload.trim()) {
+      setTemplateActionPayload('{}');
+    }
+  }, [templateActionPayload]);
+
+  const openTemplateWorkbench = useCallback(() => {
+    setTemplateModalOpen(true);
+    if (!templates.length) {
+      setTemplateWorkbenchMode('create');
+      return;
+    }
+    if (templateDetail) {
+      setTemplateWorkbenchMode('detail');
+      return;
+    }
+    const firstTemplateId = templates
+      .map((item) => templateIdOf(item))
+      .find((item): item is string => Boolean(item));
+    if (firstTemplateId) {
+      void openTemplateDetail(firstTemplateId);
+    }
+  }, [openTemplateDetail, templateDetail, templates]);
+
   const openSandboxDetail = useCallback(
-    async (sandboxId: string) => {
+    async (sandboxId: string, origin: AdminDetailOrigin | null = null, initialDetailTab: SandboxDetailTab = 'overview') => {
       try {
         await runBlockingTask(
           '正在加载 Sandbox 详情',
           async () => {
-            const detail = await loadSandboxRuntimeDetail(sandboxId);
-            setSandboxDetailTab('overview');
+            await loadSandboxRuntimeDetail(sandboxId);
+            setSandboxDeepLinkId(sandboxId);
+            setSandboxDetailTab(initialDetailTab);
             setSandboxProcessToolView('processes');
             setSandboxConnectivityResult(null);
             setSandboxTerminalOutput('');
@@ -3525,6 +4545,8 @@ export default function App() {
             setSandboxProcessFetchedAt(null);
             setSandboxPortResult(null);
             setSandboxPortFetchedAt(null);
+            setSandboxModalOrigin(origin);
+            setSandboxModalZIndex(claimOverlayZIndex());
             setSandboxModalOpen(true);
           },
           { fallbackError: '加载 Sandbox 详情失败' }
@@ -3533,15 +4555,18 @@ export default function App() {
         setError(detailError instanceof Error ? detailError.message : '加载 Sandbox 详情失败');
       }
     },
-    [loadSandboxRuntimeDetail, runBlockingTask]
+    [claimOverlayZIndex, loadSandboxRuntimeDetail, runBlockingTask]
   );
 
   const closeSandboxDetail = useCallback(() => {
     setSandboxModalOpen(false);
+    setSandboxModalOrigin(null);
+    setSandboxDeepLinkId(null);
   }, []);
 
   const closeTemplateDetail = useCallback(() => {
     setTemplateModalOpen(false);
+    setTemplateWorkbenchMode('detail');
   }, []);
 
   const copyRuntimeField = useCallback(async (label: string, value: string) => {
@@ -3556,18 +4581,65 @@ export default function App() {
   const openConversationSessionFromSandbox = useCallback((taskSessionId?: string | null) => {
     if (!taskSessionId) return;
     setError(null);
-    setSandboxModalOpen(false);
-    setConversationDetailLoading(true);
-    setSelectedSessionId(taskSessionId);
-    setActiveSection('conversation');
-  }, []);
+    openConversationDialog(taskSessionId, 'overview', currentSandboxOrigin());
+  }, [currentSandboxOrigin, openConversationDialog]);
 
-  const openSandboxFromConversation = useCallback((sandboxId?: string | null) => {
+  const openDeploymentFromConversation = useCallback((taskSessionId?: string | null) => {
+    if (!taskSessionId) return;
+    openDeploymentManagementView(taskSessionId, currentConversationOrigin());
+  }, [currentConversationOrigin, openDeploymentManagementView]);
+
+  const openSandboxFromConversation = useCallback((sandboxId?: string | null, origin: AdminDetailOrigin | null = null) => {
     if (!sandboxId) return;
     setError(null);
-    setPendingSandboxJumpId(sandboxId);
+    void openSandboxDetail(sandboxId, origin || currentConversationOrigin());
+  }, [currentConversationOrigin, openSandboxDetail]);
+
+  const openConversationFromAudit = useCallback((entry: AuditLogEntry) => {
+    if (!entry.sessionId) return;
+    setError(null);
+    openConversationDialog(entry.sessionId, 'overview', auditOriginForEntry(entry));
+  }, [auditOriginForEntry, openConversationDialog]);
+
+  const openSandboxFromAudit = useCallback((entry: AuditLogEntry) => {
+    if (!entry.targetVmId) return;
+    setError(null);
+    void openSandboxDetail(entry.targetVmId, auditOriginForEntry(entry));
+  }, [auditOriginForEntry, openSandboxDetail]);
+
+  const openConversationManagementView = useCallback(() => {
+    sectionRefreshHandlerRef.current = null;
+    setConversationSectionOrigin(conversationDialogOrigin);
+    setConversationDialog(null);
+    setConversationDialogOrigin(null);
+    setSandboxModalOpen(false);
+    setSandboxModalOrigin(null);
+    setSandboxDeepLinkId(null);
+    setActiveSection('conversation');
+  }, [conversationDialogOrigin]);
+
+  const openSandboxManagementView = useCallback(() => {
+    sectionRefreshHandlerRef.current = null;
+    setSandboxSectionOrigin(sandboxModalOrigin);
+    setSandboxModalOpen(false);
+    setSandboxModalOrigin(null);
+    setSandboxDeepLinkId(null);
+    setConversationDialog(null);
+    setConversationDialogOrigin(null);
     setActiveSection('sandbox');
-  }, []);
+  }, [sandboxModalOrigin]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated' || activeSection !== 'sandbox') {
+      return;
+    }
+    const initialSandboxId = initialUrlStateRef.current?.sandbox.selectedSandboxId;
+    if (!initialSandboxId || initialSandboxDeepLinkHandledRef.current) {
+      return;
+    }
+    initialSandboxDeepLinkHandledRef.current = true;
+    void openSandboxDetail(initialSandboxId, null, initialUrlStateRef.current?.sandbox.detailTab || 'overview');
+  }, [activeSection, authStatus, openSandboxDetail]);
 
   const closeSandbox = useCallback(
     async (sandboxId: string) => {
@@ -4100,27 +5172,55 @@ export default function App() {
         const payload = templateActionPayload.trim()
           ? (JSON.parse(templateActionPayload) as Record<string, unknown>)
           : {};
+        const payloadAlias = typeof payload.alias === 'string' ? payload.alias.trim() : '';
+        const payloadName = typeof payload.name === 'string' ? payload.name.trim() : '';
         const reason = action === 'delete' || action === 'rebuild' ? window.prompt('请输入操作备注（必填）') : 'ok';
         if ((action === 'delete' || action === 'rebuild') && !reason) return;
         await runBlockingTask(
           `正在${actionLabelMap[action]}`,
           async () => {
+            let createdTemplateId: string | null = null;
             if (action === 'create') {
-              await api.createTemplate(payload);
+              const created = await api.createTemplate(payload);
+              createdTemplateId = templateIdOf(created as E2bTemplate);
             } else if (action === 'update' && templateDetail) {
               await api.updateTemplate(templateIdOf(templateDetail), payload);
             } else if (action === 'rebuild' && templateDetail) {
               await api.rebuildTemplate(templateIdOf(templateDetail), payload);
             } else if (action === 'delete' && templateDetail) {
               await api.deleteTemplate(templateIdOf(templateDetail));
-              setTemplateModalOpen(false);
             } else if (action === 'tags-assign') {
               await api.assignTemplateTags(payload);
             } else if (action === 'tags-delete') {
               await api.deleteTemplateTags(payload);
             }
-            await loadTemplates();
-            if (templateDetail && action !== 'delete') {
+            const refreshedTemplates = await loadTemplates();
+            if (action === 'create') {
+              const nextTemplateId =
+                createdTemplateId
+                || refreshedTemplates.find((item) => templateAliasOf(item) === payloadAlias)?.templateID
+                || refreshedTemplates.find((item) => templateAliasOf(item) === payloadAlias)?.templateId
+                || refreshedTemplates.find((item) => String((item as any).name ?? '').trim() === payloadName)?.templateID
+                || refreshedTemplates.find((item) => String((item as any).name ?? '').trim() === payloadName)?.templateId
+                || null;
+              if (nextTemplateId) {
+                await updateTemplateDetail(nextTemplateId);
+                setTemplateWorkbenchMode('detail');
+              }
+            } else if (templateDetail && action === 'delete') {
+              const nextTemplateId = refreshedTemplates
+                .map((item) => templateIdOf(item))
+                .find((item): item is string => Boolean(item));
+              if (nextTemplateId) {
+                await updateTemplateDetail(nextTemplateId);
+              } else {
+                setTemplateDetail(null);
+                setTemplateAliasDraft('');
+                setTemplateAliasResult(null);
+                setTemplateBuildLogs(null);
+                setTemplateBuildStatus(null);
+              }
+            } else if (templateDetail) {
               await updateTemplateDetail(templateIdOf(templateDetail));
             }
           },
@@ -4206,27 +5306,46 @@ export default function App() {
     }
   }, [runBlockingTask]);
 
+  useEffect(() => {
+    auditFiltersRef.current = auditFilters;
+  }, [auditFilters]);
+
   const loadAuditSection = useCallback(
-    async (filters: AuditFilterState = auditAppliedFiltersRef.current) => {
+    async (filters: AuditFilterState = auditFiltersRef.current) => {
+      const requestVersion = ++auditRequestVersionRef.current;
       const result = await api.listAudit({
         query: filters.query.trim() || undefined,
         operator: filters.operator !== 'all' ? filters.operator : undefined,
         action: filters.action !== 'all' ? filters.action : undefined,
         result: filters.result !== 'all' ? filters.result : undefined,
-        sessionId: filters.sessionId.trim() || undefined,
-        targetVmId: filters.targetVmId.trim() || undefined,
         from: filters.from ? new Date(filters.from).toISOString() : undefined,
         to: filters.to ? new Date(filters.to).toISOString() : undefined,
         limit: 80,
         offset: 0,
       });
+      if (requestVersion !== auditRequestVersionRef.current) {
+        return;
+      }
       setAuditEntries(result.entries);
       setAuditResponseMeta(result);
-      auditAppliedFiltersRef.current = filters;
-      setAuditAppliedFilters(filters);
+      setAuditSummaryFetchedAt(new Date().toISOString());
+      setAuditSummaryClock(Date.now());
+      setError(null);
     },
     []
   );
+
+  const refreshAuditSummary = useCallback(async () => {
+    setAuditSummaryRefreshing(true);
+    try {
+      await loadAuditSection();
+      setError(null);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '刷新审计日志失败');
+    } finally {
+      setAuditSummaryRefreshing(false);
+    }
+  }, [loadAuditSection]);
 
   const openAuditDetail = useCallback(
     async (auditId: string) => {
@@ -4256,6 +5375,8 @@ export default function App() {
       try {
         if (section === 'kvm') {
           await Promise.all([loadKvmSection(), loadAuditSection()]);
+        } else if (section === 'deployment') {
+          setError(null);
         } else if (section === 'conversation') {
           await loadConversationSessions();
         } else if (section === 'user') {
@@ -4267,10 +5388,13 @@ export default function App() {
         } else if (section === 'connectorGuide') {
           setError(null);
         } else if (section === 'sandbox') {
-          if (sandboxTab === 'templates') {
-            await loadTemplates();
+          if (initial) {
+            await loadSandboxSectionWithProgress();
           } else {
-            await loadSandboxSection();
+            await Promise.all([
+              loadSandboxSection(),
+              loadTemplates().catch(() => undefined),
+            ]);
           }
         } else {
           await loadAuditSection();
@@ -4284,12 +5408,12 @@ export default function App() {
       }
     },
     [
-      sandboxTab,
       loadAgentSection,
       loadAuditSection,
       loadConversationSessions,
       loadKvmSection,
       loadSandboxSection,
+      loadSandboxSectionWithProgress,
       loadTemplates,
     ]
   );
@@ -4299,8 +5423,43 @@ export default function App() {
   }, [bootstrapAdminSession]);
 
   useEffect(() => {
-    applyAdminTheme(currentTheme);
-  }, [currentTheme]);
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleChange = () => {
+      setSystemThemeTone(mediaQuery.matches ? 'dark' : 'light');
+    };
+    handleChange();
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleChange);
+      return () => mediaQuery.removeEventListener('change', handleChange);
+    }
+    mediaQuery.addListener(handleChange);
+    return () => mediaQuery.removeListener(handleChange);
+  }, []);
+
+  useEffect(() => {
+    applyAdminTheme(currentTheme, currentThemeMode, systemThemeTone);
+  }, [currentTheme, currentThemeMode, systemThemeTone]);
+
+  useEffect(() => {
+    if (!settingsMenuOpen) return undefined;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (settingsMenuRef.current && !settingsMenuRef.current.contains(event.target as Node)) {
+        setSettingsMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSettingsMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [settingsMenuOpen]);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') {
@@ -4313,11 +5472,13 @@ export default function App() {
         if (stopped) return;
         setThemeSettings(settings);
         setCurrentTheme(settings.currentTheme);
+        setCurrentThemeMode(settings.currentMode);
         persistStoredAdminTheme(settings.currentTheme);
+        persistStoredAdminThemeMode(settings.currentMode);
       })
       .catch((themeError) => {
         if (stopped) return;
-        setError(themeError instanceof Error ? themeError.message : '主题设置加载失败');
+        setError(themeError instanceof Error ? themeError.message : '外观设置加载失败');
       });
     return () => {
       stopped = true;
@@ -4341,8 +5502,59 @@ export default function App() {
   }, [sandboxRegistryLimit]);
 
   useEffect(() => {
-    auditAppliedFiltersRef.current = auditAppliedFilters;
-  }, [auditAppliedFilters]);
+    writeAdminUrlState({
+      activeSection,
+      deployment: deploymentManagementViewState,
+      conversation: {
+        query: conversationSearchQuery,
+        status: conversationStatusFilter,
+        stage: conversationStageFilter,
+        user: conversationUserFilter,
+        executor: conversationExecutorFilter,
+        updatedFrom: conversationUpdatedFromDate,
+        updatedTo: conversationUpdatedToDate,
+        selectedSessionId,
+      },
+      sandbox: {
+        tab: 'runtime',
+        query: sandboxRuntimeQuery,
+        executor: sandboxExecutorFilter,
+        status: sandboxStatusFilter,
+        risk: sandboxRiskFilter,
+        selectedSandboxId: sandboxDeepLinkId,
+        detailTab: sandboxDetailTab,
+        modalOpen: sandboxModalOpen,
+      },
+      user: userManagementViewState,
+      skill: skillManagementViewState,
+      connectorGuide: connectorGuideManagementViewState,
+      osacRelease: osacReleaseManagementViewState,
+      audit: auditFilters,
+    });
+  }, [
+    activeSection,
+    auditFilters,
+    connectorGuideManagementViewState,
+    conversationExecutorFilter,
+    deploymentManagementViewState,
+    conversationSearchQuery,
+    conversationStageFilter,
+    conversationStatusFilter,
+    conversationUpdatedFromDate,
+    conversationUpdatedToDate,
+    conversationUserFilter,
+    sandboxDeepLinkId,
+    sandboxDetailTab,
+    sandboxExecutorFilter,
+    sandboxModalOpen,
+    sandboxRiskFilter,
+    sandboxRuntimeQuery,
+    sandboxStatusFilter,
+    skillManagementViewState,
+    selectedSessionId,
+    userManagementViewState,
+    osacReleaseManagementViewState,
+  ]);
 
   useEffect(() => {
     const firstStageKey = agentOverview?.stageDistribution?.[0]?.stageKey || null;
@@ -4359,25 +5571,53 @@ export default function App() {
   }, [activeSection, authStatus, loadSection]);
 
   useEffect(() => {
-    if (activeSection === 'conversation') {
+    if (!sandboxLiveSummary?.countedAt) {
       return;
     }
-    setConversationDialog(null);
-  }, [activeSection]);
+    const timer = window.setInterval(() => {
+      setSandboxLiveSummaryClock(Date.now());
+    }, 10000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [sandboxLiveSummary?.countedAt]);
 
   useEffect(() => {
-    if (authStatus !== 'authenticated') {
+    if (!conversationSummaryFetchedAt) {
       return;
     }
-    if (activeSection !== 'sandbox' || !pendingSandboxJumpId) {
-      return;
-    }
+    const timer = window.setInterval(() => {
+      setConversationSummaryClock(Date.now());
+    }, 10000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [conversationSummaryFetchedAt]);
 
-    const targetSandboxId = pendingSandboxJumpId;
-    void openSandboxDetail(targetSandboxId).finally(() => {
-      setPendingSandboxJumpId((current) => (current === targetSandboxId ? null : current));
-    });
-  }, [activeSection, authStatus, openSandboxDetail, pendingSandboxJumpId]);
+  useEffect(() => {
+    if (!auditSummaryFetchedAt) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setAuditSummaryClock(Date.now());
+    }, 10000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [auditSummaryFetchedAt]);
+
+  useEffect(() => {
+    if (!loading || activeSection !== 'sandbox' || !sandboxLoadProgress.startedAt) {
+      return;
+    }
+    setSandboxLoadProgressClock(Date.now());
+    const timer = window.setInterval(() => {
+      setSandboxLoadProgressClock(Date.now());
+    }, 1000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [activeSection, loading, sandboxLoadProgress.startedAt]);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') {
@@ -4389,7 +5629,10 @@ export default function App() {
 
     const timer = window.setInterval(() => {
       if (activeSection === 'sandbox') {
-        const refresh = sandboxTab === 'templates' ? loadTemplates : loadSandboxSection;
+        const refresh =
+          sandboxRegistryLimitRef.current > SANDBOX_RUNTIME_PAGE_SIZE
+            ? () => Promise.all([loadSandboxOverview(), loadSandboxLiveSummary().catch(() => undefined)]).then(() => undefined)
+            : loadSandboxSection;
         void refresh().catch((requestError) => {
           setError(requestError instanceof Error ? requestError.message : 'Sandbox 自动刷新失败');
         });
@@ -4403,7 +5646,7 @@ export default function App() {
     return () => {
       window.clearInterval(timer);
     };
-  }, [activeSection, authStatus, sandboxTab, loadKvmSection, loadSandboxSection, loadTemplates]);
+  }, [activeSection, authStatus, loadKvmSection, loadSandboxLiveSummary, loadSandboxOverview, loadSandboxSection]);
 
   useEffect(() => {
     if (!sandboxModalOpen || sandboxDetailTab !== 'files') {
@@ -4471,7 +5714,7 @@ export default function App() {
     if (authStatus !== 'authenticated') {
       return;
     }
-    if (!selectedSessionId || activeSection !== 'conversation') {
+    if (!selectedSessionId || (activeSection !== 'conversation' && !conversationDialog)) {
       return;
     }
 
@@ -4506,90 +5749,60 @@ export default function App() {
 
     void run();
 
-    void api.listConversationSessions(200)
-      .then((sessions) => {
-        if (!cancelled) {
-          setConversationSessions(sessions.sessions);
-        }
+    if (activeSection === 'conversation') {
+      void api.listConversationSessions(200)
+        .then((sessions) => {
+          if (!cancelled) {
+            setConversationSessions(sessions.sessions);
+          }
+        })
+        .catch(() => {
+          // ignore list refresh error here; detail view has higher priority
+        });
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection, authStatus, conversationDialog, selectedSessionId]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated') {
+      return;
+    }
+    if (!selectedSessionId || (activeSection !== 'conversation' && !conversationDialog)) {
+      setConversationDeploymentSummary(null);
+      setConversationDeploymentLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setConversationDeploymentLoading(true);
+    void api.getDeploymentDetail(selectedSessionId)
+      .then((detail) => {
+        if (cancelled) return;
+        setConversationDeploymentSummary(detail);
       })
       .catch(() => {
-        // ignore list refresh error here; detail view has higher priority
+        if (cancelled) return;
+        setConversationDeploymentSummary(null);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setConversationDeploymentLoading(false);
+        }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [activeSection, authStatus, selectedSessionId]);
+  }, [activeSection, authStatus, conversationDialog, selectedSessionId]);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') {
       return;
     }
-    if (!selectedSessionId || activeSection !== 'conversation' || !conversationAutoRefreshEnabled) {
-      return;
-    }
-
-    let cancelled = false;
-    const run = async () => {
-      try {
-        const detail = await api.getConversationSessionCore(selectedSessionId);
-        if (!cancelled) {
-          conversationDetailCacheRef.current.set(selectedSessionId, detail);
-          setConversationDetail(detail);
-          setConversationInfraError(null);
-        }
-      } catch (requestError) {
-        if (!cancelled) {
-          setError(requestError instanceof Error ? requestError.message : '会话自动刷新失败');
-        }
-      }
-    };
-
-    const timer = window.setInterval(() => {
-      void run();
-    }, 4000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [activeSection, authStatus, selectedSessionId, conversationAutoRefreshEnabled]);
-
-  useEffect(() => {
-    if (authStatus !== 'authenticated') {
-      return;
-    }
-    if (activeSection !== 'conversation' || !conversationAutoRefreshEnabled) {
-      return;
-    }
-
-    let cancelled = false;
-    const run = async () => {
-      try {
-        const sessions = await api.listConversationSessions(200);
-        if (!cancelled) {
-          setConversationSessions(sessions.sessions);
-        }
-      } catch {
-        // keep current list when periodic refresh fails
-      }
-    };
-
-    const timer = window.setInterval(() => {
-      void run();
-    }, 12000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [activeSection, authStatus, conversationAutoRefreshEnabled]);
-
-  useEffect(() => {
-    if (authStatus !== 'authenticated') {
-      return;
-    }
-    if (!selectedSessionId || activeSection !== 'conversation') {
+    if (!selectedSessionId || (activeSection !== 'conversation' && !conversationDialog)) {
       return;
     }
 
@@ -4653,7 +5866,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeSection, authStatus, selectedSessionId]);
+  }, [activeSection, authStatus, conversationDialog, selectedSessionId]);
 
   useEffect(() => {
     setConversationDialogTab('overview');
@@ -4736,15 +5949,9 @@ export default function App() {
     { label: '进行中', value: 'in_progress', count: conversationSummary.inProgress, meta: '执行中或处理中' },
     { label: '待确认', value: 'waiting_user', count: conversationSummary.waitingUser, meta: '等待用户确认' },
     { label: '失败', value: 'failed', count: conversationSummary.failed, meta: '存在阻塞错误' },
-    { label: '已完成', value: 'completed', count: conversationSummary.completed, meta: '已完成的会话' },
+    { label: '完成', value: 'completed', count: conversationSummary.completed, meta: '已完成会话' },
   ] as const;
-  const conversationIndexSummaryCards = [
-    { label: '全部', value: conversationSummary.total, meta: '当前加载会话', tone: 'neutral' },
-    { label: '进行中', value: conversationSummary.inProgress, meta: '执行中或处理中', tone: 'active' },
-    { label: '待确认', value: conversationSummary.waitingUser, meta: '等待用户补充', tone: 'warning' },
-    { label: '失败', value: conversationSummary.failed, meta: '需要人工介入', tone: 'danger' },
-    { label: '最近活跃', value: formatDateTime(conversationSummary.latestUpdatedAt), meta: '按更新时间排序', tone: 'time' },
-  ] as const;
+  const conversationSummaryAge = formatCompactRelativeTime(conversationSummaryFetchedAt, conversationSummaryClock);
   const conversationStageOptions = uniqueSorted(conversationSessions.map((session) => session.stage));
   const conversationUserOptions = Array.from(
     conversationSessions.reduce<Map<string, { value: string; label: string; count: number }>>((map, session) => {
@@ -4775,7 +5982,7 @@ export default function App() {
       }
       map.set(executorValue, {
         value: executorValue,
-        label: executorValue === '__unknown_executor__' ? '未记录执行器' : executorLabel(executorValue),
+        label: executorValue === '__unknown_executor__' ? '未记录处理方式' : executorLabel(executorValue),
         count: 1,
         });
       return map;
@@ -4796,7 +6003,7 @@ export default function App() {
       ? `用户 ${conversationUserOptions.find((item) => item.value === conversationUserFilter)?.label || conversationUserFilter}`
       : '',
     conversationExecutorFilter !== 'all'
-      ? `执行器 ${conversationExecutorOptions.find((item) => item.value === conversationExecutorFilter)?.label || conversationExecutorFilter}`
+      ? `处理方式 ${conversationExecutorOptions.find((item) => item.value === conversationExecutorFilter)?.label || conversationExecutorFilter}`
       : '',
     conversationUpdatedFromDate ? `开始 ${conversationUpdatedFromDate}` : '',
     conversationUpdatedToDate ? `结束 ${conversationUpdatedToDate}` : '',
@@ -4805,7 +6012,7 @@ export default function App() {
     const query = conversationSearchQuery.trim().toLowerCase();
     const fromTime = conversationUpdatedFromDate ? new Date(`${conversationUpdatedFromDate}T00:00:00`).getTime() : null;
     const toTime = conversationUpdatedToDate ? new Date(`${conversationUpdatedToDate}T23:59:59.999`).getTime() : null;
-    return conversationSessions.filter((session) => {
+    const filtered = conversationSessions.filter((session) => {
       if (conversationStatusFilter !== 'all' && session.status !== conversationStatusFilter) {
         return false;
       }
@@ -4845,6 +6052,27 @@ export default function App() {
         .join(' ')
         .toLowerCase();
       return haystack.includes(query);
+    });
+
+    return filtered.sort((a, b) => {
+      let delta = 0;
+      if (conversationSort.key === 'session') {
+        delta = (a.title || a.id || '').localeCompare(b.title || b.id || '', 'zh-Hans-CN', { sensitivity: 'base' });
+      } else if (conversationSort.key === 'user') {
+        delta = conversationUserLabel(a.user).localeCompare(conversationUserLabel(b.user), 'zh-Hans-CN', { sensitivity: 'base' });
+      } else if (conversationSort.key === 'executor') {
+        delta = executorLabel(a.executor || 'unknown').localeCompare(executorLabel(b.executor || 'unknown'), 'zh-Hans-CN', { sensitivity: 'base' });
+      } else if (conversationSort.key === 'session_id') {
+        delta = (a.id || '').localeCompare(b.id || '', 'zh-Hans-CN', { sensitivity: 'base' });
+      } else if (conversationSort.key === 'status') {
+        delta = (a.status || '').localeCompare(b.status || '', 'zh-Hans-CN', { sensitivity: 'base' });
+      } else if (conversationSort.key === 'updated_at') {
+        delta = toTimestamp(a.updatedAt) - toTimestamp(b.updatedAt);
+      } else if (conversationSort.key === 'created_at') {
+        delta = toTimestamp(a.createdAt) - toTimestamp(b.createdAt);
+      }
+      if (delta !== 0) return conversationSort.direction === 'asc' ? delta : -delta;
+      return toTimestamp(b.updatedAt) - toTimestamp(a.updatedAt);
     });
   })();
   const conversationTabCounts = {
@@ -4909,6 +6137,27 @@ export default function App() {
       failed: auditEntries.filter((item) => item.result !== 'success').length,
     };
   })();
+  const auditSummaryAge = formatCompactRelativeTime(auditSummaryFetchedAt, auditSummaryClock);
+  const sortedAuditEntries = [...auditEntries].sort((a, b) => {
+    let delta = 0;
+    if (auditSort.key === 'id') {
+      delta = (a.id || '').localeCompare(b.id || '', 'zh-Hans-CN', { sensitivity: 'base' });
+    } else if (auditSort.key === 'time') {
+      delta = toTimestamp(a.timestamp) - toTimestamp(b.timestamp);
+    } else if (auditSort.key === 'action') {
+      delta = auditActionLabel(a.action).localeCompare(auditActionLabel(b.action), 'zh-Hans-CN', { sensitivity: 'base' });
+    } else if (auditSort.key === 'result') {
+      delta = auditResultLabel(a.result).localeCompare(auditResultLabel(b.result), 'zh-Hans-CN', { sensitivity: 'base' });
+    } else if (auditSort.key === 'operator') {
+      delta = (a.operator || '').localeCompare(b.operator || '', 'zh-Hans-CN', { sensitivity: 'base' });
+    } else if (auditSort.key === 'target') {
+      delta = (a.targetVmId || '').localeCompare(b.targetVmId || '', 'zh-Hans-CN', { sensitivity: 'base' });
+    } else if (auditSort.key === 'session') {
+      delta = (a.sessionId || '').localeCompare(b.sessionId || '', 'zh-Hans-CN', { sensitivity: 'base' });
+    }
+    if (delta !== 0) return auditSort.direction === 'asc' ? delta : -delta;
+    return toTimestamp(b.timestamp) - toTimestamp(a.timestamp);
+  });
   const selectedAgentStage =
     agentOverview?.stageDistribution.find((item) => item.stageKey === selectedAgentStageKey) ||
     agentOverview?.stageDistribution[0] ||
@@ -5053,6 +6302,21 @@ export default function App() {
       phases: Array.from(phaseSet),
     };
   })();
+  const transitionActiveFilterCount = [
+    transitionQuery.trim() ? 'query' : '',
+    transitionFilters.fromTime ? 'fromTime' : '',
+    transitionFilters.toTime ? 'toTime' : '',
+    transitionFilters.fromStage !== 'all' ? 'fromStage' : '',
+    transitionFilters.toStage !== 'all' ? 'toStage' : '',
+    transitionFilters.status !== 'all' ? 'status' : '',
+    transitionFilters.phase !== 'all' ? 'phase' : '',
+    transitionFilters.messageType !== 'all' ? 'messageType' : '',
+    transitionFilters.role !== 'all' ? 'role' : '',
+    transitionFilters.agent !== 'all' ? 'agent' : '',
+    transitionFilters.tone !== 'all' ? 'tone' : '',
+  ].filter(Boolean).length;
+  const latestFilteredTransition = filteredTransitions[filteredTransitions.length - 1] || null;
+  const latestRelatedEnvironmentUpdatedAt = recentRelatedEnvironments[0]?.updatedAt || primaryEnvironment?.updatedAt || null;
   const conversationReplayItems = buildConversationReplayItems(conversationMessages);
   const conversationDialogDetail =
     conversationDialog && conversationDetail?.session.id === conversationDialog.sessionId
@@ -5060,233 +6324,283 @@ export default function App() {
       : null;
   const conversationDialogLoading = Boolean(conversationDialog) && !conversationDialogDetail;
 
-  const renderConversationTransitionsPanel = () => (
-    <>
-      <div className="panel-subtitle panel-subtitle-row">
-        <span>状态机流转 ({stateTransitions.length})</span>
-        <div className="panel-subtitle-actions">
-          <button type="button" className={`toggle-btn ${transitionView === 'timeline' ? 'active' : ''}`} onClick={() => setTransitionView('timeline')}>
-            时间轴
-          </button>
-          <button type="button" className={`toggle-btn ${transitionView === 'list' ? 'active' : ''}`} onClick={() => setTransitionView('list')}>
-            列表
-          </button>
-          <button
-            type="button"
-            className="secondary-btn"
-            onClick={() => {
-              setTransitionQuery('');
-              setTransitionFilters(DEFAULT_TRANSITION_FILTERS);
-              setTransitionAdvancedFiltersOpen(false);
-            }}
-          >
-            重置筛选
-          </button>
-        </div>
-      </div>
+  const renderConversationTransitionsPanel = () => {
+    const stagePreview = transitionStats.stages.slice(0, 3).map((value) => conversationStageLabel(value)).join(' / ') || '无';
+    const statusPreview = transitionStats.statuses.slice(0, 3).map((value) => statusLabel(value)).join(' / ') || '无';
+    const phasePreview = transitionStats.phases.slice(0, 3).map((value) => conversationPhaseLabel(value)).join(' / ') || '无';
 
-      <div className="state-filter">
-        <div className="state-filter-row">
-          <label className="state-filter-field">
-            <span>搜索</span>
-            <input type="search" placeholder="按阶段 / 状态 / 消息内容搜索" value={transitionQuery} onChange={(event) => setTransitionQuery(event.target.value)} />
-          </label>
-          <label className="state-filter-field">
-            <span>开始时间</span>
-            <input type="datetime-local" value={transitionFilters.fromTime} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, fromTime: event.target.value }))} />
-          </label>
-          <label className="state-filter-field">
-            <span>结束时间</span>
-            <input type="datetime-local" value={transitionFilters.toTime} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, toTime: event.target.value }))} />
-          </label>
-        </div>
-        <div className="state-filter-advanced-toggle">
-          <button type="button" className="secondary-btn" onClick={() => setTransitionAdvancedFiltersOpen((prev) => !prev)}>
-            {transitionAdvancedFiltersOpen ? '收起高级筛选' : '展开高级筛选'}
-          </button>
-        </div>
-        {transitionAdvancedFiltersOpen ? (
-          <div className="state-filter-grid">
+    return (
+      <>
+        <article className="sub-panel state-transition-overview">
+          <div className="state-transition-overview-top">
+            <div>
+              <p className="section-tag">状态流转</p>
+              <h3 className="state-transition-overview-title">会话状态机轨迹</h3>
+              <p className="panel-caption state-transition-overview-caption">
+                {latestFilteredTransition
+                  ? `最近一次流转发生在 ${formatDateTime(latestFilteredTransition.at)}。`
+                  : '当前没有可展示的流转记录。'}
+              </p>
+            </div>
+            <div className="state-transition-overview-actions">
+              <div className="panel-subtitle-actions">
+                <button type="button" className={`toggle-btn ${transitionView === 'timeline' ? 'active' : ''}`} onClick={() => setTransitionView('timeline')}>
+                  时间轴
+                </button>
+                <button type="button" className={`toggle-btn ${transitionView === 'list' ? 'active' : ''}`} onClick={() => setTransitionView('list')}>
+                  列表
+                </button>
+              </div>
+              <button
+                type="button"
+                className="secondary-btn"
+                onClick={() => {
+                  setTransitionQuery('');
+                  setTransitionFilters(DEFAULT_TRANSITION_FILTERS);
+                  setTransitionAdvancedFiltersOpen(false);
+                }}
+              >
+                重置筛选
+              </button>
+            </div>
+          </div>
+
+          <div className="state-transition-overview-stats">
+            <article className="state-transition-overview-stat">
+              <span>筛选后流转</span>
+              <strong>{transitionStats.filtered}</strong>
+              <small>总计 {transitionStats.total} 条</small>
+            </article>
+            <article className="state-transition-overview-stat">
+              <span>命中阶段</span>
+              <strong>{transitionStats.stages.length}</strong>
+              <small>{stagePreview}</small>
+            </article>
+            <article className="state-transition-overview-stat">
+              <span>命中状态</span>
+              <strong>{transitionStats.statuses.length}</strong>
+              <small>{statusPreview}</small>
+            </article>
+            <article className="state-transition-overview-stat">
+              <span>命中阶段相位</span>
+              <strong>{transitionStats.phases.length}</strong>
+              <small>{phasePreview}</small>
+            </article>
+          </div>
+
+          <div className="state-transition-overview-meta">
+            <span className="session-status">筛选条件 {transitionActiveFilterCount}</span>
+            <span className="session-status">{transitionView === 'timeline' ? '时间轴视图' : '列表视图'}</span>
+            {latestFilteredTransition?.trigger?.messageType ? (
+              <span className="session-status">
+                最近触发 {conversationMessageTypeLabel(latestFilteredTransition.trigger.messageType)}
+              </span>
+            ) : null}
+          </div>
+        </article>
+
+        <div className="state-filter state-filter-modern">
+          <div className="state-filter-summary-row">
+            <p className="panel-caption state-filter-caption">按时间、阶段或消息内容定位关键流转。</p>
+            <button type="button" className="secondary-btn" onClick={() => setTransitionAdvancedFiltersOpen((prev) => !prev)}>
+              {transitionAdvancedFiltersOpen ? '收起高级筛选' : '展开高级筛选'}
+            </button>
+          </div>
+          <div className="state-filter-row">
             <label className="state-filter-field">
-              <span>起始阶段</span>
-              <select value={transitionFilters.fromStage} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, fromStage: event.target.value }))}>
-                <option value="all">全部</option>
-                {transitionOptions.fromStages.map((value) => <option key={value} value={value}>{value}</option>)}
-              </select>
+              <span>搜索</span>
+              <input type="search" placeholder="按阶段 / 状态 / 消息内容搜索" value={transitionQuery} onChange={(event) => setTransitionQuery(event.target.value)} />
             </label>
             <label className="state-filter-field">
-              <span>目标阶段</span>
-              <select value={transitionFilters.toStage} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, toStage: event.target.value }))}>
-                <option value="all">全部</option>
-                {transitionOptions.toStages.map((value) => <option key={value} value={value}>{value}</option>)}
-              </select>
+              <span>开始时间</span>
+              <input type="datetime-local" value={transitionFilters.fromTime} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, fromTime: event.target.value }))} />
             </label>
             <label className="state-filter-field">
-              <span>状态</span>
-              <select value={transitionFilters.status} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, status: event.target.value }))}>
-                <option value="all">全部</option>
-                {transitionOptions.statuses.map((value) => <option key={value} value={value}>{value}</option>)}
-              </select>
-            </label>
-            <label className="state-filter-field">
-              <span>阶段相位</span>
-              <select value={transitionFilters.phase} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, phase: event.target.value }))}>
-                <option value="all">全部</option>
-                {transitionOptions.phases.map((value) => <option key={value} value={value}>{conversationPhaseLabel(value)}</option>)}
-              </select>
-            </label>
-            <label className="state-filter-field">
-              <span>消息类型</span>
-              <select value={transitionFilters.messageType} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, messageType: event.target.value }))}>
-                <option value="all">全部</option>
-                {transitionOptions.messageTypes.map((value) => <option key={value} value={value}>{conversationMessageTypeLabel(value)}</option>)}
-              </select>
-            </label>
-            <label className="state-filter-field">
-              <span>角色</span>
-              <select value={transitionFilters.role} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, role: event.target.value }))}>
-                <option value="all">全部</option>
-                {transitionOptions.roles.map((value) => <option key={value} value={value}>{conversationRoleLabel(value)}</option>)}
-              </select>
-            </label>
-            <label className="state-filter-field">
-              <span>智能体</span>
-              <select value={transitionFilters.agent} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, agent: event.target.value }))}>
-                <option value="all">全部</option>
-                {transitionOptions.agents.map((value) => <option key={value} value={value}>{conversationAgentLabel(value)}</option>)}
-              </select>
-            </label>
-            <label className="state-filter-field">
-              <span>语气</span>
-              <select value={transitionFilters.tone} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, tone: event.target.value }))}>
-                <option value="all">全部</option>
-                {transitionOptions.tones.map((value) => <option key={value} value={value}>{conversationToneLabel(value)}</option>)}
-              </select>
+              <span>结束时间</span>
+              <input type="datetime-local" value={transitionFilters.toTime} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, toTime: event.target.value }))} />
             </label>
           </div>
-        ) : null}
-      </div>
+          {transitionAdvancedFiltersOpen ? (
+            <div className="state-filter-grid">
+              <label className="state-filter-field">
+                <span>起始阶段</span>
+                <select value={transitionFilters.fromStage} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, fromStage: event.target.value }))}>
+                  <option value="all">全部</option>
+                  {transitionOptions.fromStages.map((value) => <option key={value} value={value}>{value}</option>)}
+                </select>
+              </label>
+              <label className="state-filter-field">
+                <span>目标阶段</span>
+                <select value={transitionFilters.toStage} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, toStage: event.target.value }))}>
+                  <option value="all">全部</option>
+                  {transitionOptions.toStages.map((value) => <option key={value} value={value}>{value}</option>)}
+                </select>
+              </label>
+              <label className="state-filter-field">
+                <span>状态</span>
+                <select value={transitionFilters.status} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, status: event.target.value }))}>
+                  <option value="all">全部</option>
+                  {transitionOptions.statuses.map((value) => <option key={value} value={value}>{value}</option>)}
+                </select>
+              </label>
+              <label className="state-filter-field">
+                <span>阶段相位</span>
+                <select value={transitionFilters.phase} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, phase: event.target.value }))}>
+                  <option value="all">全部</option>
+                  {transitionOptions.phases.map((value) => <option key={value} value={value}>{conversationPhaseLabel(value)}</option>)}
+                </select>
+              </label>
+              <label className="state-filter-field">
+                <span>消息类型</span>
+                <select value={transitionFilters.messageType} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, messageType: event.target.value }))}>
+                  <option value="all">全部</option>
+                  {transitionOptions.messageTypes.map((value) => <option key={value} value={value}>{conversationMessageTypeLabel(value)}</option>)}
+                </select>
+              </label>
+              <label className="state-filter-field">
+                <span>角色</span>
+                <select value={transitionFilters.role} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, role: event.target.value }))}>
+                  <option value="all">全部</option>
+                  {transitionOptions.roles.map((value) => <option key={value} value={value}>{conversationRoleLabel(value)}</option>)}
+                </select>
+              </label>
+              <label className="state-filter-field">
+                <span>智能体</span>
+                <select value={transitionFilters.agent} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, agent: event.target.value }))}>
+                  <option value="all">全部</option>
+                  {transitionOptions.agents.map((value) => <option key={value} value={value}>{conversationAgentLabel(value)}</option>)}
+                </select>
+              </label>
+              <label className="state-filter-field">
+                <span>语气</span>
+                <select value={transitionFilters.tone} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, tone: event.target.value }))}>
+                  <option value="all">全部</option>
+                  {transitionOptions.tones.map((value) => <option key={value} value={value}>{conversationToneLabel(value)}</option>)}
+                </select>
+              </label>
+            </div>
+          ) : null}
+        </div>
 
-      <div className="kpi-grid conversation-kpi-grid">
-        <article className="kpi-card">
-          <p className="kpi-title">筛选后流转</p>
-          <p className="kpi-value">{transitionStats.filtered}</p>
-          <p className="kpi-meta">总计 {transitionStats.total} 条</p>
-        </article>
-        <article className="kpi-card">
-          <p className="kpi-title">命中阶段</p>
-          <p className="kpi-value">{transitionStats.stages.length}</p>
-          <p className="kpi-meta">{transitionStats.stages.slice(0, 3).map((value) => conversationStageLabel(value)).join(' / ') || '无'}</p>
-        </article>
-        <article className="kpi-card">
-          <p className="kpi-title">命中状态</p>
-          <p className="kpi-value">{transitionStats.statuses.length}</p>
-          <p className="kpi-meta">{transitionStats.statuses.slice(0, 3).map((value) => statusLabel(value)).join(' / ') || '无'}</p>
-        </article>
-        <article className="kpi-card">
-          <p className="kpi-title">命中阶段相位</p>
-          <p className="kpi-value">{transitionStats.phases.length}</p>
-          <p className="kpi-meta">{transitionStats.phases.slice(0, 3).map((value) => conversationPhaseLabel(value)).join(' / ') || '无'}</p>
-        </article>
-      </div>
-
-      {transitionView === 'timeline' ? (
-        <div className="state-timeline">
-          {filteredTransitions.length === 0 ? (
-            <p className="empty">当前筛选条件下无状态流转记录。</p>
-          ) : (
-            filteredTransitions.map((transition, index) => {
+        {transitionView === 'timeline' ? (
+          <div className="state-timeline">
+            {filteredTransitions.length === 0 ? (
+              <p className="empty">当前筛选条件下无状态流转记录。</p>
+            ) : (
+              filteredTransitions.map((transition, index) => {
+                const trigger = transition.trigger || {};
+                const triggerTags = [
+                  trigger.messageType ? `消息 ${conversationMessageTypeLabel(trigger.messageType)}` : '',
+                  trigger.role ? `角色 ${conversationRoleLabel(trigger.role)}` : '',
+                  trigger.agent ? `智能体 ${conversationAgentLabel(trigger.agent)}` : '',
+                  trigger.tone ? `语气 ${conversationToneLabel(trigger.tone)}` : '',
+                  trigger.messageId ? `消息 ID ${trigger.messageId}` : '',
+                ].filter(Boolean);
+                const prev = index > 0 ? filteredTransitions[index - 1] : null;
+                const gap =
+                  prev?.at && transition.at
+                    ? formatDuration(Date.parse(transition.at) - Date.parse(prev.at))
+                    : '-';
+                const transitionNumber = String(index + 1).padStart(2, '0');
+                const fromStage = conversationStageLabel(transition.from?.stage);
+                const toStage = conversationStageLabel(transition.to?.stage);
+                const toStatus = statusLabel(transition.to?.status || 'unknown');
+                const toPhase = transition.to?.phase ? conversationPhaseLabel(transition.to.phase) : '-';
+                return (
+                  <article key={`${transition.at || 'transition'}-${index}`} className="state-timeline-item">
+                    <div className="state-timeline-rail" aria-hidden="true">
+                      <span className="state-timeline-step mono">{transitionNumber}</span>
+                    </div>
+                    <div className="state-timeline-card">
+                      <div className="state-timeline-head">
+                        <div className="state-timeline-title-block">
+                          <span className={traceLevelClass('info')}>状态</span>
+                          <strong className="state-timeline-title">{`${fromStage} → ${toStage}`}</strong>
+                        </div>
+                        <div className="state-timeline-time">
+                          <span>{formatDateTime(transition.at)}</span>
+                          <span className="state-gap">间隔 {gap}</span>
+                        </div>
+                      </div>
+                      <div className="state-transition-flow">
+                        <span className="state-chip from">{fromStage}</span>
+                        <span className="state-flow-arrow" aria-hidden="true">→</span>
+                        <span className="state-chip status">{toStatus}</span>
+                        <span className="state-flow-arrow" aria-hidden="true">→</span>
+                        <span className="state-chip phase">{toPhase}</span>
+                        <span className="state-flow-arrow" aria-hidden="true">→</span>
+                        <span className="state-chip to">{toStage}</span>
+                      </div>
+                      <div className="state-timeline-meta">
+                        <span>
+                          <small>变更前</small>
+                          <strong className="mono">{formatStateSnapshot(transition.from)}</strong>
+                        </span>
+                        <span>
+                          <small>变更后</small>
+                          <strong className="mono">{formatStateSnapshot(transition.to)}</strong>
+                        </span>
+                      </div>
+                      <div className="state-trigger-stack">
+                        {triggerTags.length ? (
+                          <div className="state-trigger-badges">
+                            {triggerTags.map((tag) => (
+                              <span key={`${transitionNumber}-${tag}`} className="state-trigger-badge">
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                        {trigger.content ? (
+                          <div className="state-trigger-content-card">
+                            <span className="state-trigger-content-label">触发内容</span>
+                            <p className="state-trigger-line">{summarizeText(trigger.content, 240)}</p>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </article>
+                );
+              })
+            )}
+          </div>
+        ) : (
+          <div className="trace-list">
+            {filteredTransitions.map((transition, index) => {
               const trigger = transition.trigger || {};
-              const triggerSummary = [
-                trigger.messageType ? `消息=${conversationMessageTypeLabel(trigger.messageType)}` : '',
-                trigger.role ? `角色=${conversationRoleLabel(trigger.role)}` : '',
-                trigger.agent ? `智能体=${conversationAgentLabel(trigger.agent)}` : '',
-                trigger.tone ? `语气=${conversationToneLabel(trigger.tone)}` : '',
-                trigger.messageId ? `id=${trigger.messageId}` : '',
-              ].filter(Boolean).join(' / ');
-              const prev = index > 0 ? filteredTransitions[index - 1] : null;
-              const gap =
-                prev?.at && transition.at
-                  ? formatDuration(Date.parse(transition.at) - Date.parse(prev.at))
-                  : '-';
-              const transitionNumber = String(index + 1).padStart(2, '0');
-              const fromStage = conversationStageLabel(transition.from?.stage);
-              const toStage = conversationStageLabel(transition.to?.stage);
-              const toStatus = statusLabel(transition.to?.status || 'unknown');
-              const toPhase = transition.to?.phase ? conversationPhaseLabel(transition.to.phase) : '-';
+              const triggerTags = [
+                trigger.messageType ? `消息 ${conversationMessageTypeLabel(trigger.messageType)}` : '',
+                trigger.role ? `角色 ${conversationRoleLabel(trigger.role)}` : '',
+                trigger.agent ? `智能体 ${conversationAgentLabel(trigger.agent)}` : '',
+                trigger.tone ? `语气 ${conversationToneLabel(trigger.tone)}` : '',
+                trigger.messageId ? `消息 ID ${trigger.messageId}` : '',
+              ].filter(Boolean);
               return (
-                <article key={`${transition.at || 'transition'}-${index}`} className="state-timeline-item">
-                  <div className="state-timeline-rail" aria-hidden="true">
-                    <span className="state-timeline-step mono">{transitionNumber}</span>
-                  </div>
-                  <div className="state-timeline-card">
-                    <div className="state-timeline-head">
-                      <div className="state-timeline-title-block">
-                        <span className={traceLevelClass('info')}>state</span>
-                        <strong className="state-timeline-title">{`${fromStage} → ${toStage}`}</strong>
-                      </div>
-                      <div className="state-timeline-time">
-                        <span>{formatDateTime(transition.at)}</span>
-                        <span className="state-gap">间隔 {gap}</span>
-                      </div>
+                <article key={`${transition.at || 'transition'}-${index}`} className="trace-item state-transition-list-item">
+                  <p className="trace-head">
+                    <span className={traceLevelClass('info')}>状态</span>
+                    <strong>{`${conversationStageLabel(transition.from?.stage)} → ${conversationStageLabel(transition.to?.stage)}`}</strong>
+                    <span>{formatDateTime(transition.at)}</span>
+                  </p>
+                  <p className="trace-meta mono">{formatStateSnapshot(transition.from)} → {formatStateSnapshot(transition.to)}</p>
+                  {triggerTags.length ? (
+                    <div className="state-trigger-badges">
+                      {triggerTags.map((tag) => (
+                        <span key={`${index}-${tag}`} className="state-trigger-badge">
+                          {tag}
+                        </span>
+                      ))}
                     </div>
-                    <div className="state-timeline-meta">
-                      <span>
-                        <small>From</small>
-                        <strong className="mono">{formatStateSnapshot(transition.from)}</strong>
-                      </span>
-                      <span>
-                        <small>To</small>
-                        <strong className="mono">{formatStateSnapshot(transition.to)}</strong>
-                      </span>
-                    </div>
-                    <div className="state-transition-flow">
-                      <span className="state-chip from">{fromStage}</span>
-                      <span className="state-flow-arrow" aria-hidden="true">→</span>
-                      <span className="state-chip status">{toStatus}</span>
-                      <span className="state-flow-arrow" aria-hidden="true">→</span>
-                      <span className="state-chip phase">{toPhase}</span>
-                      <span className="state-flow-arrow" aria-hidden="true">→</span>
-                      <span className="state-chip to">{toStage}</span>
-                    </div>
-                    <div className="state-trigger-stack">
-                      {triggerSummary ? <p className="state-trigger-line">触发: {triggerSummary}</p> : null}
-                      {trigger.content ? <p className="state-trigger-line">内容: {summarizeText(trigger.content, 240)}</p> : null}
-                    </div>
-                  </div>
+                  ) : null}
+                  {trigger.content ? <p className="state-trigger-line">{summarizeText(trigger.content, 240)}</p> : null}
                 </article>
               );
-            })
-          )}
-        </div>
-      ) : (
-        <div className="trace-list">
-          {filteredTransitions.map((transition, index) => {
-            const trigger = transition.trigger || {};
-            const triggerSummary = [
-              trigger.messageType ? `消息=${conversationMessageTypeLabel(trigger.messageType)}` : '',
-              trigger.role ? `角色=${conversationRoleLabel(trigger.role)}` : '',
-              trigger.agent ? `智能体=${conversationAgentLabel(trigger.agent)}` : '',
-              trigger.tone ? `语气=${conversationToneLabel(trigger.tone)}` : '',
-              trigger.messageId ? `id=${trigger.messageId}` : '',
-            ].filter(Boolean).join(' / ');
-            return (
-              <article key={`${transition.at || 'transition'}-${index}`} className="trace-item">
-                <p className="trace-head">
-                  <span className={traceLevelClass('info')}>state</span>
-                  <strong>{`${conversationStageLabel(transition.from?.stage)} → ${conversationStageLabel(transition.to?.stage)}`}</strong>
-                  <span>{formatDateTime(transition.at)}</span>
-                </p>
-                <p className="trace-meta mono">{formatStateSnapshot(transition.from)} → {formatStateSnapshot(transition.to)}</p>
-                {triggerSummary ? <p className="message-content">触发: {triggerSummary}</p> : null}
-                {trigger.content ? <p className="message-content">内容: {summarizeText(trigger.content, 240)}</p> : null}
-              </article>
-            );
-          })}
-        </div>
-      )}
-    </>
-  );
+            })}
+          </div>
+        )}
+      </>
+    );
+  };
 
   const renderJsonWithLineNumbers = (value: unknown) => {
     const lines = toJsonText(value).split('\n');
@@ -5303,62 +6617,145 @@ export default function App() {
   };
 
   const renderConversationDetailedLogsPanel = () => (
-    <div className="sub-panel conversation-detailed-logs-panel">
-      {renderJsonWithLineNumbers(conversationDetailedLogs)}
+    <div className="conversation-detailed-logs-stack">
+      <article className="sub-panel conversation-detailed-logs-summary">
+        <div className="conversation-detailed-logs-summary-top">
+          <div>
+            <p className="section-tag">原始日志</p>
+            <h3 className="conversation-detailed-logs-title">结构化导出视图</h3>
+            <p className="panel-caption conversation-detailed-logs-caption">
+              保留完整结构，先给出消息量、LLM 轨迹和最近记录时间，再进入 JSON 正文。
+            </p>
+          </div>
+          <div className="conversation-detailed-logs-meta">
+            <span className="session-status">会话 {conversationDetailedLogs.sessionId || '-'}</span>
+            <span className="session-status">导出 {formatDateTime(conversationDetailedLogs.exportedAt)}</span>
+          </div>
+        </div>
+        <div className="conversation-detailed-logs-stat-strip">
+          <article className="conversation-detailed-logs-stat">
+            <span>消息记录</span>
+            <strong>{conversationDetailedLogs.counts.messages}</strong>
+            <small>用户、智能体与系统消息</small>
+          </article>
+          <article className="conversation-detailed-logs-stat">
+            <span>LLM 轨迹</span>
+            <strong>{conversationDetailedLogs.counts.llm}</strong>
+            <small>模型调用与推断条目</small>
+          </article>
+          <article className="conversation-detailed-logs-stat">
+            <span>总载荷</span>
+            <strong>{conversationDetailedLogs.counts.total}</strong>
+            <small>当前导出结构中的全部条目</small>
+          </article>
+          <article className="conversation-detailed-logs-stat">
+            <span>最近记录</span>
+            <strong>{formatDateTime(conversationDetailedLogs.entries[0]?.timestamp)}</strong>
+            <small>{conversationDetailedLogs.entries[0]?.summary || '当前没有日志条目'}</small>
+          </article>
+        </div>
+      </article>
+
+      <article className="sub-panel conversation-detailed-logs-panel">
+        <div className="conversation-detailed-logs-panel-head">
+          <div>
+            <h3>JSON 正文</h3>
+            <p className="panel-caption">左侧行号固定，便于定位字段和复制排障信息。</p>
+          </div>
+          <span className="session-status">只读视图</span>
+        </div>
+        <div className="conversation-detailed-logs-shell">
+          {renderJsonWithLineNumbers(conversationDetailedLogs)}
+        </div>
+      </article>
     </div>
   );
 
   const renderConversationInfraPanel = () => {
     if (!conversationDetail) {
-      return <p className="empty">选择会话后，可在此查看来源用户与主 Sandbox 绑定信息。</p>;
+      return <p className="empty">选择会话后，可在这里查看来源用户和主 Sandbox 的关联信息。</p>;
     }
 
+    const sourceUser = conversationDetail.session.user;
+
     return (
-      <div className="conversation-inspector-content conversation-dialog-infra conversation-dialog-infra-compact">
+      <div className="conversation-inspector-content conversation-dialog-infra conversation-dialog-infra-compact conversation-infra-layout">
         {conversationInfraError ? (
           <p className="panel-caption">关联信息加载异常：{conversationInfraError}</p>
         ) : null}
-        <article className="sub-panel conversation-infra-panel">
-          <div className="panel-header">
+        <article className="sub-panel conversation-infra-panel conversation-infra-panel-identity">
+          <div className="conversation-infra-panel-top">
             <div>
-              <h3>会话身份</h3>
-              <p className="panel-caption conversation-infra-caption">只保留定位当前对话所需的来源与状态信息。</p>
+              <p className="section-tag">会话身份</p>
+              <h3 className="conversation-infra-panel-title">{conversationUserLabel(sourceUser)}</h3>
+              <p className="panel-caption conversation-infra-caption">
+                {sourceUser?.email || '当前没有可识别邮箱'}{sourceUser?.source ? ` · ${conversationUserSourceLabel(sourceUser.source)}` : ''}
+              </p>
             </div>
-            <span className={stateClassName(conversationDetail.session.status)}>{statusLabel(conversationDetail.session.status)}</span>
+            <div className="conversation-infra-pill-row">
+              <span className={stateClassName(conversationDetail.session.status)}>{statusLabel(conversationDetail.session.status)}</span>
+              <span className="session-status">{conversationStageLabel(conversationDetail.session.stage)}</span>
+            </div>
           </div>
-          <div className="detail-kv-list conversation-infra-kv-list">
-            <div>
-              <span>阶段</span>
-              <strong>{conversationStageLabel(conversationDetail.session.stage)}</strong>
-            </div>
+          <div className="conversation-infra-kv-grid">
             <div>
               <span>来源用户</span>
-              <strong>{conversationUserLabel(conversationDetail.session.user)}</strong>
+              <strong>{conversationUserLabel(sourceUser)}</strong>
             </div>
             <div>
               <span>来源 IP</span>
-              <strong className="mono">{conversationDetail.session.user?.ipAddress || '-'}</strong>
+              <strong className="mono">{sourceUser?.ipAddress || '-'}</strong>
             </div>
             <div>
               <span>最近活跃</span>
               <strong>{formatDateTime(conversationDetail.session.updatedAt)}</strong>
             </div>
+            <div>
+              <span>最近访问来源</span>
+              <strong>{conversationUserSourceLabel(sourceUser?.source)}</strong>
+            </div>
           </div>
+          {sourceUser?.userAgent ? (
+            <p className="conversation-infra-footnote">{conversationUserAgentLabel(sourceUser.userAgent)}</p>
+          ) : null}
         </article>
 
-        <article className="sub-panel conversation-infra-panel">
-          <div className="panel-header">
+        <article className="sub-panel conversation-infra-panel conversation-infra-panel-runtime">
+          <div className="conversation-infra-panel-top">
             <div>
-              <h3>运行绑定</h3>
+              <p className="section-tag">运行绑定</p>
+              <h3 className="conversation-infra-panel-title">{primaryEnvironmentSandboxId || '当前还没有主 Sandbox'}</h3>
               <p className="panel-caption conversation-infra-caption">
-                {primaryEnvironmentSandboxId ? '优先聚焦主 Sandbox，附加记录仅展示最近几条。' : '当前暂无主 Sandbox 绑定。'}
+                {primaryEnvironmentSandboxId ? '主 Sandbox、编排会话和最近关联实例都收在这里。' : '当前会话尚未绑定可排查的主 Sandbox。'}
               </p>
             </div>
-            <span className="panel-caption">附加关联 {relatedEnvironments.length} 条</span>
+            <div className="conversation-infra-pill-row">
+              <span className="session-status">{executorLabel(primaryEnvironmentExecutor)}</span>
+              <span className="session-status">{archiveStatusLabel(primaryEnvironmentArchiveStatus)}</span>
+            </div>
           </div>
-          <div className="detail-kv-list conversation-infra-kv-list">
+          {primaryEnvironmentSandboxId ? (
+            <div className="conversation-infra-binding-hero">
+              <div className="conversation-infra-binding-copy">
+                <span className="conversation-infra-binding-label">主 Sandbox</span>
+                <button type="button" className="link-btn sandbox-jump-btn mono conversation-infra-binding-id" onClick={() => openSandboxFromConversation(primaryEnvironmentSandboxId)}>
+                  {primaryEnvironmentSandboxId}
+                </button>
+              </div>
+              <div className="conversation-infra-binding-summary">
+                <span>{executorLabel(primaryEnvironmentExecutor)}</span>
+                <span>{archiveStatusLabel(primaryEnvironmentArchiveStatus)}</span>
+                <span>{relatedEnvironments.length} 条关联记录</span>
+              </div>
+            </div>
+          ) : (
+            <div className="conversation-infra-binding-hero conversation-infra-binding-hero-empty">
+              <p className="conversation-infra-empty">当前还没有主 Sandbox 关联。</p>
+            </div>
+          )}
+          <div className="conversation-infra-kv-grid">
             <div>
-              <span>编排 ID</span>
+              <span>编排会话 ID</span>
               {conversationDetail.runtime?.orchestratorSessionId ? (
                 <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(conversationDetail.runtime?.orchestratorSessionId)}>
                   {conversationDetail.runtime.orchestratorSessionId}
@@ -5378,7 +6775,7 @@ export default function App() {
               )}
             </div>
             <div>
-              <span>Executor</span>
+              <span>处理方式</span>
               <strong>{executorLabel(primaryEnvironmentExecutor)}</strong>
             </div>
             <div>
@@ -5389,42 +6786,44 @@ export default function App() {
               <span>关联记录数</span>
               <strong>{relatedEnvironments.length}</strong>
             </div>
+            <div>
+              <span>最近绑定变更</span>
+              <strong>{formatDateTime(latestRelatedEnvironmentUpdatedAt)}</strong>
+            </div>
           </div>
           {primaryEnvironmentReplacementId ? (
-            <p className="session-meta conversation-infra-note">
-              已由{' '}
+            <div className="conversation-infra-note">
+              <span className="conversation-infra-note-label">接管 Sandbox</span>
               <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(primaryEnvironmentReplacementId)}>
                 {primaryEnvironmentReplacementId}
-              </button>{' '}
-              接管
-            </p>
+              </button>
+            </div>
           ) : null}
           {recentRelatedEnvironments.length ? (
             <div className="conversation-infra-related-section">
               <div className="panel-subtitle panel-subtitle-row">
-                <span>最近关联 Sandbox</span>
-                <span className="panel-caption">展示最近 {recentRelatedEnvironments.length} 条</span>
+                <span>最近关联的 Sandbox</span>
+                <span className="panel-caption">最近 {recentRelatedEnvironments.length} 条</span>
               </div>
               <div className="compact-list conversation-infra-related-list">
                 {recentRelatedEnvironments.map((environment) => {
                   const sandboxId = environmentSandboxId(environment);
                   return (
                     <article key={environment.id} className="compact-item conversation-infra-related-item">
-                      <div className="trace-head">
-                        <strong>{sandboxRuntimeStateLabel(environment.status)}</strong>
+                      <div className="conversation-infra-related-head">
+                        <strong>{sandboxId || '-'}</strong>
                         <span className="mono">{formatDateTime(environment.updatedAt)}</span>
                       </div>
                       <div className="conversation-infra-related-main">
-                        {sandboxId ? (
-                          <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(sandboxId)}>
-                            {sandboxId}
-                          </button>
-                        ) : (
-                          <span className="mono">-</span>
-                        )}
+                        <span>{sandboxRuntimeStateLabel(environment.status)}</span>
                         <span>{executorLabel(environmentExecutor(environment))}</span>
                         <span>{archiveStatusLabel(environmentArchiveStatus(environment))}</span>
                       </div>
+                      {sandboxId ? (
+                        <button type="button" className="link-btn sandbox-jump-btn mono conversation-infra-related-link" onClick={() => openSandboxFromConversation(sandboxId)}>
+                          打开 {sandboxId}
+                        </button>
+                      ) : null}
                     </article>
                   );
                 })}
@@ -5438,36 +6837,90 @@ export default function App() {
 
   const renderConversationContentOverview = () => {
     const sourceUser = conversationDetail?.session.user || null;
+    const latestPendingQuestion = conversationDetail?.runtime?.pendingQuestion || conversationMessageSummary.latestClarificationSummary;
+    const conversationStatusText = conversationDetail ? statusLabel(conversationDetail.session.status) : '-';
+    const conversationStageText = conversationDetail ? conversationStageLabel(conversationDetail.session.stage) : '-';
     return (
-      <div className="conversation-dialog-overview">
-        <div className="detail-grid detail-grid-wide summary-grid conversation-summary-grid">
-          <div>
-            <p className="kpi-title">会话 ID</p>
-            <p className="mono">{conversationDetail?.session.id}</p>
+      <div className="conversation-dialog-overview conversation-dialog-overview-layout">
+        <article className="sub-panel conversation-dialog-overview-hero">
+          <div className="conversation-dialog-overview-top">
+            <div>
+              <p className="section-tag">会话总览</p>
+              <h3 className="conversation-dialog-overview-title">{conversationDetail?.session.title || '未命名会话'}</h3>
+              <p className="conversation-dialog-overview-subtitle mono">{conversationDetail?.session.id || '-'}</p>
+            </div>
+            <div className="conversation-dialog-overview-badges">
+              <span className={stateClassName(conversationDetail?.session.status || 'unknown')}>
+                {conversationStatusText}
+              </span>
+              {conversationStageText !== conversationStatusText ? (
+                <span className="session-status">{conversationStageText}</span>
+              ) : null}
+              <span className="session-status">{conversationUserSourceLabel(sourceUser?.source)}</span>
+            </div>
           </div>
-          <div>
-            <p className="kpi-title">状态</p>
-            <p>{conversationDetail ? statusLabel(conversationDetail.session.status) : '-'}</p>
-          </div>
-          <div>
-            <p className="kpi-title">阶段</p>
-            <p>{conversationDetail ? conversationStageLabel(conversationDetail.session.stage) : '-'}</p>
-          </div>
-          <div>
-            <p className="kpi-title">OpenCode ID</p>
-            <p className="mono">{conversationDetail?.runtime?.opencodeSessionId || '-'}</p>
-          </div>
-          <div>
-            <p className="kpi-title">绑定更新时间</p>
-            <p>{formatDateTime(conversationDetail?.runtime?.bindingUpdatedAt)}</p>
-          </div>
-        </div>
 
-        <section className="sub-panel conversation-user-panel">
+          <div className="conversation-dialog-overview-stats">
+            <article className="conversation-dialog-overview-stat">
+              <span>最近更新</span>
+              <strong>{formatDateTime(conversationDetail?.session.updatedAt || conversationDetail?.runtime?.bindingUpdatedAt)}</strong>
+              <small>当前会话的最近更新时间</small>
+            </article>
+            <article className="conversation-dialog-overview-stat">
+              <span>对话消息</span>
+              <strong>{conversationTabCounts.messages}</strong>
+              <small>用户与智能体消息总数</small>
+            </article>
+            <article className="conversation-dialog-overview-stat">
+              <span>执行事件</span>
+              <strong>{conversationMessageSummary.executionCount}</strong>
+              <small>工具与执行节点记录</small>
+            </article>
+            <article className="conversation-dialog-overview-stat">
+              <span>状态流转</span>
+              <strong>{conversationTabCounts.transitions}</strong>
+              <small>{transitionStats.stages.length ? `覆盖 ${transitionStats.stages.length} 个阶段` : '当前无流转记录'}</small>
+            </article>
+          </div>
+
+          <dl className="conversation-dialog-overview-facts">
+            <div>
+              <dt>OpenCode 会话</dt>
+              <dd className="mono">{conversationDetail?.runtime?.opencodeSessionId || '-'}</dd>
+            </div>
+            <div>
+              <dt>编排会话</dt>
+              <dd>
+                {conversationDetail?.runtime?.orchestratorSessionId ? (
+                  <button
+                    type="button"
+                    className="link-btn sandbox-jump-btn mono"
+                    onClick={() => openSandboxFromConversation(conversationDetail.runtime?.orchestratorSessionId)}
+                  >
+                    {conversationDetail.runtime.orchestratorSessionId}
+                  </button>
+                ) : (
+                  <span className="mono">-</span>
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt>挂起原因</dt>
+              <dd>{conversationDetail?.runtime?.pendingResume?.reason || '-'}</dd>
+            </div>
+            <div>
+              <dt>待确认问题</dt>
+              <dd>{latestPendingQuestion ? summarizeText(latestPendingQuestion, 120) : '当前无需补充信息'}</dd>
+            </div>
+          </dl>
+        </article>
+
+        <div className="conversation-dialog-overview-side">
+          <section className="sub-panel conversation-user-panel conversation-dialog-side-panel">
           <div className="panel-header">
             <div>
               <h3>来源用户</h3>
-              <p className="panel-caption">对话归属、最近访问来源与会话身份线索。</p>
+              <p className="panel-caption">对话归属与最近访问来源。</p>
             </div>
             <span className="session-status">{conversationUserSourceLabel(sourceUser?.source)}</span>
           </div>
@@ -5490,42 +6943,87 @@ export default function App() {
             </div>
           </div>
           <p className="conversation-user-agent">{conversationUserAgentLabel(sourceUser?.userAgent)}</p>
-        </section>
+          </section>
 
-        <div className="conversation-message-summary-stats">
-          <span className="session-status">状态流转 {conversationTabCounts.transitions}</span>
-          <span className="session-status">对话消息 {conversationTabCounts.messages}</span>
-          <span className="session-status">详细日志 {conversationDetailedLogs.counts.total}</span>
+          <section className="sub-panel conversation-dialog-side-panel">
+            <div className="panel-header">
+              <div>
+                <h3>部署摘要</h3>
+                <p className="panel-caption">当前会话的部署状态与访问入口。</p>
+              </div>
+              {conversationDeploymentSummary ? (
+                <span className={`state-chip ${deploymentStatusTone(conversationDeploymentSummary.statusCategory)}`}>
+                  {deploymentStatusLabel(conversationDeploymentSummary.statusCategory)}
+                </span>
+              ) : null}
+            </div>
+            {conversationDeploymentLoading ? (
+              <p className="panel-caption">正在加载部署状态...</p>
+            ) : conversationDeploymentSummary ? (
+              <>
+                <div className="detail-grid conversation-message-summary-grid">
+                  <div>
+                    <p className="kpi-title">项目 / 服务</p>
+                    <p>{conversationDeploymentSummary.projectName || '-'} / {conversationDeploymentSummary.serviceName || '-'}</p>
+                  </div>
+                  <div>
+                    <p className="kpi-title">最新状态</p>
+                    <p>{conversationDeploymentSummary.latestStatus || conversationDeploymentSummary.bindingState}</p>
+                  </div>
+                  <div>
+                    <p className="kpi-title">访问地址</p>
+                    <p>{conversationDeploymentSummary.latestUrl || conversationDeploymentSummary.latestStaticUrl || '-'}</p>
+                  </div>
+                  <div>
+                    <p className="kpi-title">最近验证</p>
+                    <p>{formatDateTime(conversationDeploymentSummary.lastVerifiedAt)}</p>
+                  </div>
+                </div>
+                <div className="section-actions">
+                  <button type="button" className="table-btn" onClick={() => openDeploymentFromConversation(conversationDeploymentSummary.taskSessionId)}>
+                    打开部署管理
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="section-actions">
+                <p className="panel-caption">当前会话暂无部署记录。</p>
+                {conversationDetail?.session.id ? (
+                  <button type="button" className="table-btn" onClick={() => openDeploymentFromConversation(conversationDetail.session.id)}>
+                    前往部署管理
+                  </button>
+                ) : null}
+              </div>
+            )}
+          </section>
+
+          <section className="sub-panel conversation-message-summary conversation-dialog-message-summary conversation-dialog-side-panel">
+            <div className="detail-grid conversation-message-summary-grid">
+              <div>
+                <p className="kpi-title">最近用户输入</p>
+                <p>{conversationMessageSummary.latestUserSummary}</p>
+              </div>
+              <div>
+                <p className="kpi-title">最近主回复</p>
+                <p>{conversationMessageSummary.latestAssistantSummary}</p>
+              </div>
+              <div>
+                <p className="kpi-title">最近轮次结果</p>
+                <p>{conversationInteractionGroups[conversationInteractionGroups.length - 1]?.outcome || '暂无'}</p>
+              </div>
+              <div>
+                <p className="kpi-title">最近阶段</p>
+                <p>{conversationStageLabel(conversationMessageSummary.latestStatusStage || conversationDetail?.session.stage)}</p>
+              </div>
+            </div>
+            {latestPendingQuestion ? (
+              <div className="conversation-message-inline-card">
+                <p className="kpi-title">当前待确认问题</p>
+                <p className="message-content">{latestPendingQuestion}</p>
+              </div>
+            ) : null}
+          </section>
         </div>
-
-        <section className="sub-panel conversation-message-summary">
-          <div className="detail-grid conversation-message-summary-grid">
-            <div>
-              <p className="kpi-title">最近用户输入</p>
-              <p>{conversationMessageSummary.latestUserSummary}</p>
-            </div>
-            <div>
-              <p className="kpi-title">最近主回复</p>
-              <p>{conversationMessageSummary.latestAssistantSummary}</p>
-            </div>
-            <div>
-              <p className="kpi-title">最近轮次结果</p>
-              <p>{conversationInteractionGroups[conversationInteractionGroups.length - 1]?.outcome || '暂无'}</p>
-            </div>
-            <div>
-              <p className="kpi-title">最近阶段</p>
-              <p>{conversationStageLabel(conversationMessageSummary.latestStatusStage || conversationDetail?.session.stage)}</p>
-            </div>
-          </div>
-          {conversationMessageSummary.latestClarificationSummary || conversationDetail?.runtime?.pendingQuestion ? (
-            <div className="conversation-message-inline-card">
-              <p className="kpi-title">当前待确认问题</p>
-              <p className="message-content">
-                {conversationDetail?.runtime?.pendingQuestion || conversationMessageSummary.latestClarificationSummary}
-              </p>
-            </div>
-          ) : null}
-        </section>
       </div>
     );
   };
@@ -5804,7 +7302,10 @@ export default function App() {
   const activeNavGroup = NAV_GROUPS.find((group) => group.key === activeNavItem.group) || NAV_GROUPS[0];
   const breadcrumbTitle = activeNavItem.label;
   const themeOptions = themeSettings?.themes.length ? themeSettings.themes : FALLBACK_ADMIN_THEME_OPTIONS;
+  const themeModeOptions = themeSettings?.modes.length ? themeSettings.modes : FALLBACK_ADMIN_THEME_MODES;
   const selectedThemeOption = themeOptions.find((item) => item.key === currentTheme) || themeOptions[0];
+  const selectedThemeMode = themeModeOptions.find((item) => item.key === currentThemeMode) || themeModeOptions[0];
+  const resolvedThemeTone = resolveAdminThemeTone(currentThemeMode, systemThemeTone);
   const sandboxApi = sandboxOverview?.sandboxApi ?? null;
   const sandboxOverviewItems = asArray(sandboxOverview?.sandboxes);
   const sandboxRegistryItems = asArray(sandboxRuntimeRegistry?.items).map((item) => ({
@@ -5814,6 +7315,8 @@ export default function App() {
   const activeServiceOnline =
     activeSection === 'agent'
       ? agentOverview?.agentApi.online
+      : activeSection === 'deployment'
+        ? true
       : activeSection === 'conversation'
         ? true
       : activeSection === 'user'
@@ -5832,6 +7335,8 @@ export default function App() {
   const activeServiceLabel =
     activeSection === 'agent'
       ? '智能体服务'
+      : activeSection === 'deployment'
+        ? '平台接口'
       : activeSection === 'conversation'
         ? '会话索引'
       : activeSection === 'user'
@@ -5850,22 +7355,57 @@ export default function App() {
   const updatedAtLabel =
     activeSection === 'sandbox'
       ? sandboxApi?.timestamp || sandboxOverviewItems[0]?.startedAt
+      : activeSection === 'deployment'
+        ? deploymentManagementUpdatedAt
       : activeSection === 'conversation'
         ? conversationDetail?.session.updatedAt || conversationSessions[0]?.updatedAt
         : activeSection === 'user'
           ? userManagementUpdatedAt
+        : activeSection === 'skill'
+          ? skillManagementUpdatedAt
+          : activeSection === 'connectorGuide'
+            ? connectorGuideUpdatedAt
+            : activeSection === 'osacRelease'
+              ? osacReleaseUpdatedAt
         : activeSection === 'agent'
           ? agentOverview?.agentApi.timestamp || agentOverview?.oneceoApi.timestamp
         : activeSection === 'audit'
-          ? auditEntries[0]?.timestamp
+          ? auditSummaryFetchedAt || auditEntries[0]?.timestamp
             : kvmOverview?.updatedAt;
+  const lockMainAreaScroll =
+    activeSection === 'deployment' ||
+    activeSection === 'conversation' ||
+    activeSection === 'user' ||
+    activeSection === 'skill' ||
+    activeSection === 'osacRelease' ||
+    activeSection === 'audit' ||
+    activeSection === 'sandbox';
   const currentTemplateId = templateIdOf(templateDetail);
   const currentTemplateAlias = templateAliasOf(templateDetail);
+  const templateWorkbenchTitle = templateWorkbenchMode === 'create'
+    ? '新建模板'
+    : currentTemplateAlias || currentTemplateId || '模板';
+  const templateWorkbenchCaption = templateWorkbenchMode === 'create'
+    ? '填写创建 payload 后会直接写入模板列表'
+    : templates.length ? `共 ${templates.length} 个模板` : '当前没有模板记录';
   const templateAliasCheck = parseAliasCheckResult(templateAliasResult);
+
+  const registerSectionRefresh = useCallback((handler: (() => Promise<void>) | null) => {
+    sectionRefreshHandlerRef.current = handler;
+  }, []);
 
   const refreshActiveSection = useCallback(async () => {
     try {
       await runBlockingTask(`正在刷新${breadcrumbTitle}`, async () => {
+        if (sectionRefreshHandlerRef.current) {
+          setRefreshing(true);
+          try {
+            await sectionRefreshHandlerRef.current();
+          } finally {
+            setRefreshing(false);
+          }
+          return;
+        }
         await loadSection(activeSection);
       });
     } catch {
@@ -5873,26 +7413,33 @@ export default function App() {
     }
   }, [activeSection, breadcrumbTitle, loadSection, runBlockingTask]);
 
-  const applyAuditFilters = useCallback(async () => {
-    try {
-      await runBlockingTask('正在筛选审计日志', async () => {
-        await loadAuditSection(auditFilters);
+  const updateAuditFilters = useCallback(
+    (nextValue: AuditFilterState | ((current: AuditFilterState) => AuditFilterState)) => {
+      setAuditFilters((current) => {
+        const next = typeof nextValue === 'function'
+          ? (nextValue as (value: AuditFilterState) => AuditFilterState)(current)
+          : nextValue;
+        auditFiltersRef.current = next;
+        void loadAuditSection(next)
+          .catch((requestError) => {
+            setError(requestError instanceof Error ? requestError.message : '审计日志加载失败');
+          });
+        return next;
       });
-    } catch {
-      // error is routed to banner and toast
-    }
-  }, [auditFilters, loadAuditSection, runBlockingTask]);
+    },
+    [loadAuditSection]
+  );
 
-  const resetAuditFilters = useCallback(async () => {
-    setAuditFilters(DEFAULT_AUDIT_FILTERS);
-    try {
-      await runBlockingTask('正在重置审计筛选', async () => {
-        await loadAuditSection(DEFAULT_AUDIT_FILTERS);
-      });
-    } catch {
-      // error is routed to banner and toast
-    }
-  }, [loadAuditSection, runBlockingTask]);
+  const resetAuditFilters = useCallback(() => {
+    updateAuditFilters(DEFAULT_AUDIT_FILTERS);
+  }, [updateAuditFilters]);
+
+  const resetSandboxRuntimeFilters = useCallback(() => {
+    setSandboxRuntimeQuery('');
+    setSandboxExecutorFilter('all');
+    setSandboxStatusFilter('all');
+    setSandboxRiskFilter('all');
+  }, []);
 
   const handleSidebarWheel = useCallback((event: React.WheelEvent<HTMLElement>) => {
     if (typeof window !== 'undefined' && window.innerWidth <= SIDEBAR_STACK_BREAKPOINT) {
@@ -5969,12 +7516,24 @@ export default function App() {
             <form className="admin-auth-form" onSubmit={handleAdminLogin}>
               <label>
                 <span>登录名</span>
-                <input value={loginName} onChange={(event) => setLoginName(event.target.value)} required />
+                <input
+                  type="text"
+                  name="username"
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  value={loginName}
+                  onChange={(event) => setLoginName(event.target.value)}
+                  required
+                />
               </label>
               <label>
                 <span>密码</span>
                 <input
                   type="password"
+                  name="password"
+                  autoComplete="current-password"
                   value={loginPassword}
                   onChange={(event) => setLoginPassword(event.target.value)}
                   required
@@ -6104,42 +7663,9 @@ export default function App() {
                 </div>
 
                 <div className="host-trend-wrap">
-                  <ResponsiveContainer width="100%" height={220}>
-                    <LineChart data={hostTrendMap[host.hostId] || []}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#dbe7f4" />
-                      <XAxis dataKey="timeLabel" minTickGap={20} />
-                      <YAxis domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
-                      <Tooltip formatter={(value) => [`${value}%`, '']} />
-                      <Legend />
-                      <Line
-                        type="monotone"
-                        dataKey="cpu"
-                        name="CPU"
-                        stroke="#0f766e"
-                        strokeWidth={2}
-                        dot={{ r: 2 }}
-                        activeDot={{ r: 4 }}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="memory"
-                        name="内存"
-                        stroke="#0284c7"
-                        strokeWidth={2}
-                        dot={{ r: 2 }}
-                        activeDot={{ r: 4 }}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="storage"
-                        name="存储"
-                        stroke="#f59e0b"
-                        strokeWidth={2}
-                        dot={{ r: 2 }}
-                        activeDot={{ r: 4 }}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
+                  <Suspense fallback={<div className="loading-state chart-loading-state">正在加载趋势图...</div>}>
+                    <KvmHostTrendChart data={hostTrendMap[host.hostId] || []} />
+                  </Suspense>
                 </div>
               </article>
             ))}
@@ -6177,17 +7703,9 @@ export default function App() {
             <span className="panel-caption">状态分布</span>
           </div>
           <div className="chart-wrap">
-            <ResponsiveContainer width="100%" height={260}>
-              <PieChart>
-                <Pie data={vmPieData} cx="50%" cy="50%" outerRadius={90} innerRadius={55} dataKey="value" nameKey="label">
-                  {vmPieData.map((item) => (
-                    <Cell key={item.label} fill={VM_STATE_COLORS[item.label] ?? '#0ea5a5'} />
-                  ))}
-                </Pie>
-                <Tooltip />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
+            <Suspense fallback={<div className="loading-state chart-loading-state">正在加载状态图...</div>}>
+              <KvmVmStatusPieChart data={vmPieData} stateColors={VM_STATE_COLORS} />
+            </Suspense>
           </div>
         </article>
 
@@ -6197,15 +7715,9 @@ export default function App() {
             <span className="panel-caption">任务绑定态</span>
           </div>
           <div className="chart-wrap">
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={kvmOverview?.sessionStatusDistribution ?? []}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#dbe7f4" />
-                <XAxis dataKey="label" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="value" name="数量" fill="#0284c7" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            <Suspense fallback={<div className="loading-state chart-loading-state">正在加载会话图...</div>}>
+              <KvmSessionStatusBarChart data={kvmOverview?.sessionStatusDistribution ?? []} />
+            </Suspense>
           </div>
         </article>
       </section>
@@ -6328,7 +7840,7 @@ export default function App() {
               <strong>{conversationDetail?.session.stage || '-'}</strong>
             </div>
             <div>
-              <span>OpenCode ID</span>
+              <span>OpenCode 会话 ID</span>
               <strong className="mono">{conversationDetail?.runtime?.opencodeSessionId || '-'}</strong>
             </div>
           </div>
@@ -6477,7 +7989,7 @@ export default function App() {
                 </div>
                 <div>
                   <p className="kpi-title">阶段</p>
-                  <p>{conversationDetail.session.stage || '-'}</p>
+                  <p>{conversationStageLabel(conversationDetail.session.stage)}</p>
                 </div>
                 <div>
                   <p className="kpi-title">编排 ID</p>
@@ -6494,7 +8006,7 @@ export default function App() {
                   )}
                 </div>
                 <div>
-                  <p className="kpi-title">OpenCode ID</p>
+                  <p className="kpi-title">OpenCode 会话 ID</p>
                   <p className="mono">{conversationDetail.runtime?.opencodeSessionId || '-'}</p>
                 </div>
                 <div>
@@ -6628,7 +8140,7 @@ export default function App() {
                     </select>
                   </label>
                   <label className="state-filter-field">
-                    <span>阶段(Phase)</span>
+                    <span>处理阶段</span>
                     <select
                       value={transitionFilters.phase}
                       onChange={(event) =>
@@ -6674,7 +8186,7 @@ export default function App() {
                     </select>
                   </label>
                   <label className="state-filter-field">
-                    <span>Agent</span>
+                    <span>智能体</span>
                     <select
                       value={transitionFilters.agent}
                       onChange={(event) => setTransitionFilters((prev) => ({ ...prev, agent: event.target.value }))}
@@ -6688,7 +8200,7 @@ export default function App() {
                     </select>
                   </label>
                   <label className="state-filter-field">
-                    <span>Tone</span>
+                    <span>语气</span>
                     <select
                       value={transitionFilters.tone}
                       onChange={(event) => setTransitionFilters((prev) => ({ ...prev, tone: event.target.value }))}
@@ -6722,7 +8234,7 @@ export default function App() {
                   <strong className="mono">{transitionStats.statuses.length}</strong>
                 </div>
                 <div className="compact-item">
-                  <span>涉及 Phase</span>
+                  <span>涉及处理阶段</span>
                   <strong className="mono">{transitionStats.phases.length}</strong>
                 </div>
               </div>
@@ -6734,11 +8246,11 @@ export default function App() {
                   {filteredTransitions.map((transition, index) => {
                     const trigger = transition.trigger || {};
                     const triggerSummary = [
-                      trigger.messageType ? `type=${trigger.messageType}` : '',
-                      trigger.role ? `role=${trigger.role}` : '',
-                      trigger.agent ? `agent=${trigger.agent}` : '',
-                      trigger.tone ? `tone=${trigger.tone}` : '',
-                      trigger.messageId ? `id=${trigger.messageId}` : '',
+                      trigger.messageType ? `消息=${conversationMessageTypeLabel(trigger.messageType)}` : '',
+                      trigger.role ? `角色=${conversationRoleLabel(trigger.role)}` : '',
+                      trigger.agent ? `智能体=${conversationAgentLabel(trigger.agent)}` : '',
+                      trigger.tone ? `语气=${conversationToneLabel(trigger.tone)}` : '',
+                      trigger.messageId ? `消息 ID=${trigger.messageId}` : '',
                     ]
                       .filter(Boolean)
                       .join(' / ');
@@ -6748,10 +8260,10 @@ export default function App() {
                         ? formatDuration(Date.parse(transition.at) - Date.parse(prev.at))
                         : '-';
                     const transitionNumber = String(index + 1).padStart(2, '0');
-                    const fromStage = transition.from?.stage || '-';
-                    const toStage = transition.to?.stage || '-';
-                    const toStatus = transition.to?.status || '-';
-                    const toPhase = transition.to?.phase || '-';
+                    const fromStage = conversationStageLabel(transition.from?.stage);
+                    const toStage = conversationStageLabel(transition.to?.stage);
+                    const toStatus = statusLabel(transition.to?.status || 'unknown');
+                    const toPhase = transition.to?.phase ? conversationPhaseLabel(transition.to.phase) : '-';
                     return (
                       <article key={`${transition.at || 'transition'}-${index}`} className="state-timeline-item">
                         <div className="state-timeline-rail" aria-hidden="true">
@@ -6760,7 +8272,7 @@ export default function App() {
                         <div className="state-timeline-card">
                           <div className="state-timeline-head">
                             <div className="state-timeline-title-block">
-                              <span className={traceLevelClass('info')}>state</span>
+                              <span className={traceLevelClass('info')}>状态</span>
                               <strong className="state-timeline-title">{`${fromStage} → ${toStage}`}</strong>
                             </div>
                             <div className="state-timeline-time">
@@ -6770,11 +8282,11 @@ export default function App() {
                           </div>
                           <div className="state-timeline-meta">
                             <span>
-                              <small>From</small>
+                              <small>变更前</small>
                               <strong className="mono">{formatStateSnapshot(transition.from)}</strong>
                             </span>
                             <span>
-                              <small>To</small>
+                              <small>变更后</small>
                               <strong className="mono">{formatStateSnapshot(transition.to)}</strong>
                             </span>
                           </div>
@@ -6803,19 +8315,19 @@ export default function App() {
                   {filteredTransitions.map((transition, index) => {
                     const trigger = transition.trigger || {};
                     const triggerSummary = [
-                      trigger.messageType ? `type=${trigger.messageType}` : '',
-                      trigger.role ? `role=${trigger.role}` : '',
-                      trigger.agent ? `agent=${trigger.agent}` : '',
-                      trigger.tone ? `tone=${trigger.tone}` : '',
-                      trigger.messageId ? `id=${trigger.messageId}` : '',
+                      trigger.messageType ? `消息=${conversationMessageTypeLabel(trigger.messageType)}` : '',
+                      trigger.role ? `角色=${conversationRoleLabel(trigger.role)}` : '',
+                      trigger.agent ? `智能体=${conversationAgentLabel(trigger.agent)}` : '',
+                      trigger.tone ? `语气=${conversationToneLabel(trigger.tone)}` : '',
+                      trigger.messageId ? `消息 ID=${trigger.messageId}` : '',
                     ]
                       .filter(Boolean)
                       .join(' / ');
                     return (
                       <article key={`${transition.at || 'transition'}-${index}`} className="trace-item">
                         <p className="trace-head">
-                          <span className={traceLevelClass('info')}>state</span>
-                          <strong>{`${transition.from?.stage || '-'} → ${transition.to?.stage || '-'}`}</strong>
+                          <span className={traceLevelClass('info')}>状态</span>
+                          <strong>{`${conversationStageLabel(transition.from?.stage)} → ${conversationStageLabel(transition.to?.stage)}`}</strong>
                           <span>{formatDateTime(transition.at)}</span>
                         </p>
                         <p className="trace-meta mono">
@@ -6839,7 +8351,7 @@ export default function App() {
                   conversationDetail.messages.map((message) => (
                     <article key={message.id} className="message-item">
                       <p className="message-head">
-                        <strong>{message.role}</strong> · {formatDateTime(message.createdAt)}
+                        <strong>{conversationRoleLabel(message.role)}</strong> · {formatDateTime(message.createdAt)}
                       </p>
                       <p className="message-content">{message.content}</p>
                       {message.metadata !== undefined ? (
@@ -6903,7 +8415,7 @@ export default function App() {
                       )}
                     </div>
                     <div>
-                      <p className="kpi-title">主记录 Task Session</p>
+                      <p className="kpi-title">主记录会话 ID</p>
                       {primaryEnvironmentTaskSessionId ? (
                         <button
                           type="button"
@@ -6917,7 +8429,7 @@ export default function App() {
                       )}
                     </div>
                     <div>
-                      <p className="kpi-title">Executor</p>
+                      <p className="kpi-title">处理方式</p>
                       <p>{primaryEnvironmentExecutor || '-'}</p>
                     </div>
                     <div>
@@ -7147,37 +8659,51 @@ export default function App() {
       <main className="content-stack conversation-content-stack">
         <section className="conversation-ops-layout fade-in">
           <article className="panel conversation-index-panel">
-            <div className="panel-header panel-header-stack">
+            <div className="panel-header conversation-index-panel-header">
               <div>
                 <p className="section-tag">会话索引</p>
                 <h2>会话索引</h2>
-                <p className="panel-caption">主工作区使用高密度明细列表承载索引；会话详情、关联信息与排障视图直接从列表行进入。</p>
               </div>
-              <label className="conversation-auto-refresh-toggle">
-                <input
-                  type="checkbox"
-                  checked={conversationAutoRefreshEnabled}
-                  onChange={(event) => setConversationAutoRefreshEnabled(event.target.checked)}
-                />
-                <span>{conversationAutoRefreshEnabled ? '自动刷新中' : '已暂停自动刷新'}</span>
-              </label>
-            </div>
-            <div className="conversation-index-summary-strip" aria-label="会话索引摘要">
-              {conversationIndexSummaryCards.map((item) => (
-                <article key={item.label} className={`conversation-index-summary-card conversation-index-summary-card-${item.tone}`}>
-                  <span className="conversation-index-summary-label">{item.label}</span>
-                  <strong>{item.value}</strong>
-                  <span>{item.meta}</span>
-                </article>
-              ))}
+              <div className="sandbox-list-header-actions conversation-index-header-actions">
+                <div className="conversation-live-summary-strip session-status sandbox-live-count" aria-label="会话索引摘要">
+                  <span className="sandbox-live-metric sandbox-live-metric-total">
+                    <span>全部</span>
+                    <strong>{conversationSummary.total}</strong>
+                  </span>
+                  <span className="sandbox-live-metric sandbox-live-metric-running">
+                    <span>进行中</span>
+                    <strong>{conversationSummary.inProgress}</strong>
+                  </span>
+                  <span className="sandbox-live-metric conversation-live-metric-waiting">
+                    <span>待确认</span>
+                    <strong>{conversationSummary.waitingUser}</strong>
+                  </span>
+                  <span className="sandbox-live-metric conversation-live-metric-failed">
+                    <span>失败</span>
+                    <strong>{conversationSummary.failed}</strong>
+                  </span>
+                  <span className="sandbox-live-age" title={formatDateTime(conversationSummaryFetchedAt)}>
+                    {conversationSummaryAge}
+                  </span>
+                  <button
+                    type="button"
+                    className={`sandbox-live-refresh-btn ${conversationSummaryRefreshing ? 'is-refreshing' : ''}`}
+                    onClick={() => void refreshConversationSummary()}
+                    disabled={conversationSummaryRefreshing}
+                    aria-label="刷新会话列表"
+                  >
+                    ↻
+                  </button>
+                </div>
+              </div>
             </div>
             <div className="conversation-index-toolbar">
-              <div className="runtime-filter-grid conversation-index-filter-grid">
+              <div className="runtime-filter-grid conversation-index-filter-grid conversation-index-filter-grid-compact">
                 <label className="state-filter-field">
                   <span>搜索会话</span>
                   <input
                     type="search"
-                    placeholder="sessionId / 标题 / 阶段 / 待确认问题"
+                    placeholder="sessionId / 标题 / 用户名 / 执行器"
                     value={conversationSearchQuery}
                     onChange={(event) => setConversationSearchQuery(event.target.value)}
                   />
@@ -7227,12 +8753,12 @@ export default function App() {
                   </select>
                 </label>
                 <label className="state-filter-field">
-                  <span>执行器</span>
+                  <span>处理方式</span>
                   <select
                     value={conversationExecutorFilter}
                     onChange={(event) => setConversationExecutorFilter(event.target.value)}
                   >
-                    <option value="all">全部执行器</option>
+                    <option value="all">全部处理方式</option>
                     {conversationExecutorOptions.map((item) => (
                       <option key={item.value} value={item.value}>
                         {item.label} ({item.count})
@@ -7275,34 +8801,75 @@ export default function App() {
                 </button>
               </div>
               <p className="panel-caption">
-                按更新时间排序 · 当前筛选命中 {filteredConversationSessions.length} / {conversationSessions.length} · 进行中 {conversationSummary.inProgress} · 待确认 {conversationSummary.waitingUser} · 失败 {conversationSummary.failed}
+                当前筛选命中 {filteredConversationSessions.length} / {conversationSessions.length} · 进行中 {conversationSummary.inProgress} · 待确认 {conversationSummary.waitingUser} · 失败 {conversationSummary.failed}
                 {activeConversationFilterLabels.length ? ` · 已启用 ${activeConversationFilterLabels.join(' / ')}` : ''}
               </p>
             </div>
             <div className="table-wrap conversation-index-table-wrap">
               <table className="conversation-index-table">
                 <colgroup>
-                  <col style={{ width: '51%' }} />
-                  <col style={{ width: '22%' }} />
-                  <col style={{ width: '16%' }} />
-                  <col style={{ width: '11%' }} />
+                  <col style={{ width: '26%' }} />
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '15%' }} />
+                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '12%' }} />
                 </colgroup>
                 <thead>
                   <tr>
-                    <th>会话</th>
-                    <th>状态</th>
-                    <th>时间</th>
-                    <th className="runtime-col-actions">操作</th>
+                    <th>
+                      <button type="button" className={`runtime-sort-btn ${conversationSort.key === 'session' ? 'active' : ''}`} onClick={() => toggleConversationSort('session')}>
+                        会话
+                        <span className="runtime-sort-indicator">{conversationSort.key === 'session' ? (conversationSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" className={`runtime-sort-btn ${conversationSort.key === 'user' ? 'active' : ''}`} onClick={() => toggleConversationSort('user')}>
+                        用户名
+                        <span className="runtime-sort-indicator">{conversationSort.key === 'user' ? (conversationSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" className={`runtime-sort-btn ${conversationSort.key === 'executor' ? 'active' : ''}`} onClick={() => toggleConversationSort('executor')}>
+                        执行器
+                        <span className="runtime-sort-indicator">{conversationSort.key === 'executor' ? (conversationSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" className={`runtime-sort-btn ${conversationSort.key === 'session_id' ? 'active' : ''}`} onClick={() => toggleConversationSort('session_id')}>
+                        会话 ID
+                        <span className="runtime-sort-indicator">{conversationSort.key === 'session_id' ? (conversationSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" className={`runtime-sort-btn ${conversationSort.key === 'status' ? 'active' : ''}`} onClick={() => toggleConversationSort('status')}>
+                        状态
+                        <span className="runtime-sort-indicator">{conversationSort.key === 'status' ? (conversationSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" className={`runtime-sort-btn ${conversationSort.key === 'updated_at' ? 'active' : ''}`} onClick={() => toggleConversationSort('updated_at')}>
+                        最近活跃
+                        <span className="runtime-sort-indicator">{conversationSort.key === 'updated_at' ? (conversationSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" className={`runtime-sort-btn ${conversationSort.key === 'created_at' ? 'active' : ''}`} onClick={() => toggleConversationSort('created_at')}>
+                        创建时间
+                        <span className="runtime-sort-indicator">{conversationSort.key === 'created_at' ? (conversationSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                      </button>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {conversationSessions.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="empty">暂无对话会话。</td>
+                      <td colSpan={7} className="empty">暂无对话会话。</td>
                     </tr>
                   ) : filteredConversationSessions.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="empty">当前筛选条件下无会话。</td>
+                      <td colSpan={7} className="empty">当前筛选条件下无会话。</td>
                     </tr>
                   ) : (
                     filteredConversationSessions.map((session) => {
@@ -7310,78 +8877,67 @@ export default function App() {
                       const stageLabel = conversationStageLabel(session.stage);
                       const statusText = statusLabel(session.status);
                       const stageDisplay = stageLabel !== '-' && stageLabel !== statusText ? stageLabel : null;
-                      const pendingSummary = session.pendingQuestion
-                        ? summarizeText(session.pendingQuestion, 120)
-                        : session.status === 'waiting_user'
-                          ? '等待用户补充信息'
-                          : session.status === 'failed'
-                            ? '存在阻塞错误，请查看详情'
-                            : session.status === 'completed'
-                              ? '对话已完成'
-                              : '暂无待确认问题';
-                      const progressMeta = session.pendingOptions?.length
-                        ? `${session.pendingOptions.length} 个待确认选项`
-                        : session.status === 'in_progress'
-                          ? '会话正在推进'
-                          : session.status === 'waiting_user'
-                            ? '等待用户确认'
-                            : session.status === 'failed'
-                              ? '需人工介入'
-                              : '流程已结束';
+                      const executorText = session.executor ? executorLabel(session.executor) : null;
                       const sourceUserLabel = conversationUserLabel(session.user);
                       const sourceUserMeta = conversationUserMeta(session.user);
+                      const titleText = session.title || session.id;
                       return (
                         <tr
                           key={session.id}
                           className={`${isSelected ? 'selected-row' : ''} conversation-index-row`}
-                          onClick={() => selectConversationSession(session.id)}
                           aria-selected={isSelected}
                         >
                           <td>
                             <div className="runtime-primary-cell conversation-index-primary-cell">
-                              <p className="conversation-index-title" title={session.title || session.id}>{session.title || session.id}</p>
-                              <p className="conversation-index-summary">{pendingSummary}</p>
-                              <p className="conversation-index-user" title={sourceUserMeta}>
-                                <span>{sourceUserLabel}</span>
-                                <small>{sourceUserMeta}</small>
-                              </p>
-                              <div className="runtime-id-row conversation-index-id-row">
-                                <span className="mono mono-truncate" title={session.id}>{truncateMiddle(session.id, 10, 8)}</span>
-                                <button
-                                  type="button"
-                                  className="copy-btn"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    void copyRuntimeField('会话 ID', session.id);
-                                  }}
-                                >
-                                  复制
-                                </button>
-                              </div>
-                            </div>
-                          </td>
-                          <td>
-                            <div className="conversation-index-status-stack">
-                              <div className="action-inline conversation-index-status-row">
-                                <span className={stateClassName(session.status)}>{statusText}</span>
-                                {stageDisplay ? <span className="session-status">{stageDisplay}</span> : null}
-                              </div>
-                              <p className="session-meta">{progressMeta}</p>
-                            </div>
-                          </td>
-                          <td>
-                            <div className="conversation-index-time-cell">{formatDateTime(session.updatedAt)}</div>
-                            <p className="session-meta">创建于 {formatDateTime(session.createdAt)}</p>
-                          </td>
-                          <td className="runtime-col-actions">
-                            <div className="action-inline runtime-actions conversation-index-actions" onClick={(event) => event.stopPropagation()}>
                               <button
                                 type="button"
-                                className={`secondary-btn conversation-index-detail-btn ${isSelected ? 'active' : ''}`}
+                                className="link-btn sandbox-jump-btn conversation-index-title"
+                                title={titleText}
                                 onClick={() => openConversationDialog(session.id, 'overview')}
                               >
-                                查看详情
+                                {titleText}
                               </button>
+                            </div>
+                          </td>
+                          <td>
+                            <div className="conversation-index-compact-cell">
+                              <span className="conversation-index-user-text" title={sourceUserMeta}>
+                                {sourceUserLabel}
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <div className="conversation-index-compact-cell">
+                              <span className="conversation-index-text" title={executorText || '-'}>
+                                {executorText || '-'}
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <div className="conversation-index-compact-cell">
+                              <span className="conversation-index-session-id mono" title={session.id}>
+                                {truncateMiddle(session.id, 10, 8)}
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <div className="conversation-index-status-cell">
+                              <span className={stateClassName(session.status)}>{statusText}</span>
+                              {stageDisplay ? <span className="session-status">{stageDisplay}</span> : null}
+                            </div>
+                          </td>
+                          <td>
+                            <div className="conversation-index-compact-cell">
+                              <span className="conversation-index-time-text" title={formatDateTime(session.updatedAt)}>
+                                {formatCompactRelativeTime(session.updatedAt)}
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <div className="conversation-index-compact-cell">
+                              <span className="conversation-index-time-text" title={formatDateTime(session.createdAt)}>
+                                {formatDateTime(session.createdAt)}
+                              </span>
                             </div>
                           </td>
                         </tr>
@@ -7395,22 +8951,29 @@ export default function App() {
         </section>
       </main>
       {conversationDialog ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeConversationDialog}>
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeConversationDialog} style={{ zIndex: conversationDialogZIndex }}>
           <div
             className="modal-card conversation-dialog-modal"
             onClick={(event) => {
               event.stopPropagation();
             }}
           >
-            <div className="modal-header">
-              <div>
-                <p className="section-tag">Dialogue</p>
-                <h2>{conversationDialogDetail?.session.title || conversationDialogDetail?.session.id || '正在加载会话...'}</h2>
-                <p className="panel-copy">
-                  统一会话详情工作台：在同一 popup 中查看概览、交互回放、关联信息、详细日志与状态流转。
-                </p>
-              </div>
-              <div className="conversation-dialog-actions">
+              <div className="modal-header">
+                <div>
+                  <p className="section-tag">对话详情</p>
+                  <h2>{conversationDialogDetail?.session.title || conversationDialogDetail?.session.id || '正在加载会话...'}</h2>
+                  {conversationDialogOrigin ? <p className="modal-context-path">来自 {conversationDialogOrigin.trail}</p> : null}
+                </div>
+                <div className="conversation-dialog-actions">
+                  {activeSection !== 'conversation' ? (
+                    <button
+                    type="button"
+                    className="secondary-btn"
+                    onClick={openConversationManagementView}
+                  >
+                    在对话管理中查看
+                  </button>
+                ) : null}
                 {conversationDialogDetail ? (
                   <button type="button" className="secondary-btn" onClick={exportConversationDetail}>
                     下载会话
@@ -7430,11 +8993,11 @@ export default function App() {
               <>
                 <div className="button-grid modal-tab-grid conversation-dialog-tab-grid">
                   {[
-                    { key: 'overview', label: '概览' },
-                    { key: 'interaction', label: '交互回放' },
-                    { key: 'infra', label: '关联信息' },
-                    { key: 'raw', label: `详细日志 (${conversationDetailedLogs.counts.total})` },
-                    { key: 'transitions', label: `状态流转 (${conversationTabCounts.transitions})` },
+                    { key: 'overview', label: '概览', tabKey: '01' },
+                    { key: 'interaction', label: '交互回放', tabKey: '02' },
+                    { key: 'infra', label: '关联', tabKey: '03' },
+                    { key: 'raw', label: `日志 (${conversationDetailedLogs.counts.total})`, tabKey: '04' },
+                    { key: 'transitions', label: `流转 (${conversationTabCounts.transitions})`, tabKey: '05' },
                   ].map((item) => (
                     <button
                       key={item.key}
@@ -7442,6 +9005,7 @@ export default function App() {
                       className={`inspector-tab-card ${conversationDialogTab === item.key ? 'active' : ''}`}
                       onClick={() => setConversationDialogTab(item.key as ConversationDialogTab)}
                     >
+                      <span className="inspector-tab-card-key mono">{item.tabKey}</span>
                       <span className="inspector-tab-card-label">{item.label}</span>
                     </button>
                   ))}
@@ -7466,179 +9030,165 @@ export default function App() {
     );
   };
 
-  const renderAgentSection = () => (
-    <main className="content-stack agent-command-center">
-      <section className="page-intro-grid fade-in agent-hero-grid">
-        <article className="panel hero-panel agent-hero-panel">
-          <div className="panel-header panel-header-stack">
-            <div>
-              <p className="section-tag">服务健康</p>
-              <h2>平台接口、智能体服务和能力状态</h2>
-            </div>
-            <span className={`service-state ${agentOverview?.agentApi.online ? 'ok' : 'down'}`}>
-              {agentOverview?.agentApi.online ? '智能体服务在线' : '智能体服务离线'}
-            </span>
-          </div>
-          <div className="hero-metrics">
-            <div>
-              <span className="hero-metric-label">能力总数</span>
-              <strong>{agentCapabilitySummary.total}</strong>
-            </div>
-            <div>
-              <span className="hero-metric-label">可用</span>
-              <strong>{agentCapabilitySummary.available}</strong>
-            </div>
-            <div>
-              <span className="hero-metric-label">规划中</span>
-              <strong>{agentCapabilitySummary.planned}</strong>
-            </div>
-          </div>
-        </article>
+  const renderAgentSection = () => {
+    const taskSessions = agentOverview?.taskCreationSessions;
+    const overviewTimestamp = formatDateTime(agentOverview?.agentApi.timestamp || agentOverview?.oneceoApi.timestamp);
+    const selectedStageStatusText =
+      selectedAgentStage?.statusSummary
+        .filter((item) => item.value > 0)
+        .map((item) => `${item.label} ${item.value}`)
+        .join(' · ') || '当前没有状态构成';
 
-        <article className="panel aside-panel agent-session-summary-panel">
-          <div className="panel-header panel-header-stack">
+    return (
+      <main className="content-stack agent-command-center">
+        <section className="panel fade-in agent-overview-panel">
+          <div className="agent-overview-head">
             <div>
-              <p className="section-tag">会话状态</p>
-              <h2>会话状态摘要</h2>
+              <p className="section-tag">智能体总览</p>
+              <h2>服务、会话与能力</h2>
+              <p className="panel-caption">
+                {agentApiMessageLabel(agentOverview?.agentApi.message)} · 最近检查 {overviewTimestamp}
+              </p>
+            </div>
+            <div className="agent-overview-status-row">
+              <span className={`service-state ${agentOverview?.oneceoApi.online ? 'ok' : 'down'}`}>
+                {agentOverview?.oneceoApi.online ? '平台接口在线' : '平台接口离线'}
+              </span>
+              <span className={`service-state ${agentOverview?.agentApi.online ? 'ok' : 'down'}`}>
+                {agentOverview?.agentApi.online ? '智能体服务在线' : '智能体服务离线'}
+              </span>
             </div>
           </div>
-          <div className="detail-kv-list">
-            <div>
+
+          <div className="agent-overview-strip">
+            <article className="agent-overview-card">
               <span>总会话</span>
-              <strong>{agentOverview?.taskCreationSessions.total ?? 0}</strong>
-            </div>
-            <div>
+              <strong>{taskSessions?.total ?? 0}</strong>
+              <small>当前任务创建记录</small>
+            </article>
+            <article className="agent-overview-card">
               <span>待确认</span>
-              <strong>{agentOverview?.taskCreationSessions.waitingUser ?? 0}</strong>
-            </div>
+              <strong>{taskSessions?.waitingUser ?? 0}</strong>
+              <small>等用户补充信息</small>
+            </article>
+            <article className="agent-overview-card">
+              <span>进行中</span>
+              <strong>{taskSessions?.inProgress ?? 0}</strong>
+              <small>仍在持续推进</small>
+            </article>
+            <article className="agent-overview-card">
+              <span>失败</span>
+              <strong>{taskSessions?.failed ?? 0}</strong>
+              <small>优先排查异常链路</small>
+            </article>
+            <article className="agent-overview-card">
+              <span>可用能力</span>
+              <strong>
+                {agentCapabilitySummary.available}/{agentCapabilitySummary.total}
+              </strong>
+              <small>
+                {agentCapabilitySummary.planned > 0 ? `${agentCapabilitySummary.planned} 个规划中` : '当前都已落地'}
+              </small>
+            </article>
+          </div>
+        </section>
+
+        <section className="panel fade-in agent-stage-workbench">
+          <div className="panel-header panel-header-stack">
             <div>
-              <span>最近状态</span>
-              <strong>{agentApiMessageLabel(agentOverview?.agentApi.message)}</strong>
+              <h2>任务阶段</h2>
+              <span className="panel-caption">按阶段切换，只看当前最需要处理的会话。</span>
             </div>
           </div>
-        </article>
-      </section>
 
-      <section className="kpi-grid fade-in agent-health-grid">
-        <article className="kpi-card agent-health-card">
-          <p className="kpi-title">平台接口</p>
-          <p className="kpi-value">{agentOverview?.oneceoApi.online ? '在线' : '离线'}</p>
-          <p className="kpi-meta">{formatDateTime(agentOverview?.oneceoApi.timestamp)}</p>
-        </article>
-        <article className="kpi-card agent-health-card">
-          <p className="kpi-title">智能体服务</p>
-          <p className="kpi-value">{agentOverview?.agentApi.online ? '在线' : '离线'}</p>
-          <p className="kpi-meta">{agentApiMessageLabel(agentOverview?.agentApi.message)}</p>
-        </article>
-        <article className="kpi-card agent-health-card">
-          <p className="kpi-title">会话总数</p>
-          <p className="kpi-value">{agentOverview?.taskCreationSessions.total ?? 0}</p>
-          <p className="kpi-meta">当前会话记录</p>
-        </article>
-        <article className="kpi-card agent-health-card">
-          <p className="kpi-title">待确认会话</p>
-          <p className="kpi-value">{agentOverview?.taskCreationSessions.waitingUser ?? 0}</p>
-          <p className="kpi-meta">状态为待用户确认</p>
-        </article>
-      </section>
+          {(agentOverview?.stageDistribution || []).length > 0 ? (
+            <>
+              <div className="agent-stage-tabs" role="tablist" aria-label="任务阶段">
+                {(agentOverview?.stageDistribution || []).map((item) => (
+                  <button
+                    key={item.stageKey}
+                    type="button"
+                    role="tab"
+                    aria-selected={selectedAgentStage?.stageKey === item.stageKey}
+                    className={`agent-stage-tab ${selectedAgentStage?.stageKey === item.stageKey ? 'active' : ''}`}
+                    onClick={() => setSelectedAgentStageKey(item.stageKey)}
+                  >
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                  </button>
+                ))}
+              </div>
 
-      <section className="chart-grid fade-in agent-intelligence-grid">
-        <article className="panel agent-stage-chart-panel">
+              {selectedAgentStage ? (
+                <div className="agent-stage-detail-surface" role="tabpanel">
+                  <div className="agent-stage-detail-head">
+                    <div>
+                      <p className="section-tag">当前阶段</p>
+                      <h3>{selectedAgentStage.label}</h3>
+                      <p className="panel-caption">{selectedStageStatusText}</p>
+                    </div>
+                    <span className="status-pill">{selectedAgentStage.value} 个会话</span>
+                  </div>
+
+                  <div className="agent-status-pills">
+                    {selectedAgentStage.statusSummary
+                      .filter((summary) => summary.value > 0)
+                      .map((summary) => (
+                        <span key={`${selectedAgentStage.stageKey}-${summary.label}`} className="session-status">
+                          {summary.label} · {summary.value}
+                        </span>
+                      ))}
+                  </div>
+
+                  <div className="agent-session-compact-list">
+                    {selectedAgentStage.recentSessions.map((session) => (
+                      <article key={session.id} className="agent-session-compact-item">
+                        <div className="agent-session-compact-main">
+                          <strong title={session.title || session.id}>{session.title || '未命名会话'}</strong>
+                          <span className="session-status">{statusLabel(session.status)}</span>
+                        </div>
+                        <p className="agent-session-compact-meta">更新时间 {formatDateTime(session.updatedAt)}</p>
+                        {session.pendingQuestion ? (
+                          <p className="agent-session-pending">待补充: {summarizeText(session.pendingQuestion, 120)}</p>
+                        ) : null}
+                      </article>
+                    ))}
+                    {selectedAgentStage.recentSessions.length === 0 ? <p className="empty">当前阶段暂无最近会话。</p> : null}
+                  </div>
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <p className="empty">当前没有阶段数据。</p>
+          )}
+        </section>
+
+        <section className="panel fade-in agent-capability-compact-panel">
           <div className="panel-header">
-            <h2>任务阶段概览</h2>
-            <span className="panel-caption">按任务创建阶段统计，标签已转成中文</span>
+            <h2>智能体能力</h2>
+            <span className="panel-caption">保留能力名称、接入方式和可用状态。</span>
           </div>
-          <div className="chart-wrap">
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={agentOverview?.stageDistribution ?? []}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#dbe7f4" />
-                <XAxis dataKey="label" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="value" name="数量" fill="#0f766e" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+          <div className="agent-capability-summary">
+            <span className="session-status">可用 {agentCapabilitySummary.available}</span>
+            <span className="session-status">规划中 {agentCapabilitySummary.planned}</span>
+            <span className="session-status">总数 {agentCapabilitySummary.total}</span>
           </div>
-        </article>
-
-        <article className="panel agent-capability-panel">
-          <div className="panel-header">
-            <h2>智能体能力卡</h2>
-            <span className="panel-caption">可用性与接入方式</span>
-          </div>
-          <div className="capability-grid">
+          <div className="agent-capability-list">
             {(agentOverview?.capabilities || []).map((item) => (
-              <article key={item.key} className="capability-card">
-                <p className="capability-name">{capabilityNameLabel(item.name)}</p>
-                <p className="capability-meta">{item.transport}</p>
-                <p className="mono">{item.endpoint}</p>
+              <article key={item.key} className="agent-capability-row" title={item.endpoint || undefined}>
+                <div className="agent-capability-main">
+                  <strong>{capabilityNameLabel(item.name)}</strong>
+                  <span className="agent-capability-transport mono">{item.transport}</span>
+                </div>
                 <span className={`capability-status ${item.status}`}>{capabilityStatusLabel(item.status)}</span>
               </article>
             ))}
+            {(agentOverview?.capabilities || []).length === 0 ? <p className="empty">当前没有可展示的能力信息。</p> : null}
           </div>
-        </article>
-      </section>
-
-      <section className="panel fade-in agent-stage-workbench">
-        <div className="panel-header">
-          <h2>阶段详情</h2>
-          <span className="panel-caption">按阶段查看状态构成与最近会话</span>
-        </div>
-        <div className="agent-stage-grid">
-          <div className="agent-stage-nav">
-            {(agentOverview?.stageDistribution || []).map((item) => (
-              <button
-                key={item.stageKey}
-                type="button"
-                className={`agent-stage-nav-card ${selectedAgentStage?.stageKey === item.stageKey ? 'active' : ''}`}
-                onClick={() => setSelectedAgentStageKey(item.stageKey)}
-              >
-                <span className="agent-stage-nav-title">{item.label}</span>
-                <span className="agent-stage-nav-meta">共 {item.value} 个会话</span>
-              </button>
-            ))}
-          </div>
-          <div className="agent-stage-detail-panel">
-            {selectedAgentStage ? (
-              <>
-                <div className="agent-stage-summary-card">
-                  <div>
-                    <p className="section-tag">当前阶段</p>
-                    <h3>{selectedAgentStage.label}</h3>
-                    <p className="panel-caption">最近会话与状态构成只保留最有排障价值的信息。</p>
-                  </div>
-                  <span className="status-pill">{selectedAgentStage.value}</span>
-                </div>
-                <div className="agent-status-pills">
-                  {selectedAgentStage.statusSummary.map((summary) => (
-                    <span key={`${selectedAgentStage.stageKey}-${summary.label}`} className="session-status">
-                      {summary.label} · {summary.value}
-                    </span>
-                  ))}
-                </div>
-                <div className="agent-session-list">
-                  {selectedAgentStage.recentSessions.map((session) => (
-                    <article key={session.id} className="agent-session-item">
-                      <div className="trace-head">
-                        <strong>{session.title || session.id}</strong>
-                        <span>{session.status}</span>
-                      </div>
-                      <p className="trace-meta">{session.id}</p>
-                      <p className="trace-meta">更新时间：{formatDateTime(session.updatedAt)}</p>
-                      {session.pendingQuestion ? <p className="trace-meta">待确认：{session.pendingQuestion}</p> : null}
-                    </article>
-                  ))}
-                  {selectedAgentStage.recentSessions.length === 0 ? <p className="empty">当前阶段暂无最近会话。</p> : null}
-                </div>
-              </>
-            ) : (
-              <p className="empty">当前没有阶段数据。</p>
-            )}
-          </div>
-        </div>
-      </section>
-    </main>
-  );
+        </section>
+      </main>
+    );
+  };
 
   const renderSandboxSection = () => {
     const liveSandboxIdSet = new Set(sandboxOverviewItems.map((item) => item.sandboxId).filter(Boolean));
@@ -7646,29 +9196,6 @@ export default function App() {
       liveSandboxIdSet.size === 0
         ? sandboxRegistryItems
         : sandboxRegistryItems.filter((item) => liveSandboxIdSet.has(item.sandboxId));
-    const summary = {
-      total: sandboxOverview?.summary.total ?? currentScopeItems.length,
-      running:
-        sandboxOverview?.summary.running ??
-        currentScopeItems.filter((item) => item.sandboxState === 'running' || (!item.sandboxState && item.status === 'ready')).length,
-      paused: sandboxOverview?.summary.paused ?? currentScopeItems.filter((item) => item.sandboxState === 'paused').length,
-      pendingArchive: currentScopeItems.filter((item) => item.pendingArchiveUpdate || item.archiveStatus === 'pending_update').length,
-      archiveFailed: currentScopeItems.filter((item) => item.archiveStatus === 'failed').length,
-      risky: currentScopeItems.filter((item) => item.riskTags.length > 0).length,
-    };
-    const riskyItems = currentScopeItems
-      .filter((item) => item.riskTags.length > 0)
-      .sort((a, b) => b.riskTags.length - a.riskTags.length || toTimestamp(b.lastActiveAt || b.updatedAt) - toTimestamp(a.lastActiveAt || a.updatedAt))
-      .slice(0, 6);
-    const executorDistribution = Array.from(
-      currentScopeItems.reduce((acc, item) => {
-        const key = item.executor || 'unknown';
-        acc.set(key, (acc.get(key) || 0) + 1);
-        return acc;
-      }, new Map<string, number>())
-    )
-      .map(([label, value]) => ({ label: executorLabel(label), value }))
-      .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
     const executorOptions = Array.from(new Set(sandboxRegistryItems.map((item) => item.executor).filter(Boolean))).sort();
     const statusOptions = Array.from(
       new Set([
@@ -7678,27 +9205,16 @@ export default function App() {
         'pending_archive',
       ])
     ).sort();
-    const runtimeQuickStatusFilters = [
-      { label: '全部', value: 'all', count: summary?.total ?? 0, meta: '全部 Sandbox' },
-      { label: '运行中', value: 'running', count: summary?.running ?? 0, meta: '运行中的 Sandbox' },
-      { label: '暂停中', value: 'paused', count: summary?.paused ?? 0, meta: '暂停且不计费' },
-      { label: '待归档', value: 'pending_archive', count: summary?.pendingArchive ?? 0, meta: '待归档更新' },
-    ];
     const riskOptions = Array.from(new Set(currentScopeItems.flatMap((item) => item.riskTags))).sort((a, b) =>
       sandboxRiskLabel(a).localeCompare(sandboxRiskLabel(b), 'zh-Hans-CN', { sensitivity: 'base' })
     );
-    const templateSummary = {
-      total: templates.length,
-      aliased: templates.filter((item) => templateAliasOf(item)).length,
-      lastUpdatedAt: templates
-        .map((item) => ((item as any).updatedAt ?? (item as any).createdAt ?? null) as string | null)
-        .sort((a, b) => toTimestamp(b) - toTimestamp(a))[0] || null,
-    };
-    const canLoadMoreRuntime = Boolean(sandboxRuntimeRegistry?.hasMore);
     const loadedRuntimeCount = sandboxRegistryItems.length;
+    const runtimeLoadMoreStep = SANDBOX_RUNTIME_LOAD_MORE_STEP;
+    const canLoadMoreRuntime = Boolean(sandboxRuntimeRegistry?.hasMore);
     const loadMoreTargetCount = Math.max(loadedRuntimeCount, sandboxRegistryLimit);
     const loadMoreRangeStart = loadedRuntimeCount + 1;
     const loadMoreRangeEnd = loadMoreTargetCount;
+    const liveSummaryAge = formatCompactRelativeTime(sandboxLiveSummary?.countedAt, sandboxLiveSummaryClock);
     const runtimeFilteredItems = sandboxRegistryItems
       .filter((item) => {
         const query = sandboxRuntimeQuery.trim().toLowerCase();
@@ -7735,8 +9251,6 @@ export default function App() {
         delta = (a.executor || '').localeCompare(b.executor || '', 'zh-Hans-CN', { sensitivity: 'base' });
       } else if (runtimeSort.key === 'status') {
         delta = (a.sandboxState || a.status || '').localeCompare(b.sandboxState || b.status || '', 'zh-Hans-CN', { sensitivity: 'base' });
-      } else if (runtimeSort.key === 'risk') {
-        delta = a.riskTags.length - b.riskTags.length;
       } else if (runtimeSort.key === 'last_active') {
         delta =
           toTimestamp(a.lastActiveAt || a.updatedAt || a.createdAt) - toTimestamp(b.lastActiveAt || b.updatedAt || b.createdAt);
@@ -7746,8 +9260,6 @@ export default function App() {
         return runtimeSort.direction === 'asc' ? delta : -delta;
       }
 
-      const riskDelta = b.riskTags.length - a.riskTags.length;
-      if (riskDelta !== 0) return riskDelta;
       return toTimestamp(b.lastActiveAt || b.updatedAt || b.createdAt) - toTimestamp(a.lastActiveAt || a.updatedAt || a.createdAt);
     });
     const runtimeSkeletonRowCount = runtimeItems.length > 0 && sandboxRegistryLoadingMore ? 4 : 0;
@@ -7832,123 +9344,24 @@ export default function App() {
     const portListAgeLabel = sandboxPortFetchedAt
       ? `这是 ${Math.max(0, Math.floor((sandboxToolSnapshotClock - sandboxPortFetchedAt) / 1000))} 秒前的端口列表`
       : '等待刷新端口列表';
+    const renderSandboxToolbarActions = () => (
+      <div className="sandbox-workspace-actions">
+        <button
+          type="button"
+          className="primary-btn"
+          onClick={() => setSandboxCreateDrawerOpen(true)}
+        >
+          新建 Sandbox
+        </button>
+        <button type="button" className="secondary-btn template-workbench-open-btn" onClick={openTemplateWorkbench}>
+          模板
+        </button>
+      </div>
+    );
 
     return (
       <>
-        <main className="content-stack">
-          <section className="panel fade-in">
-            <div className="panel-header">
-              <div>
-                <h2>Sandbox 工作区</h2>
-                <span className="panel-caption">主工作区切换</span>
-              </div>
-              <button
-                type="button"
-                className="primary-btn"
-                onClick={() => setSandboxCreateDrawerOpen(true)}
-              >
-                新建 Sandbox
-              </button>
-            </div>
-            <div className="button-grid button-grid-three">
-              <button
-                type="button"
-                className={`secondary-btn ${sandboxTab === 'overview' ? 'active' : ''}`}
-                onClick={() => setSandboxTab('overview')}
-              >
-                概览
-              </button>
-              <button
-                type="button"
-                className={`secondary-btn ${sandboxTab === 'runtime' ? 'active' : ''}`}
-                onClick={() => setSandboxTab('runtime')}
-              >
-                Sandbox
-              </button>
-              <button
-                type="button"
-                className={`secondary-btn ${sandboxTab === 'templates' ? 'active' : ''}`}
-                onClick={() => setSandboxTab('templates')}
-              >
-                模板
-              </button>
-            </div>
-          </section>
-
-          {sandboxTab === 'overview' ? (
-            <>
-              <section className="kpi-grid fade-in">
-                <article className="kpi-card">
-                  <p className="kpi-title">Sandbox 服务</p>
-                  <p className="kpi-value">{sandboxApi?.online ? '在线' : '离线'}</p>
-                  <p className="kpi-meta">{sandboxApi?.service || '-'}</p>
-                </article>
-                <article className="kpi-card">
-                  <p className="kpi-title">暂停中</p>
-                  <p className="kpi-value">{summary?.paused ?? 0}</p>
-                  <p className="kpi-meta">不计费状态</p>
-                </article>
-                <article className="kpi-card">
-                  <p className="kpi-title">待归档</p>
-                  <p className="kpi-value">{summary?.pendingArchive ?? 0}</p>
-                  <p className="kpi-meta">待归档更新</p>
-                </article>
-                <article className="kpi-card">
-                  <p className="kpi-title">高风险 Sandbox</p>
-                  <p className="kpi-value">{summary?.risky ?? 0}</p>
-                  <p className="kpi-meta">需人工排查</p>
-                </article>
-                <article className="kpi-card">
-                  <p className="kpi-title">归档失败</p>
-                  <p className="kpi-value">{summary?.archiveFailed ?? 0}</p>
-                  <p className="kpi-meta">归档失败</p>
-                </article>
-              </section>
-
-              <section className="chart-grid fade-in">
-                <article className="panel">
-                  <div className="panel-header">
-                    <h2>执行器分布</h2>
-                    <span className="panel-caption">按执行器统计</span>
-                  </div>
-                  <div className="compact-list">
-                    {executorDistribution.map((item) => (
-                      <div key={item.label} className="compact-item">
-                        <strong>{item.label}</strong>
-                        <span className="session-status">{item.value}</span>
-                      </div>
-                    ))}
-                  </div>
-                </article>
-
-                <article className="panel">
-                  <div className="panel-header">
-                    <h2>风险关注</h2>
-                    <span className="panel-caption">按状态和原因筛选</span>
-                  </div>
-                  <div className="compact-list">
-                    {riskyItems.length === 0 ? (
-                      <p className="empty">当前没有高风险 Sandbox。</p>
-                    ) : (
-                      riskyItems.map((item) => (
-                        <div key={item.sandboxId} className="compact-item">
-                          <div>
-                            <strong>{item.taskSessionId || item.sandboxId}</strong>
-                            <p className="session-meta">{item.riskTags.map((risk) => sandboxRiskLabel(risk)).join(' / ')}</p>
-                          </div>
-                          <button type="button" className="secondary-btn" onClick={() => void openSandboxDetail(item.sandboxId)}>
-                            查看
-                          </button>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </article>
-              </section>
-            </>
-          ) : null}
-
-          {sandboxTab === 'runtime' ? (
+        <main className="content-stack sandbox-page viewport-lock-page sandbox-page-runtime">
             <section className="sandbox-runtime-layout fade-in">
               <article className="panel sandbox-runtime-main">
                 <div className="panel-header">
@@ -7960,31 +9373,43 @@ export default function App() {
                         : `已加载 ${loadedRuntimeCount} 条，当前筛选命中 ${runtimeItems.length} 条`}
                     </span>
                   </div>
-                  <span className="session-status">
-                    {runtimeItems.length} / {loadedRuntimeCount}
-                  </span>
+                  <div className="sandbox-list-header-actions">
+                    <div className="session-status sandbox-live-count" aria-live="polite">
+                      <span className="sandbox-live-metric sandbox-live-metric-total">
+                        <span>全部</span>
+                        <strong>{sandboxLiveSummary?.total ?? '-'}</strong>
+                      </span>
+                      <span className="sandbox-live-metric sandbox-live-metric-paused">
+                        <span>暂停</span>
+                        <strong>{sandboxLiveSummary?.paused ?? '-'}</strong>
+                      </span>
+                      <span className="sandbox-live-metric sandbox-live-metric-running">
+                        <span>运行</span>
+                        <strong>{sandboxLiveSummary?.running ?? '-'}</strong>
+                      </span>
+                      <span className="sandbox-live-age" title={formatDateTime(sandboxLiveSummary?.countedAt)}>
+                        {liveSummaryAge}
+                      </span>
+                      <button
+                        type="button"
+                        className={`sandbox-live-refresh-btn ${sandboxLiveSummaryRefreshing ? 'is-refreshing' : ''}`}
+                        onClick={refreshSandboxLiveSummary}
+                        disabled={sandboxLiveSummaryRefreshing}
+                        aria-label="刷新 E2B live 数量"
+                      >
+                        ↻
+                      </button>
+                    </div>
+                    {renderSandboxToolbarActions()}
+                  </div>
                 </div>
-                <div className="runtime-quick-filters">
-                  {runtimeQuickStatusFilters.map((item) => (
-                    <button
-                      key={item.value}
-                      type="button"
-                      className={`toggle-btn runtime-quick-filter runtime-status-group-item ${sandboxStatusFilter === item.value ? 'active' : ''}`}
-                      onClick={() => setSandboxStatusFilter(item.value)}
-                    >
-                      <span className="runtime-status-group-main">{item.label}</span>
-                      <span className="runtime-status-group-meta">{item.meta}</span>
-                      <span className="session-status runtime-status-group-count">{item.count}</span>
-                    </button>
-                  ))}
-                </div>
-                <div className="runtime-filter-grid">
+                <div className="runtime-filter-grid sandbox-runtime-filter-grid">
                   <label className="state-filter-field">
                     <span>搜索 Sandbox</span>
                     <input
                       type="text"
                       value={sandboxRuntimeQuery}
-                      placeholder="sessionId / sandboxId / template"
+                      placeholder="sessionId / sandboxId"
                       onChange={(event) => setSandboxRuntimeQuery(event.target.value)}
                     />
                   </label>
@@ -8021,6 +9446,13 @@ export default function App() {
                       ))}
                     </select>
                   </label>
+                  <button
+                    type="button"
+                    className="secondary-btn sandbox-filter-reset-btn"
+                    onClick={resetSandboxRuntimeFilters}
+                  >
+                    重置筛选
+                  </button>
                 </div>
                 {runtimeItems.length === 0 ? (
                   <p className="empty runtime-empty-state">当前筛选条件下没有 Sandbox 记录</p>
@@ -8028,11 +9460,10 @@ export default function App() {
                 <div className="table-wrap table-wrap-runtime" aria-busy={sandboxRegistryLoadingMore}>
                   <table className="runtime-table">
                     <colgroup>
-                      <col style={{ width: `${runtimeColumnWidths.task_session}px` }} />
                       <col style={{ width: `${runtimeColumnWidths.sandbox}px` }} />
+                      <col style={{ width: `${runtimeColumnWidths.task_session}px` }} />
                       <col style={{ width: `${runtimeColumnWidths.executor}px` }} />
                       <col style={{ width: `${runtimeColumnWidths.status}px` }} />
-                      <col style={{ width: `${runtimeColumnWidths.risk}px` }} />
                       <col style={{ width: `${runtimeColumnWidths.last_active}px` }} />
                       <col style={{ width: `${runtimeColumnWidths.actions}px` }} />
                     </colgroup>
@@ -8040,20 +9471,20 @@ export default function App() {
                       <tr>
                         <th>
                           <div className="runtime-th-wrap">
-                            <button type="button" className={`runtime-sort-btn ${runtimeSort.key === 'task_session' ? 'active' : ''}`} onClick={() => toggleRuntimeSort('task_session')}>
-                              会话 ID
-                              <span className="runtime-sort-indicator">{runtimeSort.key === 'task_session' ? (runtimeSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                            <button type="button" className={`runtime-sort-btn ${runtimeSort.key === 'sandbox' ? 'active' : ''}`} onClick={() => toggleRuntimeSort('sandbox')}>
+                              ID
+                              <span className="runtime-sort-indicator">{runtimeSort.key === 'sandbox' ? (runtimeSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
                             </button>
-                            <span className="runtime-col-resize-handle" onMouseDown={(event) => beginRuntimeColumnResize('task_session', event)} />
+                            <span className="runtime-col-resize-handle" onMouseDown={(event) => beginRuntimeColumnResize('sandbox', event)} />
                           </div>
                         </th>
                         <th>
                           <div className="runtime-th-wrap">
-                            <button type="button" className={`runtime-sort-btn ${runtimeSort.key === 'sandbox' ? 'active' : ''}`} onClick={() => toggleRuntimeSort('sandbox')}>
-                              Sandbox
-                              <span className="runtime-sort-indicator">{runtimeSort.key === 'sandbox' ? (runtimeSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                            <button type="button" className={`runtime-sort-btn ${runtimeSort.key === 'task_session' ? 'active' : ''}`} onClick={() => toggleRuntimeSort('task_session')}>
+                              会话
+                              <span className="runtime-sort-indicator">{runtimeSort.key === 'task_session' ? (runtimeSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
                             </button>
-                            <span className="runtime-col-resize-handle" onMouseDown={(event) => beginRuntimeColumnResize('sandbox', event)} />
+                            <span className="runtime-col-resize-handle" onMouseDown={(event) => beginRuntimeColumnResize('task_session', event)} />
                           </div>
                         </th>
                         <th>
@@ -8076,15 +9507,6 @@ export default function App() {
                         </th>
                         <th>
                           <div className="runtime-th-wrap">
-                            <button type="button" className={`runtime-sort-btn ${runtimeSort.key === 'risk' ? 'active' : ''}`} onClick={() => toggleRuntimeSort('risk')}>
-                              风险摘要
-                              <span className="runtime-sort-indicator">{runtimeSort.key === 'risk' ? (runtimeSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
-                            </button>
-                            <span className="runtime-col-resize-handle" onMouseDown={(event) => beginRuntimeColumnResize('risk', event)} />
-                          </div>
-                        </th>
-                        <th>
-                          <div className="runtime-th-wrap">
                             <button type="button" className={`runtime-sort-btn ${runtimeSort.key === 'last_active' ? 'active' : ''}`} onClick={() => toggleRuntimeSort('last_active')}>
                               最近活跃
                               <span className="runtime-sort-indicator">{runtimeSort.key === 'last_active' ? (runtimeSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
@@ -8103,7 +9525,7 @@ export default function App() {
                     <tbody>
                       {runtimeItems.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="empty">
+                          <td colSpan={6} className="empty">
                             {sandboxRegistryLoadingMore ? '正在扩展已加载范围，请稍候...' : '当前筛选条件下没有 Sandbox 记录'}
                           </td>
                         </tr>
@@ -8113,49 +9535,31 @@ export default function App() {
                             <td>
                               <div className="runtime-primary-cell">
                                 <div className="runtime-id-row">
-                                  {item.taskSessionId ? (
-                                    <button
-                                      type="button"
-                                      className="link-btn sandbox-jump-btn mono"
-                                      title={item.taskSessionId}
-                                      onClick={() => openConversationSessionFromSandbox(item.taskSessionId)}
-                                    >
-                                      {truncateMiddle(item.taskSessionId, 8, 6)}
-                                    </button>
-                                  ) : (
-                                    <strong title="-">-</strong>
-                                  )}
-                                  {item.taskSessionId ? (
-                                    <button
-                                      type="button"
-                                      className="copy-btn"
-                                      onClick={() => void copyRuntimeField('会话 ID', item.taskSessionId!)}
-                                    >
-                                      复制
-                                    </button>
-                                  ) : null}
+                                  <button
+                                    type="button"
+                                    className="link-btn sandbox-jump-btn mono"
+                                    title={item.sandboxId}
+                                    onClick={() => void openSandboxDetail(item.sandboxId)}
+                                  >
+                                    {truncateMiddle(item.sandboxId, 8, 6)}
+                                  </button>
                                 </div>
-                                <p className="session-meta">{item.taskTitle || item.taskStatus || '-'}</p>
                               </div>
                             </td>
                             <td>
                               <div className="runtime-primary-cell">
                                 <div className="runtime-id-row">
-                                  <span className="mono mono-truncate" title={item.sandboxId}>{truncateMiddle(item.sandboxId, 8, 6)}</span>
-                                  <button
-                                    type="button"
-                                    className="copy-btn"
-                                    onClick={() => void copyRuntimeField('Sandbox ID', item.sandboxId)}
-                                  >
-                                    复制
-                                  </button>
+                                  <span className="mono mono-truncate" title={item.taskSessionId || '-'}>
+                                    {item.taskSessionId ? truncateMiddle(item.taskSessionId, 8, 6) : '-'}
+                                  </span>
                                 </div>
-                                <p className="session-meta" title={item.template || '-'}>{item.template || '-'}</p>
+                                {item.taskTitle ? <p className="session-meta">{item.taskTitle}</p> : null}
                               </div>
                             </td>
                             <td>
-                              <strong>{executorLabel(item.executor)}</strong>
-                              <p className="session-meta">{item.codexExecutionMode || '-'}</p>
+                              <strong className="runtime-one-line" title={item.codexExecutionMode || executorLabel(item.executor)}>
+                                {executorLabel(item.executor)}
+                              </strong>
                             </td>
                             <td>
                               <div className="runtime-status-stack">
@@ -8166,62 +9570,17 @@ export default function App() {
                                     <span className="session-status session-status-governance">已处理</span>
                                   ) : null}
                                 </div>
-                                <p className="session-meta">
-                                  归档 {archiveStatusLabel(item.archiveStatus || 'none')}
-                                  {item.pendingArchiveUpdate ? ' · 有待同步变更' : ''}
-                                </p>
-                                {item.status === 'closed' && (item.dedupeReplacementSandboxId || item.dedupeReplacedAt) ? (
-                                  <div className="runtime-governance-note">
-                                    <p className="session-meta">{sandboxDedupeReasonLabel(item.dedupeReason)}</p>
-                                    <p className="session-meta">
-                                      {item.dedupeReplacementSandboxId ? (
-                                        <>
-                                          已由{' '}
-                                          <button
-                                            type="button"
-                                            className="link-btn sandbox-jump-btn"
-                                            onClick={() => {
-                                              const replacementSandboxId = item.dedupeReplacementSandboxId;
-                                              if (!replacementSandboxId) return;
-                                              void openSandboxDetail(replacementSandboxId);
-                                            }}
-                                          >
-                                            {sandboxJumpLabel(item.dedupeReplacementSandboxId)}
-                                          </button>{' '}
-                                          接管
-                                        </>
-                                      ) : (
-                                        '已由同任务的新 Sandbox 接管'
-                                      )}
-                                      {item.dedupeReplacedAt ? ` · ${formatDateTime(item.dedupeReplacedAt)}` : ''}
-                                    </p>
-                                  </div>
-                                ) : null}
                               </div>
                             </td>
                             <td>
-                              {item.riskTags.length === 0 ? (
-                                <span className="session-status">正常</span>
-                              ) : (
-                                <div className="runtime-risk-cell">
-                                  <div className="runtime-risk-list">
-                                    {item.riskTags.slice(0, 2).map((risk) => (
-                                      <span key={risk} className="session-status">{sandboxRiskLabel(risk)}</span>
-                                    ))}
-                                    {item.riskTags.length > 2 ? <span className="session-status">+{item.riskTags.length - 2}</span> : null}
-                                  </div>
-                                  <p className="session-meta">{item.riskTags.length} 个风险标签</p>
-                                </div>
-                              )}
-                            </td>
-                            <td>
-                              <div>{formatDateTime(item.lastActiveAt || item.updatedAt)}</div>
-                              <p className="session-meta">{item.lastActiveReason || '-'}</p>
+                              <div className="runtime-one-line runtime-last-active" title={item.lastActiveReason || formatDateTime(item.lastActiveAt || item.updatedAt)}>
+                                {formatDateTime(item.lastActiveAt || item.updatedAt)}
+                              </div>
                             </td>
                             <td className="runtime-col-actions">
                               <div className="action-inline runtime-actions">
                                 <button type="button" className="table-btn" onClick={() => void openSandboxDetail(item.sandboxId)}>
-                                  查看
+                                  详情
                                 </button>
                                 {item.sandboxState === 'running' ? (
                                   <button
@@ -8242,19 +9601,44 @@ export default function App() {
                                     开机
                                   </button>
                                 )}
-                                {item.sandboxState === 'running' || item.sandboxState === 'paused' ? (
-                                  <button
-                                    type="button"
-                                    className="secondary-btn"
-                                    disabled={sandboxBusyIds[item.sandboxId]}
-                                    onClick={() => void closeSandbox(item.sandboxId)}
-                                  >
-                                    关机
-                                  </button>
-                                ) : null}
                                 <details className="runtime-action-menu">
                                   <summary className="secondary-btn runtime-action-menu-trigger">更多</summary>
                                   <div className="runtime-action-menu-popover">
+                                    {item.taskSessionId ? (
+                                      <button
+                                        type="button"
+                                        className="table-btn runtime-action-menu-item"
+                                        onClick={(event) => {
+                                          closeParentDetails(event.currentTarget);
+                                          void copyRuntimeField('会话 ID', item.taskSessionId!);
+                                        }}
+                                      >
+                                        复制会话 ID
+                                      </button>
+                                    ) : null}
+                                    <button
+                                      type="button"
+                                      className="table-btn runtime-action-menu-item"
+                                      onClick={(event) => {
+                                        closeParentDetails(event.currentTarget);
+                                        void copyRuntimeField('Sandbox ID', item.sandboxId);
+                                      }}
+                                    >
+                                      复制 Sandbox ID
+                                    </button>
+                                    {item.sandboxState === 'running' || item.sandboxState === 'paused' ? (
+                                      <button
+                                        type="button"
+                                        className="table-btn runtime-action-menu-item"
+                                        disabled={sandboxBusyIds[item.sandboxId]}
+                                        onClick={(event) => {
+                                          closeParentDetails(event.currentTarget);
+                                          void closeSandbox(item.sandboxId);
+                                        }}
+                                      >
+                                        关机
+                                      </button>
+                                    ) : null}
                                     <button
                                       type="button"
                                       className="table-btn runtime-action-menu-item"
@@ -8291,7 +9675,6 @@ export default function App() {
                           <td><span className="runtime-skeleton runtime-skeleton-chip" /></td>
                           <td><span className="runtime-skeleton runtime-skeleton-chip" /></td>
                           <td><span className="runtime-skeleton runtime-skeleton-text" /></td>
-                          <td><span className="runtime-skeleton runtime-skeleton-text" /></td>
                           <td><span className="runtime-skeleton runtime-skeleton-button" /></td>
                         </tr>
                       ))}
@@ -8313,7 +9696,7 @@ export default function App() {
                           正在加载更多...
                         </>
                       ) : (
-                        `查看更多 Sandbox（+${SANDBOX_RUNTIME_LOAD_MORE_STEP}）`
+                        `查看更多 Sandbox（+${runtimeLoadMoreStep}）`
                       )}
                     </button>
                     <p className="session-meta runtime-load-feedback" aria-live="polite">
@@ -8327,109 +9710,10 @@ export default function App() {
               </article>
 
             </section>
-          ) : null}
-
-          {sandboxTab === 'templates' ? (
-            <>
-              <section className="kpi-grid fade-in">
-                <article className="kpi-card">
-                  <p className="kpi-title">模板总数</p>
-                  <p className="kpi-value">{templateSummary.total}</p>
-                  <p className="kpi-meta">来自 E2B</p>
-                </article>
-                <article className="kpi-card">
-                  <p className="kpi-title">已设置别名</p>
-                  <p className="kpi-value">{templateSummary.aliased}</p>
-                  <p className="kpi-meta">可直接识别的模板数量</p>
-                </article>
-                <article className="kpi-card">
-                  <p className="kpi-title">最近更新时间</p>
-                  <p className="kpi-value">{formatDateTime(templateSummary.lastUpdatedAt)}</p>
-                  <p className="kpi-meta">模板治理优先看最近改动</p>
-                </article>
-              </section>
-
-              <section className="panel fade-in">
-                <div className="panel-header">
-                  <h2>模板列表</h2>
-                  <span className="panel-caption">模板列表</span>
-                </div>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>模板 ID</th>
-                        <th>别名/名称</th>
-                        <th>状态</th>
-                        <th>更新时间</th>
-                        <th>操作</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {templates.length === 0 ? (
-                        <tr>
-                          <td colSpan={5} className="empty">
-                            暂无模板记录
-                          </td>
-                        </tr>
-                      ) : (
-                        templates.map((item, idx) => {
-                          const templateId = (item as any).templateID ?? (item as any).templateId ?? `template-${idx}`;
-                          const name = item.alias || (item as any).name || '-';
-                          return (
-                            <tr key={templateId}>
-                              <td className="mono">{templateId}</td>
-                              <td>{name}</td>
-                              <td>{templateStatusLabel((item as any).status ?? '-')}</td>
-                              <td>{formatDateTime((item as any).updatedAt ?? (item as any).createdAt)}</td>
-                              <td>
-                                <div className="action-inline">
-                                  <button type="button" className="table-btn" onClick={() => void openTemplateDetail(templateId)}>
-                                    查看
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-
-              <section className="panel fade-in">
-                <div className="panel-header">
-                  <h2>模板动作</h2>
-                  <span className="panel-caption">创建模板与批量标签维护</span>
-                </div>
-                <div className="form-stack">
-                  <p className="muted">使用 JSON 触发创建、批量分配标签或删除标签。别名设置已收进模板详情。</p>
-                  <textarea
-                    className="input-area"
-                    rows={6}
-                    value={templateActionPayload}
-                    onChange={(event) => setTemplateActionPayload(event.target.value)}
-                  />
-                  <div className="button-grid">
-                    <button type="button" className="secondary-btn" onClick={() => void runTemplateAction('create')}>
-                      创建模板
-                    </button>
-                    <button type="button" className="secondary-btn" onClick={() => void runTemplateAction('tags-assign')}>
-                      分配标签
-                    </button>
-                    <button type="button" className="secondary-btn" onClick={() => void runTemplateAction('tags-delete')}>
-                      删除标签
-                    </button>
-                  </div>
-                </div>
-              </section>
-            </>
-          ) : null}
         </main>
 
         {sandboxModalOpen && sandboxRuntimeDetail ? (
-          <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeSandboxDetail}>
+          <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeSandboxDetail} style={{ zIndex: sandboxModalZIndex }}>
             <div
               className="modal-card runtime-inspector-modal"
               onClick={(event) => {
@@ -8438,12 +9722,24 @@ export default function App() {
             >
               <div className="modal-header">
                 <div>
-                  <p className="section-tag">Sandbox 信息</p>
-                  <h2>Sandbox 详情</h2>
+                  <p className="section-tag">Sandbox 详情</p>
+                  <h2>{sandboxRuntimeDetail.runtime.alias || sandboxRuntimeDetail.taskSession?.title || sandboxDisplayLabel(sandboxRuntimeDetail)}</h2>
+                  {sandboxModalOrigin ? <p className="modal-context-path">来自 {sandboxModalOrigin.trail}</p> : null}
                 </div>
-                <button type="button" className="secondary-btn" onClick={closeSandboxDetail}>
-                  关闭
-                </button>
+                <div className="conversation-dialog-actions">
+                  {activeSection !== 'sandbox' ? (
+                    <button
+                      type="button"
+                      className="secondary-btn"
+                      onClick={openSandboxManagementView}
+                    >
+                      在 Sandbox 管理中查看
+                    </button>
+                  ) : null}
+                  <button type="button" className="secondary-btn" onClick={closeSandboxDetail}>
+                    关闭
+                  </button>
+                </div>
               </div>
               <div className="button-grid modal-tab-grid">
                 <button
@@ -8498,51 +9794,111 @@ export default function App() {
 
               <div className="modal-body">
               {sandboxDetailTab === 'overview' ? (
-                <div className="inspector-page-stack">
-                  <section className="inspector-stat-grid">
-                    <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">运行状态</span>
-                      <strong>{sandboxRuntimeStateLabel(sandboxRuntimeDetail.runtime.sandboxState || sandboxRuntimeDetail.runtime.status)}</strong>
-                    </article>
-                    <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">会话状态</span>
-                      <strong>{sandboxRuntimeDetail.taskSession ? statusLabel(sandboxRuntimeDetail.taskSession.status) : '-'}</strong>
-                      {sandboxRuntimeDetail.runtime.taskSessionId ? (
-                        <button
-                          type="button"
-                          className="link-btn sandbox-jump-btn session-meta mono"
-                          onClick={() => openConversationSessionFromSandbox(sandboxRuntimeDetail.runtime.taskSessionId)}
-                        >
-                          {sandboxRuntimeDetail.runtime.taskSessionId}
-                        </button>
-                      ) : (
-                        <span className="session-meta">未绑定会话</span>
-                      )}
-                    </article>
-                    <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">最近活跃</span>
-                      <strong>{formatDateTime(sandboxRuntimeDetail.runtime.lastActiveAt)}</strong>
-                      <span className="session-meta">{sandboxRuntimeDetail.runtime.lastActiveReason || '-'}</span>
-                    </article>
-                  </section>
+                <div className="inspector-page-stack sandbox-overview-stack">
+                  <article className="inspector-card inspector-overview-hero">
+                    <div className="inspector-overview-hero-top">
+                      <div>
+                        <p className="section-tag">运行摘要</p>
+                        <h3 className="inspector-overview-title">
+                          {sandboxRuntimeDetail.runtime.alias || sandboxRuntimeDetail.taskSession?.title || sandboxDisplayLabel(sandboxRuntimeDetail)}
+                        </h3>
+                        <p className="inspector-overview-subtitle mono">{sandboxDisplayLabel(sandboxRuntimeDetail)}</p>
+                      </div>
+                      <div className="inspector-overview-badges">
+                        <span className={stateClassName(sandboxRuntimeDetail.runtime.sandboxState || sandboxRuntimeDetail.runtime.status)}>
+                          {sandboxRuntimeStateLabel(sandboxRuntimeDetail.runtime.sandboxState || sandboxRuntimeDetail.runtime.status)}
+                        </span>
+                        <span className="session-status">
+                          {archiveStatusLabel(sandboxRuntimeDetail.archive.archiveStatus || sandboxRuntimeDetail.runtime.archiveStatus) === '-'
+                            ? '未归档'
+                            : archiveStatusLabel(sandboxRuntimeDetail.archive.archiveStatus || sandboxRuntimeDetail.runtime.archiveStatus)}
+                        </span>
+                        <span className="session-status">
+                          {sandboxRuntimeDetail.runtime.source === 'live_only' ? '仅实时发现' : '已纳管'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="inspector-overview-stat-strip">
+                      <article className="inspector-overview-stat">
+                        <span>会话状态</span>
+                        <strong>{sandboxRuntimeDetail.taskSession ? statusLabel(sandboxRuntimeDetail.taskSession.status) : '-'}</strong>
+                        <small>{sandboxRuntimeDetail.runtime.taskSessionId ? '已绑定任务会话' : '当前未绑定会话'}</small>
+                      </article>
+                      <article className="inspector-overview-stat">
+                        <span>最近活跃</span>
+                        <strong>{formatDateTime(sandboxRuntimeDetail.runtime.lastActiveAt)}</strong>
+                        <small>{sandboxRuntimeDetail.runtime.lastActiveReason || '暂无活跃原因'}</small>
+                      </article>
+                      <article className="inspector-overview-stat">
+                        <span>归档状态</span>
+                        <strong>
+                          {archiveStatusLabel(sandboxRuntimeDetail.archive.archiveStatus || sandboxRuntimeDetail.runtime.archiveStatus) === '-'
+                            ? '未归档'
+                            : archiveStatusLabel(sandboxRuntimeDetail.archive.archiveStatus || sandboxRuntimeDetail.runtime.archiveStatus)}
+                        </strong>
+                        <small>
+                          {sandboxRuntimeDetail.archive.archiveDirty
+                            ? '当前有未归档变更'
+                            : sandboxRuntimeDetail.archive.pendingArchiveUpdate
+                              ? '等待归档更新'
+                              : '归档状态稳定'}
+                        </small>
+                      </article>
+                    </div>
+
+                    <div className="inspector-kv-grid inspector-overview-kv-grid">
+                      <div><span>Sandbox 标识</span><strong className="mono">{sandboxDisplayLabel(sandboxRuntimeDetail)}</strong></div>
+                      <div><span>执行器</span><strong>{executorLabel(sandboxRuntimeDetail.runtime.executor)}</strong></div>
+                      <div><span>模板</span><strong className="mono">{sandboxRuntimeDetail.runtime.template || '-'}</strong></div>
+                      <div><span>会话标题</span><strong>{sandboxRuntimeDetail.taskSession?.title || sandboxRuntimeDetail.runtime.taskTitle || '-'}</strong></div>
+                      <div><span>创建时间</span><strong>{formatDateTime(sandboxRuntimeDetail.runtime.createdAt || sandboxRuntimeDetail.runtime.startedAt)}</strong></div>
+                      <div><span>最后更新</span><strong>{formatDateTime(sandboxRuntimeDetail.runtime.updatedAt || sandboxRuntimeDetail.runtime.lastActiveAt)}</strong></div>
+                    </div>
+
+                    {sandboxRuntimeDetail.runtime.riskTags.length ? (
+                      <div className="runtime-risk-list inspector-overview-risk-list">
+                        {sandboxRuntimeDetail.runtime.riskTags.map((risk) => (
+                          <span key={risk} className="session-status">
+                            {sandboxRiskLabel(risk)}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </article>
 
                   <section className="inspector-overview-bottom-grid">
                     <article className="inspector-card inspector-card-large">
                       <div className="inspector-card-header">
-                        <h3>Sandbox 基础信息</h3>
-                        <span className="session-status">{executorLabel(sandboxRuntimeDetail.runtime.executor)}</span>
+                        <div>
+                          <h3>关联会话</h3>
+                          <p className="panel-caption">快速定位当前 Sandbox 的归属与运行入口。</p>
+                        </div>
+                        {sandboxRuntimeDetail.runtime.taskSessionId ? (
+                          <button
+                            type="button"
+                            className="link-btn sandbox-jump-btn mono"
+                            onClick={() => openConversationSessionFromSandbox(sandboxRuntimeDetail.runtime.taskSessionId)}
+                          >
+                            {sandboxRuntimeDetail.runtime.taskSessionId}
+                          </button>
+                        ) : (
+                          <span className="session-meta">未绑定会话</span>
+                        )}
                       </div>
-                      <div className="inspector-kv-grid">
-                        <div><span>Sandbox 标识</span><strong className="mono">{sandboxRuntimeDetail.runtime.sandboxId}</strong></div>
-                        <div><span>执行器</span><strong>{executorLabel(sandboxRuntimeDetail.runtime.executor)}</strong></div>
-                        <div><span>模板</span><strong className="mono">{sandboxRuntimeDetail.runtime.template || '-'}</strong></div>
+                      <div className="inspector-kv-grid inspector-overview-kv-grid">
+                        <div><span>会话标识</span><strong className="mono">{sandboxRuntimeDetail.runtime.taskSessionId || '-'}</strong></div>
                         <div><span>会话标题</span><strong>{sandboxRuntimeDetail.taskSession?.title || sandboxRuntimeDetail.runtime.taskTitle || '-'}</strong></div>
+                        <div><span>OpenCode 地址</span><strong className="mono">{sandboxRuntimeDetail.runtime.opencodeBaseUrl || '-'}</strong></div>
+                        <div><span>OSAC 地址</span><strong className="mono">{sandboxRuntimeDetail.runtime.osacEndpoint || '-'}</strong></div>
                       </div>
                     </article>
                     <article className="inspector-card inspector-overview-actions-card">
                       <div className="inspector-card-header">
-                        <h3>机器动作</h3>
-                        <span className="panel-caption">开机/关机/重启/归档</span>
+                        <div>
+                          <h3>运行动作</h3>
+                          <p className="panel-caption">开机、关机、重启与归档都集中在这里。</p>
+                        </div>
                       </div>
                       <div className="inspector-action-grid">
                         <button
@@ -8655,42 +10011,116 @@ export default function App() {
 
               {sandboxDetailTab === 'archive' ? (
                 <div className="inspector-page-stack">
-                  <article className="inspector-card">
-                    <div className="inspector-card-header">
-                      <h3>当前快照</h3>
-                      <div className="action-inline runtime-actions">
-                        <button
-                          type="button"
-                          className="primary-btn"
-                          disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId]}
-                          onClick={() => void runSandboxArchive(sandboxRuntimeDetail.runtime.sandboxId)}
-                        >
-                          手动归档
-                        </button>
+                  <article className="inspector-card archive-overview-hero">
+                    <div className="archive-overview-hero-top">
+                      <div>
+                        <p className="section-tag">归档摘要</p>
+                        <h3 className="archive-overview-title">
+                          {currentArchiveRow ? archiveEntryTypeLabel(currentArchiveRow.type) : '当前没有归档快照'}
+                        </h3>
+                        <p className="panel-caption archive-overview-caption">
+                          {currentArchiveRow
+                            ? `最近归档时间 ${formatDateTime(currentArchiveRow.timestamp)}`
+                            : '可在这里查看当前快照、历史快照以及归档元数据。'}
+                        </p>
+                      </div>
+                      <div className="inspector-overview-badges">
+                        <span className="session-status">快照 {archiveRows.length}</span>
+                        <span className={stateClassName(currentArchiveRow?.status || sandboxRuntimeDetail.archive.archiveStatus || 'unknown')}>
+                          {currentArchiveRow
+                            ? archiveStatusLabel(currentArchiveRow.status)
+                            : archiveStatusLabel(sandboxRuntimeDetail.archive.archiveStatus || 'unknown')}
+                        </span>
+                        <span className="session-status">
+                          {sandboxRuntimeDetail.archive.archiveDirty
+                            ? '有未归档变更'
+                            : sandboxRuntimeDetail.archive.pendingArchiveUpdate
+                              ? '等待归档更新'
+                              : '状态稳定'}
+                        </span>
                       </div>
                     </div>
-                    {currentArchiveRow ? (
-                      <div className="inspector-governance-list">
-                        <article className="inspector-governance-event">
-                          <div className="inspector-governance-head">
-                            <span className="session-meta">{formatDateTime(currentArchiveRow.timestamp)}</span>
-                          </div>
-                          <div className="action-inline">
-                            <span className="session-status">归档事件</span>
-                            <span className={stateClassName(currentArchiveRow.status)}>{archiveStatusLabel(currentArchiveRow.status)}</span>
-                          </div>
-                          <p className="session-meta">{currentArchiveRow.reason} · {currentArchiveRow.size}</p>
-                          <p className="session-meta mono">{currentArchiveRow.hash}</p>
-                        </article>
+
+                    <div className="archive-overview-stat-strip">
+                      <article className="archive-overview-stat">
+                        <span>最近归档</span>
+                        <strong>{formatDateTime(currentArchiveRow?.timestamp)}</strong>
+                        <small>{currentArchiveRow?.reason || '当前没有归档原因'}</small>
+                      </article>
+                      <article className="archive-overview-stat">
+                        <span>快照数量</span>
+                        <strong>{archiveRows.length}</strong>
+                        <small>{archiveRows.length > 0 ? '含当前与历史快照' : '尚未生成快照'}</small>
+                      </article>
+                      <article className="archive-overview-stat">
+                        <span>当前体积</span>
+                        <strong>{currentArchiveRow?.size || '-'}</strong>
+                        <small>{currentArchiveRow?.hash ? '已记录校验哈希' : '暂未记录哈希'}</small>
+                      </article>
+                    </div>
+
+                    <div className="inspector-kv-grid archive-overview-kv-grid">
+                      <div>
+                        <span>当前快照</span>
+                        <strong className="mono">{currentArchiveRow?.id || sandboxRuntimeDetail.archive.snapshotKey || '-'}</strong>
                       </div>
-                    ) : (
-                      <p className="empty">当前没有归档记录。</p>
-                    )}
+                      <div>
+                        <span>归档状态</span>
+                        <strong>{currentArchiveRow ? archiveStatusLabel(currentArchiveRow.status) : archiveStatusLabel(sandboxRuntimeDetail.archive.archiveStatus || 'unknown')}</strong>
+                      </div>
+                      <div>
+                        <span>最近恢复</span>
+                        <strong>{formatDateTime(sandboxRuntimeDetail.archive.restoredAt)}</strong>
+                      </div>
+                      <div>
+                        <span>元数据键</span>
+                        <strong className="mono">{sandboxRuntimeDetail.archive.metadataKey || '-'}</strong>
+                      </div>
+                    </div>
+
+                    <div className="archive-overview-actions">
+                      <button
+                        type="button"
+                        className="primary-btn"
+                        disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId]}
+                        onClick={() => void runSandboxArchive(sandboxRuntimeDetail.runtime.sandboxId)}
+                      >
+                        手动归档
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-btn snapshot-action-download"
+                        disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId] || !currentArchiveRow?.snapshotKey}
+                        onClick={() =>
+                          currentArchiveRow?.snapshotKey
+                            ? void downloadSandboxSnapshot(sandboxRuntimeDetail.runtime.sandboxId, currentArchiveRow.snapshotKey)
+                            : undefined
+                        }
+                      >
+                        下载当前快照
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-btn snapshot-action-restore"
+                        disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId] || !currentArchiveRow?.snapshotKey}
+                        onClick={() =>
+                          currentArchiveRow?.snapshotKey
+                            ? void runSandboxRestore(sandboxRuntimeDetail.runtime.sandboxId, currentArchiveRow.snapshotKey)
+                            : undefined
+                        }
+                      >
+                        恢复当前快照
+                      </button>
+                    </div>
                   </article>
 
-                  <article className="inspector-card">
-                    <div className="inspector-card-header">
-                      <h3>历史快照</h3>
+                  <article className="inspector-card archive-history-card">
+                    <div className="inspector-card-header archive-history-head">
+                      <div>
+                        <h3>历史快照</h3>
+                        <p className="panel-caption">按时间查看快照、类型、体积和处理状态。</p>
+                      </div>
+                      <span className="session-status">共 {archiveSortedRows.length} 条</span>
                     </div>
                     <div className="table-wrap">
                       <table className="runtime-table archive-snapshot-table">
@@ -8818,12 +10248,16 @@ export default function App() {
                     </div>
                   </article>
 
-                  <article className="inspector-card">
-                    <div className="inspector-card-header">
-                      <h3>归档元数据</h3>
-                    </div>
+                  <details className="inspector-card archive-meta-card">
+                    <summary className="archive-meta-summary">
+                      <div>
+                        <h3>归档元数据</h3>
+                        <p className="panel-caption">原始元数据仍保留，默认收起避免打断主视线。</p>
+                      </div>
+                      <span className="session-status">JSON</span>
+                    </summary>
                     <pre className="json-block debug-output-block">{toJsonText(sandboxRuntimeDetail.archive)}</pre>
-                  </article>
+                  </details>
 
                   {archiveDetailRow ? (
                     <div className="archive-detail-popup-backdrop" role="dialog" aria-modal="true" onClick={() => setArchiveDetailRow(null)}>
@@ -8835,10 +10269,11 @@ export default function App() {
                       >
                         <div className="archive-detail-popup-head">
                           <div>
-                            <h3>快照详情</h3>
-                            <p className="panel-caption">完整标识与校验信息</p>
+                            <p className="section-tag">快照详情</p>
+                            <h3>{archiveDetailRow.id}</h3>
+                            <p className="panel-caption">完整标识、校验信息和恢复动作都集中在这里。</p>
                           </div>
-                          <div className="action-inline">
+                          <div className="archive-detail-popup-head-actions">
                             <span className={stateClassName(archiveDetailRow.status)}>{archiveStatusLabel(archiveDetailRow.status)}</span>
                             <button type="button" className="secondary-btn" onClick={() => setArchiveDetailRow(null)}>
                               关闭
@@ -8846,32 +10281,49 @@ export default function App() {
                           </div>
                         </div>
                         <div className="archive-detail-popup-body">
-                          <div className="archive-detail-facts">
-                            <article className="archive-detail-fact">
-                              <span>时间</span>
-                              <strong>{formatDateTime(archiveDetailRow.timestamp)}</strong>
+                          <article className="archive-detail-summary-card">
+                            <div className="archive-detail-summary-top">
+                              <div>
+                                <span className="archive-detail-summary-label">快照概览</span>
+                                <strong className="archive-detail-summary-title">{archiveEntryTypeLabel(archiveDetailRow.type)}</strong>
+                                <p className="panel-caption archive-detail-summary-caption">
+                                  {formatDateTime(archiveDetailRow.timestamp)} · {archiveDetailRow.reason}
+                                </p>
+                              </div>
+                              <div className="archive-detail-summary-badges">
+                                <span className="session-status">{archiveDetailRow.size}</span>
+                                <span className={stateClassName(archiveDetailRow.status)}>{archiveStatusLabel(archiveDetailRow.status)}</span>
+                              </div>
+                            </div>
+                            <div className="archive-detail-facts">
+                              <article className="archive-detail-fact">
+                                <span>时间</span>
+                                <strong>{formatDateTime(archiveDetailRow.timestamp)}</strong>
+                              </article>
+                              <article className="archive-detail-fact">
+                                <span>类型</span>
+                                <strong>{archiveEntryTypeLabel(archiveDetailRow.type)}</strong>
+                              </article>
+                              <article className="archive-detail-fact">
+                                <span>大小</span>
+                                <strong>{archiveDetailRow.size}</strong>
+                              </article>
+                              <article className="archive-detail-fact">
+                                <span>原因</span>
+                                <strong>{archiveDetailRow.reason}</strong>
+                              </article>
+                            </div>
+                          </article>
+                          <div className="archive-detail-code-grid">
+                            <article className="archive-detail-code-card">
+                              <span>快照标识</span>
+                              <code className="mono">{archiveDetailRow.id}</code>
                             </article>
-                            <article className="archive-detail-fact">
-                              <span>类型</span>
-                              <strong>{archiveDetailRow.type}</strong>
-                            </article>
-                            <article className="archive-detail-fact">
-                              <span>大小</span>
-                              <strong>{archiveDetailRow.size}</strong>
-                            </article>
-                            <article className="archive-detail-fact">
-                              <span>原因</span>
-                              <strong>{archiveDetailRow.reason}</strong>
+                            <article className="archive-detail-code-card">
+                              <span>哈希</span>
+                              <code className="mono">{archiveDetailRow.hash}</code>
                             </article>
                           </div>
-                          <article className="archive-detail-code-card">
-                            <span>快照标识</span>
-                            <code className="mono">{archiveDetailRow.id}</code>
-                          </article>
-                          <article className="archive-detail-code-card">
-                            <span>哈希</span>
-                            <code className="mono">{archiveDetailRow.hash}</code>
-                          </article>
                         </div>
                         <div className="archive-detail-popup-actions action-inline runtime-actions">
                           <button
@@ -9276,159 +10728,258 @@ export default function App() {
           </div>
         ) : null}
 
-        {templateModalOpen && templateDetail ? (
+        {templateModalOpen ? (
           <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeTemplateDetail}>
             <div
-              className="modal-card"
+              className="modal-card template-workbench-modal"
               onClick={(event) => {
                 event.stopPropagation();
               }}
             >
               <div className="modal-header">
                 <div>
-                  <p className="section-tag">模板详情</p>
-                  <h2>{currentTemplateAlias || currentTemplateId || '模板详情'}</h2>
+                  <p className="section-tag">模板工作台</p>
+                  <h2>{templateWorkbenchTitle}</h2>
+                  <p className="panel-caption">{templateWorkbenchCaption}</p>
                 </div>
                 <button type="button" className="secondary-btn" onClick={closeTemplateDetail}>
                   关闭
                 </button>
               </div>
-              <div className="detail-grid modal-grid">
-                <article className="sub-panel">
-                  <p className="kpi-title">模板摘要</p>
-                  <div className="validation-result">
-                    <div>模板 ID: {currentTemplateId || '-'}</div>
-                    <div>当前别名: {currentTemplateAlias || '未设置'}</div>
-                    <div>状态: {templateStatusLabel(String((templateDetail as any).status ?? '-'))}</div>
-                    <div>更新时间: {formatDateTime((templateDetail as any).updatedAt ?? (templateDetail as any).createdAt)}</div>
-                  </div>
-                  <details className="template-raw-details">
-                    <summary>查看原始详情</summary>
-                    <pre className="json-block">{toJsonText(templateDetail)}</pre>
-                  </details>
-                </article>
-                <article className="sub-panel">
-                  <p className="kpi-title">别名设置</p>
-                  <label className="form-field">
-                    <span>模板别名</span>
-                    <input
-                      className="control-input"
-                      placeholder="例如：opencode-playwright-min"
-                      value={templateAliasDraft}
-                      onChange={(event) => {
-                        setTemplateAliasDraft(event.target.value);
-                        setTemplateAliasResult(null);
-                      }}
-                    />
-                  </label>
-                  <div className="button-grid">
-                    <button type="button" className="secondary-btn" disabled={!templateAliasDraft.trim()} onClick={() => void checkAlias()}>
-                      检查是否可用
-                    </button>
+              <div className="template-workbench-layout">
+                <aside className="template-workbench-sidebar">
+                  <div className="template-workbench-sidebar-head">
+                    <div className="template-workbench-sidebar-head-meta">
+                      <strong>模板列表</strong>
+                      <span>{templates.length} 个</span>
+                    </div>
                     <button
                       type="button"
-                      className="primary-btn"
-                      disabled={!templateAliasDraft.trim() || templateAliasDraft.trim() === currentTemplateAlias}
-                      onClick={() => void saveTemplateAlias()}
+                      className="secondary-btn template-workbench-create-trigger"
+                      onClick={openTemplateCreateWorkbench}
                     >
-                      保存别名
+                      新建模板
                     </button>
                   </div>
-                  {templateAliasResult ? (
-                    <div className={`alias-check-card ${templateAliasCheck.state}`}>
-                      <strong>{templateAliasCheck.message}</strong>
-                      <span>
-                        {templateAliasDraft.trim() || '-'}
-                        {templateAliasCheck.targetTemplateId ? ` · ${templateAliasCheck.targetTemplateId}` : ''}
-                      </span>
+                  <div className="template-workbench-list">
+                    {templates.length === 0 ? (
+                      <p className="empty template-workbench-empty-text">暂无模板记录</p>
+                    ) : (
+                      templates.map((item, idx) => {
+                        const templateId = (item as any).templateID ?? (item as any).templateId ?? `template-${idx}`;
+                        const alias = item.alias || (item as any).name || '未设置';
+                        const updatedAt = item.updatedAt || item.createdAt || null;
+                        const isActive = currentTemplateId === templateId;
+                        return (
+                          <button
+                            key={templateId}
+                            type="button"
+                            className={`template-workbench-item ${isActive ? 'active' : ''}`}
+                            onClick={() => void openTemplateDetail(templateId)}
+                          >
+                            <div className="template-workbench-item-head">
+                              <strong title={templateId}>{truncateMiddle(templateId, 10, 8)}</strong>
+                              <span>{templateStatusLabel(String(item.status ?? '-'))}</span>
+                            </div>
+                            <span className="template-workbench-item-alias" title={alias}>
+                              {alias}
+                            </span>
+                            <span className="template-workbench-item-meta" title={updatedAt ? formatDateTime(updatedAt) : undefined}>
+                              {updatedAt ? `更新于 ${formatRelativeTime(updatedAt)}` : '等待更新'}
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </aside>
+
+                <div className="template-workbench-main">
+                  {templateWorkbenchMode === 'create' ? (
+                    <div className="template-workbench-detail-stack">
+                      <article className="sub-panel template-workbench-create-panel">
+                        <div className="template-workbench-create-head">
+                          <div>
+                            <p className="kpi-title">新建模板</p>
+                            <p className="panel-caption">填写模板创建 payload JSON，创建完成后自动切到新模板详情。</p>
+                          </div>
+                          {templateDetail ? (
+                            <button
+                              type="button"
+                              className="secondary-btn"
+                              onClick={() => setTemplateWorkbenchMode('detail')}
+                            >
+                              返回当前模板
+                            </button>
+                          ) : null}
+                        </div>
+                        <textarea
+                          className="input-area template-workbench-create-input"
+                          rows={14}
+                          placeholder="填写 E2B TemplateBuildRequest JSON"
+                          value={templateActionPayload}
+                          onChange={(event) => setTemplateActionPayload(event.target.value)}
+                        />
+                        <div className="button-grid">
+                          <button type="button" className="secondary-btn" onClick={() => setTemplateActionPayload('{}')}>
+                            重置
+                          </button>
+                          <button type="button" className="primary-btn" onClick={() => void runTemplateAction('create')}>
+                            创建模板
+                          </button>
+                        </div>
+                        <p className="panel-caption">这里直接复用现有模板创建接口；成功后会刷新左侧模板列表并切到详情视图。</p>
+                      </article>
+                    </div>
+                  ) : templateDetail ? (
+                    <div className="template-workbench-detail-stack">
+                      <div className="detail-grid modal-grid template-workbench-detail-grid">
+                        <article className="sub-panel">
+                          <p className="kpi-title">模板摘要</p>
+                          <div className="validation-result">
+                            <div>模板 ID: {currentTemplateId || '-'}</div>
+                            <div>当前别名: {currentTemplateAlias || '未设置'}</div>
+                            <div>状态: {templateStatusLabel(String((templateDetail as any).status ?? '-'))}</div>
+                            <div>更新时间: {formatDateTime((templateDetail as any).updatedAt ?? (templateDetail as any).createdAt)}</div>
+                          </div>
+                          <details className="template-raw-details">
+                            <summary>查看原始详情</summary>
+                            <pre className="json-block">{toJsonText(templateDetail)}</pre>
+                          </details>
+                        </article>
+                        <article className="sub-panel">
+                          <p className="kpi-title">别名设置</p>
+                          <label className="form-field">
+                            <span>模板别名</span>
+                            <input
+                              className="control-input"
+                              placeholder="例如：opencode-playwright-min"
+                              value={templateAliasDraft}
+                              onChange={(event) => {
+                                setTemplateAliasDraft(event.target.value);
+                                setTemplateAliasResult(null);
+                              }}
+                            />
+                          </label>
+                          <div className="button-grid">
+                            <button type="button" className="secondary-btn" disabled={!templateAliasDraft.trim()} onClick={() => void checkAlias()}>
+                              检查是否可用
+                            </button>
+                            <button
+                              type="button"
+                              className="primary-btn"
+                              disabled={!templateAliasDraft.trim() || templateAliasDraft.trim() === currentTemplateAlias}
+                              onClick={() => void saveTemplateAlias()}
+                            >
+                              保存别名
+                            </button>
+                          </div>
+                          {templateAliasResult ? (
+                            <div className={`alias-check-card ${templateAliasCheck.state}`}>
+                              <strong>{templateAliasCheck.message}</strong>
+                              <span>
+                                {templateAliasDraft.trim() || '-'}
+                                {templateAliasCheck.targetTemplateId ? ` · ${templateAliasCheck.targetTemplateId}` : ''}
+                              </span>
+                            </div>
+                          ) : (
+                            <p className="panel-caption">别名检测已从模板首页移除，收敛到详情内作为辅助动作。</p>
+                          )}
+                        </article>
+                      </div>
+
+                      <article className="sub-panel">
+                        <p className="kpi-title">模板操作</p>
+                        <textarea
+                          className="input-area"
+                          rows={4}
+                          value={templateActionPayload}
+                          onChange={(event) => setTemplateActionPayload(event.target.value)}
+                        />
+                        <div className="button-grid">
+                          <button type="button" className="secondary-btn" onClick={() => void runTemplateAction('update')}>
+                            更新模板
+                          </button>
+                          <button type="button" className="secondary-btn" onClick={() => void runTemplateAction('rebuild')}>
+                            重建模板
+                          </button>
+                        </div>
+                        <div className="danger-zone">
+                          <p className="panel-caption">危险操作单独放置，避免与别名设置和常规维护混用。</p>
+                          <button type="button" className="table-btn danger" onClick={() => void runTemplateAction('delete')}>
+                            删除模板
+                          </button>
+                        </div>
+                      </article>
+
+                      {(templateDetail as any)?.builds ? (
+                        <div className="panel template-workbench-build-panel">
+                          <div className="panel-header">
+                            <h2>构建记录</h2>
+                            <span className="panel-caption">用于查看当前模板最近构建状态</span>
+                          </div>
+                          <div className="table-wrap">
+                            <table>
+                              <thead>
+                                <tr>
+                                  <th>构建 ID</th>
+                                  <th>状态</th>
+                                  <th>创建时间</th>
+                                  <th>操作</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(templateDetail as any).builds.map((build: any) => (
+                                  <tr key={build.buildID || build.buildId}>
+                                    <td className="mono">{build.buildID || build.buildId}</td>
+                                    <td>{templateStatusLabel(build.status || '-')}</td>
+                                    <td>{formatDateTime(build.createdAt || build.startedAt)}</td>
+                                    <td>
+                                      <div className="action-inline">
+                                        <button
+                                          type="button"
+                                          className="table-btn"
+                                          onClick={() =>
+                                            void loadTemplateBuildLogs(
+                                              (templateDetail as any).templateID ?? (templateDetail as any).templateId ?? '',
+                                              build.buildID || build.buildId
+                                            )
+                                          }
+                                        >
+                                          日志
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="table-btn"
+                                          onClick={() =>
+                                            void loadTemplateBuildStatus(
+                                              (templateDetail as any).templateID ?? (templateDetail as any).templateId ?? '',
+                                              build.buildID || build.buildId
+                                            )
+                                          }
+                                        >
+                                          状态
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          {templateBuildLogs ? <pre className="json-block">{toJsonText(templateBuildLogs)}</pre> : null}
+                          {templateBuildStatus ? <pre className="json-block">{toJsonText(templateBuildStatus)}</pre> : null}
+                        </div>
+                      ) : null}
                     </div>
                   ) : (
-                    <p className="panel-caption">别名检测已从模板首页移除，收敛到详情内作为辅助动作。</p>
+                    <article className="sub-panel template-workbench-empty">
+                      <p className="kpi-title">模板详情</p>
+                      <p className="panel-caption">从左侧选择模板后查看摘要、别名设置和构建记录。</p>
+                    </article>
                   )}
-                </article>
-                <article className="sub-panel">
-                  <p className="kpi-title">模板操作</p>
-                  <textarea
-                    className="input-area"
-                    rows={4}
-                    value={templateActionPayload}
-                    onChange={(event) => setTemplateActionPayload(event.target.value)}
-                  />
-                  <div className="button-grid">
-                    <button type="button" className="secondary-btn" onClick={() => void runTemplateAction('update')}>
-                      更新模板
-                    </button>
-                    <button type="button" className="secondary-btn" onClick={() => void runTemplateAction('rebuild')}>
-                      重建模板
-                    </button>
-                  </div>
-                  <div className="danger-zone">
-                    <p className="panel-caption">危险操作单独放置，避免与别名设置和常规维护混用。</p>
-                    <button type="button" className="table-btn danger" onClick={() => void runTemplateAction('delete')}>
-                      删除模板
-                    </button>
-                  </div>
-                </article>
-              </div>
-              {(templateDetail as any)?.builds ? (
-                <div className="panel">
-                  <div className="panel-header">
-                    <h2>构建记录</h2>
-                    <span className="panel-caption">用于查看当前模板最近构建状态</span>
-                  </div>
-                  <div className="table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>构建 ID</th>
-                          <th>状态</th>
-                          <th>创建时间</th>
-                          <th>操作</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(templateDetail as any).builds.map((build: any) => (
-                          <tr key={build.buildID || build.buildId}>
-                            <td className="mono">{build.buildID || build.buildId}</td>
-                            <td>{templateStatusLabel(build.status || '-')}</td>
-                            <td>{formatDateTime(build.createdAt || build.startedAt)}</td>
-                            <td>
-                              <div className="action-inline">
-                                <button
-                                  type="button"
-                                  className="table-btn"
-                                  onClick={() =>
-                                    void loadTemplateBuildLogs(
-                                      (templateDetail as any).templateID ?? (templateDetail as any).templateId ?? '',
-                                      build.buildID || build.buildId
-                                    )
-                                  }
-                                >
-                                  日志
-                                </button>
-                                <button
-                                  type="button"
-                                  className="table-btn"
-                                  onClick={() =>
-                                    void loadTemplateBuildStatus(
-                                      (templateDetail as any).templateID ?? (templateDetail as any).templateId ?? '',
-                                      build.buildID || build.buildId
-                                    )
-                                  }
-                                >
-                                  状态
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  {templateBuildLogs ? <pre className="json-block">{toJsonText(templateBuildLogs)}</pre> : null}
-                  {templateBuildStatus ? <pre className="json-block">{toJsonText(templateBuildStatus)}</pre> : null}
                 </div>
-              ) : null}
+              </div>
             </div>
           </div>
         ) : null}
@@ -9486,130 +11037,162 @@ export default function App() {
       </>
     );
   };
-  const renderAuditSection = () => (
+  const renderAuditEntryActions = (entry: AuditLogEntry) => (
+    <div className="audit-link-stack">
+      {entry.targetVmId ? (
+        <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromAudit(entry)}>
+          查看 Sandbox
+        </button>
+      ) : null}
+      {entry.sessionId ? (
+        <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openConversationFromAudit(entry)}>
+          查看对话
+        </button>
+      ) : null}
+    </div>
+  );
+
+  const renderAuditSection = () => {
+    const auditDetailSubject = auditDetail
+      ? auditDetail.entry.targetVmId || auditDetail.entry.sessionId || auditDetail.entry.id
+      : '-';
+    const sortedAuditRelatedEntries = auditDetail
+      ? [...auditDetail.relatedEntries].sort((left, right) => {
+          const delta = toTimestamp(right.timestamp) - toTimestamp(left.timestamp);
+          if (delta !== 0) return delta;
+          return right.id.localeCompare(left.id, 'zh-Hans-CN', { sensitivity: 'base' });
+        })
+      : [];
+
+    return (
     <>
-      <main className="content-stack">
-        <section className="page-intro-grid audit-intro-grid fade-in">
+      <main className="content-stack viewport-lock-page audit-page">
+        <section className="fade-in">
           <article className="panel hero-panel">
-            <div className="panel-header panel-header-stack">
+            <div className="panel-header audit-hero-header">
               <div>
                 <p className="section-tag">审计摘要</p>
                 <h2>管理动作与失败排查</h2>
               </div>
-              <span className="service-state ok">按时间倒序展示</span>
-            </div>
-            <div className="hero-metrics">
-              <div>
-                <span className="hero-metric-label">筛选结果</span>
-                <strong>{auditSummary.total}</strong>
-              </div>
-              <div>
-                <span className="hero-metric-label">成功</span>
-                <strong>{auditSummary.success}</strong>
-              </div>
-              <div>
-                <span className="hero-metric-label">失败</span>
-                <strong>{auditSummary.failed}</strong>
+              <div className="sandbox-list-header-actions audit-hero-actions">
+                <div className="audit-live-summary-strip session-status sandbox-live-count" aria-label="审计日志摘要">
+                  <span className="sandbox-live-metric sandbox-live-metric-total">
+                    <span>全部</span>
+                    <strong>{auditSummary.total}</strong>
+                  </span>
+                  <span className="sandbox-live-metric sandbox-live-metric-running">
+                    <span>成功</span>
+                    <strong>{auditSummary.success}</strong>
+                  </span>
+                  <span className="sandbox-live-metric audit-live-metric-failed">
+                    <span>失败</span>
+                    <strong>{auditSummary.failed}</strong>
+                  </span>
+                  <span className="sandbox-live-age" title={formatDateTime(auditSummaryFetchedAt)}>
+                    {auditSummaryAge}
+                  </span>
+                  <button
+                    type="button"
+                    className={`sandbox-live-refresh-btn ${auditSummaryRefreshing ? 'is-refreshing' : ''}`}
+                    onClick={() => void refreshAuditSummary()}
+                    disabled={auditSummaryRefreshing}
+                    aria-label="刷新审计日志"
+                  >
+                    ↻
+                  </button>
+                </div>
               </div>
             </div>
           </article>
+        </section>
 
-          <article className="panel aside-panel">
-            <div className="panel-header panel-header-stack">
-              <div>
-                <p className="section-tag">筛选状态</p>
-                <h2>当前范围</h2>
-              </div>
+        <section className="panel fade-in audit-filter-panel">
+          <div className="audit-filter-toolbar">
+            <div className="audit-filter-toolbar-copy">
+              <p className="section-tag">筛选条件</p>
+              <h2>筛选条件</h2>
+              <span className="panel-caption">按关键词、操作人、动作、结果和时间快速定位。</span>
             </div>
-            <ul className="signal-list">
-              <li>总日志数：{auditResponseMeta.total}</li>
-              <li>当前筛选后：{auditResponseMeta.filteredTotal || auditEntries.length}</li>
-              <li>可筛维度：操作人 / 动作 / 结果 / 会话 / 目标实例 / 时间</li>
-            </ul>
-          </article>
-        </section>
-
-        <section className="panel fade-in">
-          <div className="panel-header">
-            <h2>筛选条件</h2>
-            <span className="panel-caption">按操作人、动作、结果、会话、目标实例和时间筛选</span>
           </div>
-          <div className="audit-filter-grid">
-            <input
-              className="control-input"
-              placeholder="搜索日志 ID、详情、实例、会话"
-              value={auditFilters.query}
-              onChange={(event) => setAuditFilters((previous) => ({ ...previous, query: event.target.value }))}
-            />
-            <select
-              className="control-input"
-              value={auditFilters.operator}
-              onChange={(event) => setAuditFilters((previous) => ({ ...previous, operator: event.target.value }))}
-            >
-              <option value="all">全部操作人</option>
-              {auditOperatorOptions.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-            <select
-              className="control-input"
-              value={auditFilters.action}
-              onChange={(event) => setAuditFilters((previous) => ({ ...previous, action: event.target.value }))}
-            >
-              <option value="all">全部动作</option>
-              {auditActionOptions.map((item) => (
-                <option key={item} value={item}>
-                  {auditActionLabel(item)}
-                </option>
-              ))}
-            </select>
-            <select
-              className="control-input"
-              value={auditFilters.result}
-              onChange={(event) => setAuditFilters((previous) => ({ ...previous, result: event.target.value }))}
-            >
-              <option value="all">全部结果</option>
-              <option value="success">成功</option>
-              <option value="failed">失败</option>
-            </select>
-            <input
-              className="control-input"
-              placeholder="会话 ID"
-              value={auditFilters.sessionId}
-              onChange={(event) => setAuditFilters((previous) => ({ ...previous, sessionId: event.target.value }))}
-            />
-            <input
-              className="control-input"
-              placeholder="目标实例 ID"
-              value={auditFilters.targetVmId}
-              onChange={(event) => setAuditFilters((previous) => ({ ...previous, targetVmId: event.target.value }))}
-            />
-            <input
-              className="control-input"
-              type="datetime-local"
-              value={auditFilters.from}
-              onChange={(event) => setAuditFilters((previous) => ({ ...previous, from: event.target.value }))}
-            />
-            <input
-              className="control-input"
-              type="datetime-local"
-              value={auditFilters.to}
-              onChange={(event) => setAuditFilters((previous) => ({ ...previous, to: event.target.value }))}
-            />
-          </div>
-          <div className="action-inline">
-            <button type="button" className="primary-btn" onClick={() => void applyAuditFilters()}>
-              应用筛选
-            </button>
-            <button type="button" className="secondary-btn" onClick={() => void resetAuditFilters()}>
-              重置
-            </button>
+          <div className="audit-filter-grid audit-filter-grid-compact">
+            <label className="audit-filter-field">
+              <span>搜索</span>
+              <input
+                className="control-input"
+                placeholder="日志 ID、详情、实例、会话"
+                value={auditFilters.query}
+                onChange={(event) => updateAuditFilters((previous) => ({ ...previous, query: event.target.value }))}
+              />
+            </label>
+            <label className="audit-filter-field">
+              <span>操作人</span>
+              <select
+                className="control-input"
+                value={auditFilters.operator}
+                onChange={(event) => updateAuditFilters((previous) => ({ ...previous, operator: event.target.value }))}
+              >
+                <option value="all">全部操作人</option>
+                {auditOperatorOptions.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="audit-filter-field">
+              <span>动作</span>
+              <select
+                className="control-input"
+                value={auditFilters.action}
+                onChange={(event) => updateAuditFilters((previous) => ({ ...previous, action: event.target.value }))}
+              >
+                <option value="all">全部动作</option>
+                {auditActionOptions.map((item) => (
+                  <option key={item} value={item}>
+                    {auditActionLabel(item)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="audit-filter-field">
+              <span>结果</span>
+              <select
+                className="control-input"
+                value={auditFilters.result}
+                onChange={(event) => updateAuditFilters((previous) => ({ ...previous, result: event.target.value }))}
+              >
+                <option value="all">全部结果</option>
+                <option value="success">成功</option>
+                <option value="failed">失败</option>
+              </select>
+            </label>
+            <label className="audit-filter-field">
+              <span>开始时间</span>
+              <input
+                className="control-input"
+                type="datetime-local"
+                value={auditFilters.from}
+                onChange={(event) => updateAuditFilters((previous) => ({ ...previous, from: event.target.value }))}
+              />
+            </label>
+            <label className="audit-filter-field">
+              <span>结束时间</span>
+              <input
+                className="control-input"
+                type="datetime-local"
+                value={auditFilters.to}
+                onChange={(event) => updateAuditFilters((previous) => ({ ...previous, to: event.target.value }))}
+              />
+            </label>
+            <div className="audit-filter-actions">
+              <button type="button" className="secondary-btn" onClick={resetAuditFilters}>
+                重置筛选
+              </button>
+            </div>
           </div>
         </section>
 
-        <section className="panel fade-in">
+        <section className="panel fade-in audit-log-panel">
           <div className="panel-header">
             <h2>审计日志</h2>
             <span className="panel-caption">
@@ -9620,13 +11203,48 @@ export default function App() {
             <table className="audit-table">
               <thead>
                 <tr>
-                  <th>时间</th>
-                  <th>动作</th>
-                  <th>结果</th>
-                  <th>操作人</th>
-                  <th>目标实例</th>
-                  <th>会话</th>
-                  <th>详情</th>
+                  <th>
+                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'id' ? 'active' : ''}`} onClick={() => toggleAuditSort('id')}>
+                      日志 ID
+                      <span className="runtime-sort-indicator">{auditSort.key === 'id' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </button>
+                  </th>
+                  <th>
+                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'time' ? 'active' : ''}`} onClick={() => toggleAuditSort('time')}>
+                      时间
+                      <span className="runtime-sort-indicator">{auditSort.key === 'time' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </button>
+                  </th>
+                  <th>
+                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'action' ? 'active' : ''}`} onClick={() => toggleAuditSort('action')}>
+                      动作
+                      <span className="runtime-sort-indicator">{auditSort.key === 'action' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </button>
+                  </th>
+                  <th>
+                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'result' ? 'active' : ''}`} onClick={() => toggleAuditSort('result')}>
+                      结果
+                      <span className="runtime-sort-indicator">{auditSort.key === 'result' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </button>
+                  </th>
+                  <th>
+                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'operator' ? 'active' : ''}`} onClick={() => toggleAuditSort('operator')}>
+                      操作人
+                      <span className="runtime-sort-indicator">{auditSort.key === 'operator' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </button>
+                  </th>
+                  <th>
+                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'target' ? 'active' : ''}`} onClick={() => toggleAuditSort('target')}>
+                      目标实例
+                      <span className="runtime-sort-indicator">{auditSort.key === 'target' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </button>
+                  </th>
+                  <th>
+                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'session' ? 'active' : ''}`} onClick={() => toggleAuditSort('session')}>
+                      会话
+                      <span className="runtime-sort-indicator">{auditSort.key === 'session' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </button>
+                  </th>
                   <th>操作</th>
                 </tr>
               </thead>
@@ -9638,17 +11256,52 @@ export default function App() {
                     </td>
                   </tr>
                 ) : (
-                  auditEntries.map((entry) => (
+                  sortedAuditEntries.map((entry) => (
                     <tr key={entry.id}>
+                      <td>
+                        <button
+                          type="button"
+                          className="link-btn sandbox-jump-btn mono audit-id-link"
+                          title={entry.id}
+                          onClick={() => void openAuditDetail(entry.id)}
+                        >
+                          {truncateMiddle(entry.id, 10, 8)}
+                        </button>
+                      </td>
                       <td>{formatDateTime(entry.timestamp)}</td>
                       <td>{auditActionLabel(entry.action)}</td>
                       <td>
                         <span className={resultClassName(entry.result)}>{auditResultLabel(entry.result)}</span>
                       </td>
                       <td>{entry.operator}</td>
-                      <td className="mono">{entry.targetVmId}</td>
-                      <td className="mono">{entry.sessionId || '-'}</td>
-                      <td>{entry.detail || '-'}</td>
+                      <td>
+                        {entry.targetVmId ? (
+                          <button
+                            type="button"
+                            className="link-btn sandbox-jump-btn mono audit-id-link"
+                            title={entry.targetVmId}
+                            onClick={() => openSandboxFromAudit(entry)}
+                          >
+                            {truncateMiddle(entry.targetVmId, 10, 8)}
+                          </button>
+                        ) : (
+                          <span className="mono">-</span>
+                        )}
+                      </td>
+                      <td>
+                        {entry.sessionId ? (
+                          <button
+                            type="button"
+                            className="link-btn sandbox-jump-btn mono audit-id-link"
+                            title={entry.sessionId}
+                            onClick={() => openConversationFromAudit(entry)}
+                          >
+                            {truncateMiddle(entry.sessionId, 10, 8)}
+                          </button>
+                        ) : (
+                          <span className="mono">-</span>
+                        )}
+                      </td>
                       <td>
                         <button type="button" className="table-btn" onClick={() => void openAuditDetail(entry.id)}>
                           查看详情
@@ -9666,108 +11319,409 @@ export default function App() {
       {auditDetail ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setAuditDetail(null)}>
           <div
-            className="modal-card"
+            className="modal-card audit-detail-modal"
             onClick={(event) => {
               event.stopPropagation();
             }}
           >
-            <div className="modal-header">
+            <div className="modal-header audit-detail-modal-header">
               <div>
                 <p className="section-tag">审计详情</p>
-                <h2>{auditActionLabel(auditDetail.entry.action)} · {auditDetail.entry.targetVmId}</h2>
+                <h2>{auditActionLabel(auditDetail.entry.action)} · {auditDetailSubject}</h2>
+                <p className="panel-caption">
+                  日志 {auditDetail.entry.id} · {formatDateTime(auditDetail.entry.timestamp)}
+                </p>
               </div>
-              <button type="button" className="secondary-btn" onClick={() => setAuditDetail(null)}>
-                关闭
-              </button>
+              <div className="audit-detail-header-actions">
+                {auditDetail.entry.sessionId ? (
+                  <button type="button" className="secondary-btn" onClick={() => openConversationFromAudit(auditDetail.entry)}>
+                    打开对话
+                  </button>
+                ) : null}
+                {auditDetail.entry.targetVmId ? (
+                  <button type="button" className="secondary-btn" onClick={() => openSandboxFromAudit(auditDetail.entry)}>
+                    打开 Sandbox
+                  </button>
+                ) : null}
+                <button type="button" className="secondary-btn" onClick={() => setAuditDetail(null)}>
+                  关闭
+                </button>
+              </div>
             </div>
-            <div className={`detail-grid modal-grid audit-detail-grid ${auditDetail.relatedEntries.length === 0 ? 'audit-detail-grid-single' : ''}`}>
-              <article className="sub-panel">
-                <p className="kpi-title">当前记录</p>
-                <div className="validation-result">
-                  <div>日志 ID: {auditDetail.entry.id}</div>
-                  <div>时间: {formatDateTime(auditDetail.entry.timestamp)}</div>
-                  <div>动作: {auditActionLabel(auditDetail.entry.action)}</div>
-                  <div>结果: {auditResultLabel(auditDetail.entry.result)}</div>
-                  <div>操作人: {auditDetail.entry.operator}</div>
-                  <div>目标实例: {auditDetail.entry.targetVmId}</div>
-                  <div>会话 ID: {auditDetail.entry.sessionId || '-'}</div>
-                  <div>关联记录: {auditDetail.relatedEntries.length || 0}</div>
+            <div className="audit-detail-summary-strip">
+              <span className={resultClassName(auditDetail.entry.result)}>{auditResultLabel(auditDetail.entry.result)}</span>
+              <span className="audit-detail-meta-pill">{auditActionLabel(auditDetail.entry.action)}</span>
+              <span className="audit-detail-meta-pill">{auditDetail.entry.operator || '-'}</span>
+              <span className="audit-detail-meta-pill">{auditDetail.relatedEntries.length} 条关联</span>
+            </div>
+            <div className="detail-grid modal-grid audit-detail-grid">
+              <article className="sub-panel audit-detail-primary-panel">
+                <div className="editor-header">
+                  <div>
+                    <h3>当前记录</h3>
+                    <p className="cell-subtle">先看当前动作与结果，再决定是否继续跳转或展开原始记录。</p>
+                  </div>
                 </div>
-                <pre className="json-block">{toJsonText(auditDetail.entry)}</pre>
+                <div className="audit-detail-fact-grid">
+                  <div className="audit-detail-fact">
+                    <span>日志 ID</span>
+                    <strong className="mono">{auditDetail.entry.id}</strong>
+                  </div>
+                  <div className="audit-detail-fact">
+                    <span>时间</span>
+                    <strong>{formatDateTime(auditDetail.entry.timestamp)}</strong>
+                  </div>
+                  <div className="audit-detail-fact">
+                    <span>动作</span>
+                    <strong>{auditActionLabel(auditDetail.entry.action)}</strong>
+                  </div>
+                  <div className="audit-detail-fact">
+                    <span>结果</span>
+                    <strong>{auditResultLabel(auditDetail.entry.result)}</strong>
+                  </div>
+                  <div className="audit-detail-fact">
+                    <span>操作人</span>
+                    <strong>{auditDetail.entry.operator || '-'}</strong>
+                  </div>
+                  <div className="audit-detail-fact">
+                    <span>目标实例</span>
+                    <strong className="mono">{auditDetail.entry.targetVmId || '-'}</strong>
+                  </div>
+                  <div className="audit-detail-fact">
+                    <span>会话 ID</span>
+                    <strong className="mono">{auditDetail.entry.sessionId || '-'}</strong>
+                  </div>
+                  <div className="audit-detail-fact">
+                    <span>关联记录</span>
+                    <strong>{auditDetail.relatedEntries.length}</strong>
+                  </div>
+                </div>
+
+                <div className={`audit-detail-note-card ${auditDetail.entry.detail ? '' : 'is-empty'}`}>
+                  <span>说明</span>
+                  <p>{auditDetail.entry.detail || '没有额外说明。'}</p>
+                </div>
+
+                <details className="audit-detail-json-panel">
+                  <summary>查看原始记录</summary>
+                  <pre className="json-block">{toJsonText(auditDetail.entry)}</pre>
+                </details>
               </article>
-              {auditDetail.relatedEntries.length > 0 ? (
-                <article className="sub-panel">
-                  <p className="kpi-title">关联记录</p>
+
+              <article className="sub-panel audit-detail-sidebar-panel">
+                <div className="editor-header">
+                  <div>
+                    <h3>关联上下文</h3>
+                    <p className="cell-subtle">直接打开对应资源，或继续查看关联日志。</p>
+                  </div>
+                </div>
+                <div className="audit-detail-context-grid">
+                  <div className="audit-detail-context-card">
+                    <span>日志 ID</span>
+                    <strong className="mono">{auditDetail.entry.id}</strong>
+                  </div>
+                  {auditDetail.entry.targetVmId ? (
+                    <div className="audit-detail-context-card">
+                      <span>Sandbox</span>
+                      <button
+                        type="button"
+                        className="link-btn sandbox-jump-btn mono audit-id-link"
+                        title={auditDetail.entry.targetVmId}
+                        onClick={() => openSandboxFromAudit(auditDetail.entry)}
+                      >
+                        {truncateMiddle(auditDetail.entry.targetVmId, 10, 8)}
+                      </button>
+                    </div>
+                  ) : null}
+                  {auditDetail.entry.sessionId ? (
+                    <div className="audit-detail-context-card">
+                      <span>对话</span>
+                      <button
+                        type="button"
+                        className="link-btn sandbox-jump-btn mono audit-id-link"
+                        title={auditDetail.entry.sessionId}
+                        onClick={() => openConversationFromAudit(auditDetail.entry)}
+                      >
+                        {truncateMiddle(auditDetail.entry.sessionId, 10, 8)}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="editor-header audit-detail-section-head">
+                  <div>
+                    <h3>关联记录</h3>
+                    <p className="cell-subtle">按时间倒序展示，点击日志 ID 可继续查看细节。</p>
+                  </div>
+                </div>
+                {sortedAuditRelatedEntries.length > 0 ? (
                   <div className="audit-related-list">
-                    {auditDetail.relatedEntries.map((entry) => (
+                    {sortedAuditRelatedEntries.map((entry) => (
                       <article key={entry.id} className="audit-related-item">
-                        <strong>{auditActionLabel(entry.action)} · {auditResultLabel(entry.result)}</strong>
-                        <span>{formatDateTime(entry.timestamp)}</span>
-                        <span className="mono">{entry.sessionId || entry.targetVmId}</span>
-                        {entry.detail ? <p>{entry.detail}</p> : null}
+                        <div className="audit-related-head">
+                          <button
+                            type="button"
+                            className="link-btn sandbox-jump-btn mono audit-id-link"
+                            title={entry.id}
+                            onClick={() => void openAuditDetail(entry.id)}
+                          >
+                            {truncateMiddle(entry.id, 10, 8)}
+                          </button>
+                          <span className={resultClassName(entry.result)}>{auditResultLabel(entry.result)}</span>
+                        </div>
+                        <div className="audit-related-meta">
+                          <span>{auditActionLabel(entry.action)}</span>
+                          <span>{formatDateTime(entry.timestamp)}</span>
+                          <span>{entry.operator || '-'}</span>
+                        </div>
+                        {(entry.sessionId || entry.targetVmId) ? renderAuditEntryActions(entry) : null}
+                        {entry.detail ? <p className="audit-related-detail">{entry.detail}</p> : null}
                       </article>
                     ))}
                   </div>
-                </article>
-              ) : null}
+                ) : (
+                  <p className="empty">没有其他关联记录。</p>
+                )}
+              </article>
             </div>
           </div>
         </div>
       ) : null}
     </>
   );
+  };
+
+  const handleSidebarSectionOpen = (nextSection: SectionKey) => {
+    sectionRefreshHandlerRef.current = null;
+    setConversationDialog(null);
+    setConversationDialogOrigin(null);
+    setConversationSectionOrigin(null);
+    setSandboxModalOpen(false);
+    setSandboxModalOrigin(null);
+    setSandboxSectionOrigin(null);
+    setSandboxDeepLinkId(null);
+    setSidebarMobileOpen(false);
+    setActiveSection(nextSection);
+  };
+
+  const handleSidebarToggle = () => {
+    if (typeof window !== 'undefined' && window.innerWidth <= SIDEBAR_STACK_BREAKPOINT) {
+      setSidebarMobileOpen((current) => !current);
+      return;
+    }
+
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      persistStoredSidebarCollapsed(next);
+      return next;
+    });
+  };
 
   const renderContent = () => {
     if (loading) {
+      if (activeSection === 'sandbox') {
+        const completedCount = SANDBOX_LOAD_STEPS.filter((step) => sandboxLoadProgress.completed[step.key]).length;
+        const firstPendingIndex = SANDBOX_LOAD_STEPS.findIndex((step) => !sandboxLoadProgress.completed[step.key]);
+        const activeStep =
+          SANDBOX_LOAD_STEPS[firstPendingIndex >= 0 ? firstPendingIndex : SANDBOX_LOAD_STEPS.length - 1];
+        const elapsedSeconds = sandboxLoadProgress.startedAt
+          ? Math.max(1, Math.floor((sandboxLoadProgressClock - sandboxLoadProgress.startedAt) / 1000))
+          : 0;
+        const progressPercent =
+          completedCount === SANDBOX_LOAD_STEPS.length
+            ? 100
+            : Math.max(8, Math.round((completedCount / SANDBOX_LOAD_STEPS.length) * 100));
+
+        return (
+          <main className="content-stack sandbox-loading-page">
+            <section className="fade-in">
+              <article className="panel sandbox-loading-panel">
+                <div className="sandbox-loading-head">
+                  <div className="sandbox-loading-copy">
+                    <p className="section-tag">Sandbox 管理</p>
+                    <h2>正在同步 Sandbox 列表</h2>
+                    <p className="panel-caption">{activeStep.detail}</p>
+                  </div>
+                  <div className="sandbox-loading-status" aria-live="polite">
+                    <span className="sandbox-loading-status-dot" aria-hidden="true" />
+                    <strong>{completedCount}/{SANDBOX_LOAD_STEPS.length}</strong>
+                    <span>{elapsedSeconds > 0 ? `${elapsedSeconds}秒` : '准备中'}</span>
+                  </div>
+                </div>
+
+                <div
+                  className="sandbox-loading-progress-bar"
+                  role="progressbar"
+                  aria-label="Sandbox 数据加载进度"
+                  aria-valuemin={0}
+                  aria-valuemax={SANDBOX_LOAD_STEPS.length}
+                  aria-valuenow={completedCount}
+                >
+                  <span className="sandbox-loading-progress-fill" style={{ width: `${progressPercent}%` }} />
+                </div>
+
+                <div className="sandbox-loading-step-strip" aria-live="polite">
+                  {SANDBOX_LOAD_STEPS.map((step, index) => {
+                    const isDone = sandboxLoadProgress.completed[step.key];
+                    const isActive = !isDone && index === firstPendingIndex;
+                    return (
+                      <span
+                        key={step.key}
+                        className={`sandbox-loading-step${isDone ? ' is-done' : isActive ? ' is-active' : ''}`}
+                      >
+                        {step.label}
+                      </span>
+                    );
+                  })}
+                </div>
+
+                <div className="sandbox-loading-preview" aria-hidden="true">
+                  <div className="sandbox-loading-live-preview">
+                    <span className="sandbox-loading-live-pill">
+                      <span className="runtime-skeleton sandbox-loading-pill-skeleton" />
+                    </span>
+                    <span className="sandbox-loading-live-pill">
+                      <span className="runtime-skeleton sandbox-loading-pill-skeleton" />
+                    </span>
+                    <span className="sandbox-loading-live-pill">
+                      <span className="runtime-skeleton sandbox-loading-pill-skeleton" />
+                    </span>
+                    <span className="sandbox-loading-live-age">
+                      <span className="runtime-skeleton sandbox-loading-age-skeleton" />
+                    </span>
+                    <span className="sandbox-loading-refresh">
+                      <span className="runtime-skeleton sandbox-loading-refresh-skeleton" />
+                    </span>
+                  </div>
+
+                  <div className="sandbox-loading-table-preview">
+                    {Array.from({ length: 6 }, (_, index) => (
+                      <div key={`sandbox-loading-row-${index}`} className="sandbox-loading-row-preview">
+                        <span className="runtime-skeleton sandbox-loading-skeleton-id" />
+                        <span className="runtime-skeleton sandbox-loading-skeleton-session" />
+                        <span className="runtime-skeleton runtime-skeleton-chip" />
+                        <span className="runtime-skeleton runtime-skeleton-chip" />
+                        <span className="runtime-skeleton sandbox-loading-skeleton-time" />
+                        <span className="runtime-skeleton runtime-skeleton-button" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </article>
+            </section>
+          </main>
+        );
+      }
       return <main className="loading-state">正在加载 {breadcrumbTitle} ...</main>;
     }
 
     if (activeSection === 'kvm') return renderKvmSection();
+    if (activeSection === 'deployment') {
+      return (
+        <DeploymentManagementSection
+          onError={setError}
+          onUpdatedAtChange={setDeploymentManagementUpdatedAt}
+          onRegisterRefresh={registerSectionRefresh}
+          persistedState={deploymentManagementViewState}
+          onStateChange={setDeploymentManagementViewState}
+          onOpenConversation={(sessionId, origin) => {
+            openConversationDialog(sessionId, 'overview', origin || null);
+          }}
+          onOpenUser={(userId, origin) => {
+            openUserManagementView(userId, origin || null);
+          }}
+          onOpenSandbox={(sandboxId, origin) => {
+            void openSandboxDetail(sandboxId, origin || null);
+          }}
+        />
+      );
+    }
     if (activeSection === 'conversation') return renderConversationOpsSection();
     if (activeSection === 'user') {
       return (
         <UserManagementSection
           onError={setError}
           onUpdatedAtChange={setUserManagementUpdatedAt}
-          onOpenConversation={(sessionId) => {
-            setActiveSection('conversation');
-            openConversationDialog(sessionId, 'overview');
+          onRegisterRefresh={registerSectionRefresh}
+          persistedState={userManagementViewState}
+          onStateChange={setUserManagementViewState}
+          onOpenConversation={(sessionId, origin) => {
+            openConversationDialog(sessionId, 'overview', origin || null);
           }}
-          onOpenSandbox={(sandboxId) => {
-            openSandboxFromConversation(sandboxId);
+          onOpenSandbox={(sandboxId, origin) => {
+            void openSandboxDetail(sandboxId, origin || null);
+          }}
+          onOpenDeployment={(taskSessionId, origin) => {
+            openDeploymentManagementView(taskSessionId, origin || null);
           }}
         />
       );
     }
     if (activeSection === 'agent') return renderAgentSection();
-    if (activeSection === 'skill') return <SkillManagementSection onError={setError} />;
-    if (activeSection === 'connectorGuide') return <ConnectorGuideManagementSection onError={setError} />;
-    if (activeSection === 'osacRelease') return <OsacReleaseManagementSection onError={setError} />;
+    if (activeSection === 'skill') {
+      return (
+        <SkillManagementSection
+          onError={setError}
+          onUpdatedAtChange={setSkillManagementUpdatedAt}
+          onRegisterRefresh={registerSectionRefresh}
+          persistedState={skillManagementViewState}
+          onStateChange={setSkillManagementViewState}
+        />
+      );
+    }
+    if (activeSection === 'connectorGuide') {
+      return (
+        <ConnectorGuideManagementSection
+          onError={setError}
+          onUpdatedAtChange={setConnectorGuideUpdatedAt}
+          onRegisterRefresh={registerSectionRefresh}
+          persistedState={connectorGuideManagementViewState}
+          onStateChange={setConnectorGuideManagementViewState}
+        />
+      );
+    }
+    if (activeSection === 'osacRelease') {
+      return (
+        <OsacReleaseManagementSection
+          onError={setError}
+          onUpdatedAtChange={setOsacReleaseUpdatedAt}
+          onRegisterRefresh={registerSectionRefresh}
+          persistedState={osacReleaseManagementViewState}
+          onStateChange={setOsacReleaseManagementViewState}
+        />
+      );
+    }
     if (activeSection === 'sandbox') return renderSandboxSection();
     return renderAuditSection();
   };
 
   return (
-    <div className="page-shell">
+    <div
+      className={`page-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}${sidebarMobileOpen ? ' sidebar-mobile-open' : ''}`}
+    >
       <div className="background-glow" aria-hidden="true" />
+      <button
+        type="button"
+        className="sidebar-mobile-scrim"
+        aria-label="关闭侧边栏"
+        onClick={() => setSidebarMobileOpen(false)}
+      />
       <div className="app-layout">
         <aside className="sidebar fade-in" onWheelCapture={handleSidebarWheel}>
           <div className="sidebar-brand">
             <div className="sidebar-brand-row">
               <div>
-                <p className="eyebrow">ONECEO Control Rail</p>
+                <p className="eyebrow">ONECEO</p>
                 <p className="sidebar-title">管理控制台</p>
               </div>
               <span className="env-badge">OPS</span>
             </div>
-            <p className="sidebar-copy">按运行模块和平台配置分组展示后台模块。</p>
           </div>
           <nav className="sidebar-nav" aria-label="Primary" ref={sidebarNavRef}>
             {NAV_GROUPS.map((group) => (
               <section key={group.key} className="nav-group">
                 <div className="nav-group-header">
                   <p className="nav-group-title">{group.label}</p>
-                  <p className="nav-group-copy">{group.description}</p>
                 </div>
                 <div className="nav-group-list">
                   {NAV_ITEMS.filter((item) => item.group === group.key).map((item) => (
@@ -9775,13 +11729,12 @@ export default function App() {
                       key={item.key}
                       type="button"
                       className={`nav-item ${activeSection === item.key ? 'active' : ''}`}
-                      onClick={() => setActiveSection(item.key)}
+                      onClick={() => handleSidebarSectionOpen(item.key)}
+                      title={sidebarCollapsed ? item.label : undefined}
                     >
                       <span className="nav-item-tag">{item.tag}</span>
                       <span className="nav-item-body">
                         <span>{item.label}</span>
-                        <small>{item.subtitle}</small>
-                        <em>{item.signal}</em>
                       </span>
                     </button>
                   ))}
@@ -9790,55 +11743,137 @@ export default function App() {
             ))}
           </nav>
           <div className="sidebar-footer">
-            <p className="sidebar-footer-title">{adminDisplayNameLabel(adminUser?.displayName, adminUser?.loginName)}</p>
-            <p className="sidebar-footer-copy">{adminRoleLabel(adminUser?.role)}</p>
+            <span className="sidebar-footer-avatar" aria-hidden="true">
+              {adminInitials(adminUser?.displayName, adminUser?.loginName)}
+            </span>
+            <div className="sidebar-footer-body">
+              <p className="sidebar-footer-title">{adminDisplayNameLabel(adminUser?.displayName, adminUser?.loginName)}</p>
+              <span className="sidebar-footer-role">{adminRoleLabel(adminUser?.role)}</span>
+            </div>
           </div>
         </aside>
 
-        <section className={`main-area ${activeSection === 'conversation' ? 'conversation-main-area' : ''}`}>
+        <section className={`main-area ${activeSection === 'conversation' ? 'conversation-main-area' : ''}${lockMainAreaScroll ? ' main-area-locked' : ''}`}>
           <header className="top-header fade-in">
             <div className="page-header-shell page-header-compact-bar">
               <div className="header-main page-header-mainline">
-                <span className="topbar-pill">{activeNavGroup.label}</span>
-                <p className="eyebrow">
-                  {activeNavGroup.label} / {breadcrumbTitle}
-                </p>
-                <h1>{breadcrumbTitle}</h1>
-                <p className="subtitle">{activeNavItem.description}</p>
-              </div>
-              <div className="page-header-compact-meta">
-                <span className="updated-at">最后更新: {formatDateTime(updatedAtLabel)}</span>
-                <span className={`service-state ${activeServiceOnline ? 'ok' : 'down'}`}>
-                  {activeServiceOnline ? `${activeServiceLabel}在线` : `${activeServiceLabel}离线`}
-                </span>
-                <span className="updated-at">{adminDisplayNameLabel(adminUser?.displayName, adminUser?.loginName)}</span>
-              </div>
-              <div className="header-actions page-header-compact-actions">
-                <label className="theme-switcher" title={selectedThemeOption?.description || '切换后台主题'}>
-                  <span>主题</span>
-                  <select value={currentTheme} onChange={(event) => void handleThemeChange(event)} disabled={themeSaving}>
-                    {themeOptions.map((theme) => (
-                      <option key={theme.key} value={theme.key}>
-                        {theme.label}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="theme-switcher-swatches" aria-hidden="true">
-                    {(selectedThemeOption?.swatches || []).slice(0, 3).map((swatch) => (
-                      <i key={swatch} style={{ backgroundColor: swatch }} />
-                    ))}
-                  </span>
-                </label>
                 <button
                   type="button"
-                  className="primary-btn"
+                  className="icon-btn sidebar-toggle-btn"
+                  aria-label="切换侧边栏"
+                  onClick={handleSidebarToggle}
+                >
+                  <span aria-hidden="true">☰</span>
+                </button>
+                <span className="topbar-pill">{activeNavGroup.label}</span>
+                <div className="page-header-copy">
+                  <h1>{breadcrumbTitle}</h1>
+                </div>
+              </div>
+              <div className="page-header-compact-meta">
+                <span className="updated-at topbar-meta-pill topbar-meta-pill-time">最后更新: {formatDateTime(updatedAtLabel)}</span>
+                <span className={`service-state topbar-meta-pill ${activeServiceOnline ? 'ok' : 'down'}`}>
+                  {activeServiceOnline ? `${activeServiceLabel}在线` : `${activeServiceLabel}离线`}
+                </span>
+              </div>
+              <div className="header-actions page-header-compact-actions">
+                <div className="topbar-settings" ref={settingsMenuRef}>
+                  <button
+                    type="button"
+                    className={`icon-btn topbar-settings-btn ${settingsMenuOpen ? 'active' : ''}`}
+                    aria-label="界面设置"
+                    aria-haspopup="dialog"
+                    aria-expanded={settingsMenuOpen}
+                    onClick={() => setSettingsMenuOpen((open) => !open)}
+                  >
+                    <svg className="topbar-settings-icon" viewBox="0 0 20 20" aria-hidden="true">
+                      <path d="M8.861 2.1a1.25 1.25 0 0 1 2.278 0l.41 1.008c.158.388.504.664.92.735l1.081.181a1.25 1.25 0 0 1 .904 1.813l-.516.968a1.19 1.19 0 0 0 0 1.12l.516.968a1.25 1.25 0 0 1-.904 1.813l-1.08.18a1.2 1.2 0 0 0-.922.736l-.41 1.008a1.25 1.25 0 0 1-2.277 0l-.41-1.008a1.2 1.2 0 0 0-.921-.735l-1.081-.181a1.25 1.25 0 0 1-.904-1.813l.516-.968a1.19 1.19 0 0 0 0-1.12l-.516-.968a1.25 1.25 0 0 1 .904-1.813l1.08-.18a1.2 1.2 0 0 0 .922-.736z" />
+                      <path d="M10 7.05A2.95 2.95 0 1 0 10 12.95A2.95 2.95 0 1 0 10 7.05Z" />
+                    </svg>
+                  </button>
+                  {settingsMenuOpen ? (
+                    <div className="topbar-settings-menu" role="dialog" aria-label="界面设置">
+                      <div className="topbar-settings-head">
+                        <div className="topbar-settings-copy">
+                          <strong>界面设置</strong>
+                          <span>
+                            {selectedThemeOption?.label} · {selectedThemeMode?.label}
+                            {currentThemeMode === 'system' ? `（当前${resolvedThemeTone === 'dark' ? '暗色' : '亮色'}）` : ''}
+                          </span>
+                        </div>
+                        {themeSaving ? <span className="session-status">保存中</span> : null}
+                      </div>
+
+                      <div className="topbar-settings-section">
+                        <div className="topbar-settings-section-head">
+                          <span>主题</span>
+                          <small>GitHub、Nord、Rose Pine、One Dark Light</small>
+                        </div>
+                        <div className="theme-family-grid">
+                          {themeOptions.map((theme) => {
+                            const swatches = resolvedThemeTone === 'dark' ? theme.darkSwatches : theme.lightSwatches;
+                            return (
+                              <button
+                                key={theme.key}
+                                type="button"
+                                className={`theme-family-card ${theme.key === currentTheme ? 'active' : ''}`}
+                                onClick={() => void saveThemePreferences(theme.key, currentThemeMode)}
+                                disabled={themeSaving}
+                              >
+                                <div className="theme-family-card-copy">
+                                  <strong>{theme.label}</strong>
+                                  <span>{theme.description}</span>
+                                </div>
+                                <div className="theme-family-swatches" aria-hidden="true">
+                                  {swatches.map((swatch) => (
+                                    <i key={`${theme.key}-${swatch}`} style={{ backgroundColor: swatch }} />
+                                  ))}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="topbar-settings-section">
+                        <div className="topbar-settings-section-head">
+                          <span>外观</span>
+                          <small>亮色、暗色、跟随系统</small>
+                        </div>
+                        <div className="theme-mode-strip" role="group" aria-label="外观模式">
+                          {themeModeOptions.map((mode) => (
+                            <button
+                              key={mode.key}
+                              type="button"
+                              className={`theme-mode-btn ${mode.key === currentThemeMode ? 'active' : ''}`}
+                              onClick={() => void saveThemePreferences(currentTheme, mode.key)}
+                              disabled={themeSaving}
+                            >
+                              <strong>{mode.label}</strong>
+                              <span>{mode.description}</span>
+                            </button>
+                          ))}
+                        </div>
+                        <p className="topbar-settings-note">
+                          当前使用 {selectedThemeOption?.label} · {resolvedThemeTone === 'dark' ? '暗色' : '亮色'}。
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  className="primary-btn topbar-btn topbar-refresh-btn"
+                  aria-label={refreshing ? '刷新中' : '刷新当前页'}
                   onClick={() => void refreshActiveSection()}
                   disabled={refreshing}
                 >
-                  {refreshing ? '刷新中...' : '刷新当前页面'}
+                  <span aria-hidden="true">↻</span>
+                  <span className="topbar-btn-label">{refreshing ? '刷新中...' : '刷新当前页'}</span>
                 </button>
-                <button type="button" className="secondary-btn" onClick={() => void handleAdminLogout()}>
-                  退出登录
+                <button type="button" className="secondary-btn topbar-btn topbar-logout-btn" aria-label="退出" onClick={() => void handleAdminLogout()}>
+                  <span aria-hidden="true">⎋</span>
+                  <span className="topbar-btn-label">退出</span>
                 </button>
               </div>
             </div>
@@ -9850,7 +11885,19 @@ export default function App() {
             </section>
           ) : null}
 
-          {renderContent()}
+          <Suspense fallback={<main className="loading-state">正在加载 {breadcrumbTitle} ...</main>}>
+            {renderContent()}
+          </Suspense>
+          {activeSection !== 'conversation' && conversationDialog ? (
+            <div className="section-overlay-host section-overlay-host-conversation">
+              {renderConversationOpsSection()}
+            </div>
+          ) : null}
+          {activeSection !== 'sandbox' && sandboxModalOpen && sandboxRuntimeDetail ? (
+            <div className="section-overlay-host section-overlay-host-sandbox">
+              {renderSandboxSection()}
+            </div>
+          ) : null}
         </section>
       </div>
       {operationOverlay ? (

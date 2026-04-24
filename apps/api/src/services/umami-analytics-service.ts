@@ -6,6 +6,7 @@ export type UmamiWebsiteSummary = {
   id: string;
   name?: string;
   domain?: string;
+  teamId?: string;
 };
 
 export type UmamiWebsiteMetrics = {
@@ -31,6 +32,8 @@ type UmamiWebsiteListResponse = {
   page?: unknown;
   pageSize?: unknown;
 };
+
+export type UmamiTeamScope = 'platform' | 'deployment';
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -140,20 +143,33 @@ class UmamiAnalyticsService {
     return asText(process.env.UMAMI_PASSWORD);
   }
 
-  private getTeamId(): string {
-    return asText(process.env.UMAMI_TEAM_ID);
+  private getPlatformTeamId(): string {
+    return asText(process.env.UMAMI_PLATFORM_TEAM_ID);
   }
 
-  isEnabled(): boolean {
+  private getDeploymentTeamId(): string {
+    return asText(process.env.UMAMI_DEPLOYMENT_TEAM_ID);
+  }
+
+  private getTeamId(scope: UmamiTeamScope = 'deployment'): string {
+    return scope === 'platform' ? this.getPlatformTeamId() : this.getDeploymentTeamId();
+  }
+
+  isEnabled(scope: UmamiTeamScope = 'deployment'): boolean {
     const explicit = parseBoolean(process.env.UMAMI_ENABLED);
     if (explicit !== null) {
       return explicit;
     }
-    return Boolean(this.getHost() && this.getUsername() && this.getPassword() && this.getTeamId());
+    return Boolean(
+      this.getHost() && this.getUsername() && this.getPassword() && this.getTeamId(scope)
+    );
   }
 
-  isConfigured(): boolean {
-    return this.isEnabled() && Boolean(this.getHost() && this.getUsername() && this.getPassword() && this.getTeamId());
+  isConfigured(scope: UmamiTeamScope = 'deployment'): boolean {
+    return (
+      this.isEnabled(scope) &&
+      Boolean(this.getHost() && this.getUsername() && this.getPassword() && this.getTeamId(scope))
+    );
   }
 
   getTrackerHost(): string {
@@ -249,12 +265,13 @@ class UmamiAnalyticsService {
     return token;
   }
 
-  async listWebsites(): Promise<UmamiWebsiteSummary[]> {
-    if (!this.isConfigured()) {
+  async listWebsites(input?: { scope?: UmamiTeamScope }): Promise<UmamiWebsiteSummary[]> {
+    const scope = input?.scope || 'deployment';
+    if (!this.isConfigured(scope)) {
       return [];
     }
 
-    const teamId = this.getTeamId();
+    const teamId = this.getTeamId(scope);
     const pageSize = 100;
     let page = 1;
     const collected: UmamiWebsiteSummary[] = [];
@@ -280,6 +297,7 @@ class UmamiAnalyticsService {
               id: asText(record.id),
               name: asText(record.name) || undefined,
               domain: normalizeDomain(asText(record.domain)) || undefined,
+              teamId: asText(record.teamId) || undefined,
             } satisfies UmamiWebsiteSummary;
           })
           .filter((item) => item.id)
@@ -303,8 +321,13 @@ class UmamiAnalyticsService {
     return collected;
   }
 
-  async ensureWebsite(input: { name: string; domain: string }): Promise<UmamiWebsiteSummary> {
-    if (!this.isConfigured()) {
+  async ensureWebsite(input: {
+    scope?: UmamiTeamScope;
+    name: string;
+    domain: string;
+  }): Promise<UmamiWebsiteSummary> {
+    const scope = input.scope || 'deployment';
+    if (!this.isConfigured(scope)) {
       throw new Error('Umami 未配置完成');
     }
 
@@ -313,7 +336,7 @@ class UmamiAnalyticsService {
       throw new Error('缺少有效站点域名');
     }
 
-    const websites = await this.listWebsites();
+    const websites = await this.listWebsites({ scope });
     const matched = websites.find((item) => normalizeDomain(item.domain || '') === normalizedDomain);
     if (matched) {
       return matched;
@@ -327,7 +350,7 @@ class UmamiAnalyticsService {
       body: JSON.stringify({
         name: asText(input.name) || normalizedDomain,
         domain: normalizedDomain,
-        teamId: this.getTeamId(),
+        teamId: this.getTeamId(scope),
       }),
     });
     const record = asObject(unwrapPayload<unknown>(payload));
@@ -339,7 +362,97 @@ class UmamiAnalyticsService {
       id,
       name: asText(record.name) || asText(input.name) || normalizedDomain,
       domain: normalizeDomain(asText(record.domain) || normalizedDomain) || normalizedDomain,
+      teamId: asText(record.teamId) || this.getTeamId(scope) || undefined,
     };
+  }
+
+  async updateWebsite(
+    websiteId: string,
+    input: {
+      scope?: UmamiTeamScope;
+      name?: string;
+      domain: string;
+    }
+  ): Promise<UmamiWebsiteSummary> {
+    const scope = input.scope || 'deployment';
+    if (!this.isConfigured(scope)) {
+      throw new Error('Umami 未配置完成');
+    }
+
+    const safeWebsiteId = asText(websiteId);
+    const normalizedDomain = normalizeDomain(input.domain);
+    if (!safeWebsiteId) {
+      throw new Error('缺少 websiteId');
+    }
+    if (!normalizedDomain) {
+      throw new Error('缺少有效站点域名');
+    }
+
+    const payload = await this.request<unknown>(`/api/websites/${encodeURIComponent(safeWebsiteId)}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: asText(input.name) || normalizedDomain,
+        domain: normalizedDomain,
+      }),
+    });
+    const record = asObject(unwrapPayload<unknown>(payload));
+    const id = asText(record.id) || safeWebsiteId;
+    if (!id) {
+      throw new Error('Umami website 更新失败');
+    }
+    return {
+      id,
+      name: asText(record.name) || asText(input.name) || normalizedDomain,
+      domain: normalizeDomain(asText(record.domain) || normalizedDomain) || normalizedDomain,
+      teamId: asText(record.teamId) || undefined,
+    };
+  }
+
+  async ensureWebsiteBinding(input: {
+    scope?: UmamiTeamScope;
+    websiteId?: string;
+    name: string;
+    domain: string;
+  }): Promise<UmamiWebsiteSummary> {
+    const scope = input.scope || 'deployment';
+    const normalizedDomain = normalizeDomain(input.domain);
+    const safeWebsiteId = asText(input.websiteId);
+    const scopedWebsites = await this.listWebsites({ scope });
+
+    if (safeWebsiteId && scopedWebsites.some((item) => item.id === safeWebsiteId)) {
+      try {
+        return await this.updateWebsite(safeWebsiteId, {
+          scope,
+          name: input.name,
+          domain: input.domain,
+        });
+      } catch (error: any) {
+        const message = asText(error?.message).toLowerCase();
+        if (!message.includes('not found')) {
+          throw error;
+        }
+      }
+    }
+
+    const matchedInScope = scopedWebsites.find(
+      (item) => normalizeDomain(item.domain || '') === normalizedDomain
+    );
+    if (matchedInScope?.id) {
+      return this.updateWebsite(matchedInScope.id, {
+        scope,
+        name: input.name,
+        domain: input.domain,
+      });
+    }
+
+    return this.ensureWebsite({
+      scope,
+      name: input.name,
+      domain: input.domain,
+    });
   }
 
   async deleteWebsite(websiteId: string): Promise<boolean> {

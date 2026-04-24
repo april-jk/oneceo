@@ -5,6 +5,8 @@ import { AltusManagedToolRuntime } from '../src/services/altus-managed-tool-runt
 import { sandboxSkillSyncService } from '../src/services/sandbox-skill-sync-service';
 import { connectorGuideService } from '../src/services/connector-guide-service';
 import { osacAgentService } from '../src/services/osac-agent-service';
+import { altusManagedDeploymentToolService } from '../src/services/altus-managed-deployment-tool-service';
+import { userSkillService } from '../src/services/user-skill-service';
 import { buildManagedMcpToolName } from '../src/services/altus-managed-shared';
 
 afterEach(() => {
@@ -273,6 +275,88 @@ test('write_file marks sandbox dirty so archive job can persist latest workspace
   assert.deepEqual(markSandboxDirtyMock.mock.calls[0]?.arguments, ['sandbox-1', 'managed_write_file']);
 });
 
+test('deployment tool usage auto-attaches governed skill linked by tool name', async () => {
+  const resolveMock = mock.method(userSkillService, 'resolveSelectionsForSession', async () => [
+    {
+      sourceType: 'platform',
+      skillId: 'deploy-skill-1',
+      revisionId: 'deploy-rev-1',
+      slug: 'deployment-orchestrator',
+      name: '部署编排',
+      description: '自动处理部署工作流',
+      category: 'deployment',
+      renderedMarkdown: '# deployment-orchestrator',
+      revisionNumber: 1,
+      governance: {
+        systemRole: 'deployment_orchestrator',
+        adminManaged: true,
+        required: false,
+        autoActivation: {
+          enabled: true,
+          triggers: ['deploy'],
+          toolNames: ['deploy_application'],
+        },
+      },
+      resourceSummary: null,
+    },
+  ] as any);
+  const syncMock = mock.method(sandboxSkillSyncService, 'syncResolvedSkills', async () => ({
+    taskSessionId: 'session-1',
+    orchestratorSessionId: 'sandbox-1',
+    signature: 'sig-1',
+    restartTriggered: true,
+    changed: true,
+    items: [],
+    syncedAt: new Date().toISOString(),
+  }) as any);
+  mock.method(altusManagedDeploymentToolService, 'execute', async () => ({
+    action: 'deploy_application',
+    status: 'success',
+    summary: 'deployment ok',
+  }) as any);
+
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    availableSkills: [
+      {
+        sourceType: 'platform',
+        skillId: 'deploy-skill-1',
+        revisionId: 'deploy-rev-1',
+        slug: 'deployment-orchestrator',
+        name: '部署编排',
+        description: '自动处理部署工作流',
+        category: 'deployment',
+        revisionNumber: 1,
+        governance: {
+          systemRole: 'deployment_orchestrator',
+          adminManaged: true,
+          required: false,
+          autoActivation: {
+            enabled: true,
+            triggers: ['deploy'],
+            toolNames: ['deploy_application'],
+          },
+        },
+        resourceSummary: null,
+      },
+    ],
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  const result = await runtime.execute('deploy_application', {
+    notes: '帮我部署当前项目',
+  });
+
+  assert.equal(resolveMock.mock.callCount(), 1);
+  assert.equal(syncMock.mock.callCount(), 1);
+  assert.equal(result.type, 'result');
+  assert.deepEqual(result.activatedSkills?.map((item) => item.slug), ['deployment-orchestrator']);
+});
+
 test('shell_execute marks sandbox dirty after command execution', async () => {
   mock.method(e2bConnector, 'runCommand', async () => ({
     stdout: 'ok',
@@ -306,6 +390,168 @@ test('shell_execute marks sandbox dirty after command execution', async () => {
   assert.equal(result.type, 'result');
   assert.equal(markSandboxDirtyMock.mock.callCount(), 1);
   assert.deepEqual(markSandboxDirtyMock.mock.calls[0]?.arguments, ['sandbox-1', 'managed_shell_execute']);
+});
+
+test('shell_execute prepares vite build entry when only public index exists', async () => {
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async (_sandboxId: string, command: string) => {
+    if (command.includes('package_json=1')) {
+      return {
+        stdout: ['package_json=1', 'root_index=0', 'public_index=1', 'client_index=0', 'vite_project=1'].join('\n'),
+        stderr: '',
+        exitCode: 0,
+      } as any;
+    }
+    if (command.includes('cp ') && command.includes('index.html')) {
+      return {
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+      } as any;
+    }
+    return {
+      stdout: 'vite build ok',
+      stderr: '',
+      exitCode: 0,
+    } as any;
+  });
+
+  const markSandboxDirtyMock = mock.fn(async () => undefined);
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: mock.fn(async () => undefined) as any,
+      markSandboxDirty: markSandboxDirtyMock as any,
+    }
+  );
+
+  const result = await runtime.execute('shell_execute', {
+    command: 'npm run build',
+    cwd: 'acrylic-export',
+  });
+
+  assert.equal(result.type, 'result');
+  assert.equal(runCommandMock.mock.callCount(), 3);
+  assert.match(String(runCommandMock.mock.calls[1]?.arguments[1]), /cp 'public\/index\.html' index\.html/);
+  assert.match(String(runCommandMock.mock.calls[2]?.arguments[1]), /npm run build/);
+  assert.deepEqual(markSandboxDirtyMock.mock.calls.map((call) => call.arguments[1]), [
+    'managed_frontend_build_prepare',
+    'managed_shell_execute',
+  ]);
+});
+
+test('shell_execute prepares vite build entry for leading cd build commands', async () => {
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async (_sandboxId: string, command: string, options?: any) => {
+    if (command.includes('package_json=1')) {
+      return {
+        stdout: ['package_json=1', 'root_index=0', 'public_index=1', 'client_index=0', 'vite_project=1'].join('\n'),
+        stderr: '',
+        exitCode: 0,
+      } as any;
+    }
+    if (command.includes('cp ') && command.includes('index.html')) {
+      return {
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+      } as any;
+    }
+    return {
+      stdout: 'vite build ok',
+      stderr: '',
+      exitCode: 0,
+    } as any;
+  });
+
+  const markSandboxDirtyMock = mock.fn(async () => undefined);
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: mock.fn(async () => undefined) as any,
+      markSandboxDirty: markSandboxDirtyMock as any,
+    }
+  );
+
+  const result = await runtime.execute('shell_execute', {
+    command: 'cd acrylic-export && npm run build',
+    cwd: '.',
+  });
+
+  assert.equal(result.type, 'result');
+  assert.equal(runCommandMock.mock.callCount(), 3);
+  assert.equal(runCommandMock.mock.calls[0]?.arguments[2]?.cwd, '/workspace/session-1/acrylic-export');
+  assert.equal(runCommandMock.mock.calls[1]?.arguments[2]?.cwd, '/workspace/session-1/acrylic-export');
+  assert.match(String(runCommandMock.mock.calls[1]?.arguments[1]), /cp 'public\/index\.html' index\.html/);
+  assert.deepEqual(markSandboxDirtyMock.mock.calls.map((call) => call.arguments[1]), [
+    'managed_frontend_build_prepare',
+    'managed_shell_execute',
+  ]);
+});
+
+test('shell_execute blocks preview/dev commands while deployment-orchestrator is active', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [
+      {
+        id: 'skill-1',
+        slug: 'deployment-orchestrator',
+        name: '部署编排',
+        promptMarkdown: '# deployment',
+      },
+    ],
+    mcpProviders: [],
+  });
+
+  await assert.rejects(
+    runtime.execute('shell_execute', {
+      command: 'PORT=3000 npm run preview > /dev/null 2>&1 &',
+      cwd: '.',
+    }),
+    /deployment_shell_preview_blocked/
+  );
+});
+
+test('shell_execute blocks persistent local server commands to avoid long timeout stalls', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  await assert.rejects(
+    runtime.execute('shell_execute', {
+      command: 'python3 -m http.server 8080',
+      cwd: '.',
+    }),
+    /shell_execute_persistent_local_server_blocked/
+  );
+
+  await assert.rejects(
+    runtime.execute('shell_execute', {
+      command: 'python3 -m http.server 8080 &',
+      cwd: '.',
+    }),
+    /shell_execute_persistent_local_server_blocked/
+  );
 });
 
 test('debug_open_page rejects non-http protocols', async () => {
@@ -432,4 +678,141 @@ test('debug_open_page fails fast when debug runtime reports failed status', asyn
   assert.equal(ensureDebugMock.mock.callCount(), 1);
   assert.equal(runCommandMock.mock.callCount(), 0);
   assert.equal(markSandboxDirtyMock.mock.callCount(), 0);
+});
+
+test('deployment tools are blocked for non-deployable artifact sessions', async () => {
+  const executeMock = mock.method(altusManagedDeploymentToolService, 'execute', async () => {
+    throw new Error('should_not_be_called');
+  });
+
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-non-deploy',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-non-deploy',
+    activeSkills: [],
+    mcpProviders: [],
+    taskIntentProfile: {
+      mode: 'non_deployable_artifact',
+      reason: 'historical_explicit_no_deploy',
+      recentUserMessages: [
+        '请帮我写一个 HTML 邮件模板，用于报价通知邮件。只需要输出源码文件，不需要做网站，也不要部署。',
+        '请按最佳方案直接继续，不需要再提问。',
+      ],
+      explicitNoDeploy: true,
+      explicitNoWeb: true,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: true,
+      deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
+    },
+  });
+
+  await assert.rejects(
+    runtime.execute('deploy_application', {
+      notes: 'publish current app',
+    }),
+    /deployment_tool_not_allowed_without_explicit_request/
+  );
+
+  assert.equal(executeMock.mock.callCount(), 0);
+});
+
+test('deployment tools are blocked for website source sessions without an explicit deploy request', async () => {
+  const executeMock = mock.method(altusManagedDeploymentToolService, 'execute', async () => {
+    throw new Error('should_not_be_called');
+  });
+
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-web-source-only',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-web-source-only',
+    activeSkills: [],
+    mcpProviders: [],
+    taskIntentProfile: {
+      mode: 'deployable_web_app',
+      reason: 'historical_deployable_request',
+      recentUserMessages: ['做一个纯 HTML 企业官网，包含首页、关于我们和联系我们，先给我源码文件。'],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: true,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
+    },
+  });
+
+  await assert.rejects(
+    runtime.execute('deploy_application', {
+      notes: 'publish current app',
+    }),
+    /deployment_tool_not_allowed_without_explicit_request/
+  );
+
+  await assert.rejects(
+    runtime.execute('get_application_deployment_status', {
+      notes: 'check deployment',
+    }),
+    /deployment_tool_not_allowed_without_explicit_request/
+  );
+
+  assert.equal(executeMock.mock.callCount(), 0);
+});
+
+test('todowrite accepts a valid in-progress todo snapshot', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-todo',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-todo',
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  const result = await runtime.execute('todowrite', {
+    todos: [
+      { content: '梳理需求边界', status: 'completed' },
+      { content: '修改后端主链', status: 'in_progress', activeForm: '正在修改后端主链' },
+      { content: '补充回归测试', status: 'pending' },
+    ],
+  });
+
+  assert.equal(result.type, 'result');
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.todos.length, 3);
+  assert.equal(payload.todos[1]?.status, 'in_progress');
+});
+
+test('todowrite rejects snapshots without exactly one in-progress item while work is ongoing', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-todo-invalid',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-todo-invalid',
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  await assert.rejects(
+    runtime.execute('todowrite', {
+      todos: [
+        { content: '修改后端主链', status: 'pending' },
+        { content: '补充回归测试', status: 'pending' },
+      ],
+    }),
+    /todowrite_requires_single_in_progress/
+  );
 });

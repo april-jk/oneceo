@@ -1137,18 +1137,58 @@ export class SandboxAgentProvisionService {
 
   async provision(input: ProvisionInput): Promise<ProvisionResult> {
     await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
+    const taskSessionId = pickString(input.metadata?.taskSessionId) || undefined;
+    const executor = normalizeProvisionExecutor(input.executor || input.metadata?.executor);
+    const provisionStartedAt = Date.now();
+    let currentSessionId: string | null = null;
+
+    writeConnectorDebugLog('[PROVISION_START]', {
+      taskSessionId: taskSessionId || null,
+      executor,
+      idempotencyKey: input.idempotencyKey || null,
+      bindTaskSessionId: pickString(input.bind?.taskSessionId) || null,
+    });
+
     const runStep = async <T>(name: string, fn: () => Promise<T>): Promise<T> => {
+      const startedAt = Date.now();
+      writeConnectorDebugLog('[PROVISION_STEP_START]', {
+        taskSessionId: taskSessionId || null,
+        executor,
+        orchestratorSessionId: currentSessionId,
+        step: name,
+      });
       try {
-        return await fn();
+        const result = await fn();
+        const candidateSessionId =
+          result && typeof result === 'object' && !Array.isArray(result)
+            ? pickString((result as Record<string, unknown>).sessionId)
+            : null;
+        if (candidateSessionId) {
+          currentSessionId = candidateSessionId;
+        }
+        writeConnectorDebugLog('[PROVISION_STEP_DONE]', {
+          taskSessionId: taskSessionId || null,
+          executor,
+          orchestratorSessionId: currentSessionId,
+          step: name,
+          durationMs: Date.now() - startedAt,
+        });
+        return result;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        writeConnectorDebugLog('[PROVISION_STEP_FAILED]', {
+          taskSessionId: taskSessionId || null,
+          executor,
+          orchestratorSessionId: currentSessionId,
+          step: name,
+          durationMs: Date.now() - startedAt,
+          error: message,
+        }, 'error');
         throw new Error(`[PROVISION:${name}] ${message}`);
       }
     };
 
     const envInput = buildSandboxEnv();
-    const taskSessionId = pickString(input.metadata?.taskSessionId) || undefined;
-    const executor = normalizeProvisionExecutor(input.executor || input.metadata?.executor);
     const codexExecutionMode = await resolveProvisionCodexMode(taskSessionId, input.metadata);
     const selectedTemplate = resolveProvisionTemplate(executor, codexExecutionMode);
     const reusableResolution = taskSessionId
@@ -1190,6 +1230,7 @@ export class SandboxAgentProvisionService {
           );
 
       const sessionId = reusable?.sessionId || environment.sessionId;
+      currentSessionId = sessionId;
       const isReused = Boolean(reusable);
 
       try {
@@ -1212,9 +1253,11 @@ export class SandboxAgentProvisionService {
         let codexAuthJson: string | null = null;
 
         if (!isReused) {
-          const restored = await restoreWorkspaceIfArchived(
-            sessionId,
-            preferredRestoreSnapshotKey ? { snapshotKey: preferredRestoreSnapshotKey } : undefined
+          const restored = await runStep('workspace_restore', () =>
+            restoreWorkspaceIfArchived(
+              sessionId,
+              preferredRestoreSnapshotKey ? { snapshotKey: preferredRestoreSnapshotKey } : undefined
+            )
           );
           if (preferredRestoreSnapshotKey && !restored) {
             throw new Error(`template migration restore failed: snapshot=${preferredRestoreSnapshotKey}`);
@@ -1441,6 +1484,14 @@ export class SandboxAgentProvisionService {
           });
         }
 
+        writeConnectorDebugLog('[PROVISION_DONE]', {
+          taskSessionId: taskSessionId || null,
+          executor,
+          orchestratorSessionId: sessionId,
+          reused: isReused,
+          durationMs: Date.now() - provisionStartedAt,
+        });
+
         return {
           sessionId,
           vmName: null,
@@ -1486,6 +1537,17 @@ export class SandboxAgentProvisionService {
         reusable = null;
       }
     }
+
+    writeConnectorDebugLog('[PROVISION_FAILED]', {
+      taskSessionId: taskSessionId || null,
+      executor,
+      orchestratorSessionId: currentSessionId,
+      durationMs: Date.now() - provisionStartedAt,
+      error:
+        lastRecoverableError instanceof Error
+          ? lastRecoverableError.message
+          : String(lastRecoverableError || 'sandbox provision failed'),
+    }, 'error');
 
     throw lastRecoverableError instanceof Error
       ? lastRecoverableError

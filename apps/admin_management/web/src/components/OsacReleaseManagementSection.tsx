@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import type { OsacRelease, OsacReleaseDetailResponse } from '../types';
+import { DEFAULT_OSAC_RELEASE_MANAGEMENT_VIEW_STATE } from './adminViewState';
+import type { OsacReleaseManagementViewState, OsacReleaseTabKey } from './adminViewState';
 
 type Props = {
   onError: (message: string | null) => void;
+  onUpdatedAtChange?: (value: string | null) => void;
+  onRegisterRefresh?: (handler: (() => Promise<void>) | null) => void;
+  persistedState?: OsacReleaseManagementViewState | null;
+  onStateChange?: (state: OsacReleaseManagementViewState) => void;
 };
 
-type TabKey = 'published' | 'pending' | 'all' | 'upload';
+type TabKey = OsacReleaseTabKey;
 
 function formatDateTime(value?: string | null) {
   if (!value) return '-';
@@ -73,15 +79,23 @@ const DEFAULT_UPLOAD_FORM = {
   binary: null as File | null,
 };
 
-export function OsacReleaseManagementSection({ onError }: Props) {
-  const [tab, setTab] = useState<TabKey>('published');
+export function OsacReleaseManagementSection({
+  onError,
+  onUpdatedAtChange,
+  onRegisterRefresh,
+  persistedState,
+  onStateChange,
+}: Props) {
+  const initialState = persistedState || DEFAULT_OSAC_RELEASE_MANAGEMENT_VIEW_STATE;
+  const [tab, setTab] = useState<TabKey>(initialState.tab);
   const [list, setList] = useState<OsacRelease[]>([]);
   const [publishedReleaseId, setPublishedReleaseId] = useState<string | null>(null);
   const [publishedVersion, setPublishedVersion] = useState<string | null>(null);
-  const [selectedReleaseId, setSelectedReleaseId] = useState<string | null>(null);
+  const [selectedReleaseId, setSelectedReleaseId] = useState<string | null>(initialState.selectedReleaseId);
   const [detail, setDetail] = useState<OsacReleaseDetailResponse | null>(null);
+  const [detailDialogOpen, setDetailDialogOpen] = useState(initialState.detailDialogOpen);
   const [busy, setBusy] = useState(false);
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(initialState.query);
   const [uploadForm, setUploadForm] = useState(DEFAULT_UPLOAD_FORM);
 
   const currentPublishedReleaseId =
@@ -152,15 +166,19 @@ export function OsacReleaseManagementSection({ onError }: Props) {
 
   useEffect(() => {
     if (tab === 'upload') {
+      setDetailDialogOpen(false);
       return;
     }
     if (filteredList.length === 0) {
       setSelectedReleaseId(null);
       setDetail(null);
+      setDetailDialogOpen(false);
       return;
     }
     if (!selectedReleaseId || !filteredList.some((item) => item.id === selectedReleaseId)) {
       setSelectedReleaseId(filteredList[0].id);
+      setDetail(null);
+      setDetailDialogOpen(false);
     }
   }, [filteredList, selectedReleaseId, tab]);
 
@@ -202,11 +220,68 @@ export function OsacReleaseManagementSection({ onError }: Props) {
   }, [loadList, onError]);
 
   useEffect(() => {
-    if (!selectedReleaseId) return;
+    if (!detailDialogOpen || !selectedReleaseId) return;
+    if (detail?.release?.id === selectedReleaseId) return;
     void loadDetail(selectedReleaseId).catch((error) => {
       onError(error instanceof Error ? error.message : 'OSAC release 详情加载失败');
     });
-  }, [loadDetail, onError, selectedReleaseId]);
+  }, [detail?.release?.id, detailDialogOpen, loadDetail, onError, selectedReleaseId]);
+
+  useEffect(() => {
+    onUpdatedAtChange?.(
+      selectedRelease?.updatedAt
+      || currentPublishedRelease?.updatedAt
+      || list[0]?.updatedAt
+      || null
+    );
+  }, [currentPublishedRelease?.updatedAt, list, onUpdatedAtChange, selectedRelease?.updatedAt]);
+
+  const handleExternalRefresh = useCallback(async () => {
+    await loadList();
+    if (selectedReleaseId) {
+      await loadDetail(selectedReleaseId);
+    }
+  }, [loadDetail, loadList, selectedReleaseId]);
+
+  useEffect(() => {
+    onRegisterRefresh?.(handleExternalRefresh);
+    return () => {
+      onRegisterRefresh?.(null);
+    };
+  }, [handleExternalRefresh, onRegisterRefresh]);
+
+  useEffect(() => {
+    onStateChange?.({
+      tab,
+      query,
+      selectedReleaseId,
+      detailDialogOpen,
+    });
+  }, [detailDialogOpen, onStateChange, query, selectedReleaseId, tab]);
+
+  const handleRefreshList = useCallback(() => {
+    void handleExternalRefresh().catch((error) => {
+      onError(error instanceof Error ? error.message : 'OSAC release 列表加载失败');
+    });
+  }, [handleExternalRefresh, onError]);
+
+  const closeDetailDialog = useCallback(() => {
+    setDetailDialogOpen(false);
+  }, []);
+
+  const openDetailDialog = useCallback(
+    async (releaseId: string) => {
+      setSelectedReleaseId(releaseId);
+      setDetail(null);
+      setDetailDialogOpen(true);
+      try {
+        await loadDetail(releaseId);
+      } catch (error) {
+        onError(error instanceof Error ? error.message : 'OSAC release 详情加载失败');
+      }
+    },
+    [loadDetail, onError]
+  );
 
   const submitUpload = async () => {
     if (!uploadForm.version.trim()) {
@@ -281,13 +356,12 @@ export function OsacReleaseManagementSection({ onError }: Props) {
   };
 
   return (
-    <main className="content-stack osac-release-page">
+    <main className="content-stack viewport-lock-page osac-release-page">
       <section className="panel hero-panel fade-in osac-release-hero-panel">
         <div className="panel-header osac-release-hero-head">
           <div>
             <p className="section-tag">OSAC 发布台</p>
             <h2>稳定版发布</h2>
-            <p className="panel-copy osac-release-hero-copy">上传、校验、切换 latest 都在同一条工作流里完成，减少来回跳转。</p>
           </div>
           <div className="osac-release-hero-meta">
             <span className="service-state ok">stable 渠道</span>
@@ -314,11 +388,6 @@ export function OsacReleaseManagementSection({ onError }: Props) {
           </div>
         </div>
 
-        <div className="osac-release-rule-strip">
-          <span className="osac-release-rule-chip">上传后不会自动生效</span>
-          <span className="osac-release-rule-chip">发布记录决定 latest</span>
-          <span className="osac-release-rule-chip">二进制通过短时链接分发</span>
-        </div>
       </section>
 
       <section className="panel fade-in osac-release-panel osac-release-console">
@@ -326,7 +395,7 @@ export function OsacReleaseManagementSection({ onError }: Props) {
           <div>
             <p className="eyebrow">发布工作区</p>
             <h2>版本选择与切换</h2>
-            <p className="subtitle">先选版本，再在右侧完成校验、发布或切换。</p>
+            <p className="subtitle">先从索引里选版本，再进入二级详情完成校验、发布或切换。</p>
           </div>
           <div className="section-actions osac-release-toolbar">
             <input
@@ -335,8 +404,8 @@ export function OsacReleaseManagementSection({ onError }: Props) {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
-            <button type="button" className="ghost-btn" onClick={() => void loadList()} disabled={busy}>
-              刷新
+            <button type="button" className="ghost-btn" onClick={handleRefreshList} disabled={busy}>
+              同步列表
             </button>
           </div>
         </div>
@@ -443,14 +512,17 @@ export function OsacReleaseManagementSection({ onError }: Props) {
             </article>
           </div>
         ) : (
-          <div className="osac-release-console-grid">
+          <div className="osac-release-console-list-shell">
             <article className="sub-panel osac-release-list-panel">
               <div className="editor-header osac-release-list-head">
                 <div>
                   <h3>{currentListTitle}</h3>
                   <p className="cell-subtle">{currentListSubtitle}</p>
                 </div>
-                <span className="session-status">{filteredList.length} 个版本</span>
+                <div className="osac-release-list-head-meta">
+                  <span className="panel-caption">点击版本进入详情</span>
+                  <span className="session-status">{filteredList.length} 个版本</span>
+                </div>
               </div>
               {filteredList.length === 0 ? (
                 <p className="empty osac-release-empty">当前标签下没有版本。</p>
@@ -463,8 +535,8 @@ export function OsacReleaseManagementSection({ onError }: Props) {
                       <button
                         key={item.id}
                         type="button"
-                        className={`osac-release-row ${isSelected ? 'active' : ''}`}
-                        onClick={() => setSelectedReleaseId(item.id)}
+                        className={`osac-release-row ${isSelected && detailDialogOpen ? 'active' : ''}`}
+                        onClick={() => void openDetailDialog(item.id)}
                       >
                         <div className="osac-release-row-main">
                           <div className="osac-release-row-title">
@@ -478,6 +550,7 @@ export function OsacReleaseManagementSection({ onError }: Props) {
                         <div className="osac-release-row-side">
                           <span className={`status-pill osac-release-status-${item.status}`}>{releaseStatusLabel(item.status)}</span>
                           <span className="mono osac-release-row-sha">{shortSha(item.sha256)}</span>
+                          <span className="osac-release-row-link">查看详情</span>
                         </div>
                       </button>
                     );
@@ -485,19 +558,40 @@ export function OsacReleaseManagementSection({ onError }: Props) {
                 </div>
               )}
             </article>
+          </div>
+        )}
+      </section>
 
-            <article className="sub-panel osac-release-detail-panel">
-              <div className="editor-header osac-release-detail-head">
-                <div>
-                  <h3>版本详情</h3>
-                  <p className="cell-subtle">右侧只展示当前选中版本，操作不会和列表混在一起。</p>
-                </div>
+      {detailDialogOpen ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeDetailDialog}>
+          <article
+            className="modal-card osac-release-modal"
+            aria-labelledby="osac-release-detail-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header osac-release-modal-header">
+              <div>
+                <p className="section-tag">OSAC 版本详情</p>
+                <h2 id="osac-release-detail-title">{selectedRelease?.version || '版本详情'}</h2>
+                <p className="panel-caption">
+                  {selectedRelease
+                    ? `${selectedRelease.platform}/${selectedRelease.arch} · 上传于 ${formatDateTime(selectedRelease.uploadedAt)}`
+                    : '正在加载版本详情...'}
+                </p>
+              </div>
+              <div className="osac-release-modal-actions">
                 {selectedRelease ? (
                   <span className={`status-pill osac-release-status-${selectedRelease.status}`}>
                     {selectedRelease.id === currentPublishedReleaseId ? '当前已发布' : releaseStatusLabel(selectedRelease.status)}
                   </span>
                 ) : null}
+                <button type="button" className="icon-btn" aria-label="关闭 OSAC 版本详情" onClick={closeDetailDialog}>
+                  <span aria-hidden="true">×</span>
+                </button>
               </div>
+            </div>
+
+            <div className="modal-body osac-release-modal-body">
               {selectedRelease ? (
                 <>
                   <div className="osac-release-detail-summary">
@@ -512,6 +606,18 @@ export function OsacReleaseManagementSection({ onError }: Props) {
                     <div>
                       <span>上传人</span>
                       <strong>{selectedRelease.uploadedBy || '-'}</strong>
+                    </div>
+                    <div>
+                      <span>当前 latest</span>
+                      <strong>{detail?.currentPublishedVersion || publishedVersion || '-'}</strong>
+                    </div>
+                    <div>
+                      <span>状态</span>
+                      <strong>{selectedRelease.id === currentPublishedReleaseId ? '当前已发布' : releaseStatusLabel(selectedRelease.status)}</strong>
+                    </div>
+                    <div>
+                      <span>发布时间</span>
+                      <strong>{formatDateTime(selectedRelease.publishedAt)}</strong>
                     </div>
                   </div>
 
@@ -551,7 +657,7 @@ export function OsacReleaseManagementSection({ onError }: Props) {
                     <p>{selectedRelease.releaseNotes?.trim() || '暂无发布说明。'}</p>
                   </article>
 
-                  <div className="osac-release-action-row">
+                  <div className="osac-release-action-row osac-release-modal-action-row">
                     <button
                       type="button"
                       className="ghost-btn"
@@ -582,12 +688,12 @@ export function OsacReleaseManagementSection({ onError }: Props) {
                   </div>
                 </>
               ) : (
-                <p className="empty osac-release-empty">请选择一个版本查看详情。</p>
+                <p className="empty osac-release-empty">正在加载版本详情...</p>
               )}
-            </article>
-          </div>
-        )}
-      </section>
+            </div>
+          </article>
+        </div>
+      ) : null}
     </main>
   );
 }

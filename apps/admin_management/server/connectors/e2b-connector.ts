@@ -4,12 +4,110 @@ import { AppError } from '../utils/errors';
 import { ensureProxyDispatcher } from '../utils/http-proxy';
 
 type ListedSandbox = components['schemas']['ListedSandbox'];
+const E2B_LIST_RETRY_DELAYS_MS = [350, 900, 1600];
 
 function requireApiKey() {
   if (!config.e2bApiKey) {
     throw new AppError(500, 'E2B_API_KEY 未配置，无法访问 E2B API');
   }
   ensureProxyDispatcher();
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return 'unknown_error';
+  }
+}
+
+function getErrorStatusCode(error: unknown): number | null {
+  if (!error || typeof error !== 'object') return null;
+  const record = error as Record<string, any>;
+  const candidates = [
+    record.statusCode,
+    record.status,
+    record.response?.statusCode,
+    record.response?.status,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) return candidate;
+    if (typeof candidate === 'string') {
+      const parsed = Number(candidate);
+      if (Number.isInteger(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+function isRetriableSandboxListError(error: unknown) {
+  const statusCode = getErrorStatusCode(error);
+  if (statusCode && [408, 409, 425, 429, 500, 502, 503, 504].includes(statusCode)) {
+    return true;
+  }
+
+  const message = getErrorMessage(error).toLowerCase();
+  return [
+    'fetch failed',
+    'network',
+    'timeout',
+    'timed out',
+    'econnreset',
+    'econnrefused',
+    'eai_again',
+    'etimedout',
+    'socket',
+    'undici',
+    'rate limit',
+    'too many requests',
+    'temporarily',
+    '429',
+    '500',
+    '502',
+    '503',
+    '504',
+  ].some((keyword) => message.includes(keyword));
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readSandboxListPage<T>(operation: () => Promise<T>, context: string): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= E2B_LIST_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      const retryDelayMs = E2B_LIST_RETRY_DELAYS_MS[attempt];
+      const retrying = retryDelayMs !== undefined && isRetriableSandboxListError(error);
+      console.warn('[admin-management][e2b] Sandbox list page failed', {
+        context,
+        attempt: attempt + 1,
+        retrying,
+        retryDelayMs,
+        statusCode: getErrorStatusCode(error),
+        message: getErrorMessage(error),
+      });
+      if (!retrying) break;
+      await sleep(retryDelayMs);
+    }
+  }
+
+  throw new AppError(502, 'E2B Sandbox 列表暂时不可用', {
+    context,
+    statusCode: getErrorStatusCode(lastError),
+    message: getErrorMessage(lastError),
+  });
+}
+
+function normalizeSandboxListPage(page: unknown): ListedSandbox[] {
+  return Array.isArray(page)
+    ? (page as ListedSandbox[])
+    : ((page as any)?.items || (page as any)?.sandboxes || []);
 }
 
 export type E2bSandboxListItem = {
@@ -126,6 +224,8 @@ async function listSandboxes(
   query?: { state?: SandboxState[]; metadata?: Record<string, string> }
 ): Promise<E2bSandboxListItem[]> {
   requireApiKey();
+  const requestedLimit = Math.max(1, Math.floor(limit));
+  const pageLimit = Math.min(requestedLimit, 100);
   const effectiveQuery = {
     state: query?.state ?? ['running', 'paused'],
     metadata: query?.metadata,
@@ -133,18 +233,52 @@ async function listSandboxes(
   const paginator = Sandbox.list({
     apiKey: config.e2bApiKey,
     query: effectiveQuery,
-    limit,
+    limit: pageLimit,
   });
   const items: E2bSandboxListItem[] = [];
-  while (paginator.hasNext && items.length < limit) {
-    const page = await paginator.nextItems();
-    const list = Array.isArray(page) ? page : ((page as any)?.items || (page as any)?.sandboxes || []);
-    for (const entry of list as ListedSandbox[]) {
+  while (paginator.hasNext && items.length < requestedLimit) {
+    const page = await readSandboxListPage(
+      () => paginator.nextItems(),
+      `listSandboxes:${items.length}/${requestedLimit}`
+    );
+    const list = normalizeSandboxListPage(page);
+    for (const entry of list) {
       items.push(toListItem(entry));
-      if (items.length >= limit) break;
+      if (items.length >= requestedLimit) break;
     }
   }
   return items;
+}
+
+async function summarizeLiveSandboxes() {
+  requireApiKey();
+  const paginator = Sandbox.list({
+    apiKey: config.e2bApiKey,
+    query: { state: ['running', 'paused'] },
+    limit: 100,
+  });
+  let total = 0;
+  const byState: Record<string, number> = {};
+  let pagesScanned = 0;
+  while (paginator.hasNext) {
+    const page = await readSandboxListPage(
+      () => paginator.nextItems(),
+      `summarizeLiveSandboxes:${pagesScanned}`
+    );
+    const list = normalizeSandboxListPage(page);
+    pagesScanned += 1;
+    total += list.length;
+    for (const item of list) {
+      byState[item.state] = (byState[item.state] || 0) + 1;
+    }
+  }
+  return {
+    total,
+    running: byState.running || 0,
+    paused: byState.paused || 0,
+    pagesScanned,
+    countedAt: new Date().toISOString(),
+  };
 }
 
 async function getSandboxInfo(sandboxId: string): Promise<E2bSandboxDetail> {
@@ -235,6 +369,7 @@ async function resumeSandbox(sandboxId: string): Promise<boolean> {
 
 export const e2bConnector = {
   listSandboxes,
+  summarizeLiveSandboxes,
   getSandboxInfo,
   getSandboxFullInfo,
   getSandboxMetrics,

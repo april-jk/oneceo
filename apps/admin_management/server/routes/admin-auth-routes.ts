@@ -74,7 +74,7 @@ export function createAdminAuthRoutes(oneceoApi: OneceoApiConnector) {
     } catch (error: any) {
       return res.status(401).json({
         success: false,
-        error: { message: error instanceof Error ? error.message : '管理员登录态无效' },
+        error: { message: error instanceof Error ? error.message : '管理员登录已失效，请重新登录' },
       });
     }
   });

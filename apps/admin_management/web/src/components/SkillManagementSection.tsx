@@ -2,18 +2,33 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import type {
   SkillDetail,
+  SkillGovernanceOption,
+  SkillGovernanceOptions,
   SkillImportPreview,
   SkillRevision,
   SkillRevisionResources,
   SkillSummary,
   SkillValidationResult,
 } from '../types';
+import {
+  DEFAULT_SKILL_MANAGEMENT_FILTERS,
+  DEFAULT_SKILL_MANAGEMENT_VIEW_STATE,
+} from './adminViewState';
+import type { SkillManagementViewState, SkillViewFilter } from './adminViewState';
 
 type EditorState = {
   slug: string;
   name: string;
   description: string;
   category: string;
+  governance: {
+    systemRole: string;
+    adminManaged: boolean;
+    required: boolean;
+    autoActivationEnabled: boolean;
+    autoActivationTriggers: string;
+    autoActivationToolNames: string;
+  };
   bodyMarkdown: string;
   documents: Array<{
     documentKey: string;
@@ -31,18 +46,31 @@ type ImportedFolderPayload = {
 };
 
 type ImportFileStatus = 'pending' | 'success' | 'failed';
-type SkillViewFilter = 'all' | 'active' | 'archived' | 'published' | 'unpublished';
 
 const EMPTY_EDITOR: EditorState = {
   slug: '',
   name: '',
   description: '',
   category: 'general',
+  governance: {
+    systemRole: '',
+    adminManaged: false,
+    required: false,
+    autoActivationEnabled: false,
+    autoActivationTriggers: '',
+    autoActivationToolNames: '',
+  },
   bodyMarkdown: '',
   documents: [],
 };
 
 const DEFAULT_CATEGORY_OPTIONS = ['general', 'office', 'engineering', 'ops', 'design'];
+const EMPTY_GOVERNANCE_OPTIONS: SkillGovernanceOptions = {
+  systemRoles: [],
+  autoActivationTriggers: [],
+  toolNames: [],
+};
+const DEFAULT_FILTERS = DEFAULT_SKILL_MANAGEMENT_FILTERS;
 
 function toEditorState(detail: SkillDetail): EditorState {
   return {
@@ -50,6 +78,18 @@ function toEditorState(detail: SkillDetail): EditorState {
     name: detail.name,
     description: detail.description || '',
     category: detail.category || 'general',
+    governance: {
+      systemRole: detail.governance?.systemRole || '',
+      adminManaged: Boolean(detail.governance?.adminManaged),
+      required: Boolean(detail.governance?.required),
+      autoActivationEnabled: Boolean(detail.governance?.autoActivation?.enabled),
+      autoActivationTriggers: Array.isArray(detail.governance?.autoActivation?.triggers)
+        ? detail.governance.autoActivation.triggers.join(', ')
+        : '',
+      autoActivationToolNames: Array.isArray(detail.governance?.autoActivation?.toolNames)
+        ? detail.governance.autoActivation.toolNames.join(', ')
+        : '',
+    },
     bodyMarkdown: detail.latestBodyMarkdown || '',
     documents: [],
   };
@@ -104,6 +144,102 @@ function skillCategoryLabel(category?: string | null) {
   return category || '-';
 }
 
+function governanceTriggerLabel(triggers?: string[] | null) {
+  if (!Array.isArray(triggers) || triggers.length === 0) return '-';
+  return triggers.join(' / ');
+}
+
+function governanceToolLabel(toolNames?: string[] | null) {
+  if (!Array.isArray(toolNames) || toolNames.length === 0) return '-';
+  return toolNames.join(' / ');
+}
+
+function splitGovernanceValues(value: string) {
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function toggleGovernanceValue(current: string, value: string, checked: boolean) {
+  const next = new Set(splitGovernanceValues(current));
+  if (checked) {
+    next.add(value);
+  } else {
+    next.delete(value);
+  }
+  return Array.from(next).join(', ');
+}
+
+function mergeGovernanceOptions(options: SkillGovernanceOption[], selectedValues: string[]) {
+  const merged = new Map(options.map((item) => [item.value, item]));
+  for (const value of selectedValues) {
+    if (!merged.has(value)) {
+      merged.set(value, {
+        value,
+        label: `${value} (历史值)`,
+        category: 'legacy',
+      });
+    }
+  }
+  return Array.from(merged.values());
+}
+
+function formatGovernanceSelectionSummary(
+  selectedValues: string[],
+  options: SkillGovernanceOption[],
+  placeholder: string,
+) {
+  if (selectedValues.length === 0) return placeholder;
+  const labels = selectedValues
+    .map((value) => options.find((item) => item.value === value)?.label || value)
+    .filter(Boolean);
+  if (labels.length <= 2) return labels.join('、');
+  return `${labels.slice(0, 2).join('、')} +${labels.length - 2}`;
+}
+
+function GovernanceMultiSelectDropdown(props: {
+  options: SkillGovernanceOption[];
+  selectedValues: string[];
+  placeholder: string;
+  onToggle: (value: string, checked: boolean) => void;
+}) {
+  const { options, selectedValues, placeholder, onToggle } = props;
+  const mergedOptions = useMemo(() => mergeGovernanceOptions(options, selectedValues), [options, selectedValues]);
+  const summary = useMemo(
+    () => formatGovernanceSelectionSummary(selectedValues, mergedOptions, placeholder),
+    [mergedOptions, placeholder, selectedValues]
+  );
+
+  return (
+    <details className="skill-multiselect">
+      <summary className="control-input skill-multiselect-trigger">
+        <span>{summary}</span>
+        <span className="skill-multiselect-arrow" aria-hidden="true">
+          ▾
+        </span>
+      </summary>
+      <div className="skill-multiselect-menu">
+        {mergedOptions.map((item) => (
+          <label key={item.value} className="skill-multiselect-option">
+            <span className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={selectedValues.includes(item.value)}
+                onChange={(event) => onToggle(item.value, event.target.checked)}
+              />
+              <strong>{item.label}</strong>
+            </span>
+            <span className="cell-subtle mono">{item.value}</span>
+            {item.description ? <span className="cell-subtle">{item.description}</span> : null}
+            {item.category ? <span className="cell-subtle">{item.category}</span> : null}
+          </label>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 async function readDirectoryFiles(fileList: FileList): Promise<Array<{ relativePath: string; content: string }>> {
   const files = Array.from(fileList);
   const binaryExtensionPattern =
@@ -129,26 +265,34 @@ async function readDirectoryFiles(fileList: FileList): Promise<Array<{ relativeP
 
 type Props = {
   onError: (message: string | null) => void;
+  onUpdatedAtChange?: (value: string | null) => void;
+  onRegisterRefresh?: (handler: (() => Promise<void>) | null) => void;
+  persistedState?: SkillManagementViewState | null;
+  onStateChange?: (state: SkillManagementViewState) => void;
 };
 
-export function SkillManagementSection({ onError }: Props) {
+export function SkillManagementSection({
+  onError,
+  onUpdatedAtChange,
+  onRegisterRefresh,
+  persistedState,
+  onStateChange,
+}: Props) {
+  const initialState = persistedState || DEFAULT_SKILL_MANAGEMENT_VIEW_STATE;
   const [skills, setSkills] = useState<SkillSummary[]>([]);
-  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
+  const [governanceOptions, setGovernanceOptions] = useState<SkillGovernanceOptions>(EMPTY_GOVERNANCE_OPTIONS);
+  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(initialState.selectedSkillId);
   const [detail, setDetail] = useState<SkillDetail | null>(null);
   const [revisions, setRevisions] = useState<SkillRevision[]>([]);
-  const [selectedRevisionId, setSelectedRevisionId] = useState<string | null>(null);
+  const [selectedRevisionId, setSelectedRevisionId] = useState<string | null>(initialState.selectedRevisionId);
   const [revisionResources, setRevisionResources] = useState<SkillRevisionResources | null>(null);
-  const [selectedResourcePath, setSelectedResourcePath] = useState<string | null>(null);
+  const [selectedResourcePath, setSelectedResourcePath] = useState<string | null>(initialState.selectedResourcePath);
   const [validationResult, setValidationResult] = useState<SkillValidationResult | null>(null);
   const [validationSessionId, setValidationSessionId] = useState('');
-  const [detailDialogOpen, setDetailDialogOpen] = useState(false);
-  const [detailTab, setDetailTab] = useState<'editor' | 'resources' | 'validation'>('editor');
-  const [skillView, setSkillView] = useState<SkillViewFilter>('all');
-  const [filters, setFilters] = useState({
-    query: '',
-    status: 'all',
-    category: '',
-  });
+  const [detailDialogOpen, setDetailDialogOpen] = useState(initialState.detailDialogOpen);
+  const [detailTab, setDetailTab] = useState<'editor' | 'resources' | 'validation'>(initialState.detailTab);
+  const [skillView, setSkillView] = useState<SkillViewFilter>(initialState.skillView);
+  const [filters, setFilters] = useState(initialState.filters);
   const [editor, setEditor] = useState<EditorState>(EMPTY_EDITOR);
   const [selectedDocumentIndex, setSelectedDocumentIndex] = useState(0);
   const [isCreating, setIsCreating] = useState(false);
@@ -160,6 +304,7 @@ export function SkillManagementSection({ onError }: Props) {
   const [importJobId, setImportJobId] = useState<string | null>(null);
   const [importJobStatus, setImportJobStatus] = useState<'pending' | 'running' | 'completed' | 'failed' | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const selectedRevisionIdRef = useRef<string | null>(initialState.selectedRevisionId);
 
   const resetImportState = useCallback(() => {
     setImportPreview(null);
@@ -177,6 +322,23 @@ export function SkillManagementSection({ onError }: Props) {
     }
     return Array.from(categories).sort((a, b) => skillCategoryLabel(a).localeCompare(skillCategoryLabel(b), 'zh-Hans-CN'));
   }, [skills]);
+
+  const selectedTriggerValues = useMemo(
+    () => splitGovernanceValues(editor.governance.autoActivationTriggers),
+    [editor.governance.autoActivationTriggers]
+  );
+  const selectedToolValues = useMemo(
+    () => splitGovernanceValues(editor.governance.autoActivationToolNames),
+    [editor.governance.autoActivationToolNames]
+  );
+
+  const loadGovernanceOptions = useCallback(async () => {
+    const next = await api.getSkillGovernanceOptions();
+    setGovernanceOptions(next);
+  }, []);
+  useEffect(() => {
+    selectedRevisionIdRef.current = selectedRevisionId;
+  }, [selectedRevisionId]);
 
   const loadSkills = useCallback(async () => {
     const next = await api.listSkills({
@@ -213,7 +375,11 @@ export function SkillManagementSection({ onError }: Props) {
       setSelectedDocumentIndex(0);
       const publishedRevision =
         nextRevisions.find((item) => item.isPublished) || nextRevisions[0] || null;
-      const nextRevisionId = publishedRevision?.id || null;
+      const currentSelectedRevisionId = selectedRevisionIdRef.current;
+      const nextRevisionId =
+        currentSelectedRevisionId && nextRevisions.some((item) => item.id === currentSelectedRevisionId)
+          ? currentSelectedRevisionId
+          : publishedRevision?.id || null;
       setSelectedRevisionId(nextRevisionId);
       setValidationResult(null);
       onError(null);
@@ -228,7 +394,17 @@ export function SkillManagementSection({ onError }: Props) {
   }, [loadSkills, onError]);
 
   useEffect(() => {
+    void loadGovernanceOptions().catch((error) => {
+      onError(error instanceof Error ? error.message : '技能治理选项加载失败');
+    });
+  }, [loadGovernanceOptions, onError]);
+
+  useEffect(() => {
     if (!selectedSkillId) return;
+    setSelectedRevisionId(null);
+    setRevisionResources(null);
+    setSelectedResourcePath(null);
+    setValidationResult(null);
     void loadSkillDetail(selectedSkillId).catch((error) => {
       onError(error instanceof Error ? error.message : '技能详情加载失败');
     });
@@ -316,6 +492,51 @@ export function SkillManagementSection({ onError }: Props) {
     };
   }, [importDialogOpen, importJobId, loadSkills, onError]);
 
+  useEffect(() => {
+    onUpdatedAtChange?.(
+      validationResult?.syncedAt
+      || detail?.updatedAt
+      || skills[0]?.updatedAt
+      || null
+    );
+  }, [detail?.updatedAt, onUpdatedAtChange, skills, validationResult?.syncedAt]);
+
+  const handleExternalRefresh = useCallback(async () => {
+    await loadSkills();
+    if (selectedSkillId) {
+      await loadSkillDetail(selectedSkillId);
+    }
+  }, [loadSkillDetail, loadSkills, selectedSkillId]);
+
+  useEffect(() => {
+    onRegisterRefresh?.(handleExternalRefresh);
+    return () => {
+      onRegisterRefresh?.(null);
+    };
+  }, [handleExternalRefresh, onRegisterRefresh]);
+
+  useEffect(() => {
+    onStateChange?.({
+      filters,
+      skillView,
+      selectedSkillId,
+      detailDialogOpen,
+      detailTab,
+      selectedRevisionId,
+      selectedResourcePath,
+    });
+  }, [detailDialogOpen, detailTab, filters, onStateChange, selectedResourcePath, selectedRevisionId, selectedSkillId, skillView]);
+
+  const handleRefreshSkills = useCallback(() => {
+    void handleExternalRefresh().catch((error) => {
+      onError(error instanceof Error ? error.message : '技能列表加载失败');
+    });
+  }, [handleExternalRefresh, onError]);
+
+  const handleResetFilters = useCallback(() => {
+    setFilters(DEFAULT_FILTERS);
+  }, []);
+
   const openCreateDialog = () => {
     setIsCreating(true);
     setDetailDialogOpen(true);
@@ -335,6 +556,10 @@ export function SkillManagementSection({ onError }: Props) {
     setIsCreating(false);
     setDetailDialogOpen(true);
     setDetailTab('editor');
+    setSelectedRevisionId(null);
+    setRevisionResources(null);
+    setSelectedResourcePath(null);
+    setValidationResult(null);
     setSelectedSkillId(skillId);
   };
 
@@ -355,6 +580,22 @@ export function SkillManagementSection({ onError }: Props) {
     try {
       const created = await api.createSkill({
         ...editor,
+        governance: {
+          systemRole: editor.governance.systemRole.trim() || null,
+          adminManaged: editor.governance.adminManaged,
+          required: editor.governance.required,
+          autoActivation: {
+            enabled: editor.governance.autoActivationEnabled,
+            triggers: editor.governance.autoActivationTriggers
+              .split(',')
+              .map((item) => item.trim())
+              .filter(Boolean),
+            toolNames: editor.governance.autoActivationToolNames
+              .split(',')
+              .map((item) => item.trim())
+              .filter(Boolean),
+          },
+        },
         resources: editor.documents
           .map((item, index) => ({
             resourcePath: item.resourcePath.trim(),
@@ -382,6 +623,22 @@ export function SkillManagementSection({ onError }: Props) {
         name: editor.name,
         description: editor.description,
         category: editor.category,
+        governance: {
+          systemRole: editor.governance.systemRole.trim() || null,
+          adminManaged: editor.governance.adminManaged,
+          required: editor.governance.required,
+          autoActivation: {
+            enabled: editor.governance.autoActivationEnabled,
+            triggers: editor.governance.autoActivationTriggers
+              .split(',')
+              .map((item) => item.trim())
+              .filter(Boolean),
+            toolNames: editor.governance.autoActivationToolNames
+              .split(',')
+              .map((item) => item.trim())
+              .filter(Boolean),
+          },
+        },
         bodyMarkdown: editor.bodyMarkdown,
         resources: editor.documents
           .map((item) => ({
@@ -463,6 +720,84 @@ export function SkillManagementSection({ onError }: Props) {
     return skills;
   }, [skillView, skills]);
 
+  const publishedRevision = useMemo(
+    () => revisions.find((item) => item.id === detail?.publishedRevisionId) || revisions.find((item) => item.isPublished) || null,
+    [detail?.publishedRevisionId, revisions]
+  );
+
+  const selectedRevision = useMemo(
+    () => revisions.find((item) => item.id === selectedRevisionId) || null,
+    [revisions, selectedRevisionId]
+  );
+
+  const currentResourceCount = revisionResources?.resourceSummary.totalCount
+    ?? detail?.resourceSummary?.totalCount
+    ?? detail?.resources?.length
+    ?? 0;
+
+  const selectedResource = useMemo(
+    () => revisionResources?.resources.find((item) => item.resourcePath === selectedResourcePath) || null,
+    [revisionResources, selectedResourcePath]
+  );
+
+  const skillDetailSummary = useMemo(() => {
+    if (isCreating) {
+      return [
+        { label: '当前模式', value: '新建技能' },
+        { label: '分类', value: skillCategoryLabel(editor.category) },
+        { label: '系统角色', value: editor.governance.systemRole || '-' },
+        { label: '补充文档', value: String(editor.documents.length) },
+        { label: '发布方式', value: '创建后生成版本 1' },
+      ];
+    }
+
+    if (!detail) return [];
+
+    return [
+      { label: '唯一标识', value: detail.slug, mono: true },
+      { label: '分类', value: skillCategoryLabel(detail.category) },
+      { label: '系统角色', value: detail.governance?.systemRole || '-' },
+      { label: '已发布版本', value: publishedRevision ? `版本 ${publishedRevision.revisionNumber}` : '未发布' },
+      { label: '当前工作版本', value: selectedRevision ? `版本 ${selectedRevision.revisionNumber}` : '-' },
+      { label: '资源 / 文档', value: `${currentResourceCount} / ${editor.documents.length}` },
+    ];
+  }, [
+    currentResourceCount,
+    detail,
+    editor.category,
+    editor.documents.length,
+    isCreating,
+    publishedRevision,
+    selectedRevision,
+  ]);
+
+  const detailTabOptions = useMemo(
+    () => [
+      {
+        key: 'editor' as const,
+        index: '01',
+        label: '内容与版本',
+        meta: isCreating ? '创建中' : selectedRevision ? `版本 ${selectedRevision.revisionNumber}` : '编辑中',
+        disabled: false,
+      },
+      {
+        key: 'resources' as const,
+        index: '02',
+        label: '资源明细',
+        meta: isCreating ? '创建后可用' : `${currentResourceCount} 项`,
+        disabled: isCreating,
+      },
+      {
+        key: 'validation' as const,
+        index: '03',
+        label: '沙箱校验',
+        meta: isCreating ? '创建后可用' : validationResult ? '已同步' : '待校验',
+        disabled: isCreating,
+      },
+    ],
+    [currentResourceCount, isCreating, selectedRevision, validationResult]
+  );
+
   const updateDocument = (
     index: number,
     patch: Partial<{
@@ -506,21 +841,23 @@ export function SkillManagementSection({ onError }: Props) {
   };
 
   return (
-    <main className="content-stack">
+    <main className="content-stack viewport-lock-page skill-management-page">
       <section className="panel fade-in skill-management-panel">
-        <div className="section-heading">
-          <div>
+        <div className="section-heading skill-management-heading">
+          <div className="skill-management-heading-copy">
             <p className="eyebrow">技能总览</p>
             <h2>技能管理</h2>
-            <p className="subtitle">维护平台技能、版本记录、资源文档与沙箱校验。</p>
           </div>
-          <div className="section-actions">
+          <div className="section-actions skill-management-actions">
             <button
               type="button"
-              className="ghost-btn"
+              className="primary-btn skill-action-btn skill-action-btn-primary"
               onClick={openCreateDialog}
             >
-              新建技能
+              <span className="skill-action-btn-icon" aria-hidden="true">+</span>
+              <span className="skill-action-btn-copy">
+                <span className="skill-action-btn-label">新建技能</span>
+              </span>
             </button>
             <input
               ref={importInputRef}
@@ -560,6 +897,14 @@ export function SkillManagementSection({ onError }: Props) {
                       name: preview.name,
                       description: preview.discoveryDescription,
                       category: 'general',
+                      governance: {
+                        systemRole: '',
+                        adminManaged: false,
+                        required: false,
+                        autoActivationEnabled: false,
+                        autoActivationTriggers: '',
+                        autoActivationToolNames: '',
+                      },
                       bodyMarkdown: preview.entry.bodyMarkdown,
                       documents: preview.resources
                         .filter((item) => item.resourceKind === 'reference' || item.resourceKind === 'template')
@@ -587,11 +932,27 @@ export function SkillManagementSection({ onError }: Props) {
                   });
               }}
             />
-            <button type="button" className="ghost-btn" onClick={() => importInputRef.current?.click()} disabled={busy}>
-              导入技能文件夹
+            <button
+              type="button"
+              className="secondary-btn skill-action-btn"
+              onClick={() => importInputRef.current?.click()}
+              disabled={busy}
+            >
+              <span className="skill-action-btn-icon" aria-hidden="true">↥</span>
+              <span className="skill-action-btn-copy">
+                <span className="skill-action-btn-label">导入技能文件夹</span>
+              </span>
             </button>
-            <button type="button" className="primary-btn" onClick={() => void loadSkills()} disabled={busy}>
-              刷新技能
+            <button
+              type="button"
+              className="secondary-btn skill-action-btn skill-action-btn-refresh"
+              onClick={handleRefreshSkills}
+              disabled={busy}
+            >
+              <span className="skill-action-btn-icon" aria-hidden="true">↻</span>
+              <span className="skill-action-btn-copy">
+                <span className="skill-action-btn-label">同步列表</span>
+              </span>
             </button>
           </div>
         </div>
@@ -624,28 +985,9 @@ export function SkillManagementSection({ onError }: Props) {
                 </option>
               ))}
             </select>
-          <button type="button" className="ghost-btn" onClick={() => void loadSkills()} disabled={busy}>
-            应用筛选
+          <button type="button" className="secondary-btn" onClick={handleResetFilters} disabled={busy}>
+            重置筛选
           </button>
-        </div>
-
-        <div className="skill-overview-strip">
-          <div>
-            <span>技能总数</span>
-            <strong>{skillOverview.total}</strong>
-          </div>
-          <div>
-            <span>已启用</span>
-            <strong>{skillOverview.active}</strong>
-          </div>
-          <div>
-            <span>已发布</span>
-            <strong>{skillOverview.published}</strong>
-          </div>
-          <div>
-            <span>待发布</span>
-            <strong>{skillOverview.unpublished}</strong>
-          </div>
         </div>
 
         <div className="skill-secondary-menu" role="tablist" aria-label="技能二级筛选">
@@ -670,6 +1012,7 @@ export function SkillManagementSection({ onError }: Props) {
               <tr>
                 <th>技能</th>
                 <th>分类</th>
+                <th>治理</th>
                 <th>状态</th>
                 <th>当前版本</th>
               </tr>
@@ -677,7 +1020,7 @@ export function SkillManagementSection({ onError }: Props) {
             <tbody>
               {visibleSkills.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="table-empty">
+                  <td colSpan={5} className="table-empty">
                     当前筛选下暂无技能记录
                   </td>
                 </tr>
@@ -686,13 +1029,27 @@ export function SkillManagementSection({ onError }: Props) {
                   <tr
                     key={item.id}
                     className={selectedSkillId === item.id && detailDialogOpen ? 'selected' : ''}
-                    onClick={() => openDetailDialog(item.id)}
                   >
                     <td>
-                      <strong>{item.name}</strong>
+                      <button
+                        type="button"
+                        className="management-title-link"
+                        onClick={() => openDetailDialog(item.id)}
+                      >
+                        {item.name}
+                      </button>
                       <div className="cell-subtle">{item.slug}</div>
                     </td>
                     <td>{skillCategoryLabel(item.category)}</td>
+                    <td>
+                      <div>{item.governance?.systemRole || '-'}</div>
+                      <div className="cell-subtle">
+                        {item.governance?.autoActivation?.enabled
+                          ? `自动加载 · ${governanceTriggerLabel(item.governance.autoActivation.triggers)}`
+                          : '手动加载'}
+                      </div>
+                      <div className="cell-subtle">工具 · {governanceToolLabel(item.governance?.autoActivation?.toolNames)}</div>
+                    </td>
                     <td>
                       <span className={`status-pill status-${item.status}`}>{skillStatusLabel(item.status)}</span>
                     </td>
@@ -708,12 +1065,12 @@ export function SkillManagementSection({ onError }: Props) {
       {detailDialogOpen ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeDetailDialog}>
           <div
-            className="modal-card"
+            className="modal-card skill-detail-modal"
             onClick={(event) => {
               event.stopPropagation();
             }}
           >
-              <div className="modal-header">
+              <div className="modal-header skill-detail-modal-header">
                 <div>
                   <p className="section-tag">技能详情</p>
                   <h2>{isCreating ? '新建技能' : detail?.name || '技能详情'}</h2>
@@ -722,6 +1079,33 @@ export function SkillManagementSection({ onError }: Props) {
                     ? '直接创建平台技能，并在同一窗口完成正文与资源校验'
                     : `${detail?.slug || '-'} · 更新时间 ${formatDateTime(detail?.updatedAt)}`}
                   </p>
+                  <div className="skill-detail-header-meta">
+                    {isCreating ? (
+                      <>
+                        <span className="skill-detail-meta-chip">新建模式</span>
+                        <span className="skill-detail-meta-chip">{skillCategoryLabel(editor.category)}</span>
+                      </>
+                    ) : detail ? (
+                      <>
+                        <span className={`status-pill status-${detail.status}`}>{skillStatusLabel(detail.status)}</span>
+                        <span className="skill-detail-meta-chip">{skillCategoryLabel(detail.category)}</span>
+                        <span className="skill-detail-meta-chip mono">{detail.slug}</span>
+                        {detail.governance?.systemRole ? (
+                          <span className="skill-detail-meta-chip">{detail.governance.systemRole}</span>
+                        ) : null}
+                        {detail.governance?.autoActivation?.enabled ? (
+                          <span className="skill-detail-meta-chip">
+                            自动加载 · {governanceTriggerLabel(detail.governance.autoActivation.triggers)}
+                          </span>
+                        ) : null}
+                        {detail.governance?.autoActivation?.toolNames?.length ? (
+                          <span className="skill-detail-meta-chip">
+                            工具 · {governanceToolLabel(detail.governance.autoActivation.toolNames)}
+                          </span>
+                        ) : null}
+                      </>
+                    ) : null}
+                  </div>
                 </div>
               <div className="section-actions">
                 {!isCreating && detail ? (
@@ -734,33 +1118,30 @@ export function SkillManagementSection({ onError }: Props) {
                 </button>
               </div>
             </div>
-            <div className="button-grid modal-tab-grid">
-              <button
-                type="button"
-                className={`inspector-tab-card ${detailTab === 'editor' ? 'active' : ''}`}
-                onClick={() => setDetailTab('editor')}
-              >
-                <span className="inspector-tab-card-key mono">01</span>
-                <span className="inspector-tab-card-label">内容与版本</span>
-              </button>
-              <button
-                type="button"
-                className={`inspector-tab-card ${detailTab === 'resources' ? 'active' : ''}`}
-                onClick={() => setDetailTab('resources')}
-                disabled={isCreating}
-              >
-                <span className="inspector-tab-card-key mono">02</span>
-                <span className="inspector-tab-card-label">资源明细</span>
-              </button>
-              <button
-                type="button"
-                className={`inspector-tab-card ${detailTab === 'validation' ? 'active' : ''}`}
-                onClick={() => setDetailTab('validation')}
-                disabled={isCreating}
-              >
-                <span className="inspector-tab-card-key mono">03</span>
-                <span className="inspector-tab-card-label">沙箱校验</span>
-              </button>
+            {skillDetailSummary.length ? (
+              <div className="skill-detail-summary-strip">
+                {skillDetailSummary.map((item) => (
+                  <article key={item.label} className="skill-detail-summary-card">
+                    <span>{item.label}</span>
+                    <strong className={item.mono ? 'mono' : undefined}>{item.value}</strong>
+                  </article>
+                ))}
+              </div>
+            ) : null}
+            <div className="button-grid modal-tab-grid skill-detail-tabbar">
+              {detailTabOptions.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={`inspector-tab-card ${detailTab === item.key ? 'active' : ''}`}
+                  onClick={() => setDetailTab(item.key)}
+                  disabled={item.disabled}
+                >
+                  <span className="inspector-tab-card-key mono">{item.index}</span>
+                  <span className="inspector-tab-card-label">{item.label}</span>
+                  <span className="skill-detail-tab-meta">{item.meta}</span>
+                </button>
+              ))}
             </div>
             <div className="modal-body">
               {detailTab === 'editor' ? (
@@ -774,26 +1155,6 @@ export function SkillManagementSection({ onError }: Props) {
                         </p>
                       </div>
                     </div>
-                    {!isCreating && detail ? (
-                      <div className="skill-editor-context-strip">
-                        <div>
-                          <span>发布版本</span>
-                          <strong>{detail.publishedRevisionId ? `版本 ${revisions.find((item) => item.id === detail.publishedRevisionId)?.revisionNumber || '-'}` : '-'}</strong>
-                        </div>
-                        <div>
-                          <span>当前编辑</span>
-                          <strong>{selectedRevisionId ? `版本 ${revisions.find((item) => item.id === selectedRevisionId)?.revisionNumber || '-'}` : '-'}</strong>
-                        </div>
-                        <div>
-                          <span>资源数量</span>
-                          <strong>{detail.resourceSummary?.totalCount ?? detail.resources?.length ?? 0}</strong>
-                        </div>
-                        <div>
-                          <span>补充文档</span>
-                          <strong>{editor.documents.length}</strong>
-                        </div>
-                      </div>
-                    ) : null}
                     <div className="skill-form-grid">
                       <label className="form-field">
                         <span>唯一标识（Slug）</span>
@@ -836,6 +1197,131 @@ export function SkillManagementSection({ onError }: Props) {
                           value={editor.description}
                           onChange={(event) => setEditor((prev) => ({ ...prev, description: event.target.value }))}
                         />
+                      </label>
+                      <label className="form-field">
+                        <span>系统角色</span>
+                        <select
+                          className="control-input"
+                          value={editor.governance.systemRole}
+                          onChange={(event) =>
+                            setEditor((prev) => ({
+                              ...prev,
+                              governance: {
+                                ...prev.governance,
+                                systemRole: event.target.value,
+                              },
+                            }))
+                          }
+                        >
+                          <option value="">不设置</option>
+                          {editor.governance.systemRole &&
+                          !governanceOptions.systemRoles.some((item) => item.value === editor.governance.systemRole) ? (
+                            <option value={editor.governance.systemRole}>
+                              {editor.governance.systemRole} (历史值)
+                            </option>
+                          ) : null}
+                          {governanceOptions.systemRoles.map((item) => (
+                            <option key={item.value} value={item.value}>
+                              {item.label} ({item.value})
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <div className="form-field field-span-2">
+                        <span>自动加载触发动作</span>
+                        <GovernanceMultiSelectDropdown
+                          options={governanceOptions.autoActivationTriggers}
+                          selectedValues={selectedTriggerValues}
+                          placeholder="请选择触发动作"
+                          onToggle={(value, checked) =>
+                            setEditor((prev) => ({
+                              ...prev,
+                              governance: {
+                                ...prev.governance,
+                                autoActivationTriggers: toggleGovernanceValue(
+                                  prev.governance.autoActivationTriggers,
+                                  value,
+                                  checked
+                                ),
+                              },
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="form-field field-span-2">
+                        <span>自动加载工具</span>
+                        <GovernanceMultiSelectDropdown
+                          options={governanceOptions.toolNames}
+                          selectedValues={selectedToolValues}
+                          placeholder="请选择自动加载工具"
+                          onToggle={(value, checked) =>
+                            setEditor((prev) => ({
+                              ...prev,
+                              governance: {
+                                ...prev.governance,
+                                autoActivationToolNames: toggleGovernanceValue(
+                                  prev.governance.autoActivationToolNames,
+                                  value,
+                                  checked
+                                ),
+                              },
+                            }))
+                          }
+                        />
+                      </div>
+                      <label className="form-field">
+                        <span className="checkbox-row">
+                          <input
+                            type="checkbox"
+                            checked={editor.governance.adminManaged}
+                            onChange={(event) =>
+                              setEditor((prev) => ({
+                                ...prev,
+                                governance: {
+                                  ...prev.governance,
+                                  adminManaged: event.target.checked,
+                                },
+                              }))
+                            }
+                          />
+                          <span>管理端治理</span>
+                        </span>
+                      </label>
+                      <label className="form-field">
+                        <span className="checkbox-row">
+                          <input
+                            type="checkbox"
+                            checked={editor.governance.required}
+                            onChange={(event) =>
+                              setEditor((prev) => ({
+                                ...prev,
+                                governance: {
+                                  ...prev.governance,
+                                  required: event.target.checked,
+                                },
+                              }))
+                            }
+                          />
+                          <span>系统必需</span>
+                        </span>
+                      </label>
+                      <label className="form-field field-span-2">
+                        <span className="checkbox-row">
+                          <input
+                            type="checkbox"
+                            checked={editor.governance.autoActivationEnabled}
+                            onChange={(event) =>
+                              setEditor((prev) => ({
+                                ...prev,
+                                governance: {
+                                  ...prev.governance,
+                                  autoActivationEnabled: event.target.checked,
+                                },
+                              }))
+                            }
+                          />
+                          <span>自动加载</span>
+                        </span>
                       </label>
                       <label className="form-field field-span-2">
                         <span>主说明文档（Markdown）</span>
@@ -981,18 +1467,67 @@ export function SkillManagementSection({ onError }: Props) {
                       )}
                     </div>
                   </article>
+                  <aside className="sub-panel skill-editor-side-panel">
+                    <div className="editor-header skill-side-panel-head">
+                      <div>
+                        <h3>{isCreating ? '创建节奏' : '版本列表'}</h3>
+                        <p className="cell-subtle">
+                          {isCreating ? '先写正文，再补充文档，确认后直接创建。' : '先选工作版本，再决定是否保存为新版本。'}
+                        </p>
+                      </div>
+                      {!isCreating ? <span className="session-status">{revisions.length} 个版本</span> : null}
+                    </div>
+                    {isCreating ? (
+                      <div className="skill-quick-note-list">
+                        <article className="skill-quick-note">
+                          <span>01</span>
+                          <strong>先填基本信息</strong>
+                          <p>名称、分类和描述决定后台检索体验。</p>
+                        </article>
+                        <article className="skill-quick-note">
+                          <span>02</span>
+                          <strong>再写主说明文档</strong>
+                          <p>主说明文档是技能正文，优先把主流程写完整。</p>
+                        </article>
+                        <article className="skill-quick-note">
+                          <span>03</span>
+                          <strong>最后补补充文档</strong>
+                          <p>把规则、示例和模板拆成独立 Markdown，后续更好维护。</p>
+                        </article>
+                      </div>
+                    ) : (
+                      <div className="revision-list skill-version-list skill-version-list-compact">
+                        {revisions.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            className={`revision-item skill-version-item ${selectedRevisionId === item.id ? 'active' : ''}`}
+                            onClick={() => setSelectedRevisionId(item.id)}
+                          >
+                            <div className="skill-version-item-head">
+                              <strong>版本 {item.revisionNumber}</strong>
+                              {item.isPublished ? <span className="skill-version-badge">已发布</span> : null}
+                            </div>
+                            <span>{formatDateTime(item.createdAt)}</span>
+                            <span>{item.createdBy || 'admin_management'}</span>
+                          </button>
+                        ))}
+                        {!revisions.length ? <div className="table-empty">暂无版本记录</div> : null}
+                      </div>
+                    )}
+                  </aside>
                 </div>
               ) : null}
 
               {detailTab === 'resources' ? (
                 <div className="skill-resource-layout">
                   <article className="sub-panel skill-version-history-panel">
-                    <div className="section-heading">
+                    <div className="editor-header skill-side-panel-head">
                       <div>
-                        <p className="eyebrow">版本历史</p>
-                        <h2>选择版本</h2>
-                        <p className="cell-subtle">切换版本后，下方资源明细同步展示对应资源。</p>
+                        <h3>版本列表</h3>
+                        <p className="cell-subtle">切换版本后，中间和右侧资源会同步更新。</p>
                       </div>
+                      <span className="session-status">{revisions.length} 个版本</span>
                     </div>
                     <div className="revision-list skill-version-list">
                       {revisions.map((item) => (
@@ -1002,41 +1537,64 @@ export function SkillManagementSection({ onError }: Props) {
                           className={`revision-item skill-version-item ${selectedRevisionId === item.id ? 'active' : ''}`}
                           onClick={() => setSelectedRevisionId(item.id)}
                         >
-                          <strong>版本 {item.revisionNumber}</strong>
-                          <span>{item.isPublished ? '已发布' : '历史版本'}</span>
+                          <div className="skill-version-item-head">
+                            <strong>版本 {item.revisionNumber}</strong>
+                            {item.isPublished ? <span className="skill-version-badge">已发布</span> : null}
+                          </div>
                           <span>{formatDateTime(item.createdAt)}</span>
+                          <span>{item.createdBy || 'admin_management'}</span>
                         </button>
                       ))}
                       {!revisions.length ? <div className="table-empty">暂无版本记录</div> : null}
                     </div>
                     {!isCreating && detail ? (
-                      <div className="validation-result skill-resource-summary-box">
-                        <div>当前发布版本 ID: {detail.publishedRevisionId || '-'}</div>
-                        <div>资源数量: {revisionResources?.resourceSummary.totalCount ?? detail.resourceSummary?.totalCount ?? detail.resources?.length ?? 0}</div>
-                        <div>参考文档: {revisionResources?.resourceSummary.referenceCount ?? detail.resourceSummary?.referenceCount ?? 0}</div>
-                        <div>模板片段: {revisionResources?.resourceSummary.templateCount ?? detail.resourceSummary?.templateCount ?? 0}</div>
+                      <div className="skill-resource-summary-box">
+                        <article className="skill-side-fact-card">
+                          <span>当前发布</span>
+                          <strong>{publishedRevision ? `版本 ${publishedRevision.revisionNumber}` : '未发布'}</strong>
+                        </article>
+                        <article className="skill-side-fact-card">
+                          <span>资源数量</span>
+                          <strong>{currentResourceCount}</strong>
+                        </article>
+                        <article className="skill-side-fact-card">
+                          <span>参考文档</span>
+                          <strong>{revisionResources?.resourceSummary.referenceCount ?? detail.resourceSummary?.referenceCount ?? 0}</strong>
+                        </article>
+                        <article className="skill-side-fact-card">
+                          <span>模板片段</span>
+                          <strong>{revisionResources?.resourceSummary.templateCount ?? detail.resourceSummary?.templateCount ?? 0}</strong>
+                        </article>
                       </div>
                     ) : null}
                   </article>
                   <article className="sub-panel skill-resource-list-panel">
-                    <div className="section-heading">
+                    <div className="editor-header skill-side-panel-head">
                       <div>
-                        <p className="eyebrow">资源工作区</p>
-                        <h2>{revisionResources ? `版本 ${revisionResources.revision.revisionNumber} 资源` : '当前版本资源'}</h2>
-                        <p className="cell-subtle">先选版本，再选资源；右侧查看路径、存储与正文。</p>
+                        <h3>资源列表</h3>
+                        <p className="cell-subtle">
+                          {selectedRevision ? `版本 ${selectedRevision.revisionNumber} 的资源` : '先选择一个版本'}
+                        </p>
                       </div>
+                      <span className="session-status">{currentResourceCount} 项</span>
                     </div>
-                    <div className="revision-list">
+                    <div className="revision-list skill-resource-items">
                       {revisionResources?.resources.map((item) => (
                         <button
                           key={item.id}
                           type="button"
-                          className={`revision-item ${selectedResourcePath === item.resourcePath ? 'active' : ''}`}
+                          className={`revision-item skill-resource-item ${selectedResourcePath === item.resourcePath ? 'active' : ''}`}
                           onClick={() => setSelectedResourcePath(item.resourcePath)}
                         >
-                          <span>{item.resourcePath}</span>
-                          <span>{resourceTypeLabel(item.resourceType)}</span>
-                          <span>{storageLabel(item.contentStorage)}</span>
+                          <div className="skill-resource-item-head">
+                            <strong>{item.title || item.resourcePath.split('/').pop() || item.resourcePath}</strong>
+                            <span className="skill-resource-type-badge">{resourceTypeLabel(item.resourceType)}</span>
+                          </div>
+                          <span className="skill-resource-item-path mono">{item.resourcePath}</span>
+                          <div className="skill-resource-item-meta">
+                            <span>{storageLabel(item.contentStorage)}</span>
+                            <span>{item.loadStage || '默认加载'}</span>
+                          </div>
                         </button>
                       ))}
                       {!revisionResources?.resources.length ? (
@@ -1045,34 +1603,61 @@ export function SkillManagementSection({ onError }: Props) {
                     </div>
                   </article>
                   <article className="sub-panel skill-resource-detail-panel">
-                    {(() => {
-                      const resource =
-                        revisionResources?.resources.find((item) => item.resourcePath === selectedResourcePath) || null;
-                      if (!resource) {
-                        return <div className="table-empty">选择左侧资源查看详情。</div>;
-                      }
-                      return (
-                        <div className="inspector-page-stack">
-                          <div className="validation-result">
-                            <div>资源路径: {resource.resourcePath}</div>
-                            <div>文档类型: {resourceTypeLabel(resource.resourceType)}</div>
-                            <div>存储位置: {storageLabel(resource.contentStorage)}</div>
-                            <div>MIME 类型: {resource.mimeType || '-'}</div>
-                            <div>加载阶段: {resource.loadStage || '-'}</div>
-                            <div>存储路径: {resource.storagePath || '-'}</div>
-                            <div>更新时间: {formatDateTime(resource.updatedAt)}</div>
+                    {selectedResource ? (
+                      <div className="skill-resource-detail-stack">
+                        <div className="skill-resource-detail-hero">
+                          <div>
+                            <p className="eyebrow">资源详情</p>
+                            <h3>{selectedResource.title || selectedResource.resourcePath.split('/').pop() || selectedResource.resourcePath}</h3>
+                            <p className="cell-subtle">{selectedResource.resourcePath}</p>
                           </div>
-                          <div className="validation-result">
-                            <div>标题: {resource.title || '-'}</div>
-                            <div>摘要: {resource.summary || '-'}</div>
-                            <div>存储定位信息: {resource.storageLocatorJson ? JSON.stringify(resource.storageLocatorJson) : '-'}</div>
+                          <div className="skill-resource-detail-badges">
+                            <span className="skill-detail-meta-chip">{resourceTypeLabel(selectedResource.resourceType)}</span>
+                            <span className="skill-detail-meta-chip">{storageLabel(selectedResource.contentStorage)}</span>
+                            {selectedResource.mimeType ? (
+                              <span className="skill-detail-meta-chip mono">{selectedResource.mimeType}</span>
+                            ) : null}
                           </div>
-                          <pre className="code-block">
-                            {resource.contentMarkdown || (resource.contentStorage === 'object_storage' ? '该存储桶文件当前无可预览文本内容' : '暂无正文')}
-                          </pre>
                         </div>
-                      );
-                    })()}
+                        <div className="skill-resource-fact-grid">
+                          <article className="skill-resource-fact-card">
+                            <span>加载阶段</span>
+                            <strong>{selectedResource.loadStage || '-'}</strong>
+                          </article>
+                          <article className="skill-resource-fact-card">
+                            <span>更新时间</span>
+                            <strong>{formatDateTime(selectedResource.updatedAt)}</strong>
+                          </article>
+                          <article className="skill-resource-fact-card">
+                            <span>存储路径</span>
+                            <strong className="mono">{selectedResource.storagePath || '-'}</strong>
+                          </article>
+                          <article className="skill-resource-fact-card">
+                            <span>资源 Key</span>
+                            <strong className="mono">{selectedResource.resourceKey || '-'}</strong>
+                          </article>
+                        </div>
+                        {selectedResource.summary ? (
+                          <article className="skill-resource-summary-card">
+                            <span>摘要</span>
+                            <p>{selectedResource.summary}</p>
+                          </article>
+                        ) : null}
+                        {selectedResource.storageLocatorJson ? (
+                          <article className="skill-resource-summary-card">
+                            <span>存储定位信息</span>
+                            <code className="skill-resource-inline-code">
+                              {JSON.stringify(selectedResource.storageLocatorJson)}
+                            </code>
+                          </article>
+                        ) : null}
+                        <pre className="code-block">
+                          {selectedResource.contentMarkdown || (selectedResource.contentStorage === 'object_storage' ? '该存储桶文件当前无可预览文本内容' : '暂无正文')}
+                        </pre>
+                      </div>
+                    ) : (
+                      <div className="table-empty">选择左侧资源查看详情。</div>
+                    )}
                   </article>
                 </div>
               ) : null}

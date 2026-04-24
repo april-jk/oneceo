@@ -1,5 +1,6 @@
 import type { ManagedSkillCatalogEntry, ManagedSkillContext } from './altus-managed-shared';
 import type { SessionConnectorStatus } from './session-connector-service';
+import { classifyTaskIntentShape, type TaskClarificationType } from './task-intent-shape-service';
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -157,6 +158,212 @@ function formatCodeList(values: readonly string[]): string {
   return values.map((value) => `\`${value}\``).join(', ');
 }
 
+const EXPLICIT_NO_DEPLOY_KEYWORDS = [
+  '不要部署',
+  '不需要部署',
+  '无需部署',
+  '不要发布',
+  '不需要发布',
+  '无需发布',
+  '不要上线',
+  '无需上线',
+  'do not deploy',
+  "don't deploy",
+  'no deploy',
+  'do not publish',
+] as const;
+
+const EXPLICIT_NO_WEB_KEYWORDS = [
+  '不要做网站',
+  '不做网站',
+  '不要做网页',
+  '不做网页',
+  '不是网站',
+  '不是网页',
+  '无需网站',
+  '只需要输出源码文件',
+  'source code only',
+  'just output the source code',
+] as const;
+
+const SCRIPT_ARTIFACT_KEYWORDS = [
+  '脚本',
+  'cli',
+  '命令行',
+  'command line',
+  '控制台程序',
+  'console program',
+  'console app',
+  'console application',
+  'tool script',
+  '日志汇总',
+  '读取 csv',
+  '读取 json',
+  '批量重命名',
+] as const;
+
+const EMAIL_TEMPLATE_KEYWORDS = [
+  '邮件模板',
+  'email template',
+  'html email',
+  '报价通知邮件',
+] as const;
+
+const WEB_ARTIFACT_KEYWORDS = [
+  '网站',
+  '网页',
+  '官网',
+  '企业站',
+  '产品介绍',
+  '公司介绍',
+  'web app',
+  'website',
+  'landing page',
+  'dashboard',
+  'admin panel',
+  'browser product',
+] as const;
+
+const DEPLOY_REQUEST_KEYWORDS = [
+  '部署',
+  '发布',
+  '上线',
+  'deploy',
+  'publish',
+  'go live',
+] as const;
+
+function includesAnyKeyword(text: string, keywords: readonly string[]) {
+  return keywords.some((keyword) => text.includes(keyword));
+}
+
+function normalizeIntentTexts(texts: string[]) {
+  return texts
+    .map((item) => asText(item))
+    .filter(Boolean)
+    .map((item) => item.toLowerCase());
+}
+
+export type AltusManagedTaskIntentProfile = {
+  mode: 'deployable_web_app' | 'non_deployable_artifact' | 'neutral';
+  reason:
+    | 'latest_explicit_no_deploy'
+    | 'latest_explicit_no_web'
+    | 'latest_deployable_request'
+    | 'historical_explicit_no_deploy'
+    | 'historical_explicit_no_web'
+    | 'historical_deployable_request'
+    | 'script_or_template_artifact'
+    | 'unknown';
+  recentUserMessages: string[];
+  explicitNoDeploy: boolean;
+  explicitNoWeb: boolean;
+  webArtifactRequested: boolean;
+  deployRequested: boolean;
+  scriptArtifactRequested: boolean;
+  emailTemplateRequested: boolean;
+  deploymentAllowed: boolean;
+  needsClarification: boolean;
+  clarificationQuestion: string;
+  clarificationType: TaskClarificationType;
+  clarificationOptions?: string[];
+  todoRequired: boolean;
+  todoReason:
+    | 'multi_step'
+    | 'multi_target'
+    | 'debug_chain'
+    | 'integration_chain'
+    | 'explicit_user_request'
+    | 'none';
+};
+
+export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTaskIntentProfile {
+  const normalizedTexts = normalizeIntentTexts(texts);
+  const latest = normalizedTexts[normalizedTexts.length - 1] || '';
+  const combined = normalizedTexts.join('\n');
+  const intentShape = classifyTaskIntentShape(texts);
+
+  const latestExplicitNoDeploy = includesAnyKeyword(latest, EXPLICIT_NO_DEPLOY_KEYWORDS);
+  const latestExplicitNoWeb = includesAnyKeyword(latest, EXPLICIT_NO_WEB_KEYWORDS);
+  const latestWebArtifact = includesAnyKeyword(latest, WEB_ARTIFACT_KEYWORDS);
+  const latestDeployRequest = includesAnyKeyword(latest, DEPLOY_REQUEST_KEYWORDS);
+
+  const explicitNoDeploy = includesAnyKeyword(combined, EXPLICIT_NO_DEPLOY_KEYWORDS);
+  const explicitNoWeb = includesAnyKeyword(combined, EXPLICIT_NO_WEB_KEYWORDS);
+  const webArtifactRequested = includesAnyKeyword(combined, WEB_ARTIFACT_KEYWORDS);
+  const deployRequested = includesAnyKeyword(combined, DEPLOY_REQUEST_KEYWORDS);
+  const scriptArtifactRequested = includesAnyKeyword(combined, SCRIPT_ARTIFACT_KEYWORDS);
+  const emailTemplateRequested = includesAnyKeyword(combined, EMAIL_TEMPLATE_KEYWORDS);
+  const deploymentAllowed =
+    deployRequested &&
+    !explicitNoDeploy &&
+    !explicitNoWeb &&
+    !scriptArtifactRequested &&
+    !emailTemplateRequested;
+
+  let mode: AltusManagedTaskIntentProfile['mode'] = 'neutral';
+  let reason: AltusManagedTaskIntentProfile['reason'] = 'unknown';
+
+  if (latestExplicitNoDeploy) {
+    mode = 'non_deployable_artifact';
+    reason = 'latest_explicit_no_deploy';
+  } else if (latestExplicitNoWeb) {
+    mode = 'non_deployable_artifact';
+    reason = 'latest_explicit_no_web';
+  } else if (latestWebArtifact || latestDeployRequest) {
+    mode = 'deployable_web_app';
+    reason = 'latest_deployable_request';
+  } else if (explicitNoDeploy) {
+    mode = 'non_deployable_artifact';
+    reason = 'historical_explicit_no_deploy';
+  } else if (explicitNoWeb) {
+    mode = 'non_deployable_artifact';
+    reason = 'historical_explicit_no_web';
+  } else if (webArtifactRequested || deployRequested) {
+    mode = 'deployable_web_app';
+    reason = 'historical_deployable_request';
+  } else if (scriptArtifactRequested || emailTemplateRequested) {
+    mode = 'non_deployable_artifact';
+    reason = 'script_or_template_artifact';
+  }
+
+  return {
+    mode,
+    reason,
+    recentUserMessages: texts.map((item) => asText(item)).filter(Boolean).slice(-8),
+    explicitNoDeploy,
+    explicitNoWeb,
+    webArtifactRequested,
+    deployRequested,
+    scriptArtifactRequested,
+    emailTemplateRequested,
+    deploymentAllowed,
+    needsClarification:
+      intentShape.needsClarification || intentShape.candidateClarificationType !== 'none',
+    clarificationQuestion:
+      intentShape.clarificationQuestion || intentShape.candidateClarificationQuestion,
+    clarificationType: intentShape.candidateClarificationType,
+    clarificationOptions:
+      intentShape.candidateClarificationOptions.length > 0
+        ? intentShape.candidateClarificationOptions
+        : undefined,
+    todoRequired:
+      intentShape.candidateTodoSignals.explicitTodoRequest ||
+      intentShape.candidateTodoSignals.hasMultipleSubtasks ||
+      intentShape.candidateTodoSignals.hasDebugChain ||
+      intentShape.candidateTodoSignals.hasIntegrationChain,
+    todoReason: intentShape.candidateTodoSignals.explicitTodoRequest
+      ? 'explicit_user_request'
+      : intentShape.candidateTodoSignals.hasMultipleSubtasks
+        ? 'multi_step'
+        : intentShape.candidateTodoSignals.hasDebugChain
+          ? 'debug_chain'
+          : intentShape.candidateTodoSignals.hasIntegrationChain
+            ? 'integration_chain'
+            : 'none',
+  };
+}
+
 function describeConnectorToolAccess(runtimeStatus: string): string {
   switch (runtimeStatus) {
     case 'connected':
@@ -204,11 +411,29 @@ function formatConnectors(connectors: SessionConnectorStatus[]): string {
 }
 
 export class AltusManagedPromptService {
+  private formatSkillSections(skills: ManagedSkillContext[]) {
+    return skills.map((skill) => {
+      const header = [
+        `## ${skill.name}`,
+        `- source: ${skill.sourceType}`,
+        `- slug: ${skill.slug}`,
+        `- revision: ${skill.revisionNumber ?? '-'}`,
+        `- resources: ${
+          skill.resourceSummary && skill.resourceSummary.totalCount > 0
+            ? `${skill.resourceSummary.referenceCount} references, ${skill.resourceSummary.templateCount} templates`
+            : 'no extra resources'
+        }`,
+      ].join('\n');
+      return `${header}\n\n${skill.renderedMarkdown}`;
+    });
+  }
+
   buildSystemPrompt(input: {
     sessionId: string;
     sessionTitle?: string | null;
     workspaceRoot: string;
     connectors: SessionConnectorStatus[];
+    taskIntentProfile?: AltusManagedTaskIntentProfile;
     connectorGuideSections?: {
       instructionsSection?: string;
       reminderSection?: string;
@@ -216,6 +441,89 @@ export class AltusManagedPromptService {
   }) {
     const title = asText(input.sessionTitle) || '未命名会话';
     const now = new Date().toISOString();
+    const taskIntentProfile = input.taskIntentProfile;
+    const nonDeployableTaskSection =
+      taskIntentProfile?.mode === 'non_deployable_artifact'
+        ? [
+            '# Non-deployable task contract',
+            `- The current session intent is classified as a non-deployable artifact (${taskIntentProfile.reason}).`,
+            '- Do not transform this task into a website, web app, or deployable browser product unless the user explicitly changes the requirement.',
+            '- Do not create `oneceo.manifest.json`, deploy-only `package.json` scripts, Railway-only baselines, or other publish scaffolding just to satisfy a web contract.',
+            '- Do not call `deploy_application`, `redeploy_application`, or `rollback_application_deployment` for this task.',
+            '- Valid outputs include source files such as email templates, CLI tools, scripts, console programs, or other non-web artifacts.',
+            '',
+          ].join('\n')
+        : '';
+    const noAutoDeploySection =
+      taskIntentProfile && !taskIntentProfile.deploymentAllowed
+        ? [
+            '# Deployment trigger contract',
+            '- The current session is not an explicit deployment request.',
+            '- Do not call `deploy_application`, `redeploy_application`, `rollback_application_deployment`, or `get_application_deployment_status` unless the user explicitly asks to deploy, redeploy, rollback, or check deployment status in the current turn.',
+            '- Building a website, generating source code, creating documents, office files, scripts, reports, or templates does not by itself authorize deployment.',
+            '- If the user only asked for implementation or source files, finish the artifact and call complete_task without entering the deployment flow.',
+            '',
+          ].join('\n')
+        : '';
+    const deploymentToolSection =
+      taskIntentProfile && !taskIntentProfile.deploymentAllowed
+        ? ''
+        : [
+            '- When the user asks to deploy, publish, go live, 上线, redeploy, rollback deployment, or check deployment status for the current app, use the managed deployment tools instead of replying with plain text.',
+            '- In deploy/redeploy/status flows, do not run local preview/dev commands such as `vite preview`, `npm run preview`, `vite dev`, `npm run dev`, or `react-scripts start` to decide whether Railway deployment is healthy.',
+            '- In deploy/redeploy/status flows, do not infer the public deployment start command from the raw workspace `package.json` or an outdated `oneceo.manifest.json`. The platform will normalize the deployable source before publishing.',
+            '- Use `deploy_application` for first publish or publishing the latest workspace changes.',
+            '- Use `redeploy_application` when the user wants the latest code changes published again.',
+            '- Use `rollback_application_deployment` only when the user explicitly asks to rollback or revert the deployment.',
+            '- Use `get_application_deployment_status` when the user asks for deployment progress, current URL, or deployment health.',
+            '- If `deploy_application` or `redeploy_application` returns `status=retryable_repair_required`, inspect `repair.category` first. For `template_compliance`, `deployment_configuration`, or `workspace_missing`, repair the workspace baseline with file/code tools and then call the deployment tool again. For `resource_binding`, do not keep editing workspace files; continue with deployment/status tools until the platform resource binding is repaired or a clear blocker is surfaced. For `deployment_pending`, do not edit workspace files; keep calling `get_application_deployment_status` until the deployment becomes ready.',
+            '- `debug_open_page` only proves a local debug preview is reachable. It never proves that the managed public deployment succeeded.',
+            '- For deploy/redeploy/rollback requests, do not call `complete_task` until deployment is actually ready online. Treat `bindingState=ready` plus a non-transient deployment status as the success condition. If the deployment tool reports `deployment_pending`, keep polling with `get_application_deployment_status`. If deployment is still failing, continue repairing or clearly report that the online deployment is not complete yet.',
+            '- Keep deployment debug details internal. In user-facing replies, summarize only the current phase, whether auto-repair is happening, and the final result.',
+          ].join('\n');
+    const clarificationGateSection =
+      taskIntentProfile?.needsClarification && asText(taskIntentProfile.clarificationQuestion)
+        ? [
+            '# Clarification gate',
+            '- The current request is under-specified and requires clarification before execution.',
+            '- Your next step must be `ask_user` with the focused clarification question from session context.',
+            '- Do not call `todowrite`, do not start execution tools, and do not enter implementation before the user answers.',
+            '',
+          ].join('\n')
+        : '';
+    const clarificationFocusSection =
+      taskIntentProfile?.needsClarification && taskIntentProfile.clarificationType !== 'none'
+        ? [
+            '# Clarification focus',
+            `- Active clarification type: ${taskIntentProfile.clarificationType}.`,
+            ...(Array.isArray(taskIntentProfile.clarificationOptions) &&
+            taskIntentProfile.clarificationOptions.length > 0
+              ? [
+                  `- Available clarification options: ${taskIntentProfile.clarificationOptions
+                    .map((item) => `\`${item}\``)
+                    .join(', ')}.`,
+                ]
+              : []),
+            '',
+          ].join('\n')
+        : '';
+    const todoGateSection =
+      taskIntentProfile && !taskIntentProfile.needsClarification
+        ? taskIntentProfile.todoRequired
+          ? [
+              '# Todo gate',
+              `- The current request requires a pre-execution todo snapshot (reason=${taskIntentProfile.todoReason}).`,
+              '- Call `todowrite` before the first execution step, then update it after each major step.',
+              '- While work is ongoing, `todowrite` must contain exactly one `in_progress` item.',
+              '',
+            ].join('\n')
+          : [
+              '# Simple-task gate',
+              '- The current request does not require a pre-execution todo snapshot.',
+              '- Do not call `todowrite` just because the request sounds non-trivial; execute directly with the minimum correct tool path.',
+              '',
+            ].join('\n')
+        : '';
 
     return [
       'You are Altus, the managed-mode engineering agent inside OneCEO.',
@@ -228,16 +536,20 @@ export class AltusManagedPromptService {
       '- Think through the task, but only output short user-facing messages.',
       '- Use tools to inspect files, run commands, search code, and update files when needed.',
       '- Before acting, judge the task complexity as simple, normal, or complex based on scope, uncertainty, dependencies, and verification cost.',
-      '- For simple tasks, proceed directly with the minimum correct tool path.',
-      '- For normal tasks, keep a short execution checklist in mind and verify each meaningful change before finishing.',
-      '- For complex tasks, you must first form a detailed step-by-step todo list, then execute it one step at a time in a stable order.',
-      '- A task is complex when it involves multiple files, multiple subsystems, unclear dependencies, staged verification, migrations, infrastructure/runtime changes, or a non-trivial debugging chain.',
-      '- For complex tasks, do not jump straight to the final implementation. First inspect the relevant context, break the work into concrete steps, then complete and verify them sequentially.',
-      '- For complex tasks, keep the todo detailed enough to cover discovery, implementation, verification, and completion; do not collapse multiple risky changes into one step.',
+      '- Treat simple, normal, or complex as descriptive working language only. Do not use that grading as an independent todo trigger.',
+      '- If `taskIntentProfile.needsClarification=true`, clarify first. Do not call `todowrite`, do not start execution tools, and do not enter implementation before the user answers.',
+      '- If `taskIntentProfile.todoRequired=true`, you must call `todowrite` before the first execution step and update it after each major step.',
+      '- If `taskIntentProfile.todoRequired=false`, do not preemptively call `todowrite` for trivial or simple work; execute directly with the minimum correct tool path.',
+      '- A task can still be described as complex when it involves multiple files, multiple subsystems, unclear dependencies, staged verification, migrations, infrastructure/runtime changes, or a non-trivial debugging chain.',
+      '- When `taskIntentProfile.todoRequired=true`, inspect the relevant context, break the work into concrete steps, then complete and verify them sequentially.',
+      '- When `taskIntentProfile.todoRequired=true`, keep the todo detailed enough to cover discovery, implementation, verification, and completion; do not collapse multiple risky changes into one step.',
+      '- While `taskIntentProfile.todoRequired=true` and work is still ongoing, `todowrite` must contain exactly one `in_progress` item. Use zero `in_progress` only when every todo is completed and `complete_task` is your immediate next action.',
       '- If the task requires creating or modifying files, you must use tools such as write_file, read_file, list_directory, search_code, or shell_execute before replying.',
       '- Do not paste full implementation code into the chat as the main answer when the request is to modify the workspace; perform the file operation instead, then summarize the result.',
       '- Do not claim success unless the result is verified from tool output.',
-      '- Ask the user a clarification question only when the task is blocked on missing information.',
+      '- If key requirements are missing, ask one precise clarification question with `ask_user` before starting execution.',
+      '- After a clarification answer arrives, reassess the request from scratch: either answer directly, execute directly, or write a todo first depending on the now-available information.',
+      '- If the user asks a pure identity or memory question that can be answered directly from the current conversation and memory context, reply directly with plain assistant text instead of forcing tool calls or complete_task.',
       '',
       '# Workspace',
       `- Session ID: ${input.sessionId}`,
@@ -285,6 +597,11 @@ export class AltusManagedPromptService {
       '- When you use external sources for a PPT, DOCX, or XLSX deliverable, preserve source URLs in an appendix slide, reference section, source sheet, notes area, or verification notes.',
       '- Do not rerun the same failing shell command unchanged. If a script fails, inspect the exact error, change the script or dependency once, then rerun.',
       '',
+      nonDeployableTaskSection,
+      noAutoDeploySection,
+      clarificationGateSection,
+      clarificationFocusSection,
+      todoGateSection,
       '# OneCEO web app contract',
       '- When the user asks for a website, web app, dashboard, admin panel, SaaS UI, landing page with working product flow, or other deployable browser product, you must build it as a OneCEO deployable web app instead of an ad-hoc static artifact.',
       '- For deployable web app tasks, you must produce a root `package.json` with working `build` and `start` scripts.',
@@ -292,20 +609,14 @@ export class AltusManagedPromptService {
       '- The manifest must include: `templateVersion`, `appType`, `stack`, `build.command`, `build.outputDir`, `start.command`, `start.portEnv`, `healthcheck.path`, `features`, and `runtime`.',
       '- For deployable web app tasks, default `appType` to `web_app`, `templateVersion` to `1.0.0`, and `start.portEnv` to `PORT`.',
       '- Prefer a Vite-based frontend and a simple Node/Express-compatible server boundary unless the existing workspace already dictates another web stack.',
+      "- For Express/EJS projects, do not use `layout('...')` or a layout file with `<%- body %>` unless `express-ejs-layouts` or `ejs-mate` is installed and wired in the server. Otherwise use ordinary partial includes for head/header/footer.",
+      '- For PHP sites that run with `php -S`, if you do not implement a dedicated JSON health endpoint, set `healthcheck.path` to `/` and make sure the homepage returns HTTP 200. Do not point PHP static-style sites at `/api/system/health` unless that route really exists.',
       '- If the app uses database persistence, default to Railway Postgres with `pg` or `drizzle-orm`; do not introduce MySQL by default.',
-      '- Do not invent a separate analytics vendor choice inside generated app code. The platform injects analytics through `VITE_ANALYTICS_ENABLED`, `VITE_ANALYTICS_HOST`, `VITE_ANALYTICS_WEBSITE_ID`, `VITE_ANALYTICS_TAG`, and `VITE_PUBLIC_DOMAIN`.',
-      '- If you touch the frontend entry for a deployable web app, keep a stable hook for platform analytics injection. Prefer reading `VITE_ANALYTICS_HOST` and `VITE_ANALYTICS_WEBSITE_ID` over hard-coded tracker values.',
+      '- Do not invent a separate analytics vendor choice inside generated app code. The platform owns the analytics runtime contract and injects tracker configuration during deployment.',
+      '- If you touch the frontend entry for a deployable web app, keep a stable hook for platform analytics injection. Do not hard-code tracker host, websiteId, or vendor-specific script tags.',
       '- For deployable web app tasks, include a healthcheck route path in `oneceo.manifest.json`. Prefer `/api/system/health` when you own the server route design.',
       '- Do not finish a deployable web app task while required deployment files are missing. Before completion, verify at least: `package.json`, `oneceo.manifest.json`, and the primary app entry files exist.',
-      '- When the user asks to deploy, publish, go live, 上线, redeploy, rollback deployment, or check deployment status for the current app, use the managed deployment tools instead of replying with plain text.',
-      '- Use `deploy_application` for first publish or publishing the latest workspace changes.',
-      '- Use `redeploy_application` when the user wants the latest code changes published again.',
-      '- Use `rollback_application_deployment` only when the user explicitly asks to rollback or revert the deployment.',
-      '- Use `get_application_deployment_status` when the user asks for deployment progress, current URL, or deployment health.',
-      '- If `deploy_application` or `redeploy_application` returns `status=retryable_repair_required`, do not stop. Inspect the workspace, repair the deployment baseline with file/code tools, then call the deployment tool again.',
-      '- `debug_open_page` only proves a local debug preview is reachable. It never proves that the managed public deployment succeeded.',
-      '- For deploy/redeploy/rollback requests, do not call `complete_task` until the matching managed deployment tool returns `status=success`. If deployment is still failing, continue repairing or clearly report that the online deployment is not complete yet.',
-      '- Keep deployment debug details internal. In user-facing replies, summarize only the current phase, whether auto-repair is happening, and the final result.',
+      deploymentToolSection,
       '',
       '# PPT workflow',
       `- For PPT tasks, choose exactly one contentArchetype from ${formatCodeList(PPT_CONTENT_ARCHETYPES)} before drafting slides.`,
@@ -367,28 +678,28 @@ export class AltusManagedPromptService {
       return '';
     }
 
-    const sections = skills.map((skill) => {
-      const header = [
-        `## ${skill.name}`,
-        `- source: ${skill.sourceType}`,
-        `- slug: ${skill.slug}`,
-        `- revision: ${skill.revisionNumber ?? '-'}`,
-        `- resources: ${
-          skill.resourceSummary && skill.resourceSummary.totalCount > 0
-            ? `${skill.resourceSummary.referenceCount} references, ${skill.resourceSummary.templateCount} templates`
-            : 'no extra resources'
-        }`,
-      ].join('\n');
-      return `${header}\n\n${skill.renderedMarkdown}`;
-    });
-
     return [
       '# Active skills',
-      '- The user explicitly selected these skills for the current run.',
+      '- These skills are currently active for the run.',
+      '- They may be user-selected or auto-attached by platform governance.',
       '- These skills are already synced into the sandbox and must be followed when relevant.',
       '- Treat each skill body below as task-specific operating instructions unless it conflicts with higher-priority system rules.',
       '',
-      ...sections,
+      ...this.formatSkillSections(skills),
+    ].join('\n');
+  }
+
+  buildAutoAttachedSkillPrompt(skills: ManagedSkillContext[], toolName: string) {
+    if (!Array.isArray(skills) || skills.length === 0) {
+      return '';
+    }
+
+    return [
+      '# Newly auto-attached skills',
+      `- These skills were automatically activated because tool \`${toolName}\` was used.`,
+      '- They are now active for the rest of this run and must be followed when relevant.',
+      '',
+      ...this.formatSkillSections(skills),
     ].join('\n');
   }
 

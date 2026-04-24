@@ -3,6 +3,7 @@
  * Deliverable Document Viewer Component
  */
 
+import { useTranslation } from 'react-i18next';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
@@ -62,12 +63,13 @@ export function EmployeeDeliverableViewer({
   open,
   onOpenChange,
 }: EmployeeDeliverableViewerProps) {
+  const { t, i18n } = useTranslation();
   const getEvaluationIcon = (rating: 'acceptable' | 'unacceptable' | 'perfect') => {
     switch (rating) {
       case 'perfect':
         return <Star className="w-5 h-5 text-green-600" />;
       case 'acceptable':
-        return <CheckCircle className="w-5 h-5 text-blue-600" />;
+        return <CheckCircle className="h-5 w-5 text-[var(--brand-link)]" />;
       case 'unacceptable':
         return <XCircle className="w-5 h-5 text-red-600" />;
     }
@@ -75,9 +77,9 @@ export function EmployeeDeliverableViewer({
 
   const getEvaluationLabel = (rating: 'acceptable' | 'unacceptable' | 'perfect') => {
     const labels = {
-      perfect: '完美',
-      acceptable: '可接受',
-      unacceptable: '不可接受',
+      perfect: t('deliverableViewer.evaluation.perfect'),
+      acceptable: t('deliverableViewer.evaluation.acceptable'),
+      unacceptable: t('deliverableViewer.evaluation.unacceptable'),
     };
     return labels[rating];
   };
@@ -85,7 +87,7 @@ export function EmployeeDeliverableViewer({
   const getEvaluationColor = (rating: 'acceptable' | 'unacceptable' | 'perfect') => {
     const colors = {
       perfect: 'bg-green-100 text-green-700',
-      acceptable: 'bg-blue-100 text-blue-700',
+      acceptable: 'border border-[var(--brand-border)] bg-[var(--brand-soft)] text-[var(--brand-soft-foreground)]',
       unacceptable: 'bg-red-100 text-red-700',
     };
     return colors[rating];
@@ -97,7 +99,7 @@ export function EmployeeDeliverableViewer({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileText className="w-5 h-5" />
-            员工交付文档
+            {t('deliverableViewer.employeeTitle')}
           </DialogTitle>
         </DialogHeader>
 
@@ -118,7 +120,11 @@ export function EmployeeDeliverableViewer({
                 </div>
                 <div className="flex items-center gap-1">
                   <Calendar className="w-4 h-4" />
-                  提交时间: {deliverable.submittedAt ? new Date(deliverable.submittedAt).toLocaleString('zh-CN') : '未知时间'}
+                  {t('deliverableViewer.submittedAt', {
+                    value: deliverable.submittedAt
+                      ? new Date(deliverable.submittedAt).toLocaleString(i18n.language)
+                      : t('deliverableViewer.unknownTime'),
+                  })}
                 </div>
               </div>
 
@@ -136,7 +142,7 @@ export function EmployeeDeliverableViewer({
 
             {/* Document Content */}
             <div className="space-y-3">
-              <h4 className="text-sm font-medium text-foreground">交付内容</h4>
+              <h4 className="text-sm font-medium text-foreground">{t('deliverableViewer.content')}</h4>
               <div className="bg-muted/30 p-4 rounded-lg">
                 <pre className="whitespace-pre-wrap text-sm text-foreground font-sans">
                   {deliverable.content}
@@ -147,7 +153,7 @@ export function EmployeeDeliverableViewer({
             {/* Attachments */}
             {deliverable.attachments && deliverable.attachments.length > 0 && (
               <div className="space-y-3">
-                <h4 className="text-sm font-medium text-foreground">附件</h4>
+                <h4 className="text-sm font-medium text-foreground">{t('deliverableViewer.attachments')}</h4>
                 <div className="space-y-2">
                   {deliverable.attachments.map((attachment, idx) => (
                     <motion.div
@@ -170,7 +176,7 @@ export function EmployeeDeliverableViewer({
                       </div>
                       <Button variant="ghost" size="sm" className="gap-2">
                         <Download className="w-4 h-4" />
-                        下载
+                        {t('deliverableViewer.download')}
                       </Button>
                     </motion.div>
                   ))}
@@ -182,7 +188,7 @@ export function EmployeeDeliverableViewer({
             {deliverable.evaluation && (
               <div className="space-y-3">
                 <Separator />
-                <h4 className="text-sm font-medium text-foreground">经理评价</h4>
+                <h4 className="text-sm font-medium text-foreground">{t('deliverableViewer.managerEvaluation')}</h4>
                 <div className="bg-muted/30 p-4 rounded-lg space-y-3">
                   <div className="flex items-center gap-2">
                     {getEvaluationIcon(deliverable.evaluation.rating)}
@@ -194,7 +200,11 @@ export function EmployeeDeliverableViewer({
                     {deliverable.evaluation.feedback}
                   </p>
                   <div className="text-xs text-muted-foreground">
-                    评价时间: {deliverable.evaluation.evaluatedAt ? new Date(deliverable.evaluation.evaluatedAt).toLocaleString('zh-CN') : '未知时间'}
+                    {t('deliverableViewer.evaluatedAt', {
+                      value: deliverable.evaluation.evaluatedAt
+                        ? new Date(deliverable.evaluation.evaluatedAt).toLocaleString(i18n.language)
+                        : t('deliverableViewer.unknownTime'),
+                    })}
                   </div>
                 </div>
               </div>
@@ -217,6 +227,7 @@ export function ManagerDeliverableViewer({
   open,
   onOpenChange,
 }: ManagerDeliverableViewerProps) {
+  const { t, i18n } = useTranslation();
   const getStatusColor = (status: ManagerDeliverable['status']) => {
     const colors = {
       pending: 'bg-yellow-100 text-yellow-700',
@@ -228,9 +239,9 @@ export function ManagerDeliverableViewer({
 
   const getStatusLabel = (status: ManagerDeliverable['status']) => {
     const labels = {
-      pending: '待审核',
-      approved: '已批准',
-      rejected: '已拒绝',
+      pending: t('deliverableViewer.status.pending'),
+      approved: t('deliverableViewer.status.approved'),
+      rejected: t('deliverableViewer.status.rejected'),
     };
     return labels[status];
   };
@@ -241,7 +252,7 @@ export function ManagerDeliverableViewer({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileText className="w-5 h-5" />
-            经理交付文档
+            {t('deliverableViewer.managerTitle')}
           </DialogTitle>
         </DialogHeader>
 
@@ -262,7 +273,11 @@ export function ManagerDeliverableViewer({
                 </div>
                 <div className="flex items-center gap-1">
                   <Calendar className="w-4 h-4" />
-                  提交时间: {deliverable.submittedAt ? new Date(deliverable.submittedAt).toLocaleString('zh-CN') : '未知时间'}
+                  {t('deliverableViewer.submittedAt', {
+                    value: deliverable.submittedAt
+                      ? new Date(deliverable.submittedAt).toLocaleString(i18n.language)
+                      : t('deliverableViewer.unknownTime'),
+                  })}
                 </div>
               </div>
 
@@ -275,7 +290,7 @@ export function ManagerDeliverableViewer({
 
             {/* Summary */}
             <div className="space-y-3">
-              <h4 className="text-sm font-medium text-foreground">模块总结</h4>
+              <h4 className="text-sm font-medium text-foreground">{t('deliverableViewer.moduleSummary')}</h4>
               <div className="bg-muted/30 p-4 rounded-lg">
                 <pre className="whitespace-pre-wrap text-sm text-foreground font-sans">
                   {deliverable.summary}
@@ -286,7 +301,9 @@ export function ManagerDeliverableViewer({
             {/* Employee Contributions */}
             <div className="space-y-3">
               <h4 className="text-sm font-medium text-foreground">
-                员工贡献 ({deliverable.employeeContributions.length})
+                {t('deliverableViewer.employeeContributions', {
+                  count: deliverable.employeeContributions.length,
+                })}
               </h4>
               <div className="space-y-2">
                 {deliverable.employeeContributions.map((contribution, idx) => (
@@ -310,7 +327,7 @@ export function ManagerDeliverableViewer({
                     </div>
                     <Button variant="ghost" size="sm" className="gap-2">
                       <FileText className="w-4 h-4" />
-                      查看交付文档
+                      {t('deliverableViewer.viewDeliverable')}
                     </Button>
                   </motion.div>
                 ))}
@@ -320,7 +337,7 @@ export function ManagerDeliverableViewer({
             {/* Attachments */}
             {deliverable.attachments && deliverable.attachments.length > 0 && (
               <div className="space-y-3">
-                <h4 className="text-sm font-medium text-foreground">附件</h4>
+                <h4 className="text-sm font-medium text-foreground">{t('deliverableViewer.attachments')}</h4>
                 <div className="space-y-2">
                   {deliverable.attachments.map((attachment, idx) => (
                     <motion.div
@@ -343,7 +360,7 @@ export function ManagerDeliverableViewer({
                       </div>
                       <Button variant="ghost" size="sm" className="gap-2">
                         <Download className="w-4 h-4" />
-                        下载
+                        {t('deliverableViewer.download')}
                       </Button>
                     </motion.div>
                   ))}
@@ -355,7 +372,7 @@ export function ManagerDeliverableViewer({
             {deliverable.feedback && (
               <div className="space-y-3">
                 <Separator />
-                <h4 className="text-sm font-medium text-foreground">总经理反馈</h4>
+                <h4 className="text-sm font-medium text-foreground">{t('deliverableViewer.ceoFeedback')}</h4>
                 <div className="bg-muted/30 p-4 rounded-lg">
                   <p className="text-sm text-muted-foreground">
                     {deliverable.feedback}

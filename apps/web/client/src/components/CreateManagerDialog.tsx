@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
 import { Briefcase, Code, TrendingUp, Wrench, Search, Palette, CheckCircle } from 'lucide-react';
 import {
@@ -24,47 +25,33 @@ interface CreateManagerDialogProps {
   }) => void;
 }
 
-const managerTypes: Array<{
+const managerTypeDefs: Array<{
   type: ManagerType;
-  label: string;
   icon: React.ComponentType<{ className?: string }>;
-  description: string;
 }> = [
   {
     type: 'development',
-    label: '开发经理 (Development Manager)',
     icon: Code,
-    description: '负责软件开发、编码和技术实现，管理开发员工',
   },
   {
     type: 'operations',
-    label: '运营经理 (Operations Manager)',
     icon: TrendingUp,
-    description: '监督业务运营、流程和效率，管理运营员工',
   },
   {
     type: 'maintenance',
-    label: '运维经理 (Maintenance Manager)',
     icon: Wrench,
-    description: '处理系统维护、更新和技术支持，管理运维员工',
   },
   {
     type: 'market_research',
-    label: '市场调研经理 (Market Research Manager)',
     icon: Search,
-    description: '进行市场分析、竞争对手研究和趋势识别，管理调研员工',
   },
   {
     type: 'design',
-    label: '设计经理 (Design Manager)',
     icon: Palette,
-    description: '管理 UI/UX 设计、品牌和视觉资产，管理设计员工',
   },
   {
     type: 'qa',
-    label: 'QA 经理 (QA Manager)',
     icon: CheckCircle,
-    description: '确保质量保证、测试和错误跟踪，管理 QA 员工',
   },
 ];
 
@@ -73,9 +60,15 @@ export default function CreateManagerDialog({
   onOpenChange,
   onCreateManager,
 }: CreateManagerDialogProps) {
+  const { t } = useTranslation();
   const [selectedType, setSelectedType] = useState<ManagerType>('development');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const managerTypes = managerTypeDefs.map((type) => ({
+    ...type,
+    label: t(`createManagerDialog.types.${type.type}.label`),
+    description: t(`createManagerDialog.types.${type.type}.description`),
+  }));
 
   const handleCreate = () => {
     if (!name.trim()) return;
@@ -98,17 +91,17 @@ export default function CreateManagerDialog({
       <DialogContent className="max-w-2xl rounded-2xl">
         <DialogHeader>
           <DialogTitle className="text-xl font-semibold text-foreground">
-            创建经理 (Create Manager)
+            {t('createManagerDialog.title')}
           </DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            选择经理类型并配置他们在项目中的角色。经理将负责创建和管理员工。
+            {t('createManagerDialog.description')}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-6 mt-4">
           {/* Manager Type Selection */}
           <div className="space-y-3">
-            <Label className="text-foreground font-semibold">经理类型 (Manager Type)</Label>
+            <Label className="text-foreground font-semibold">{t('createManagerDialog.typeLabel')}</Label>
             <div className="grid grid-cols-2 gap-2">
               {managerTypes.map((type) => {
                 const Icon = type.icon;
@@ -150,13 +143,13 @@ export default function CreateManagerDialog({
           {/* Manager Name */}
           <div className="space-y-2">
             <Label htmlFor="manager-name" className="text-foreground font-semibold">
-              Manager Name
+              {t('createManagerDialog.nameLabel')}
             </Label>
             <Input
               id="manager-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g., Senior Development Manager"
+              placeholder={t('createManagerDialog.namePlaceholder')}
               className="rounded-xl border-border"
             />
           </div>
@@ -164,13 +157,13 @@ export default function CreateManagerDialog({
           {/* Description */}
           <div className="space-y-2">
             <Label htmlFor="manager-description" className="text-foreground font-semibold">
-              Description (Optional)
+              {t('createManagerDialog.managerDescriptionLabel')}
             </Label>
             <Textarea
               id="manager-description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Describe the manager's responsibilities and focus areas..."
+              placeholder={t('createManagerDialog.managerDescriptionPlaceholder')}
               className="rounded-xl border-border min-h-[80px]"
             />
           </div>
@@ -184,7 +177,7 @@ export default function CreateManagerDialog({
                 className="w-full rounded-xl bg-foreground hover:bg-foreground/90 text-background font-medium"
               >
                 <Briefcase className="w-4 h-4 mr-2" />
-                Create Manager
+                {t('createManagerDialog.create')}
               </Button>
             </motion.div>
             <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
@@ -193,7 +186,7 @@ export default function CreateManagerDialog({
                 variant="outline"
                 className="rounded-xl border-border font-medium"
               >
-                Cancel
+                {t('common.cancel')}
               </Button>
             </motion.div>
           </div>

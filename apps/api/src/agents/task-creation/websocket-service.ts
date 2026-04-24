@@ -24,7 +24,8 @@ import { taskCreationSessionDAO } from '../../db/dao';
 import { directModeEntryService } from '../../services/direct-mode-entry-service';
 import { getDirectModeDeploymentErrorMessage } from '../../services/direct-mode-deployment-capability-service';
 import { appAuthService } from '../../services/app-auth-service';
-import { APP_SESSION_COOKIE_NAME } from '../../utils/auth-session';
+import { APP_SESSION_COOKIE_NAMES } from '../../utils/auth-session';
+import { readCookieValuesFromHeaderByNames } from '../../utils/http-cookie';
 
 function normalizeDirectOpencodeErrorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error || '');
@@ -63,25 +64,6 @@ function requiresAuthenticatedUser(messageType: unknown): boolean {
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
-}
-
-function readCookieFromHeader(cookieHeader: unknown, name: string): string | null {
-  const header = asText(cookieHeader);
-  if (!header) return null;
-  const items = header.split(/;\s*/g).filter(Boolean);
-  for (const item of items) {
-    const index = item.indexOf('=');
-    if (index <= 0) continue;
-    const key = item.slice(0, index).trim();
-    if (key !== name) continue;
-    const rawValue = item.slice(index + 1);
-    try {
-      return decodeURIComponent(rawValue);
-    } catch {
-      return rawValue;
-    }
-  }
-  return null;
 }
 
 export class TaskCreationWebSocketService {
@@ -176,7 +158,7 @@ export class TaskCreationWebSocketService {
       const service = new TaskCreationService({
         onSessionCreated: (sessionId: string) => {
           this.sessionByClient.set(clientId, sessionId);
-          void taskCreationFileMemoryStore.createSession('新建任务会话', sessionId);
+          void taskCreationFileMemoryStore.createSession('待识别任务', sessionId);
         },
         onMessage: (message: WebSocketMessage) => {
           this.sendToClient(clientId, message);
@@ -330,6 +312,48 @@ export class TaskCreationWebSocketService {
     });
     if (stage) {
       await taskCreationFileMemoryStore.updateSessionState(sessionId, { stage: stage as any });
+    }
+  }
+
+  private async emitTerminalOutcomeIfNeeded(clientId: string, sessionId: string): Promise<void> {
+    const current = await taskCreationFileMemoryStore.getSession(sessionId);
+    if (!current) return;
+
+    if (current.status === 'completed' || current.stage === 'completed') {
+      this.sendToClient(
+        clientId,
+        {
+          type: 'status_update' as any,
+          sessionId,
+          content: '执行完成',
+          stage: 'completed' as any,
+          tone: 'review' as any,
+          metadata: {
+            outcome: 'completed',
+            executionMode: current.mode === 'altus' ? 'altus_managed' : 'task_creation',
+          },
+        },
+        { skipPersistence: true }
+      );
+      return;
+    }
+
+    if (current.status === 'failed' || current.stage === 'failed') {
+      this.sendToClient(
+        clientId,
+        {
+          type: 'status_update' as any,
+          sessionId,
+          content: '执行失败',
+          stage: 'failed' as any,
+          tone: 'error' as any,
+          metadata: {
+            outcome: 'failed',
+            executionMode: current.mode === 'altus' ? 'altus_managed' : 'task_creation',
+          },
+        },
+        { skipPersistence: true }
+      );
     }
   }
 
@@ -663,6 +687,7 @@ export class TaskCreationWebSocketService {
         await service.resumeTask(sessionId, message.content || pendingResume.lastUserInput, resolvedUserId);
         this.clearManagedRun(sessionId);
         await this.syncSessionStateFromCurrentStage(sessionId);
+        await this.emitTerminalOutcomeIfNeeded(clientId, sessionId);
         return;
       } catch (error) {
         this.clearManagedRun(sessionId);
@@ -700,6 +725,7 @@ export class TaskCreationWebSocketService {
         await service.createTask(resumedInput, resolvedUserId, sessionId, 'user_response');
         this.clearManagedRun(sessionId);
         await this.syncSessionStateFromCurrentStage(sessionId);
+        await this.emitTerminalOutcomeIfNeeded(clientId, sessionId);
         return;
       } catch (error) {
         this.clearManagedRun(sessionId);
@@ -732,6 +758,7 @@ export class TaskCreationWebSocketService {
       }
       if (sessionId) {
         await this.syncSessionStateFromCurrentStage(sessionId);
+        await this.emitTerminalOutcomeIfNeeded(clientId, sessionId);
       }
     } catch (error) {
       if (sessionId) {
@@ -827,9 +854,13 @@ export class TaskCreationWebSocketService {
     if (!enabled) return;
     void sandboxAgentProvisionService
       .provisionWithLock({
+        executor: 'altus',
         metadata: {
           taskSessionId: sessionId,
-          taskTitle: taskTitle?.slice(0, 80) || '新建任务会话',
+          taskTitle: taskTitle?.slice(0, 80) || '待识别任务',
+          sandboxExecutor: 'altus',
+          executor: 'altus',
+          altusMode: 'managed',
         },
       })
       .catch((error) => {
@@ -1167,7 +1198,8 @@ export class TaskCreationWebSocketService {
     const context = this.clientAuthContext.get(clientId);
     if (!context) return;
 
-    const sessionToken = readCookieFromHeader(req?.headers?.cookie, APP_SESSION_COOKIE_NAME);
+    const sessionToken =
+      readCookieValuesFromHeaderByNames(asText(req?.headers?.cookie), APP_SESSION_COOKIE_NAMES)[0] || null;
     context.sessionCookiePresent = Boolean(sessionToken);
 
     if (!sessionToken) {

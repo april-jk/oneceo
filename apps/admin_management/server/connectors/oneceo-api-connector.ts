@@ -37,6 +37,190 @@ export type TaskCreationSession = {
   messages?: TaskCreationMessage[];
 };
 
+export type AdminDeploymentRecord = {
+  taskSessionId: string;
+  statusCategory: 'success' | 'failed' | 'pending' | 'ready' | 'uninitialized' | 'unknown' | string;
+  hasDeployment: boolean;
+  deploymentId: string | null;
+  bindingState: string;
+  latestStatus: string | null;
+  latestUrl: string | null;
+  latestStaticUrl: string | null;
+  activeDeploymentPending: boolean;
+  projectName: string | null;
+  environmentName: string | null;
+  serviceName: string | null;
+  lastVerifiedAt: string | null;
+  updatedAt: string;
+  user: {
+    id: string;
+    source: string;
+    displayName: string | null;
+    email: string | null;
+    status: string | null;
+    lastLoginAt: string | null;
+    lastSeenAt: string | null;
+  } | null;
+  session: {
+    id: string;
+    userId: string | null;
+    title: string;
+    status: string;
+    stage: string | null;
+    createdAt: string | null;
+    updatedAt: string | null;
+  };
+  sandbox: {
+    sandboxId: string;
+    sessionId: string;
+    orchestratorSessionId: string | null;
+    vmName: string | null;
+    status: string;
+    createdAt: string | null;
+    updatedAt: string | null;
+    closedAt: string | null;
+  } | null;
+  panel: {
+    configured: boolean;
+    canDeploy: boolean;
+    message?: string;
+    bindingState: string;
+    provisioningPhase?: string;
+    providerErrorCode?: string;
+    providerErrorMessage?: string;
+    lastVerifiedAt?: string;
+    projectId?: string;
+    projectName?: string;
+    environmentId?: string;
+    environmentName?: string;
+    serviceId?: string;
+    serviceName?: string;
+    deploymentId?: string;
+    latestStatus?: string;
+    latestUrl?: string;
+    latestStaticUrl?: string;
+    activeDeploymentPending: boolean;
+    domains: string[];
+    deployments: Array<{
+      id: string;
+      status: string;
+      createdAt?: string;
+      serviceName?: string;
+      commitMessage?: string;
+      commitAuthor?: string;
+      url?: string;
+      staticUrl?: string;
+    }>;
+    logs: Array<{
+      timestamp?: string;
+      message: string;
+      severity?: string;
+    }>;
+    missing: string[];
+    analytics?: Record<string, unknown>;
+    resourceBinding?: Record<string, unknown>;
+  };
+};
+
+export type DeploymentManagementOverviewResponse = {
+  summary: {
+    total: number;
+    success: number;
+    failed: number;
+    pending: number;
+    ready: number;
+    withUrl: number;
+    latestUpdatedAt: string | null;
+  };
+};
+
+export type DeploymentManagementListResponse = {
+  records: AdminDeploymentRecord[];
+  total: number;
+};
+
+export type DeploymentConversationListResponse = {
+  items: AdminDeploymentRecord[];
+  total: number;
+};
+
+export type DeploymentUserSummary = {
+  user: AdminDeploymentRecord['user'];
+  deploymentCount: number;
+  successCount: number;
+  failedCount: number;
+  pendingCount: number;
+  latestUpdatedAt: string | null;
+  latestRecord: AdminDeploymentRecord | null;
+};
+
+export type DeploymentUserListResponse = {
+  items: DeploymentUserSummary[];
+  total: number;
+};
+
+export type AdminRailwayServiceItem = {
+  key: string;
+  projectId: string;
+  projectName: string | null;
+  environmentId: string;
+  environmentName: string | null;
+  serviceId: string;
+  serviceName: string | null;
+  primaryDomain: string | null;
+  domainCount: number;
+  targetPort: number | null;
+  latestDeploymentId: string | null;
+  latestDeploymentStatus: string | null;
+  latestDeploymentAt: string | null;
+  latestUrl: string | null;
+  latestStaticUrl: string | null;
+  linkedUsers: Array<{
+    id: string;
+    displayName: string | null;
+    email: string | null;
+    status: string | null;
+  }>;
+  linkedUserCount: number;
+  managedAccountCount: number;
+  riskTags: string[];
+  variablesPreview: string[];
+  refs: Array<{
+    userId: string;
+    connectorKey: string;
+    displayName: string | null;
+    authStatus: string;
+    lastError: string | null;
+    updatedAt: string | null;
+    projectKey: string;
+  }>;
+  updatedAt: string | null;
+};
+
+export type AdminRailwayServiceListResponse = {
+  summary: {
+    total: number;
+    withDomain: number;
+    failed: number;
+    risky: number;
+    updatedAt: string | null;
+  };
+  items: AdminRailwayServiceItem[];
+};
+
+export type AdminRailwayBatchActionResponse = {
+  total: number;
+  successCount: number;
+  failureCount: number;
+  results: Array<{
+    key: string;
+    serviceId: string;
+    serviceName: string | null;
+    ok: boolean;
+    message?: string;
+  }>;
+};
+
 export type AdminTaskSessionUser = {
   id: string;
   source: 'app_user' | 'legacy_user_id' | 'missing_app_user' | string;
@@ -117,6 +301,16 @@ export type AdminSkillSummary = {
   publishedRevisionNumber: number | null;
   publishedAt: string | null;
   updatedAt: string;
+  governance: {
+    systemRole: string | null;
+    adminManaged: boolean;
+    required: boolean;
+    autoActivation: {
+      enabled: boolean;
+      triggers: string[];
+      toolNames: string[];
+    };
+  };
 };
 
 export type AdminSkillDetail = {
@@ -129,6 +323,16 @@ export type AdminSkillDetail = {
   publishedRevisionId: string | null;
   latestBodyMarkdown: string;
   renderedSkillMarkdown: string | null;
+  governance: {
+    systemRole: string | null;
+    adminManaged: boolean;
+    required: boolean;
+    autoActivation: {
+      enabled: boolean;
+      triggers: string[];
+      toolNames: string[];
+    };
+  };
   resourceSummary?: {
     totalCount: number;
     referenceCount: number;
@@ -142,6 +346,19 @@ export type AdminSkillDetail = {
     createdAt: string;
   }>;
   updatedAt: string;
+};
+
+export type AdminSkillGovernanceOption = {
+  value: string;
+  label: string;
+  description?: string;
+  category?: string;
+};
+
+export type AdminSkillGovernanceOptions = {
+  systemRoles: AdminSkillGovernanceOption[];
+  autoActivationTriggers: AdminSkillGovernanceOption[];
+  toolNames: AdminSkillGovernanceOption[];
 };
 
 export type AdminSkillRevision = {
@@ -374,6 +591,7 @@ export type AdminAppUserSessionSummary = {
   updatedAt: string | null;
   lastSeenAt: string | null;
   isActive: boolean;
+  isOnline: boolean;
 };
 
 export type AdminAppUserConversationSummary = {
@@ -449,6 +667,8 @@ export type AdminAppUserListResponse = {
     hasConversation: string;
     hasSandbox: string;
     ownershipHealth: string;
+    sortKey: string;
+    sortDirection: string;
   };
   items: AdminAppUserListItem[];
 };
@@ -649,6 +869,8 @@ export class OneceoApiConnector {
     hasConversation?: string;
     hasSandbox?: string;
     ownershipHealth?: string;
+    sortKey?: string;
+    sortDirection?: string;
   }) {
     const params = new URLSearchParams();
     if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
@@ -659,6 +881,8 @@ export class OneceoApiConnector {
     if (filters?.hasConversation) params.set('hasConversation', filters.hasConversation);
     if (filters?.hasSandbox) params.set('hasSandbox', filters.hasSandbox);
     if (filters?.ownershipHealth) params.set('ownershipHealth', filters.ownershipHealth);
+    if (filters?.sortKey) params.set('sortKey', filters.sortKey);
+    if (filters?.sortDirection) params.set('sortDirection', filters.sortDirection);
     const suffix = params.toString() ? `?${params.toString()}` : '';
     return this.request<AdminAppUserListResponse>(`/api/internal/admin/app-users${suffix}`);
   }
@@ -667,22 +891,146 @@ export class OneceoApiConnector {
     return this.request<AdminAppUserDetailResponse>(`/api/internal/admin/app-users/${encodeURIComponent(userId)}`);
   }
 
+  getDeploymentOverview(filters?: {
+    limit?: number;
+    query?: string;
+    status?: string;
+    hasUrl?: string;
+    userId?: string;
+    taskSessionId?: string;
+  }) {
+    const params = new URLSearchParams();
+    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
+    if (filters?.query) params.set('query', filters.query);
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.hasUrl) params.set('hasUrl', filters.hasUrl);
+    if (filters?.userId) params.set('userId', filters.userId);
+    if (filters?.taskSessionId) params.set('taskSessionId', filters.taskSessionId);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return this.request<DeploymentManagementOverviewResponse>(`/api/internal/admin/deployments/overview${suffix}`);
+  }
+
+  listDeploymentRecords(filters?: {
+    limit?: number;
+    query?: string;
+    status?: string;
+    hasUrl?: string;
+    userId?: string;
+    taskSessionId?: string;
+  }) {
+    const params = new URLSearchParams();
+    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
+    if (filters?.query) params.set('query', filters.query);
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.hasUrl) params.set('hasUrl', filters.hasUrl);
+    if (filters?.userId) params.set('userId', filters.userId);
+    if (filters?.taskSessionId) params.set('taskSessionId', filters.taskSessionId);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return this.request<DeploymentManagementListResponse>(`/api/internal/admin/deployments${suffix}`);
+  }
+
+  listDeploymentConversations(filters?: {
+    limit?: number;
+    query?: string;
+    status?: string;
+    hasUrl?: string;
+    userId?: string;
+    taskSessionId?: string;
+  }) {
+    const params = new URLSearchParams();
+    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
+    if (filters?.query) params.set('query', filters.query);
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.hasUrl) params.set('hasUrl', filters.hasUrl);
+    if (filters?.userId) params.set('userId', filters.userId);
+    if (filters?.taskSessionId) params.set('taskSessionId', filters.taskSessionId);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return this.request<DeploymentConversationListResponse>(`/api/internal/admin/deployments/conversations${suffix}`);
+  }
+
+  listDeploymentUsers(filters?: {
+    limit?: number;
+    query?: string;
+    status?: string;
+    hasUrl?: string;
+    userId?: string;
+  }) {
+    const params = new URLSearchParams();
+    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
+    if (filters?.query) params.set('query', filters.query);
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.hasUrl) params.set('hasUrl', filters.hasUrl);
+    if (filters?.userId) params.set('userId', filters.userId);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return this.request<DeploymentUserListResponse>(`/api/internal/admin/deployments/users${suffix}`);
+  }
+
+  getDeploymentDetail(taskSessionId: string) {
+    return this.request<AdminDeploymentRecord>(
+      `/api/internal/admin/deployments/task-sessions/${encodeURIComponent(taskSessionId)}`
+    );
+  }
+
+  listRailwayServices(filters?: {
+    limit?: number;
+    query?: string;
+    status?: string;
+    risk?: string;
+  }) {
+    const params = new URLSearchParams();
+    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
+    if (filters?.query) params.set('query', filters.query);
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.risk) params.set('risk', filters.risk);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return this.request<AdminRailwayServiceListResponse>(`/api/internal/admin/deployments/railway/services${suffix}`);
+  }
+
+  batchDeleteRailwayServices(serviceKeys: string[]) {
+    return this.request<AdminRailwayBatchActionResponse>('/api/internal/admin/deployments/railway/services/batch-delete', {
+      method: 'POST',
+      body: { serviceKeys },
+    });
+  }
+
+  batchConfigureRailwayServices(
+    serviceKeys: string[],
+    patch: {
+      builder?: string;
+      buildCommand?: string;
+      startCommand?: string;
+      rootDirectory?: string;
+      healthcheckPath?: string;
+      sourceImage?: string;
+    }
+  ) {
+    return this.request<AdminRailwayBatchActionResponse>('/api/internal/admin/deployments/railway/services/batch-configure', {
+      method: 'POST',
+      body: { serviceKeys, patch },
+    });
+  }
+
+  batchUpsertRailwayServiceVariables(
+    serviceKeys: string[],
+    variables: Record<string, string>,
+    replace?: boolean,
+  ) {
+    return this.request<AdminRailwayBatchActionResponse>('/api/internal/admin/deployments/railway/services/batch-variables', {
+      method: 'POST',
+      body: {
+        serviceKeys,
+        variables,
+        replace: replace === true,
+      },
+    });
+  }
+
   updateAppUserStatus(userId: string, status: 'active' | 'disabled') {
     return this.request<AdminAppUserDetailResponse>(
       `/api/internal/admin/app-users/${encodeURIComponent(userId)}/status`,
       {
         method: 'POST',
         body: { status },
-      }
-    );
-  }
-
-  revokeAppUserSessions(userId: string) {
-    return this.request<AdminAppUserDetailResponse>(
-      `/api/internal/admin/app-users/${encodeURIComponent(userId)}/revoke-sessions`,
-      {
-        method: 'POST',
-        body: {},
       }
     );
   }
@@ -748,7 +1096,7 @@ export class OneceoApiConnector {
       `/api/sandbox/environment/${encodeURIComponent(sessionId)}/restore`,
       {
         method: 'POST',
-        body: payload ? JSON.stringify(payload) : undefined,
+        body: payload,
       }
     );
   }
@@ -805,6 +1153,10 @@ export class OneceoApiConnector {
     return this.request<AdminSkillSummary[]>(`/api/internal/skills${suffix}`);
   }
 
+  getSkillGovernanceOptions() {
+    return this.request<AdminSkillGovernanceOptions>('/api/internal/skills/governance-options');
+  }
+
   getSkill(skillId: string) {
     return this.request<AdminSkillDetail>(`/api/internal/skills/${encodeURIComponent(skillId)}`);
   }
@@ -814,6 +1166,16 @@ export class OneceoApiConnector {
     name: string;
     description?: string;
     category?: string;
+    governance?: {
+      systemRole?: string | null;
+      adminManaged?: boolean;
+      required?: boolean;
+      autoActivation?: {
+        enabled?: boolean;
+        triggers?: string[];
+        toolNames?: string[];
+      };
+    };
     bodyMarkdown: string;
     resources?: Array<{
       resourcePath: string;
@@ -834,6 +1196,16 @@ export class OneceoApiConnector {
       name?: string;
       description?: string;
       category?: string;
+      governance?: {
+        systemRole?: string | null;
+        adminManaged?: boolean;
+        required?: boolean;
+        autoActivation?: {
+          enabled?: boolean;
+          triggers?: string[];
+          toolNames?: string[];
+        };
+      };
       bodyMarkdown?: string;
       resources?: Array<{
         resourcePath: string;

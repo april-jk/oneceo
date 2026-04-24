@@ -1,12 +1,16 @@
 import { taskCreationSessionDAO, taskSessionRunDAO } from '../db/dao';
 import { altusManagedStreamService } from './altus-managed-stream-service';
 import { altusRunRedisStateService, AltusRunRedisStateService } from './altus-run-redis-state-service';
-import { toIso, type ManagedRunSummary } from './altus-managed-shared';
+import { stripManagedDebugPayload, toIso, type ManagedRunSummary } from './altus-managed-shared';
 
 const MANAGED_TOOL_EVENT_TYPES = new Set([
   'tool_call_started',
   'tool_call_completed',
   'tool_call_failed',
+]);
+
+const MANAGED_STATUS_TIMELINE_EVENT_TYPES = new Set([
+  'run_status',
 ]);
 
 function asText(value: unknown): string {
@@ -15,6 +19,31 @@ function asText(value: unknown): string {
 
 function shouldProjectManagedToolEvent(eventType: string) {
   return MANAGED_TOOL_EVENT_TYPES.has(asText(eventType).toLowerCase());
+}
+
+function shouldProjectManagedToolPayload(eventType: string, payload: Record<string, unknown>) {
+  const normalizedEventType = asText(eventType).toLowerCase();
+  const toolName = asText(payload.toolName).toLowerCase();
+  if (!toolName) return true;
+  if (toolName === 'ask_user') {
+    return false;
+  }
+  if (toolName === 'todowrite') {
+    return normalizedEventType === 'tool_call_completed';
+  }
+  return true;
+}
+
+function shouldProjectManagedStatusEvent(eventType: string) {
+  return MANAGED_STATUS_TIMELINE_EVENT_TYPES.has(asText(eventType).toLowerCase());
+}
+
+function shouldProjectManagedStatusPayload(payload: Record<string, unknown>) {
+  const status = asText(payload.status).toLowerCase();
+  const content = asText(payload.content);
+  if (!content) return false;
+  if (status === 'starting') return false;
+  return true;
 }
 
 function buildManagedToolMessageKey(input: {
@@ -27,6 +56,14 @@ function buildManagedToolMessageKey(input: {
   if (toolCallId) {
     return `managed:${input.runId}:tool:${toolCallId}`;
   }
+  return `managed:${input.runId}:${input.eventType}:${Math.max(0, Math.floor(input.sequence || 0))}`;
+}
+
+function buildManagedStatusMessageKey(input: {
+  runId: string;
+  eventType: string;
+  sequence: number;
+}) {
   return `managed:${input.runId}:${input.eventType}:${Math.max(0, Math.floor(input.sequence || 0))}`;
 }
 
@@ -56,13 +93,28 @@ export class AltusRunEventWriter {
       sequence,
       eventType: normalizedEventType,
     };
-    if (shouldProjectManagedToolEvent(normalizedEventType)) {
-      const messageKey = buildManagedToolMessageKey({
-        runId,
-        eventType: normalizedEventType,
-        sequence,
-        payload: envelopePayload,
-      });
+    const toolProjectionMessageKey = shouldProjectManagedToolEvent(normalizedEventType)
+      ? buildManagedToolMessageKey({
+          runId,
+          eventType: normalizedEventType,
+          sequence,
+          payload: envelopePayload,
+        })
+      : '';
+    const statusProjectionMessageKey = shouldProjectManagedStatusEvent(normalizedEventType)
+      ? buildManagedStatusMessageKey({
+          runId,
+          eventType: normalizedEventType,
+          sequence,
+        })
+      : '';
+    const timelineProjectionMessageKey = toolProjectionMessageKey || statusProjectionMessageKey;
+    if (timelineProjectionMessageKey) {
+      envelopePayload.messageKey = timelineProjectionMessageKey;
+    }
+    const userVisiblePayload = stripManagedDebugPayload(envelopePayload);
+    if (shouldProjectManagedToolEvent(normalizedEventType) && shouldProjectManagedToolPayload(normalizedEventType, envelopePayload)) {
+      const messageKey = timelineProjectionMessageKey;
       const content = asText(envelopePayload.content) || normalizedEventType;
       await taskCreationSessionDAO.addMessage({
         sessionId,
@@ -70,7 +122,7 @@ export class AltusRunEventWriter {
         messageType: 'executor_event',
         content,
         metadata: {
-          ...envelopePayload,
+          ...userVisiblePayload,
           messageKey,
           eventType: normalizedEventType,
           executor: 'altus',
@@ -83,6 +135,28 @@ export class AltusRunEventWriter {
         },
         createdAt: event.createdAt || new Date(),
       });
+    } else if (shouldProjectManagedStatusEvent(normalizedEventType)) {
+      const content = asText(envelopePayload.content);
+      if (shouldProjectManagedStatusPayload(envelopePayload)) {
+        await taskCreationSessionDAO.addMessage({
+          sessionId,
+          role: 'system',
+          messageType: 'status_update',
+          content,
+          metadata: {
+            ...userVisiblePayload,
+            messageKey: timelineProjectionMessageKey,
+            eventType: normalizedEventType,
+            executor: 'altus',
+            executionMode: 'managed',
+            runId,
+            sessionId,
+            userId,
+            status: asText(envelopePayload.status) || undefined,
+          },
+          createdAt: event.createdAt || new Date(),
+        });
+      }
     }
     await this.redisStateService.appendRunEvent({
       runId,

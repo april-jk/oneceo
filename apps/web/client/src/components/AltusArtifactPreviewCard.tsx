@@ -3,13 +3,16 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   getWorkspaceFile,
+  getTaskCreationDeploymentInfo,
   headWorkspaceRawFile,
   getWorkspaceRawFileUrl,
   startTaskCreationRuntime,
+  type TaskCreationDeploymentInfo,
   waitWorkspaceRawFileReady,
   type WorkspaceFile,
 } from "@/lib/task-creation-client";
 import { cn } from "@/lib/utils";
+import i18n from "@/i18n";
 import {
   appendPreviewCacheBust,
   mapWorkspaceRawPreviewHeadResult,
@@ -23,6 +26,7 @@ import {
   Monitor,
   Rocket,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 export type AltusArtifactFile = {
   path: string;
@@ -35,6 +39,7 @@ type AltusArtifactPreviewCardProps = {
   displayMode?: "artifact-browser" | "web-preview";
   onOpenViewer?: (path: string) => void;
   onDeployRequested?: (path: string) => Promise<void> | void;
+  runtimeSwitchBlocked?: boolean;
 };
 
 function getFilename(path: string): string {
@@ -47,13 +52,38 @@ function isWebArtifact(path: string): boolean {
   return /\.(html?)$/i.test(path);
 }
 
+export function resolveArtifactDeploymentPreviewUrl(
+  info: TaskCreationDeploymentInfo | null | undefined,
+): string {
+  if (!info) return "";
+  const selectedDeployment =
+    info.deployments.find((deployment) => deployment.id === info.deploymentId) || null;
+  const successfulDeployment =
+    info.deployments.find(
+      (deployment) =>
+        deployment.status === "SUCCESS" && Boolean(deployment.staticUrl || deployment.url),
+    ) || null;
+  return (
+    selectedDeployment?.staticUrl ||
+    selectedDeployment?.url ||
+    successfulDeployment?.staticUrl ||
+    successfulDeployment?.url ||
+    info.latestStaticUrl ||
+    info.latestUrl ||
+    info.domains[0] ||
+    ""
+  );
+}
+
 export default function AltusArtifactPreviewCard({
   sessionId,
   artifacts,
   displayMode = "artifact-browser",
   onOpenViewer,
   onDeployRequested,
+  runtimeSwitchBlocked = false,
 }: AltusArtifactPreviewCardProps) {
+  useTranslation();
   const normalizedArtifacts = useMemo(() => {
     const unique = new Map<string, AltusArtifactFile>();
     for (const artifact of artifacts) {
@@ -92,6 +122,7 @@ export default function AltusArtifactPreviewCard({
   const [codeLoading, setCodeLoading] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
   const [deploying, setDeploying] = useState(false);
+  const [deploymentPreviewUrl, setDeploymentPreviewUrl] = useState("");
   const [webPreviewState, setWebPreviewState] = useState<WorkspaceHtmlPreviewState>("checking");
   const [webPreviewMessage, setWebPreviewMessage] = useState("");
   const [webPreviewReloading, setWebPreviewReloading] = useState(false);
@@ -118,7 +149,9 @@ export default function AltusArtifactPreviewCard({
       .catch((error) => {
         if (cancelled) return;
         setCodeFile(null);
-        setCodeError(error instanceof Error ? error.message : "读取文件失败");
+        setCodeError(
+          error instanceof Error ? error.message : i18n.t("homeWorkspace.readFileFailed"),
+        );
       })
       .finally(() => {
         if (cancelled) return;
@@ -144,19 +177,56 @@ export default function AltusArtifactPreviewCard({
   const selectedIsWebArtifact = Boolean(
     selectedArtifact && isWebArtifact(selectedArtifact.path),
   );
-  const hasPreviewTab = Boolean(previewPath);
   const effectiveRawPreviewUrl = appendPreviewCacheBust(rawPreviewUrl, webPreviewNonce);
   const effectiveRawSelectedUrl = appendPreviewCacheBust(rawSelectedUrl, webPreviewNonce);
-  const previewCheckEnabled = Boolean(activeTab === "preview" && previewPath);
+  const selectedPreviewUrl = selectedIsWebArtifact
+    ? deploymentPreviewUrl || effectiveRawPreviewUrl
+    : "";
+  const selectedOpenUrl = selectedIsWebArtifact
+    ? deploymentPreviewUrl || effectiveRawSelectedUrl
+    : effectiveRawSelectedUrl;
+  const hasPreviewTab = Boolean(previewPath);
+  const previewCheckEnabled = Boolean(
+    activeTab === "preview" && previewPath && !deploymentPreviewUrl,
+  );
   const frameClass = selectedIsWebArtifact
     ? "group relative w-full overflow-hidden rounded-xl border bg-card pt-10 min-h-[240px] sm:h-[400px] max-h-[640px]"
     : "group relative w-full overflow-hidden rounded-xl border bg-card pt-10 min-h-[320px]";
 
   useEffect(() => {
+    if (!visibleArtifacts.some((artifact) => isWebArtifact(artifact.path))) {
+      setDeploymentPreviewUrl("");
+      return;
+    }
+    if (runtimeSwitchBlocked) {
+      setDeploymentPreviewUrl("");
+      return;
+    }
+    let cancelled = false;
+    getTaskCreationDeploymentInfo(sessionId)
+      .then((info) => {
+        if (cancelled) return;
+        setDeploymentPreviewUrl(resolveArtifactDeploymentPreviewUrl(info));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setDeploymentPreviewUrl("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [runtimeSwitchBlocked, sessionId, visibleArtifacts]);
+
+  useEffect(() => {
+    if (deploymentPreviewUrl) {
+      setWebPreviewState("ready");
+      setWebPreviewMessage("");
+      return;
+    }
     setWebPreviewState("checking");
     setWebPreviewMessage("");
     setWebPreviewNonce(Date.now());
-  }, [previewPath]);
+  }, [deploymentPreviewUrl, previewPath]);
 
   useEffect(() => {
     if (!previewCheckEnabled || !previewPath) {
@@ -180,6 +250,11 @@ export default function AltusArtifactPreviewCard({
     if (!previewPath || webPreviewReloading) {
       return;
     }
+    if (runtimeSwitchBlocked) {
+      setWebPreviewState("fetch_failed");
+      setWebPreviewMessage(i18n.t("previewPanel.runtimeSwitchBlocked"));
+      return;
+    }
     setWebPreviewReloading(true);
     setWebPreviewState("checking");
     setWebPreviewMessage("");
@@ -197,7 +272,7 @@ export default function AltusArtifactPreviewCard({
       }
     } catch {
       setWebPreviewState("fetch_failed");
-      setWebPreviewMessage("预览恢复失败，请稍后重试。");
+      setWebPreviewMessage(i18n.t("previewPanel.previewRestoreFailed"));
     } finally {
       setWebPreviewReloading(false);
     }
@@ -223,9 +298,11 @@ export default function AltusArtifactPreviewCard({
     <div className="w-full">
       <div className="mt-4 space-y-3">
         <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-          <span>Task complete</span>
+          <span>{i18n.t("previewPanel.artifactPreview.taskComplete")}</span>
           <span className="text-xs">
-            ({visibleArtifacts.length} file{visibleArtifacts.length === 1 ? "" : "s"})
+            ({i18n.t("previewPanel.artifactPreview.fileCount", {
+              count: visibleArtifacts.length,
+            })})
           </span>
         </div>
 
@@ -245,7 +322,7 @@ export default function AltusArtifactPreviewCard({
                       className="h-7 w-7 rounded-full"
                       onClick={() => void handleDeploy()}
                       disabled={deploying}
-                      title="Deploy website"
+                      title={i18n.t("previewPanel.artifactPreview.deployWebsite")}
                     >
                       {deploying ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -260,13 +337,15 @@ export default function AltusArtifactPreviewCard({
                       size="icon"
                       className="h-7 w-7 rounded-full"
                       onClick={() => onOpenViewer(selectedArtifact.path)}
-                      title="Open in viewer"
+                      title={i18n.t("previewPanel.artifactPreview.openViewer")}
                     >
                       <ExternalLink className="h-3.5 w-3.5" />
                     </Button>
                   ) : (
                     <div className="text-[11px] font-medium text-muted-foreground">
-                      {selectedIsWebArtifact ? "Web Preview" : "Source Code"}
+                      {selectedIsWebArtifact
+                        ? i18n.t("previewPanel.artifactPreview.webPreview")
+                        : i18n.t("previewPanel.artifactPreview.sourceCode")}
                     </div>
                   )}
                 </div>
@@ -284,26 +363,26 @@ export default function AltusArtifactPreviewCard({
                           className="h-6 rounded-xl px-3 text-xs"
                         >
                           <Monitor className="h-3.5 w-3.5" />
-                          Preview
+                          {i18n.t("previewPanel.previewTab")}
                         </TabsTrigger>
                       ) : null}
                       <TabsTrigger value="code" className="h-6 rounded-xl px-3 text-xs">
                         <Code2 className="h-3.5 w-3.5" />
-                        Code
+                        {i18n.t("previewPanel.artifactPreview.sourceCode")}
                       </TabsTrigger>
                     </TabsList>
-                    {rawSelectedUrl ? (
+                    {selectedOpenUrl ? (
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
                         className="h-8 rounded-2xl border-border/70 bg-background/80 text-xs backdrop-blur-sm"
                         onClick={() =>
-                          window.open(effectiveRawSelectedUrl, "_blank", "noopener,noreferrer")
+                          window.open(selectedOpenUrl, "_blank", "noopener,noreferrer")
                         }
                       >
                         <ExternalLink className="h-3.5 w-3.5" />
-                        Open
+                        {i18n.t("previewPanel.artifactPreview.open")}
                       </Button>
                     ) : null}
                   </div>
@@ -313,10 +392,14 @@ export default function AltusArtifactPreviewCard({
                       <div className="absolute inset-0">
                         {webPreviewState === "ready" ? (
                           <iframe
-                            src={effectiveRawPreviewUrl}
+                            src={selectedPreviewUrl}
                             title={`${getFilename(previewPath)} preview`}
                             className="absolute inset-0 h-full w-full border-0"
-                            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
+                            sandbox={
+                              deploymentPreviewUrl
+                                ? undefined
+                                : "allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
+                            }
                             style={{ background: "white" }}
                           />
                         ) : (
@@ -324,12 +407,14 @@ export default function AltusArtifactPreviewCard({
                             {webPreviewState === "checking" ? (
                               <>
                                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                                <div className="text-sm text-muted-foreground">正在检查预览环境...</div>
+                                <div className="text-sm text-muted-foreground">
+                                  {i18n.t("previewPanel.checkingPreviewEnvironment")}
+                                </div>
                               </>
                             ) : (
                               <>
                                 <div className="max-w-md text-sm text-muted-foreground">
-                                  {webPreviewMessage || "当前 HTML 文件暂不可预览。"}
+                                  {webPreviewMessage || i18n.t("previewPanel.htmlUnavailable")}
                                 </div>
                                 <div className="flex items-center gap-2">
                                   <Button
@@ -342,10 +427,10 @@ export default function AltusArtifactPreviewCard({
                                     {webPreviewReloading ? (
                                       <>
                                         <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                                        重新加载中...
+                                        {i18n.t("previewPanel.reloadingPreview")}
                                       </>
                                     ) : (
-                                      "重新加载预览"
+                                      i18n.t("previewPanel.reloadPreview")
                                     )}
                                   </Button>
                                   <Button
@@ -354,7 +439,7 @@ export default function AltusArtifactPreviewCard({
                                     size="sm"
                                     onClick={() => setActiveTab("code")}
                                   >
-                                    查看源码
+                                    {i18n.t("previewPanel.viewSource")}
                                   </Button>
                                 </div>
                               </>
@@ -364,7 +449,7 @@ export default function AltusArtifactPreviewCard({
                       </div>
                     ) : (
                       <div className="absolute inset-0 flex items-center justify-center bg-muted/20 px-6 text-center text-sm text-muted-foreground">
-                        当前产物里没有可直接预览的 HTML 页面，请切换到 Code 查看文件内容。
+                        {i18n.t("previewPanel.artifactPreview.noHtmlArtifact")}
                       </div>
                     )}
                   </TabsContent>
@@ -379,7 +464,7 @@ export default function AltusArtifactPreviewCard({
                       {codeLoading ? (
                         <div className="flex h-full min-h-[220px] items-center justify-center text-sm text-slate-300">
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          正在加载文件内容
+                          {i18n.t("previewPanel.artifactPreview.loadingFileContent")}
                         </div>
                       ) : codeError ? (
                         <div className="flex h-full min-h-[220px] items-center justify-center px-6 text-center text-sm text-rose-300">
@@ -387,7 +472,8 @@ export default function AltusArtifactPreviewCard({
                         </div>
                       ) : (
                         <pre className="min-h-[220px] whitespace-pre-wrap break-all font-mono text-xs leading-6">
-                          {codeFile?.content || "暂无内容"}
+                          {codeFile?.content ||
+                            i18n.t("previewPanel.artifactPreview.noContent")}
                         </pre>
                       )}
                     </div>

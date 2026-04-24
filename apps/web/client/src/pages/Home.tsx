@@ -1938,8 +1938,8 @@ export default function Home() {
 
   const chatPanel = (
     <section className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm">
-        <div className="flex items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
+      <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-background/35">
+        <div className="flex items-center justify-between gap-3 px-4 py-3">
           <div className="min-w-0 space-y-1">
             <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
               {t("homeWorkspace.dialogueLabel")}
@@ -1956,24 +1956,6 @@ export default function Home() {
                 })}
               </span>
             ) : null}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="rounded-full"
-              onClick={() => {
-                setPreviewOpen((prev) => {
-                  if (prev) {
-                    setPreviewMaximized(false);
-                  }
-                  return !prev;
-                });
-              }}
-            >
-              {previewOpen
-                ? t("homeWorkspace.hidePreview")
-                : t("homeWorkspace.showPreview")}
-            </Button>
           </div>
         </div>
         <div
@@ -2059,7 +2041,7 @@ export default function Home() {
             duration: 0.4,
             ease: "easeOut",
           }}
-          className="mt-auto shrink-0 border-t border-border/70 bg-background/95 backdrop-blur"
+          className="mt-auto shrink-0 bg-background/90 backdrop-blur"
         >
           <div className="px-6 py-3">
             {slashSuggestionPanel ? (

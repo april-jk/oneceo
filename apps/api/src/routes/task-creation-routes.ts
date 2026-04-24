@@ -613,6 +613,72 @@ async function collectLegacyUserIdsForMigration(appUserId: string): Promise<stri
   return [...values];
 }
 
+async function listOwnedDbSessionsWithLegacyRebind(userId: string, limit: number) {
+  let ownedDbSessions = await taskCreationSessionDAO.getRecentSessions(limit, userId);
+  if (ownedDbSessions.length > 0) {
+    return ownedDbSessions;
+  }
+
+  try {
+    const legacyUserIds = await collectLegacyUserIdsForMigration(userId);
+    if (legacyUserIds.length === 0) {
+      return ownedDbSessions;
+    }
+
+    for (const legacyUserId of legacyUserIds) {
+      const reboundLegacy = await taskCreationSessionDAO.rebindSessionsFromLegacyUserId(
+        userId,
+        legacyUserId,
+        limit
+      );
+      if (reboundLegacy.length === 0) {
+        continue;
+      }
+      ownedDbSessions = reboundLegacy;
+      console.warn('[TASK_SESSION_LIST_REBOUND_LEGACY_USER]', {
+        userId,
+        legacyUserId,
+        reboundCount: reboundLegacy.length,
+      });
+      break;
+    }
+  } catch (error) {
+    console.warn('[TASK_SESSION_LIST_REBOUND_LEGACY_FAILED]', {
+      userId,
+      error,
+    });
+  }
+
+  return ownedDbSessions;
+}
+
+function normalizeSessionSearchQuery(value: unknown): string {
+  return asText(value).replace(/\s+/g, ' ').slice(0, 100);
+}
+
+function buildSessionSearchSnippet(content: unknown, query: string): string {
+  const normalizedContent = asText(content).replace(/\s+/g, ' ');
+  const normalizedQuery = normalizeSessionSearchQuery(query);
+  if (!normalizedContent) return '';
+  if (!normalizedQuery) {
+    return normalizedContent.slice(0, 80);
+  }
+
+  const haystack = normalizedContent.toLowerCase();
+  const needle = normalizedQuery.toLowerCase();
+  const matchedIndex = haystack.indexOf(needle);
+  if (matchedIndex < 0) {
+    return normalizedContent.slice(0, 80);
+  }
+
+  const radius = 40;
+  const start = Math.max(0, matchedIndex - radius);
+  const end = Math.min(normalizedContent.length, matchedIndex + normalizedQuery.length + radius);
+  const prefix = start > 0 ? '...' : '';
+  const suffix = end < normalizedContent.length ? '...' : '';
+  return `${prefix}${normalizedContent.slice(start, end).trim()}${suffix}`;
+}
+
 async function adoptLegacyOwnedSessionIfMapped(sessionId: string, userId: string, sessionUserId: string) {
   const normalizedUserId = normalizeUserId(userId);
   const legacyOwner = normalizeUserId(sessionUserId);
@@ -4168,35 +4234,7 @@ router.get('/sessions', async (req, res) => {
       60000
     );
     const now = Date.now();
-    let ownedDbSessions = await taskCreationSessionDAO.getRecentSessions(limit, currentUser.userId);
-    if (ownedDbSessions.length === 0) {
-      try {
-        const legacyUserIds = await collectLegacyUserIdsForMigration(currentUser.userId);
-        if (legacyUserIds.length > 0) {
-          for (const legacyUserId of legacyUserIds) {
-            const reboundLegacy = await taskCreationSessionDAO.rebindSessionsFromLegacyUserId(
-              currentUser.userId,
-              legacyUserId,
-              limit
-            );
-            if (reboundLegacy.length > 0) {
-              ownedDbSessions = reboundLegacy;
-              console.warn('[TASK_SESSION_LIST_REBOUND_LEGACY_USER]', {
-                userId: currentUser.userId,
-                legacyUserId,
-                reboundCount: reboundLegacy.length,
-              });
-              break;
-            }
-          }
-        }
-      } catch (error) {
-        console.warn('[TASK_SESSION_LIST_REBOUND_LEGACY_FAILED]', {
-          userId: currentUser.userId,
-          error,
-        });
-      }
-    }
+    const ownedDbSessions = await listOwnedDbSessionsWithLegacyRebind(currentUser.userId, limit);
     const rawSessions = await taskCreationFileMemoryStore.listSessions(limit);
     const ownedSessionIds = new Set(ownedDbSessions.map((item) => String(item.id)));
     const ownedMemorySessions = rawSessions.filter((session) => ownedSessionIds.has(String(session.id)));
@@ -4280,6 +4318,195 @@ router.get('/sessions', async (req, res) => {
     res.status(500).json({
       success: false,
       error: getPublicErrorMessage('获取会话列表失败，请稍后重试'),
+    });
+  }
+});
+
+router.get('/sessions/search', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const query = normalizeSessionSearchQuery(req.query.q);
+    const limit = clampNumber(Number(req.query.limit) || 20, 1, 50);
+    if (query.length < 2) {
+      return res.json({
+        success: true,
+        data: [],
+      });
+    }
+
+    const ownedDbSessions = await listOwnedDbSessionsWithLegacyRebind(currentUser.userId, 5000);
+    if (ownedDbSessions.length === 0) {
+      return res.json({
+        success: true,
+        data: [],
+      });
+    }
+
+    const ownedDbById = new Map(ownedDbSessions.map((session) => [String(session.id), session]));
+    const ownedSessionIds = new Set(ownedDbById.keys());
+    const rawSessions = await taskCreationFileMemoryStore.listSessions(5000);
+    const ownedMemorySessions = rawSessions.filter((session) => ownedSessionIds.has(String(session.id)));
+    const ownedMemoryById = new Map(ownedMemorySessions.map((session) => [String(session.id), session]));
+    const normalizedNeedle = query.toLowerCase();
+    const titleSearchLimit = Math.min(limit * 3, 50);
+
+    const [dbTitleHits, messageHits] = await Promise.all([
+      taskCreationSessionDAO.searchOwnedSessionTitles(currentUser.userId, query, titleSearchLimit),
+      taskCreationSessionDAO.searchOwnedSessionMessages(currentUser.userId, query, titleSearchLimit),
+    ]);
+
+    const memoryTitleHits = ownedMemorySessions
+      .filter((session) => {
+        const title = asText(session.title).toLowerCase();
+        return title.length > 0 && title.includes(normalizedNeedle);
+      })
+      .map((session) => ({
+        sessionId: String(session.id),
+        matchedTitle: asText(session.title),
+        matchedAt: session.updatedAt || null,
+        updatedAt: session.updatedAt || null,
+      }));
+
+    const rankedHits = new Map<
+      string,
+      {
+        sessionId: string;
+        titleMatched: boolean;
+        titleSnippet: string;
+        titleMatchedAt: number;
+        messageSnippet: string;
+        messageMatchedAt: number;
+        updatedAt: number;
+      }
+    >();
+
+    const ensureRankedHit = (sessionId: string) => {
+      const existing = rankedHits.get(sessionId);
+      if (existing) return existing;
+      const dbSession = ownedDbById.get(sessionId);
+      const next = {
+        sessionId,
+        titleMatched: false,
+        titleSnippet: '',
+        titleMatchedAt: 0,
+        messageSnippet: '',
+        messageMatchedAt: 0,
+        updatedAt: Date.parse(String(dbSession?.updatedAt || '')) || 0,
+      };
+      rankedHits.set(sessionId, next);
+      return next;
+    };
+
+    for (const hit of [...memoryTitleHits, ...dbTitleHits]) {
+      if (!ownedSessionIds.has(hit.sessionId)) continue;
+      const next = ensureRankedHit(hit.sessionId);
+      const matchedAt = Date.parse(String(hit.matchedAt || '')) || 0;
+      next.titleMatched = true;
+      if (!next.titleSnippet) {
+        next.titleSnippet = hit.matchedTitle;
+      }
+      if (matchedAt > next.titleMatchedAt) {
+        next.titleMatchedAt = matchedAt;
+      }
+      const updatedAt = Date.parse(String(hit.updatedAt || '')) || 0;
+      if (updatedAt > next.updatedAt) {
+        next.updatedAt = updatedAt;
+      }
+    }
+
+    for (const hit of messageHits) {
+      if (!ownedSessionIds.has(hit.sessionId)) continue;
+      const next = ensureRankedHit(hit.sessionId);
+      const matchedAt = Date.parse(String(hit.matchedAt || '')) || 0;
+      if (!next.messageSnippet) {
+        next.messageSnippet = buildSessionSearchSnippet(hit.snippet, query);
+      }
+      if (matchedAt > next.messageMatchedAt) {
+        next.messageMatchedAt = matchedAt;
+      }
+      const updatedAt = Date.parse(String(hit.updatedAt || '')) || 0;
+      if (updatedAt > next.updatedAt) {
+        next.updatedAt = updatedAt;
+      }
+    }
+
+    const topHits = [...rankedHits.values()]
+      .sort((left, right) => {
+        if (left.titleMatched !== right.titleMatched) {
+          return Number(right.titleMatched) - Number(left.titleMatched);
+        }
+        const leftMatchedAt = Math.max(left.titleMatchedAt, left.messageMatchedAt);
+        const rightMatchedAt = Math.max(right.titleMatchedAt, right.messageMatchedAt);
+        if (rightMatchedAt !== leftMatchedAt) {
+          return rightMatchedAt - leftMatchedAt;
+        }
+        if (right.updatedAt !== left.updatedAt) {
+          return right.updatedAt - left.updatedAt;
+        }
+        return right.sessionId.localeCompare(left.sessionId);
+      })
+      .slice(0, limit);
+
+    const data = [];
+    for (const hit of topHits) {
+      const dbSession = ownedDbById.get(hit.sessionId);
+      if (!dbSession) {
+        continue;
+      }
+      const memorySession = ownedMemoryById.get(hit.sessionId) || null;
+      const dbFileSession = await buildLightweightFileSessionFromDb(hit.sessionId);
+      const titleResolution = resolveDisplaySessionTitle({
+        storedTitle: memorySession?.title,
+        storedTitleSource: (memorySession as any)?.titleSource,
+        storedTitleState: (memorySession as any)?.titleState,
+        taskDescriptionTitle: dbFileSession?.title,
+        status: memorySession?.status || dbFileSession?.status || dbSession.status,
+      });
+      const snippetSource = hit.messageSnippet || buildSessionSearchSnippet(hit.titleSnippet, query);
+      data.push({
+        sessionId: hit.sessionId,
+        title: titleResolution.title,
+        updatedAt: toIso(
+          (memorySession?.updatedAt as string | undefined) ||
+            (dbFileSession?.updatedAt as string | undefined) ||
+            dbSession.updatedAt
+        ),
+        matchType: hit.titleMatched ? 'title' : 'message',
+        snippet: snippetSource || null,
+        projectId:
+          memorySession?.projectId ||
+          dbFileSession?.projectId ||
+          dbSession.projectId ||
+          null,
+        projectName:
+          memorySession?.projectName ||
+          dbFileSession?.projectName ||
+          dbSession.projectName ||
+          null,
+        isFavorite: Boolean(memorySession?.isFavorite),
+        status: asText(memorySession?.status || dbFileSession?.status || dbSession.status) || 'in_progress',
+      });
+    }
+
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    console.error('搜索会话失败:', error);
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    return res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage('搜索会话失败，请稍后重试'),
     });
   }
 });

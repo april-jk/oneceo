@@ -468,7 +468,22 @@
   },
   "searchPage": {
     "title": "搜索",
-    "description": "搜索功能将在这里提供。"
+    "description": "搜索全部会话标题与正文内容，并按项目聚合结果。",
+    "placeholder": "搜索全部对话",
+    "clear": "清空搜索",
+    "hint": "至少输入 2 个字符后开始搜索全部对话。",
+    "loading": "搜索中...",
+    "empty": "未找到相关对话。",
+    "searchFailed": "搜索失败，请稍后重试。",
+    "totalResults": "结果 {{count}}",
+    "titleHits": "标题命中 {{count}}",
+    "messageHits": "消息命中 {{count}}",
+    "projectGroups": "项目分组 {{count}}",
+    "ungrouped": "未归属项目",
+    "groupCount": "{{count}} 个会话",
+    "titleMatch": "标题命中",
+    "messageMatch": "消息命中",
+    "updatedAt": "最近更新 {{value}}"
   },
   "libraryPage": {
     "title": "资料库",

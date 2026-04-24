@@ -8,6 +8,7 @@ const originalEnv = {
   UMAMI_USERNAME: process.env.UMAMI_USERNAME,
   UMAMI_PASSWORD: process.env.UMAMI_PASSWORD,
   UMAMI_PLATFORM_TEAM_ID: process.env.UMAMI_PLATFORM_TEAM_ID,
+  UMAMI_PLATFORM_WEBSITE_ID: process.env.UMAMI_PLATFORM_WEBSITE_ID,
   UMAMI_DEPLOYMENT_TEAM_ID: process.env.UMAMI_DEPLOYMENT_TEAM_ID,
 };
 
@@ -41,6 +42,22 @@ test('umami analytics requires deployment team for deployment scope', () => {
   assert.equal(umamiAnalyticsService.isConfigured('deployment'), false);
 });
 
+test('platform website configuration requires the fixed OneCEO website id', () => {
+  process.env.UMAMI_ENABLED = 'true';
+  process.env.UMAMI_HOST_URL = 'https://analytics.oneceo.ai';
+  process.env.UMAMI_USERNAME = 'user';
+  process.env.UMAMI_PASSWORD = 'pass';
+  process.env.UMAMI_PLATFORM_TEAM_ID = 'team_platform';
+  delete process.env.UMAMI_PLATFORM_WEBSITE_ID;
+
+  assert.equal(umamiAnalyticsService.isConfigured('platform'), true);
+  assert.equal(umamiAnalyticsService.isPlatformWebsiteConfigured(), false);
+
+  process.env.UMAMI_PLATFORM_WEBSITE_ID = 'website_platform';
+  assert.equal(umamiAnalyticsService.getPlatformWebsiteId(), 'website_platform');
+  assert.equal(umamiAnalyticsService.isPlatformWebsiteConfigured(), true);
+});
+
 test('listWebsites uses the requested team scope', async () => {
   process.env.UMAMI_ENABLED = 'true';
   process.env.UMAMI_HOST_URL = 'https://analytics.oneceo.ai';
@@ -72,6 +89,55 @@ test('listWebsites uses the requested team scope', async () => {
 
   assert.equal(sites.length, 1);
   assert.match(requested[1] || '', /teamId=team_platform/);
+});
+
+test('platform analytics methods read stats, pageviews and expanded metrics from the fixed website API', async () => {
+  process.env.UMAMI_ENABLED = 'true';
+  process.env.UMAMI_HOST_URL = 'https://analytics.oneceo.ai';
+  process.env.UMAMI_USERNAME = 'user';
+  process.env.UMAMI_PASSWORD = 'pass';
+  process.env.UMAMI_PLATFORM_TEAM_ID = 'team_platform';
+  process.env.UMAMI_PLATFORM_WEBSITE_ID = 'website_platform';
+
+  const requested: string[] = [];
+  global.fetch = (async (input: any) => {
+    const url = String(input);
+    requested.push(url);
+    if (url.endsWith('/api/auth/login')) {
+      return new Response(JSON.stringify({ token: 'token-123' }), { status: 200 });
+    }
+    if (url.includes('/stats?')) {
+      return new Response(JSON.stringify({ pageviews: 120, visits: 40, visitors: 30, bounces: 8, totaltime: 2000 }), { status: 200 });
+    }
+    if (url.includes('/pageviews?')) {
+      return new Response(JSON.stringify({
+        pageviews: [{ x: '2026-04-24T00:00:00Z', y: 12 }],
+        sessions: [{ x: '2026-04-24T00:00:00Z', y: 5 }],
+      }), { status: 200 });
+    }
+    if (url.includes('/metrics/expanded?')) {
+      return new Response(JSON.stringify([{ name: '/', pageviews: 80, visitors: 20, visits: 25, bounces: 3, totaltime: 900 }]), { status: 200 });
+    }
+    return new Response(JSON.stringify({ visitors: 2 }), { status: 200 });
+  }) as typeof fetch;
+
+  const range = { startAt: 1000, endAt: 2000, unit: 'hour' as const, timezone: 'Asia/Shanghai' };
+  const stats = await umamiAnalyticsService.getWebsiteStats('website_platform', range);
+  const activeVisitors = await umamiAnalyticsService.getWebsiteActiveVisitors('website_platform', { scope: 'platform' });
+  const pageviews = await umamiAnalyticsService.getWebsitePageviews('website_platform', range);
+  const metrics = await umamiAnalyticsService.getWebsiteMetric('website_platform', {
+    ...range,
+    type: 'path',
+    expanded: true,
+  });
+
+  assert.equal(stats?.pageviews, 120);
+  assert.equal(activeVisitors, 2);
+  assert.deepEqual(pageviews?.sessions, [{ x: '2026-04-24T00:00:00Z', y: 5 }]);
+  assert.equal(metrics[0].name, '/');
+  assert.ok(requested.some((url) => url.includes('/api/websites/website_platform/stats?startAt=1000&endAt=2000')));
+  assert.ok(requested.some((url) => url.includes('/api/websites/website_platform/pageviews?')));
+  assert.ok(requested.some((url) => url.includes('/api/websites/website_platform/metrics/expanded?')));
 });
 
 test('ensureWebsiteBinding reuses website inside target scope instead of stale cross-team website id', async () => {

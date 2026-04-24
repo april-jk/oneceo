@@ -35,3 +35,10 @@
 - 将点击目标视图收口为 `resolveManagedToolReplayView`：普通工具进 `actions`，`debug_open_page` 进 `debug`，部署类工具进 `deployment`。
 - 给 `AltusRunReplayDrawer` 增加外部可控的 `activeView`，并在 actions 视图中按选中 `toolCallId` 自动滚动到对应行。
 - 补充前端单元测试覆盖工具名到目标视图的映射。
+
+## Altus Actions 完成任务 Markdown 渲染修复
+
+- 排查完成任务 action 展示异常，定位为 replay drawer 的 action 列表仍用普通 `<p>` 渲染 `complete_task.summary`，已选动作详情仍用 `<pre>` 渲染拼接后的调试文本。
+- 对 `complete_task` 单独接入 `Streamdown` Markdown 渲染，列表行和已选动作详情都能正确显示加粗、列表和代码片段。
+- 将 `complete_task` 详情生成改为直接输出 Markdown 内容，并把 `verification` 数组转成标准 bullet 列表；渲染层兼容旧数据中的 `• item • item`，展示前转成标准 Markdown 列表。
+- 补充 replay drawer 单元测试，锁定 `complete_task` 与普通工具的渲染分支差异。

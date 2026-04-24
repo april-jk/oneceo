@@ -3,15 +3,18 @@ import {
   buildChatItems,
   collapseRepeatedChatAuthors,
   getActiveManagedStatusText,
+  getManagedToolPurposeSummary,
+  groupManagedActivityItems,
   type ChatItem,
 } from "@/pages/Home";
 import type { AgentMessage } from "@/hooks/useTaskCreationAgent";
 
 function createManagedToolMessage(input: {
-  eventType: "tool_call_started" | "tool_call_completed";
+  eventType: "tool_call_started" | "tool_call_completed" | "tool_call_failed";
   content: string;
   toolCallId: string;
   toolName?: string;
+  metadata?: Record<string, unknown>;
 }): AgentMessage {
   return {
     type: "executor_event",
@@ -26,6 +29,7 @@ function createManagedToolMessage(input: {
       toolCallId: input.toolCallId,
       toolName: input.toolName || "read_file",
       messageKey: `managed:run-status-dialogue-1:tool:${input.toolCallId}`,
+      ...(input.metadata || {}),
     },
   };
 }
@@ -63,7 +67,7 @@ function createManagedStartingStatusMessage(content: string): AgentMessage {
 }
 
 describe("managed run status dialogue", () => {
-  it("drops stale managed run_status once a following tool card arrives", () => {
+  it("keeps managed run_status between two tool cards", () => {
     const items = buildChatItems([
       createManagedToolMessage({
         eventType: "tool_call_completed",
@@ -79,9 +83,10 @@ describe("managed run status dialogue", () => {
       }),
     ]);
 
-    expect(items).toHaveLength(2);
+    expect(items).toHaveLength(3);
     expect(items[0]?.kind).toBe("managed_tool");
-    expect(items[1]?.kind).toBe("managed_tool");
+    expect(items[1]?.kind).toBe("managed_status");
+    expect(items[2]?.kind).toBe("managed_tool");
     expect(
       items.some(
         (item) =>
@@ -102,6 +107,10 @@ describe("managed run status dialogue", () => {
     expect(
       (items[0] as Extract<ChatItem, { kind: "managed_status" }>).text,
     ).toBe("正在分析并执行任务");
+    expect(
+      (items[0] as Extract<ChatItem, { kind: "managed_status" }>)
+        .displayInTimeline,
+    ).toBe(false);
     expect(getActiveManagedStatusText(items)).toBe("正在分析并执行任务");
   });
 
@@ -120,7 +129,7 @@ describe("managed run status dialogue", () => {
     expect(items[0]?.kind).toBe("managed_tool");
   });
 
-  it("keeps only the latest managed run_status around managed tools", () => {
+  it("keeps intermediate run_status in the managed activity group and leaves only the trailing status atomic", () => {
     const items = collapseRepeatedChatAuthors(
       buildChatItems([
         createManagedRunStatusMessage("运行环境已经准备好了，我开始生成项目内容"),
@@ -146,11 +155,133 @@ describe("managed run status dialogue", () => {
         item.kind === "managed_status",
     );
 
-    expect(managedStatusItems).toHaveLength(1);
-    expect(managedStatusItems[0]?.text).toBe(
+    expect(managedStatusItems).toHaveLength(3);
+    expect(managedStatusItems.slice(0, 2).map((item) => item.displayInTimeline)).toEqual([
+      true,
+      true,
+    ]);
+    expect(managedStatusItems[2]?.text).toBe(
       "界面样式已经整理好了，我继续补上操作逻辑",
     );
+    expect(managedStatusItems[2]?.displayInTimeline).toBe(false);
     expect(items.filter((item) => item.kind === "managed_tool")).toHaveLength(2);
+
+    const visibleItems = groupManagedActivityItems(
+      items.filter(
+        (item) =>
+          item.kind !== "managed_status" || item.displayInTimeline !== false,
+      ),
+    );
+    expect(visibleItems).toHaveLength(1);
+    expect(visibleItems[0]?.kind).toBe("managed_activity_group");
+    expect(
+      (visibleItems[0] as Extract<ChatItem, { kind: "managed_activity_group" }>)
+        .items,
+    ).toHaveLength(4);
+  });
+
+  it("marks recovered managed activity group as completed when a later tool succeeds", () => {
+    const visibleItems = groupManagedActivityItems(
+      buildChatItems([
+        createManagedToolMessage({
+          eventType: "tool_call_failed",
+          content: "本地常驻服务启动命令被拦截",
+          toolCallId: "tool-failed",
+          toolName: "shell_execute",
+          metadata: {
+            arguments: {
+              command: "pnpm dev --host 0.0.0.0",
+            },
+          },
+        }),
+        createManagedRunStatusMessage("刚才那一步执行没成功，我换个方式继续"),
+        createManagedToolMessage({
+          eventType: "tool_call_completed",
+          content: "任务已完成",
+          toolCallId: "tool-complete",
+          toolName: "complete_task",
+          metadata: {
+            arguments: {
+              summary: "watson，我已经为你创建了一个完整的2048小游戏！",
+            },
+          },
+        }),
+      ]).filter(
+        (item) =>
+          item.kind !== "managed_status" || item.displayInTimeline !== false,
+      ),
+    );
+
+    expect(visibleItems[0]?.kind).toBe("managed_activity_group");
+    const group = visibleItems[0] as Extract<
+      ChatItem,
+      { kind: "managed_activity_group" }
+    >;
+    expect(group.title).toBe("刚才那一步执行没成功，我换个方式继续");
+    expect(group.items[group.items.length - 1]).toMatchObject({
+      kind: "managed_tool",
+      status: "completed",
+      toolName: "complete_task",
+    });
+  });
+
+  it("uses purpose summaries instead of raw tool output in managed activity group rows", () => {
+    const visibleItems = groupManagedActivityItems(
+      buildChatItems([
+        createManagedToolMessage({
+          eventType: "tool_call_completed",
+          content: "写入 HTML",
+          toolCallId: "tool-write",
+          toolName: "write_file",
+          metadata: {
+            arguments: {
+              path: "game-2048/index.html",
+              content: '<!DOCTYPE html><html lang="zh-CN"><head></head></html>',
+            },
+            outputPreview: {
+              path: "game-2048/index.html",
+              content: '<!DOCTYPE html><html lang="zh-CN"><head></head></html>',
+            },
+          },
+        }),
+        createManagedToolMessage({
+          eventType: "tool_call_completed",
+          content: "检查目录",
+          toolCallId: "tool-ls",
+          toolName: "shell_execute",
+          metadata: {
+            arguments: {
+              command: "ls -la game-2048",
+            },
+            outputPreview: {
+              stdout: "total 20 drwxr-xr-x 2 user user 4096 Apr 24",
+            },
+          },
+        }),
+      ]),
+    );
+
+    const group = visibleItems[0] as Extract<
+      ChatItem,
+      { kind: "managed_activity_group" }
+    >;
+    const toolRows = group.items.filter(
+      (item): item is Extract<ChatItem, { kind: "managed_tool" }> =>
+        item.kind === "managed_tool",
+    );
+    const writePurpose = getManagedToolPurposeSummary(
+      toolRows[0]?.toolName || "",
+      toolRows[0]?.metadata,
+    );
+    const shellPurpose = getManagedToolPurposeSummary(
+      toolRows[1]?.toolName || "",
+      toolRows[1]?.metadata,
+    );
+
+    expect(writePurpose).toBe("更新index.html");
+    expect(writePurpose).not.toContain("<!DOCTYPE");
+    expect(shellPurpose).toBe("检查项目文件和运行日志");
+    expect(shellPurpose).not.toContain("total 20");
   });
 
   it("starts a fresh managed run_status after a new user round", () => {

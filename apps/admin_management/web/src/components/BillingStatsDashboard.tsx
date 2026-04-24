@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { getBillingErrorMessage, readBillingResponseError, type BillingNotify } from './billing-feedback';
 import {
   BarChart,
   Bar,
@@ -43,12 +44,16 @@ interface StatsData {
 const COLORS = ['#0f766e', '#0d9488', '#14b8a6', '#5eead4', '#99f6e4', '#ccfbf1'];
 const PIE_COLORS = ['#ef4444', '#f97316', '#eab308', '#22c55e'];
 
-export function BillingStatsDashboard() {
+interface BillingStatsDashboardProps {
+  onNotify?: BillingNotify;
+}
+
+export function BillingStatsDashboard({ onNotify }: BillingStatsDashboardProps) {
   const [period, setPeriod] = useState<'today' | 'week' | 'month'>('today');
   const [stats, setStats] = useState<StatsData | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const fetchStats = async () => {
+  const fetchStats = useCallback(async () => {
     setLoading(true);
     try {
       const response = await fetch(`/api/internal/billing/stats?period=${period}`, {
@@ -57,17 +62,20 @@ export function BillingStatsDashboard() {
       if (response.ok) {
         const data = await response.json();
         setStats(data);
+      } else {
+        onNotify?.('error', '加载失败', await readBillingResponseError(response, '无法获取平台统计'));
       }
     } catch (error) {
       console.error('获取平台统计失败:', error);
+      onNotify?.('error', '加载失败', getBillingErrorMessage(error, '无法获取平台统计'));
     } finally {
       setLoading(false);
     }
-  };
+  }, [onNotify, period]);
 
   useEffect(() => {
-    fetchStats();
-  }, [period]);
+    void fetchStats();
+  }, [fetchStats]);
 
   const formatNumber = (num: number) => {
     if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;

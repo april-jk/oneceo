@@ -198,7 +198,7 @@ export class BillingService {
   /**
    * 查询会话积分使用情况
    */
-  async getSessionUsage(sessionId: string): Promise<{
+  async getSessionUsage(sessionId: string, userId: string): Promise<{
     totalCredits: number;
     totalTokens: number;
     modelBreakdown: Array<{
@@ -211,7 +211,7 @@ export class BillingService {
     const logs = await db
       .select()
       .from(tokenUsageLogs)
-      .where(eq(tokenUsageLogs.sessionId, sessionId as any))
+      .where(and(eq(tokenUsageLogs.sessionId, sessionId as any), eq(tokenUsageLogs.userId, userId as any)))
       .orderBy(tokenUsageLogs.createdAt);
 
     const totalCredits = logs.reduce((sum, log) => sum + log.creditsConsumed, 0);

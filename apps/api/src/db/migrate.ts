@@ -1462,7 +1462,8 @@ CREATE TABLE IF NOT EXISTS model_pricing (
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_model_pricing_model_active ON model_pricing(model, is_active);
+DROP INDEX IF EXISTS idx_model_pricing_model_active;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_model_pricing_model_active ON model_pricing(model) WHERE is_active = TRUE;
 CREATE INDEX IF NOT EXISTS idx_model_pricing_active ON model_pricing(is_active);
 `;
 
@@ -1488,9 +1489,9 @@ export async function inspectDatabaseSchemaReadiness(): Promise<SchemaReadinessR
       `,
       [Array.from(new Set(REQUIRED_COLUMNS.map(([tableName]) => tableName)))]
     ),
-    databasePool.query<{ indexname: string }>(
+    databasePool.query<{ indexname: string; indexdef: string }>(
       `
-        select indexname
+        select indexname, indexdef
         from pg_indexes
         where schemaname = 'public'
           and indexname = any($1::text[])
@@ -1504,6 +1505,7 @@ export async function inspectDatabaseSchemaReadiness(): Promise<SchemaReadinessR
     columnResult.rows.map((row) => `${row.table_name}.${row.column_name}`)
   );
   const existingIndexes = new Set(indexResult.rows.map((row) => row.indexname));
+  const indexDefinitions = new Map(indexResult.rows.map((row) => [row.indexname, row.indexdef]));
   const missing: string[] = [];
 
   for (const tableName of REQUIRED_TABLES) {
@@ -1522,6 +1524,14 @@ export async function inspectDatabaseSchemaReadiness(): Promise<SchemaReadinessR
     if (!existingIndexes.has(indexName)) {
       missing.push(`index:${indexName}`);
     }
+  }
+
+  const pricingActiveIndexDefinition = indexDefinitions.get('idx_model_pricing_model_active') || '';
+  if (
+    pricingActiveIndexDefinition &&
+    !pricingActiveIndexDefinition.toLowerCase().includes('where (is_active = true)')
+  ) {
+    missing.push('index:idx_model_pricing_model_active(partial-active)');
   }
 
   return {
@@ -1553,7 +1563,7 @@ export async function runMigration() {
         ('qwen3-max-2026-01-23', 'openai', 3, 6, true, NOW()),
         ('qwen3-vl-plus', 'openai', 5, 10, true, NOW()),
         ('claude-haiku-4-5-20251001', 'anthropic', 5, 10, true, NOW())
-      ON CONFLICT (model, is_active) DO NOTHING;
+      ON CONFLICT (model) WHERE is_active = TRUE DO NOTHING;
     `));
 
     console.log('✅ 数据库迁移完成！');

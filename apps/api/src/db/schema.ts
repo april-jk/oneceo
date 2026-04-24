@@ -1346,7 +1346,9 @@ export const modelPricing = pgTable(
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },
   (table) => ({
-    modelUnique: uniqueIndex('idx_model_pricing_model_active').on(table.model, table.isActive),
+    modelUnique: uniqueIndex('idx_model_pricing_model_active')
+      .on(table.model)
+      .where(sql`${table.isActive} = true`),
     activeIdx: index('idx_model_pricing_active').on(table.isActive),
   })
 );

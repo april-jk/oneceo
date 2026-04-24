@@ -189,6 +189,42 @@ test('buildPostToolRunStatusContent uses user-friendly wording instead of comman
   );
 });
 
+test('plain text capability answers complete without forcing tool calls', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+
+  assert.equal(
+    (coordinator as any).shouldAcceptPlainTextConversationCompletion(
+      '你能做什么',
+      '我可以帮你制作 PPT、开发 Web 应用、调试代码。请直接告诉我你希望我执行的具体任务。'
+    ),
+    true
+  );
+  assert.equal(
+    (coordinator as any).shouldAcceptPlainTextConversationCompletion(
+      '还能做什么',
+      '我还可以生成数据表格、编写报告、部署应用。只要你给出具体指令，我会开始处理。'
+    ),
+    true
+  );
+});
+
+test('plain text concrete-task prompts are treated as clarification instead of failure', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+
+  assert.equal(
+    (coordinator as any).isClarificationResponse(
+      'watson，请直接告诉我您希望我执行的具体任务，例如：“创建一个产品介绍PPT”。'
+    ),
+    true
+  );
+  assert.equal(
+    (coordinator as any).isClarificationResponse(
+      '只要您给出具体指令，我会立即开始处理。'
+    ),
+    true
+  );
+});
+
 test('deployment status evidence only unlocks completion after non-transient success state', () => {
   const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
   const intent = (coordinator as any).resolveDeploymentCompletionIntent('帮我部署当前项目');

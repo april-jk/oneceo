@@ -101,6 +101,215 @@ test('readStreamedModelChoice emits assistant delta callbacks while accumulating
   ]);
 });
 
+test('callModel sanitizes malformed assistant tool arguments at the final request boundary', async () => {
+  const capturedBodies: any[] = [];
+  global.fetch = mock.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+    capturedBodies.push(JSON.parse(String(init?.body || '{}')));
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: 'ok',
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const coordinator = new AltusRunCoordinator(
+    {} as any,
+    {} as any,
+    {} as any,
+    {} as any,
+    {
+      projectMessagesForModel: (messages: any[]) => messages,
+    } as any
+  );
+
+  await (coordinator as any).callModel({
+    messages: [
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'call-shell-1',
+            type: 'function',
+            function: {
+              name: 'shell_execute',
+              arguments: '{"command":"pnpm test"',
+            },
+          },
+          {
+            id: 'call-read-1',
+            type: 'function',
+            function: {
+              name: 'read_file',
+              arguments: JSON.stringify({ path: 'package.json' }),
+            },
+          },
+        ],
+      },
+    ],
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(capturedBodies[0]?.messages?.[0]?.tool_calls?.[0]?.function?.arguments, '{}');
+  assert.equal(
+    capturedBodies[0]?.messages?.[0]?.tool_calls?.[1]?.function?.arguments,
+    '{"path":"package.json"}'
+  );
+});
+
+test('execute feeds malformed current tool arguments back to the model instead of executing the tool', async () => {
+  const state = createState('run-invalid-current-tool-args', 'session-invalid-current-tool-args');
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-invalid-current-tool-args',
+      workspaceRoot: '/workspace/session-invalid-current-tool-args',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => undefined),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(
+      async (
+        _runId: string,
+        _sessionId: string,
+        _userId: string,
+        eventType: string,
+        payload: Record<string, unknown>
+      ) => {
+        eventCalls.push({ eventType, payload });
+        return {
+          sequence: eventCalls.length,
+          payload,
+        };
+      }
+    ),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message:
+              fetchCount === 1
+                ? {
+                    content: '',
+                    tool_calls: [
+                      {
+                        id: 'tool-invalid-shell-1',
+                        type: 'function',
+                        function: {
+                          name: 'shell_execute',
+                          arguments: '{"command":"pnpm test"',
+                        },
+                      },
+                    ],
+                  }
+                : {
+                    content: '',
+                    tool_calls: [
+                      {
+                        id: 'tool-complete-after-invalid-1',
+                        type: 'function',
+                        function: {
+                          name: 'complete_task',
+                          arguments: JSON.stringify({
+                            summary: '已恢复并完成。',
+                          }),
+                        },
+                      },
+                    ],
+                  },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async (_toolName: string, args: any) => ({
+    type: 'complete' as const,
+    summary: String(args.summary || '已完成。'),
+  }));
+  mock.method(taskSessionSkillStateService, 'markResidentSkillsMaterialized', async () => undefined);
+  mock.method(taskSessionAltusMemoryService, 'markMaterialized', async (input: any) => ({
+    ...(input.state || {}),
+    sandboxMaterialization: {
+      sandboxId: input.sandboxId,
+      workspaceRoot: input.workspaceRoot,
+      materializedAt: '2026-04-24T18:30:00.000Z',
+    },
+  }));
+  mock.method(taskSessionAltusMemoryService, 'saveSandboxFileMemoryToDb', async () => ({
+    version: 1,
+    summary: {
+      goal: '恢复非法工具参数',
+      latestOutcome: '已恢复并完成。',
+      openQuestions: [],
+    },
+    constraints: [],
+    decisions: [],
+    workingNotes: [],
+    updatedAt: '2026-04-24T18:31:00.000Z',
+  }));
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(fetchCount, 2);
+  assert.equal(executeMock.mock.callCount(), 1);
+  assert.equal(executeMock.mock.calls[0]?.arguments[0], 'complete_task');
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+  assert.equal(state.status, 'completed');
+
+  const invalidToolEvent = eventCalls.find(
+    (entry) => entry.eventType === 'tool_call_failed' && entry.payload.toolName === 'shell_execute'
+  );
+  assert.ok(invalidToolEvent);
+  assert.equal(invalidToolEvent.payload.error, '工具参数不是合法 JSON object，已要求模型重新生成工具调用。');
+});
+
 test('resolveDeploymentCompletionIntent accepts deployment status polling as completion evidence', () => {
   const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
 

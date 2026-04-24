@@ -84,9 +84,6 @@ type AltusRunReplayDrawerProps = {
   onRequestDeployByMessage?: () => void;
   onRequestRedeployByMessage?: () => void;
   onRequestRollbackByMessage?: () => void;
-  onOpenPreviewTab?: (
-    tab: "files" | "changes" | "debug" | "deployment",
-  ) => void;
 };
 
 type AltusDrawerView = "actions" | "files" | "changes" | "debug" | "deployment";
@@ -206,7 +203,6 @@ export default function AltusRunReplayDrawer({
   onRequestDeployByMessage,
   onRequestRedeployByMessage,
   onRequestRollbackByMessage,
-  onOpenPreviewTab,
 }: AltusRunReplayDrawerProps) {
   useTranslation();
   const normalizedFiles = useMemo(
@@ -796,7 +792,6 @@ export default function AltusRunReplayDrawer({
             diffItems={diffItems}
             currentDiff={currentDiff}
             onSelectDiff={setSelectedDiffId}
-            onOpenPreviewTab={onOpenPreviewTab}
           />
         ) : drawerView === "debug" ? (
           <DebugPreview
@@ -978,14 +973,10 @@ function AltusPreviewChangesPanel({
   diffItems,
   currentDiff,
   onSelectDiff,
-  onOpenPreviewTab,
 }: {
   diffItems: PreviewDiffItem[];
   currentDiff: PreviewDiffItem | null;
   onSelectDiff: (id: string) => void;
-  onOpenPreviewTab?: (
-    tab: "files" | "changes" | "debug" | "deployment",
-  ) => void;
 }) {
   useTranslation();
   return (
@@ -997,14 +988,6 @@ function AltusPreviewChangesPanel({
             {diffItems.length}
           </span>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 rounded-full"
-          onClick={() => onOpenPreviewTab?.("changes")}
-        >
-          {i18n.t("replayDrawer.openInPreview")}
-        </Button>
       </div>
       <div className="flex-1 min-h-0 overflow-auto px-4 py-4 space-y-5">
         {diffItems.length ? (

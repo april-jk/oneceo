@@ -1902,9 +1902,6 @@ export default function Home() {
           onRequestRollbackByMessage={() => {
             void submitDeploymentPrompt("rollback");
           }}
-          onOpenPreviewTab={() => {
-            setPreviewOpen(true);
-          }}
         />
       ) : (
         <OpencodePreviewPanel
@@ -2623,11 +2620,6 @@ export default function Home() {
           }}
           onRequestRollbackByMessage={() => {
             void submitDeploymentPrompt("rollback");
-          }}
-          onOpenPreviewTab={(tab) => {
-            setPreviewOpen(true);
-            setPreviewMaximized(false);
-            setPreviewTab(tab);
           }}
         />
       ) : null}

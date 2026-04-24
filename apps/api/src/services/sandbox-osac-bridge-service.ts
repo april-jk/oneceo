@@ -48,12 +48,8 @@ function resolveExecutorRemoteBaseDir(
   };
 
   const derived = deriveFromWorkspaceRoot();
-  const isLegacyConfiguredDir = !configured || configured === '/opt/.altus/opencode';
 
   if (executor !== 'codex') {
-    if (derived && isLegacyConfiguredDir) {
-      return derived;
-    }
     return configured || derived || '/home/user/opencode';
   }
 
@@ -229,7 +225,6 @@ chmod +x "$target"
   ];
   const startCommand = `
 set -euo pipefail
-chmod +x ${shellEscape(remoteBinary)}
 pkill -x ${shellEscape(remoteBinaryName)} || true
 rm -f ${shellEscape(osacLockPath)}
 nohup env ${envParts.join(' ')} ${shellEscape(remoteBinary)} >> ${shellEscape(`${osacLogDir}/osac.log`)} 2>&1 < /dev/null &

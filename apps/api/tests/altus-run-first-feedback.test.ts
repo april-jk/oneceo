@@ -40,6 +40,23 @@ function createState(runId: string, sessionId: string) {
     mcpProviders: [],
     skillCatalog: [],
     skills: [],
+    taskIntentProfile: {
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: [],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
+    },
   });
 }
 

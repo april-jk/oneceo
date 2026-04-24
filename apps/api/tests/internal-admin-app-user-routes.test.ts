@@ -12,14 +12,12 @@ type TestServer = {
 const originalListUsers = adminAppUserService.listUsers;
 const originalGetUserDetail = adminAppUserService.getUserDetail;
 const originalUpdateUserStatus = adminAppUserService.updateUserStatus;
-const originalRevokeUserSessions = adminAppUserService.revokeUserSessions;
 const originalToken = process.env.ONECEO_INTERNAL_TOKEN;
 
 after(() => {
   adminAppUserService.listUsers = originalListUsers;
   adminAppUserService.getUserDetail = originalGetUserDetail;
   adminAppUserService.updateUserStatus = originalUpdateUserStatus;
-  adminAppUserService.revokeUserSessions = originalRevokeUserSessions;
   process.env.ONECEO_INTERNAL_TOKEN = originalToken;
 });
 
@@ -73,6 +71,8 @@ test('GET /api/internal/admin/app-users returns app user list payload', async ()
   adminAppUserService.listUsers = async (filters) => {
     assert.equal(filters.limit, 50);
     assert.equal(filters.status, 'active');
+    assert.equal(filters.sortKey, 'user');
+    assert.equal(filters.sortDirection, 'asc');
     return {
       summary: {
         totalUsers: 1,
@@ -95,7 +95,7 @@ test('GET /api/internal/admin/app-users returns app user list payload', async ()
 
   try {
     const response = await fetch(
-      `${server.origin}/api/internal/admin/app-users?limit=50&status=active`,
+      `${server.origin}/api/internal/admin/app-users?limit=50&status=active&sortKey=user&sortDirection=asc`,
       {
         headers: {
           'x-oneceo-internal-token': 'internal-secret',
@@ -168,45 +168,6 @@ test('POST /api/internal/admin/app-users/:userId/status validates status value',
     assert.equal(response.status, 400);
     assert.equal(payload.success, false);
     assert.equal(payload.error, '状态仅支持 active 或 disabled');
-  } finally {
-    await server.close();
-  }
-});
-
-test('POST /api/internal/admin/app-users/:userId/revoke-sessions forwards to service', async () => {
-  const server = await startServer();
-  adminAppUserService.revokeUserSessions = async (userId: string) => {
-    assert.equal(userId, 'user-123');
-    return {
-      revokedSessionCount: 2,
-      user: {
-        id: 'user-123',
-        email: 'demo@example.com',
-        displayName: 'Demo User',
-        status: 'active',
-      },
-      stats: {},
-      recentSessions: [],
-      recentConversations: [],
-      recentSandboxes: [],
-      legacyMappings: [],
-    } as any;
-  };
-
-  try {
-    const response = await fetch(`${server.origin}/api/internal/admin/app-users/user-123/revoke-sessions`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-oneceo-internal-token': 'internal-secret',
-      },
-      body: JSON.stringify({}),
-    });
-    const payload = await response.json();
-
-    assert.equal(response.status, 200);
-    assert.equal(payload.success, true);
-    assert.equal(payload.data.revokedSessionCount, 2);
   } finally {
     await server.close();
   }

@@ -1,5 +1,6 @@
-import { access, readFile, writeFile } from 'node:fs/promises';
+import { access, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { DEPLOYMENT_TEMPLATE_ANALYTICS_ENTRY_RELATIVE_PATHS } from './deployment-template-bootstrap-service';
 
 type ManifestFeatures = {
   analytics: boolean;
@@ -91,6 +92,81 @@ async function readTextIfExists(path: string): Promise<string> {
   return readFile(path, 'utf-8');
 }
 
+async function findFilesByExtension(
+  rootDir: string,
+  extension: string,
+  limit = 200
+): Promise<string[]> {
+  const results: string[] = [];
+  const queue = [rootDir];
+  while (queue.length > 0 && results.length < limit) {
+    const current = queue.shift();
+    if (!current) continue;
+    let entries: Array<{ name: string; path: string; isDirectory: boolean; isFile: boolean }> = [];
+    try {
+      entries = (await readdir(current, { withFileTypes: true })).map((entry) => ({
+        name: entry.name,
+        path: join(current, entry.name),
+        isDirectory: entry.isDirectory(),
+        isFile: entry.isFile(),
+      }));
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (results.length >= limit) break;
+      if (entry.isDirectory) {
+        if (
+          entry.name === 'node_modules' ||
+          entry.name === '.git' ||
+          entry.name === 'dist' ||
+          entry.name === 'build'
+        ) {
+          continue;
+        }
+        queue.push(entry.path);
+        continue;
+      }
+      if (entry.isFile && entry.path.endsWith(extension)) {
+        results.push(entry.path);
+      }
+    }
+  }
+  return results;
+}
+
+async function findTemplateFiles(
+  sourceDir: string,
+  extensions: readonly string[],
+  limit = 80
+): Promise<string[]> {
+  const templateRoots = [
+    join(sourceDir, 'templates'),
+    join(sourceDir, 'app/templates'),
+    join(sourceDir, 'views'),
+    join(sourceDir, 'app/views'),
+  ];
+  const results: string[] = [];
+  const seen = new Set<string>();
+  for (const root of templateRoots) {
+    for (const extension of extensions) {
+      if (results.length >= limit) {
+        return results;
+      }
+      const matches = await findFilesByExtension(root, extension, Math.max(1, limit - results.length));
+      for (const filePath of matches) {
+        if (seen.has(filePath)) continue;
+        seen.add(filePath);
+        results.push(filePath);
+        if (results.length >= limit) {
+          return results;
+        }
+      }
+    }
+  }
+  return results;
+}
+
 function hasDependency(packageJson: Record<string, unknown>, name: string): boolean {
   const dependencies = asObject(packageJson.dependencies);
   const devDependencies = asObject(packageJson.devDependencies);
@@ -156,7 +232,78 @@ async function inferHealthcheckPath(sourceDir: string): Promise<string> {
     if (content.includes('/api/system/health')) return '/api/system/health';
     if (content.includes('/health')) return '/health';
   }
+  const phpEntrypoints = [
+    join(sourceDir, 'index.php'),
+    join(sourceDir, 'public/index.php'),
+  ];
+  if ((await Promise.all(phpEntrypoints.map((filePath) => exists(filePath)))).some(Boolean)) {
+    return '/';
+  }
   return '/api/system/health';
+}
+
+function looksLikePhpManifest(manifest: OneCeoDeploymentManifest): boolean {
+  const stack = asText(manifest.stack).toLowerCase();
+  const framework = asText(manifest.runtime.framework).toLowerCase();
+  const startCommand = asText(manifest.start.command).toLowerCase();
+  return (
+    stack.includes('php') ||
+    framework.includes('php') ||
+    startCommand.startsWith('php ') ||
+    startCommand.startsWith('php-s')
+  );
+}
+
+async function detectBrokenEjsLayoutBodyUsage(
+  sourceDir: string,
+  packageJson: Record<string, unknown> | null
+): Promise<string | null> {
+  if (!packageJson || !hasDependency(packageJson, 'ejs')) {
+    return null;
+  }
+  const ejsFiles = await findFilesByExtension(sourceDir, '.ejs');
+  const layoutTemplateWithBody = (
+    await Promise.all(
+      ejsFiles.map(async (filePath) => ({
+        filePath,
+        content: await readTextIfExists(filePath),
+      }))
+    )
+  ).find((entry) => /<%-\s*body\s*%>|<%=\s*body\s*%>/.test(entry.content));
+  if (!layoutTemplateWithBody) {
+    return null;
+  }
+
+  const hasLayoutDependency =
+    hasDependency(packageJson, 'express-ejs-layouts') || hasDependency(packageJson, 'ejs-mate');
+  const serverCandidates = [
+    join(sourceDir, 'server.ts'),
+    join(sourceDir, 'server.js'),
+    join(sourceDir, 'server/index.ts'),
+    join(sourceDir, 'server/index.js'),
+    join(sourceDir, 'src/server/index.ts'),
+    join(sourceDir, 'src/server/index.js'),
+    join(sourceDir, 'src/index.ts'),
+    join(sourceDir, 'src/index.js'),
+    join(sourceDir, 'app.ts'),
+    join(sourceDir, 'app.js'),
+  ];
+  const serverContents = await Promise.all(serverCandidates.map((filePath) => readTextIfExists(filePath)));
+  const hasLayoutWiring =
+    hasLayoutDependency ||
+    serverContents.some(
+      (content) =>
+        content.includes('express-ejs-layouts') ||
+        content.includes('ejs-mate') ||
+        content.includes('app.use(expressLayouts)') ||
+        content.includes("app.set('layout'") ||
+        content.includes('app.set("layout"')
+    );
+  if (hasLayoutWiring) {
+    return null;
+  }
+
+  return layoutTemplateWithBody.filePath.replace(`${sourceDir}/`, '');
 }
 
 function buildDefaultManifest(input: {
@@ -236,18 +383,25 @@ function normalizeManifest(
 }
 
 async function detectAnalyticsEntry(sourceDir: string): Promise<boolean> {
+  const templateCandidates = await findTemplateFiles(sourceDir, ['.html', '.ejs', '.jinja', '.j2']);
   const candidates = [
     join(sourceDir, 'client/src/main.tsx'),
     join(sourceDir, 'client/src/main.ts'),
     join(sourceDir, 'src/main.tsx'),
     join(sourceDir, 'src/main.ts'),
-    join(sourceDir, 'client/index.html'),
-    join(sourceDir, 'index.html'),
+    ...DEPLOYMENT_TEMPLATE_ANALYTICS_ENTRY_RELATIVE_PATHS.map((relativePath) =>
+      join(sourceDir, relativePath)
+    ),
+    ...templateCandidates,
   ];
   const contents = await Promise.all(candidates.map((file) => readTextIfExists(file)));
   return contents.some(
     (content) =>
       content.includes('ONECEO_ANALYTICS:START') ||
+      content.includes('window.__ONECEO_ANALYTICS__') ||
+      content.includes('window.ONECEO_ANALYTICS_CONFIG') ||
+      content.includes('OneCEO Analytics') ||
+      content.includes('data-oneceo-analytics') ||
       content.includes('VITE_ANALYTICS_') ||
       content.includes('data-website-id') ||
       content.includes('script.js')
@@ -261,28 +415,79 @@ export async function ensureTemplateCompliance(sourceDir: string): Promise<Templ
   const errors: string[] = [];
 
   const packageJson = await readJsonFile(packageJsonPath);
-  if (!packageJson) {
-    throw new Error('部署前检查失败：缺少 package.json');
-  }
-
-  const scripts = asObject(packageJson.scripts);
-  const buildCommandDetected = Boolean(asText(scripts.build));
-  const startCommandDetected = Boolean(asText(scripts.start));
-  if (!buildCommandDetected) {
-    errors.push('缺少 package.json scripts.build，当前项目不具备标准构建入口');
-  }
-  if (!startCommandDetected) {
-    errors.push('缺少 package.json scripts.start，当前项目不具备标准启动入口');
-  }
-
   const healthcheckPath = await inferHealthcheckPath(sourceDir);
-  const fallbackManifest = buildDefaultManifest({
-    packageJson,
-    healthcheckPath,
-  });
   const existingManifest = await readJsonFile(manifestPath);
+  if (!packageJson && !existingManifest) {
+    throw new Error('部署前检查失败：缺少 package.json 或 oneceo.manifest.json');
+  }
+
+  const fallbackManifest = packageJson
+    ? buildDefaultManifest({
+        packageJson,
+        healthcheckPath,
+      })
+    : normalizeManifest(
+        existingManifest || {},
+        {
+          templateVersion: '1.0.0',
+          appType: 'web_app',
+          stack: 'generic_script_http_api_dbless',
+          build: {
+            command: 'echo "oneceo app ready"',
+            outputDir: '.',
+          },
+          start: {
+            command: '',
+            portEnv: 'PORT',
+          },
+          healthcheck: {
+            path: healthcheckPath,
+          },
+          features: {
+            analytics: true,
+            userTracking: true,
+            database: false,
+            auth: 'optional',
+            objectStorage: false,
+          },
+          runtime: {
+            framework: 'generic',
+            transport: 'http',
+          },
+        }
+      );
   const generatedManifest = !existingManifest;
   const manifest = normalizeManifest(existingManifest || {}, fallbackManifest);
+  if (
+    looksLikePhpManifest(manifest) &&
+    healthcheckPath === '/' &&
+    manifest.healthcheck.path !== '/'
+  ) {
+    manifest.healthcheck.path = '/';
+    warnings.push('检测到 PHP 站点入口且未提供显式健康检查路由，已将 manifest 健康检查标准化为 /');
+  }
+
+  const scripts = asObject(packageJson?.scripts);
+  const buildCommandDetected = packageJson
+    ? Boolean(asText(scripts.build))
+    : Boolean(asText(manifest.build.command));
+  const startCommandDetected = packageJson
+    ? Boolean(asText(scripts.start))
+    : Boolean(asText(manifest.start.command));
+  if (!buildCommandDetected) {
+    errors.push(
+      packageJson
+        ? '缺少 package.json scripts.build，当前项目不具备标准构建入口'
+        : '缺少可推导的 build command，当前项目不具备标准构建入口'
+    );
+  }
+  if (!startCommandDetected) {
+    errors.push(
+      packageJson
+        ? '缺少 package.json scripts.start，当前项目不具备标准启动入口'
+        : '缺少可推导的 start command，当前项目不具备标准启动入口'
+    );
+  }
 
   if (generatedManifest) {
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8');
@@ -290,16 +495,28 @@ export async function ensureTemplateCompliance(sourceDir: string): Promise<Templ
   }
 
   if (manifest.features.database === 'railway_postgres') {
-    const databaseDependencyDetected =
-      hasDependency(packageJson, 'pg') || hasDependency(packageJson, 'drizzle-orm');
+    const databaseDependencyDetected = packageJson
+      ? hasDependency(packageJson, 'pg') || hasDependency(packageJson, 'drizzle-orm')
+      : null;
     if (!databaseDependencyDetected) {
-      errors.push('manifest 声明 database=railway_postgres，但项目未检测到 pg / drizzle-orm 依赖');
+      errors.push(
+        packageJson
+          ? 'manifest 声明 database=railway_postgres，但项目未检测到 pg / drizzle-orm 依赖'
+          : 'manifest 声明 database=railway_postgres，但当前无 package.json 可校验数据库依赖'
+      );
     }
   }
 
   const analyticsEntryDetected = await detectAnalyticsEntry(sourceDir);
   if (!analyticsEntryDetected) {
     errors.push('未检测到 OneCEO analytics bootstrap 或显式 analytics 注入入口');
+  }
+
+  const brokenEjsLayoutPath = await detectBrokenEjsLayoutBodyUsage(sourceDir, packageJson);
+  if (brokenEjsLayoutPath) {
+    errors.push(
+      `检测到 EJS 布局模板 ${brokenEjsLayoutPath} 使用 <%- body %>，但项目未检测到 express-ejs-layouts / ejs-mate 布局接入；继续部署会导致 body is not defined`
+    );
   }
 
   const healthcheckSourceDetected = (await inferHealthcheckPath(sourceDir)) === manifest.healthcheck.path;
@@ -319,7 +536,9 @@ export async function ensureTemplateCompliance(sourceDir: string): Promise<Templ
       healthcheckRouteDetected: healthcheckSourceDetected,
       databaseDependencyDetected:
         manifest.features.database === 'railway_postgres'
-          ? hasDependency(packageJson, 'pg') || hasDependency(packageJson, 'drizzle-orm')
+          ? packageJson
+            ? hasDependency(packageJson, 'pg') || hasDependency(packageJson, 'drizzle-orm')
+            : null
           : null,
     },
     warnings,

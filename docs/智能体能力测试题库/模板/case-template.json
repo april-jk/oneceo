@@ -1,0 +1,22 @@
+{
+  "case_id": "ALTUS-XXXX-001",
+  "case_version": "1.0.0",
+  "category": "clarification",
+  "title": "Short case title",
+  "prompt": "User input here",
+  "prompt_sequence": [],
+  "preconditions": [],
+  "expected": [],
+  "forbidden": [],
+  "required_evidence": [],
+  "hard_fail_rules": [],
+  "scoring_dimensions": [
+    "intent_understanding",
+    "clarification_discipline",
+    "planning_and_tool_selection",
+    "execution_completion",
+    "repair_and_exception_handling",
+    "boundary_control",
+    "output_quality"
+  ]
+}

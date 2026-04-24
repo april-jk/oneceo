@@ -62,4 +62,30 @@ describe('managed mixed timeline render', () => {
       )
     ).toBe(true);
   });
+
+  it('renders managed final assistant messages as Altus even when agent field is missing', () => {
+    const messages: AgentMessage[] = [
+      {
+        type: 'agent_message',
+        messageKey: 'managed:run-2:assistant',
+        content: '这是刷新后从历史恢复的 managed 最终答复',
+        metadata: {
+          executionMode: 'managed',
+          executor: 'altus',
+          runId: 'run-2',
+          eventType: 'assistant_message',
+        },
+      },
+    ];
+
+    const items = buildChatItems(messages);
+    const agentItem = items.find(
+      (item): item is Extract<(typeof items)[number], { kind: 'agent' }> =>
+        item.kind === 'agent',
+    );
+
+    expect(agentItem).toBeTruthy();
+    expect(agentItem?.markdown).toContain('**Altus**');
+    expect(agentItem?.markdown).not.toContain('**智能体**');
+  });
 });

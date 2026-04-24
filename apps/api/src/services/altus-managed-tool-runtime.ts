@@ -7,7 +7,9 @@ import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
 import { osacAgentService } from './osac-agent-service';
 import { connectorGuideService } from './connector-guide-service';
 import { markSandboxDirty, touchSandbox } from './sandbox-activity-service';
+import { taskSessionSkillStateService } from './task-session-skill-state-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
+import { userSkillService } from './user-skill-service';
 import {
   altusManagedDeploymentToolService,
   type AltusManagedDeploymentToolName,
@@ -16,14 +18,30 @@ import {
   asText,
   buildManagedMcpToolName,
   type ManagedCompletionAttachment,
+  type ManagedSkillCatalogEntry,
   type ManagedMcpProvider,
   type ManagedSkillContext,
 } from './altus-managed-shared';
+import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-service';
 
-type ManagedToolResult =
-  | { type: 'result'; content: string }
-  | { type: 'ask_user'; question: string; options?: string[] }
-  | { type: 'complete'; summary: string; verification?: string[]; attachments?: ManagedCompletionAttachment[] };
+export type ManagedToolResult =
+  | { type: 'result'; content: string; activatedSkills?: ManagedSkillContext[] }
+  | { type: 'ask_user'; question: string; options?: string[]; activatedSkills?: ManagedSkillContext[] }
+  | {
+      type: 'complete';
+      summary: string;
+      verification?: string[];
+      attachments?: ManagedCompletionAttachment[];
+      activatedSkills?: ManagedSkillContext[];
+    };
+
+type ManagedTodoStatus = 'pending' | 'in_progress' | 'completed';
+
+type ManagedTodoItem = {
+  content: string;
+  status: ManagedTodoStatus;
+  activeForm?: string;
+};
 
 function asPositiveInt(value: unknown, fallback: number, max: number) {
   const parsed = Number(value);
@@ -54,6 +72,10 @@ function asStringArray(value: unknown, maxItems: number) {
     if (result.length >= maxItems) break;
   }
   return result;
+}
+
+function isManagedTodoStatus(value: string): value is ManagedTodoStatus {
+  return value === 'pending' || value === 'in_progress' || value === 'completed';
 }
 
 function shellEscape(value: string): string {
@@ -93,9 +115,76 @@ function isManagedDeploymentToolName(value: string): value is AltusManagedDeploy
   );
 }
 
+function normalizeCommandForMatch(value: string) {
+  return asText(value).toLowerCase().replace(/\s+/g, ' ');
+}
+
+function isLocalPreviewOrDevCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('vite preview') ||
+    normalized.includes('npm run preview') ||
+    normalized.includes('pnpm preview') ||
+    normalized.includes('yarn preview') ||
+    normalized.includes('bun preview') ||
+    normalized.includes('vite dev') ||
+    normalized.includes('npm run dev') ||
+    normalized.includes('pnpm dev') ||
+    normalized.includes('yarn dev') ||
+    normalized.includes('bun dev') ||
+    normalized.includes('react-scripts start')
+  );
+}
+
+function isFrontendBuildCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('npm run build') ||
+    normalized.includes('pnpm build') ||
+    normalized.includes('yarn build') ||
+    normalized.includes('bun run build') ||
+    normalized.includes('bun build') ||
+    normalized.includes('vite build')
+  );
+}
+
+function isPersistentLocalServerCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('python -m http.server') ||
+    normalized.includes('python3 -m http.server') ||
+    normalized.includes('npm run dev') ||
+    normalized.includes('pnpm dev') ||
+    normalized.includes('yarn dev') ||
+    normalized.includes('bun dev') ||
+    normalized.includes('vite dev') ||
+    normalized === 'vite'
+  );
+}
+
+function extractLeadingCdTarget(value: string) {
+  const raw = asText(value).trim();
+  if (!raw.toLowerCase().startsWith('cd ')) {
+    return '';
+  }
+
+  const match = raw.match(/^cd\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))\s*(?:&&|;)/i);
+  if (!match) {
+    return '';
+  }
+  return asText(match[1] ?? match[2] ?? match[3]);
+}
+
 export class AltusManagedToolRuntime {
   private readonly posix = path.posix;
   private readonly loadedConnectorGuides = new Set<string>();
+
+  private hasActiveSkill(slug: string) {
+    return this.input.activeSkills.some((item) => asText(item.slug) === slug);
+  }
 
   constructor(
     private readonly input: {
@@ -103,6 +192,9 @@ export class AltusManagedToolRuntime {
       userId: string;
       sandboxId: string;
       workspaceRoot: string;
+      userInput?: string;
+      taskIntentProfile?: AltusManagedTaskIntentProfile;
+      availableSkills?: ManagedSkillCatalogEntry[];
       activeSkills: ManagedSkillContext[];
       mcpProviders: ManagedMcpProvider[];
     },
@@ -228,6 +320,47 @@ export class AltusManagedToolRuntime {
     return Array.from(deduped.values());
   }
 
+  private parseTodos(raw: unknown) {
+    if (!Array.isArray(raw)) {
+      throw new Error('todowrite_missing_todos');
+    }
+    const todos = raw
+      .map((item) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+        const record = item as Record<string, unknown>;
+        const content = asText(record.content);
+        const status = asText(record.status);
+        const activeForm = asText(record.activeForm);
+        if (!content || !isManagedTodoStatus(status)) {
+          return null;
+        }
+        return {
+          content,
+          status,
+          ...(activeForm ? { activeForm } : {}),
+        } satisfies ManagedTodoItem;
+      })
+      .filter((item): item is ManagedTodoItem => Boolean(item))
+      .slice(0, 12);
+
+    if (todos.length === 0) {
+      throw new Error('todowrite_missing_valid_todos');
+    }
+
+    const inProgressCount = todos.filter((item) => item.status === 'in_progress').length;
+    const allCompleted = todos.every((item) => item.status === 'completed');
+    if (allCompleted) {
+      if (inProgressCount !== 0) {
+        throw new Error('todowrite_completed_list_invalid');
+      }
+      return todos;
+    }
+    if (inProgressCount !== 1) {
+      throw new Error('todowrite_requires_single_in_progress');
+    }
+    return todos;
+  }
+
   private async runShell(
     command: string,
     options?: { cwd?: string; timeoutMs?: number },
@@ -242,6 +375,71 @@ export class AltusManagedToolRuntime {
     });
     this.ensureNotAborted(signal);
     return result;
+  }
+
+  private parseInspectionFlags(stdout: string) {
+    const flags = new Map<string, string>();
+    for (const line of String(stdout || '').split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const separatorIndex = trimmed.indexOf('=');
+      if (separatorIndex <= 0) continue;
+      const key = trimmed.slice(0, separatorIndex);
+      const value = trimmed.slice(separatorIndex + 1);
+      flags.set(key, value);
+    }
+    return flags;
+  }
+
+  private async prepareFrontendBuildWorkspace(
+    command: string,
+    cwd: string,
+    signal?: AbortSignal
+  ) {
+    if (!isFrontendBuildCommand(command)) {
+      return;
+    }
+    const commandScopedCwd = extractLeadingCdTarget(command);
+    const inspectionCwd = commandScopedCwd || cwd;
+    const absoluteCwd = this.resolveWorkspacePath(inspectionCwd, { allowWorkspaceRoot: true });
+    const inspection = await this.runShell(
+      [
+        'if [ -f package.json ]; then echo "package_json=1"; else echo "package_json=0"; fi',
+        'if [ -f index.html ]; then echo "root_index=1"; else echo "root_index=0"; fi',
+        'if [ -f public/index.html ]; then echo "public_index=1"; else echo "public_index=0"; fi',
+        'if [ -f client/index.html ]; then echo "client_index=1"; else echo "client_index=0"; fi',
+        'if [ -f package.json ] && grep -qi \'"vite"\\|vite\' package.json; then echo "vite_project=1"; else echo "vite_project=0"; fi',
+      ].join('\n'),
+      {
+        cwd: absoluteCwd,
+        timeoutMs: 10000,
+      },
+      signal
+    );
+    const flags = this.parseInspectionFlags(asText((inspection as any)?.stdout));
+    if (flags.get('package_json') !== '1' || flags.get('vite_project') !== '1' || flags.get('root_index') === '1') {
+      return;
+    }
+
+    const source =
+      flags.get('public_index') === '1'
+        ? 'public/index.html'
+        : flags.get('client_index') === '1'
+          ? 'client/index.html'
+          : '';
+    if (!source) {
+      return;
+    }
+
+    await this.runShell(
+      `cp ${shellEscape(source)} index.html`,
+      {
+        cwd: absoluteCwd,
+        timeoutMs: 10000,
+      },
+      signal
+    );
+    await this.markWorkspaceDirty('managed_frontend_build_prepare');
   }
 
   private compactSearchContent(value: string, limit = 1200) {
@@ -259,9 +457,137 @@ export class AltusManagedToolRuntime {
     await this.sandboxActivityDeps.markSandboxDirty(this.input.sandboxId, reason).catch(() => null);
   }
 
+  private findAutoAttachableSkillsForTool(toolName: string) {
+    const normalizedToolName = asText(toolName).toLowerCase();
+    if (!normalizedToolName) return [];
+    const activeKeys = new Set(
+      this.input.activeSkills.map((item) => `${item.sourceType}:${item.skillId}:${item.revisionId}`)
+    );
+    const availableSkills = Array.isArray(this.input.availableSkills) ? this.input.availableSkills : [];
+    return availableSkills.filter((skill) => {
+      const governance = skill.governance;
+      if (!governance?.autoActivation?.enabled) return false;
+      if (!governance.autoActivation.toolNames.includes(normalizedToolName)) return false;
+      const key = `${skill.sourceType}:${skill.skillId}:${skill.revisionId}`;
+      return !activeKeys.has(key);
+    });
+  }
+
+  private async autoAttachSkillsForTool(toolName: string, signal?: AbortSignal): Promise<ManagedSkillContext[]> {
+    const candidates = this.findAutoAttachableSkillsForTool(toolName);
+    if (candidates.length === 0) {
+      return [];
+    }
+    const resolved = await userSkillService.resolveSelectionsForSession(
+      this.input.sessionId,
+      candidates.map((item) => ({
+        sourceType: item.sourceType,
+        skillId: item.skillId,
+        revisionId: item.revisionId,
+      }))
+    );
+    this.ensureNotAborted(signal);
+    if (resolved.length === 0) {
+      return [];
+    }
+
+    await sandboxSkillSyncService.syncResolvedSkills({
+      taskSessionId: this.input.sessionId,
+      orchestratorSessionId: this.input.sandboxId,
+      skills: resolved as any,
+    });
+    this.ensureNotAborted(signal);
+
+    const existingKeys = new Set(
+      this.input.activeSkills.map((item) => `${item.sourceType}:${item.skillId}:${item.revisionId}`)
+    );
+    const activated: ManagedSkillContext[] = [];
+    for (const skill of resolved as ManagedSkillContext[]) {
+      const key = `${skill.sourceType}:${skill.skillId}:${skill.revisionId}`;
+      if (existingKeys.has(key)) continue;
+      existingKeys.add(key);
+      this.input.activeSkills.push(skill);
+      activated.push(skill);
+    }
+
+    if (activated.length > 0) {
+      try {
+        await taskSessionSkillStateService.recordRuntimeAutoAttachedSkills({
+          sessionId: this.input.sessionId,
+          sandboxId: this.input.sandboxId,
+          workspaceRoot: this.input.workspaceRoot,
+          activatedSkills: activated,
+          toolName,
+          taskIntentProfile: this.input.taskIntentProfile || {
+            mode: 'neutral',
+            reason: 'unknown',
+            recentUserMessages: [],
+            explicitNoDeploy: false,
+            explicitNoWeb: false,
+            webArtifactRequested: false,
+            deployRequested: false,
+            scriptArtifactRequested: false,
+            emailTemplateRequested: false,
+            deploymentAllowed: true,
+            needsClarification: false,
+            clarificationQuestion: '',
+            clarificationType: 'none',
+            todoRequired: false,
+            todoReason: 'none',
+          },
+        });
+      } catch (error) {
+        console.warn('[ALTUS_RUNTIME_AUTO_ATTACHED_SKILLS_PERSIST_WARN]', {
+          taskSessionId: this.input.sessionId,
+          sandboxId: this.input.sandboxId,
+          toolName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      writeConnectorDebugLog('[ALTUS_RUNTIME_AUTO_ATTACHED_SKILLS]', {
+        taskSessionId: this.input.sessionId,
+        sandboxId: this.input.sandboxId,
+        toolName,
+        skillSlugs: activated.map((item) => item.slug),
+      });
+    }
+
+    return activated;
+  }
+
+  private enforceDeploymentIntent(toolName: string) {
+    if (
+      toolName !== 'deploy_application' &&
+      toolName !== 'redeploy_application' &&
+      toolName !== 'rollback_application_deployment' &&
+      toolName !== 'get_application_deployment_status'
+    ) {
+      return;
+    }
+    const profile = this.input.taskIntentProfile;
+    if (!profile || profile.deploymentAllowed) {
+      return;
+    }
+    const recentContext = profile.recentUserMessages.slice(-3).join(' | ');
+    throw new Error(
+      [
+        'deployment_tool_not_allowed_without_explicit_request',
+        `reason=${profile.reason}`,
+        `current_session_intent=${profile.mode}`,
+        'current_session_deployment_allowed=false',
+        'do_not_enter_deployment_flow_without_an_explicit_user_request',
+        recentContext ? `recent_user_messages=${recentContext}` : '',
+      ]
+        .filter(Boolean)
+        .join(':')
+    );
+  }
+
   async execute(toolName: string, rawArgs: Record<string, unknown>, signal?: AbortSignal): Promise<ManagedToolResult> {
     this.ensureNotAborted(signal);
     await this.sandboxActivityDeps.touchSandbox(this.input.sandboxId, `managed_tool:${toolName}`).catch(() => null);
+    this.enforceDeploymentIntent(toolName);
+    const activatedSkills = await this.autoAttachSkillsForTool(toolName, signal);
     if (toolName === 'load_connector_guide') {
       const connectorKey = asText(rawArgs.connectorKey).toLowerCase();
       if (!connectorKey) {
@@ -280,6 +606,7 @@ export class AltusManagedToolRuntime {
       });
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           connectorKey: guide.connectorKey,
           policyId: guide.policyId,
@@ -341,6 +668,7 @@ export class AltusManagedToolRuntime {
       await this.markWorkspaceDirty(`managed_mcp_tool:${mcpTool.toolName}`);
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           providerId: response.providerId,
           toolName: response.toolName,
@@ -354,7 +682,21 @@ export class AltusManagedToolRuntime {
       if (!command) {
         throw new Error('shell_execute_missing_command');
       }
+      if (isPersistentLocalServerCommand(command)) {
+        throw new Error(
+          'shell_execute_persistent_local_server_blocked:检测到本地常驻服务启动命令。managed shell_execute 不适合直接拉起这类本地预览或开发服务，请改用专用调试工具，或继续执行不会常驻的检查命令。'
+        );
+      }
+      if (
+        this.hasActiveSkill('deployment-orchestrator') &&
+        isLocalPreviewOrDevCommand(command)
+      ) {
+        throw new Error(
+          'deployment_shell_preview_blocked:部署链路禁止使用本地 preview/dev 命令。请改用 deploy_application、redeploy_application 或 get_application_deployment_status，并依赖平台导出的标准 start/healthcheck 配置。'
+        );
+      }
       const cwd = asText(rawArgs.cwd) || '.';
+      await this.prepareFrontendBuildWorkspace(command, cwd, signal);
       const result = await this.runShell(command, {
         cwd,
         timeoutMs: asPositiveInt(rawArgs.timeoutMs, 20000, 120000),
@@ -365,6 +707,7 @@ export class AltusManagedToolRuntime {
       await this.markWorkspaceDirty('managed_shell_execute');
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           cwd: this.relativeForDisplay(this.resolveWorkspacePath(cwd, { allowWorkspaceRoot: true })),
           exitCode,
@@ -435,6 +778,7 @@ export class AltusManagedToolRuntime {
       await this.markWorkspaceDirty('managed_debug_open_page');
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           targetUrl,
           debugUrl: debugInfo?.url,
@@ -458,6 +802,7 @@ export class AltusManagedToolRuntime {
       });
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify(result),
       };
     }
@@ -469,6 +814,7 @@ export class AltusManagedToolRuntime {
       const content = Buffer.from(bytes).toString('utf-8');
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           path: this.relativeForDisplay(absolutePath),
           content: truncate(content, 24000),
@@ -489,6 +835,7 @@ export class AltusManagedToolRuntime {
       await this.markWorkspaceDirty('managed_write_file');
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           path: this.relativeForDisplay(absolutePath),
           bytes: Buffer.byteLength(content, 'utf-8'),
@@ -513,6 +860,7 @@ export class AltusManagedToolRuntime {
       }, signal);
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           path: this.relativeForDisplay(absolutePath),
           depth,
@@ -542,6 +890,7 @@ export class AltusManagedToolRuntime {
       }, signal);
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           query,
           path: this.relativeForDisplay(absolutePath),
@@ -572,6 +921,7 @@ export class AltusManagedToolRuntime {
       );
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           query: result.query,
           topic: result.topic,
@@ -608,6 +958,7 @@ export class AltusManagedToolRuntime {
       );
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           urls: result.urls,
           extractDepth: result.extractDepth,
@@ -646,6 +997,7 @@ export class AltusManagedToolRuntime {
       });
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           skillId: result.skillId,
           revisionId: result.revisionId,
@@ -667,8 +1019,18 @@ export class AltusManagedToolRuntime {
         : [];
       return {
         type: 'ask_user',
+        activatedSkills,
         question,
         options: options.length > 0 ? options : undefined,
+      };
+    }
+
+    if (toolName === 'todowrite') {
+      const todos = this.parseTodos(rawArgs.todos);
+      return {
+        type: 'result',
+        activatedSkills,
+        content: JSON.stringify({ todos }),
       };
     }
 
@@ -683,6 +1045,7 @@ export class AltusManagedToolRuntime {
       const attachments = this.parseCompletionAttachments(rawArgs.attachments);
       return {
         type: 'complete',
+        activatedSkills,
         summary,
         verification: verification.length > 0 ? verification : undefined,
         attachments: attachments.length > 0 ? attachments : undefined,

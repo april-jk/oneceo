@@ -48,7 +48,13 @@ export interface FileSessionRecord {
   id: string;
   title: string;
   titleLocked?: boolean;
-  titleSource?: 'placeholder' | 'first_explicit_user_input' | 'manual';
+  titleSource?:
+    | 'placeholder'
+    | 'first_explicit_user_input'
+    | 'task_description'
+    | 'clarification_summary'
+    | 'manual';
+  titleState?: 'provisional' | 'resolved' | 'manual';
   titleResolvedAt?: string;
   isFavorite?: boolean;
   projectId?: string | null;
@@ -80,6 +86,12 @@ export interface FileSessionRecord {
   };
   pendingQuestion?: string;
   pendingOptions?: string[];
+  pendingClarificationType?:
+    | 'artifact_type'
+    | 'tech_stack'
+    | 'scope_boundary'
+    | 'integration_target'
+    | 'acceptance_requirement';
   pendingResume?: {
     stage: NonNullable<FileSessionRecord['stage']>;
     reason?: string;
@@ -97,6 +109,7 @@ interface MemoryFileShape {
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const MEMORY_FILE = path.join(DATA_DIR, 'task-creation-memory.json');
+const DEFAULT_SESSION_TITLE = '待识别任务';
 
 type TaskStage = NonNullable<FileSessionRecord['stage']>;
 type TaskPhase = NonNullable<FileSessionRecord['phase']>;
@@ -329,9 +342,10 @@ class TaskCreationFileMemoryStore {
 
       const session: FileSessionRecord = {
         id: sessionId || this.createId('session'),
-        title: title.trim().slice(0, 80) || '新建任务会话',
+        title: title.trim().slice(0, 80) || DEFAULT_SESSION_TITLE,
         titleLocked: false,
         titleSource: 'placeholder',
+        titleState: 'provisional',
         isFavorite: false,
         projectId: null,
         projectName: null,
@@ -588,6 +602,7 @@ class TaskCreationFileMemoryStore {
     options?: {
       lock?: boolean;
       source?: FileSessionRecord['titleSource'];
+      state?: FileSessionRecord['titleState'];
       force?: boolean;
       resolvedAt?: string;
     }
@@ -602,20 +617,29 @@ class TaskCreationFileMemoryStore {
 
       const nextLock = Boolean(options?.lock);
       const nextSource = options?.source || session.titleSource || 'placeholder';
+      const nextState =
+        options?.state ||
+        (nextSource === 'manual'
+          ? 'manual'
+          : nextSource === 'task_description' || nextSource === 'clarification_summary'
+            ? 'resolved'
+            : session.titleState || 'provisional');
       const nextResolvedAt =
         options?.resolvedAt || (nextLock ? new Date().toISOString() : session.titleResolvedAt);
       const titleChanged = session.title !== nextTitle;
       const lockChanged = Boolean(session.titleLocked) !== nextLock;
       const sourceChanged = session.titleSource !== nextSource;
+      const stateChanged = session.titleState !== nextState;
       const resolvedAtChanged = session.titleResolvedAt !== nextResolvedAt;
 
-      if (!titleChanged && !lockChanged && !sourceChanged && !resolvedAtChanged) {
+      if (!titleChanged && !lockChanged && !sourceChanged && !stateChanged && !resolvedAtChanged) {
         return;
       }
 
       session.title = nextTitle;
       session.titleLocked = nextLock;
       session.titleSource = nextSource;
+      session.titleState = nextState;
       session.titleResolvedAt = nextResolvedAt;
       session.updatedAt = new Date().toISOString();
       await this.writeMemory(memory);
@@ -659,6 +683,43 @@ class TaskCreationFileMemoryStore {
       session.projectId = nextProjectId;
       session.projectName = nextProjectName;
       session.updatedAt = new Date().toISOString();
+      await this.writeMemory(memory);
+    });
+  }
+
+  async clearProjectAssignment(projectId: string): Promise<void> {
+    const normalizedProjectId = projectId ? String(projectId).trim() : '';
+    if (!normalizedProjectId) return;
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      let changed = false;
+      for (const session of memory.sessions) {
+        if ((session.projectId || null) !== normalizedProjectId) continue;
+        session.projectId = null;
+        session.projectName = null;
+        session.updatedAt = new Date().toISOString();
+        changed = true;
+      }
+      if (!changed) return;
+      await this.writeMemory(memory);
+    });
+  }
+
+  async syncProjectName(projectId: string, projectName: string): Promise<void> {
+    const normalizedProjectId = projectId ? String(projectId).trim() : '';
+    const normalizedProjectName = projectName ? String(projectName).trim().slice(0, 80) : '';
+    if (!normalizedProjectId || !normalizedProjectName) return;
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      let changed = false;
+      for (const session of memory.sessions) {
+        if ((session.projectId || null) !== normalizedProjectId) continue;
+        if ((session.projectName || null) === normalizedProjectName) continue;
+        session.projectName = normalizedProjectName;
+        session.updatedAt = new Date().toISOString();
+        changed = true;
+      }
+      if (!changed) return;
       await this.writeMemory(memory);
     });
   }
@@ -849,13 +910,19 @@ class TaskCreationFileMemoryStore {
     });
   }
 
-  async setPendingClarification(sessionId: string, question: string, options?: string[]): Promise<void> {
+  async setPendingClarification(
+    sessionId: string,
+    question: string,
+    options?: string[],
+    clarificationType?: FileSessionRecord['pendingClarificationType']
+  ): Promise<void> {
     await this.withLock(async () => {
       const memory = await this.readMemory();
       const session = memory.sessions.find((s) => s.id === sessionId);
       if (!session) return;
       session.pendingQuestion = question;
       session.pendingOptions = options;
+      session.pendingClarificationType = clarificationType;
       session.status = 'waiting_user';
       session.stage = 'clarifying';
       session.updatedAt = new Date().toISOString();
@@ -870,6 +937,7 @@ class TaskCreationFileMemoryStore {
       if (!session) return;
       session.pendingQuestion = undefined;
       session.pendingOptions = undefined;
+      session.pendingClarificationType = undefined;
       if (session.status === 'waiting_user') {
         session.status = 'in_progress';
       }

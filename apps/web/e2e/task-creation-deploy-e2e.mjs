@@ -1,17 +1,23 @@
 import { chromium } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const TEST_ACCOUNT_FILE = path.resolve(__dirname, 'playwright-test-account.json');
 const WEB_BASE_URL = process.env.ONECEO_WEB_BASE_URL || 'http://127.0.0.1:3000';
 const API_BASE_URL = process.env.ONECEO_API_BASE_URL || 'http://127.0.0.1:4000';
 const PROMPT =
   process.env.ONECEO_E2E_PROMPT ||
   '请使用 Node.js 开发一个 2048 小游戏，生成完整可运行项目，自己在 sandbox 内启动并使用 Playwright 做核心交互测试，确认通过后再结束。不要先问问题，直接开始。';
-const E2E_USER_EMAIL = process.env.ONECEO_E2E_USER_EMAIL || `oneceo-e2e-${Date.now()}@example.com`;
-const E2E_USER_PASSWORD = process.env.ONECEO_E2E_USER_PASSWORD || 'OneceoE2E!234';
-const E2E_USER_DISPLAY_NAME = process.env.ONECEO_E2E_USER_DISPLAY_NAME || 'Oneceo E2E';
 
 const SESSION_WAIT_TIMEOUT_MS = Number(process.env.ONECEO_SESSION_WAIT_TIMEOUT_MS || 25 * 60 * 1000);
 const DEPLOY_WAIT_TIMEOUT_MS = Number(process.env.ONECEO_DEPLOY_WAIT_TIMEOUT_MS || 20 * 60 * 1000);
 const POLL_INTERVAL_MS = Number(process.env.ONECEO_E2E_POLL_INTERVAL_MS || 5000);
+const PREVIEW_BUTTON_NAME = /显示预览|show preview/i;
+const DEPLOY_TAB_NAME = /^(部署|Deployment)$/i;
+const DEPLOY_NOW_BUTTON_NAME = /^(立即部署|立即发布|发布|publish now|deploy now|publish)$/i;
+const ARTIFACT_DEPLOY_BUTTON_NAME = /^(发布网站|Deploy website)$/i;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -24,6 +30,23 @@ function parseJson(text) {
   } catch {
     return null;
   }
+}
+
+function asText(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+async function loadTestAccount() {
+  const raw = await readFile(TEST_ACCOUNT_FILE, 'utf8');
+  const parsed = JSON.parse(raw);
+  return {
+    email: process.env.ONECEO_E2E_USER_EMAIL || asText(parsed.email) || `oneceo-e2e-${Date.now()}@example.com`,
+    password: process.env.ONECEO_E2E_USER_PASSWORD || asText(parsed.password) || 'OneceoE2E!234',
+    displayName:
+      process.env.ONECEO_E2E_USER_DISPLAY_NAME ||
+      asText(parsed.displayName) ||
+      'Playwright Test User',
+  };
 }
 
 async function apiRequest(path, authCookieHeader, init = {}) {
@@ -50,17 +73,17 @@ async function apiRequest(path, authCookieHeader, init = {}) {
 
 function extractAppSessionCookie(response) {
   const raw = response.headers.get('set-cookie') || '';
-  const matched = raw.match(/(?:^|,\s*)app_session_id=([^;,\s]+)/);
+  const matched = raw.match(/(?:^|,\s*)app_session_v2_id=([^;,\s]+)/);
   if (!matched?.[1]) {
-    throw new Error('failed to extract app_session_id from set-cookie');
+    throw new Error('failed to extract app_session_v2_id from set-cookie');
   }
-  return `app_session_id=${matched[1]}`;
+  return `app_session_v2_id=${matched[1]}`;
 }
 
-async function ensureSessionCookieHeader() {
+async function ensureSessionCookieHeader(account) {
   const loginPayload = JSON.stringify({
-    email: E2E_USER_EMAIL,
-    password: E2E_USER_PASSWORD,
+    email: account.email,
+    password: account.password,
   });
 
   let loginResponse = await fetch(`${API_BASE_URL}/api/auth/login`, {
@@ -74,9 +97,9 @@ async function ensureSessionCookieHeader() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        email: E2E_USER_EMAIL,
-        password: E2E_USER_PASSWORD,
-        displayName: E2E_USER_DISPLAY_NAME,
+        email: account.email,
+        password: account.password,
+        displayName: account.displayName,
       }),
     });
     loginResponse = await fetch(`${API_BASE_URL}/api/auth/login`, {
@@ -227,14 +250,15 @@ async function waitForDeploymentSuccess(sessionId, authCookieHeader) {
 }
 
 async function main() {
+  const account = await loadTestAccount();
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 960 } });
   const page = await context.newPage();
-  const sessionCookieHeader = await ensureSessionCookieHeader();
-  const sessionCookieValue = sessionCookieHeader.replace(/^app_session_id=/, '');
+  const sessionCookieHeader = await ensureSessionCookieHeader(account);
+  const sessionCookieValue = sessionCookieHeader.replace(/^app_session_v2_id=/, '');
   await context.addCookies([
-    { name: 'app_session_id', value: sessionCookieValue, url: WEB_BASE_URL, path: '/' },
-    { name: 'app_session_id', value: sessionCookieValue, url: API_BASE_URL, path: '/' },
+    { name: 'app_session_v2_id', value: sessionCookieValue, url: WEB_BASE_URL },
+    { name: 'app_session_v2_id', value: sessionCookieValue, url: API_BASE_URL },
   ]);
 
   try {
@@ -261,12 +285,17 @@ async function main() {
       })
     );
 
-    await page.getByRole('button', { name: '显示预览' }).click();
-    await page.getByRole('button', { name: '部署' }).click();
-    await page.waitForTimeout(1500);
-
-    const deployButton = page.getByRole('button', { name: '立即部署' });
-    await deployButton.click();
+    await page.getByRole('button', { name: PREVIEW_BUTTON_NAME }).click();
+    const previewPanel = page.locator('aside').first();
+    const previewDeploymentTab = previewPanel.getByRole('button', { name: DEPLOY_TAB_NAME });
+    if (await previewDeploymentTab.count()) {
+      await previewDeploymentTab.click();
+      await page.waitForTimeout(1500);
+      const deployButton = previewPanel.getByRole('button', { name: DEPLOY_NOW_BUTTON_NAME });
+      await deployButton.click();
+    } else {
+      await page.getByRole('button', { name: ARTIFACT_DEPLOY_BUTTON_NAME }).first().click();
+    }
     console.log('[deploy] trigger clicked');
 
     const deploymentInfo = await waitForDeploymentSuccess(sessionId, sessionCookieHeader);

@@ -14,8 +14,10 @@ type SchemaReadinessReport = {
 
 const REQUIRED_TABLES = [
   'app_users',
+  'app_user_projects',
   'app_user_legacy_id_mappings',
   'app_user_sessions',
+  'app_user_email_verifications',
   'admin_users',
   'admin_user_sessions',
   'task_creation_sessions',
@@ -49,6 +51,7 @@ const REQUIRED_TABLES = [
   'connector_guide_revisions',
   'task_session_connector_guides',
   'task_session_mcp_recovery_jobs',
+  'task_session_deployment_sync_jobs',
   'connector_auth_requests',
   'platform_runtime_artifact_releases',
   'platform_runtime_artifact_channels',
@@ -58,6 +61,13 @@ const REQUIRED_COLUMNS = [
   ['app_users', 'email'],
   ['app_users', 'password_hash'],
   ['app_users', 'display_name'],
+  ['app_users', 'profile_json'],
+  ['app_user_projects', 'user_id'],
+  ['app_user_projects', 'name'],
+  ['app_user_projects', 'description'],
+  ['app_user_projects', 'project_type'],
+  ['app_user_projects', 'status'],
+  ['app_user_projects', 'metadata_json'],
   ['app_user_legacy_id_mappings', 'app_user_id'],
   ['app_user_legacy_id_mappings', 'legacy_user_id'],
   ['app_user_legacy_id_mappings', 'source'],
@@ -66,6 +76,12 @@ const REQUIRED_COLUMNS = [
   ['app_user_sessions', 'user_id'],
   ['app_user_sessions', 'session_token_hash'],
   ['app_user_sessions', 'expires_at'],
+  ['app_user_email_verifications', 'email'],
+  ['app_user_email_verifications', 'purpose'],
+  ['app_user_email_verifications', 'code_hash'],
+  ['app_user_email_verifications', 'expires_at'],
+  ['app_user_email_verifications', 'consumed_at'],
+  ['app_user_email_verifications', 'last_sent_at'],
   ['admin_users', 'login_name'],
   ['admin_users', 'password_hash'],
   ['admin_users', 'display_name'],
@@ -104,9 +120,18 @@ const REQUIRED_COLUMNS = [
   ['task_session_mcp_recovery_jobs', 'next_retry_at'],
   ['task_session_mcp_recovery_jobs', 'started_at'],
   ['task_session_mcp_recovery_jobs', 'completed_at'],
+  ['task_session_deployment_sync_jobs', 'sync_key'],
+  ['task_session_deployment_sync_jobs', 'job_type'],
+  ['task_session_deployment_sync_jobs', 'status'],
+  ['task_session_deployment_sync_jobs', 'attempt_count'],
+  ['task_session_deployment_sync_jobs', 'payload_json'],
+  ['task_session_deployment_sync_jobs', 'next_retry_at'],
+  ['task_session_deployment_sync_jobs', 'started_at'],
+  ['task_session_deployment_sync_jobs', 'completed_at'],
   ['connector_auth_requests', 'profile_id'],
   ['connector_auth_requests', 'profile_draft_json'],
   ['platform_skills', 'slug'],
+  ['platform_skills', 'metadata_json'],
   ['platform_skills', 'published_revision_id'],
   ['platform_skill_revisions', 'skill_id'],
   ['platform_skill_revisions', 'revision_number'],
@@ -184,8 +209,13 @@ const REQUIRED_COLUMNS = [
 
 const REQUIRED_INDEXES = [
   'idx_app_users_email',
+  'idx_app_user_projects_user_name',
+  'idx_app_user_projects_user_id',
+  'idx_app_user_projects_user_type_status',
   'idx_app_user_legacy_mappings_legacy_user_id',
   'idx_app_user_sessions_token_hash',
+  'idx_app_user_email_verifications_email_purpose',
+  'idx_app_user_email_verifications_expires_at',
   'idx_admin_users_login_name',
   'idx_admin_user_sessions_token_hash',
   'idx_conversation_messages_session_message_key',
@@ -198,6 +228,7 @@ const REQUIRED_INDEXES = [
   'idx_task_session_sandbox_bindings_session_id',
   'idx_task_session_connector_bindings_session_connector',
   'idx_task_session_mcp_recovery_jobs_recovery_key',
+  'idx_task_session_deployment_sync_jobs_sync_key',
   'idx_task_session_mcp_tool_snapshots_session_id',
   'idx_task_session_connector_runtime_events_session_id',
   'idx_platform_skills_slug',
@@ -345,6 +376,23 @@ CREATE TABLE IF NOT EXISTS task_session_mcp_recovery_jobs (
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS task_session_deployment_sync_jobs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  task_session_id TEXT NOT NULL,
+  orchestrator_session_id TEXT NOT NULL,
+  sync_key TEXT NOT NULL,
+  job_type TEXT NOT NULL DEFAULT 'deployment_panel_sync',
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  payload_json JSONB,
+  next_retry_at TIMESTAMP,
+  started_at TIMESTAMP,
+  completed_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 -- OAuth 请求事务表
 CREATE TABLE IF NOT EXISTS connector_auth_requests (
   request_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -437,6 +485,14 @@ CREATE INDEX IF NOT EXISTS idx_task_session_mcp_recovery_jobs_orchestrator_sessi
   ON task_session_mcp_recovery_jobs(orchestrator_session_id);
 CREATE INDEX IF NOT EXISTS idx_task_session_mcp_recovery_jobs_next_retry_at
   ON task_session_mcp_recovery_jobs(next_retry_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_deployment_sync_jobs_sync_key
+  ON task_session_deployment_sync_jobs(sync_key);
+CREATE INDEX IF NOT EXISTS idx_task_session_deployment_sync_jobs_session_status
+  ON task_session_deployment_sync_jobs(task_session_id, status);
+CREATE INDEX IF NOT EXISTS idx_task_session_deployment_sync_jobs_orchestrator_session_id
+  ON task_session_deployment_sync_jobs(orchestrator_session_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_deployment_sync_jobs_next_retry_at
+  ON task_session_deployment_sync_jobs(next_retry_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_auth_requests_state ON connector_auth_requests(state);
 CREATE INDEX IF NOT EXISTS idx_connector_auth_requests_user_id ON connector_auth_requests(user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_runtime_artifacts_type_version
@@ -509,6 +565,18 @@ ALTER TABLE IF EXISTS task_session_mcp_recovery_jobs
   ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP,
   ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW();
 
+ALTER TABLE IF EXISTS task_session_deployment_sync_jobs
+  ADD COLUMN IF NOT EXISTS sync_key TEXT,
+  ADD COLUMN IF NOT EXISTS job_type TEXT NOT NULL DEFAULT 'deployment_panel_sync',
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending',
+  ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS last_error TEXT,
+  ADD COLUMN IF NOT EXISTS payload_json JSONB,
+  ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS started_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW();
+
 ALTER TABLE IF EXISTS connector_auth_requests
   ADD COLUMN IF NOT EXISTS profile_id TEXT,
   ADD COLUMN IF NOT EXISTS profile_draft_json JSONB;
@@ -572,17 +640,40 @@ CREATE TABLE IF NOT EXISTS app_users (
   email TEXT NOT NULL,
   password_hash TEXT NOT NULL,
   display_name TEXT NOT NULL,
+  profile_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   status TEXT NOT NULL DEFAULT 'active',
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
   last_login_at TIMESTAMP
 );
+ALTER TABLE app_users
+  ADD COLUMN IF NOT EXISTS profile_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+CREATE TABLE IF NOT EXISTS app_user_projects (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  project_type TEXT NOT NULL DEFAULT 'standard',
+  status TEXT NOT NULL DEFAULT 'active',
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+ALTER TABLE app_user_projects
+  ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+ALTER TABLE app_user_projects
+  ADD COLUMN IF NOT EXISTS project_type TEXT NOT NULL DEFAULT 'standard';
+ALTER TABLE app_user_projects
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE app_user_projects
+  ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS app_user_legacy_id_mappings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   app_user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
   legacy_user_id TEXT NOT NULL,
-  source TEXT NOT NULL DEFAULT 'request_header',
+  source TEXT NOT NULL DEFAULT 'auth_bootstrap',
   first_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
   last_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -600,6 +691,18 @@ CREATE TABLE IF NOT EXISTS app_user_sessions (
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
   last_seen_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS app_user_email_verifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email TEXT NOT NULL,
+  purpose TEXT NOT NULL DEFAULT 'register',
+  code_hash TEXT NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  consumed_at TIMESTAMP,
+  last_sent_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS admin_users (
@@ -629,6 +732,11 @@ CREATE TABLE IF NOT EXISTS admin_user_sessions (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_email ON app_users(email);
 CREATE INDEX IF NOT EXISTS idx_app_users_status ON app_users(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_projects_user_name
+  ON app_user_projects(user_id, name);
+CREATE INDEX IF NOT EXISTS idx_app_user_projects_user_id ON app_user_projects(user_id);
+CREATE INDEX IF NOT EXISTS idx_app_user_projects_user_type_status
+  ON app_user_projects(user_id, project_type, status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_legacy_mappings_legacy_user_id
   ON app_user_legacy_id_mappings(legacy_user_id);
 CREATE INDEX IF NOT EXISTS idx_app_user_legacy_mappings_app_user_id
@@ -636,6 +744,10 @@ CREATE INDEX IF NOT EXISTS idx_app_user_legacy_mappings_app_user_id
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_sessions_token_hash ON app_user_sessions(session_token_hash);
 CREATE INDEX IF NOT EXISTS idx_app_user_sessions_user_id ON app_user_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_app_user_sessions_expires_at ON app_user_sessions(expires_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_email_verifications_email_purpose
+  ON app_user_email_verifications(email, purpose);
+CREATE INDEX IF NOT EXISTS idx_app_user_email_verifications_expires_at
+  ON app_user_email_verifications(expires_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_users_login_name ON admin_users(login_name);
 CREATE INDEX IF NOT EXISTS idx_admin_users_role ON admin_users(role);
 CREATE INDEX IF NOT EXISTS idx_admin_users_status ON admin_users(status);
@@ -648,10 +760,13 @@ CREATE TABLE IF NOT EXISTS task_creation_sessions (
   id UUID PRIMARY KEY,
   user_id TEXT,
   status TEXT NOT NULL DEFAULT 'in_progress',
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
   completed_at TIMESTAMP
 );
+ALTER TABLE task_creation_sessions
+  ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 -- 连接器相关表与补丁必须在 runtime_events 外键表之前创建
 ${connectorTablesSQL}
@@ -774,10 +889,13 @@ CREATE TABLE IF NOT EXISTS platform_skills (
   description TEXT NOT NULL DEFAULT '',
   category TEXT NOT NULL DEFAULT 'general',
   status TEXT NOT NULL DEFAULT 'active',
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   published_revision_id UUID,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
+ALTER TABLE platform_skills
+  ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 -- 平台 skills revision 表
 CREATE TABLE IF NOT EXISTS platform_skill_revisions (
@@ -1380,6 +1498,16 @@ export async function runConnectorMigration() {
     console.error('❌ 连接器表迁移失败:', error);
     throw error;
   }
+}
+
+export async function ensurePlatformSkillGovernanceSchema() {
+  await ensureDatabaseConnection({ retries: 5, delayMs: 1200 });
+  await db.execute(
+    sql.raw(`
+      ALTER TABLE platform_skills
+        ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+    `)
+  );
 }
 
 /**

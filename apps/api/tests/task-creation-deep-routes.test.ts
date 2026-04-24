@@ -4,7 +4,12 @@ import express from 'express';
 import type { Socket } from 'node:net';
 import taskCreationRoutes from '../src/routes/task-creation-routes';
 import { mockAuthContextMiddleware } from './helpers/mock-auth-context';
-import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO, taskSessionRunDAO } from '../src/db/dao';
+import {
+  appUserLegacyIdMappingDAO,
+  sandboxExecutionEnvironmentDAO,
+  taskCreationSessionDAO,
+  taskSessionRunDAO,
+} from '../src/db/dao';
 import { closeDatabaseConnection } from '../src/config/database';
 import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-memory-store';
 import { sessionConnectorService } from '../src/services/session-connector-service';
@@ -21,6 +26,7 @@ type TestServer = {
 };
 
 const sessionDaoAny = taskCreationSessionDAO as any;
+const legacyMappingDaoAny = appUserLegacyIdMappingDAO as any;
 const runDaoAny = taskSessionRunDAO as any;
 const fileStoreAny = taskCreationFileMemoryStore as any;
 const sessionConnectorAny = sessionConnectorService as any;
@@ -34,9 +40,12 @@ const opencodeRemoteAny = opencodeRemoteService as any;
 const originalGetSessionDao = sessionDaoAny.getSession;
 const originalBindUserIfMissing = sessionDaoAny.bindUserIfMissing;
 const originalAdoptSessionFromLegacyUserId = sessionDaoAny.adoptSessionFromLegacyUserId;
+const originalResolveAppUserIdByLegacyUserId = legacyMappingDaoAny.resolveAppUserIdByLegacyUserId;
+const originalGetTaskDescription = sessionDaoAny.getTaskDescription;
 const originalGetRecentMessages = sessionDaoAny.getRecentMessages;
 const originalGetMessages = sessionDaoAny.getMessages;
 const originalGetRun = runDaoAny.getRun;
+const originalFindActiveRun = runDaoAny.findActiveRun;
 const originalGetSessionFile = fileStoreAny.getSession;
 const originalGetMessagesFileStore = fileStoreAny.getMessages;
 const originalAssertOwnership = sessionConnectorAny.assertSessionOwnership;
@@ -51,18 +60,23 @@ const originalGetWorkspaceTree = redisCacheAny.getWorkspaceTree;
 const originalGetWorkspaceFile = redisCacheAny.getWorkspaceFile;
 const originalListSessionEvents = redisCacheAny.listSessionEvents;
 const originalSandboxGetBySessionId = sandboxEnvDaoAny.getBySessionId;
+const originalSandboxFindCanonicalByTaskSessionId = sandboxEnvDaoAny.findCanonicalByTaskSessionId;
 const originalEnsureOpencodeServer = osacAgentAny.ensureOpencodeServer;
 const originalBindSession = opencodeEventStreamAny.bindSession;
 const originalSubscribeOpencodeEvent = opencodeEventStreamAny.subscribe;
 const originalSubscribeRemote = opencodeRemoteAny.subscribe;
+const originalLoadNativeMessageHistory = opencodeRemoteAny.loadNativeMessageHistory;
 
 after(async () => {
   sessionDaoAny.getSession = originalGetSessionDao;
   sessionDaoAny.bindUserIfMissing = originalBindUserIfMissing;
   sessionDaoAny.adoptSessionFromLegacyUserId = originalAdoptSessionFromLegacyUserId;
+  legacyMappingDaoAny.resolveAppUserIdByLegacyUserId = originalResolveAppUserIdByLegacyUserId;
+  sessionDaoAny.getTaskDescription = originalGetTaskDescription;
   sessionDaoAny.getRecentMessages = originalGetRecentMessages;
   sessionDaoAny.getMessages = originalGetMessages;
   runDaoAny.getRun = originalGetRun;
+  runDaoAny.findActiveRun = originalFindActiveRun;
   fileStoreAny.getSession = originalGetSessionFile;
   fileStoreAny.getMessages = originalGetMessagesFileStore;
   sessionConnectorAny.assertSessionOwnership = originalAssertOwnership;
@@ -77,10 +91,12 @@ after(async () => {
   redisCacheAny.getWorkspaceFile = originalGetWorkspaceFile;
   redisCacheAny.listSessionEvents = originalListSessionEvents;
   sandboxEnvDaoAny.getBySessionId = originalSandboxGetBySessionId;
+  sandboxEnvDaoAny.findCanonicalByTaskSessionId = originalSandboxFindCanonicalByTaskSessionId;
   osacAgentAny.ensureOpencodeServer = originalEnsureOpencodeServer;
   opencodeEventStreamAny.bindSession = originalBindSession;
   opencodeEventStreamAny.subscribe = originalSubscribeOpencodeEvent;
   opencodeRemoteAny.subscribe = originalSubscribeRemote;
+  opencodeRemoteAny.loadNativeMessageHistory = originalLoadNativeMessageHistory;
   await redisClientService.disconnect?.();
   await closeDatabaseConnection().catch(() => undefined);
 });
@@ -207,7 +223,7 @@ test('GET /api/task-creation/sessions/:sessionId binds orphan session to current
   }
 });
 
-test('GET /api/task-creation/sessions/:sessionId adopts legacy session owner when hint matches', async () => {
+test('GET /api/task-creation/sessions/:sessionId adopts legacy session owner when mapping matches', async () => {
   const server = await startServer();
   sessionDaoAny.getSession = async (sessionId: string) => ({
     id: sessionId,
@@ -238,6 +254,12 @@ test('GET /api/task-creation/sessions/:sessionId adopts legacy session owner whe
       updatedAt: new Date(),
     };
   };
+  legacyMappingDaoAny.resolveAppUserIdByLegacyUserId = async (legacyUserId: string) => {
+    if (legacyUserId === 'legacy-local-user-2') {
+      return 'owner-user';
+    }
+    return null;
+  };
   fileStoreAny.getSession = async (sessionId: string) => ownerSession(sessionId, 'owner-user');
   sessionConnectorAny.listSessionConnectors = async () => [];
 
@@ -245,7 +267,6 @@ test('GET /api/task-creation/sessions/:sessionId adopts legacy session owner whe
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-legacy-owner-1`, {
       headers: {
         'x-test-user-id': 'owner-user',
-        'x-legacy-user-id': 'legacy-local-user-2',
       },
     });
     const payload = await response.json();
@@ -744,9 +765,109 @@ test('GET /api/task-creation/sessions/:sessionId/messages returns 403 for foreig
   }
 });
 
+test('GET /api/task-creation/sessions/:sessionId/messages merges missing persisted user inputs into native history timeline', async () => {
+  const server = await startServer();
+  const createdAt1 = new Date('2026-04-20T16:27:04.385Z').toISOString();
+  const createdAt2 = new Date('2026-04-20T16:27:07.771Z').toISOString();
+  sessionDaoAny.getSession = async (sessionId: string) => ({
+    id: sessionId,
+    userId: 'owner-user',
+    status: 'in_progress',
+    mode: 'sandbox',
+    executor: 'opencode',
+    runtime: {
+      orchestratorSessionId: 'orch-merge-1',
+      opencodeSessionId: 'native-opencode-merge-1',
+    },
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  fileStoreAny.getSession = async (sessionId: string) => ({
+    ...ownerSession(sessionId),
+    mode: 'sandbox',
+    executor: 'opencode',
+    runtime: {
+      orchestratorSessionId: 'orch-merge-1',
+      opencodeSessionId: 'native-opencode-merge-1',
+    },
+  });
+  fileStoreAny.getMessages = async () => [
+    {
+      id: 'persisted-user-1',
+      role: 'user',
+      messageType: 'opencode_user_input',
+      content: '继续在同一会话回复“continuation-ok”。',
+      metadata: {
+        originalInput: '继续在同一会话回复“continuation-ok”。',
+        opencodeSessionId: 'native-opencode-merge-1',
+      },
+      createdAt: createdAt1,
+    },
+    {
+      id: 'persisted-user-2',
+      role: 'user',
+      messageType: 'opencode_user_input',
+      content: '请输出 8 行带编号文本（line-1 到 line-8），每行简短解释。',
+      metadata: {
+        originalInput: '请输出 8 行带编号文本（line-1 到 line-8），每行简短解释。',
+        opencodeSessionId: 'native-opencode-merge-1',
+      },
+      createdAt: createdAt2,
+    },
+  ];
+  opencodeRemoteAny.loadNativeMessageHistory = async () => [
+    {
+      id: 'native-user-1',
+      role: 'user',
+      messageType: 'opencode_user_input',
+      content: '继续在同一会话回复“continuation-ok”。',
+      metadata: {
+        source: 'opencode_native_history',
+        opencodeSessionId: 'native-opencode-merge-1',
+      },
+      createdAt: createdAt1,
+    },
+    {
+      id: 'native-agent-1',
+      role: 'agent',
+      messageType: 'opencode_event',
+      content: 'continuation-ok',
+      metadata: {
+        eventType: 'message.final',
+        source: 'opencode_native_history',
+        opencodeSessionId: 'native-opencode-merge-1',
+      },
+      createdAt: new Date('2026-04-20T16:27:05.000Z').toISOString(),
+    },
+  ];
+
+  try {
+    const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-merge-1/messages`, {
+      headers: { 'x-test-user-id': 'owner-user' },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    const userMessages = payload.data.filter((message: any) => message.role === 'user');
+    assert.deepEqual(
+      userMessages.map((message: any) => message.content),
+      [
+        '继续在同一会话回复“continuation-ok”。',
+        '请输出 8 行带编号文本（line-1 到 line-8），每行简短解释。',
+      ]
+    );
+  } finally {
+    opencodeRemoteAny.loadNativeMessageHistory = originalLoadNativeMessageHistory;
+    await server.close();
+  }
+});
+
 test('GET /api/task-creation/sessions/:sessionId/opencode/events replays redis session-events before db fallback', async () => {
   const server = await startServer();
   sessionDaoAny.getSession = async (sessionId: string) => ({ id: sessionId, userId: 'owner-user' });
+  sessionDaoAny.getTaskDescription = async () => null;
+  sessionDaoAny.getRecentMessages = async () => [];
   fileStoreAny.getSession = async (sessionId: string) => ({
     ...ownerSession(sessionId),
     mode: 'sandbox',
@@ -829,6 +950,8 @@ test('GET /api/task-creation/sessions/:sessionId/opencode/events replays redis s
 test('GET /api/task-creation/sessions/:sessionId/opencode/events falls back to db replay when redis stream is empty', async () => {
   const server = await startServer();
   sessionDaoAny.getSession = async (sessionId: string) => ({ id: sessionId, userId: 'owner-user' });
+  sessionDaoAny.getTaskDescription = async () => null;
+  sessionDaoAny.getRecentMessages = async () => [];
   fileStoreAny.getSession = async (sessionId: string) => ({
     ...ownerSession(sessionId),
     mode: 'sandbox',
@@ -978,6 +1101,100 @@ test('POST /api/task-creation/sessions/:sessionId/runtime/start returns 403 for 
   }
 });
 
+test('POST /api/task-creation/sessions/:sessionId/runtime/start returns 409 when managed run is active', async () => {
+  const server = await startServer();
+  sessionConnectorAny.assertSessionOwnership = async () => undefined;
+  sessionDaoAny.getSession = async (sessionId: string) => ({
+    id: sessionId,
+    userId: 'owner-user',
+    status: 'in_progress',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  fileStoreAny.getSession = async (sessionId: string) => ownerSession(sessionId);
+  runDaoAny.findActiveRun = async () => ({
+    id: 'run-active-1',
+    sessionId: 's-7',
+    mode: 'managed',
+    status: 'running',
+  });
+
+  try {
+    const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-7/runtime/start`, {
+      method: 'POST',
+      headers: { 'x-test-user-id': 'owner-user' },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 409);
+    assert.equal(payload.success, false);
+    assert.equal(payload.error, '当前存在进行中的开发任务，暂不允许切换执行环境');
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/task-creation/sessions/:sessionId/deployment/template stays pure-read when runtime is missing', async () => {
+  const server = await startServer();
+  sessionConnectorAny.assertSessionOwnership = async () => undefined;
+  sessionDaoAny.getSession = async (sessionId: string) => ({
+    id: sessionId,
+    userId: 'owner-user',
+    status: 'in_progress',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  fileStoreAny.getSession = async (sessionId: string) => ownerSession(sessionId);
+  sandboxEnvDaoAny.findCanonicalByTaskSessionId = async () => null;
+  sandboxEnvDaoAny.getBySessionId = async () => null;
+
+  try {
+    const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-7/deployment/template`, {
+      headers: { 'x-test-user-id': 'owner-user' },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.equal(payload.data.workspaceDetected, false);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /api/task-creation/sessions/:sessionId/deployment/deploy does not provision runtime when binding is missing', async () => {
+  const server = await startServer();
+  sessionConnectorAny.assertSessionOwnership = async () => undefined;
+  sessionDaoAny.getSession = async (sessionId: string) => ({
+    id: sessionId,
+    userId: 'owner-user',
+    status: 'in_progress',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  fileStoreAny.getSession = async (sessionId: string) => ownerSession(sessionId);
+  sandboxEnvDaoAny.findCanonicalByTaskSessionId = async () => null;
+  sandboxEnvDaoAny.getBySessionId = async () => null;
+
+  try {
+    const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-7/deployment/deploy`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-test-user-id': 'owner-user',
+      },
+      body: JSON.stringify({}),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.equal(payload.success, false);
+    assert.equal(payload.error, '未找到可部署的工作区，请先生成项目文件');
+  } finally {
+    await server.close();
+  }
+});
+
 test('POST /api/task-creation/sessions/:sessionId/runtime/touch returns 403 for foreign user', async () => {
   const server = await startServer();
   sessionConnectorAny.assertSessionOwnership = async () => {
@@ -1071,6 +1288,8 @@ test('POST /api/task-creation/sessions/:sessionId/connectors/:connectorKey/attac
 test('POST /api/task-creation/sessions/:sessionId/connectors/:connectorKey/detach detaches for owner', async () => {
   const server = await startServer();
   sessionConnectorAny.assertSessionOwnership = async () => undefined;
+  sessionDaoAny.getTaskDescription = async () => null;
+  sessionDaoAny.getRecentMessages = async () => [];
   fileStoreAny.getSession = async (sessionId: string) => ownerSession(sessionId);
   sessionConnectorAny.detachConnector = async (_sessionId: string, userId: string, connectorKey: string) => {
     assert.equal(userId, 'owner-user');

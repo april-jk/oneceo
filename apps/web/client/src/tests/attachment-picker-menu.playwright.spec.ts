@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
 
 const WEB_URL = 'http://127.0.0.1:3000';
@@ -11,8 +12,45 @@ const EXPECTED_SKILL_NAMES = [
   'Word 办公',
   'Excel 办公',
 ];
+const REMOTE_ATTACHMENT_NAME_PATTERN = /移除附件 (logo\.png|website-file)/;
 
 test('attachment picker supports cloud, skill, and local imports', async ({ page }) => {
+  const localFileBuffer = await readFile(LOCAL_FILE);
+  await page.route('**/api/task-creation/attachments/fetch', async (route) => {
+    await route.fulfill({
+      status: 200,
+      headers: {
+        'Content-Type': 'image/png',
+        'X-Attachment-Name': encodeURIComponent('logo.png'),
+      },
+      body: localFileBuffer,
+    });
+  });
+  await page.route('**/api/task-creation/skills', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: EXPECTED_SKILL_NAMES.map((name, index) => ({
+          sourceType: 'platform',
+          skillId: `skill-${index + 1}`,
+          revisionId: `rev-${index + 1}`,
+          slug: `skill-${index + 1}`,
+          name,
+          description: `${name} description`,
+          category: 'tool',
+          revisionNumber: 1,
+          resourceSummary: {
+            totalCount: 0,
+            referenceCount: 0,
+            templateCount: 0,
+            paths: [],
+          },
+        })),
+      }),
+    });
+  });
+
   await page.goto(WEB_URL);
   await expect(page.getByRole('button', { name: '添加附件' })).toBeVisible();
 
@@ -25,7 +63,7 @@ test('attachment picker supports cloud, skill, and local imports', async ({ page
   await page.getByRole('menuitem', { name: /网站 从网页链接直接下载文件/ }).click();
   await page.getByTestId('remote-attachment-url-input').fill(`${WEB_URL}/logo.png`);
   await page.getByRole('button', { name: '添加文件', exact: true }).click();
-  await expect(page.getByRole('button', { name: '移除附件 logo.png' })).toBeVisible();
+  await expect(page.getByRole('button', { name: REMOTE_ATTACHMENT_NAME_PATTERN })).toBeVisible();
 
   await page.getByRole('button', { name: '添加附件' }).click();
   await page.getByRole('menuitem', { name: /使用技能/ }).hover();
@@ -47,6 +85,6 @@ test('attachment picker supports cloud, skill, and local imports', async ({ page
   const fileChooser = await fileChooserPromise;
   await fileChooser.setFiles(LOCAL_FILE);
 
-  await expect(page.getByRole('button', { name: '移除附件 logo.png' })).toHaveCount(2);
+  await expect(page.getByRole('button', { name: REMOTE_ATTACHMENT_NAME_PATTERN })).toHaveCount(2);
   await expect(page.locator('button[aria-label^="移除附件 "]')).toHaveCount(4);
 });

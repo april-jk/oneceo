@@ -3,6 +3,7 @@ import {
   appendPreviewCacheBust,
   mapWorkspaceRawPreviewHeadResult,
 } from "../lib/workspace-preview";
+import i18n from "../i18n";
 
 test("issue39: runtime closed maps to reloadable placeholder state", async () => {
   const result = mapWorkspaceRawPreviewHeadResult({
@@ -11,7 +12,7 @@ test("issue39: runtime closed maps to reloadable placeholder state", async () =>
   });
 
   expect(result.state).toBe("runtime_unavailable");
-  expect(result.message).toContain("重新加载预览");
+  expect(result.message).toBe(i18n.t("workspacePreview.runtimeUnavailable"));
 });
 
 test("issue39: network error maps to friendly retry message", async () => {
@@ -22,7 +23,7 @@ test("issue39: network error maps to friendly retry message", async () => {
   });
 
   expect(result.state).toBe("fetch_failed");
-  expect(result.message).toContain("网络异常");
+  expect(result.message).toBe(i18n.t("workspacePreview.networkError"));
 });
 
 test("issue39: server 500 maps to runtime recovering message", async () => {
@@ -32,7 +33,7 @@ test("issue39: server 500 maps to runtime recovering message", async () => {
   });
 
   expect(result.state).toBe("runtime_unavailable");
-  expect(result.message).toContain("恢复中");
+  expect(result.message).toBe(i18n.t("workspacePreview.recovering"));
 });
 
 test("issue39: 404 maps to auto-recovering preview message", async () => {
@@ -42,7 +43,7 @@ test("issue39: 404 maps to auto-recovering preview message", async () => {
   });
 
   expect(result.state).toBe("runtime_unavailable");
-  expect(result.message).toContain("准备预览");
+  expect(result.message).toBe(i18n.t("workspacePreview.preparing"));
 });
 
 test("issue39: successful head check maps to ready state", async () => {

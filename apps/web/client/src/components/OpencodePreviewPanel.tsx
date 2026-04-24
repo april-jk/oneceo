@@ -1,4 +1,5 @@
 import {
+  default as React,
   useCallback,
   useEffect,
   useMemo,
@@ -7,6 +8,7 @@ import {
   type ComponentType,
   type ReactNode,
 } from "react";
+import i18n from "@/i18n";
 import { Button } from "@/components/ui/button";
 import {
   BarChart3,
@@ -40,7 +42,6 @@ import {
   Unlock,
   Rocket,
   ScrollText,
-  Server,
   Settings2,
   ShieldCheck,
   TableProperties,
@@ -94,6 +95,7 @@ import {
   type WorkspaceHtmlPreviewState,
 } from "@/lib/workspace-preview";
 import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
+import { useTranslation } from "react-i18next";
 
 interface OpencodePreviewPanelProps {
   messages: AgentMessage[];
@@ -109,12 +111,36 @@ interface OpencodePreviewPanelProps {
   runtimeReady?: boolean;
   runtimeStarting?: boolean;
   onEnsureRuntime?: () => Promise<void>;
+  runtimeSwitchBlocked?: boolean;
   onRequestStartDebugByMessage?: () => void;
   onRequestDeployByMessage?: () => void;
   onRequestRedeployByMessage?: () => void;
   onRequestRollbackByMessage?: () => void;
   className?: string;
   selectedWorkspacePath?: string | null;
+}
+
+function resolveFilePreviewDeploymentUrl(
+  info: TaskCreationDeploymentInfo | null | undefined,
+): string {
+  if (!info) return "";
+  const selectedDeployment =
+    info.deployments.find((deployment) => deployment.id === info.deploymentId) || null;
+  const successfulDeployment =
+    info.deployments.find(
+      (deployment) =>
+        deployment.status === "SUCCESS" && Boolean(deployment.staticUrl || deployment.url),
+    ) || null;
+  return (
+    selectedDeployment?.staticUrl ||
+    selectedDeployment?.url ||
+    successfulDeployment?.staticUrl ||
+    successfulDeployment?.url ||
+    info.latestStaticUrl ||
+    info.latestUrl ||
+    info.domains[0] ||
+    ""
+  );
 }
 
 type PreviewTab = "files" | "changes" | "debug" | "deployment";
@@ -153,6 +179,7 @@ export function useWorkspaceFilePreviewState({
   runtimeReady,
   runtimeStarting,
   onEnsureRuntime,
+  runtimeSwitchBlocked = false,
   selectedWorkspacePath,
   diffItems = [],
 }: {
@@ -162,6 +189,7 @@ export function useWorkspaceFilePreviewState({
   runtimeReady?: boolean;
   runtimeStarting?: boolean;
   onEnsureRuntime?: () => Promise<void>;
+  runtimeSwitchBlocked?: boolean;
   selectedWorkspacePath?: string | null;
   diffItems?: PreviewDiffItem[];
 }) {
@@ -178,7 +206,7 @@ export function useWorkspaceFilePreviewState({
   );
   const refreshTimerRef = useRef<number | null>(null);
   const fileRequestSequenceRef = useRef(0);
-  const ensureRuntimeRef = useRef(onEnsureRuntime);
+  const ensureRuntimeRef = useRef(runtimeSwitchBlocked ? undefined : onEnsureRuntime);
   const diffDerivedTree = useMemo(
     () => buildWorkspaceTreeFromDiffItems(sessionId, diffItems),
     [sessionId, diffItems],
@@ -189,8 +217,8 @@ export function useWorkspaceFilePreviewState({
   );
 
   useEffect(() => {
-    ensureRuntimeRef.current = onEnsureRuntime;
-  }, [onEnsureRuntime]);
+    ensureRuntimeRef.current = runtimeSwitchBlocked ? undefined : onEnsureRuntime;
+  }, [onEnsureRuntime, runtimeSwitchBlocked]);
 
   const normalizeWorkspacePath = (value: string) =>
     normalizeWorkspaceRelativePath(value, sessionId);
@@ -293,7 +321,8 @@ export function useWorkspaceFilePreviewState({
 
       return page;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "获取目录失败";
+      const message =
+        error instanceof Error ? error.message : i18n.t("homeWorkspace.loadDirectoryFailed");
       if (!options?.silent && normalizedDir === "") {
         if (message.includes("409")) {
           setTreeError(null);
@@ -366,15 +395,16 @@ export function useWorkspaceFilePreviewState({
       }
       setFileData(file);
       if (file.binaryTooLarge) {
-        setFileError("二进制文件过大，暂不支持预览");
+        setFileError(i18n.t("homeWorkspace.binaryTooLarge"));
       } else if (file.truncated) {
-        setFileError("内容较大，已截断显示");
+        setFileError(i18n.t("homeWorkspace.contentTruncated"));
       }
     } catch (error) {
       if (fileRequestSequenceRef.current !== requestSequence) {
         return;
       }
-      const message = error instanceof Error ? error.message : "读取文件失败";
+      const message =
+        error instanceof Error ? error.message : i18n.t("homeWorkspace.readFileFailed");
       if (message.includes("409")) {
         setFileError(null);
       } else {
@@ -390,7 +420,7 @@ export function useWorkspaceFilePreviewState({
 
   const refreshTree = async (mode: "auto" | "manual" = "manual") => {
     if (!sessionId) {
-      setTreeError("缺少会话信息");
+      setTreeError(i18n.t("previewPanel.deployment.missingSession"));
       setTree(null);
       setDirState({});
       return;
@@ -435,7 +465,8 @@ export function useWorkspaceFilePreviewState({
         }
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "获取文件树失败";
+      const message =
+        error instanceof Error ? error.message : i18n.t("homeWorkspace.loadFileTreeFailed");
       if (message.includes("409")) {
         setTreeError(null);
       } else {
@@ -571,6 +602,7 @@ export function useWorkspaceDebugPreviewState({
   runtimeReady,
   runtimeStarting,
   onEnsureRuntime,
+  runtimeSwitchBlocked = false,
 }: {
   sessionId?: string | null;
   open: boolean;
@@ -578,6 +610,7 @@ export function useWorkspaceDebugPreviewState({
   runtimeReady?: boolean;
   runtimeStarting?: boolean;
   onEnsureRuntime?: () => Promise<void>;
+  runtimeSwitchBlocked?: boolean;
 }) {
   const [debugInfo, setDebugInfo] = useState<TaskCreationDebugInfo | null>(
     null,
@@ -587,11 +620,11 @@ export function useWorkspaceDebugPreviewState({
   const [debugError, setDebugError] = useState<string | null>(null);
   const debugRuntimeBootRef = useRef(false);
   const debugPollRef = useRef<number | null>(null);
-  const ensureRuntimeRef = useRef(onEnsureRuntime);
+  const ensureRuntimeRef = useRef(runtimeSwitchBlocked ? undefined : onEnsureRuntime);
 
   useEffect(() => {
-    ensureRuntimeRef.current = onEnsureRuntime;
-  }, [onEnsureRuntime]);
+    ensureRuntimeRef.current = runtimeSwitchBlocked ? undefined : onEnsureRuntime;
+  }, [onEnsureRuntime, runtimeSwitchBlocked]);
 
   useEffect(() => {
     debugRuntimeBootRef.current = false;
@@ -615,7 +648,7 @@ export function useWorkspaceDebugPreviewState({
     if (!open || !active) return;
     if (!sessionId) {
       setDebugInfo(null);
-      setDebugError("缺少会话信息");
+      setDebugError(i18n.t("previewPanel.debug.missingSession"));
       return;
     }
     if (runtimeReady === false) {
@@ -668,7 +701,9 @@ export function useWorkspaceDebugPreviewState({
       } catch (error) {
         if (cancelled) return;
         const message =
-          error instanceof Error ? error.message : "加载调试信息失败";
+          error instanceof Error
+            ? error.message
+            : i18n.t("previewPanel.debug.loadFailed");
         setDebugError(message);
         if (isRetryableDebugError(message)) {
           scheduleDebugPoll(true, DEBUG_POLL_RETRY_MS);
@@ -692,7 +727,7 @@ export function useWorkspaceDebugPreviewState({
 
   const refreshDebug = async () => {
     if (!sessionId) {
-      setDebugError("缺少会话信息");
+      setDebugError(i18n.t("previewPanel.debug.missingSession"));
       return;
     }
     setDebugLoading(true);
@@ -701,7 +736,11 @@ export function useWorkspaceDebugPreviewState({
       const info = await getTaskCreationDebugInfo(sessionId);
       setDebugInfo(info);
     } catch (error) {
-      setDebugError(error instanceof Error ? error.message : "加载调试信息失败");
+      setDebugError(
+        error instanceof Error
+          ? error.message
+          : i18n.t("previewPanel.debug.loadFailed"),
+      );
     } finally {
       setDebugLoading(false);
     }
@@ -732,6 +771,7 @@ export default function OpencodePreviewPanel({
   runtimeReady,
   runtimeStarting,
   onEnsureRuntime,
+  runtimeSwitchBlocked = false,
   onRequestStartDebugByMessage,
   onRequestDeployByMessage,
   onRequestRedeployByMessage,
@@ -739,6 +779,7 @@ export default function OpencodePreviewPanel({
   className,
   selectedWorkspacePath,
 }: OpencodePreviewPanelProps) {
+  useTranslation();
   const { diffItems } = useMemo(() => buildPreviewItems(messages), [messages]);
 
   const [internalTab, setInternalTab] = useState<PreviewTab>("files");
@@ -766,13 +807,17 @@ export default function OpencodePreviewPanel({
   >(null);
   const deploymentPollRef = useRef<number | null>(null);
   const currentTab = activeTab ?? internalTab;
+  const effectiveEnsureRuntime = runtimeSwitchBlocked ? undefined : onEnsureRuntime;
+  const runtimeSwitchBlockedMessage = i18n.t("previewPanel.runtimeSwitchBlocked");
+  const deploymentBlockedMessage = i18n.t("previewPanel.deployment.blockedDuringRun");
   const filePreview = useWorkspaceFilePreviewState({
     messages,
     sessionId,
     open,
     runtimeReady,
     runtimeStarting,
-    onEnsureRuntime,
+    onEnsureRuntime: effectiveEnsureRuntime,
+    runtimeSwitchBlocked,
     selectedWorkspacePath,
     diffItems,
   });
@@ -782,7 +827,8 @@ export default function OpencodePreviewPanel({
     active: currentTab === "debug",
     runtimeReady,
     runtimeStarting,
-    onEnsureRuntime,
+    onEnsureRuntime: effectiveEnsureRuntime,
+    runtimeSwitchBlocked,
   });
 
   const selectedDiffId = controlledSelectedDiffId ?? internalSelectedDiffId;
@@ -830,7 +876,13 @@ export default function OpencodePreviewPanel({
     if (currentTab !== "deployment") return;
     if (!sessionId) {
       setDeploymentInfo(null);
-      setDeploymentError("缺少会话信息");
+      setDeploymentError(i18n.t("previewPanel.deployment.missingSession"));
+      return;
+    }
+    if (runtimeSwitchBlocked) {
+      setDeploymentInfo(null);
+      setDeploymentError(deploymentBlockedMessage);
+      setDeploymentLoading(false);
       return;
     }
 
@@ -869,7 +921,9 @@ export default function OpencodePreviewPanel({
       } catch (error) {
         if (cancelled) return;
         const message =
-          error instanceof Error ? error.message : "加载部署信息失败";
+          error instanceof Error
+            ? error.message
+            : i18n.t("previewPanel.deployment.loadInfoFailed");
         setDeploymentError(message);
         if (!silent) {
           setDeploymentInfo(null);
@@ -890,10 +944,11 @@ export default function OpencodePreviewPanel({
         deploymentPollRef.current = null;
       }
     };
-  }, [open, currentTab, sessionId]);
+  }, [currentTab, deploymentBlockedMessage, open, runtimeSwitchBlocked, sessionId]);
 
   useEffect(() => {
     if (!open || currentTab !== "deployment" || !sessionId) return;
+    if (runtimeSwitchBlocked) return;
     if (!deploymentInfo?.activeDeploymentPending) return;
     if (deploymentPollRef.current) {
       window.clearTimeout(deploymentPollRef.current);
@@ -915,6 +970,7 @@ export default function OpencodePreviewPanel({
     sessionId,
     deploymentInfo?.activeDeploymentPending,
     deploymentInfo?.deploymentId,
+    runtimeSwitchBlocked,
     selectedDeploymentId,
   ]);
 
@@ -923,7 +979,13 @@ export default function OpencodePreviewPanel({
     if (currentTab !== "deployment") return;
     if (!sessionId) {
       setDeploymentTemplateBaseline(null);
-      setDeploymentTemplateError("缺少会话信息");
+      setDeploymentTemplateError(i18n.t("previewPanel.deployment.missingSession"));
+      return;
+    }
+    if (runtimeSwitchBlocked) {
+      setDeploymentTemplateBaseline(null);
+      setDeploymentTemplateError(deploymentBlockedMessage);
+      setDeploymentTemplateLoading(false);
       return;
     }
 
@@ -940,7 +1002,9 @@ export default function OpencodePreviewPanel({
       } catch (error) {
         if (cancelled) return;
         setDeploymentTemplateError(
-          error instanceof Error ? error.message : "加载模板基线失败",
+          error instanceof Error
+            ? error.message
+            : i18n.t("previewPanel.deployment.loadTemplateBaselineFailed"),
         );
       } finally {
         if (!cancelled) {
@@ -953,7 +1017,7 @@ export default function OpencodePreviewPanel({
     return () => {
       cancelled = true;
     };
-  }, [open, currentTab, sessionId]);
+  }, [currentTab, deploymentBlockedMessage, open, runtimeSwitchBlocked, sessionId]);
 
   if (!open) return null;
 
@@ -962,8 +1026,12 @@ export default function OpencodePreviewPanel({
   const treeCount = filePreview.effectiveTree?.items.length || 0;
 
   const refreshDeployment = async (deploymentId?: string) => {
+    if (runtimeSwitchBlocked) {
+      setDeploymentError(deploymentBlockedMessage);
+      return;
+    }
     if (!sessionId) {
-      setDeploymentError("缺少会话信息");
+      setDeploymentError(i18n.t("previewPanel.deployment.missingSession"));
       return;
     }
     void refreshDeploymentTemplateBaseline();
@@ -978,7 +1046,9 @@ export default function OpencodePreviewPanel({
       setSelectedDeploymentId(info?.deploymentId || deploymentId || null);
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "加载部署信息失败";
+        error instanceof Error
+          ? error.message
+          : i18n.t("previewPanel.deployment.loadInfoFailed");
       setDeploymentError(message);
     } finally {
       setDeploymentLoading(false);
@@ -986,8 +1056,12 @@ export default function OpencodePreviewPanel({
   };
 
   const refreshDeploymentTemplateBaseline = async () => {
+    if (runtimeSwitchBlocked) {
+      setDeploymentTemplateError(deploymentBlockedMessage);
+      return;
+    }
     if (!sessionId) {
-      setDeploymentTemplateError("缺少会话信息");
+      setDeploymentTemplateError(i18n.t("previewPanel.deployment.missingSession"));
       return;
     }
     setDeploymentTemplateLoading(true);
@@ -997,7 +1071,9 @@ export default function OpencodePreviewPanel({
       setDeploymentTemplateBaseline(baseline);
     } catch (error) {
       setDeploymentTemplateError(
-        error instanceof Error ? error.message : "加载模板基线失败",
+        error instanceof Error
+          ? error.message
+          : i18n.t("previewPanel.deployment.loadTemplateBaselineFailed"),
       );
     } finally {
       setDeploymentTemplateLoading(false);
@@ -1007,8 +1083,12 @@ export default function OpencodePreviewPanel({
   const runDeploymentAction = async (
     action: "deploy" | "redeploy" | "rollback",
   ) => {
+    if (runtimeSwitchBlocked) {
+      setDeploymentError(deploymentBlockedMessage);
+      return;
+    }
     if (!sessionId) {
-      setDeploymentError("缺少会话信息");
+      setDeploymentError(i18n.t("previewPanel.deployment.missingSession"));
       return;
     }
     setDeploymentAction(action);
@@ -1026,9 +1106,12 @@ export default function OpencodePreviewPanel({
         setDeploymentAction(null);
         return;
       }
-      setDeploymentError("当前页面未绑定部署消息入口，请从会话页触发部署。");
+      setDeploymentError(i18n.t("previewPanel.deployment.missingMessageEntry"));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "部署操作失败";
+      const message =
+        error instanceof Error
+          ? error.message
+          : i18n.t("previewPanel.deployment.actionFailed");
       setDeploymentError(message);
     } finally {
       setDeploymentAction(null);
@@ -1036,8 +1119,12 @@ export default function OpencodePreviewPanel({
   };
 
   const rotateDeploymentToken = async () => {
+    if (runtimeSwitchBlocked) {
+      setDeploymentError(deploymentBlockedMessage);
+      return;
+    }
     if (!sessionId) {
-      setDeploymentError("缺少会话信息");
+      setDeploymentError(i18n.t("previewPanel.deployment.missingSession"));
       return;
     }
     setDeploymentTokenRotating(true);
@@ -1049,7 +1136,9 @@ export default function OpencodePreviewPanel({
       setSelectedDeploymentId(result?.deploymentId || selectedDeploymentId || null);
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "轮换部署凭证失败";
+        error instanceof Error
+          ? error.message
+          : i18n.t("previewPanel.deployment.rotateTokenFailed");
       setDeploymentError(message);
     } finally {
       setDeploymentTokenRotating(false);
@@ -1059,13 +1148,13 @@ export default function OpencodePreviewPanel({
   return (
     <aside
       className={cn(
-        "w-full h-full shrink-0 rounded-xl border border-border/70 bg-white flex flex-col min-h-0",
+        "w-full h-full shrink-0 rounded-xl border border-border/70 bg-card flex flex-col min-h-0",
         className,
       )}
     >
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-          内容预览
+          {i18n.t("previewPanel.contentPreview")}
           <span className="text-xs text-muted-foreground">
             {treeCount + diffItems.length}
           </span>
@@ -1077,7 +1166,7 @@ export default function OpencodePreviewPanel({
             onClick={onToggleMaximized}
             className="h-7 rounded-full"
           >
-            {maximized ? "还原" : "展开"}
+            {maximized ? i18n.t("previewPanel.restore") : i18n.t("common.expand")}
           </Button>
           <Button
             variant="ghost"
@@ -1085,7 +1174,7 @@ export default function OpencodePreviewPanel({
             onClick={onToggle}
             className="h-7 rounded-full"
           >
-            收起
+            {i18n.t("common.collapse")}
           </Button>
         </div>
       </div>
@@ -1101,7 +1190,7 @@ export default function OpencodePreviewPanel({
             currentTab === "files" ? "text-foreground font-semibold" : ""
           }
         >
-          文件
+          {i18n.t("previewPanel.tabs.files")}
         </button>
         <span>/</span>
         <button
@@ -1114,7 +1203,7 @@ export default function OpencodePreviewPanel({
             currentTab === "changes" ? "text-foreground font-semibold" : ""
           }
         >
-          更改
+          {i18n.t("previewPanel.tabs.changes")}
         </button>
         <span>/</span>
         <button
@@ -1127,7 +1216,7 @@ export default function OpencodePreviewPanel({
             currentTab === "debug" ? "text-foreground font-semibold" : ""
           }
         >
-          调试
+          {i18n.t("previewPanel.tabs.debug")}
         </button>
         <span>/</span>
         <button
@@ -1140,7 +1229,7 @@ export default function OpencodePreviewPanel({
             currentTab === "deployment" ? "text-foreground font-semibold" : ""
           }
         >
-          部署
+          {i18n.t("previewPanel.tabs.deployment")}
         </button>
       </div>
 
@@ -1171,6 +1260,7 @@ export default function OpencodePreviewPanel({
             onSelectFile={filePreview.handleFileSelect}
             runtimeReady={runtimeReady !== false}
             runtimeStarting={runtimeStarting === true}
+            runtimeSwitchBlocked={runtimeSwitchBlocked}
           />
         </div>
         <div
@@ -1240,10 +1330,14 @@ export default function OpencodePreviewPanel({
             onRequestStartDebugByMessage={onRequestStartDebugByMessage}
             onStart={async () => {
               if (runtimeReady === false) {
-                if (onEnsureRuntime) {
+                if (runtimeSwitchBlocked) {
+                  debugPreview.setDebugError(runtimeSwitchBlockedMessage);
+                  return;
+                }
+                if (effectiveEnsureRuntime) {
                   debugPreview.setDebugStarting(true);
                   try {
-                    await onEnsureRuntime();
+                    await effectiveEnsureRuntime();
                   } finally {
                     debugPreview.setDebugStarting(false);
                   }
@@ -1251,7 +1345,9 @@ export default function OpencodePreviewPanel({
                 return;
               }
               if (!onRequestStartDebugByMessage) {
-                debugPreview.setDebugError("缺少启动调试消息入口");
+                debugPreview.setDebugError(
+                  i18n.t("previewPanel.debug.missingStartEntry"),
+                );
                 return;
               }
               onRequestStartDebugByMessage();
@@ -1304,7 +1400,9 @@ function formatMetricCount(value?: number | null, fallback: string = "--") {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return fallback;
   }
-  return new Intl.NumberFormat("zh-CN").format(value);
+  return new Intl.NumberFormat(i18n.language === "zh" ? "zh-CN" : "en-US").format(
+    value,
+  );
 }
 
 function getDeploymentAnalyticsPresentation(
@@ -1313,73 +1411,104 @@ function getDeploymentAnalyticsPresentation(
 ) {
   if (!hasPrimaryUrl) {
     return {
-      integrationValue: "等待站点上线",
-      integrationSubtitle: "站点拿到稳定访问地址后，平台才会创建并绑定 Umami website。",
-      trafficValue: "等待站点上线",
-      trafficSubtitle: "当前还没有可读取的流量数据。",
-      realtimeValue: "等待站点上线",
-      realtimeSubtitle: "站点上线后才会开始统计实时访客。",
+      integrationValue: i18n.t("previewPanel.analytics.waitingSiteLive"),
+      integrationSubtitle: i18n.t("previewPanel.analytics.waitingSiteLiveBind"),
+      trafficValue: i18n.t("previewPanel.analytics.waitingSiteLive"),
+      trafficSubtitle: i18n.t("previewPanel.analytics.waitingTrafficData"),
+      realtimeValue: i18n.t("previewPanel.analytics.waitingSiteLive"),
+      realtimeSubtitle: i18n.t("previewPanel.analytics.waitingRealtimeData"),
     };
   }
 
   if (!analytics) {
     return {
-      integrationValue: "待接入",
-      integrationSubtitle: "当前会话还没有绑定统计站点。",
-      trafficValue: "待接入",
-      trafficSubtitle: "平台尚未拿到该站点的聚合访问数据。",
-      realtimeValue: "待接入",
-      realtimeSubtitle: "平台尚未拿到该站点的实时访客数据。",
+      integrationValue: i18n.t("previewPanel.analytics.pending"),
+      integrationSubtitle: i18n.t("previewPanel.analytics.pendingBind"),
+      trafficValue: i18n.t("previewPanel.analytics.pending"),
+      trafficSubtitle: i18n.t("previewPanel.analytics.pendingTraffic"),
+      realtimeValue: i18n.t("previewPanel.analytics.pending"),
+      realtimeSubtitle: i18n.t("previewPanel.analytics.pendingRealtime"),
     };
   }
 
-  if (analytics.status === "ready") {
+  if (analytics.status === "tracking") {
     return {
-      integrationValue: "已接入",
+      integrationValue: i18n.t("previewPanel.analytics.tracking"),
       integrationSubtitle:
-        analytics.message || "当前已绑定 Umami website，并展示近 30 天聚合数据。",
+        analytics.message || i18n.t("previewPanel.analytics.trackingDefault"),
       trafficValue: formatMetricCount(analytics.pageviews, "0"),
       trafficSubtitle: `Visits ${formatMetricCount(analytics.visits, "0")} / Visitors ${formatMetricCount(analytics.visitors, "0")}`,
       realtimeValue: formatMetricCount(analytics.activeVisitors, "0"),
       realtimeSubtitle:
         analytics.updatedAt
-          ? `最近更新 ${formatPreviewTimestamp(analytics.updatedAt) || analytics.updatedAt}`
-          : "当前在线访客数来自 Umami realtime。",
+          ? i18n.t("previewPanel.analytics.recentUpdate", {
+              time:
+                formatPreviewTimestamp(analytics.updatedAt) || analytics.updatedAt,
+            })
+          : i18n.t("previewPanel.analytics.realtimeFromUmami"),
+    };
+  }
+
+  if (analytics.status === "bound") {
+    return {
+      integrationValue: i18n.t("previewPanel.analytics.bound"),
+      integrationSubtitle:
+        analytics.message || i18n.t("previewPanel.analytics.boundDefault"),
+      trafficValue: formatMetricCount(analytics.pageviews, "0"),
+      trafficSubtitle: i18n.t("previewPanel.analytics.boundTraffic"),
+      realtimeValue: formatMetricCount(analytics.activeVisitors, "0"),
+      realtimeSubtitle: i18n.t("previewPanel.analytics.boundRealtime"),
     };
   }
 
   if (analytics.status === "error") {
     return {
-      integrationValue: "读取失败",
+      integrationValue: i18n.t("previewPanel.analytics.readFailed"),
       integrationSubtitle:
-        analytics.error || analytics.message || "统计读取失败，但不会阻塞部署与访问。",
-      trafficValue: "读取失败",
-      trafficSubtitle: "稍后刷新会再次读取 Umami 聚合数据。",
-      realtimeValue: "读取失败",
-      realtimeSubtitle: "实时访客读取失败，不影响网站访问。",
+        analytics.error ||
+        analytics.message ||
+        i18n.t("previewPanel.analytics.readFailedDefault"),
+      trafficValue: i18n.t("previewPanel.analytics.readFailed"),
+      trafficSubtitle: i18n.t("previewPanel.analytics.readFailedTraffic"),
+      realtimeValue: i18n.t("previewPanel.analytics.readFailed"),
+      realtimeSubtitle: i18n.t("previewPanel.analytics.readFailedRealtime"),
     };
   }
 
   if (analytics.status === "unconfigured") {
     return {
-      integrationValue: "平台未配置",
+      integrationValue: i18n.t("previewPanel.analytics.unconfigured"),
       integrationSubtitle:
-        analytics.message || "需要先配置 Umami host、账号与 team 绑定。",
-      trafficValue: "平台未配置",
-      trafficSubtitle: "当前不会自动注入 tracker 与 websiteId。",
-      realtimeValue: "平台未配置",
-      realtimeSubtitle: "当前没有可用的实时访客数据源。",
+        analytics.message ||
+        i18n.t("previewPanel.analytics.unconfiguredDefault"),
+      trafficValue: i18n.t("previewPanel.analytics.unconfigured"),
+      trafficSubtitle: i18n.t("previewPanel.analytics.unconfiguredTraffic"),
+      realtimeValue: i18n.t("previewPanel.analytics.unconfigured"),
+      realtimeSubtitle: i18n.t("previewPanel.analytics.unconfiguredRealtime"),
+    };
+  }
+
+  if (analytics.status === "pending_domain") {
+    return {
+      integrationValue: i18n.t("previewPanel.analytics.pendingDomain"),
+      integrationSubtitle:
+        analytics.message ||
+        i18n.t("previewPanel.analytics.pendingDomainDefault"),
+      trafficValue: i18n.t("previewPanel.analytics.pendingDomain"),
+      trafficSubtitle: i18n.t("previewPanel.analytics.pendingDomainTraffic"),
+      realtimeValue: i18n.t("previewPanel.analytics.pendingDomain"),
+      realtimeSubtitle: i18n.t("previewPanel.analytics.pendingDomainRealtime"),
     };
   }
 
   return {
-    integrationValue: "待接入",
+    integrationValue: i18n.t("previewPanel.analytics.pending"),
     integrationSubtitle:
-      analytics.message || "站点已经准备好，等待平台完成 website 绑定。",
-    trafficValue: "待接入",
-    trafficSubtitle: "当前还没有可展示的聚合访问数据。",
-    realtimeValue: "待接入",
-    realtimeSubtitle: "当前还没有可展示的实时访客数据。",
+      analytics.message || i18n.t("previewPanel.analytics.siteReadyPending"),
+    trafficValue: i18n.t("previewPanel.analytics.pending"),
+    trafficSubtitle: i18n.t("previewPanel.analytics.noAggregateData"),
+    realtimeValue: i18n.t("previewPanel.analytics.pending"),
+    realtimeSubtitle: i18n.t("previewPanel.analytics.noRealtimeData"),
   };
 }
 
@@ -1503,7 +1632,7 @@ function getWorkspacePathExt(path: string): string {
 
 function formatWorkspaceFileSize(size?: number): string {
   if (!Number.isFinite(size) || typeof size !== "number" || size < 0) {
-    return "未知大小";
+    return i18n.t("previewPanel.unknownSize");
   }
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
@@ -1673,6 +1802,7 @@ export function FilePreview({
   onSelectFile,
   runtimeReady,
   runtimeStarting,
+  runtimeSwitchBlocked = false,
 }: {
   sessionId?: string | null;
   tree: WorkspaceTree | null;
@@ -1690,6 +1820,7 @@ export function FilePreview({
   onSelectFile: (path: string) => void;
   runtimeReady: boolean;
   runtimeStarting: boolean;
+  runtimeSwitchBlocked?: boolean;
 }) {
   const [htmlView, setHtmlView] = useState<"preview" | "source">("preview");
   const [htmlPreviewState, setHtmlPreviewState] =
@@ -1697,14 +1828,9 @@ export function FilePreview({
   const [htmlPreviewMessage, setHtmlPreviewMessage] = useState("");
   const [htmlPreviewReloading, setHtmlPreviewReloading] = useState(false);
   const [htmlPreviewNonce, setHtmlPreviewNonce] = useState(0);
+  const [deploymentPreviewUrl, setDeploymentPreviewUrl] = useState("");
   const [copiedKey, setCopiedKey] = useState<"path" | "content" | null>(null);
-
-  useEffect(() => {
-    setHtmlView("preview");
-    setHtmlPreviewState("checking");
-    setHtmlPreviewMessage("");
-    setHtmlPreviewNonce(Date.now());
-  }, [selectedPath]);
+  const runtimeSwitchBlockedMessage = i18n.t("previewPanel.runtimeSwitchBlocked");
 
   const previewType = file?.previewType || "text";
   const mimeType = file?.mimeType || "application/octet-stream";
@@ -1716,22 +1842,29 @@ export function FilePreview({
     sessionId && selectedPath
       ? getWorkspaceRawFileUrl(sessionId, selectedPath)
       : "";
+  const selectedExternalUrl =
+    previewType === "html" && deploymentPreviewUrl ? deploymentPreviewUrl : selectedRawUrl;
   const pathSegments = selectedPath ? selectedPath.split("/").filter(Boolean) : [];
   const htmlPreviewUrl =
-    previewType === "html" && sessionId && selectedPath
-      ? getWorkspaceRawFileUrl(sessionId, selectedPath)
+    previewType === "html"
+      ? deploymentPreviewUrl ||
+        (sessionId && selectedPath
+          ? getWorkspaceRawFileUrl(sessionId, selectedPath)
+          : "")
       : "";
+  const htmlPreviewUsesDeployment = Boolean(previewType === "html" && deploymentPreviewUrl);
   const htmlPreviewEnabled = Boolean(
-    runtimeReady &&
-      !loading &&
+    !loading &&
       !error &&
-      tree &&
-      tree.items.length > 0 &&
-      sessionId &&
       selectedPath &&
       previewType === "html" &&
       !isBinary &&
-      htmlView === "preview",
+      htmlView === "preview" &&
+      (htmlPreviewUsesDeployment ||
+        (runtimeReady &&
+          tree &&
+          tree.items.length > 0 &&
+          sessionId)),
   );
   const effectiveHtmlPreviewUrl = appendPreviewCacheBust(
     htmlPreviewUrl,
@@ -1739,7 +1872,48 @@ export function FilePreview({
   );
 
   useEffect(() => {
-    if (!htmlPreviewEnabled || !sessionId || !selectedPath) {
+    if (!sessionId || previewType !== "html") {
+      setDeploymentPreviewUrl("");
+      return;
+    }
+    if (runtimeSwitchBlocked) {
+      setDeploymentPreviewUrl("");
+      return;
+    }
+    let cancelled = false;
+    getTaskCreationDeploymentInfo(sessionId)
+      .then((info) => {
+        if (cancelled) return;
+        setDeploymentPreviewUrl(resolveFilePreviewDeploymentUrl(info));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setDeploymentPreviewUrl("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [previewType, runtimeSwitchBlocked, sessionId]);
+
+  useEffect(() => {
+    setHtmlView("preview");
+    if (htmlPreviewUsesDeployment) {
+      setHtmlPreviewState("ready");
+      setHtmlPreviewMessage("");
+      return;
+    }
+    setHtmlPreviewState("checking");
+    setHtmlPreviewMessage("");
+    setHtmlPreviewNonce(Date.now());
+  }, [htmlPreviewUsesDeployment, selectedPath]);
+
+  useEffect(() => {
+    if (
+      !htmlPreviewEnabled ||
+      htmlPreviewUsesDeployment ||
+      !sessionId ||
+      !selectedPath
+    ) {
       return;
     }
     let cancelled = false;
@@ -1754,10 +1928,15 @@ export function FilePreview({
     return () => {
       cancelled = true;
     };
-  }, [htmlPreviewEnabled, selectedPath, sessionId]);
+  }, [htmlPreviewEnabled, htmlPreviewUsesDeployment, selectedPath, sessionId]);
 
   const reloadHtmlPreview = async () => {
     if (!sessionId || !selectedPath || htmlPreviewReloading) return;
+    if (runtimeSwitchBlocked) {
+      setHtmlPreviewState("fetch_failed");
+      setHtmlPreviewMessage(runtimeSwitchBlockedMessage);
+      return;
+    }
     setHtmlPreviewReloading(true);
     setHtmlPreviewState("checking");
     setHtmlPreviewMessage("");
@@ -1775,7 +1954,7 @@ export function FilePreview({
       }
     } catch {
       setHtmlPreviewState("fetch_failed");
-      setHtmlPreviewMessage("预览恢复失败，请稍后重试。");
+      setHtmlPreviewMessage(i18n.t("previewPanel.previewRestoreFailed"));
     } finally {
       setHtmlPreviewReloading(false);
     }
@@ -1803,33 +1982,33 @@ export function FilePreview({
   if (!runtimeReady) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-2">
-        <span>文件预览尚未加载</span>
+        <span>{i18n.t("previewPanel.filePreviewNotLoaded")}</span>
         <Button
           variant="outline"
           size="sm"
           onClick={onRefresh}
           disabled={runtimeStarting}
         >
-          {runtimeStarting ? "加载中..." : "加载文件"}
+          {runtimeStarting ? i18n.t("common.loading") : i18n.t("previewPanel.loadFiles")}
         </Button>
       </div>
     );
   }
   if (loading) {
-    return <EmptyState text="正在加载文件树..." />;
+    return <EmptyState text={i18n.t("previewPanel.loadingFileTree")} />;
   }
   if (error) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-2">
         <span>{error}</span>
         <Button variant="outline" size="sm" onClick={onRefresh}>
-          重试
+          {i18n.t("previewPanel.retry")}
         </Button>
       </div>
     );
   }
   if (!tree || tree.items.length === 0) {
-    return <EmptyState text="暂无文件" />;
+    return <EmptyState text={i18n.t("previewPanel.noFiles")} />;
   }
 
   const nodes = buildTree(tree.items);
@@ -1854,11 +2033,13 @@ export function FilePreview({
             {rootDirState?.hasMore ? (
               <button
                 type="button"
-                className="w-full rounded-md border border-transparent px-2 py-1 text-left text-[11px] text-blue-600 transition-colors hover:border-blue-100 hover:bg-blue-50/60 disabled:text-slate-400"
+                className="w-full rounded-md border border-transparent px-2 py-1 text-left text-[11px] text-[var(--brand-link)] transition-colors hover:border-[var(--brand-border)] hover:bg-[var(--brand-soft)] disabled:text-muted-foreground"
                 onClick={() => onLoadMoreDir("")}
                 disabled={Boolean(rootDirState.loading)}
               >
-                {rootDirState.loading ? "加载中..." : "加载更多根目录项..."}
+                {rootDirState.loading
+                  ? i18n.t("common.loading")
+                  : i18n.t("previewPanel.loadMoreRootItems")}
               </button>
             ) : null}
           </div>
@@ -1877,12 +2058,12 @@ export function FilePreview({
           </div>
         </div>
       </ResizablePanel>
-      <ResizableHandle className="w-[2px] bg-border/80 transition-colors hover:bg-blue-500/70 data-[resize-handle-state=drag]:bg-blue-500" />
+      <ResizableHandle className="w-[2px] bg-border/80 transition-colors hover:bg-[var(--brand-soft-foreground)] data-[resize-handle-state=drag]:bg-[var(--brand-solid)]" />
       <ResizablePanel defaultSize={72} minSize={55}>
         <div className="h-full min-h-0 overflow-hidden bg-background p-3">
           {selectedPath ? (
-            <div className="flex h-full min-h-0 flex-col rounded-lg border border-slate-200 bg-white">
-              <div className="flex h-10 items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-3">
+            <div className="flex h-full min-h-0 flex-col rounded-lg border border-border bg-card">
+              <div className="flex h-10 items-center justify-between gap-2 border-b border-border bg-muted/30 px-3">
                 <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden text-[12px]">
                   {pathSegments.map((segment, index) => (
                     <div key={`${segment}-${index}`} className="flex min-w-0 items-center gap-1">
@@ -1890,14 +2071,14 @@ export function FilePreview({
                         className={cn(
                           "truncate",
                           index === pathSegments.length - 1
-                            ? "font-medium text-slate-900"
-                            : "text-slate-500",
+                            ? "font-medium text-foreground"
+                            : "text-muted-foreground",
                         )}
                       >
                         {segment}
                       </span>
                       {index < pathSegments.length - 1 ? (
-                        <span className="text-slate-400">/</span>
+                        <span className="text-muted-foreground">/</span>
                       ) : null}
                     </div>
                   ))}
@@ -1905,57 +2086,67 @@ export function FilePreview({
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
-                    className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700 disabled:opacity-40"
+                    className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-slate-200 hover:text-foreground disabled:opacity-40"
                     onClick={() => void copyPath(selectedPath)}
-                    title={copiedKey === "path" ? "已复制路径" : "复制路径"}
+                    title={
+                      copiedKey === "path"
+                        ? i18n.t("previewPanel.copiedPath")
+                        : i18n.t("previewPanel.copyPath")
+                    }
                   >
                     <Copy className="h-3.5 w-3.5" />
                   </button>
                   <button
                     type="button"
-                    className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700 disabled:opacity-40"
+                    className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-slate-200 hover:text-foreground disabled:opacity-40"
                     onClick={() => void copyContent()}
                     disabled={!file || isBinary}
-                    title={copiedKey === "content" ? "已复制" : "复制内容"}
+                    title={
+                      copiedKey === "content"
+                        ? i18n.t("previewPanel.copied")
+                        : i18n.t("previewPanel.copyContent")
+                    }
                   >
                     <Copy className="h-3.5 w-3.5" />
                   </button>
                   <button
                     type="button"
-                    className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700 disabled:opacity-40"
+                    className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-slate-200 hover:text-foreground disabled:opacity-40"
                     onClick={() =>
                       triggerFileDownload(selectedRawUrl, selectedFilename || "workspace-file")
                     }
                     disabled={!selectedRawUrl}
-                    title="下载文件"
+                    title={i18n.t("previewPanel.downloadFile")}
                   >
                     <Download className="h-3.5 w-3.5" />
                   </button>
                   <button
                     type="button"
-                    className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700 disabled:opacity-40"
+                    className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-slate-200 hover:text-foreground disabled:opacity-40"
                     onClick={() =>
-                      selectedRawUrl
-                        ? window.open(selectedRawUrl, "_blank", "noopener,noreferrer")
+                      selectedExternalUrl
+                        ? window.open(selectedExternalUrl, "_blank", "noopener,noreferrer")
                         : null
                     }
-                    disabled={!selectedRawUrl}
-                    title="新窗口打开"
+                    disabled={!selectedExternalUrl}
+                    title={i18n.t("previewPanel.openInNewWindow")}
                   >
                     <ExternalLink className="h-3.5 w-3.5" />
                   </button>
                 </div>
               </div>
-              <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-1.5 text-[11px] text-slate-500">
+              <div className="flex items-center justify-between gap-2 border-b border-border/70 px-3 py-1.5 text-[11px] text-muted-foreground">
                 <span className="truncate">{selectedPath}</span>
                 <span className="shrink-0">
-                  {isBinary ? `${mimeType} · ${formatWorkspaceFileSize(file?.size)}` : `${lineCount} 行 · ${mimeType}`}
+                  {isBinary
+                    ? `${mimeType} · ${formatWorkspaceFileSize(file?.size)}`
+                    : `${lineCount} ${i18n.t("homeWorkspace.linesUnit")} · ${mimeType}`}
                 </span>
               </div>
               <div className="min-h-0 flex-1 overflow-hidden">
                 {contentLoading ? (
                   <div className="px-3 py-3 text-xs text-muted-foreground">
-                    加载中...
+                    {i18n.t("common.loading")}
                   </div>
                 ) : previewType === "html" && !isBinary ? (
                   htmlView === "preview" ? (
@@ -1965,24 +2156,28 @@ export function FilePreview({
                           <iframe
                             src={effectiveHtmlPreviewUrl}
                             title={`preview-${selectedPath}`}
-                            className="h-full min-h-[360px] w-full rounded-md border border-slate-200 bg-white"
-                            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
+                            className="h-full min-h-[360px] w-full rounded-md border border-border bg-card"
+                            sandbox={
+                              htmlPreviewUsesDeployment
+                                ? undefined
+                                : "allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
+                            }
                             onError={() => {
                               setHtmlPreviewState("fetch_failed");
-                              setHtmlPreviewMessage("预览加载失败，请稍后重试。");
+                              setHtmlPreviewMessage(i18n.t("previewPanel.previewLoadFailed"));
                             }}
                           />
                         ) : (
-                          <div className="flex h-full min-h-[360px] w-full flex-col items-center justify-center gap-3 rounded-md border border-dashed border-slate-300 bg-slate-50 px-6 text-center">
+                          <div className="flex h-full min-h-[360px] w-full flex-col items-center justify-center gap-3 rounded-md border border-dashed border-border bg-muted/30 px-6 text-center">
                             {htmlPreviewState === "checking" ? (
                               <>
-                                <Loader2 className="h-4 w-4 animate-spin text-slate-500" />
-                                <div className="text-xs text-slate-500">正在检查预览环境...</div>
+                                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                                <div className="text-xs text-muted-foreground">{i18n.t("previewPanel.checkingPreviewEnvironment")}</div>
                               </>
                             ) : (
                               <>
-                                <div className="text-sm text-slate-700">
-                                  {htmlPreviewMessage || "当前 HTML 文件暂不可预览。"}
+                                <div className="text-sm text-foreground">
+                                  {htmlPreviewMessage || i18n.t("previewPanel.htmlUnavailable")}
                                 </div>
                                 <div className="flex items-center gap-2">
                                   <Button
@@ -1995,10 +2190,10 @@ export function FilePreview({
                                     {htmlPreviewReloading ? (
                                       <>
                                         <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                                        重新加载中...
+                                        {i18n.t("previewPanel.reloadingPreview")}
                                       </>
                                     ) : (
-                                      "重新加载预览"
+                                      i18n.t("previewPanel.reloadPreview")
                                     )}
                                   </Button>
                                   <Button
@@ -2007,7 +2202,7 @@ export function FilePreview({
                                     variant="ghost"
                                     onClick={() => setHtmlView("source")}
                                   >
-                                    查看源码
+                                    {i18n.t("previewPanel.viewSource")}
                                   </Button>
                                 </div>
                               </>
@@ -2016,7 +2211,7 @@ export function FilePreview({
                         )
                       ) : (
                         <div className="px-3 py-3 text-xs text-muted-foreground">
-                          当前 HTML 文件暂不可预览。
+                          {i18n.t("previewPanel.htmlUnavailable")}
                         </div>
                       )}
                     </div>
@@ -2028,7 +2223,7 @@ export function FilePreview({
                     </div>
                   )
                 ) : previewType === "markdown" && !isBinary ? (
-                  <div className="h-full min-h-0 overflow-auto overscroll-contain px-3 py-3 text-sm leading-7 text-foreground [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-6 [&_strong]:font-semibold [&_pre]:my-3 [&_pre]:overflow-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-slate-200 [&_pre]:bg-slate-50 [&_pre]:p-3 [&_code]:font-mono">
+                  <div className="h-full min-h-0 overflow-auto overscroll-contain px-3 py-3 text-sm leading-7 text-foreground [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-6 [&_strong]:font-semibold [&_pre]:my-3 [&_pre]:overflow-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border [&_pre]:bg-muted/30 [&_pre]:p-3 [&_code]:font-mono">
                     <Streamdown>{file?.content || ""}</Streamdown>
                   </div>
                 ) : previewType === "image" && binaryDataUrl ? (
@@ -2036,7 +2231,7 @@ export function FilePreview({
                     <img
                       src={binaryDataUrl}
                       alt={selectedPath}
-                      className="max-h-full w-auto max-w-full rounded-md border border-slate-200 bg-slate-50"
+                      className="max-h-full w-auto max-w-full rounded-md border border-border bg-muted/30"
                     />
                   </div>
                 ) : previewType === "video" && binaryDataUrl ? (
@@ -2044,7 +2239,7 @@ export function FilePreview({
                     <video
                       src={binaryDataUrl}
                       controls
-                      className="max-h-full w-full rounded-md border border-slate-200 bg-black"
+                      className="max-h-full w-full rounded-md border border-border bg-black"
                     />
                   </div>
                 ) : previewType === "audio" && binaryDataUrl ? (
@@ -2056,34 +2251,34 @@ export function FilePreview({
                     <iframe
                       title={`preview-${selectedPath}`}
                       src={binaryDataUrl}
-                      className="h-full min-h-[360px] w-full rounded-md border border-slate-200 bg-white"
+                      className="h-full min-h-[360px] w-full rounded-md border border-border bg-card"
                     />
                   </div>
                 ) : isBinary ? (
                   <div className="h-full min-h-0 overflow-auto overscroll-contain p-4">
-                    <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-4">
-                      <div className="mb-3 text-sm font-medium text-slate-900">
-                        二进制文件信息
+                    <div className="rounded-lg border border-border bg-muted/40 p-4">
+                      <div className="mb-3 text-sm font-medium text-foreground">
+                        {i18n.t("previewPanel.binaryInfo")}
                       </div>
-                      <dl className="grid gap-3 text-xs text-slate-600">
+                      <dl className="grid gap-3 text-xs text-muted-foreground">
                         <div>
-                          <dt className="text-slate-500">文件路径</dt>
-                          <dd className="mt-0.5 break-all font-mono text-slate-800">{selectedPath}</dd>
+                          <dt className="text-muted-foreground">{i18n.t("previewPanel.filePath")}</dt>
+                          <dd className="mt-0.5 break-all font-mono text-foreground">{selectedPath}</dd>
                         </div>
                         <div>
-                          <dt className="text-slate-500">MIME 类型</dt>
-                          <dd className="mt-0.5 font-mono text-slate-800">{mimeType}</dd>
+                          <dt className="text-muted-foreground">{i18n.t("previewPanel.mimeType")}</dt>
+                          <dd className="mt-0.5 font-mono text-foreground">{mimeType}</dd>
                         </div>
                         <div>
-                          <dt className="text-slate-500">文件大小</dt>
-                          <dd className="mt-0.5 text-slate-800">{formatWorkspaceFileSize(file?.size)}</dd>
+                          <dt className="text-muted-foreground">{i18n.t("previewPanel.fileSize")}</dt>
+                          <dd className="mt-0.5 text-foreground">{formatWorkspaceFileSize(file?.size)}</dd>
                         </div>
                         <div>
-                          <dt className="text-slate-500">预览策略</dt>
-                          <dd className="mt-0.5 text-slate-800">
+                          <dt className="text-muted-foreground">{i18n.t("previewPanel.previewPolicy")}</dt>
+                          <dd className="mt-0.5 text-foreground">
                             {file?.binaryTooLarge
-                              ? "文件较大，仅展示元信息并提供下载。"
-                              : "该类型按二进制处理，仅展示元信息。"}
+                              ? i18n.t("previewPanel.binaryLargePreviewPolicy")
+                              : i18n.t("previewPanel.binaryPreviewPolicy")}
                           </dd>
                         </div>
                       </dl>
@@ -2098,7 +2293,7 @@ export function FilePreview({
                           disabled={!selectedRawUrl}
                         >
                           <Download className="mr-1.5 h-3.5 w-3.5" />
-                          下载文件
+                          {i18n.t("previewPanel.downloadFile")}
                         </Button>
                         <Button
                           type="button"
@@ -2112,7 +2307,7 @@ export function FilePreview({
                           disabled={!selectedRawUrl}
                         >
                           <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
-                          新窗口打开
+                          {i18n.t("previewPanel.openInNewWindow")}
                         </Button>
                       </div>
                     </div>
@@ -2126,15 +2321,15 @@ export function FilePreview({
                 )}
               </div>
               {previewType === "html" && !isBinary ? (
-                <div className="border-t border-slate-100 px-3 py-1.5">
-                  <div className="inline-flex items-center rounded-md border border-slate-200 bg-white p-0.5 text-[11px]">
+                <div className="border-t border-border/70 px-3 py-1.5">
+                  <div className="inline-flex items-center rounded-md border border-border bg-card p-0.5 text-[11px]">
                     <button
                       type="button"
                       className={cn(
                         "rounded px-2 py-0.5",
                         htmlView === "preview"
                           ? "bg-slate-900 text-white"
-                          : "text-slate-600",
+                          : "text-muted-foreground",
                       )}
                       onClick={() => setHtmlView("preview")}
                     >
@@ -2146,7 +2341,7 @@ export function FilePreview({
                         "rounded px-2 py-0.5",
                         htmlView === "source"
                           ? "bg-slate-900 text-white"
-                          : "text-slate-600",
+                          : "text-muted-foreground",
                       )}
                       onClick={() => setHtmlView("source")}
                     >
@@ -2157,8 +2352,8 @@ export function FilePreview({
               ) : null}
             </div>
           ) : (
-            <div className="h-full rounded-lg border border-dashed border-slate-300 bg-slate-50/70">
-              <EmptyState text="请选择文件预览" />
+            <div className="h-full rounded-lg border border-dashed border-border bg-muted/40">
+              <EmptyState text={i18n.t("previewPanel.selectFilePreview")} />
             </div>
           )}
           {contentError ? (
@@ -2227,12 +2422,12 @@ function TreeList({
               }}
               className={`group w-full flex items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[13px] transition-colors border cursor-pointer ${
                 selectedPath === node.path
-                  ? "bg-[var(--fill-tsp-white-dark)] border-slate-200 text-[var(--text-primary)]"
-                  : "text-[var(--text-secondary)] border-transparent hover:bg-[var(--fill-tsp-white-main)] hover:border-slate-200"
+                  ? "bg-[var(--fill-tsp-white-dark)] border-border text-[var(--text-primary)]"
+                  : "text-[var(--text-secondary)] border-transparent hover:bg-[var(--fill-tsp-white-main)] hover:border-border"
               }`}
               style={{ paddingLeft: `${indent + 8}px` }}
             >
-              <span className="flex h-4 w-4 shrink-0 items-center justify-center text-slate-500">
+              <span className="flex h-4 w-4 shrink-0 items-center justify-center text-muted-foreground">
                 {isDir ? (
                   isOpen ? (
                     <ChevronDown className="h-3.5 w-3.5" />
@@ -2245,31 +2440,31 @@ function TreeList({
               </span>
               <span className="min-w-0 flex-1 truncate font-mono">{node.name}</span>
               {isDir && state?.loading ? (
-                <span className="ml-1 text-[10px] text-slate-400">加载中</span>
+                <span className="ml-1 text-[10px] text-muted-foreground">{i18n.t("common.loading")}</span>
               ) : null}
               <span className="hidden items-center gap-1 group-hover:flex">
                 <button
                   type="button"
-                  className="rounded p-1 text-slate-400 transition-colors hover:bg-[var(--fill-tsp-white-dark)] hover:text-slate-700"
+                  className="rounded p-1 text-muted-foreground transition-colors hover:bg-[var(--fill-tsp-white-dark)] hover:text-foreground"
                   onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
                     void onCopyPath(node.path);
                   }}
-                  title="复制路径"
+                  title={i18n.t("previewPanel.copyPath")}
                 >
                   <Copy className="h-3 w-3" />
                 </button>
                 {!isDir && nodeRawUrl ? (
                   <button
                     type="button"
-                    className="rounded p-1 text-slate-400 transition-colors hover:bg-[var(--fill-tsp-white-dark)] hover:text-slate-700"
+                    className="rounded p-1 text-muted-foreground transition-colors hover:bg-[var(--fill-tsp-white-dark)] hover:text-foreground"
                     onClick={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
                       window.open(nodeRawUrl, "_blank", "noopener,noreferrer");
                     }}
-                    title="新窗口打开"
+                    title={i18n.t("previewPanel.openInNewWindow")}
                   >
                     <ExternalLink className="h-3 w-3" />
                   </button>
@@ -2305,10 +2500,10 @@ function TreeList({
                     type="button"
                     onClick={() => onLoadMoreDir(node.path)}
                     disabled={Boolean(state.loading)}
-                    className="px-2 py-1 text-[11px] text-blue-600 hover:text-blue-700 disabled:text-slate-400"
+                    className="px-2 py-1 text-[11px] text-[var(--brand-link)] hover:text-[var(--brand-link-hover)] disabled:text-muted-foreground"
                     style={{ paddingLeft: `${indent + 28}px` }}
                   >
-                    {state.loading ? "加载中..." : "加载更多..."}
+                    {state.loading ? i18n.t("common.loading") : i18n.t("previewPanel.loadMore")}
                   </button>
                 ) : null}
                 {!state?.loading &&
@@ -2317,10 +2512,10 @@ function TreeList({
                 !state.error &&
                 node.children.length === 0 ? (
                   <div
-                    className="px-2 py-1 text-[11px] text-slate-400"
+                    className="px-2 py-1 text-[11px] text-muted-foreground"
                     style={{ paddingLeft: `${indent + 28}px` }}
                   >
-                    空目录
+                    {i18n.t("previewPanel.emptyDirectory")}
                   </div>
                 ) : null}
               </div>
@@ -2342,13 +2537,13 @@ function DiffPreview({
   onSelect: (id: string) => void;
 }) {
   if (items.length === 0) {
-    return <EmptyState text="暂无更改" />;
+    return <EmptyState text={i18n.t("previewPanel.noChanges")} />;
   }
 
   return (
     <div className="flex h-full flex-col">
       <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-        <span className="text-xs text-muted-foreground">最近更改</span>
+        <span className="text-xs text-muted-foreground">{i18n.t("previewPanel.recentChanges")}</span>
         <select
           className="text-xs border border-border rounded-md bg-background px-2 py-1 flex-1"
           value={current?.id || items[items.length - 1]?.id || ""}
@@ -2382,7 +2577,7 @@ function DiffPreview({
         {current ? (
           <DiffBlock diff={current.diff} files={current.files} />
         ) : (
-          <EmptyState text="暂无更改" />
+          <EmptyState text={i18n.t("previewPanel.noChanges")} />
         )}
       </div>
     </div>
@@ -2450,47 +2645,83 @@ export function DeploymentPreview({
     info?.activeDeploymentPending || pendingStatuses.has(status.toUpperCase()),
   );
   const statusMeta = !info?.configured
-    ? {
-        label: "未就绪",
-        description: info?.missing.length
-          ? `还需准备 ${info.missing.length} 项部署资源后才能发布。`
-          : "正在准备部署资源。",
-        badgeClass: "border-slate-200 bg-slate-100 text-slate-700",
-        dotClass: "bg-slate-400",
-        panelClass: "border-slate-200 bg-slate-50/80",
-      }
+    ? info?.bindingState === "repair_required" ||
+      info?.bindingState === "provider_error"
+      ? {
+          label: i18n.t("previewPanel.deployment.status.repairRequired"),
+          description:
+            info?.providerErrorMessage ||
+            info?.message ||
+            i18n.t("previewPanel.deployment.status.repairRequiredDescription"),
+          badgeClass: "border-rose-200 bg-rose-50 text-rose-700",
+          dotClass: "bg-rose-500",
+          panelClass: "border-rose-200 bg-rose-50/70",
+        }
+      : info?.bindingState === "provisioning"
+        ? {
+            label: i18n.t("previewPanel.deployment.status.provisioning"),
+            description:
+              info?.message ||
+              i18n.t("previewPanel.deployment.status.provisioningDescription"),
+            badgeClass: "border-amber-200 bg-amber-50 text-amber-700",
+            dotClass: "bg-amber-500",
+            panelClass: "border-amber-200 bg-amber-50/70",
+          }
+        : {
+            label: i18n.t("previewPanel.deployment.status.notReady"),
+            description: info?.missing.length
+              ? i18n.t("previewPanel.deployment.status.notReadyDescription", {
+                  count: info.missing.length,
+                })
+              : i18n.t("previewPanel.deployment.status.preparingResources"),
+            badgeClass: "border-border bg-muted/50 text-foreground",
+            dotClass: "bg-slate-400",
+            panelClass: "border-border bg-muted/40",
+          }
     : status === "SUCCESS"
       ? {
-          label: "已发布",
-          description: "当前网站已有线上版本，可直接访问与验证。",
+          label: i18n.t("previewPanel.deployment.status.published"),
+          description: i18n.t(
+            "previewPanel.deployment.status.publishedDescription",
+          ),
           badgeClass: "border-emerald-200 bg-emerald-50 text-emerald-700",
           dotClass: "bg-emerald-500",
           panelClass: "border-emerald-200 bg-emerald-50/70",
         }
       : status === "FAILED" || status === "CRASHED"
         ? {
-            label: "发布失败",
-            description: "最近一次发布未完成，建议查看日志后重新发布。",
+            label: i18n.t("previewPanel.deployment.status.failed"),
+            description: i18n.t(
+              "previewPanel.deployment.status.failedDescription",
+            ),
             badgeClass: "border-rose-200 bg-rose-50 text-rose-700",
             dotClass: "bg-rose-500",
             panelClass: "border-rose-200 bg-rose-50/70",
           }
         : isPending
           ? {
-              label: "发布中",
-              description: "平台正在同步代码并等待发布结果。",
+              label: i18n.t("previewPanel.deployment.status.publishing"),
+              description: i18n.t(
+                "previewPanel.deployment.status.publishingDescription",
+              ),
               badgeClass: "border-amber-200 bg-amber-50 text-amber-700",
               dotClass: "bg-amber-500",
               panelClass: "border-amber-200 bg-amber-50/70",
             }
           : {
-              label: hasSuccessfulDeployment ? "等待更新" : "未发布",
+              label: hasSuccessfulDeployment
+                ? i18n.t("previewPanel.deployment.status.waitingUpdate")
+                : i18n.t("previewPanel.deployment.status.notPublished"),
               description: hasSuccessfulDeployment
-                ? "可以继续发布新版本，线上将保留最近的成功版本。"
-                : "项目已准备好，可以开始首次发布。",
-              badgeClass: "border-slate-200 bg-slate-100 text-slate-700",
+                ? i18n.t(
+                    "previewPanel.deployment.status.waitingUpdateDescription",
+                  )
+                : i18n.t(
+                    "previewPanel.deployment.status.notPublishedDescription",
+                  ),
+              badgeClass: "border-border bg-muted/50 text-foreground",
               dotClass: "bg-slate-400",
-              panelClass: "border-slate-200 bg-slate-50/80",
+              panelClass: "border-border bg-muted/40",
             };
   const staticUrl = currentDeployment?.staticUrl || info?.latestStaticUrl || "";
   const runtimeUrl = currentDeployment?.url || info?.latestUrl || "";
@@ -2498,16 +2729,26 @@ export function DeploymentPreview({
   const accessEntries = Array.from(
     new Map(
       [
-        primaryAccessUrl ? ["网站地址", primaryAccessUrl] : null,
+        primaryAccessUrl
+          ? [i18n.t("previewPanel.deployment.siteUrl"), primaryAccessUrl]
+          : null,
         runtimeUrl && runtimeUrl !== primaryAccessUrl
-          ? ["运行地址", runtimeUrl]
+          ? [i18n.t("previewPanel.deployment.runtimeUrl"), runtimeUrl]
           : null,
         ...(info?.domains || [])
           .filter(
             (domain) =>
               domain && domain !== primaryAccessUrl && domain !== runtimeUrl,
           )
-          .map((domain, index) => [`绑定域名 ${index + 1}`, domain] as const),
+          .map(
+            (domain, index) =>
+              [
+                i18n.t("previewPanel.deployment.boundDomain", {
+                  index: index + 1,
+                }),
+                domain,
+              ] as const,
+          ),
       ]
         .filter(Boolean)
         .map((entry) => entry as readonly [string, string]),
@@ -2515,10 +2756,10 @@ export function DeploymentPreview({
   );
   const primaryActionText =
     actionLoading === "deploy"
-      ? "发布中..."
+      ? i18n.t("previewPanel.deployment.publishing")
       : hasSuccessfulDeployment
-        ? "发布新版本"
-        : "立即发布";
+        ? i18n.t("previewPanel.deployment.publishNewVersion")
+        : i18n.t("previewPanel.deployment.publishNow");
   const successCount =
     info?.deployments.filter((item) => item.status === "SUCCESS").length ?? 0;
   const failedCount =
@@ -2528,24 +2769,13 @@ export function DeploymentPreview({
   const totalDeployments = info?.deployments.length ?? 0;
   const successRate = totalDeployments
     ? `${Math.round((successCount / totalDeployments) * 100)}%`
-    : "暂无数据";
+    : i18n.t("previewPanel.deployment.noData");
   const latestTimestamp =
     formatPreviewTimestamp(currentDeployment?.createdAt) ||
     currentDeployment?.createdAt ||
-    "尚无记录";
-  const logsText = info?.logs.length
-    ? info.logs
-        .map(
-          (entry) =>
-            `${entry.timestamp ? `[${formatPreviewTimestamp(entry.timestamp) || entry.timestamp}] ` : ""}${
-              entry.severity ? `${entry.severity} ` : ""
-            }${entry.message}`,
-        )
-        .join("\n")
-    : "";
-
+    i18n.t("previewPanel.deployment.noRecord");
   if (loading && !info) {
-    return <EmptyState text="正在加载部署信息..." />;
+    return <EmptyState text={i18n.t("previewPanel.deployment.loadingInfo")} />;
   }
 
   return (
@@ -2555,38 +2785,40 @@ export function DeploymentPreview({
           <DeploymentMenuButton
             active={section === "overview"}
             icon={Rocket}
-            label="发布与访问"
+            label={i18n.t("previewPanel.deployment.sections.overview")}
             onClick={() => setSection("overview")}
           />
           <DeploymentMenuButton
             active={section === "dashboard"}
             icon={BarChart3}
-            label="仪表盘"
+            label={i18n.t("previewPanel.deployment.sections.dashboard")}
             onClick={() => setSection("dashboard")}
           />
           <DeploymentMenuButton
             active={section === "database"}
             icon={Database}
-            label="数据库"
+            label={i18n.t("previewPanel.deployment.sections.database")}
             onClick={() => setSection("database")}
           />
           <DeploymentMenuButton
             active={section === "storage"}
             icon={HardDrive}
-            label="存储桶"
+            label={i18n.t("previewPanel.deployment.sections.storage")}
             onClick={() => setSection("storage")}
           />
           <DeploymentMenuButton
             active={section === "settings"}
             icon={Settings2}
-            label="设置"
+            label={i18n.t("previewPanel.deployment.sections.settings")}
             onClick={() => setSection("settings")}
           />
         </div>
       </div>
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">部署</span>
+          <span className="text-xs text-muted-foreground">
+            {i18n.t("previewPanel.tabs.deployment")}
+          </span>
           <span
             className={cn(
               "rounded-full border px-2 py-0.5 text-[11px]",
@@ -2603,7 +2835,7 @@ export function DeploymentPreview({
           onClick={() => onRefresh(currentDeploymentId || undefined)}
         >
           <RefreshCw className="size-3.5" />
-          刷新状态
+          {i18n.t("previewPanel.deployment.refreshStatus")}
         </Button>
       </div>
 
@@ -2626,7 +2858,6 @@ export function DeploymentPreview({
             actionLoading={actionLoading}
             loading={loading}
             primaryActionText={primaryActionText}
-            logsText={logsText}
             onDeploy={onDeploy}
             onRedeploy={onRedeploy}
             onRollback={onRollback}
@@ -2719,7 +2950,6 @@ function DeploymentOverviewSection({
   actionLoading,
   loading,
   primaryActionText,
-  logsText,
   onDeploy,
   onRedeploy,
   onRollback,
@@ -2737,359 +2967,486 @@ function DeploymentOverviewSection({
   actionLoading: "deploy" | "redeploy" | "rollback" | null;
   loading: boolean;
   primaryActionText: string;
-  logsText: string;
   onDeploy: () => void;
   onRedeploy: () => void;
   onRollback: () => void;
   onRefresh: (deploymentId?: string) => void;
   onSelectDeployment: (deploymentId: string) => void;
 }) {
+  const [releaseListExpanded, setReleaseListExpanded] = useState(false);
+  const deployments = info?.deployments || [];
+  const visibleDeployments = releaseListExpanded
+    ? deployments.slice(0, 12)
+    : currentDeployment
+      ? [
+          currentDeployment,
+          ...deployments
+            .filter((item) => item.id !== currentDeployment.id)
+            .slice(0, 3),
+        ]
+      : deployments.slice(0, 4);
+  const logEntries = (info?.logs || []).slice(-4).reverse();
+  const currentVersionTimestamp =
+    formatPreviewTimestamp(currentDeployment?.createdAt) ||
+    currentDeployment?.createdAt ||
+    i18n.t("previewPanel.deployment.overview.waitingFirstRelease");
+  const primaryDomainCount = Math.max(accessEntries.length - 1, 0);
+  const stableReleaseCount = deployments.filter(
+    (item) => item.status === "SUCCESS",
+  ).length;
+  const compactPrimaryActionText =
+    primaryActionText === i18n.t("previewPanel.deployment.publishing")
+      ? i18n.t("previewPanel.deployment.overview.publishingShort")
+      : i18n.t("previewPanel.deployment.overview.publishShort");
+  const compactActionButtonClass =
+    "h-7 gap-1 rounded-md px-2 text-[11px] leading-none has-[>svg]:px-2";
+  const compactActionIconClass = "size-3.5";
+
   return (
-    <>
-      <section className="rounded-lg border border-slate-200/80 bg-white p-4">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-          <div className="space-y-3">
-            <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/90 px-3 py-1 text-[11px] font-medium text-slate-600">
-              <Rocket className="size-3.5 text-slate-500" />
-              发布与访问
-            </div>
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <div
-                  className={cn("size-2 rounded-full", statusMeta.dotClass)}
-                />
-                <h3 className="text-lg font-semibold text-slate-900">
-                  {statusMeta.label}
-                </h3>
-              </div>
-              <p className="max-w-2xl text-sm leading-6 text-slate-600">
-                {statusMeta.description}
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              onClick={onDeploy}
-              disabled={!info?.canDeploy || Boolean(actionLoading)}
-            >
-              {actionLoading === "deploy" ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <Rocket className="size-4" />
-              )}
-              {primaryActionText}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={onRedeploy}
-              disabled={!currentDeploymentId || Boolean(actionLoading)}
-            >
-              {actionLoading === "redeploy" ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <History className="size-4" />
-              )}
-              重新发布
-            </Button>
-            <Button
-              variant="outline"
-              onClick={onRollback}
-              disabled={!currentDeploymentId || Boolean(actionLoading)}
-            >
-              {actionLoading === "rollback" ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : null}
-              回滚版本
-            </Button>
-          </div>
-        </div>
-
-        <div className="mt-4 grid gap-3 md:grid-cols-3">
-          <DeploymentMetricCard
-            title="当前状态"
-            value={statusMeta.label}
-            subtitle={
-              currentDeployment?.createdAt
-                ? `最近变更 ${formatPreviewTimestamp(currentDeployment.createdAt) || currentDeployment.createdAt}`
-                : "等待首次发布后展示版本时间"
-            }
-            className={statusMeta.panelClass}
-          />
-          <DeploymentMetricCard
-            title="访问入口"
-            value={primaryAccessUrl ? "网站已生成访问地址" : "尚未生成访问地址"}
-            subtitle={
-              primaryAccessUrl || "首次发布成功后，这里会展示线上访问地址。"
-            }
-          />
-          <DeploymentMetricCard
-            title="版本概览"
-            value={
-              info?.deployments.length
-                ? `${info.deployments.length} 次发布记录`
-                : "暂无发布记录"
-            }
-            subtitle={
-              info?.activeDeploymentPending
-                ? "当前有任务正在发布中。"
-                : "发布后可在这里查看历史版本与回滚入口。"
-            }
-          />
-        </div>
-
-        <div className="mt-4 rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                <Globe className="size-4 text-slate-500" />
-                网站地址
-              </div>
-              {primaryAccessUrl ? (
-                <a
-                  href={primaryAccessUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="break-all text-sm text-blue-600 hover:text-blue-700"
-                >
-                  {primaryAccessUrl}
-                </a>
-              ) : (
-                <p className="text-sm text-slate-500">
-                  发布完成后自动生成线上地址。
-                </p>
-              )}
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {primaryAccessUrl ? (
-                <Button asChild>
-                  <a href={primaryAccessUrl} target="_blank" rel="noreferrer">
-                    <ExternalLink className="size-4" />
-                    打开网站
-                  </a>
-                </Button>
-              ) : null}
-              <Button
-                variant="outline"
-                onClick={() => onRefresh(currentDeploymentId || undefined)}
-                disabled={loading}
-              >
-                <RefreshCw
-                  className={cn("size-4", loading ? "animate-spin" : "")}
-                />
-                刷新结果
-              </Button>
-            </div>
-          </div>
-        </div>
-
-        {accessEntries.length ? (
-          <div className="mt-4 grid gap-2 md:grid-cols-2">
-            {accessEntries.map(([label, value]) => (
-              <a
-                key={`${label}-${value}`}
-                href={value}
-                target="_blank"
-                rel="noreferrer"
-                className="rounded-md border border-slate-200/80 bg-slate-50/40 px-3 py-3 transition-colors hover:border-slate-300 hover:bg-slate-50"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
-                      {label}
-                    </div>
-                    <div className="mt-1 break-all text-sm text-slate-700">
-                      {value}
-                    </div>
-                  </div>
-                  <ExternalLink className="size-4 shrink-0 text-slate-400" />
+    <div className="grid gap-3">
+      <section className="min-w-0 rounded-lg border border-border/70 bg-card">
+        <div className="flex h-full min-h-0 flex-col p-3 sm:p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-[11px] font-medium text-muted-foreground">
+                  <Rocket className="size-3.5 text-muted-foreground" />
+                  {i18n.t("previewPanel.deployment.sections.overview")}
                 </div>
-              </a>
-            ))}
-          </div>
-        ) : null}
-      </section>
-
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
-        <section className="rounded-lg border border-slate-200/80 bg-white">
-          <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-            <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-              <History className="size-4 text-slate-500" />
-              发布记录
-            </div>
-            <div className="text-xs text-slate-500">
-              {currentDeployment
-                ? `当前查看 ${currentDeployment.id.slice(0, 8)}`
-                : "暂无记录"}
-            </div>
-          </div>
-          <div className="space-y-3 p-4">
-            {info?.deployments.length ? (
-              <div className="space-y-2">
-                {info.deployments.slice(0, 6).map((item) => {
-                  const itemSelected = item.id === currentDeployment?.id;
-                  const itemStatusClass =
-                    item.status === "SUCCESS"
-                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                      : item.status === "FAILED" || item.status === "CRASHED"
-                        ? "border-rose-200 bg-rose-50 text-rose-700"
-                        : "border-amber-200 bg-amber-50 text-amber-700";
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => onSelectDeployment(item.id)}
-                      className={cn(
-                        "w-full rounded-md border px-3 py-3 text-left transition-colors",
-                        itemSelected
-                          ? "border-slate-900 bg-slate-50"
-                          : "border-slate-200 hover:bg-slate-50",
-                      )}
+                <div
+                  className={cn(
+                    "rounded-full border px-2.5 py-1 text-[11px]",
+                    statusMeta.badgeClass,
+                  )}
+                  >
+                    {info?.activeDeploymentPending
+                      ? i18n.t("previewPanel.deployment.overview.inProgress")
+                      : i18n.t("previewPanel.deployment.overview.settled")}
+                  </div>
+              </div>
+              <div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <div
+                      className={cn("size-2 rounded-full", statusMeta.dotClass)}
+                    />
+                    <h3 className="truncate text-lg font-semibold text-foreground">
+                      {statusMeta.label}
+                    </h3>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Button
+                      size="sm"
+                      className={compactActionButtonClass}
+                      onClick={onDeploy}
+                      disabled={!info?.canDeploy || Boolean(actionLoading)}
                     >
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span
-                              className={cn(
-                                "rounded-full border px-2 py-0.5 text-[11px]",
-                                itemStatusClass,
-                              )}
-                            >
-                              {item.status}
-                            </span>
-                            <span className="font-mono text-[11px] text-slate-400">
-                              {item.id.slice(0, 8)}
-                            </span>
-                          </div>
-                          <div className="text-sm font-medium text-slate-900">
-                            {item.commitMessage || "由 OneCEO 触发的版本发布"}
-                          </div>
+                      {actionLoading === "deploy" ? (
+                        <Loader2
+                          className={cn(
+                            compactActionIconClass,
+                            "animate-spin",
+                          )}
+                        />
+                      ) : (
+                        <Rocket className={compactActionIconClass} />
+                      )}
+                      {compactPrimaryActionText}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className={compactActionButtonClass}
+                      onClick={onRedeploy}
+                      disabled={!currentDeploymentId || Boolean(actionLoading)}
+                    >
+                      {actionLoading === "redeploy" ? (
+                        <Loader2
+                          className={cn(
+                            compactActionIconClass,
+                            "animate-spin",
+                          )}
+                        />
+                      ) : (
+                        <History className={compactActionIconClass} />
+                      )}
+                      {i18n.t("previewPanel.deployment.overview.redeploy")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className={compactActionButtonClass}
+                      onClick={onRollback}
+                      disabled={!currentDeploymentId || Boolean(actionLoading)}
+                    >
+                      {actionLoading === "rollback" ? (
+                        <Loader2
+                          className={cn(
+                            compactActionIconClass,
+                            "animate-spin",
+                          )}
+                        />
+                      ) : null}
+                      {i18n.t("previewPanel.deployment.overview.rollback")}
+                    </Button>
+                  </div>
+                </div>
+                <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+                  {statusMeta.description}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            <DashboardMiniStat
+              label={i18n.t("previewPanel.deployment.overview.currentVersion")}
+              value={currentVersionTimestamp}
+              subtle
+            />
+            <DashboardMiniStat
+              label={i18n.t("previewPanel.deployment.overview.accessEntries")}
+              value={
+                primaryAccessUrl
+                  ? `${accessEntries.length} ${i18n.t("previewPanel.deployment.overview.accessEntries")}`
+                  : i18n.t("previewPanel.deployment.overview.waitingGenerate")
+              }
+              subtle
+            />
+            <DashboardMiniStat
+              label={i18n.t("previewPanel.deployment.overview.releaseRecords")}
+              value={
+                deployments.length
+                  ? i18n.t("previewPanel.deployment.dashboard.recordsCount", {
+                      count: deployments.length,
+                    })
+                  : i18n.t("previewPanel.deployment.noRecord")
+              }
+              subtle
+            />
+          </div>
+
+          <div className="mt-3 rounded-md border border-border/70 bg-muted/30 p-3 sm:p-4">
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                    <Globe className="size-4 text-muted-foreground" />
+                    {i18n.t("previewPanel.deployment.overview.primaryAccessUrl")}
+                  </div>
+                  {primaryAccessUrl ? (
+                    <a
+                      href={primaryAccessUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-2 block break-all text-sm text-[var(--brand-link)] hover:text-[var(--brand-link-hover)]"
+                    >
+                      {primaryAccessUrl}
+                    </a>
+                  ) : (
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      {i18n.t(
+                        "previewPanel.deployment.overview.firstReleaseGeneratesUrl",
+                      )}
+                    </p>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {primaryAccessUrl ? (
+                    <Button asChild>
+                      <a
+                        href={primaryAccessUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <ExternalLink className="size-4" />
+                        {i18n.t("previewPanel.deployment.overview.openSite")}
+                      </a>
+                    </Button>
+                  ) : null}
+                  <Button
+                    variant="outline"
+                    onClick={() => onRefresh(currentDeploymentId || undefined)}
+                    disabled={loading}
+                    >
+                      <RefreshCw
+                        className={cn("size-4", loading ? "animate-spin" : "")}
+                      />
+                    {i18n.t("previewPanel.deployment.overview.refreshResult")}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="grid gap-2">
+                {accessEntries.length ? (
+                  accessEntries.map(([label, value]) => (
+                    <a
+                      key={`${label}-${value}`}
+                      href={value}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2 transition-colors hover:border-border hover:bg-muted/30"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                          {label}
                         </div>
-                        <div className="text-xs text-slate-500">
-                          {formatPreviewTimestamp(item.createdAt) ||
-                            item.createdAt ||
-                            "时间未知"}
+                        <div className="mt-1 break-all text-sm text-foreground">
+                          {value}
                         </div>
                       </div>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="rounded-md border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">
-                暂无发布记录
-              </div>
-            )}
-
-            {currentDeployment ? (
-              <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
-                      当前版本详情
-                    </div>
-                    <div className="mt-1 text-sm font-semibold text-slate-900">
-                      {currentDeployment.commitMessage ||
-                        "由 OneCEO 触发的版本发布"}
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      {currentDeployment.commitAuthor
-                        ? `提交人 ${currentDeployment.commitAuthor}`
-                        : "平台托管发布记录"}
-                    </div>
+                      <ExternalLink className="size-4 shrink-0 text-muted-foreground" />
+                    </a>
+                  ))
+                ) : (
+                  <div className="rounded-md border border-dashed border-border bg-card px-3 py-8 text-center text-sm text-muted-foreground">
+                    {i18n.t("previewPanel.deployment.overview.noAccessibleEntry")}
                   </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    {runtimeUrl ? (
-                      <Button variant="outline" asChild>
-                        <a href={runtimeUrl} target="_blank" rel="noreferrer">
-                          <ExternalLink className="size-4" />
-                          运行地址
-                        </a>
-                      </Button>
-                    ) : null}
-                    {staticUrl && staticUrl !== runtimeUrl ? (
-                      <Button variant="outline" asChild>
-                        <a href={staticUrl} target="_blank" rel="noreferrer">
-                          <ExternalLink className="size-4" />
-                          静态地址
-                        </a>
-                      </Button>
-                    ) : null}
-                  </div>
-                </div>
+                )}
               </div>
-            ) : null}
+            </div>
           </div>
-        </section>
 
-        <div className="space-y-4">
-          <section className="rounded-lg border border-slate-200/80 bg-white">
-            <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
-              <Server className="size-4 text-slate-500" />
-              资源状态
-            </div>
-            <div className="grid gap-3 p-4">
-              <DeploymentInfoCard
-                title="项目"
-                value={info?.projectName || info?.projectId || "未配置"}
-                mono={Boolean(info?.projectId && info?.projectName)}
-                extra={
-                  info?.projectId && info?.projectName
-                    ? info.projectId
-                    : undefined
-                }
-              />
-              <DeploymentInfoCard
-                title="服务"
-                value={info?.serviceName || info?.serviceId || "未配置"}
-                mono={Boolean(info?.serviceId && info?.serviceName)}
-                extra={
-                  info?.serviceId && info?.serviceName
-                    ? info.serviceId
-                    : undefined
-                }
-              />
-              <DeploymentInfoCard
-                title="环境"
-                value={info?.environmentName || info?.environmentId || "未配置"}
-              />
-              <div className="rounded-md border border-slate-200/80 bg-slate-50/40 p-3">
-                <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                  <ShieldCheck className="size-4 text-slate-500" />
-                  部署准备情况
-                </div>
-                <div className="mt-2 text-xs leading-5 text-slate-600">
-                  {info?.missing.length
-                    ? `仍缺少 ${info.missing.join("、")}`
-                    : info?.configured
-                      ? "资源已准备完成，可继续发布与回滚。"
-                      : "正在准备部署资源。"}
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section className="overflow-hidden rounded-lg border border-slate-200/80 bg-white">
-            <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
-              <ScrollText className="size-4 text-slate-500" />
-              发布日志
-            </div>
-            {logsText ? (
-              <div className="max-h-[420px] overflow-auto overscroll-contain bg-slate-950 text-slate-100">
-                <pre className="px-4 py-4 text-[11px] leading-5 whitespace-pre-wrap break-words">
-                  <code>{logsText}</code>
-                </pre>
-              </div>
-            ) : (
-              <div className="px-4 py-10 text-sm text-slate-500">
-                {info?.configured
-                  ? "当前版本暂无日志输出"
-                  : "部署资源准备完成后可查看发布日志"}
-              </div>
-            )}
-          </section>
+          <div className="mt-2 rounded-md border border-dashed border-border bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
+            {primaryAccessUrl
+              ? i18n.t("previewPanel.deployment.overview.accessSummary", {
+                  count: accessEntries.length,
+                  domainCount: primaryDomainCount,
+                })
+              : i18n.t("previewPanel.deployment.overview.focusedClosure")}
+          </div>
         </div>
-      </div>
-    </>
+      </section>
+
+      <section className="min-w-0 rounded-lg border border-border/70 bg-card">
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="border-b border-border px-4 py-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+                  {i18n.t("previewPanel.deployment.overview.releaseCard")}
+                </div>
+                <div className="mt-2 text-base font-semibold text-foreground">
+                  {currentDeployment?.commitMessage ||
+                    i18n.t("previewPanel.deployment.overview.waitingFirstRelease")}
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span>
+                    {currentDeployment?.commitAuthor ||
+                      i18n.t("previewPanel.deployment.overview.platformAutoPublish")}
+                  </span>
+                  <span className="size-1 rounded-full bg-slate-300" />
+                  <span>{currentVersionTimestamp}</span>
+                  {currentDeployment?.id ? (
+                    <>
+                      <span className="size-1 rounded-full bg-slate-300" />
+                      <span className="font-mono">
+                        {currentDeployment.id.slice(0, 8)}
+                      </span>
+                    </>
+                  ) : null}
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {runtimeUrl ? (
+                  <Button variant="outline" asChild>
+                    <a href={runtimeUrl} target="_blank" rel="noreferrer">
+                      <ExternalLink className="size-4" />
+                      {i18n.t("previewPanel.deployment.runtimeUrl")}
+                    </a>
+                  </Button>
+                ) : null}
+                {staticUrl && staticUrl !== runtimeUrl ? (
+                  <Button variant="outline" asChild>
+                    <a href={staticUrl} target="_blank" rel="noreferrer">
+                      <ExternalLink className="size-4" />
+                      {i18n.t("previewPanel.deployment.siteUrl")}
+                    </a>
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex min-h-0 flex-1 flex-col gap-3 p-3 sm:p-4">
+            <div className="rounded-md border border-border/70 bg-muted/30 p-3">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <DashboardMiniStat
+                  label={i18n.t("previewPanel.deployment.overview.onlineStatus")}
+                  value={currentDeployment?.status || info?.latestStatus || "UNKNOWN"}
+                />
+                <DashboardMiniStat
+                  label={i18n.t("previewPanel.deployment.overview.recentLogs")}
+                  value={
+                    logEntries.length
+                      ? i18n.t("previewPanel.deployment.dashboard.recordsCount", {
+                          count: logEntries.length,
+                        })
+                      : i18n.t("previewPanel.deployment.overview.none")
+                  }
+                />
+                <DashboardMiniStat
+                  label={i18n.t("previewPanel.deployment.overview.rollbackCapacity")}
+                  value={
+                    stableReleaseCount
+                      ? i18n.t("previewPanel.deployment.overview.stableVersions", {
+                          count: stableReleaseCount,
+                        })
+                      : i18n.t("previewPanel.deployment.overview.none")
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="min-h-0 rounded-md border border-border/70">
+              <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
+                <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                  <History className="size-4 text-muted-foreground" />
+                  {i18n.t("previewPanel.deployment.overview.releaseList")}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    {i18n.t("previewPanel.deployment.dashboard.recordsCount", {
+                      count: deployments.length,
+                    })}
+                  </span>
+                  {deployments.length > 4 ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setReleaseListExpanded((current) => !current)
+                      }
+                      className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+                    >
+                      {releaseListExpanded
+                        ? i18n.t("previewPanel.deployment.overview.collapse")
+                        : i18n.t("previewPanel.deployment.overview.expand")}
+                      <ChevronDown
+                        className={cn(
+                          "size-3 transition-transform",
+                          releaseListExpanded ? "rotate-180" : "",
+                        )}
+                      />
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <div
+                className={cn(
+                  "space-y-2 overflow-auto px-4 py-2.5",
+                  releaseListExpanded ? "max-h-[280px]" : "max-h-[208px]",
+                )}
+              >
+                {visibleDeployments.length ? (
+                  visibleDeployments.map((item) => {
+                    const itemSelected = item.id === currentDeployment?.id;
+                    const itemStatusClass =
+                      item.status === "SUCCESS"
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        : item.status === "FAILED" || item.status === "CRASHED"
+                          ? "border-rose-200 bg-rose-50 text-rose-700"
+                          : "border-amber-200 bg-amber-50 text-amber-700";
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => onSelectDeployment(item.id)}
+                        className={cn(
+                          "w-full rounded-md border px-3 py-3 text-left transition-colors",
+                          itemSelected
+                            ? "border-slate-900 bg-muted/30"
+                            : "border-border hover:bg-muted/30",
+                        )}
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span
+                                className={cn(
+                                  "rounded-full border px-2 py-0.5 text-[11px]",
+                                  itemStatusClass,
+                                )}
+                              >
+                                {item.status}
+                              </span>
+                              <span className="font-mono text-[11px] text-muted-foreground">
+                                {item.id.slice(0, 8)}
+                              </span>
+                            </div>
+                            <div className="mt-2 text-sm font-medium text-foreground">
+                              {item.commitMessage ||
+                                i18n.t(
+                                  "previewPanel.deployment.overview.triggeredByOneceo",
+                                )}
+                            </div>
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {formatPreviewTimestamp(item.createdAt) ||
+                              item.createdAt ||
+                              i18n.t("previewPanel.deployment.overview.unknownTime")}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })
+                ) : (
+                  <div className="rounded-md border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+                    {i18n.t("previewPanel.deployment.noRecord")}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="min-h-0 overflow-hidden rounded-md border border-border/70 bg-slate-950 text-slate-100">
+              <div className="flex items-center justify-between gap-3 border-b border-slate-800 px-4 py-2.5">
+                <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+                  <ScrollText className="size-4 text-muted-foreground" />
+                  {i18n.t("previewPanel.deployment.overview.releaseLog")}
+                </div>
+                <div className="text-[11px] text-muted-foreground">
+                  {i18n.t("previewPanel.deployment.overview.onlyRecentContent")}
+                </div>
+              </div>
+              {logEntries.length ? (
+                <div className="max-h-[176px] overflow-auto overscroll-contain px-4 py-2.5">
+                  <div className="space-y-3">
+                    {logEntries.map((entry, index) => (
+                      <div
+                        key={`${entry.timestamp || "log"}-${index}`}
+                        className="rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2"
+                      >
+                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                          {entry.timestamp ? (
+                            <span>
+                              {formatPreviewTimestamp(entry.timestamp) ||
+                                entry.timestamp}
+                            </span>
+                          ) : null}
+                          {entry.severity ? (
+                            <span className="rounded-full border border-slate-700 px-1.5 py-0.5 uppercase tracking-[0.08em] text-slate-300">
+                              {entry.severity}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="mt-2 break-words font-mono text-[11px] leading-5 text-slate-100">
+                          {entry.message}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="px-4 py-10 text-sm text-muted-foreground">
+                  {info?.configured
+                    ? i18n.t("previewPanel.deployment.overview.noCurrentLog")
+                    : i18n.t("previewPanel.deployment.overview.logsAfterReady")}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -3125,34 +3482,41 @@ function DeploymentDashboardSection({
   const [mode, setMode] = useState<"deployments" | "site">("deployments");
 
   if (mode === "site") {
-    const siteName = info?.projectName || info?.serviceName || "未命名站点";
+    const siteName =
+      info?.projectName ||
+      info?.serviceName ||
+      i18n.t("previewPanel.deployment.dashboard.unnamedSite");
     const primaryUrl = accessEntries[0]?.[1] || "";
     const recentLogs = info?.logs.slice(-3) || [];
-    const siteVisibilityLabel = primaryUrl ? "公开可访问" : "等待首次发布";
+    const siteVisibilityLabel = primaryUrl
+      ? i18n.t("previewPanel.deployment.dashboard.publicAccessible")
+      : i18n.t("previewPanel.deployment.dashboard.waitingFirstRelease");
     const analyticsPresentation = getDeploymentAnalyticsPresentation(
       info?.analytics,
       Boolean(primaryUrl),
     );
+    const hasAnalyticsMetrics =
+      info?.analytics?.status === "tracking" || info?.analytics?.status === "bound";
     const visitsValue =
-      info?.analytics?.status === "ready"
+      hasAnalyticsMetrics
         ? formatMetricCount(info?.analytics?.visits, "0")
         : analyticsPresentation.integrationValue;
     const visitorsValue =
-      info?.analytics?.status === "ready"
+      hasAnalyticsMetrics
         ? formatMetricCount(info?.analytics?.visitors, "0")
         : analyticsPresentation.integrationValue;
     return (
       <div className="space-y-4">
-        <section className="rounded-lg border border-slate-200/80 bg-white p-4 sm:p-5">
+        <section className="rounded-lg border border-border/70 bg-card p-4 sm:p-5">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div className="min-w-0">
               <div className="flex items-start gap-3">
-                <div className="flex size-11 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-100 text-slate-700">
+                <div className="flex size-11 shrink-0 items-center justify-center rounded-md border border-border bg-muted/50 text-foreground">
                   <Globe2 className="size-4" />
                 </div>
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="text-lg font-semibold text-slate-900">
+                    <h3 className="text-lg font-semibold text-foreground">
                       {siteName}
                     </h3>
                     <span
@@ -3169,18 +3533,20 @@ function DeploymentDashboardSection({
                       href={primaryUrl}
                       target="_blank"
                       rel="noreferrer"
-                      className="mt-1 flex items-center gap-1 truncate text-sm text-slate-500 hover:text-slate-700 hover:underline"
+                      className="mt-1 flex items-center gap-1 truncate text-sm text-muted-foreground hover:text-foreground hover:underline"
                     >
                       {primaryUrl}
                       <ExternalLink className="size-3.5 shrink-0" />
                     </a>
                   ) : (
-                    <div className="mt-1 text-sm text-slate-500">
-                      尚未生成站点访问地址
+                    <div className="mt-1 text-sm text-muted-foreground">
+                      {i18n.t("previewPanel.deployment.dashboard.siteUrlMissing")}
                     </div>
                   )}
-                  <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-                    当前视图只展示平台已经真实拿到的站点状态、访问入口、发布版本，以及 Umami 已返回的统计结果。
+                  <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
+                    {i18n.t(
+                      "previewPanel.deployment.dashboard.siteViewDescription",
+                    )}
                   </p>
                 </div>
               </div>
@@ -3190,7 +3556,7 @@ function DeploymentDashboardSection({
               {primaryUrl ? (
                 <Button asChild size="sm" className="h-8 text-xs">
                   <a href={primaryUrl} target="_blank" rel="noreferrer">
-                    打开网站
+                    {i18n.t("previewPanel.deployment.overview.openSite")}
                   </a>
                 </Button>
               ) : null}
@@ -3199,60 +3565,66 @@ function DeploymentDashboardSection({
 
           <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <DeploymentMetricCard
-              title="访问状态"
+              title={i18n.t("previewPanel.deployment.dashboard.accessStatus")}
               value={siteVisibilityLabel}
               subtitle={
                 primaryUrl
-                  ? "当前已有公开访问入口，可直接打开线上版本。"
-                  : "首次发布成功后自动生成默认访问地址。"
+                  ? i18n.t(
+                      "previewPanel.deployment.dashboard.accessReadyDescription",
+                    )
+                  : i18n.t(
+                      "previewPanel.deployment.dashboard.defaultAccessDescription",
+                    )
               }
             />
             <DeploymentMetricCard
-              title="最新版本"
+              title={i18n.t("previewPanel.deployment.dashboard.latestVersion")}
               value={
                 currentDeployment?.commitMessage ||
                 (currentDeployment?.id
                   ? currentDeployment.id.slice(0, 8)
-                  : "等待首个版本")
+                  : i18n.t("previewPanel.deployment.dashboard.waitingFirstVersion"))
               }
               subtitle={
                 formatPreviewTimestamp(currentDeployment?.createdAt) ||
                 currentDeployment?.createdAt ||
-                "还没有发布记录"
+                i18n.t("previewPanel.deployment.dashboard.noReleaseHistory")
               }
             />
             <DeploymentMetricCard
-              title="访问入口数"
+              title={i18n.t("previewPanel.deployment.dashboard.accessEntryCount")}
               value={`${accessEntries.length}`}
               subtitle={
                 accessEntries.length
-                  ? `其中 ${info?.domains.length || 0} 个为绑定域名`
-                  : "当前没有可展示的入口"
+                  ? i18n.t("previewPanel.deployment.dashboard.boundDomainCount", {
+                      count: info?.domains.length || 0,
+                    })
+                  : i18n.t("previewPanel.deployment.dashboard.noEntries")
               }
             />
             <DeploymentMetricCard
-              title="近 30 天 PV"
+              title={i18n.t("previewPanel.deployment.dashboard.pageviews30d")}
               value={analyticsPresentation.trafficValue}
               subtitle={analyticsPresentation.trafficSubtitle}
             />
           </div>
         </section>
 
-        <section className="rounded-lg border border-slate-200/80 bg-white">
-          <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
-            <div className="text-sm font-semibold text-slate-900">
-              当前平台已感知的数据
+        <section className="rounded-lg border border-border/70 bg-card">
+          <div className="border-b border-border px-4 py-4 sm:px-5">
+            <div className="text-sm font-semibold text-foreground">
+              {i18n.t("previewPanel.deployment.dashboard.sensedDataTitle")}
             </div>
-            <div className="mt-1 text-xs text-slate-500">
-              这里显示当前接口已经真实提供的数据，拿不到统计时会明确标注当前状态。
+            <div className="mt-1 text-xs text-muted-foreground">
+              {i18n.t("previewPanel.deployment.dashboard.sensedDataDescription")}
             </div>
           </div>
           <div className="grid gap-4 p-4 sm:p-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
             <div className="space-y-4">
-              <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                  <Globe className="size-4 text-slate-500" />
-                  访问入口
+              <div className="rounded-md border border-border/70 bg-muted/30 p-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                  <Globe className="size-4 text-muted-foreground" />
+                  {i18n.t("previewPanel.deployment.dashboard.accessEntries")}
                 </div>
                 <div className="mt-3 space-y-2">
                   {accessEntries.length ? (
@@ -3262,24 +3634,26 @@ function DeploymentDashboardSection({
                         href={url}
                         target="_blank"
                         rel="noreferrer"
-                        className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50"
+                        className="flex items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground transition-colors hover:border-border hover:bg-muted/30"
                       >
                         <div className="min-w-0">
-                          <div className="text-[11px] uppercase tracking-[0.08em] text-slate-400">
+                          <div className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
                             {label}
                           </div>
-                          <div className="mt-1 break-all text-slate-700">
+                          <div className="mt-1 break-all text-foreground">
                             {url}
                           </div>
                         </div>
-                        <ExternalLink className="size-4 shrink-0 text-slate-400" />
+                        <ExternalLink className="size-4 shrink-0 text-muted-foreground" />
                       </a>
                     ))
                   ) : (
-                    <div className="rounded-md border border-dashed border-slate-200 px-3 py-8 text-center text-sm text-slate-400">
+                    <div className="rounded-md border border-dashed border-border px-3 py-8 text-center text-sm text-muted-foreground">
                       {sessionId
-                        ? "还没有可展示的访问入口"
-                        : "缺少会话信息，无法展示访问入口"}
+                        ? i18n.t("previewPanel.deployment.dashboard.noAccessEntries")
+                        : i18n.t(
+                            "previewPanel.deployment.dashboard.noSessionForEntries",
+                          )}
                     </div>
                   )}
                 </div>
@@ -3287,84 +3661,113 @@ function DeploymentDashboardSection({
 
               <div className="grid gap-3 md:grid-cols-2">
                 <DeploymentInfoCard
-                  title="项目"
-                  value={info?.projectName || info?.projectId || "未配置"}
+                  title={i18n.t("previewPanel.deployment.dashboard.project")}
+                  value={
+                    info?.projectName ||
+                    info?.projectId ||
+                    i18n.t("previewPanel.deployment.dashboard.unconfigured")
+                  }
                   extra={
-                    info?.projectId ? `项目 ID ${info.projectId}` : undefined
+                    info?.projectId
+                      ? i18n.t("previewPanel.deployment.dashboard.projectId", {
+                          id: info.projectId,
+                        })
+                      : undefined
                   }
                   mono={Boolean(info?.projectId && info?.projectName)}
                 />
                 <DeploymentInfoCard
-                  title="服务"
-                  value={info?.serviceName || info?.serviceId || "未配置"}
+                  title={i18n.t("previewPanel.deployment.dashboard.service")}
+                  value={
+                    info?.serviceName ||
+                    info?.serviceId ||
+                    i18n.t("previewPanel.deployment.dashboard.unconfigured")
+                  }
                   extra={
                     info?.serviceId
-                      ? `服务 ID ${info.serviceId}`
-                      : "等待平台完成服务绑定"
+                      ? i18n.t("previewPanel.deployment.dashboard.serviceId", {
+                          id: info.serviceId,
+                        })
+                      : i18n.t(
+                          "previewPanel.deployment.dashboard.waitingServiceBinding",
+                        )
                   }
                   mono={Boolean(info?.serviceId && info?.serviceName)}
                 />
                 <DeploymentInfoCard
-                  title="当前版本状态"
+                  title={i18n.t(
+                    "previewPanel.deployment.dashboard.currentVersionStatus",
+                  )}
                   value={
                     currentDeployment?.status || info?.latestStatus || "UNKNOWN"
                   }
                   extra={statusMeta.description}
                 />
                 <DeploymentInfoCard
-                  title="最近同步"
+                  title={i18n.t("previewPanel.deployment.dashboard.latestSync")}
                   value={latestTimestamp}
                   extra={
                     totalDeployments
-                      ? `累计 ${totalDeployments} 次发布，成功率 ${successRate}`
-                      : "当前还没有发布历史"
+                      ? i18n.t("previewPanel.deployment.dashboard.publishSummary", {
+                          count: totalDeployments,
+                          rate: successRate,
+                        })
+                      : i18n.t(
+                          "previewPanel.deployment.dashboard.noPublishHistory",
+                        )
                   }
                 />
               </div>
             </div>
 
             <div className="space-y-4">
-              <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                  <BarChart3 className="size-4 text-slate-500" />
-                  站点统计
+              <div className="rounded-md border border-border/70 bg-muted/30 p-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                  <BarChart3 className="size-4 text-muted-foreground" />
+                  {i18n.t("previewPanel.deployment.dashboard.siteAnalytics")}
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   <DeploymentMiniStatus
-                    label="统计接入"
+                    label={i18n.t(
+                      "previewPanel.deployment.dashboard.analyticsIntegration",
+                    )}
                     value={analyticsPresentation.integrationValue}
                   />
                   <DeploymentMiniStatus
-                    label="实时访客"
+                    label={i18n.t(
+                      "previewPanel.deployment.dashboard.realtimeVisitors",
+                    )}
                     value={analyticsPresentation.realtimeValue}
                   />
                   <DeploymentMiniStatus
-                    label="近 30 天 Visits"
+                    label={i18n.t("previewPanel.deployment.dashboard.visits30d")}
                     value={visitsValue}
                   />
                   <DeploymentMiniStatus
-                    label="近 30 天 Visitors"
+                    label={i18n.t(
+                      "previewPanel.deployment.dashboard.visitors30d",
+                    )}
                     value={visitorsValue}
                   />
                 </div>
-                <div className="mt-3 text-xs leading-5 text-slate-500">
+                <div className="mt-3 text-xs leading-5 text-muted-foreground">
                   {analyticsPresentation.integrationSubtitle}
                 </div>
               </div>
 
-              <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                  <ScrollText className="size-4 text-slate-500" />
-                  最近日志
+              <div className="rounded-md border border-border/70 bg-muted/30 p-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                  <ScrollText className="size-4 text-muted-foreground" />
+                  {i18n.t("previewPanel.deployment.dashboard.recentLogs")}
                 </div>
                 <div className="mt-3 space-y-2">
                   {recentLogs.length ? (
                     recentLogs.map((entry, index) => (
                       <div
                         key={`${entry.timestamp || "log"}-${index}`}
-                        className="rounded-md border border-slate-200 bg-white px-3 py-2"
+                        className="rounded-md border border-border bg-card px-3 py-2"
                       >
-                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                           {entry.timestamp ? (
                             <span>
                               {formatPreviewTimestamp(entry.timestamp) ||
@@ -3372,54 +3775,60 @@ function DeploymentDashboardSection({
                             </span>
                           ) : null}
                           {entry.severity ? (
-                            <span className="rounded-full border border-slate-200 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.08em] text-slate-500">
+                            <span className="rounded-full border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
                               {entry.severity}
                             </span>
                           ) : null}
                         </div>
-                        <div className="mt-1 text-sm leading-6 text-slate-700">
+                        <div className="mt-1 text-sm leading-6 text-foreground">
                           {entry.message}
                         </div>
                       </div>
                     ))
                   ) : (
-                    <div className="rounded-md border border-dashed border-slate-200 px-3 py-8 text-center text-sm text-slate-400">
-                      当前没有可展示的发布日志
+                    <div className="rounded-md border border-dashed border-border px-3 py-8 text-center text-sm text-muted-foreground">
+                      {i18n.t("previewPanel.deployment.dashboard.noRecentLogs")}
                     </div>
                   )}
                 </div>
               </div>
 
-              <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                  <ShieldCheck className="size-4 text-slate-500" />
-                  平台判断
+              <div className="rounded-md border border-border/70 bg-muted/30 p-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                  <ShieldCheck className="size-4 text-muted-foreground" />
+                  {i18n.t("previewPanel.deployment.dashboard.platformDecision")}
                 </div>
                 <div className="mt-3 grid gap-3">
                   <DeploymentMiniStatus
-                    label="站点可见性"
+                    label={i18n.t("previewPanel.deployment.dashboard.siteVisibility")}
                     value={siteVisibilityLabel}
                   />
                   <DeploymentMiniStatus
-                    label="站点统计"
+                    label={i18n.t("previewPanel.deployment.dashboard.siteStats")}
                     value={analyticsPresentation.integrationValue}
                   />
                   <DeploymentMiniStatus
-                    label="实时访客"
+                    label={i18n.t(
+                      "previewPanel.deployment.dashboard.realtimeVisitors",
+                    )}
                     value={analyticsPresentation.realtimeValue}
                   />
                   <DeploymentMiniStatus
-                    label="部署准备"
+                    label={i18n.t(
+                      "previewPanel.deployment.dashboard.deploymentPreparation",
+                    )}
                     value={
                       info?.missing.length
-                        ? `缺少 ${info.missing.join("、")}`
+                        ? i18n.t("previewPanel.deployment.dashboard.missingItems", {
+                            items: info.missing.join("、"),
+                          })
                         : info?.configured
-                          ? "已准备完成"
-                          : "正在准备"
+                          ? i18n.t("previewPanel.deployment.dashboard.ready")
+                          : i18n.t("previewPanel.deployment.dashboard.preparing")
                     }
                   />
                 </div>
-                <div className="mt-3 text-xs leading-5 text-slate-500">
+                <div className="mt-3 text-xs leading-5 text-muted-foreground">
                   {analyticsPresentation.realtimeSubtitle}
                 </div>
               </div>
@@ -3427,33 +3836,39 @@ function DeploymentDashboardSection({
           </div>
         </section>
 
-        <section className="rounded-lg border border-slate-200/80 bg-white">
-          <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
-            <div className="text-sm font-semibold text-slate-900">
-              分析能力接入状态
+        <section className="rounded-lg border border-border/70 bg-card">
+          <div className="border-b border-border px-4 py-4 sm:px-5">
+            <div className="text-sm font-semibold text-foreground">
+              {i18n.t("previewPanel.deployment.dashboard.analyticsTitle")}
             </div>
-            <div className="mt-1 text-xs text-slate-500">
-              这里继续展开当前站点的真实统计接入情况，不会混入未接入的数据源。
+            <div className="mt-1 text-xs text-muted-foreground">
+              {i18n.t("previewPanel.deployment.dashboard.analyticsDescription")}
             </div>
           </div>
           <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4 sm:p-5">
             <DeploymentMetricCard
-              title="页面访问统计"
+              title={i18n.t("previewPanel.deployment.dashboard.pageTraffic")}
               value={analyticsPresentation.trafficValue}
               subtitle={analyticsPresentation.trafficSubtitle}
             />
             <DeploymentMetricCard
-              title="访问会话"
+              title={i18n.t("previewPanel.deployment.dashboard.visitSessions")}
               value={visitsValue}
-              subtitle="近 30 天 visits 聚合。"
+              subtitle={i18n.t(
+                "previewPanel.deployment.dashboard.visitSessionsDescription",
+              )}
             />
             <DeploymentMetricCard
-              title="访客人数"
+              title={i18n.t("previewPanel.deployment.dashboard.visitorCount")}
               value={visitorsValue}
-              subtitle="近 30 天 visitors 聚合。"
+              subtitle={i18n.t(
+                "previewPanel.deployment.dashboard.visitorCountDescription",
+              )}
             />
             <DeploymentMetricCard
-              title="实时访客"
+              title={i18n.t(
+                "previewPanel.deployment.dashboard.realtimeVisitors",
+              )}
               value={analyticsPresentation.realtimeValue}
               subtitle={analyticsPresentation.realtimeSubtitle}
             />
@@ -3465,17 +3880,19 @@ function DeploymentDashboardSection({
 
   return (
     <div className="space-y-4">
-      <section className="overflow-hidden rounded-lg border border-slate-200/80 bg-white">
-        <div className="border-b border-slate-200 p-4 sm:p-5">
+      <section className="overflow-hidden rounded-lg border border-border/70 bg-card">
+        <div className="border-b border-border p-4 sm:p-5">
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div className="min-w-0">
-                <div className="text-[11px] uppercase tracking-[0.16em] text-slate-400">
-                  部署数据
+                <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
+                  {i18n.t("previewPanel.deployment.dashboard.deploymentData")}
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <h3 className="text-xl font-semibold text-slate-900">
-                    当前状态：{statusMeta.label}
+                  <h3 className="text-xl font-semibold text-foreground">
+                    {i18n.t("previewPanel.deployment.dashboard.currentStatus", {
+                      status: statusMeta.label,
+                    })}
                   </h3>
                   <span
                     className={cn(
@@ -3484,11 +3901,11 @@ function DeploymentDashboardSection({
                     )}
                   >
                     {info?.activeDeploymentPending
-                      ? "发布进行中"
-                      : "状态已同步"}
+                      ? i18n.t("previewPanel.deployment.dashboard.statusPublishing")
+                      : i18n.t("previewPanel.deployment.dashboard.statusSynced")}
                   </span>
                 </div>
-                <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
                   {statusMeta.description}
                 </p>
               </div>
@@ -3496,21 +3913,21 @@ function DeploymentDashboardSection({
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
-                最近同步:{" "}
-                <span className="font-medium text-slate-900">
+              <div className="rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
+                {i18n.t("previewPanel.deployment.dashboard.latestSyncShort")}:{" "}
+                <span className="font-medium text-foreground">
                   {latestTimestamp}
                 </span>
               </div>
-              <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
-                可回退版本:{" "}
-                <span className="font-medium text-slate-900">
+              <div className="rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
+                {i18n.t("previewPanel.deployment.dashboard.rollbackVersions")}:{" "}
+                <span className="font-medium text-foreground">
                   {successCount}
                 </span>
               </div>
-              <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
-                访问入口:{" "}
-                <span className="font-medium text-slate-900">
+              <div className="rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
+                {i18n.t("previewPanel.deployment.dashboard.accessEntriesShort")}:{" "}
+                <span className="font-medium text-foreground">
                   {accessEntries.length}
                 </span>
               </div>
@@ -3520,43 +3937,63 @@ function DeploymentDashboardSection({
 
         <div className="grid gap-px bg-slate-200 grid-cols-2 lg:grid-cols-4">
           <CompactDeploymentMetric
-            label="成功率"
+            label={i18n.t("previewPanel.deployment.dashboard.successRate")}
             value={successRate}
-            hint={totalDeployments ? `${totalDeployments} 次发布` : "暂无记录"}
+            hint={
+              totalDeployments
+                ? i18n.t("previewPanel.deployment.dashboard.recordsCount", {
+                    count: totalDeployments,
+                  })
+                : i18n.t("previewPanel.deployment.noRecord")
+            }
           />
           <CompactDeploymentMetric
-            label="成功版本"
+            label={i18n.t("previewPanel.deployment.dashboard.successVersions")}
             value={`${successCount}`}
-            hint={successCount ? "可作为稳定回退点" : "等待首个稳定版本"}
+            hint={
+              successCount
+                ? i18n.t("previewPanel.deployment.dashboard.stableRollbackHint")
+                : i18n.t("previewPanel.deployment.dashboard.waitingStableVersion")
+            }
           />
           <CompactDeploymentMetric
-            label="失败版本"
+            label={i18n.t("previewPanel.deployment.dashboard.failedVersions")}
             value={`${failedCount}`}
-            hint={failedCount ? "建议回看失败日志" : "当前没有失败版本"}
+            hint={
+              failedCount
+                ? i18n.t("previewPanel.deployment.dashboard.reviewFailedLogs")
+                : i18n.t("previewPanel.deployment.dashboard.noFailedVersions")
+            }
           />
           <CompactDeploymentMetric
-            label="访问入口"
+            label={i18n.t("previewPanel.deployment.dashboard.accessEntriesShort")}
             value={`${accessEntries.length}`}
-            hint={accessEntries.length ? "线上地址已可用" : "等待首次发布"}
+            hint={
+              accessEntries.length
+                ? i18n.t("previewPanel.deployment.dashboard.onlineAddressReady")
+                : i18n.t("previewPanel.deployment.dashboard.waitingFirstRelease")
+            }
           />
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200/80 bg-white">
-        <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
-          <div className="text-sm font-semibold text-slate-900">
-            当前线上版本
+      <section className="rounded-lg border border-border/70 bg-card">
+        <div className="border-b border-border px-4 py-4 sm:px-5">
+          <div className="text-sm font-semibold text-foreground">
+            {i18n.t("previewPanel.deployment.dashboard.currentLiveVersion")}
           </div>
-          <div className="mt-1 text-xs text-slate-500">
-            先看当前可访问版本，再决定是否继续发布、验证或回退。
+          <div className="mt-1 text-xs text-muted-foreground">
+            {i18n.t(
+              "previewPanel.deployment.dashboard.currentLiveVersionDescription",
+            )}
           </div>
         </div>
         <div className="space-y-4 p-4 sm:p-5">
-          <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
+          <div className="rounded-md border border-border/70 bg-muted/30 p-4">
             <div className="flex flex-col gap-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">
-                  版本说明
+                <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+                  {i18n.t("previewPanel.deployment.dashboard.versionNotes")}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <span
@@ -3571,21 +4008,25 @@ function DeploymentDashboardSection({
                   </span>
                   {info?.activeDeploymentPending ? (
                     <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-700">
-                      等待完成
+                      {i18n.t("previewPanel.deployment.dashboard.waitingComplete")}
                     </span>
                   ) : null}
                 </div>
               </div>
-              <div className="text-base font-semibold text-slate-900">
-                {currentDeployment?.commitMessage || "等待首次发布"}
+              <div className="text-base font-semibold text-foreground">
+                {currentDeployment?.commitMessage ||
+                  i18n.t("previewPanel.deployment.overview.waitingFirstRelease")}
               </div>
-              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                <span>{currentDeployment?.commitAuthor || "平台自动发布"}</span>
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <span>
+                  {currentDeployment?.commitAuthor ||
+                    i18n.t("previewPanel.deployment.overview.platformAutoPublish")}
+                </span>
                 <span className="size-1 rounded-full bg-slate-300" />
                 <span>
                   {formatPreviewTimestamp(currentDeployment?.createdAt) ||
                     currentDeployment?.createdAt ||
-                    "时间未知"}
+                    i18n.t("previewPanel.deployment.overview.unknownTime")}
                 </span>
                 {currentDeployment?.id ? (
                   <>
@@ -3600,9 +4041,9 @@ function DeploymentDashboardSection({
           </div>
 
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
-            <div className="rounded-md border border-slate-200/80 p-4">
-              <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">
-                访问入口
+            <div className="rounded-md border border-border/70 p-4">
+              <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+                {i18n.t("previewPanel.deployment.dashboard.accessEntries")}
               </div>
               <div className="mt-3 space-y-2">
                 {accessEntries.length ? (
@@ -3612,33 +4053,39 @@ function DeploymentDashboardSection({
                       href={url}
                       target="_blank"
                       rel="noreferrer"
-                      className="flex items-center justify-between gap-3 rounded-md border border-slate-200/80 bg-slate-50/60 px-3 py-2 text-sm text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50"
+                      className="flex items-center justify-between gap-3 rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-sm text-foreground transition-colors hover:border-border hover:bg-muted/30"
                     >
                       <span className="truncate">{label}</span>
-                      <ExternalLink className="size-4 shrink-0 text-slate-400" />
+                      <ExternalLink className="size-4 shrink-0 text-muted-foreground" />
                     </a>
                   ))
                 ) : (
-                  <div className="rounded-md border border-dashed border-slate-200 px-3 py-6 text-sm text-slate-400">
-                    暂无可访问入口
+                  <div className="rounded-md border border-dashed border-border px-3 py-6 text-sm text-muted-foreground">
+                    {i18n.t("previewPanel.deployment.overview.noAccessibleEntry")}
                   </div>
                 )}
               </div>
             </div>
 
-            <div className="rounded-md border border-slate-200/80 p-4">
-              <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">
-                发布概览
+            <div className="rounded-md border border-border/70 p-4">
+              <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+                {i18n.t("previewPanel.deployment.dashboard.publishOverview")}
               </div>
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <DashboardMiniStat label="成功版本" value={`${successCount}`} />
-                <DashboardMiniStat label="失败版本" value={`${failedCount}`} />
                 <DashboardMiniStat
-                  label="访问入口"
+                  label={i18n.t("previewPanel.deployment.dashboard.successVersions")}
+                  value={`${successCount}`}
+                />
+                <DashboardMiniStat
+                  label={i18n.t("previewPanel.deployment.dashboard.failedVersions")}
+                  value={`${failedCount}`}
+                />
+                <DashboardMiniStat
+                  label={i18n.t("previewPanel.deployment.dashboard.accessEntriesShort")}
                   value={`${accessEntries.length}`}
                 />
                 <DashboardMiniStat
-                  label="最近活动"
+                  label={i18n.t("previewPanel.deployment.dashboard.recentActivity")}
                   value={latestTimestamp}
                   subtle
                 />
@@ -3648,40 +4095,59 @@ function DeploymentDashboardSection({
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200/80 bg-white">
-        <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
-          <div className="text-sm font-semibold text-slate-900">操作判断</div>
-          <div className="mt-1 text-xs text-slate-500">
-            把最重要的部署判断压缩成简短结论，减少在侧栏里反复找信息。
+      <section className="rounded-lg border border-border/70 bg-card">
+        <div className="border-b border-border px-4 py-4 sm:px-5">
+          <div className="text-sm font-semibold text-foreground">
+            {i18n.t("previewPanel.deployment.dashboard.operationsDecision")}
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            {i18n.t(
+              "previewPanel.deployment.dashboard.operationsDecisionDescription",
+            )}
           </div>
         </div>
         <div className="grid gap-3 p-4 sm:p-5 md:grid-cols-3">
           <InsightCard
-            title="当前版本"
+            title={i18n.t("previewPanel.deployment.dashboard.currentVersionInsight")}
             description={
               currentDeployment?.status === "SUCCESS"
-                ? "当前线上版本稳定，可继续发布新版本或作为回退基线。"
+                ? i18n.t(
+                    "previewPanel.deployment.dashboard.currentVersionStable",
+                  )
                 : info?.activeDeploymentPending
-                  ? "代码已同步，正在等待构建完成并切换线上版本。"
-                  : "当前还没有稳定线上版本，建议先完成一次成功发布。"
+                  ? i18n.t(
+                      "previewPanel.deployment.dashboard.currentVersionPending",
+                    )
+                  : i18n.t(
+                      "previewPanel.deployment.dashboard.currentVersionMissing",
+                    )
             }
           />
           <InsightCard
-            title="入口状态"
+            title={i18n.t("previewPanel.deployment.dashboard.entryStatus")}
             description={
               accessEntries.length
-                ? `当前有 ${accessEntries.length} 个访问入口，可直接用于线上验证。`
-                : "完成首次发布后会自动生成默认访问地址。"
+                ? i18n.t("previewPanel.deployment.dashboard.entryStatusCount", {
+                    count: accessEntries.length,
+                  })
+                : i18n.t("previewPanel.deployment.dashboard.entryStatusMissing")
             }
           />
           <InsightCard
-            title="回退空间"
+            title={i18n.t("previewPanel.deployment.dashboard.rollbackSpace")}
             description={
               successCount > 1
-                ? `当前有 ${successCount} 个成功版本，可以直接从历史版本中回退。`
+                ? i18n.t(
+                    "previewPanel.deployment.dashboard.rollbackSpaceMany",
+                    { count: successCount },
+                  )
                 : successCount === 1
-                  ? "当前只有 1 个成功版本，建议先积累更多稳定版本。"
-                  : "当前没有成功版本，暂时无法进行稳定回退。"
+                  ? i18n.t(
+                      "previewPanel.deployment.dashboard.rollbackSpaceSingle",
+                    )
+                  : i18n.t(
+                      "previewPanel.deployment.dashboard.rollbackSpaceNone",
+                    )
             }
           />
         </div>
@@ -3693,18 +4159,22 @@ function DeploymentDashboardSection({
         error={templateBaselineError}
       />
 
-      <section className="rounded-lg border border-slate-200/80 bg-white">
-        <div className="flex flex-col gap-2 border-b border-slate-200 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+      <section className="rounded-lg border border-border/70 bg-card">
+        <div className="flex flex-col gap-2 border-b border-border px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <div className="text-sm font-semibold text-slate-900">
-              最近版本轨迹
+            <div className="text-sm font-semibold text-foreground">
+              {i18n.t("previewPanel.deployment.dashboard.recentReleaseTimeline")}
             </div>
-            <div className="mt-1 text-xs text-slate-500">
-              精简展示最近 6 次发布，重点保留状态、时间和版本说明。
+            <div className="mt-1 text-xs text-muted-foreground">
+              {i18n.t(
+                "previewPanel.deployment.dashboard.recentReleaseTimelineDescription",
+              )}
             </div>
           </div>
-          <div className="text-xs text-slate-500">
-            {info?.deployments.length || 0} 条记录
+          <div className="text-xs text-muted-foreground">
+            {i18n.t("previewPanel.deployment.dashboard.recordsCount", {
+              count: info?.deployments.length || 0,
+            })}
           </div>
         </div>
         <div className="p-5">
@@ -3715,7 +4185,7 @@ function DeploymentDashboardSection({
                   {index < Math.min(info.deployments.length, 6) - 1 ? (
                     <div className="absolute left-[7px] top-7 h-[calc(100%+12px)] w-px bg-slate-200" />
                   ) : null}
-                  <div className="absolute left-0 top-1.5 size-4 rounded-full border border-slate-200 bg-white">
+                  <div className="absolute left-0 top-1.5 size-4 rounded-full border border-border bg-card">
                     <div
                       className={cn(
                         "mx-auto mt-[3px] size-2 rounded-full",
@@ -3728,24 +4198,32 @@ function DeploymentDashboardSection({
                       )}
                     />
                   </div>
-                  <div className="flex flex-col gap-2 rounded-md border border-slate-200/80 bg-slate-50/60 px-4 py-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="flex flex-col gap-2 rounded-md border border-border/70 bg-muted/30 px-4 py-3 lg:flex-row lg:items-start lg:justify-between">
                     <div className="min-w-0">
-                      <div className="text-sm font-medium text-slate-900">
-                        {item.commitMessage || "由 OneCEO 触发的版本发布"}
+                      <div className="text-sm font-medium text-foreground">
+                        {item.commitMessage ||
+                          i18n.t(
+                            "previewPanel.deployment.overview.triggeredByOneceo",
+                          )}
                       </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                        <span>{item.commitAuthor || "平台自动发布"}</span>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                        <span>
+                          {item.commitAuthor ||
+                            i18n.t(
+                              "previewPanel.deployment.overview.platformAutoPublish",
+                            )}
+                        </span>
                         <span className="size-1 rounded-full bg-slate-300" />
                         <span>
                           {formatPreviewTimestamp(item.createdAt) ||
                             item.createdAt ||
-                            "时间未知"}
+                            i18n.t("previewPanel.deployment.overview.unknownTime")}
                         </span>
                         <span className="size-1 rounded-full bg-slate-300" />
                         <span className="font-mono">{item.id.slice(0, 8)}</span>
                       </div>
                     </div>
-                    <span className="shrink-0 rounded-full border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700">
+                    <span className="shrink-0 rounded-full border border-border bg-card px-2 py-1 text-[11px] text-foreground">
                       {item.status}
                     </span>
                   </div>
@@ -3753,8 +4231,8 @@ function DeploymentDashboardSection({
               ))}
             </div>
           ) : (
-            <div className="rounded-md border border-dashed border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
-              暂无版本轨迹
+            <div className="rounded-md border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
+              {i18n.t("previewPanel.deployment.dashboard.noTimeline")}
             </div>
           )}
         </div>
@@ -3810,7 +4288,9 @@ function DeploymentDatabaseSection({
       } catch (error) {
         if (cancelled) return;
         setDatabaseError(
-          error instanceof Error ? error.message : "加载数据库信息失败",
+          error instanceof Error
+            ? error.message
+            : i18n.t("previewPanel.deployment.database.loadInfoFailed"),
         );
       } finally {
         if (!cancelled) {
@@ -3859,7 +4339,11 @@ function DeploymentDatabaseSection({
         }
       } catch (error) {
         if (cancelled) return;
-        setRowsError(error instanceof Error ? error.message : "加载数据表失败");
+        setRowsError(
+          error instanceof Error
+            ? error.message
+            : i18n.t("previewPanel.deployment.database.loadTablesFailed"),
+        );
       } finally {
         if (!cancelled) {
           setRowsLoading(false);
@@ -3894,7 +4378,10 @@ function DeploymentDatabaseSection({
       setDatabaseInfo(summary);
       if (rows) setRowsPage(rows);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "刷新数据库失败";
+      const message =
+        error instanceof Error
+          ? error.message
+          : i18n.t("previewPanel.deployment.database.refreshFailed");
       setDatabaseError(message);
       setRowsError(message);
     } finally {
@@ -3967,7 +4454,9 @@ function DeploymentDatabaseSection({
       }
     } catch (error) {
       setRowsError(
-        error instanceof Error ? error.message : "保存数据库记录失败",
+        error instanceof Error
+          ? error.message
+          : i18n.t("previewPanel.deployment.database.saveFailed"),
       );
     } finally {
       setActionLoading(null);
@@ -3977,7 +4466,9 @@ function DeploymentDatabaseSection({
   const handleDelete = async () => {
     if (!sessionId || !activeTableId || !selectedRowLocator || !rowsPage)
       return;
-    const confirmed = window.confirm("确认删除当前记录？此操作无法撤销。");
+    const confirmed = window.confirm(
+      i18n.t("previewPanel.deployment.database.deleteConfirm"),
+    );
     if (!confirmed) return;
     setActionLoading("delete");
     setRowsError(null);
@@ -4004,7 +4495,9 @@ function DeploymentDatabaseSection({
       }
     } catch (error) {
       setRowsError(
-        error instanceof Error ? error.message : "删除数据库记录失败",
+        error instanceof Error
+          ? error.message
+          : i18n.t("previewPanel.deployment.database.deleteFailed"),
       );
     } finally {
       setActionLoading(null);
@@ -4012,21 +4505,23 @@ function DeploymentDatabaseSection({
   };
 
   if (!sessionId) {
-    return <EmptyState text="缺少会话信息，无法管理数据库" />;
+    return (
+      <EmptyState text={i18n.t("previewPanel.deployment.database.missingSession")} />
+    );
   }
 
   return (
     <div className="grid gap-4 xl:grid-cols-[180px_minmax(0,1fr)_320px]">
-      <section className="rounded-lg border border-slate-200/80 bg-white">
+      <section className="rounded-lg border border-border/70 bg-card">
         <div className="relative flex h-full flex-col">
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 right-0 border-r border-slate-200"
+            className="pointer-events-none absolute inset-y-0 right-0 border-r border-border"
           />
           <div className="flex-1 space-y-2 overflow-y-auto overscroll-contain p-3">
             {databaseLoading && !databaseInfo ? (
-              <div className="px-3 py-2 text-sm text-slate-500">
-                正在准备数据库…
+              <div className="px-3 py-2 text-sm text-muted-foreground">
+                {i18n.t("previewPanel.deployment.database.preparing")}
               </div>
             ) : null}
             {databaseInfo?.tables.map((table) => (
@@ -4041,8 +4536,8 @@ function DeploymentDatabaseSection({
                 className={cn(
                   "flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left transition-colors",
                   activeTableId === table.id
-                    ? "bg-slate-100 text-slate-900"
-                    : "text-slate-700 hover:bg-slate-50",
+                    ? "bg-muted/50 text-foreground"
+                    : "text-foreground hover:bg-muted/30",
                 )}
               >
                 <div className="min-w-0 flex-1">
@@ -4050,46 +4545,50 @@ function DeploymentDatabaseSection({
                     {table.name}
                   </div>
                 </div>
-                <span className="rounded-full border border-slate-200 px-2 py-0.5 text-[11px] text-slate-500">
+                <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
                   {table.sourceLabel}
                 </span>
               </button>
             ))}
             {!databaseLoading && !databaseInfo?.tables.length ? (
-              <div className="rounded-md border border-dashed border-slate-200 px-3 py-6 text-center text-sm text-slate-500">
-                数据库已准备，但还没有业务表
+              <div className="rounded-md border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground">
+                {i18n.t("previewPanel.deployment.database.readyNoTables")}
               </div>
             ) : null}
           </div>
-          <div className="border-t border-slate-200 p-3">
+          <div className="border-t border-border p-3">
             <Button
               variant="outline"
               className="w-full justify-center text-sm"
               onClick={() => setPanelMode("settings")}
             >
               <TableProperties className="size-4" />
-              设置
+              {i18n.t("previewPanel.deployment.database.settings")}
             </Button>
           </div>
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200/80 bg-white">
-        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+      <section className="rounded-lg border border-border/70 bg-card">
+        <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
           <div>
-            <div className="text-sm font-semibold text-slate-900">
-              {activeTable ? activeTable.name : "数据库"}
+            <div className="text-sm font-semibold text-foreground">
+              {activeTable
+                ? activeTable.name
+                : i18n.t("previewPanel.deployment.database.database")}
             </div>
-            <div className="mt-1 text-xs text-slate-500">
+            <div className="mt-1 text-xs text-muted-foreground">
               {activeTable
                 ? `${activeTable.schema}.${activeTable.name}`
-                : "等待选择数据表"}
+                : i18n.t("previewPanel.deployment.database.waitSelectTable")}
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" className="h-8 text-xs">
-              <TableProperties className="size-4" />列{" "}
-              {rowsPage?.columns.length || 0}
+              <TableProperties className="size-4" />
+              {i18n.t("previewPanel.deployment.database.columnCount", {
+                count: rowsPage?.columns.length || 0,
+              })}
             </Button>
             <Button
               variant="outline"
@@ -4098,11 +4597,11 @@ function DeploymentDatabaseSection({
               onClick={() => void handleRefresh()}
             >
               <RefreshCw className="size-4" />
-              刷新
+              {i18n.t("previewPanel.deployment.database.refresh")}
             </Button>
             <Button size="sm" className="h-8 text-xs" onClick={handleCreateNew}>
               <Plus className="size-4" />
-              新增记录
+              {i18n.t("previewPanel.deployment.database.newRecord")}
             </Button>
           </div>
         </div>
@@ -4119,17 +4618,17 @@ function DeploymentDatabaseSection({
             <>
               <div className="max-h-[520px] overflow-auto">
                 <table className="min-w-full border-separate border-spacing-0 text-sm">
-                  <thead className="sticky top-0 z-10 bg-white">
+                  <thead className="sticky top-0 z-10 bg-card">
                     <tr>
                       {rowsPage.columns.map((column) => (
                         <th
                           key={column.name}
-                          className="border-b border-slate-200 px-3 py-2 text-left font-medium text-slate-600"
+                          className="border-b border-border px-3 py-2 text-left font-medium text-muted-foreground"
                         >
                           <div className="flex items-center gap-2">
                             <span>{column.name}</span>
                             {column.isPrimaryKey ? (
-                              <KeyRound className="size-3.5 text-slate-400" />
+                              <KeyRound className="size-3.5 text-muted-foreground" />
                             ) : null}
                           </div>
                         </th>
@@ -4141,9 +4640,9 @@ function DeploymentDatabaseSection({
                       <tr>
                         <td
                           colSpan={Math.max(rowsPage.columns.length, 1)}
-                          className="px-4 py-16 text-center text-slate-400"
+                          className="px-4 py-16 text-center text-muted-foreground"
                         >
-                          正在加载数据…
+                          {i18n.t("previewPanel.deployment.database.loadingData")}
                         </td>
                       </tr>
                     ) : rowsPage.rows.length ? (
@@ -4161,14 +4660,14 @@ function DeploymentDatabaseSection({
                             key={String(row._oneceo_ctid || index)}
                             className={cn(
                               "cursor-pointer transition-colors",
-                              active ? "bg-slate-50" : "hover:bg-slate-50/70",
+                              active ? "bg-muted/30" : "hover:bg-muted/40",
                             )}
                             onClick={() => handleSelectRow(row)}
                           >
                             {rowsPage.columns.map((column) => (
                               <td
                                 key={column.name}
-                                className="border-b border-slate-100 px-3 py-2 align-top text-slate-700"
+                                className="border-b border-border/70 px-3 py-2 align-top text-foreground"
                               >
                                 <div className="max-w-[220px] truncate">
                                   {formatDatabaseCell(row[column.name])}
@@ -4182,20 +4681,28 @@ function DeploymentDatabaseSection({
                       <tr>
                         <td
                           colSpan={Math.max(rowsPage.columns.length, 1)}
-                          className="px-4 py-16 text-center text-slate-400"
+                          className="px-4 py-16 text-center text-muted-foreground"
                         >
-                          当前数据表没有数据
+                          {i18n.t("previewPanel.deployment.database.noTableData")}
                         </td>
                       </tr>
                     )}
                   </tbody>
                 </table>
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 text-xs text-slate-500">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3 text-xs text-muted-foreground">
                 <div className="flex items-center gap-2">
-                  <span>{rowsPage.total} 行</span>
+                  <span>
+                    {i18n.t("previewPanel.deployment.database.rows", {
+                      count: rowsPage.total,
+                    })}
+                  </span>
                   <span className="size-1 rounded-full bg-slate-300" />
-                  <span>每页行数：{rowsPage.pageSize}</span>
+                  <span>
+                    {i18n.t("previewPanel.deployment.database.rowsPerPage", {
+                      count: rowsPage.pageSize,
+                    })}
+                  </span>
                 </div>
                 <div className="flex items-center gap-2">
                   <Button
@@ -4208,10 +4715,13 @@ function DeploymentDatabaseSection({
                     }
                   >
                     <ChevronLeft className="size-4" />
-                    上一页
+                    {i18n.t("previewPanel.deployment.database.previousPage")}
                   </Button>
                   <span>
-                    第 {rowsPage.page} / {rowsPage.totalPages} 页
+                    {i18n.t("previewPanel.deployment.database.pageIndicator", {
+                      page: rowsPage.page,
+                      total: rowsPage.totalPages,
+                    })}
                   </span>
                   <Button
                     variant="outline"
@@ -4220,37 +4730,37 @@ function DeploymentDatabaseSection({
                     disabled={rowsPage.page >= rowsPage.totalPages}
                     onClick={() => setPage((current) => current + 1)}
                   >
-                    下一页
+                    {i18n.t("previewPanel.deployment.database.nextPage")}
                     <ChevronRight className="size-4" />
                   </Button>
                 </div>
               </div>
             </>
           ) : (
-            <div className="px-4 py-20 text-center text-sm text-slate-400">
+            <div className="px-4 py-20 text-center text-sm text-muted-foreground">
               {databaseLoading
-                ? "正在连接数据库…"
-                : "选择数据表后即可查看和修改数据"}
+                ? i18n.t("previewPanel.deployment.database.connecting")
+                : i18n.t("previewPanel.deployment.database.selectTableHint")}
             </div>
           )}
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200/80 bg-white">
-        <div className="border-b border-slate-200 px-4 py-3">
-          <div className="text-sm font-semibold text-slate-900">
+      <section className="rounded-lg border border-border/70 bg-card">
+        <div className="border-b border-border px-4 py-3">
+          <div className="text-sm font-semibold text-foreground">
             {panelMode === "settings"
-              ? "连接信息"
+              ? i18n.t("previewPanel.deployment.database.connectionInfo")
               : panelMode === "insert"
-                ? "新增记录"
-                : "记录详情"}
+                ? i18n.t("previewPanel.deployment.database.newRecord")
+                : i18n.t("previewPanel.deployment.database.recordDetail")}
           </div>
-          <div className="mt-1 text-xs text-slate-500">
+          <div className="mt-1 text-xs text-muted-foreground">
             {panelMode === "settings"
-              ? "可直接复制到 DBeaver、DataGrip、TablePlus 等数据库工具"
+              ? i18n.t("previewPanel.deployment.database.canCopyToClient")
               : activeTable
                 ? `${activeTable.schema}.${activeTable.name}`
-                : "等待选择数据表"}
+                : i18n.t("previewPanel.deployment.database.waitSelectTable")}
           </div>
         </div>
 
@@ -4259,7 +4769,7 @@ function DeploymentDatabaseSection({
             <>
               <div className="grid gap-3">
                 <ConnectionInfoField
-                  label="连接 URL"
+                  label={i18n.t("previewPanel.deployment.database.connectionUrl")}
                   value={
                     databaseInfo.connection.publicConnectionUrl ||
                     databaseInfo.connection.connectionUrl
@@ -4274,7 +4784,7 @@ function DeploymentDatabaseSection({
                   }
                 />
                 <ConnectionInfoField
-                  label="主机"
+                  label={i18n.t("previewPanel.deployment.database.host")}
                   value={databaseInfo.connection.host}
                   copied={copiedField === "host"}
                   onCopy={() =>
@@ -4282,7 +4792,7 @@ function DeploymentDatabaseSection({
                   }
                 />
                 <ConnectionInfoField
-                  label="端口"
+                  label={i18n.t("previewPanel.deployment.database.port")}
                   value={databaseInfo.connection.port}
                   copied={copiedField === "port"}
                   onCopy={() =>
@@ -4290,7 +4800,7 @@ function DeploymentDatabaseSection({
                   }
                 />
                 <ConnectionInfoField
-                  label="用户名"
+                  label={i18n.t("previewPanel.deployment.database.username")}
                   value={databaseInfo.connection.username}
                   copied={copiedField === "username"}
                   onCopy={() =>
@@ -4301,7 +4811,7 @@ function DeploymentDatabaseSection({
                   }
                 />
                 <ConnectionInfoField
-                  label="密码"
+                  label={i18n.t("previewPanel.deployment.database.password")}
                   value={databaseInfo.connection.password}
                   copied={copiedField === "password"}
                   onCopy={() =>
@@ -4313,7 +4823,7 @@ function DeploymentDatabaseSection({
                   sensitive
                 />
                 <ConnectionInfoField
-                  label="数据库"
+                  label={i18n.t("previewPanel.deployment.database.databaseName")}
                   value={databaseInfo.connection.database}
                   copied={copiedField === "database"}
                   onCopy={() =>
@@ -4327,28 +4837,39 @@ function DeploymentDatabaseSection({
 
               <div className="grid gap-3 md:grid-cols-2">
                 <DeploymentMiniStatus
-                  label="数据库状态"
+                  label={i18n.t("previewPanel.deployment.database.databaseStatus")}
                   value={databaseInfo.latestDeploymentStatus || "UNKNOWN"}
                 />
                 <DeploymentMiniStatus
-                  label="连接模式"
+                  label={i18n.t("previewPanel.deployment.database.connectionMode")}
                   value={databaseInfo.connection.sslMode.toUpperCase()}
                 />
                 <DeploymentMiniStatus
-                  label="卷标识"
-                  value={databaseInfo.volumeName || "已挂载"}
+                  label={i18n.t("previewPanel.deployment.database.volumeLabel")}
+                  value={
+                    databaseInfo.volumeName ||
+                    i18n.t("previewPanel.deployment.database.mounted")
+                  }
                 />
                 <DeploymentMiniStatus
-                  label="应用发布"
-                  value={info?.configured ? statusMeta.label : "部署准备中"}
+                  label={i18n.t("previewPanel.deployment.database.appDeployment")}
+                  value={
+                    info?.configured
+                      ? statusMeta.label
+                      : i18n.t(
+                          "previewPanel.deployment.database.deploymentPreparing",
+                        )
+                  }
                 />
               </div>
             </>
           ) : rowsPage ? (
             <>
               <div className="flex items-center justify-between gap-2">
-                <div className="text-sm font-medium text-slate-900">
-                  {panelMode === "insert" ? "准备写入新记录" : "当前选中记录"}
+                <div className="text-sm font-medium text-foreground">
+                  {panelMode === "insert"
+                    ? i18n.t("previewPanel.deployment.database.prepareInsert")
+                    : i18n.t("previewPanel.deployment.database.selectedRecord")}
                 </div>
                 {panelMode !== "settings" ? (
                   <div className="flex items-center gap-2">
@@ -4360,7 +4881,7 @@ function DeploymentDatabaseSection({
                         onClick={handleCreateNew}
                       >
                         <Plus className="size-4" />
-                        新建
+                        {i18n.t("previewPanel.deployment.database.create")}
                       </Button>
                     ) : null}
                     {panelMode === "record" ? (
@@ -4371,7 +4892,7 @@ function DeploymentDatabaseSection({
                         onClick={() => setPanelMode("record")}
                       >
                         <Pencil className="size-4" />
-                        编辑
+                        {i18n.t("previewPanel.deployment.database.edit")}
                       </Button>
                     ) : null}
                     {panelMode === "record" ? (
@@ -4383,7 +4904,7 @@ function DeploymentDatabaseSection({
                         disabled={actionLoading === "delete"}
                       >
                         <Trash2 className="size-4" />
-                        删除
+                        {i18n.t("previewPanel.deployment.database.delete")}
                       </Button>
                     ) : null}
                   </div>
@@ -4419,7 +4940,9 @@ function DeploymentDatabaseSection({
                   {actionLoading === "insert" || actionLoading === "update" ? (
                     <Loader2 className="size-4 animate-spin" />
                   ) : null}
-                  {panelMode === "insert" ? "写入记录" : "保存修改"}
+                  {panelMode === "insert"
+                    ? i18n.t("previewPanel.deployment.database.writeRecord")
+                    : i18n.t("previewPanel.deployment.database.saveChanges")}
                 </Button>
                 <Button
                   variant="outline"
@@ -4427,13 +4950,15 @@ function DeploymentDatabaseSection({
                   className="h-8 text-xs"
                   onClick={() => setPanelMode("settings")}
                 >
-                  查看连接信息
+                  {i18n.t("previewPanel.deployment.database.viewConnectionInfo")}
                 </Button>
               </div>
             </>
           ) : (
-            <div className="py-10 text-center text-sm text-slate-400">
-              {databaseLoading ? "正在准备数据库面板…" : "等待数据库准备完成"}
+            <div className="py-10 text-center text-sm text-muted-foreground">
+              {databaseLoading
+                ? i18n.t("previewPanel.deployment.database.preparingPanel")
+                : i18n.t("previewPanel.deployment.database.waitPanelReady")}
             </div>
           )}
         </div>
@@ -4450,18 +4975,18 @@ function DashboardModeToggle({
   onChange: (mode: "deployments" | "site") => void;
 }) {
   return (
-    <div className="relative z-10 flex rounded-md border border-slate-200/80 bg-slate-50 p-1 text-xs text-slate-500">
+    <div className="relative z-10 flex rounded-md border border-border/70 bg-muted/30 p-1 text-xs text-muted-foreground">
       <button
         type="button"
         onClick={() => onChange("deployments")}
         className={cn(
           "rounded-md px-3 py-1.5 transition-colors",
           mode === "deployments"
-            ? "bg-white text-slate-900 shadow-sm"
-            : "hover:text-slate-700",
+            ? "bg-card text-foreground shadow-sm"
+            : "hover:text-foreground",
         )}
       >
-        部署数据
+        {i18n.t("previewPanel.deployment.dashboard.deploymentData")}
       </button>
       <button
         type="button"
@@ -4469,11 +4994,11 @@ function DashboardModeToggle({
         className={cn(
           "rounded-md px-3 py-1.5 transition-colors",
           mode === "site"
-            ? "bg-white text-slate-900 shadow-sm"
-            : "hover:text-slate-700",
+            ? "bg-card text-foreground shadow-sm"
+            : "hover:text-foreground",
         )}
       >
-        站点数据
+        {i18n.t("previewPanel.deployment.dashboard.siteData")}
       </button>
     </div>
   );
@@ -4489,12 +5014,12 @@ function CompactDeploymentMetric({
   hint: string;
 }) {
   return (
-    <div className="bg-white px-5 py-4">
-      <div className="text-[11px] uppercase tracking-[0.12em] text-slate-400">
+    <div className="bg-card px-5 py-4">
+      <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
         {label}
       </div>
-      <div className="mt-2 text-2xl font-semibold text-slate-900">{value}</div>
-      <div className="mt-1 text-xs text-slate-500">{hint}</div>
+      <div className="mt-2 text-2xl font-semibold text-foreground">{value}</div>
+      <div className="mt-1 text-xs text-muted-foreground">{hint}</div>
     </div>
   );
 }
@@ -4513,17 +5038,17 @@ function DashboardMiniStat({
       className={cn(
         "rounded-md border px-3 py-3",
         subtle
-          ? "border-slate-100 bg-slate-50/80"
-          : "border-slate-200 bg-white",
+          ? "border-border/70 bg-muted/40"
+          : "border-border bg-card",
       )}
     >
-      <div className="text-[11px] uppercase tracking-[0.08em] text-slate-400">
+      <div className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
         {label}
       </div>
       <div
         className={cn(
           "mt-2 text-sm font-medium",
-          subtle ? "text-slate-600" : "text-slate-900",
+          subtle ? "text-muted-foreground" : "text-foreground",
         )}
       >
         {value}
@@ -4540,9 +5065,9 @@ function InsightCard({
   description: string;
 }) {
   return (
-    <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
-      <div className="text-sm font-medium text-slate-900">{title}</div>
-      <p className="mt-2 text-sm leading-6 text-slate-600">{description}</p>
+    <div className="rounded-md border border-border/70 bg-muted/30 p-4">
+      <div className="text-sm font-medium text-foreground">{title}</div>
+      <p className="mt-2 text-sm leading-6 text-muted-foreground">{description}</p>
     </div>
   );
 }
@@ -4561,9 +5086,9 @@ function ConnectionInfoField({
   sensitive?: boolean;
 }) {
   return (
-    <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-3">
+    <div className="rounded-md border border-border/70 bg-muted/30 p-3">
       <div className="flex items-center justify-between gap-3">
-        <div className="text-xs uppercase tracking-[0.08em] text-slate-500">
+        <div className="text-xs uppercase tracking-[0.08em] text-muted-foreground">
           {label}
         </div>
         <Button
@@ -4573,10 +5098,12 @@ function ConnectionInfoField({
           onClick={onCopy}
         >
           <Copy className="size-3.5" />
-          {copied ? "已复制" : "复制"}
+          {copied
+            ? i18n.t("previewPanel.deployment.database.copied")
+            : i18n.t("previewPanel.deployment.database.copy")}
         </Button>
       </div>
-      <div className="mt-2 break-all font-mono text-xs text-slate-700">
+      <div className="mt-2 break-all font-mono text-xs text-foreground">
         {sensitive ? value : value}
       </div>
     </div>
@@ -4600,8 +5127,8 @@ function DatabaseFieldEditor({
     column.dataType.includes("timestamp");
   return (
     <div className="space-y-1.5">
-      <div className="flex items-center gap-2 text-xs text-slate-500">
-        <span className="font-medium text-slate-700">{column.name}</span>
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <span className="font-medium text-foreground">{column.name}</span>
         <span>{column.dataType}</span>
         {column.isPrimaryKey ? <KeyRound className="size-3.5" /> : null}
       </div>
@@ -4610,7 +5137,7 @@ function DatabaseFieldEditor({
           value={value}
           disabled={disabled}
           onChange={(event) => onChange(event.target.value)}
-          className="min-h-[88px] rounded-md border-slate-200 bg-white text-xs"
+          className="min-h-[88px] rounded-md border-border bg-card text-xs"
           placeholder={
             column.hasDefault
               ? column.defaultValue || ""
@@ -4624,7 +5151,7 @@ function DatabaseFieldEditor({
           value={value}
           disabled={disabled}
           onChange={(event) => onChange(event.target.value)}
-          className="h-9 rounded-md border-slate-200 bg-white text-xs"
+          className="h-9 rounded-md border-border bg-card text-xs"
           placeholder={
             column.hasDefault
               ? column.defaultValue || ""
@@ -4729,53 +5256,77 @@ function DeploymentStorageSection({
 }) {
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
-      <section className="rounded-lg border border-slate-200/80 bg-white">
-        <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
-          存储桶
+      <section className="rounded-lg border border-border/70 bg-card">
+        <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
+          {i18n.t("previewPanel.deployment.storage.title")}
         </div>
         <div className="grid gap-3 p-4 md:grid-cols-2">
           <DeploymentMetricCard
-            title="存储状态"
-            value="保留入口"
-            subtitle="当前版本按文档约束保留前端位置，不进入真实后端能力开发。"
+            title={i18n.t("previewPanel.deployment.storage.storageStatus")}
+            value={i18n.t("previewPanel.deployment.storage.reservedEntry")}
+            subtitle={i18n.t(
+              "previewPanel.deployment.storage.reservedEntryDescription",
+            )}
           />
           <DeploymentMetricCard
-            title="推荐用途"
-            value="用户上传 / 媒体资源"
-            subtitle="后续适合图片、附件、导出文件和大体积静态资源。"
+            title={i18n.t("previewPanel.deployment.storage.recommendedUsage")}
+            value={i18n.t(
+              "previewPanel.deployment.storage.recommendedUsageValue",
+            )}
+            subtitle={i18n.t(
+              "previewPanel.deployment.storage.recommendedUsageDescription",
+            )}
           />
-          <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4 md:col-span-2">
-            <div className="text-sm font-semibold text-slate-900">
-              当前可见状态
+          <div className="rounded-md border border-border/70 bg-muted/30 p-4 md:col-span-2">
+            <div className="text-sm font-semibold text-foreground">
+              {i18n.t("previewPanel.deployment.storage.visibleState")}
             </div>
             <div className="mt-2 grid gap-3 md:grid-cols-3">
-              <DeploymentMiniStatus label="应用访问" value={statusMeta.label} />
               <DeploymentMiniStatus
-                label="默认域名"
-                value={info?.domains.length ? "已生成" : "待发布"}
+                label={i18n.t("previewPanel.deployment.storage.appAccess")}
+                value={statusMeta.label}
               />
-              <DeploymentMiniStatus label="对象存储" value="后续规划" />
+              <DeploymentMiniStatus
+                label={i18n.t("previewPanel.deployment.storage.defaultDomain")}
+                value={
+                  info?.domains.length
+                    ? i18n.t("previewPanel.deployment.storage.generated")
+                    : i18n.t("previewPanel.deployment.storage.pendingPublish")
+                }
+              />
+              <DeploymentMiniStatus
+                label={i18n.t("previewPanel.deployment.storage.objectStorage")}
+                value={i18n.t("previewPanel.deployment.storage.futurePlan")}
+              />
             </div>
           </div>
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200/80 bg-white">
-        <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
-          场景规划
+      <section className="rounded-lg border border-border/70 bg-card">
+        <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
+          {i18n.t("previewPanel.deployment.storage.scenarioPlanning")}
         </div>
         <div className="space-y-3 p-4">
           <DeploymentPlaceholderCard
-            title="用户文件上传"
-            description="用于头像、商品图片、用户附件等持久化存储。"
+            title={i18n.t("previewPanel.deployment.storage.userUpload")}
+            description={i18n.t(
+              "previewPanel.deployment.storage.userUploadDescription",
+            )}
           />
           <DeploymentPlaceholderCard
-            title="构建产物分离"
-            description="让静态资源和运行时代码解耦，减轻重新发布的成本。"
+            title={i18n.t(
+              "previewPanel.deployment.storage.buildArtifactSeparation",
+            )}
+            description={i18n.t(
+              "previewPanel.deployment.storage.buildArtifactSeparationDescription",
+            )}
           />
           <DeploymentPlaceholderCard
-            title="访问策略"
-            description="后续可扩展公开读、私有签名下载和生命周期清理策略。"
+            title={i18n.t("previewPanel.deployment.storage.accessPolicy")}
+            description={i18n.t(
+              "previewPanel.deployment.storage.accessPolicyDescription",
+            )}
           />
         </div>
       </section>
@@ -4808,43 +5359,44 @@ function DeploymentSettingsSectionPanel({
   const tokenRotationLabel = resourceBinding?.tokenRotatedAt
     ? formatPreviewTimestamp(resourceBinding.tokenRotatedAt) ||
       resourceBinding.tokenRotatedAt
-    : "尚未记录";
+    : i18n.t("previewPanel.deployment.settings.notRecorded");
   const isolationLabel =
     resourceBinding?.isolationMode === "session"
-      ? "共享用户 Project / 会话独立 Environment"
+      ? i18n.t("previewPanel.deployment.settings.sharedUserProject")
       : resourceBinding
-        ? "默认共享资源"
-        : "待首次部署创建";
+        ? i18n.t("previewPanel.deployment.settings.defaultSharedResource")
+        : i18n.t("previewPanel.deployment.settings.createAfterFirstDeploy");
   const repositoryLabel =
-    resourceBinding?.repositoryFullName || "尚未生成托管仓库";
+    resourceBinding?.repositoryFullName ||
+    i18n.t("previewPanel.deployment.settings.managedRepoMissing");
   const repositoryBranch =
     resourceBinding?.repositoryBranch || "main";
 
   return (
     <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)]">
-      <section className="rounded-lg border border-slate-200/80 bg-white">
-        <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
-          设置
+      <section className="rounded-lg border border-border/70 bg-card">
+        <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
+          {i18n.t("previewPanel.deployment.sections.settings")}
         </div>
         <div className="flex gap-2 overflow-x-auto p-3 xl:flex-col xl:overflow-visible">
           <DeploymentSettingsButton
             active={settingsSection === "general"}
-            label="通用"
+            label={i18n.t("previewPanel.deployment.settings.general")}
             onClick={() => onSettingsSectionChange("general")}
           />
           <DeploymentSettingsButton
             active={settingsSection === "domain"}
-            label="域名"
+            label={i18n.t("previewPanel.deployment.settings.domain")}
             onClick={() => onSettingsSectionChange("domain")}
           />
           <DeploymentSettingsButton
             active={settingsSection === "notifications"}
-            label="通知"
+            label={i18n.t("previewPanel.deployment.settings.notifications")}
             onClick={() => onSettingsSectionChange("notifications")}
           />
           <DeploymentSettingsButton
             active={settingsSection === "payment"}
-            label="支付"
+            label={i18n.t("previewPanel.deployment.settings.payment")}
             onClick={() => onSettingsSectionChange("payment")}
           />
           <DeploymentSettingsButton
@@ -4854,7 +5406,7 @@ function DeploymentSettingsSectionPanel({
           />
           <DeploymentSettingsButton
             active={settingsSection === "keys"}
-            label="密钥"
+            label={i18n.t("previewPanel.deployment.settings.keys")}
             onClick={() => onSettingsSectionChange("keys")}
           />
           <DeploymentSettingsButton
@@ -4865,39 +5417,62 @@ function DeploymentSettingsSectionPanel({
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200/80 bg-white">
-        <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
-          {settingsSection === "general" ? "通用" : null}
-          {settingsSection === "domain" ? "域名" : null}
-          {settingsSection === "notifications" ? "通知" : null}
-          {settingsSection === "payment" ? "支付" : null}
+      <section className="rounded-lg border border-border/70 bg-card">
+        <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
+          {settingsSection === "general"
+            ? i18n.t("previewPanel.deployment.settings.general")
+            : null}
+          {settingsSection === "domain"
+            ? i18n.t("previewPanel.deployment.settings.domain")
+            : null}
+          {settingsSection === "notifications"
+            ? i18n.t("previewPanel.deployment.settings.notifications")
+            : null}
+          {settingsSection === "payment"
+            ? i18n.t("previewPanel.deployment.settings.payment")
+            : null}
           {settingsSection === "seo" ? "SEO" : null}
-          {settingsSection === "keys" ? "密钥" : null}
+          {settingsSection === "keys"
+            ? i18n.t("previewPanel.deployment.settings.keys")
+            : null}
           {settingsSection === "github" ? "GitHub" : null}
         </div>
         <div className="p-4">
           {settingsSection === "general" ? (
             <div className="grid gap-3 md:grid-cols-2">
               <DeploymentInfoCard
-                title="站点名称"
-                value={info?.serviceName || info?.projectName || "未命名应用"}
-                extra="当前由平台托管部署工作流统一管理"
+                title={i18n.t("previewPanel.deployment.settings.siteName")}
+                value={
+                  info?.serviceName ||
+                  info?.projectName ||
+                  i18n.t("previewPanel.deployment.settings.unnamedApp")
+                }
+                extra={i18n.t("previewPanel.deployment.settings.managedWorkflow")}
               />
               <DeploymentInfoCard
-                title="发布状态"
+                title={i18n.t("previewPanel.deployment.settings.publishStatus")}
                 value={statusMeta.label}
                 extra={statusMeta.description}
               />
               <DeploymentInfoCard
-                title="环境"
-                value={info?.environmentName || info?.environmentId || "未配置"}
+                title={i18n.t("previewPanel.deployment.settings.environment")}
+                value={
+                  info?.environmentName ||
+                  info?.environmentId ||
+                  i18n.t("previewPanel.deployment.dashboard.unconfigured")
+                }
               />
               <DeploymentInfoCard
-                title="当前版本"
-                value={currentDeployment?.commitMessage || "等待首次发布"}
+                title={i18n.t("previewPanel.deployment.settings.currentVersion")}
+                value={
+                  currentDeployment?.commitMessage ||
+                  i18n.t("previewPanel.deployment.overview.waitingFirstRelease")
+                }
                 extra={
                   currentDeployment?.id
-                    ? `版本号 ${currentDeployment.id.slice(0, 8)}`
+                    ? i18n.t("previewPanel.deployment.settings.versionId", {
+                        id: currentDeployment.id.slice(0, 8),
+                      })
                     : undefined
                 }
               />
@@ -4907,12 +5482,17 @@ function DeploymentSettingsSectionPanel({
           {settingsSection === "domain" ? (
             <div className="space-y-3">
               <DeploymentInfoCard
-                title="主访问地址"
-                value={primaryAccessUrl || "尚未生成"}
+                title={i18n.t("previewPanel.deployment.settings.primaryAccessUrl")}
+                value={
+                  primaryAccessUrl ||
+                  i18n.t("previewPanel.deployment.settings.notGenerated")
+                }
                 extra={
                   primaryAccessUrl
-                    ? "当前可直接用于线上访问与验证"
-                    : "完成首次发布后自动生成"
+                    ? i18n.t("previewPanel.deployment.settings.readyForValidation")
+                    : i18n.t(
+                        "previewPanel.deployment.settings.generatedAfterFirstPublish",
+                      )
                 }
               />
               <div className="grid gap-3 md:grid-cols-2">
@@ -4926,8 +5506,10 @@ function DeploymentSettingsSectionPanel({
                   ))
                 ) : (
                   <DeploymentPlaceholderCard
-                    title="域名列表为空"
-                    description="当前还没有可展示的访问域名，发布成功后会自动回填。"
+                    title={i18n.t("previewPanel.deployment.settings.emptyDomainList")}
+                    description={i18n.t(
+                      "previewPanel.deployment.settings.emptyDomainListDescription",
+                    )}
                   />
                 )}
               </div>
@@ -4937,24 +5519,38 @@ function DeploymentSettingsSectionPanel({
           {settingsSection === "notifications" ? (
             <div className="grid gap-3 md:grid-cols-2">
               <DeploymentInfoCard
-                title="发布成功通知"
-                value="即将支持"
-                extra="后续可在站内或消息渠道订阅发布成功通知。"
+                title={i18n.t(
+                  "previewPanel.deployment.settings.publishSuccessNotification",
+                )}
+                value={i18n.t("previewPanel.deployment.settings.comingSoon")}
+                extra={i18n.t(
+                  "previewPanel.deployment.settings.publishSuccessNotificationDescription",
+                )}
               />
               <DeploymentInfoCard
-                title="发布失败通知"
-                value="即将支持"
-                extra="后续可针对失败版本推送告警与排障建议。"
+                title={i18n.t(
+                  "previewPanel.deployment.settings.publishFailureNotification",
+                )}
+                value={i18n.t("previewPanel.deployment.settings.comingSoon")}
+                extra={i18n.t(
+                  "previewPanel.deployment.settings.publishFailureNotificationDescription",
+                )}
               />
               <DeploymentInfoCard
-                title="回滚通知"
-                value="即将支持"
-                extra="后续会记录并通知版本回滚行为。"
+                title={i18n.t(
+                  "previewPanel.deployment.settings.rollbackNotification",
+                )}
+                value={i18n.t("previewPanel.deployment.settings.comingSoon")}
+                extra={i18n.t(
+                  "previewPanel.deployment.settings.rollbackNotificationDescription",
+                )}
               />
               <DeploymentInfoCard
-                title="当前策略"
-                value="平台默认静默"
-                extra="目前仅在部署面板内查看发布状态，不会主动外发通知。"
+                title={i18n.t("previewPanel.deployment.settings.currentStrategy")}
+                value={i18n.t("previewPanel.deployment.settings.platformSilent")}
+                extra={i18n.t(
+                  "previewPanel.deployment.settings.currentStrategyDescription",
+                )}
               />
             </div>
           ) : null}
@@ -4962,24 +5558,32 @@ function DeploymentSettingsSectionPanel({
           {settingsSection === "payment" ? (
             <div className="grid gap-3 md:grid-cols-2">
               <DeploymentInfoCard
-                title="结算方式"
-                value="平台统一结算"
-                extra="当前部署供应链成本由平台侧统一处理，终端用户不直接接触底层供应商。"
+                title={i18n.t("previewPanel.deployment.settings.billingMode")}
+                value={i18n.t("previewPanel.deployment.settings.platformBilling")}
+                extra={i18n.t("previewPanel.deployment.settings.billingDescription")}
               />
               <DeploymentInfoCard
-                title="用户侧计费"
-                value="未开放"
-                extra="暂未对单个应用暴露独立账单与资源费用。"
+                title={i18n.t("previewPanel.deployment.settings.userBilling")}
+                value={i18n.t("previewPanel.deployment.settings.notOpen")}
+                extra={i18n.t(
+                  "previewPanel.deployment.settings.userBillingDescription",
+                )}
               />
               <DeploymentInfoCard
-                title="用量阈值提醒"
-                value="即将支持"
-                extra="后续可在达到部署或存储阈值时进行提醒。"
+                title={i18n.t("previewPanel.deployment.settings.usageAlert")}
+                value={i18n.t("previewPanel.deployment.settings.comingSoon")}
+                extra={i18n.t(
+                  "previewPanel.deployment.settings.comingSoon",
+                )}
               />
               <DeploymentInfoCard
-                title="升级能力"
-                value="待扩展"
-                extra="如后续引入更高规格资源，可在此处集中管理。"
+                title={i18n.t(
+                  "previewPanel.deployment.settings.upgradeCapability",
+                )}
+                value={i18n.t("previewPanel.deployment.settings.toExpand")}
+                extra={i18n.t(
+                  "previewPanel.deployment.settings.upgradeCapabilityDescription",
+                )}
               />
             </div>
           ) : null}
@@ -4987,24 +5591,37 @@ function DeploymentSettingsSectionPanel({
           {settingsSection === "seo" ? (
             <div className="grid gap-3 md:grid-cols-2">
               <DeploymentInfoCard
-                title="站点标题"
-                value={info?.serviceName || info?.projectName || "OneCEO 应用"}
-                extra="当前仅做展示级整理，后续可扩展为真实 SEO 元信息配置。"
+                title={i18n.t("previewPanel.deployment.settings.siteTitle")}
+                value={
+                  info?.serviceName ||
+                  info?.projectName ||
+                  i18n.t("previewPanel.deployment.settings.defaultSiteTitle")
+                }
+                extra={i18n.t(
+                  "previewPanel.deployment.settings.siteTitleDescription",
+                )}
               />
               <DeploymentInfoCard
-                title="索引入口"
-                value={primaryAccessUrl || "待发布后生成"}
-                extra="成功发布后即可作为爬虫访问入口。"
+                title={i18n.t("previewPanel.deployment.settings.indexEntry")}
+                value={
+                  primaryAccessUrl ||
+                  i18n.t("previewPanel.deployment.settings.generateAfterPublish")
+                }
+                extra={i18n.t(
+                  "previewPanel.deployment.settings.indexEntryDescription",
+                )}
               />
               <DeploymentInfoCard
                 title="Meta / Open Graph"
-                value="即将支持"
-                extra="后续可统一配置 description、preview 图和社交分享信息。"
+                value={i18n.t("previewPanel.deployment.settings.comingSoon")}
+                extra={i18n.t(
+                  "previewPanel.deployment.settings.metaOpenGraphDescription",
+                )}
               />
               <DeploymentInfoCard
-                title="站点地图"
-                value="待扩展"
-                extra="后续可按应用类型自动生成 sitemap 与 robots 策略。"
+                title={i18n.t("previewPanel.deployment.settings.siteMap")}
+                value={i18n.t("previewPanel.deployment.settings.toExpand")}
+                extra={i18n.t("previewPanel.deployment.settings.siteMapDescription")}
               />
             </div>
           ) : null}
@@ -5013,53 +5630,80 @@ function DeploymentSettingsSectionPanel({
             <div className="space-y-3">
               <div className="grid gap-3 md:grid-cols-2">
                 <DeploymentInfoCard
-                  title="部署凭证模型"
-                  value={resourceBinding ? "Railway Project Token" : "待创建"}
-                  extra="由 OneCEO 平台托管，不向最终用户暴露供应商管理权限。"
+                  title={i18n.t(
+                    "previewPanel.deployment.settings.deploymentTokenModel",
+                  )}
+                  value={
+                    resourceBinding
+                      ? i18n.t(
+                          "previewPanel.deployment.settings.railwayProjectToken",
+                        )
+                      : i18n.t("previewPanel.deployment.settings.toCreate")
+                  }
+                  extra={i18n.t(
+                    "previewPanel.deployment.settings.deploymentTokenDescription",
+                  )}
                 />
                 <DeploymentInfoCard
-                  title="权限范围"
+                  title={i18n.t("previewPanel.deployment.settings.scope")}
                   value={
                     resourceBinding?.tokenScope === "railway_project_environment"
-                      ? "项目 / 环境级"
-                      : "待创建"
+                      ? i18n.t(
+                          "previewPanel.deployment.settings.projectEnvironmentScope",
+                        )
+                      : i18n.t("previewPanel.deployment.settings.toCreate")
                   }
-                  extra="当前 token 仅用于当前绑定项目与环境，不使用高权限全局 token。"
+                  extra={i18n.t("previewPanel.deployment.settings.scopeDescription")}
                 />
                 <DeploymentInfoCard
-                  title="资源隔离"
+                  title={i18n.t("previewPanel.deployment.settings.resourceIsolation")}
                   value={isolationLabel}
                   extra={
                     resourceBinding?.projectKey
-                      ? `资源键 ${resourceBinding.projectKey}`
-                      : "首次部署后会自动为当前会话分配资源键。"
+                      ? i18n.t("previewPanel.deployment.settings.resourceKey", {
+                          key: resourceBinding.projectKey,
+                        })
+                      : i18n.t(
+                          "previewPanel.deployment.settings.resourceIsolationDescription",
+                        )
                   }
                   mono={Boolean(resourceBinding?.projectKey)}
                 />
                 <DeploymentInfoCard
-                  title="最近轮换"
+                  title={i18n.t("previewPanel.deployment.settings.lastRotation")}
                   value={tokenRotationLabel}
-                  extra="平台切换到新 token 后立即生效；旧 token 的供应商侧吊销能力后续补齐。"
+                  extra={i18n.t(
+                    "previewPanel.deployment.settings.lastRotationDescription",
+                  )}
                 />
                 <DeploymentInfoCard
-                  title="凭证标识"
-                  value={resourceBinding?.tokenId || "供应商未返回可追踪 ID"}
-                  extra="当前供应商接口未返回 token 实体 ID，仅记录平台侧轮换时间。"
+                  title={i18n.t("previewPanel.deployment.settings.credentialId")}
+                  value={
+                    resourceBinding?.tokenId ||
+                    i18n.t("previewPanel.deployment.settings.credentialIdMissing")
+                  }
+                  extra={i18n.t(
+                    "previewPanel.deployment.settings.credentialIdDescription",
+                  )}
                   mono
                 />
                 <DeploymentInfoCard
-                  title="用户自定义环境变量"
-                  value="即将支持"
-                  extra="后续会在这里接入业务密钥、第三方 API Key 与环境变量分组。"
+                  title={i18n.t("previewPanel.deployment.settings.customEnvVars")}
+                  value={i18n.t("previewPanel.deployment.settings.comingSoon")}
+                  extra={i18n.t(
+                    "previewPanel.deployment.settings.customEnvVarsDescription",
+                  )}
                 />
               </div>
-              <div className="flex flex-col gap-3 rounded-md border border-slate-200/80 bg-slate-50/40 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-col gap-3 rounded-md border border-border/70 bg-muted/30 p-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">
-                  <div className="text-sm font-medium text-slate-900">
-                    轮换当前会话的部署 token
+                  <div className="text-sm font-medium text-foreground">
+                    {i18n.t("previewPanel.deployment.settings.rotateCurrentToken")}
                   </div>
-                  <div className="mt-1 text-xs leading-5 text-slate-500">
-                    仅更新当前会话绑定项目的 Project Token，不会影响其他会话的部署资源。
+                  <div className="mt-1 text-xs leading-5 text-muted-foreground">
+                    {i18n.t(
+                      "previewPanel.deployment.settings.rotateCurrentTokenDescription",
+                    )}
                   </div>
                 </div>
                 <Button
@@ -5075,7 +5719,7 @@ function DeploymentSettingsSectionPanel({
                   ) : (
                     <RefreshCw className="mr-1.5 size-3.5" />
                   )}
-                  轮换 Token
+                  {i18n.t("previewPanel.deployment.settings.rotateToken")}
                 </Button>
               </div>
             </div>
@@ -5085,28 +5729,41 @@ function DeploymentSettingsSectionPanel({
             <div className="space-y-3">
               <div className="grid gap-3 md:grid-cols-2">
                 <DeploymentInfoCard
-                  title="托管仓库"
+                  title={i18n.t("previewPanel.deployment.settings.managedRepo")}
                   value={repositoryLabel}
-                  extra="当前发布链路会把工作区导出到平台托管仓库，再由供应链执行部署。"
+                  extra={i18n.t(
+                    "previewPanel.deployment.settings.managedRepoDescription",
+                  )}
                   mono={Boolean(resourceBinding?.repositoryFullName)}
                 />
                 <DeploymentInfoCard
-                  title="默认分支"
+                  title={i18n.t("previewPanel.deployment.settings.defaultBranch")}
                   value={repositoryBranch}
-                  extra="平台推送最新工作区内容后，由供应链根据该分支触发部署。"
+                  extra={i18n.t(
+                    "previewPanel.deployment.settings.triggerModeDescription",
+                  )}
                   mono
                 />
                 <DeploymentInfoCard
-                  title="触发方式"
-                  value="平台推送后发布"
-                  extra="每次发布都会同步最新代码并驱动新的部署版本。"
+                  title={i18n.t("previewPanel.deployment.settings.triggerMode")}
+                  value={i18n.t("previewPanel.deployment.settings.publishAfterPush")}
+                  extra={i18n.t(
+                    "previewPanel.deployment.settings.triggerModeDescription",
+                  )}
                 />
                 <DeploymentInfoCard
-                  title="最近同步版本"
-                  value={currentDeployment?.commitMessage || "等待首次同步"}
+                  title={i18n.t(
+                    "previewPanel.deployment.settings.lastSyncedVersion",
+                  )}
+                  value={
+                    currentDeployment?.commitMessage ||
+                    i18n.t("previewPanel.deployment.settings.waitingFirstSync")
+                  }
                   extra={
                     currentDeployment?.id
-                      ? `同步标识 ${currentDeployment.id.slice(0, 8)}`
+                      ? i18n.t("previewPanel.deployment.settings.syncId", {
+                          id: currentDeployment.id.slice(0, 8),
+                        })
                       : undefined
                   }
                 />
@@ -5116,15 +5773,19 @@ function DeploymentSettingsSectionPanel({
                   href={resourceBinding.repositoryUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 sm:w-auto"
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted/30 sm:w-auto"
                 >
-                  打开托管仓库
+                  {i18n.t("previewPanel.deployment.settings.openManagedRepo")}
                   <ExternalLink className="size-4" />
                 </a>
               ) : (
                 <DeploymentPlaceholderCard
-                  title="托管仓库尚未生成"
-                  description="首次部署时平台会自动创建会话级托管仓库，并把它接入到发布链路。"
+                  title={i18n.t(
+                    "previewPanel.deployment.settings.managedRepoNotGenerated",
+                  )}
+                  description={i18n.t(
+                    "previewPanel.deployment.settings.managedRepoNotGeneratedDescription",
+                  )}
                 />
               )}
             </div>
@@ -5153,8 +5814,8 @@ function DeploymentMenuButton({
       className={cn(
         "inline-flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap",
         active
-          ? "border-slate-200 bg-slate-100 text-slate-900"
-          : "border-transparent bg-transparent text-slate-500 hover:border-slate-200 hover:bg-slate-50",
+          ? "border-border bg-muted/50 text-foreground"
+          : "border-transparent bg-transparent text-muted-foreground hover:border-border hover:bg-muted/30",
       )}
     >
       <Icon className="size-3.5" />
@@ -5179,8 +5840,8 @@ function DeploymentSettingsButton({
       className={cn(
         "rounded-md border px-3 py-2 text-left text-sm transition-colors whitespace-nowrap",
         active
-          ? "border-slate-200 bg-slate-100 text-slate-900"
-          : "border-transparent bg-transparent text-slate-500 hover:border-slate-200 hover:bg-slate-50",
+          ? "border-border bg-muted/50 text-foreground"
+          : "border-transparent bg-transparent text-muted-foreground hover:border-border hover:bg-muted/30",
       )}
     >
       {label}
@@ -5199,70 +5860,71 @@ function DeploymentTemplateBaselineSection({
 }) {
   const checkedAt = baseline?.checkedAt
     ? formatPreviewTimestamp(baseline.checkedAt) || baseline.checkedAt
-    : "尚未检查";
+    : i18n.t("previewPanel.deployment.baseline.notChecked");
   const overallValue =
     loading
-      ? "正在检查"
+      ? i18n.t("previewPanel.deployment.baseline.checking")
       : error
-        ? "读取失败"
+        ? i18n.t("previewPanel.deployment.baseline.readFailed")
         : baseline?.status === "ready"
-          ? "已通过"
+          ? i18n.t("previewPanel.deployment.baseline.passed")
           : baseline?.status === "needs_attention"
-            ? "需要处理"
-            : "待检查";
+            ? i18n.t("previewPanel.deployment.baseline.needsAttention")
+            : i18n.t("previewPanel.deployment.baseline.pending");
   const overallSubtitle =
     error ||
     (baseline?.status === "ready"
-      ? "当前工作区已经满足平台部署模板基线。"
+      ? i18n.t("previewPanel.deployment.baseline.readyDescription")
       : baseline?.status === "needs_attention"
-        ? "建议先修正模板基线问题，再继续发布。"
-        : "打开部署面板后会对当前工作区做一次真实检查。");
+        ? i18n.t("previewPanel.deployment.baseline.needsAttentionDescription")
+        : i18n.t("previewPanel.deployment.baseline.pendingDescription"));
   const manifestValue = !baseline
-    ? "待检查"
+    ? i18n.t("previewPanel.deployment.baseline.pending")
     : baseline.manifestGenerated
-      ? "平台补齐"
+      ? i18n.t("previewPanel.deployment.baseline.platformFilled")
       : baseline.manifestPath
-        ? "已存在"
-        : "缺失";
+        ? i18n.t("previewPanel.deployment.baseline.exists")
+        : i18n.t("previewPanel.deployment.baseline.missing");
   const analyticsValue = !baseline
-    ? "待检查"
+    ? i18n.t("previewPanel.deployment.baseline.pending")
     : baseline.analyticsMode === "platform_injected"
-      ? "平台注入"
+      ? i18n.t("previewPanel.deployment.baseline.platformInjected")
       : baseline.analyticsMode === "workspace"
-        ? "源码已接入"
+        ? i18n.t("previewPanel.deployment.baseline.sourceIntegrated")
         : baseline.analyticsMode === "missing"
-          ? "缺失"
-          : "未知";
+          ? i18n.t("previewPanel.deployment.baseline.missing")
+          : i18n.t("previewPanel.deployment.baseline.unknown");
   const databaseValue =
     !baseline || !baseline.features
-      ? "待检查"
+      ? i18n.t("previewPanel.deployment.baseline.pending")
       : baseline.features.database === "railway_postgres"
         ? baseline.checks.database === false
-          ? "依赖缺失"
+          ? i18n.t("previewPanel.deployment.baseline.dependencyMissing")
           : "Railway Postgres"
-        : "未声明";
+        : i18n.t("previewPanel.deployment.baseline.notDeclared");
   const healthcheckValue =
     !baseline
-      ? "待检查"
+      ? i18n.t("previewPanel.deployment.baseline.pending")
       : baseline.checks.healthcheck === false
-        ? "路由待确认"
-        : baseline.healthcheckPath || "未声明";
+        ? i18n.t("previewPanel.deployment.baseline.routePending")
+        : baseline.healthcheckPath ||
+          i18n.t("previewPanel.deployment.baseline.notDeclared");
 
   return (
-    <section className="rounded-lg border border-slate-200/80 bg-white">
-      <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
+    <section className="rounded-lg border border-border/70 bg-card">
+      <div className="border-b border-border px-4 py-4 sm:px-5">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <div className="text-sm font-semibold text-slate-900">
-              模板与平台接入基线
+            <div className="text-sm font-semibold text-foreground">
+              {i18n.t("previewPanel.deployment.baseline.title")}
             </div>
-            <div className="mt-1 text-xs text-slate-500">
-              直接检查当前工作区的部署模板状态，不再等构建失败后再回看日志。
+            <div className="mt-1 text-xs text-muted-foreground">
+              {i18n.t("previewPanel.deployment.baseline.description")}
             </div>
           </div>
-          <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
-            最近检查:{" "}
-            <span className="font-medium text-slate-900">{checkedAt}</span>
+          <div className="rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
+            {i18n.t("previewPanel.deployment.baseline.lastCheck")}:{" "}
+            <span className="font-medium text-foreground">{checkedAt}</span>
           </div>
         </div>
       </div>
@@ -5270,85 +5932,107 @@ function DeploymentTemplateBaselineSection({
       <div className="space-y-4 p-4 sm:p-5">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <DeploymentMetricCard
-            title="总体状态"
+            title={i18n.t("previewPanel.deployment.baseline.overallStatus")}
             value={overallValue}
             subtitle={overallSubtitle}
           />
           <DeploymentMetricCard
             title="Manifest"
             value={manifestValue}
-            subtitle={baseline?.manifestPath || "等待当前工作区检查结果"}
-          />
-          <DeploymentMetricCard
-            title="Analytics 注入"
-            value={analyticsValue}
             subtitle={
-              baseline?.checks.analytics === false
-                ? "当前还没检测到可用注入入口。"
-                : baseline?.buildCommand
-                  ? `构建命令 ${baseline.buildCommand}`
-                  : "平台会在导出阶段执行模板注入。"
+              baseline?.manifestPath ||
+              i18n.t("previewPanel.deployment.baseline.manifestWait")
             }
           />
           <DeploymentMetricCard
-            title="数据库契约"
+            title={i18n.t("previewPanel.deployment.baseline.analyticsInjection")}
+            value={analyticsValue}
+            subtitle={
+              baseline?.checks.analytics === false
+                ? i18n.t(
+                    "previewPanel.deployment.baseline.analyticsInjectionMissing",
+                  )
+                : baseline?.buildCommand
+                  ? i18n.t("previewPanel.deployment.baseline.buildCommand", {
+                      command: baseline.buildCommand,
+                    })
+                  : i18n.t(
+                      "previewPanel.deployment.baseline.platformInjectAtExport",
+                    )
+            }
+          />
+          <DeploymentMetricCard
+            title={i18n.t("previewPanel.deployment.baseline.databaseContract")}
             value={databaseValue}
             subtitle={
               baseline?.features?.database === "railway_postgres"
                 ? baseline.checks.database === false
-                  ? "manifest 已声明，但缺少 pg / drizzle 依赖。"
-                  : "已按 Railway Postgres 模型声明。"
-                : "当前应用没有声明数据库依赖。"
+                  ? i18n.t(
+                      "previewPanel.deployment.baseline.databaseContractMissingDeps",
+                    )
+                  : i18n.t(
+                      "previewPanel.deployment.baseline.databaseContractReady",
+                    )
+                : i18n.t(
+                    "previewPanel.deployment.baseline.databaseContractNone",
+                  )
             }
           />
         </div>
 
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <DeploymentInfoCard
-            title="启动命令"
-            value={baseline?.startCommand || "待检查"}
+            title={i18n.t("previewPanel.deployment.baseline.startCommand")}
+            value={
+              baseline?.startCommand ||
+              i18n.t("previewPanel.deployment.baseline.pending")
+            }
             extra={
               baseline?.checks.start === false
-                ? "缺少 package.json scripts.start"
-                : "平台按该命令启动应用"
+                ? i18n.t("previewPanel.deployment.baseline.missingStartScript")
+                : i18n.t("previewPanel.deployment.baseline.platformStartCommand")
             }
           />
           <DeploymentInfoCard
-            title="健康检查"
+            title={i18n.t("previewPanel.deployment.baseline.healthcheck")}
             value={healthcheckValue}
             extra={
               baseline?.checks.healthcheck === false
-                ? "manifest 已声明，但源码里还没确认同名路由"
-                : "部署成功后平台会探测该健康检查入口"
+                ? i18n.t(
+                    "previewPanel.deployment.baseline.healthcheckRouteMissing",
+                  )
+                : i18n.t("previewPanel.deployment.baseline.healthcheckProbe")
             }
           />
           <DeploymentInfoCard
-            title="用户跟踪"
+            title={i18n.t("previewPanel.deployment.baseline.userTracking")}
             value={
               !baseline?.features
-                ? "待检查"
+                ? i18n.t("previewPanel.deployment.baseline.pending")
                 : baseline.features.userTracking
-                  ? "已声明"
-                  : "未声明"
+                  ? i18n.t("previewPanel.deployment.baseline.declared")
+                  : i18n.t("previewPanel.deployment.baseline.notDeclared")
             }
-            extra="平台统计默认按用户跟踪能力生成基线。"
+            extra={i18n.t("previewPanel.deployment.baseline.userTrackingDescription")}
           />
           <DeploymentInfoCard
-            title="对象存储"
+            title={i18n.t("previewPanel.deployment.baseline.objectStorage")}
             value={
               !baseline?.features
-                ? "待检查"
+                ? i18n.t("previewPanel.deployment.baseline.pending")
                 : baseline.features.objectStorage
-                  ? "已启用"
-                  : "未启用"
+                  ? i18n.t("previewPanel.deployment.baseline.enabled")
+                  : i18n.t("previewPanel.deployment.baseline.notDeclared")
             }
-            extra="当前模板默认不强制注入对象存储。"
+            extra={i18n.t("previewPanel.deployment.baseline.objectStorageDescription")}
           />
         </div>
 
         {baseline?.warnings.length ? (
           <div className="rounded-md border border-amber-200 bg-amber-50/70 p-4">
-            <div className="text-sm font-medium text-amber-900">检查提醒</div>
+            <div className="text-sm font-medium text-amber-900">
+              {i18n.t("previewPanel.deployment.baseline.warnings")}
+            </div>
             <div className="mt-2 space-y-1 text-xs leading-5 text-amber-800">
               {baseline.warnings.map((item) => (
                 <div key={item}>- {item}</div>
@@ -5359,7 +6043,9 @@ function DeploymentTemplateBaselineSection({
 
         {baseline?.errors.length ? (
           <div className="rounded-md border border-rose-200 bg-rose-50/70 p-4">
-            <div className="text-sm font-medium text-rose-900">待处理问题</div>
+            <div className="text-sm font-medium text-rose-900">
+              {i18n.t("previewPanel.deployment.baseline.errors")}
+            </div>
             <div className="mt-2 space-y-1 text-xs leading-5 text-rose-800">
               {baseline.errors.map((item) => (
                 <div key={item}>- {item}</div>
@@ -5386,16 +6072,16 @@ function DeploymentMetricCard({
   return (
     <div
       className={cn(
-        "rounded-md border border-slate-200/80 bg-slate-50/40 p-3",
+        "rounded-md border border-border/70 bg-muted/30 p-3",
         className,
       )}
     >
-      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
+      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
         {title}
       </div>
-      <div className="mt-2 text-sm font-semibold text-slate-900">{value}</div>
+      <div className="mt-2 text-sm font-semibold text-foreground">{value}</div>
       {subtitle ? (
-        <div className="mt-1 text-xs leading-5 text-slate-600">{subtitle}</div>
+        <div className="mt-1 text-xs leading-5 text-muted-foreground">{subtitle}</div>
       ) : null}
     </div>
   );
@@ -5413,20 +6099,20 @@ function DeploymentInfoCard({
   mono?: boolean;
 }) {
   return (
-    <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
-      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
+    <div className="rounded-md border border-border/70 bg-muted/30 p-4">
+      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
         {title}
       </div>
       <div
         className={cn(
-          "mt-2 text-sm font-medium text-slate-900 break-all",
+          "mt-2 text-sm font-medium text-foreground break-all",
           mono ? "font-mono text-[12px]" : "",
         )}
       >
         {value}
       </div>
       {extra ? (
-        <div className="mt-1 text-xs leading-5 text-slate-500">{extra}</div>
+        <div className="mt-1 text-xs leading-5 text-muted-foreground">{extra}</div>
       ) : null}
     </div>
   );
@@ -5440,11 +6126,11 @@ function DeploymentMiniStatus({
   value: string;
 }) {
   return (
-    <div className="rounded-md border border-slate-200/80 bg-slate-50/30 px-3 py-3">
-      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
+    <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-3">
+      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
         {label}
       </div>
-      <div className="mt-1 text-sm font-medium text-slate-900">{value}</div>
+      <div className="mt-1 text-sm font-medium text-foreground">{value}</div>
     </div>
   );
 }
@@ -5457,9 +6143,9 @@ function DeploymentPlaceholderCard({
   description: string;
 }) {
   return (
-    <div className="rounded-md border border-dashed border-slate-200 bg-slate-50/40 p-4">
-      <div className="text-sm font-semibold text-slate-900">{title}</div>
-      <div className="mt-1 text-sm leading-6 text-slate-600">{description}</div>
+    <div className="rounded-md border border-dashed border-border bg-muted/30 p-4">
+      <div className="text-sm font-semibold text-foreground">{title}</div>
+      <div className="mt-1 text-sm leading-6 text-muted-foreground">{description}</div>
     </div>
   );
 }
@@ -5609,7 +6295,9 @@ export function DebugPreview({
     return (
       <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-3">
         <span>
-          {starting ? "正在启动执行环境..." : "执行环境未启动，无法加载调试画面"}
+          {starting
+            ? i18n.t("previewPanel.debug.startingRuntime")
+            : i18n.t("previewPanel.debug.runtimeNotStarted")}
         </span>
         <Button
           variant="outline"
@@ -5619,13 +6307,13 @@ export function DebugPreview({
           }}
           disabled={starting}
         >
-          启动调试
+          {i18n.t("previewPanel.debug.startDebug")}
         </Button>
       </div>
     );
   }
   if (loading) {
-    return <EmptyState text="正在加载调试画面..." />;
+    return <EmptyState text={i18n.t("previewPanel.debug.loading")} />;
   }
   if (error && (!info?.ready || !info?.url)) {
     return (
@@ -5639,7 +6327,9 @@ export function DebugPreview({
           }}
           disabled={starting}
         >
-          {starting ? "重试中..." : "重新启用远程调试"}
+          {starting
+            ? i18n.t("previewPanel.debug.retrying")
+            : i18n.t("previewPanel.debug.reenable")}
         </Button>
       </div>
     );
@@ -5647,7 +6337,12 @@ export function DebugPreview({
   if (!info?.ready || !info.url) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-3">
-        <span>{info?.message || (isFailed ? "远程调试连接失败" : "调试服务未就绪")}</span>
+        <span>
+          {info?.message ||
+            (isFailed
+              ? i18n.t("previewPanel.debug.connectionFailed")
+              : i18n.t("previewPanel.debug.serviceNotReady"))}
+        </span>
         <Button
           variant="outline"
           size="sm"
@@ -5656,7 +6351,11 @@ export function DebugPreview({
           }}
           disabled={starting}
         >
-          {starting ? "启动中..." : isFailed ? "重新触发远程调试" : "启用远程调试"}
+          {starting
+            ? i18n.t("previewPanel.debug.enabling")
+            : isFailed
+              ? i18n.t("previewPanel.debug.retryEnable")
+              : i18n.t("previewPanel.debug.enable")}
         </Button>
       </div>
     );
@@ -5665,7 +6364,7 @@ export function DebugPreview({
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between px-4 py-2 border-b border-border">
-        <div className="text-xs text-muted-foreground">远程浏览器调试</div>
+        <div className="text-xs text-muted-foreground">{i18n.t("previewPanel.debug.remoteBrowserDebug")}</div>
         <div className="flex items-center gap-2">
           <Button
             type="button"
@@ -5681,12 +6380,12 @@ export function DebugPreview({
             {debugLocked ? (
               <>
                 <Lock className="mr-1 h-3.5 w-3.5" />
-                锁定
+                {i18n.t("previewPanel.debug.locked")}
               </>
             ) : (
               <>
                 <Unlock className="mr-1 h-3.5 w-3.5" />
-                已解锁
+                {i18n.t("previewPanel.debug.unlocked")}
               </>
             )}
           </Button>
@@ -5700,22 +6399,22 @@ export function DebugPreview({
             }}
             disabled={starting}
           >
-            {starting ? "启用中..." : "启用远程调试"}
+            {starting ? i18n.t("previewPanel.debug.enabling") : i18n.t("previewPanel.debug.enable")}
           </Button>
           <a
             href={debugUrl}
             target="_blank"
             rel="noreferrer"
-            className="text-xs text-blue-600 hover:text-blue-700"
+            className="text-xs text-[var(--brand-link)] hover:text-[var(--brand-link-hover)]"
           >
-            打开新窗口
+            {i18n.t("previewPanel.openInNewWindow")}
           </a>
         </div>
       </div>
       <div className="flex-1 min-h-0 p-3">
         {!lockControlEnabled && bridgeWaitExpired ? (
           <div className="mb-2 rounded-md border border-amber-300/70 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
-            当前调试页未加载锁定桥接能力，请重新启用远程调试（通常是旧模板 sandbox）。
+            {i18n.t("previewPanel.debug.bridgeUnavailable")}
           </div>
         ) : null}
         <div
@@ -5746,13 +6445,13 @@ export function DebugPreview({
                 if (!lockControlEnabled) return;
                 requestNekoLockState(false);
               }}
-              aria-label="解除调试锁定提示"
+              aria-label={i18n.t("previewPanel.debug.unlockHintAria")}
             >
               <span className="flex h-24 w-24 items-center justify-center rounded-full border border-white/60 bg-black/40 text-white shadow-lg backdrop-blur-[2px]">
                 <Lock className="h-10 w-10" />
               </span>
               <span className="mt-3 rounded-full border border-white/30 bg-black/35 px-3 py-1 text-xs text-white/90">
-                当前为锁定状态，点击解锁
+                {i18n.t("previewPanel.debug.clickToUnlock")}
               </span>
             </button>
           ) : null}
@@ -5827,14 +6526,14 @@ function DiffBlock({
 
   if (baseFiles.length === 0) {
     return (
-      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 font-mono whitespace-pre-wrap break-words">
-        {diff || "暂无更改"}
+      <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-foreground font-mono whitespace-pre-wrap break-words">
+        {diff || i18n.t("previewPanel.noChanges")}
       </div>
     );
   }
 
   if (displayFiles.length === 0) {
-    return <EmptyState text="忽略空白差异后无可展示内容" />;
+    return <EmptyState text={i18n.t("previewPanel.noDiffAfterIgnoringWhitespace")} />;
   }
 
   const showGlobalHeader = displayFiles.every(
@@ -5870,58 +6569,58 @@ function DiffBlock({
   };
 
   return (
-    <div className="flex h-full flex-col rounded-lg border border-slate-200 bg-white text-xs text-slate-700 font-mono overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-slate-200 text-[11px] text-slate-500">
+    <div className="flex h-full flex-col rounded-lg border border-border bg-card text-xs text-foreground font-mono overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border text-[11px] text-muted-foreground">
         <div className="flex items-center gap-2">
           <button
             type="button"
-            className="rounded-full border border-slate-200 px-2 py-0.5 hover:bg-slate-100"
+            className="rounded-full border border-border px-2 py-0.5 hover:bg-muted/50"
             onClick={() => {
               setCollapsedFiles(new Set(allFileIds));
               setCollapsedHunks(new Set(allHunkIds));
             }}
           >
-            全部收起
+            {i18n.t("previewPanel.collapseAll")}
           </button>
           <button
             type="button"
-            className="rounded-full border border-slate-200 px-2 py-0.5 hover:bg-slate-100"
+            className="rounded-full border border-border px-2 py-0.5 hover:bg-muted/50"
             onClick={() => {
               setCollapsedFiles(new Set());
               setCollapsedHunks(new Set());
             }}
           >
-            全部展开
+            {i18n.t("previewPanel.expandAll")}
           </button>
         </div>
         <div className="flex items-center gap-2">
           <button
             type="button"
-            className={`rounded-full border px-2 py-0.5 hover:bg-slate-100 ${
+            className={`rounded-full border px-2 py-0.5 hover:bg-muted/50 ${
               showWhitespace
                 ? "border-emerald-500 text-emerald-700"
-                : "border-slate-200"
+                : "border-border"
             }`}
             onClick={() => setShowWhitespace((prev) => !prev)}
           >
-            高亮空白符
+            {i18n.t("previewPanel.highlightWhitespace")}
           </button>
           <button
             type="button"
-            className={`rounded-full border px-2 py-0.5 hover:bg-slate-100 ${
+            className={`rounded-full border px-2 py-0.5 hover:bg-muted/50 ${
               ignoreWhitespace
                 ? "border-emerald-500 text-emerald-700"
-                : "border-slate-200"
+                : "border-border"
             }`}
             onClick={() => setIgnoreWhitespace((prev) => !prev)}
           >
-            忽略空白差异
+            {i18n.t("previewPanel.ignoreWhitespaceDiff")}
           </button>
         </div>
       </div>
       {showGlobalHeader ? (
-        <div className="grid grid-cols-2 border-b border-slate-200 text-[11px] uppercase tracking-wide text-slate-500">
-          <div className="px-3 py-2 border-r border-slate-200">Before</div>
+        <div className="grid grid-cols-2 border-b border-border text-[11px] uppercase tracking-wide text-muted-foreground">
+          <div className="px-3 py-2 border-r border-border">Before</div>
           <div className="px-3 py-2">After</div>
         </div>
       ) : null}
@@ -5929,44 +6628,44 @@ function DiffBlock({
         {displayFiles.map(({ file, stats, mode, hunks }) => {
           const fileCollapsed = collapsedFiles.has(file.id);
           return (
-            <div key={file.id} className="border-b border-slate-200">
-              <div className="flex items-center justify-between px-3 py-2 text-slate-700 bg-slate-50">
+            <div key={file.id} className="border-b border-border">
+              <div className="flex items-center justify-between px-3 py-2 text-foreground bg-muted/30">
                 <div>
                   <div className="text-xs font-semibold">
-                    文件: {file.displayPath}
+                    {i18n.t("previewPanel.fileLabel")}: {file.displayPath}
                   </div>
                   {(file.oldPath || file.newPath) && (
-                    <div className="text-[11px] text-slate-500">
+                    <div className="text-[11px] text-muted-foreground">
                       {file.oldPath ? `- ${file.oldPath}` : ""}
                       {file.oldPath && file.newPath ? " | " : ""}
                       {file.newPath ? `+ ${file.newPath}` : ""}
                     </div>
                   )}
                 </div>
-                <div className="flex items-center gap-3 text-[11px] text-slate-500">
+                <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
                   <span className="text-emerald-600">+{stats.additions}</span>
                   <span className="text-rose-600">-{stats.deletions}</span>
                   <button
                     type="button"
                     onClick={() => toggleFile(file.id)}
-                    className="text-[11px] text-slate-500 hover:text-slate-900"
+                    className="text-[11px] text-muted-foreground hover:text-foreground"
                   >
-                    {fileCollapsed ? "展开" : "收起"}
+                    {fileCollapsed ? i18n.t("common.expand") : i18n.t("common.collapse")}
                   </button>
                 </div>
               </div>
 
               {!fileCollapsed && !showGlobalHeader ? (
                 mode === "split" ? (
-                  <div className="grid grid-cols-2 border-t border-slate-200 border-b border-slate-200 text-[11px] uppercase tracking-wide text-slate-500">
-                    <div className="px-3 py-2 border-r border-slate-200">
+                  <div className="grid grid-cols-2 border-t border-border border-b border-border text-[11px] uppercase tracking-wide text-muted-foreground">
+                    <div className="px-3 py-2 border-r border-border">
                       Before
                     </div>
                     <div className="px-3 py-2">After</div>
                   </div>
                 ) : (
-                  <div className="border-t border-slate-200 border-b border-slate-200 px-3 py-2 text-[11px] uppercase tracking-wide text-slate-500">
-                    {mode === "add-only" ? "新增" : "删除"}
+                  <div className="border-t border-border border-b border-border px-3 py-2 text-[11px] uppercase tracking-wide text-muted-foreground">
+                    {mode === "add-only" ? i18n.t("previewPanel.added") : i18n.t("common.delete")}
                   </div>
                 )
               ) : null}
@@ -5975,15 +6674,15 @@ function DiffBlock({
                 hunks.map((hunk) => {
                   const hunkCollapsed = collapsedHunks.has(hunk.id);
                   return (
-                    <div key={hunk.id} className="border-t border-slate-200">
-                      <div className="flex items-center justify-between px-3 py-1 text-slate-500 bg-slate-50">
+                    <div key={hunk.id} className="border-t border-border">
+                      <div className="flex items-center justify-between px-3 py-1 text-muted-foreground bg-muted/30">
                         <span>{hunk.header}</span>
                         <button
                           type="button"
                           onClick={() => toggleHunk(hunk.id)}
-                          className="text-[11px] text-slate-500 hover:text-slate-900"
+                          className="text-[11px] text-muted-foreground hover:text-foreground"
                         >
-                          {hunkCollapsed ? "展开" : "收起"}
+                          {hunkCollapsed ? i18n.t("common.expand") : i18n.t("common.collapse")}
                         </button>
                       </div>
                       {!hunkCollapsed && (
@@ -5995,13 +6694,13 @@ function DiffBlock({
                                 className="grid grid-cols-2"
                               >
                                 <div
-                                  className={`flex gap-2 px-3 py-0.5 border-r border-slate-200 ${
+                                  className={`flex gap-2 px-3 py-0.5 border-r border-border ${
                                     row.leftType === "del"
                                       ? "bg-rose-50 text-rose-700"
-                                      : "text-slate-700"
+                                      : "text-foreground"
                                   }`}
                                 >
-                                  <span className="w-8 text-right text-slate-400">
+                                  <span className="w-8 text-right text-muted-foreground">
                                     {row.leftLine ?? ""}
                                   </span>
                                   <span className="whitespace-pre-wrap break-words flex-1">
@@ -6015,10 +6714,10 @@ function DiffBlock({
                                   className={`flex gap-2 px-3 py-0.5 ${
                                     row.rightType === "add"
                                       ? "bg-emerald-50 text-emerald-700"
-                                      : "text-slate-700"
+                                      : "text-foreground"
                                   }`}
                                 >
-                                  <span className="w-8 text-right text-slate-400">
+                                  <span className="w-8 text-right text-muted-foreground">
                                     {row.rightLine ?? ""}
                                   </span>
                                   <span className="whitespace-pre-wrap break-words flex-1">
@@ -6042,7 +6741,7 @@ function DiffBlock({
                                       : "bg-rose-50 text-rose-700"
                                   }`}
                                 >
-                                  <span className="w-8 text-right text-slate-400">
+                                  <span className="w-8 text-right text-muted-foreground">
                                     {isAdd
                                       ? (row.rightLine ?? "")
                                       : (row.leftLine ?? "")}
@@ -6059,7 +6758,7 @@ function DiffBlock({
                         </div>
                       )}
                       {hunkCollapsed && (
-                        <div className="px-3 py-1 text-[11px] text-slate-400">
+                        <div className="px-3 py-1 text-[11px] text-muted-foreground">
                           ...
                         </div>
                       )}
@@ -6393,16 +7092,16 @@ function parseStructuredDiffs(files?: StructuredFileDiff[]): DiffFile[] {
         rightLine: null,
         leftText:
           file.status === "added"
-            ? "文件已创建，暂无可展示的 diff 详情"
+            ? i18n.t("previewPanel.diffCreatedNoDetails")
             : file.status === "deleted"
-              ? "文件已删除，暂无可展示的 diff 详情"
-              : "文件已更新，暂无可展示的 diff 详情",
+              ? i18n.t("previewPanel.diffDeletedNoDetails")
+              : i18n.t("previewPanel.diffUpdatedNoDetails"),
         rightText:
           file.status === "added"
-            ? "文件已创建，暂无可展示的 diff 详情"
+            ? i18n.t("previewPanel.diffCreatedNoDetails")
             : file.status === "deleted"
-              ? "文件已删除，暂无可展示的 diff 详情"
-              : "文件已更新，暂无可展示的 diff 详情",
+              ? i18n.t("previewPanel.diffDeletedNoDetails")
+              : i18n.t("previewPanel.diffUpdatedNoDetails"),
         leftType: "context",
         rightType: "context",
       });
@@ -6441,7 +7140,7 @@ function parseUnifiedDiffDetailed(diff: string): DiffFile[] {
         id: `file-${files.length}`,
         oldPath: null,
         newPath: null,
-        displayPath: "未命名文件",
+        displayPath: i18n.t("previewPanel.unnamedFile"),
         hunks: [],
       };
       files.push(currentFile);
@@ -6455,7 +7154,9 @@ function parseUnifiedDiffDetailed(diff: string): DiffFile[] {
         id: `file-${files.length}`,
         oldPath: match ? match[1] : null,
         newPath: match ? match[2] : null,
-        displayPath: match ? normalizeDiffPath(match[2]) : "未命名文件",
+        displayPath: match
+          ? normalizeDiffPath(match[2])
+          : i18n.t("previewPanel.unnamedFile"),
         hunks: [],
       };
       files.push(currentFile);
@@ -6477,7 +7178,9 @@ function parseUnifiedDiffDetailed(diff: string): DiffFile[] {
       const path = line.replace(/^\\+\\+\\+\\s+/, "");
       currentFile!.newPath = normalizeDiffPath(path.replace(/^b\//, ""));
       currentFile!.displayPath = normalizeDiffPath(
-        currentFile!.newPath || currentFile!.oldPath || "未命名文件",
+        currentFile!.newPath ||
+          currentFile!.oldPath ||
+          i18n.t("previewPanel.unnamedFile"),
       );
       continue;
     }

@@ -50,6 +50,16 @@ export type ManagedSkillContext = {
     templateCount: number;
     paths: string[];
   } | null;
+  governance?: {
+    systemRole: string | null;
+    adminManaged: boolean;
+    required: boolean;
+    autoActivation: {
+      enabled: boolean;
+      triggers: string[];
+      toolNames: string[];
+    };
+  } | null;
 };
 
 export type ManagedSkillCatalogEntry = {
@@ -66,6 +76,16 @@ export type ManagedSkillCatalogEntry = {
     referenceCount: number;
     templateCount: number;
     paths: string[];
+  } | null;
+  governance?: {
+    systemRole: string | null;
+    adminManaged: boolean;
+    required: boolean;
+    autoActivation: {
+      enabled: boolean;
+      triggers: string[];
+      toolNames: string[];
+    };
   } | null;
 };
 
@@ -152,6 +172,27 @@ export function toIso(value: unknown): string | null {
 export function truncate(value: string, limit = 16000) {
   if (!value || value.length <= limit) return value;
   return `${value.slice(0, limit)}\n...[truncated]`;
+}
+
+const MANAGED_DEBUG_PAYLOAD_KEYS = new Set([
+  'transitionReason',
+  'currentRound',
+  'maxRounds',
+  'recoveryMode',
+  'loop',
+  'debug',
+  'internalDebug',
+]);
+
+export function stripManagedDebugPayload(payload: Record<string, unknown>) {
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload || {})) {
+    if (MANAGED_DEBUG_PAYLOAD_KEYS.has(key)) {
+      continue;
+    }
+    sanitized[key] = value;
+  }
+  return sanitized;
 }
 
 export function parseToolArguments(raw: string) {
@@ -441,6 +482,41 @@ export function buildManagedToolDefinitions() {
     {
       type: 'function',
       function: {
+        name: 'todowrite',
+        description:
+          'Write or update the current execution todo list before starting substantial work and after each major step.',
+        parameters: objectSchema(
+          {
+            todos: {
+              type: 'array',
+              description:
+                'Ordered todo list. Use exactly one in_progress item while work is still ongoing; use zero only when every item is completed and complete_task is the immediate next action.',
+              items: objectSchema(
+                {
+                  content: {
+                    type: 'string',
+                    description: 'Concrete todo item text visible to the user.',
+                  },
+                  status: {
+                    type: 'string',
+                    description: 'Todo status: pending, in_progress, or completed.',
+                  },
+                  activeForm: {
+                    type: 'string',
+                    description: 'Optional present-tense short form of the active step.',
+                  },
+                },
+                ['content', 'status']
+              ),
+            },
+          },
+          ['todos']
+        ),
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'ask_user',
         description: 'Ask the user one precise clarification question when blocked by missing requirements.',
         parameters: objectSchema(
@@ -575,6 +651,7 @@ export function readManagedSkillContext(value: unknown): ManagedSkillContext[] {
           ? record.revisionNumber
           : null,
       resourceSummary: readSkillResourceSummary(record.resourceSummary),
+      governance: readSkillGovernance(record.governance),
     });
   }
   return results;
@@ -606,6 +683,30 @@ function readSkillResourceSummary(value: unknown) {
   };
 }
 
+function readSkillGovernance(value: unknown) {
+  const record = pickObject(value);
+  const autoActivation = pickObject(record.autoActivation);
+  const triggers = Array.isArray(autoActivation.triggers)
+    ? autoActivation.triggers.map((item) => asText(item).toLowerCase()).filter(Boolean).slice(0, 32)
+    : [];
+  const toolNames = Array.isArray(autoActivation.toolNames)
+    ? autoActivation.toolNames.map((item) => asText(item).toLowerCase()).filter(Boolean).slice(0, 64)
+    : [];
+  if (!record.systemRole && !record.adminManaged && !record.required && !autoActivation.enabled && triggers.length === 0 && toolNames.length === 0) {
+    return null;
+  }
+  return {
+    systemRole: asText(record.systemRole) || null,
+    adminManaged: Boolean(record.adminManaged),
+    required: Boolean(record.required),
+    autoActivation: {
+      enabled: Boolean(autoActivation.enabled),
+      triggers: Array.from(new Set(triggers)),
+      toolNames: Array.from(new Set(toolNames)),
+    },
+  };
+}
+
 export function readManagedSkillCatalog(value: unknown): ManagedSkillCatalogEntry[] {
   if (!Array.isArray(value)) return [];
   const results: ManagedSkillCatalogEntry[] = [];
@@ -631,6 +732,7 @@ export function readManagedSkillCatalog(value: unknown): ManagedSkillCatalogEntr
           ? record.revisionNumber
           : null,
       resourceSummary: readSkillResourceSummary(record.resourceSummary),
+      governance: readSkillGovernance(record.governance),
     });
   }
   return results;

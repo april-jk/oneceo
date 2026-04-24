@@ -1,0 +1,774 @@
+{
+  "caseId": "ALTUS-TOOL-002",
+  "prompts": [
+    "写一个 Python 脚本分析 CSV 并输出 Markdown 报告，不要部署。"
+  ],
+  "turnResults": [
+    {
+      "prompt": "写一个 Python 脚本分析 CSV 并输出 Markdown 报告，不要部署。",
+      "outcome": "timeout"
+    }
+  ],
+  "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d",
+  "sessionDetail": {
+    "success": true,
+    "data": {
+      "id": "f37800c9-255f-4459-9cb9-243ee340b05d",
+      "title": "写一个 Python 脚本分析 CSV 并输出 Markdown 报告，不要部署",
+      "status": "failed",
+      "stage": "failed",
+      "mode": "sandbox",
+      "executor": "opencode",
+      "driver": "opencode",
+      "runtime": {
+        "orchestratorSessionId": "ijdpubu63zeb8iiro1sok",
+        "updatedAt": "2026-04-20T06:13:35.341Z"
+      },
+      "createdAt": "2026-04-20T14:13:10.025Z",
+      "updatedAt": "2026-04-20T06:13:37.816Z",
+      "messages": [],
+      "runtimeStatus": {
+        "status": "ready",
+        "provider": "e2b",
+        "updatedAt": "2026-04-20T06:13:35.341Z",
+        "sandboxId": "ijdpubu63zeb8iiro1sok"
+      },
+      "connectorsSummary": {
+        "total": 6,
+        "attached": 0,
+        "active": 0,
+        "needsAuth": 0,
+        "failed": 0
+      }
+    }
+  },
+  "recentMessages": {
+    "success": true,
+    "data": {
+      "messages": [
+        {
+          "id": "msg_1776665586518_3azejk1h",
+          "messageKey": "runtime:na:1:session_started",
+          "role": "system",
+          "messageType": "session_started",
+          "content": "会话已创建",
+          "metadata": {
+            "timestamp": 1776665586518,
+            "sessionEventSeq": 1,
+            "messageKey": "runtime:na:1:session_started",
+            "runtimeGeneration": 1
+          },
+          "createdAt": "2026-04-20T06:13:06.518Z"
+        },
+        {
+          "id": "msg_1776665589991_tk3p2b8a",
+          "messageKey": "runtime:na:2:user_input",
+          "role": "user",
+          "messageType": "user_input",
+          "content": "写一个 Python 脚本分析 CSV 并输出 Markdown 报告，不要部署。",
+          "metadata": {
+            "timestamp": 1776665589991,
+            "sessionEventSeq": 2,
+            "messageKey": "runtime:na:2:user_input",
+            "runtimeGeneration": 1
+          },
+          "createdAt": "2026-04-20T06:13:09.991Z"
+        },
+        {
+          "id": "msg_1776665593752_1k20kz80",
+          "messageKey": "runtime:na:3:status_update",
+          "role": "agent",
+          "messageType": "status_update",
+          "content": "构思阶段：正在整理需求...",
+          "metadata": {
+            "timestamp": 1776665593752,
+            "sessionEventSeq": 3,
+            "stage": "collecting",
+            "tone": "system",
+            "messageKey": "runtime:na:3:status_update",
+            "runtimeGeneration": 1
+          },
+          "createdAt": "2026-04-20T06:13:13.752Z"
+        },
+        {
+          "id": "msg_1776665593955_exk6h6e4",
+          "messageKey": "runtime:na:4:status_update",
+          "role": "agent",
+          "messageType": "status_update",
+          "content": "分析阶段：正在分析您的任务需求...",
+          "metadata": {
+            "timestamp": 1776665593955,
+            "sessionEventSeq": 4,
+            "stage": "collecting",
+            "tone": "intent",
+            "messageKey": "runtime:na:4:status_update",
+            "runtimeGeneration": 1
+          },
+          "createdAt": "2026-04-20T06:13:13.955Z"
+        },
+        {
+          "id": "msg_1776665594233_19dt0r84",
+          "messageKey": "runtime:na:5:agent_message",
+          "role": "agent",
+          "messageType": "agent_message",
+          "content": "已识别任务类型：软件开发",
+          "metadata": {
+            "timestamp": 1776665594233,
+            "sessionEventSeq": 5,
+            "messageKey": "runtime:na:5:agent_message",
+            "runtimeGeneration": 1
+          },
+          "createdAt": "2026-04-20T06:13:14.233Z"
+        },
+        {
+          "id": "msg_1776665594395_334eiurw",
+          "messageKey": "runtime:na:6:status_update",
+          "role": "agent",
+          "messageType": "status_update",
+          "content": "分析阶段：正在规划任务详情...",
+          "metadata": {
+            "timestamp": 1776665594395,
+            "sessionEventSeq": 6,
+            "stage": "planning",
+            "tone": "planning",
+            "messageKey": "runtime:na:6:status_update",
+            "runtimeGeneration": 1
+          },
+          "createdAt": "2026-04-20T06:13:14.395Z"
+        },
+        {
+          "id": "msg_1776665594495_8x8xejvl",
+          "messageKey": "runtime:na:7:agent_message",
+          "role": "agent",
+          "messageType": "agent_message",
+          "content": "任务规划完成：写一个 Python 脚本分析 CSV 并输出 Markdown 报告，不要部署",
+          "metadata": {
+            "timestamp": 1776665594495,
+            "sessionEventSeq": 7,
+            "messageKey": "runtime:na:7:agent_message",
+            "runtimeGeneration": 1
+          },
+          "createdAt": "2026-04-20T06:13:14.495Z"
+        },
+        {
+          "id": "msg_1776665594657_7ktdt2t7",
+          "messageKey": "runtime:na:8:status_update",
+          "role": "agent",
+          "messageType": "status_update",
+          "content": "分析阶段：正在生成执行计划...",
+          "metadata": {
+            "timestamp": 1776665594657,
+            "sessionEventSeq": 8,
+            "stage": "planning",
+            "tone": "planning",
+            "messageKey": "runtime:na:8:status_update",
+            "runtimeGeneration": 1
+          },
+          "createdAt": "2026-04-20T06:13:14.657Z"
+        },
+        {
+          "id": "msg_1776665595080_gzywf7my",
+          "messageKey": "runtime:na:9:status_update",
+          "role": "agent",
+          "messageType": "status_update",
+          "content": "开发阶段：执行计划已生成，正在启动执行环境...",
+          "metadata": {
+            "timestamp": 1776665595080,
+            "sessionEventSeq": 9,
+            "stage": "executing",
+            "tone": "execution",
+            "messageKey": "runtime:na:9:status_update",
+            "runtimeGeneration": 1
+          },
+          "createdAt": "2026-04-20T06:13:15.080Z"
+        },
+        {
+          "id": "msg_1776665595362_uxhhbxjr",
+          "messageKey": "runtime:na:10:status_update",
+          "role": "agent",
+          "messageType": "status_update",
+          "content": "开发阶段：正在启动执行环境...",
+          "metadata": {
+            "timestamp": 1776665595362,
+            "sessionEventSeq": 10,
+            "stage": "executing",
+            "tone": "execution",
+            "messageKey": "runtime:na:10:status_update",
+            "runtimeGeneration": 1
+          },
+          "createdAt": "2026-04-20T06:13:15.362Z"
+        },
+        {
+          "id": "runtime-generation-boundary-2-11",
+          "messageKey": "boundary:2:11",
+          "role": "system",
+          "messageType": "status_update",
+          "content": "已切换到第 2 代执行环境，以下内容来自新的 sandbox 恢复。",
+          "metadata": {
+            "messageKey": "boundary:2:11",
+            "runtimeGeneration": 2,
+            "runtimeGenerationBoundary": true,
+            "stage": "executing",
+            "tone": "system",
+            "timestamp": 11,
+            "sessionEventSeq": 10
+          },
+          "createdAt": "2026-04-20T06:13:35.239Z"
+        },
+        {
+          "id": "msg_1776665615239_utfl11k1",
+          "messageKey": "runtime:2:11:agent_message",
+          "role": "agent",
+          "messageType": "agent_message",
+          "content": "执行环境已就绪，开始下发执行指令...",
+          "metadata": {
+            "timestamp": 1776665615239,
+            "sessionEventSeq": 11,
+            "runtimeGeneration": 2,
+            "orchestratorSessionId": "ijdpubu63zeb8iiro1sok",
+            "workspacePath": "/home/user/opencode/workspaces/f37800c9-255f-4459-9cb9-243ee340b05d",
+            "messageKey": "runtime:2:11:agent_message"
+          },
+          "createdAt": "2026-04-20T06:13:35.239Z"
+        },
+        {
+          "id": "msg_1776665616018_thvy613h",
+          "messageKey": "runtime:2:12:agent_message",
+          "role": "agent",
+          "messageType": "agent_message",
+          "content": "执行环境调度失败（第 1/2 次）：[PROVISION:open_environment] Rate limit exceeded, please try again later - you have reached the maximum number of concurrent E2B sandboxes (20). If you need more, please visit 'https://e2b.dev/docs/billing'",
+          "metadata": {
+            "timestamp": 1776665616018,
+            "sessionEventSeq": 12,
+            "runtimeGeneration": 2,
+            "messageKey": "runtime:2:12:agent_message"
+          },
+          "createdAt": "2026-04-20T06:13:36.018Z"
+        },
+        {
+          "id": "msg_1776665617872_n9eoerd3",
+          "messageKey": "runtime:2:13:agent_message",
+          "role": "agent",
+          "messageType": "agent_message",
+          "content": "执行环境调度失败（第 2/2 次）：[PROVISION:open_environment] Rate limit exceeded, please try again later - you have reached the maximum number of concurrent E2B sandboxes (20). If you need more, please visit 'https://e2b.dev/docs/billing'",
+          "metadata": {
+            "timestamp": 1776665617872,
+            "sessionEventSeq": 13,
+            "runtimeGeneration": 2,
+            "messageKey": "runtime:2:13:agent_message"
+          },
+          "createdAt": "2026-04-20T06:13:37.872Z"
+        },
+        {
+          "id": "msg_1776665618041_9ool1k7h",
+          "messageKey": "runtime:2:14:status_update",
+          "role": "agent",
+          "messageType": "status_update",
+          "content": "任务处理失败",
+          "metadata": {
+            "timestamp": 1776665618041,
+            "sessionEventSeq": 14,
+            "runtimeGeneration": 2,
+            "stage": "failed",
+            "tone": "error",
+            "messageKey": "runtime:2:14:status_update"
+          },
+          "createdAt": "2026-04-20T06:13:38.041Z"
+        },
+        {
+          "id": "msg_1776665618097_g7ylb1qx",
+          "messageKey": "runtime:2:15:error",
+          "role": "agent",
+          "messageType": "error",
+          "content": "任务创建失败，请稍后重试",
+          "metadata": {
+            "timestamp": 1776665618097,
+            "sessionEventSeq": 15,
+            "runtimeGeneration": 2,
+            "messageKey": "runtime:2:15:error"
+          },
+          "createdAt": "2026-04-20T06:13:38.097Z"
+        }
+      ],
+      "oldestCursor": 1,
+      "newestCursor": 15,
+      "hasOlderHistory": true,
+      "source": "resolved_recent"
+    }
+  },
+  "fullMessages": {
+    "success": true,
+    "data": [
+      {
+        "id": "d19662ed-06b2-4668-91ca-0eafd84e3a13",
+        "messageKey": "runtime:na:1776665590026000:user_input",
+        "role": "user",
+        "messageType": "user_input",
+        "content": "写一个 Python 脚本分析 CSV 并输出 Markdown 报告，不要部署。",
+        "metadata": {
+          "messageKey": "runtime:na:1776665590026000:user_input",
+          "timestamp": 1776665590026,
+          "sessionEventSeq": 1776665590026000,
+          "timelineCursor": 5330,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:10.026Z"
+      },
+      {
+        "id": "0f2cf29f-04af-480d-b4b2-a488818e9ac1",
+        "messageKey": "runtime:na:1776665590039000:status_update",
+        "role": "agent",
+        "messageType": "status_update",
+        "content": "分析阶段：正在分析您的任务需求...",
+        "metadata": {
+          "messageKey": "runtime:na:1776665590039000:status_update",
+          "timestamp": 1776665590039,
+          "sessionEventSeq": 1776665590039000,
+          "timelineCursor": 5331,
+          "stage": "collecting",
+          "tone": "intent",
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:10.039Z"
+      },
+      {
+        "id": "a70b325b-374d-4f26-b1fb-34e38ac5e455",
+        "messageKey": "runtime:na:1776665590239000:status_update",
+        "role": "agent",
+        "messageType": "status_update",
+        "content": "分析阶段：正在规划任务详情...",
+        "metadata": {
+          "messageKey": "runtime:na:1776665590239000:status_update",
+          "timestamp": 1776665590239,
+          "sessionEventSeq": 1776665590239000,
+          "timelineCursor": 5333,
+          "stage": "planning",
+          "tone": "planning",
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:10.239Z"
+      },
+      {
+        "id": "22776147-0ee4-47dc-b243-e1d4eb22cd29",
+        "messageKey": "runtime:na:1776665590239000:agent_message",
+        "role": "agent",
+        "messageType": "agent_message",
+        "content": "已识别任务类型：软件开发",
+        "metadata": {
+          "messageKey": "runtime:na:1776665590239000:agent_message",
+          "timestamp": 1776665590239,
+          "sessionEventSeq": 1776665590239000,
+          "timelineCursor": 5334,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:10.239Z"
+      },
+      {
+        "id": "c5f43928-9573-48b5-971d-c398554259ac",
+        "messageKey": "runtime:na:1776665590447000:status_update",
+        "role": "agent",
+        "messageType": "status_update",
+        "content": "分析阶段：正在生成执行计划...",
+        "metadata": {
+          "messageKey": "runtime:na:1776665590447000:status_update",
+          "timestamp": 1776665590447,
+          "sessionEventSeq": 1776665590447000,
+          "timelineCursor": 5335,
+          "stage": "planning",
+          "tone": "planning",
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:10.447Z"
+      },
+      {
+        "id": "7e0edb74-3b42-4aec-bd77-f1ebbc7a338a",
+        "messageKey": "runtime:na:1776665590447000:agent_message",
+        "role": "agent",
+        "messageType": "agent_message",
+        "content": "任务规划完成：写一个 Python 脚本分析 CSV 并输出 Markdown 报告，不要部署",
+        "metadata": {
+          "messageKey": "runtime:na:1776665590447000:agent_message",
+          "timestamp": 1776665590447,
+          "sessionEventSeq": 1776665590447000,
+          "timelineCursor": 5336,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:10.447Z"
+      },
+      {
+        "id": "36c54645-4576-4287-b829-df113c9f01e6",
+        "messageKey": "runtime:na:1776665590676000:plan_generated",
+        "role": "agent",
+        "messageType": "plan_generated",
+        "content": "执行计划已生成",
+        "metadata": {
+          "messageKey": "runtime:na:1776665590676000:plan_generated",
+          "timestamp": 1776665590676,
+          "sessionEventSeq": 1776665590676000,
+          "timelineCursor": 5337,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:10.676Z"
+      },
+      {
+        "id": "4e0f4d5a-ffa7-43ee-8218-d4cd77a313b6",
+        "messageKey": "runtime:na:1776665590677000:status_update",
+        "role": "agent",
+        "messageType": "status_update",
+        "content": "开发阶段：正在启动执行环境...",
+        "metadata": {
+          "messageKey": "runtime:na:1776665590677000:status_update",
+          "timestamp": 1776665590677,
+          "sessionEventSeq": 1776665590677000,
+          "timelineCursor": 5338,
+          "stage": "executing",
+          "tone": "execution",
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:10.677Z"
+      },
+      {
+        "id": "5d60f47d-9c07-4e9b-b028-c791784be3e4",
+        "messageKey": "runtime:na:1776665615098000:agent_message",
+        "role": "agent",
+        "messageType": "agent_message",
+        "content": "执行环境已就绪，开始下发执行指令...",
+        "metadata": {
+          "messageKey": "runtime:na:1776665615098000:agent_message",
+          "timestamp": 1776665615098,
+          "sessionEventSeq": 1776665615098000,
+          "timelineCursor": 5351,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:35.098Z"
+      },
+      {
+        "id": "5b75c9f3-7db3-43b2-8b80-0c9fe790b552",
+        "messageKey": "runtime:na:1776665615973000:agent_message",
+        "role": "agent",
+        "messageType": "agent_message",
+        "content": "执行环境调度失败（第 1/2 次）：[PROVISION:open_environment] Rate limit exceeded, please try again later - you have reached the maximum number of concurrent E2B sandboxes (20). If you need more, please visit 'https://e2b.dev/docs/billing'",
+        "metadata": {
+          "messageKey": "runtime:na:1776665615973000:agent_message",
+          "timestamp": 1776665615973,
+          "sessionEventSeq": 1776665615973000,
+          "timelineCursor": 5353,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:35.973Z"
+      },
+      {
+        "id": "4203e1c8-d50b-4093-9332-a0b8644a0f86",
+        "messageKey": "runtime:na:1776665617816000:agent_message",
+        "role": "agent",
+        "messageType": "agent_message",
+        "content": "执行环境调度失败（第 2/2 次）：[PROVISION:open_environment] Rate limit exceeded, please try again later - you have reached the maximum number of concurrent E2B sandboxes (20). If you need more, please visit 'https://e2b.dev/docs/billing'",
+        "metadata": {
+          "messageKey": "runtime:na:1776665617816000:agent_message",
+          "timestamp": 1776665617816,
+          "sessionEventSeq": 1776665617816000,
+          "timelineCursor": 5354,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:37.816Z"
+      },
+      {
+        "id": "81c03788-450c-407b-ba11-f7a2757edc82",
+        "messageKey": "runtime:na:1776665617816000:status_update",
+        "role": "agent",
+        "messageType": "status_update",
+        "content": "任务处理失败",
+        "metadata": {
+          "messageKey": "runtime:na:1776665617816000:status_update",
+          "timestamp": 1776665617816,
+          "sessionEventSeq": 1776665617816000,
+          "timelineCursor": 5355,
+          "stage": "failed",
+          "tone": "error",
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:37.816Z"
+      },
+      {
+        "id": "54455ffa-d371-4418-bfa1-955425683f37",
+        "messageKey": "runtime:na:1776665617817000:error",
+        "role": "agent",
+        "messageType": "error",
+        "content": "任务创建失败，请稍后重试",
+        "metadata": {
+          "messageKey": "runtime:na:1776665617817000:error",
+          "timestamp": 1776665617817,
+          "sessionEventSeq": 1776665617817000,
+          "timelineCursor": 5356,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:37.817Z"
+      }
+    ]
+  },
+  "workspaceTree": {
+    "success": true,
+    "data": {
+      "root": "/home/user/opencode/workspaces/f37800c9-255f-4459-9cb9-243ee340b05d",
+      "items": []
+    },
+    "cache": {
+      "hit": false
+    }
+  },
+  "latestRun": {
+    "success": true,
+    "data": null
+  },
+  "deployment": {
+    "success": true,
+    "data": {
+      "configured": false,
+      "canDeploy": true,
+      "bindingState": "uninitialized",
+      "provisioningPhase": "resource_provisioning",
+      "message": "首次部署时将自动准备托管仓库与部署资源，并发布当前工作区内容。",
+      "activeDeploymentPending": false,
+      "domains": [],
+      "deployments": [],
+      "logs": [],
+      "missing": [],
+      "analytics": {
+        "provider": "umami",
+        "configured": true,
+        "enabled": false,
+        "status": "pending_domain",
+        "host": "https://analytics.oneceo.ai",
+        "message": "等待首次部署后绑定 Umami website"
+      }
+    }
+  },
+  "transcript": [
+    {
+      "type": "agent_message",
+      "agent": "system",
+      "content": "欢迎使用 Altus 任务创建助手！请描述您想要创建的任务。",
+      "metadata": {}
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "system",
+      "stage": "collecting",
+      "phase": "ideation",
+      "content": "构思阶段：正在整理需求...",
+      "metadata": {
+        "phase": "ideation",
+        "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+      },
+      "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "intent",
+      "stage": "collecting",
+      "phase": "analysis",
+      "content": "分析阶段：正在分析您的任务需求...",
+      "metadata": {
+        "phase": "analysis",
+        "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+      },
+      "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+    },
+    {
+      "type": "agent_message",
+      "agent": "intent_recognition",
+      "content": "已识别任务类型：软件开发",
+      "metadata": {
+        "intent_type": "software_development",
+        "confidence": 72,
+        "next_action": "plan",
+        "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+      },
+      "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "planning",
+      "stage": "planning",
+      "phase": "analysis",
+      "content": "分析阶段：正在规划任务详情...",
+      "metadata": {
+        "phase": "analysis",
+        "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+      },
+      "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+    },
+    {
+      "type": "agent_message",
+      "agent": "planning",
+      "content": "任务规划完成：写一个 Python 脚本分析 CSV 并输出 Markdown 报告，不要部署",
+      "metadata": {
+        "task_description": {
+          "title": "写一个 Python 脚本分析 CSV 并输出 Markdown 报告，不要部署",
+          "objective": "基于用户需求实现可运行的网页应用（写一个 Python 脚本分析 CSV 并输出 Markdown 报告，不要部署。）",
+          "scope": "单页或单文件实现，覆盖核心交互",
+          "deliverables": [
+            "可运行的网页应用",
+            "完整源代码",
+            "基础使用说明"
+          ],
+          "constraints": [
+            "单文件或少量文件交付",
+            "确保浏览器可运行"
+          ],
+          "additional_info": {
+            "fallback": true,
+            "note": "解析任务描述失败，已回退至软件开发默认模板",
+            "userInput": "写一个 Python 脚本分析 CSV 并输出 Markdown 报告，不要部署。"
+          }
+        },
+        "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+      },
+      "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "planning",
+      "stage": "planning",
+      "phase": "analysis",
+      "content": "分析阶段：正在生成执行计划...",
+      "metadata": {
+        "phase": "analysis",
+        "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+      },
+      "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+    },
+    {
+      "type": "plan_generated",
+      "plan": {
+        "project": {
+          "title": "写一个 Python 脚本分析 CSV 并输出 Markdown 报告，不要部署",
+          "description": "基于用户需求实现可运行的网页应用（写一个 Python 脚本分析 CSV 并输出 Markdown 报告，不要部署。）",
+          "managers": [
+            {
+              "id": "m1",
+              "name": "执行经理",
+              "description": "负责整体执行计划与协调",
+              "tasks": [
+                {
+                  "id": "t1-1",
+                  "title": "可运行的网页应用",
+                  "description": "完成交付物：可运行的网页应用",
+                  "estimated_hours": 8,
+                  "deliverables": [
+                    "可运行的网页应用"
+                  ]
+                },
+                {
+                  "id": "t1-2",
+                  "title": "完整源代码",
+                  "description": "完成交付物：完整源代码",
+                  "estimated_hours": 8,
+                  "deliverables": [
+                    "完整源代码"
+                  ]
+                },
+                {
+                  "id": "t1-3",
+                  "title": "基础使用说明",
+                  "description": "完成交付物：基础使用说明",
+                  "estimated_hours": 8,
+                  "deliverables": [
+                    "基础使用说明"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d",
+      "metadata": {
+        "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+      }
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "execution",
+      "stage": "executing",
+      "phase": "development",
+      "content": "开发阶段：执行计划已生成，正在启动执行环境...",
+      "metadata": {
+        "phase": "development",
+        "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+      },
+      "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "execution",
+      "stage": "executing",
+      "phase": "development",
+      "content": "开发阶段：正在启动执行环境...",
+      "metadata": {
+        "phase": "development",
+        "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+      },
+      "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+    },
+    {
+      "type": "agent_message",
+      "agent": "execution_plan",
+      "content": "执行环境已就绪，开始下发执行指令...",
+      "metadata": {
+        "osacEndpoint": "wss://18080-ijdpubu63zeb8iiro1sok.e2b.app/ws",
+        "osacHost": "18080-ijdpubu63zeb8iiro1sok.e2b.app",
+        "osacHostPort": 18080,
+        "osacConnectionMode": "direct",
+        "osacAuthToken": "e2b_420c3ee4564d4171b9ff1e2778126661",
+        "orchestratorSessionId": "ijdpubu63zeb8iiro1sok",
+        "workspacePath": "/home/user/opencode/workspaces/f37800c9-255f-4459-9cb9-243ee340b05d",
+        "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+      },
+      "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+    },
+    {
+      "type": "agent_message",
+      "agent": "execution_plan",
+      "content": "执行环境调度失败（第 1/2 次）：[PROVISION:open_environment] Rate limit exceeded, please try again later - you have reached the maximum number of concurrent E2B sandboxes (20). If you need more, please visit 'https://e2b.dev/docs/billing'",
+      "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d",
+      "metadata": {
+        "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+      }
+    },
+    {
+      "type": "agent_message",
+      "agent": "execution_plan",
+      "content": "执行环境调度失败（第 2/2 次）：[PROVISION:open_environment] Rate limit exceeded, please try again later - you have reached the maximum number of concurrent E2B sandboxes (20). If you need more, please visit 'https://e2b.dev/docs/billing'",
+      "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d",
+      "metadata": {
+        "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+      }
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "error",
+      "stage": "failed",
+      "content": "任务处理失败",
+      "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d",
+      "metadata": {
+        "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+      }
+    },
+    {
+      "type": "error",
+      "message": "任务创建失败，请稍后重试",
+      "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d",
+      "metadata": {
+        "sessionId": "f37800c9-255f-4459-9cb9-243ee340b05d"
+      }
+    }
+  ]
+}

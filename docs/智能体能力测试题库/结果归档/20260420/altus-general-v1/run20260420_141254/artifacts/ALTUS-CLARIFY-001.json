@@ -1,0 +1,531 @@
+{
+  "caseId": "ALTUS-CLARIFY-001",
+  "prompts": [
+    "帮我做一个客户管理系统。"
+  ],
+  "turnResults": [
+    {
+      "prompt": "帮我做一个客户管理系统。",
+      "outcome": "timeout"
+    }
+  ],
+  "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491",
+  "sessionDetail": {
+    "success": true,
+    "data": {
+      "id": "ad2f9dae-4553-44c5-94a3-55040aeb0491",
+      "title": "帮我做一个客户管理系统。营销计划制定",
+      "status": "failed",
+      "stage": "failed",
+      "mode": "sandbox",
+      "executor": "opencode",
+      "driver": "opencode",
+      "runtime": {
+        "orchestratorSessionId": "ismkrdwyk4pxz2gz5ib3s",
+        "updatedAt": "2026-04-20T06:13:38.128Z"
+      },
+      "createdAt": "2026-04-20T14:13:07.052Z",
+      "updatedAt": "2026-04-20T06:13:40.482Z",
+      "messages": [],
+      "runtimeStatus": {
+        "status": "ready",
+        "provider": "e2b",
+        "updatedAt": "2026-04-20T06:13:38.128Z",
+        "sandboxId": "ismkrdwyk4pxz2gz5ib3s"
+      },
+      "connectorsSummary": {
+        "total": 6,
+        "attached": 0,
+        "active": 0,
+        "needsAuth": 0,
+        "failed": 0
+      }
+    }
+  },
+  "recentMessages": null,
+  "fullMessages": {
+    "success": true,
+    "data": [
+      {
+        "id": "852891d3-b28d-4ad5-8ea5-152ef371ba91",
+        "messageKey": "runtime:na:1776665587055000:user_input",
+        "role": "user",
+        "messageType": "user_input",
+        "content": "帮我做一个客户管理系统。",
+        "metadata": {
+          "messageKey": "runtime:na:1776665587055000:user_input",
+          "timestamp": 1776665587055,
+          "sessionEventSeq": 1776665587055000,
+          "timelineCursor": 5300,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:07.055Z"
+      },
+      {
+        "id": "244b0dd8-899c-4c4f-9b9b-78a79a976be9",
+        "messageKey": "runtime:na:1776665587067000:status_update",
+        "role": "agent",
+        "messageType": "status_update",
+        "content": "分析阶段：正在分析您的任务需求...",
+        "metadata": {
+          "messageKey": "runtime:na:1776665587067000:status_update",
+          "timestamp": 1776665587067,
+          "sessionEventSeq": 1776665587067000,
+          "timelineCursor": 5301,
+          "stage": "collecting",
+          "tone": "intent",
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:07.067Z"
+      },
+      {
+        "id": "1936a16e-90fb-427e-a584-34e11360f8d7",
+        "messageKey": "runtime:na:1776665587629000:agent_message",
+        "role": "agent",
+        "messageType": "agent_message",
+        "content": "已识别任务类型：其他",
+        "metadata": {
+          "messageKey": "runtime:na:1776665587629000:agent_message",
+          "timestamp": 1776665587629,
+          "sessionEventSeq": 1776665587629000,
+          "timelineCursor": 5306,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:07.629Z"
+      },
+      {
+        "id": "307c4399-232b-4e24-ac01-cd53f121f76d",
+        "messageKey": "runtime:na:1776665587629000:status_update",
+        "role": "agent",
+        "messageType": "status_update",
+        "content": "分析阶段：正在规划任务详情...",
+        "metadata": {
+          "messageKey": "runtime:na:1776665587629000:status_update",
+          "timestamp": 1776665587629,
+          "sessionEventSeq": 1776665587629000,
+          "timelineCursor": 5307,
+          "stage": "planning",
+          "tone": "planning",
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:07.629Z"
+      },
+      {
+        "id": "66f4eb48-bee1-4535-9c31-224dc5c92011",
+        "messageKey": "runtime:na:1776665587838000:agent_message",
+        "role": "agent",
+        "messageType": "agent_message",
+        "content": "任务规划完成：帮我做一个客户管理系统。营销计划制定",
+        "metadata": {
+          "messageKey": "runtime:na:1776665587838000:agent_message",
+          "timestamp": 1776665587838,
+          "sessionEventSeq": 1776665587838000,
+          "timelineCursor": 5308,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:07.838Z"
+      },
+      {
+        "id": "c901e953-4335-4b06-9dfb-0ee794e9054b",
+        "messageKey": "runtime:na:1776665587838000:status_update",
+        "role": "agent",
+        "messageType": "status_update",
+        "content": "分析阶段：正在生成执行计划...",
+        "metadata": {
+          "messageKey": "runtime:na:1776665587838000:status_update",
+          "timestamp": 1776665587838,
+          "sessionEventSeq": 1776665587838000,
+          "timelineCursor": 5309,
+          "stage": "planning",
+          "tone": "planning",
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:07.838Z"
+      },
+      {
+        "id": "18c44f58-3c18-4afc-a893-ac4ca0867185",
+        "messageKey": "runtime:na:1776665588112000:plan_generated",
+        "role": "agent",
+        "messageType": "plan_generated",
+        "content": "执行计划已生成",
+        "metadata": {
+          "messageKey": "runtime:na:1776665588112000:plan_generated",
+          "timestamp": 1776665588112,
+          "sessionEventSeq": 1776665588112000,
+          "timelineCursor": 5312,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:08.112Z"
+      },
+      {
+        "id": "0710a569-15d6-4d63-b202-d8ad868489e4",
+        "messageKey": "runtime:na:1776665588142000:status_update",
+        "role": "agent",
+        "messageType": "status_update",
+        "content": "开发阶段：执行计划已生成，正在启动执行环境...",
+        "metadata": {
+          "messageKey": "runtime:na:1776665588142000:status_update",
+          "timestamp": 1776665588142,
+          "sessionEventSeq": 1776665588142000,
+          "timelineCursor": 5313,
+          "stage": "executing",
+          "tone": "execution",
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:08.142Z"
+      },
+      {
+        "id": "e27848e1-ec70-4345-9f4b-2166f5126e98",
+        "messageKey": "runtime:na:1776665617848000:agent_message",
+        "role": "agent",
+        "messageType": "agent_message",
+        "content": "执行环境已就绪，开始下发执行指令...",
+        "metadata": {
+          "messageKey": "runtime:na:1776665617848000:agent_message",
+          "timestamp": 1776665617848,
+          "sessionEventSeq": 1776665617848000,
+          "timelineCursor": 5357,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:37.848Z"
+      },
+      {
+        "id": "a0bbc635-16be-4f2a-b177-779c1fd316b7",
+        "messageKey": "runtime:na:1776665618494000:agent_message",
+        "role": "agent",
+        "messageType": "agent_message",
+        "content": "执行环境调度失败（第 1/2 次）：[PROVISION:open_environment] Rate limit exceeded, please try again later - you have reached the maximum number of concurrent E2B sandboxes (20). If you need more, please visit 'https://e2b.dev/docs/billing'",
+        "metadata": {
+          "messageKey": "runtime:na:1776665618494000:agent_message",
+          "timestamp": 1776665618494,
+          "sessionEventSeq": 1776665618494000,
+          "timelineCursor": 5358,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:38.494Z"
+      },
+      {
+        "id": "ed02dcc2-6c7b-4666-a45f-a260801341d7",
+        "messageKey": "runtime:na:1776665620482000:agent_message",
+        "role": "agent",
+        "messageType": "agent_message",
+        "content": "执行环境调度失败（第 2/2 次）：[PROVISION:open_environment] Rate limit exceeded, please try again later - you have reached the maximum number of concurrent E2B sandboxes (20). If you need more, please visit 'https://e2b.dev/docs/billing'",
+        "metadata": {
+          "messageKey": "runtime:na:1776665620482000:agent_message",
+          "timestamp": 1776665620482,
+          "sessionEventSeq": 1776665620482000,
+          "timelineCursor": 5361,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:40.482Z"
+      },
+      {
+        "id": "a6d44aec-b319-448f-8d5a-421d427ca1bc",
+        "messageKey": "runtime:na:1776665620482000:status_update",
+        "role": "agent",
+        "messageType": "status_update",
+        "content": "任务处理失败",
+        "metadata": {
+          "messageKey": "runtime:na:1776665620482000:status_update",
+          "timestamp": 1776665620482,
+          "sessionEventSeq": 1776665620482000,
+          "timelineCursor": 5362,
+          "stage": "failed",
+          "tone": "error",
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:40.482Z"
+      },
+      {
+        "id": "1ea2d8b8-07bf-401e-8829-6c866e5eb49b",
+        "messageKey": "runtime:na:1776665620483000:error",
+        "role": "agent",
+        "messageType": "error",
+        "content": "任务创建失败，请稍后重试",
+        "metadata": {
+          "messageKey": "runtime:na:1776665620483000:error",
+          "timestamp": 1776665620483,
+          "sessionEventSeq": 1776665620483000,
+          "timelineCursor": 5363,
+          "runtimeGeneration": 2
+        },
+        "createdAt": "2026-04-20T06:13:40.483Z"
+      }
+    ]
+  },
+  "workspaceTree": {
+    "success": true,
+    "data": {
+      "root": "/home/user/opencode/workspaces/ad2f9dae-4553-44c5-94a3-55040aeb0491",
+      "items": []
+    },
+    "cache": {
+      "hit": false
+    }
+  },
+  "latestRun": {
+    "success": true,
+    "data": null
+  },
+  "deployment": {
+    "success": true,
+    "data": {
+      "configured": false,
+      "canDeploy": true,
+      "bindingState": "uninitialized",
+      "provisioningPhase": "resource_provisioning",
+      "message": "首次部署时将自动准备托管仓库与部署资源，并发布当前工作区内容。",
+      "activeDeploymentPending": false,
+      "domains": [],
+      "deployments": [],
+      "logs": [],
+      "missing": [],
+      "analytics": {
+        "provider": "umami",
+        "configured": true,
+        "enabled": false,
+        "status": "pending_domain",
+        "host": "https://analytics.oneceo.ai",
+        "message": "等待首次部署后绑定 Umami website"
+      }
+    }
+  },
+  "transcript": [
+    {
+      "type": "agent_message",
+      "agent": "system",
+      "content": "欢迎使用 Altus 任务创建助手！请描述您想要创建的任务。",
+      "metadata": {}
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "system",
+      "stage": "collecting",
+      "phase": "ideation",
+      "content": "构思阶段：正在整理需求...",
+      "metadata": {
+        "phase": "ideation",
+        "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+      },
+      "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "intent",
+      "stage": "collecting",
+      "phase": "analysis",
+      "content": "分析阶段：正在分析您的任务需求...",
+      "metadata": {
+        "phase": "analysis",
+        "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+      },
+      "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+    },
+    {
+      "type": "agent_message",
+      "agent": "intent_recognition",
+      "content": "已识别任务类型：其他",
+      "metadata": {
+        "intent_type": "other",
+        "confidence": 60,
+        "next_action": "plan",
+        "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+      },
+      "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "planning",
+      "stage": "planning",
+      "phase": "analysis",
+      "content": "分析阶段：正在规划任务详情...",
+      "metadata": {
+        "phase": "analysis",
+        "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+      },
+      "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+    },
+    {
+      "type": "agent_message",
+      "agent": "planning",
+      "content": "任务规划完成：帮我做一个客户管理系统。营销计划制定",
+      "metadata": {
+        "task_description": {
+          "title": "帮我做一个客户管理系统。营销计划制定",
+          "objective": "基于已知信息，为 帮我做一个客户管理系统。 产出可落地的营销计划方案",
+          "scope": "待补充",
+          "deliverables": [
+            "营销策略文档",
+            "目标市场分析",
+            "渠道策略建议",
+            "阶段性执行计划"
+          ],
+          "constraints": [
+            "需确认产品类型与目标市场",
+            "需确认预算范围与时间框架"
+          ],
+          "additional_info": {
+            "fallback": true,
+            "note": "由于解析任务描述失败，已生成基础规划，后续可补充关键信息",
+            "userInput": "帮我做一个客户管理系统。"
+          }
+        },
+        "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+      },
+      "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "planning",
+      "stage": "planning",
+      "phase": "analysis",
+      "content": "分析阶段：正在生成执行计划...",
+      "metadata": {
+        "phase": "analysis",
+        "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+      },
+      "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+    },
+    {
+      "type": "plan_generated",
+      "plan": {
+        "project": {
+          "title": "帮我做一个客户管理系统。营销计划制定",
+          "description": "基于已知信息，为 帮我做一个客户管理系统。 产出可落地的营销计划方案",
+          "managers": [
+            {
+              "id": "m1",
+              "name": "执行经理",
+              "description": "负责整体执行计划与协调",
+              "tasks": [
+                {
+                  "id": "t1-1",
+                  "title": "营销策略文档",
+                  "description": "完成交付物：营销策略文档",
+                  "estimated_hours": 8,
+                  "deliverables": [
+                    "营销策略文档"
+                  ]
+                },
+                {
+                  "id": "t1-2",
+                  "title": "目标市场分析",
+                  "description": "完成交付物：目标市场分析",
+                  "estimated_hours": 8,
+                  "deliverables": [
+                    "目标市场分析"
+                  ]
+                },
+                {
+                  "id": "t1-3",
+                  "title": "渠道策略建议",
+                  "description": "完成交付物：渠道策略建议",
+                  "estimated_hours": 8,
+                  "deliverables": [
+                    "渠道策略建议"
+                  ]
+                },
+                {
+                  "id": "t1-4",
+                  "title": "阶段性执行计划",
+                  "description": "完成交付物：阶段性执行计划",
+                  "estimated_hours": 8,
+                  "deliverables": [
+                    "阶段性执行计划"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491",
+      "metadata": {
+        "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+      }
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "execution",
+      "stage": "executing",
+      "phase": "development",
+      "content": "开发阶段：执行计划已生成，正在启动执行环境...",
+      "metadata": {
+        "phase": "development",
+        "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+      },
+      "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "execution",
+      "stage": "executing",
+      "phase": "development",
+      "content": "开发阶段：正在启动执行环境...",
+      "metadata": {
+        "phase": "development",
+        "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+      },
+      "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+    },
+    {
+      "type": "agent_message",
+      "agent": "execution_plan",
+      "content": "执行环境已就绪，开始下发执行指令...",
+      "metadata": {
+        "osacEndpoint": "wss://18080-ismkrdwyk4pxz2gz5ib3s.e2b.app/ws",
+        "osacHost": "18080-ismkrdwyk4pxz2gz5ib3s.e2b.app",
+        "osacHostPort": 18080,
+        "osacConnectionMode": "direct",
+        "osacAuthToken": "e2b_11bc6e0db6d342528cd2aeabb6f4a8b5",
+        "orchestratorSessionId": "ismkrdwyk4pxz2gz5ib3s",
+        "workspacePath": "/home/user/opencode/workspaces/ad2f9dae-4553-44c5-94a3-55040aeb0491",
+        "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+      },
+      "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+    },
+    {
+      "type": "agent_message",
+      "agent": "execution_plan",
+      "content": "执行环境调度失败（第 1/2 次）：[PROVISION:open_environment] Rate limit exceeded, please try again later - you have reached the maximum number of concurrent E2B sandboxes (20). If you need more, please visit 'https://e2b.dev/docs/billing'",
+      "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491",
+      "metadata": {
+        "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+      }
+    },
+    {
+      "type": "agent_message",
+      "agent": "execution_plan",
+      "content": "执行环境调度失败（第 2/2 次）：[PROVISION:open_environment] Rate limit exceeded, please try again later - you have reached the maximum number of concurrent E2B sandboxes (20). If you need more, please visit 'https://e2b.dev/docs/billing'",
+      "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491",
+      "metadata": {
+        "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+      }
+    },
+    {
+      "type": "status_update",
+      "agent": "system",
+      "tone": "error",
+      "stage": "failed",
+      "content": "任务处理失败",
+      "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491",
+      "metadata": {
+        "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+      }
+    },
+    {
+      "type": "error",
+      "message": "任务创建失败，请稍后重试",
+      "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491",
+      "metadata": {
+        "sessionId": "ad2f9dae-4553-44c5-94a3-55040aeb0491"
+      }
+    }
+  ]
+}

@@ -3,40 +3,79 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+
 import { ensureDeploymentTemplateBootstrap } from '../src/services/deployment-template-bootstrap-service';
 
-test('deployment template bootstrap injects analytics script into html entry once', async () => {
-  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-bootstrap-test-'));
+async function withTempHtml(
+  html: string,
+  run: (dir: string, htmlPath: string) => Promise<void>
+) {
+  const dir = await mkdtemp(join(tmpdir(), 'oneceo-bootstrap-test-'));
+  const htmlPath = join(dir, 'index.html');
   try {
-    const clientDir = join(workspace, 'client');
-    await mkdir(clientDir, { recursive: true });
-    await writeFile(
-      join(workspace, 'package.json'),
-      JSON.stringify({ name: 'demo', scripts: { build: 'vite build', start: 'node server.js' } }),
-      'utf-8'
-    );
-    await writeFile(
-      join(clientDir, 'index.html'),
-      '<!doctype html><html><body><div id="root"></div></body></html>',
-      'utf-8'
-    );
-
-    const first = await ensureDeploymentTemplateBootstrap(workspace);
-    assert.equal(first.errors.length, 0);
-    assert.equal(first.analyticsInjected, true);
-    assert.equal(first.analyticsTargetPath, join(clientDir, 'index.html'));
-
-    const afterFirst = await readFile(join(clientDir, 'index.html'), 'utf-8');
-    assert.match(afterFirst, /ONECEO_ANALYTICS:START/);
-    assert.match(afterFirst, /data-oneceo-analytics="runtime"/);
-
-    const second = await ensureDeploymentTemplateBootstrap(workspace);
-    assert.equal(second.errors.length, 0);
-    assert.equal(second.analyticsInjected, false);
-
-    const afterSecond = await readFile(join(clientDir, 'index.html'), 'utf-8');
-    assert.equal(afterSecond.match(/ONECEO_ANALYTICS:START/g)?.length || 0, 1);
+    await writeFile(htmlPath, html, 'utf-8');
+    await run(dir, htmlPath);
   } finally {
-    await rm(workspace, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+test('ensureDeploymentTemplateBootstrap injects runtime config without vite placeholders', async () => {
+  await withTempHtml('<html><body><div id="app"></div></body></html>', async (dir, htmlPath) => {
+    const report = await ensureDeploymentTemplateBootstrap(dir, {
+      analyticsConfig: {
+        enabled: true,
+        host: 'https://stats.oneceo.ai',
+        websiteId: 'site_123',
+        tag: 'production',
+        publicDomain: 'demo.oneceo.app',
+      },
+    });
+
+    const output = await readFile(htmlPath, 'utf-8');
+    assert.equal(report.analyticsInjected, true);
+    assert.match(output, /https:\/\/stats\.oneceo\.ai/);
+    assert.match(output, /site_123/);
+    assert.match(output, /demo\.oneceo\.app/);
+    assert.doesNotMatch(output, /%VITE_[A-Z0-9_]+%/);
+  });
+});
+
+test('ensureDeploymentTemplateBootstrap injects disabled default config for inspection flow', async () => {
+  await withTempHtml('<html><body><main>demo</main></body></html>', async (dir, htmlPath) => {
+    await ensureDeploymentTemplateBootstrap(dir);
+
+    const output = await readFile(htmlPath, 'utf-8');
+    assert.match(output, /"enabled":false/);
+    assert.doesNotMatch(output, /%VITE_[A-Z0-9_]+%/);
+  });
+});
+
+test('ensureDeploymentTemplateBootstrap injects analytics bootstrap into server-rendered EJS layout when no html entry exists', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'oneceo-bootstrap-ejs-test-'));
+  const layoutPath = join(dir, 'views/layouts/main.ejs');
+  try {
+    await mkdir(join(dir, 'views/layouts'), { recursive: true });
+    await writeFile(
+      layoutPath,
+      '<!DOCTYPE html><html><head><title><%= title %></title></head><body><%- body %></body></html>',
+      'utf-8'
+    );
+
+    const report = await ensureDeploymentTemplateBootstrap(dir, {
+      analyticsConfig: {
+        enabled: true,
+        host: 'https://analytics.oneceo.ai',
+        websiteId: 'site_ejs_123',
+      },
+    });
+
+    const output = await readFile(layoutPath, 'utf-8');
+    assert.equal(report.analyticsInjected, true);
+    assert.equal(report.analyticsTargetPath, layoutPath);
+    assert.match(output, /ONECEO_ANALYTICS:START/);
+    assert.match(output, /site_ejs_123/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });

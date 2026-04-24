@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
 import {
   taskCreationSessionDAO,
@@ -12,6 +14,11 @@ import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { ensureSandboxRuntimeMetadata } from './sandbox-runtime-metadata-service';
 import { sandboxAgentProvisionService } from './sandbox-agent-provision-service';
 import { asText, pickObject, type ChatMessage, type ChatMessageContentPart } from './altus-managed-shared';
+import {
+  deriveManagedTaskIntentProfile,
+  type AltusManagedTaskIntentProfile,
+} from './altus-managed-prompt-service';
+import { classifyTaskIntentShape, type TaskClarificationType, type TaskIntentShape } from './task-intent-shape-service';
 import { buildAttachmentContextPrompt } from './task-attachment-service';
 import { managedImageObjectService, type ManagedImageObjectService } from './managed-image-object-service';
 import { isSameUserId } from '../utils/user-id';
@@ -19,6 +26,482 @@ import { isSameUserId } from '../utils/user-id';
 const INLINE_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const INLINE_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 const INLINE_IMAGE_MAX_COUNT = 4;
+const ARTIFACT_TYPE_OPTIONS = ['网页应用', '后端 API', '本地脚本', '完整业务系统'] as const;
+const ACCEPTANCE_REQUIREMENT_OPTIONS = ['只要源码', '本地可运行', '测试通过', '可直接部署'] as const;
+const SPECIFIC_ARTIFACT_KEYWORDS = [
+  '网页应用',
+  'web app',
+  '网站',
+  '网页',
+  'landing page',
+  'dashboard',
+  'admin',
+  '后台',
+  '后端 api',
+  'backend api',
+  'api 服务',
+  'backend service',
+  '脚本',
+  'cli',
+  '命令行',
+  '爬虫',
+  '完整业务系统',
+  '完整系统',
+  'erp',
+  'crm',
+] as const;
+const AMBIGUOUS_SOFTWARE_KEYWORDS = ['工具', 'tool', '应用', 'app', '系统', '平台'] as const;
+const TECH_STACK_RESPONSE_KEYWORDS = [
+  'react',
+  'vue',
+  'next',
+  'vite',
+  'typescript',
+  'javascript',
+  'node',
+  'express',
+  'fastify',
+  'python',
+  'fastapi',
+  'flask',
+  'django',
+  'java',
+  'spring',
+  'go',
+  'rust',
+  'php',
+  'laravel',
+  'nestjs',
+];
+const SCOPE_BOUNDARY_RESPONSE_KEYWORDS = [
+  '只要前端',
+  '仅前端',
+  '只需要前端',
+  '前端页面',
+  '前后端',
+  '全栈',
+  'full stack',
+  'full-stack',
+  '后端',
+  '数据库',
+  '登录',
+  '权限',
+  'auth',
+  'api',
+];
+const SCOPE_BOUNDARY_TRIGGER_KEYWORDS = ['后台', 'dashboard', 'admin', 'crm', 'erp', '管理系统'] as const;
+const INTEGRATION_REQUEST_KEYWORDS = ['接入', '打通', '集成', '对接', 'integrate'] as const;
+const INTEGRATION_TARGET_RESPONSE_KEYWORDS = [
+  'github',
+  'notion',
+  'slack',
+  'supabase',
+  'vercel',
+  'stripe',
+  'postgres',
+  'mysql',
+  '数据库',
+  'crm',
+  'erp',
+  'oa',
+  'sap',
+  'api',
+];
+const NO_INTEGRATION_RESPONSE_KEYWORDS = [
+  '不需要接入',
+  '无需接入',
+  '不用接入',
+  '不需要集成',
+  '无需集成',
+  '不用集成',
+  '不需要对接',
+  '独立实现',
+  '不和现有系统打通',
+];
+const ACCEPTANCE_RESPONSE_KEYWORDS = [
+  '只要源码',
+  '源码',
+  '本地可运行',
+  '本地运行',
+  '测试通过',
+  '测试',
+  '可直接部署',
+  '直接部署',
+  '可部署',
+  '部署上线',
+  '上线',
+  'build',
+  'run',
+];
+const ROOT_STACK_FILES = [
+  'package.json',
+  'pnpm-workspace.yaml',
+  'tsconfig.json',
+  'requirements.txt',
+  'pyproject.toml',
+  'go.mod',
+  'Cargo.toml',
+  'pom.xml',
+] as const;
+
+type WorkspaceTechStackHints = {
+  constrained: boolean;
+  labels: string[];
+};
+
+type FinalClarificationDecision = {
+  needsClarification: boolean;
+  clarificationType: TaskClarificationType;
+  clarificationQuestion: string;
+  clarificationOptions?: string[];
+};
+
+function includesAnyKeyword(text: string, keywords: readonly string[]) {
+  return keywords.some((keyword) => text.includes(keyword));
+}
+
+function normalizeText(value: unknown) {
+  return asText(value).toLowerCase();
+}
+
+function coversArtifactType(text: string) {
+  return includesAnyKeyword(text, SPECIFIC_ARTIFACT_KEYWORDS);
+}
+
+function coversTechStack(text: string, workspaceHints: WorkspaceTechStackHints) {
+  return workspaceHints.constrained || includesAnyKeyword(text, TECH_STACK_RESPONSE_KEYWORDS);
+}
+
+function coversScopeBoundary(text: string) {
+  return includesAnyKeyword(text, SCOPE_BOUNDARY_RESPONSE_KEYWORDS);
+}
+
+function coversIntegrationTarget(text: string) {
+  return (
+    includesAnyKeyword(text, INTEGRATION_TARGET_RESPONSE_KEYWORDS) ||
+    includesAnyKeyword(text, NO_INTEGRATION_RESPONSE_KEYWORDS)
+  );
+}
+
+function coversAcceptanceRequirement(text: string) {
+  return includesAnyKeyword(text, ACCEPTANCE_RESPONSE_KEYWORDS);
+}
+
+function coversClarificationType(
+  clarificationType: Exclude<TaskClarificationType, 'none'>,
+  text: string,
+  workspaceHints: WorkspaceTechStackHints
+) {
+  switch (clarificationType) {
+    case 'artifact_type':
+      return coversArtifactType(text);
+    case 'tech_stack':
+      return coversTechStack(text, workspaceHints);
+    case 'scope_boundary':
+      return coversScopeBoundary(text);
+    case 'integration_target':
+      return coversIntegrationTarget(text);
+    case 'acceptance_requirement':
+      return coversAcceptanceRequirement(text);
+    default:
+      return false;
+  }
+}
+
+function buildClarificationQuestion(
+  clarificationType: Exclude<TaskClarificationType, 'none'>,
+  options?: string[],
+  input?: { followUp?: boolean }
+) {
+  const followUpPrefix = input?.followUp ? '我还需要先确认这一点：' : '';
+  switch (clarificationType) {
+    case 'artifact_type':
+      return {
+        question: `${followUpPrefix}这次要交付的是网页应用、后端 API、本地脚本，还是完整业务系统？`,
+        options: options || [...ARTIFACT_TYPE_OPTIONS],
+      };
+    case 'tech_stack':
+      return {
+        question: `${followUpPrefix}这次希望使用哪种开发语言或框架？如果没有指定，我将按仓库现有技术栈继续。`,
+      };
+    case 'scope_boundary':
+      return {
+        question: `${followUpPrefix}这次只需要前端页面，还是需要包含后端、数据库和登录权限？`,
+      };
+    case 'integration_target':
+      return {
+        question: `${followUpPrefix}这次需要接入现有系统吗？如果需要，请说明目标系统或接口边界。`,
+      };
+    case 'acceptance_requirement':
+      return {
+        question: `${followUpPrefix}这次只需要源码，还是还需要本地可运行、测试通过，或可以直接部署？`,
+        options: options || [...ACCEPTANCE_REQUIREMENT_OPTIONS],
+      };
+  }
+}
+
+async function pathExists(targetPath: string) {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function deriveWorkspaceTechStackHints(workspaceRoot: string): Promise<WorkspaceTechStackHints> {
+  const root = asText(workspaceRoot);
+  if (!root || !(await pathExists(root))) {
+    return {
+      constrained: false,
+      labels: [],
+    };
+  }
+
+  const fileChecks = await Promise.all(
+    ROOT_STACK_FILES.map(async (filename) => ({
+      filename,
+      exists: await pathExists(path.join(root, filename)),
+    }))
+  );
+  const existing = new Set(fileChecks.filter((item) => item.exists).map((item) => item.filename));
+  if (existing.size === 0) {
+    return {
+      constrained: false,
+      labels: [],
+    };
+  }
+
+  const familySignals = new Set<string>();
+  const labels = new Set<string>();
+
+  if (existing.has('requirements.txt') || existing.has('pyproject.toml')) {
+    familySignals.add('python');
+    labels.add('python');
+  }
+  if (existing.has('go.mod')) {
+    familySignals.add('go');
+    labels.add('go');
+  }
+  if (existing.has('Cargo.toml')) {
+    familySignals.add('rust');
+    labels.add('rust');
+  }
+  if (existing.has('pom.xml')) {
+    familySignals.add('java');
+    labels.add('java');
+  }
+
+  let packageJson: Record<string, unknown> | null = null;
+  if (existing.has('package.json')) {
+    familySignals.add('javascript');
+    try {
+      const raw = await fs.readFile(path.join(root, 'package.json'), 'utf8');
+      packageJson = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      packageJson = null;
+    }
+  }
+  if (existing.has('tsconfig.json')) {
+    familySignals.add('javascript');
+    labels.add('typescript');
+  }
+
+  const dependencyKeys = new Set<string>();
+  if (packageJson) {
+    const dependencies = pickObject(packageJson.dependencies);
+    const devDependencies = pickObject(packageJson.devDependencies);
+    const scripts = pickObject(packageJson.scripts);
+    for (const source of [dependencies, devDependencies, scripts]) {
+      for (const key of Object.keys(source)) {
+        dependencyKeys.add(normalizeText(key));
+      }
+      for (const value of Object.values(source)) {
+        const normalizedValue = normalizeText(value);
+        if (normalizedValue) {
+          dependencyKeys.add(normalizedValue);
+        }
+      }
+    }
+    if (dependencyKeys.has('react')) labels.add('react');
+    if (dependencyKeys.has('vue')) labels.add('vue');
+    if (dependencyKeys.has('next')) labels.add('next');
+    if (dependencyKeys.has('vite')) labels.add('vite');
+    if (dependencyKeys.has('express')) labels.add('express');
+    if (dependencyKeys.has('fastify')) labels.add('fastify');
+    if (dependencyKeys.has('typescript')) labels.add('typescript');
+  }
+
+  const familyList = [...familySignals];
+  if (familyList.length !== 1) {
+    return {
+      constrained: false,
+      labels: [...labels],
+    };
+  }
+
+  if (familyList[0] !== 'javascript') {
+    return {
+      constrained: true,
+      labels: [...labels],
+    };
+  }
+
+  const frontendSignals = ['next', 'react', 'vue', 'vite'].filter((item) => labels.has(item));
+  const backendSignals = ['express', 'fastify'].filter((item) => labels.has(item));
+  const constrained =
+    (frontendSignals.length > 0 && backendSignals.length === 0) ||
+    (backendSignals.length > 0 && frontendSignals.length === 0);
+
+  return {
+    constrained,
+    labels: [...labels],
+  };
+}
+
+function resolveTodoDecision(shape: TaskIntentShape): Pick<AltusManagedTaskIntentProfile, 'todoRequired' | 'todoReason'> {
+  if (shape.candidateTodoSignals.explicitTodoRequest) {
+    return {
+      todoRequired: true,
+      todoReason: 'explicit_user_request',
+    };
+  }
+  if (
+    shape.candidateTodoSignals.looksTrivial ||
+    shape.candidateTodoSignals.isSingleCommandLike ||
+    shape.candidateTodoSignals.isSinglePointEditLike
+  ) {
+    return {
+      todoRequired: false,
+      todoReason: 'none',
+    };
+  }
+  if (shape.candidateTodoSignals.hasMultipleSubtasks) {
+    return {
+      todoRequired: true,
+      todoReason: 'multi_step',
+    };
+  }
+  if (shape.candidateTodoSignals.hasDebugChain) {
+    return {
+      todoRequired: true,
+      todoReason: 'debug_chain',
+    };
+  }
+  if (shape.candidateTodoSignals.hasIntegrationChain) {
+    return {
+      todoRequired: true,
+      todoReason: 'integration_chain',
+    };
+  }
+  return {
+    todoRequired: false,
+    todoReason: 'none',
+  };
+}
+
+function resolveClarificationDecision(input: {
+  shape: TaskIntentShape;
+  currentText: string;
+  messageType: 'user_input' | 'user_response';
+  pendingClarificationType?: TaskClarificationType | null;
+  workspaceHints: WorkspaceTechStackHints;
+}): FinalClarificationDecision {
+  const combinedText = input.shape.combinedText;
+  const currentText = input.currentText;
+  const softwareRequest = input.shape.suggestedIntentType === 'software_development';
+  const pendingType =
+    input.pendingClarificationType &&
+    input.pendingClarificationType !== 'none'
+      ? input.pendingClarificationType
+      : null;
+
+  if (
+    input.messageType === 'user_response' &&
+    pendingType &&
+    !coversClarificationType(pendingType, currentText, input.workspaceHints)
+  ) {
+    const followUp = buildClarificationQuestion(pendingType, undefined, { followUp: true });
+    return {
+      needsClarification: true,
+      clarificationType: pendingType,
+      clarificationQuestion: followUp.question,
+      clarificationOptions: followUp.options,
+    };
+  }
+
+  const candidates: Array<Exclude<TaskClarificationType, 'none'>> = [];
+  const needsArtifactClarification =
+    softwareRequest &&
+    (input.shape.boundaryOnlySoftwareRequest ||
+      input.shape.artifactKind === 'business_system' ||
+      includesAnyKeyword(combinedText, AMBIGUOUS_SOFTWARE_KEYWORDS)) &&
+    !coversArtifactType(combinedText);
+  if (needsArtifactClarification) {
+    candidates.push('artifact_type');
+  }
+
+  const needsTechStackClarification =
+    softwareRequest &&
+    !input.workspaceHints.constrained &&
+    !coversTechStack(combinedText, input.workspaceHints) &&
+    !input.shape.candidateTodoSignals.looksTrivial;
+  if (needsTechStackClarification) {
+    candidates.push('tech_stack');
+  }
+
+  const needsScopeClarification =
+    softwareRequest &&
+    !input.shape.candidateTodoSignals.looksTrivial &&
+    (input.shape.artifactKind === 'business_system' ||
+      includesAnyKeyword(combinedText, SCOPE_BOUNDARY_TRIGGER_KEYWORDS)) &&
+    !coversScopeBoundary(combinedText);
+  if (needsScopeClarification) {
+    candidates.push('scope_boundary');
+  }
+
+  const needsIntegrationClarification =
+    includesAnyKeyword(combinedText, INTEGRATION_REQUEST_KEYWORDS) &&
+    !coversIntegrationTarget(combinedText);
+  if (needsIntegrationClarification) {
+    candidates.push('integration_target');
+  }
+
+  const needsAcceptanceClarification =
+    softwareRequest &&
+    !input.shape.candidateTodoSignals.looksTrivial &&
+    (input.shape.artifactKind === 'business_system' ||
+      (input.shape.artifactKind === 'software_artifact' &&
+        includesAnyKeyword(combinedText, ['项目', '系统', '平台']))) &&
+    !coversAcceptanceRequirement(combinedText);
+  if (needsAcceptanceClarification) {
+    candidates.push('acceptance_requirement');
+  }
+
+  for (const clarificationType of candidates) {
+    if (
+      input.messageType === 'user_response' &&
+      pendingType === clarificationType &&
+      coversClarificationType(clarificationType, currentText, input.workspaceHints)
+    ) {
+      continue;
+    }
+    const question = buildClarificationQuestion(clarificationType);
+    return {
+      needsClarification: true,
+      clarificationType,
+      clarificationQuestion: question.question,
+      clarificationOptions: question.options,
+    };
+  }
+
+  return {
+    needsClarification: false,
+    clarificationType: 'none',
+    clarificationQuestion: '',
+    clarificationOptions: undefined,
+  };
+}
 
 function normalizeHistoryRole(role: unknown): 'system' | 'user' | 'assistant' | null {
   const normalized = asText(role).toLowerCase();
@@ -78,6 +561,53 @@ function collectAttachmentContextPrompt(history: Array<{ metadata?: unknown }>):
   }
 
   return buildAttachmentContextPrompt(contexts.slice(-6));
+}
+
+function collectLatestManagedTodoSnapshot(history: Array<{ metadata?: unknown }>) {
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const metadata = pickObject(history[index]?.metadata);
+    const eventType = asText(metadata.eventType).toLowerCase();
+    const toolName = asText(metadata.toolName).toLowerCase();
+    if (eventType !== 'tool_call_completed' || toolName !== 'todowrite') {
+      continue;
+    }
+    const args = pickObject(metadata.arguments);
+    if (!Array.isArray(args.todos)) {
+      continue;
+    }
+    const todos = args.todos
+      .map((item) => {
+        const record = pickObject(item);
+        const content = asText(record.content);
+        const status = asText(record.status);
+        const activeForm = asText(record.activeForm);
+        if (!content || !status) {
+          return null;
+        }
+        return {
+          content,
+          status,
+          ...(activeForm ? { activeForm } : {}),
+        };
+      })
+      .filter((item): item is { content: string; status: string; activeForm?: string } => Boolean(item));
+    if (todos.length > 0) {
+      return todos;
+    }
+  }
+  return [];
+}
+
+function buildTodoContextPrompt(history: Array<{ metadata?: unknown }>) {
+  const todos = collectLatestManagedTodoSnapshot(history);
+  if (todos.length === 0) {
+    return '';
+  }
+  return [
+    '# Current todo snapshot',
+    'These todos are the latest successful execution snapshot for this session. Reuse and update them instead of inventing a separate plan.',
+    ...todos.map((item) => `- [${item.status}] ${item.content}${item.activeForm ? ` | activeForm=${item.activeForm}` : ''}`),
+  ].join('\n');
 }
 
 function normalizeAttachmentRecord(raw: unknown) {
@@ -185,7 +715,7 @@ export class AltusManagedSetupService {
 
     const memory = await taskCreationFileMemoryStore.getSession(sessionId);
     if (!memory) {
-      await taskCreationFileMemoryStore.createSession('新建任务会话', sessionId);
+      await taskCreationFileMemoryStore.createSession('待识别任务', sessionId);
       await taskCreationFileMemoryStore.addMessage(sessionId, 'system', 'session_started', '会话已创建');
     }
 
@@ -322,6 +852,12 @@ export class AltusManagedSetupService {
     await ensureSandboxRuntimeMetadata(provision.sessionId, {
       taskSessionId: sessionId,
     }).catch(() => null);
+    await taskCreationFileMemoryStore.updateSessionExecutor(sessionId, 'altus');
+    await taskCreationFileMemoryStore.updateRuntimeBinding(sessionId, {
+      orchestratorSessionId: provision.sessionId,
+      executor: 'altus',
+      workspaceRoot,
+    });
     void sessionMcpRecoveryService.ensureSessionRecovered(sessionId, provision.sessionId).catch(() => null);
     return {
       sandboxId: provision.sessionId,
@@ -391,6 +927,7 @@ export class AltusManagedSetupService {
   ): Promise<ChatMessage[]> {
     const history = await taskCreationSessionDAO.getMessages(sessionId);
     const attachmentContextPrompt = collectAttachmentContextPrompt(history);
+    const todoContextPrompt = buildTodoContextPrompt(history);
     const inlineImageCache = new Map<string, ChatMessageContentPart>();
     const relevantHistory = history
       .filter((item) => isHistoryMessageRelevant({ role: item.role, messageType: item.messageType }))
@@ -456,6 +993,14 @@ export class AltusManagedSetupService {
             },
           ]
         : []),
+      ...(todoContextPrompt
+        ? [
+            {
+              role: 'system' as const,
+              content: todoContextPrompt,
+            },
+          ]
+        : []),
       ...relevant,
       ...(shouldAppendCurrentInput
         ? [
@@ -463,9 +1008,53 @@ export class AltusManagedSetupService {
               role: 'user' as const,
               content: currentInput,
             },
-          ]
+      ]
         : []),
     ];
+  }
+
+  async buildTaskIntentProfile(
+    sessionId: string,
+    currentInput?: string | null,
+    messageType: 'user_input' | 'user_response' = 'user_input'
+  ): Promise<AltusManagedTaskIntentProfile> {
+    const history = await taskCreationSessionDAO.getMessages(sessionId);
+    const relevantUserTexts = history
+      .filter(
+        (item) =>
+          normalizeHistoryRole(item.role) === 'user' &&
+          isHistoryMessageRelevant({ role: item.role, messageType: item.messageType })
+      )
+      .map((item) => asText(item.content))
+      .filter(Boolean)
+      .slice(-8);
+    const currentText = asText(currentInput);
+    const latestHistoryText = relevantUserTexts[relevantUserTexts.length - 1] || '';
+    const texts =
+      currentText && currentText !== latestHistoryText
+        ? [...relevantUserTexts, currentText]
+        : relevantUserTexts;
+    const baseProfile = deriveManagedTaskIntentProfile(texts);
+    const shape = classifyTaskIntentShape(texts);
+    const workspaceHints = await deriveWorkspaceTechStackHints(resolveOpencodeWorkspacePath(sessionId));
+    const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId).catch(() => null);
+    const clarificationDecision = resolveClarificationDecision({
+      shape,
+      currentText: normalizeText(currentText),
+      messageType,
+      pendingClarificationType: sessionMemory?.pendingClarificationType || null,
+      workspaceHints,
+    });
+    const todoDecision = resolveTodoDecision(shape);
+
+    return {
+      ...baseProfile,
+      ...todoDecision,
+      needsClarification: clarificationDecision.needsClarification,
+      clarificationType: clarificationDecision.clarificationType,
+      clarificationQuestion: clarificationDecision.clarificationQuestion,
+      clarificationOptions: clarificationDecision.clarificationOptions,
+    };
   }
 
   async refreshInlineImageUrls(messages: ChatMessage[]): Promise<ChatMessage[]> {

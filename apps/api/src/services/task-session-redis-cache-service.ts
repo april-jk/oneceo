@@ -41,6 +41,16 @@ type ConnectorProjectionSnapshot = {
   updatedAt: string;
 };
 
+type SkillSessionStateSnapshot = {
+  state: Record<string, unknown>;
+  updatedAt: string;
+};
+
+type AltusSessionMemorySnapshot = {
+  state: Record<string, unknown>;
+  updatedAt: string;
+};
+
 function toRecord(value: unknown) {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
 }
@@ -178,6 +188,50 @@ export class TaskSessionRedisCacheService {
   async getRecentMessagesPage(input: SessionRedisScope) {
     const scope = this.buildScope(input);
     return this.redis.getJson<Record<string, unknown>>(redisKeyspace.messagesRecent(scope));
+  }
+
+  async getSkillSessionState(input: SessionRedisScope) {
+    const scope = this.buildScope(input);
+    return this.redis.getJson<SkillSessionStateSnapshot>(redisKeyspace.skillSessionState(scope));
+  }
+
+  async getAltusSessionMemory(input: SessionRedisScope) {
+    const scope = this.buildScope(input);
+    return this.redis.getJson<AltusSessionMemorySnapshot>(redisKeyspace.altusSessionMemory(scope));
+  }
+
+  async setSkillSessionState(input: SessionRedisScope & { state: Record<string, unknown> }) {
+    const scope = this.buildScope(input);
+    await this.redis.setJson(
+      redisKeyspace.skillSessionState(scope),
+      {
+        state: input.state,
+        updatedAt: new Date().toISOString(),
+      } satisfies SkillSessionStateSnapshot,
+      redisTtlSeconds.skillSessionState
+    );
+  }
+
+  async setAltusSessionMemory(input: SessionRedisScope & { state: Record<string, unknown> }) {
+    const scope = this.buildScope(input);
+    await this.redis.setJson(
+      redisKeyspace.altusSessionMemory(scope),
+      {
+        state: input.state,
+        updatedAt: new Date().toISOString(),
+      } satisfies AltusSessionMemorySnapshot,
+      redisTtlSeconds.altusSessionMemory
+    );
+  }
+
+  async clearSkillSessionState(input: SessionRedisScope) {
+    const scope = this.buildScope(input);
+    await this.redis.delete(redisKeyspace.skillSessionState(scope));
+  }
+
+  async clearAltusSessionMemory(input: SessionRedisScope) {
+    const scope = this.buildScope(input);
+    await this.redis.delete(redisKeyspace.altusSessionMemory(scope));
   }
 
   async setRecentMessagesPage(input: SessionRedisScope & { payload: Record<string, unknown> }) {

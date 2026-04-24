@@ -10,6 +10,7 @@ afterEach(() => {
 });
 
 test('listPublicSkills returns resourceSummary without exposing resource bodies', async () => {
+  (platformSkillService as any).seeded = true;
   mock.method(platformSkillDAO, 'countSkills', async () => 1);
   mock.method(platformSkillDAO, 'listPublishedActiveSkills', async () => [
     {
@@ -19,6 +20,16 @@ test('listPublicSkills returns resourceSummary without exposing resource bodies'
       description: '创建专业演示文稿',
       category: 'office',
       status: 'active',
+      metadataJson: {
+        systemRole: 'ppt_builder',
+        adminManaged: true,
+        required: false,
+        autoActivation: {
+          enabled: false,
+          triggers: [],
+          toolNames: [],
+        },
+      },
       publishedRevisionId: 'rev-1',
       createdAt: new Date('2026-03-29T00:00:00.000Z'),
       updatedAt: new Date('2026-03-29T00:00:00.000Z'),
@@ -72,6 +83,10 @@ test('listPublicSkills returns resourceSummary without exposing resource bodies'
   assert.equal(skills[0]?.resourceSummary.totalCount, 2);
   assert.equal(skills[0]?.resourceSummary.referenceCount, 1);
   assert.equal(skills[0]?.resourceSummary.templateCount, 1);
+  assert.equal(skills[0]?.governance.systemRole, 'ppt_builder');
+  assert.equal(skills[0]?.governance.adminManaged, true);
+  assert.equal(skills[0]?.governance.autoActivation.enabled, false);
+  assert.deepEqual(skills[0]?.governance.autoActivation.toolNames, []);
   assert.deepEqual(skills[0]?.resourceSummary.paths, [
     'references/slide-structure-guide.md',
     'templates/business-deck-outline.md',
@@ -80,6 +95,7 @@ test('listPublicSkills returns resourceSummary without exposing resource bodies'
 });
 
 test('getRevisionResource returns exact resource payload for selected revision', async () => {
+  (platformSkillService as any).seeded = true;
   mock.method(platformSkillDAO, 'countSkills', async () => 1);
   mock.method(platformSkillDAO, 'getSkill', async () => ({
     id: 'skill-1',
@@ -138,6 +154,7 @@ test('getRevisionResource returns exact resource payload for selected revision',
 });
 
 test('getRevisionResource downloads object storage resource when layered index points to r2', async () => {
+  (platformSkillService as any).seeded = true;
   mock.method(platformSkillDAO, 'countSkills', async () => 1);
   mock.method(platformSkillDAO, 'getSkill', async () => ({
     id: 'skill-1',
@@ -191,6 +208,7 @@ test('getRevisionResource downloads object storage resource when layered index p
 });
 
 test('renderRevisionById prefers layered entry body when available', async () => {
+  (platformSkillService as any).seeded = true;
   mock.method(platformSkillDAO, 'countSkills', async () => 1);
   mock.method(platformSkillDAO, 'getSkill', async () => ({
     id: 'skill-1',
@@ -230,7 +248,76 @@ test('renderRevisionById prefers layered entry body when available', async () =>
   assert.doesNotMatch(rendered.renderedMarkdown, /Legacy Body/);
 });
 
+test('archiveSkill rejects required governance skill', async () => {
+  (platformSkillService as any).seeded = true;
+  mock.method(platformSkillDAO, 'getSkill', async () => ({
+    id: 'skill-deploy',
+    slug: 'deployment-orchestrator',
+    name: '部署编排',
+    description: '部署 skill',
+    category: 'deployment',
+    status: 'active',
+    metadataJson: {
+      systemRole: 'deployment_orchestrator',
+      adminManaged: true,
+      required: true,
+      autoActivation: {
+        enabled: true,
+        triggers: ['deploy'],
+        toolNames: ['deploy_application'],
+      },
+    },
+    publishedRevisionId: 'rev-1',
+    createdAt: new Date('2026-04-18T00:00:00.000Z'),
+    updatedAt: new Date('2026-04-18T00:00:00.000Z'),
+  }) as any);
+
+  await assert.rejects(() => platformSkillService.archiveSkill('skill-deploy'), /系统必需 skill 不允许归档/);
+});
+
+test('ensureSeeded repairs missing governance column before reading seeded skills', async () => {
+  let firstRead = true;
+  (platformSkillService as any).seeded = false;
+  const ensureSchemaMock = mock.method(
+    platformSkillService as any,
+    'ensureGovernanceSchemaReady',
+    async () => undefined
+  );
+  mock.method(platformSkillDAO, 'getSkillBySlug', async (slug: string) => {
+    if (firstRead) {
+      firstRead = false;
+      const error = new Error('column "metadata_json" does not exist') as Error & { code?: string };
+      error.code = '42703';
+      throw error;
+    }
+    return {
+      id: `skill-${slug}`,
+      slug,
+      name: slug,
+      description: `${slug} description`,
+      category: 'general',
+      status: 'active',
+      metadataJson: {},
+      publishedRevisionId: null,
+      createdAt: new Date('2026-04-18T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-18T00:00:00.000Z'),
+    } as any;
+  });
+  mock.method(platformSkillDAO, 'updateSkillMetadata', async () => undefined as any);
+  mock.method(platformSkillDAO, 'createSkillWithRevision', async () => {
+    throw new Error('should not create seeded skill when read succeeds after repair');
+  });
+  mock.method(platformSkillDAO, 'listSkills', async () => []);
+
+  const skills = await platformSkillService.listAdminSkills();
+
+  assert.deepEqual(skills, []);
+  assert.equal(ensureSchemaMock.mock.callCount(), 1);
+  assert.equal(firstRead, false);
+});
+
 test('importSkillFolder creates new skill using layered import payload', async () => {
+  (platformSkillService as any).seeded = true;
   mock.method(platformSkillDAO, 'countSkills', async () => 1);
   mock.method(platformSkillDAO, 'getSkillBySlug', async () => null);
   const uploadMock = mock.method(skillObjectStorageService, 'uploadTextResource', async () => ({
@@ -292,7 +379,20 @@ test('importSkillFolder creates new skill using layered import payload', async (
 });
 
 test('importSkillFolder can publish a new revision for an existing admin skill', async () => {
+  (platformSkillService as any).seeded = true;
   mock.method(platformSkillDAO, 'countSkills', async () => 1);
+  mock.method(platformSkillDAO, 'getSkill', async () => ({
+    id: 'skill-1',
+    slug: 'office-ppt',
+    name: 'Office PPT',
+    description: 'original',
+    category: 'general',
+    status: 'active',
+    metadataJson: {},
+    publishedRevisionId: 'rev-1',
+    createdAt: new Date('2026-03-29T00:00:00.000Z'),
+    updatedAt: new Date('2026-03-29T00:00:00.000Z'),
+  }) as any);
   const updateMock = mock.method(platformSkillDAO, 'createPublishedRevision', async (_skillId: string, input: any) => ({
     skill: {
       id: 'skill-1',

@@ -304,6 +304,9 @@ async function main() {
     const page = await fetchText(baseUrl);
     assert.equal(page.status, 200);
     assert.match(page.text, /OneCEO Deployment Smoke/);
+    assert.doesNotMatch(page.text, /%VITE_ANALYTICS_[A-Z0-9_]+%/);
+    assert.match(page.text, /ONECEO_ANALYTICS:START|__ONECEO_ANALYTICS__/);
+    assert.match(page.text, /analytics\.oneceo\.ai|VITE_ANALYTICS_HOST/);
 
     const health = await fetchText(`${baseUrl.replace(/\/+$/, '')}/api/system/health`);
     assert.equal(health.status, 200);

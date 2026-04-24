@@ -145,6 +145,15 @@ test('live redis integration writes run state, recovery snapshot and terminal cl
       latestSequence: 1,
       latestEventType: 'run_status',
     },
+    loop: {
+      lastTransitionReason: 'initial_execution',
+      recoveryMode: 'none',
+      currentRound: 1,
+      maxRounds: 192,
+      plainTextRecoveryUsed: false,
+      lastToolName: null,
+      lastToolCallId: null,
+    },
   });
   const recoveryRaw = await raw.get(recoveryKey);
   assert.ok(recoveryRaw);
@@ -152,10 +161,13 @@ test('live redis integration writes run state, recovery snapshot and terminal cl
     status: string;
     connectorRuntime: { providerIds: string[] };
     stream: { latestSequence: number };
+    loop: { lastTransitionReason: string | null; currentRound: number };
   };
   assert.equal(recovery.status, 'running');
   assert.deepEqual(recovery.connectorRuntime.providerIds, ['provider-live']);
   assert.equal(recovery.stream.latestSequence, 1);
+  assert.equal(recovery.loop.lastTransitionReason, 'initial_execution');
+  assert.equal(recovery.loop.currentRound, 1);
 
   await service.requestStop(
     {

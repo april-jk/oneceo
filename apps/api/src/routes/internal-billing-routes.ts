@@ -4,6 +4,7 @@ import { db } from '../config/database';
 import { userCredits, creditTransactions, tokenUsageLogs, modelPricing, appUsers } from '../db/schema';
 import { billingService } from '../services/billing-service';
 import { pricingService } from '../services/pricing-service';
+import { conversionService } from '../services/conversion-service';
 import { adminAuthMiddleware } from '../middleware/admin-auth-middleware';
 
 const router = express.Router();
@@ -19,6 +20,26 @@ function isPositivePostgresInteger(value: unknown) {
 }
 
 router.use(adminAuthMiddleware);
+
+/**
+ * GET /api/internal/billing/meta
+ * 计费规则只读元信息
+ */
+router.get('/meta', async (_req, res) => {
+  try {
+    const exchange = conversionService.getExchangeConfig();
+    res.json({
+      ...exchange,
+      cacheRatios: {
+        openai: pricingService.getCacheRatios('openai'),
+        anthropic: pricingService.getCacheRatios('anthropic'),
+      },
+    });
+  } catch (error) {
+    console.error('[Billing Admin] 获取计费元信息失败:', error);
+    res.status(500).json({ error: '获取计费元信息失败' });
+  }
+});
 
 /**
  * GET /api/internal/billing/users

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { getBillingErrorMessage, readBillingResponseError, type BillingNotify } from './billing-feedback';
 
 interface UsageLog {
   id: string;
@@ -19,6 +20,7 @@ interface UsageLog {
 interface BillingUsageLogsProps {
   onOpenUser?: (userId: string) => void;
   onOpenConversation?: (sessionId: string) => void;
+  onNotify?: BillingNotify;
 }
 
 function formatDateTime(value?: string | null) {
@@ -26,7 +28,7 @@ function formatDateTime(value?: string | null) {
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
 }
 
-export function BillingUsageLogs({ onOpenUser, onOpenConversation }: BillingUsageLogsProps) {
+export function BillingUsageLogs({ onOpenUser, onOpenConversation, onNotify }: BillingUsageLogsProps) {
   const [logs, setLogs] = useState<UsageLog[]>([]);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
@@ -61,21 +63,24 @@ export function BillingUsageLogs({ onOpenUser, onOpenConversation }: BillingUsag
         const data = await response.json();
         setLogs(data.items || []);
         setTotal(data.total || 0);
+      } else {
+        onNotify?.('error', '加载失败', await readBillingResponseError(response, '无法获取使用明细'));
       }
     } catch (error) {
       console.error('获取使用明细失败:', error);
+      onNotify?.('error', '加载失败', getBillingErrorMessage(error, '无法获取使用明细'));
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchLogs();
+    void fetchLogs();
   }, [page]);
 
   const handleSearch = () => {
     setPage(1);
-    fetchLogs();
+    void fetchLogs();
   };
 
   const handleReset = () => {
@@ -85,7 +90,7 @@ export function BillingUsageLogs({ onOpenUser, onOpenConversation }: BillingUsag
     setStartDate('');
     setEndDate('');
     setPage(1);
-    fetchLogs();
+    void fetchLogs();
   };
 
   const handleOpenDetail = (log: UsageLog) => {

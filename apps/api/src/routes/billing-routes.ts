@@ -73,7 +73,7 @@ router.get('/session/:sessionId/usage', async (req, res) => {
     }
 
     const { sessionId } = req.params;
-    const usage = await billingService.getSessionUsage(sessionId);
+    const usage = await billingService.getSessionUsage(sessionId, userId);
 
     res.json({
       sessionId,

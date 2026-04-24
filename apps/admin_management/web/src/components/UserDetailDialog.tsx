@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { getBillingErrorMessage, readBillingResponseError, type BillingNotify } from './billing-feedback';
 
 interface UserDetailDialogProps {
   user: {
@@ -12,6 +13,8 @@ interface UserDetailDialogProps {
   } | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onAdjusted?: (result: { amount: number; balanceAfter: number }) => void;
+  onNotify?: BillingNotify;
 }
 
 interface Transaction {
@@ -38,13 +41,14 @@ function formatDateTime(value?: string | null) {
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
 }
 
-export function UserDetailDialog({ user, open, onOpenChange }: UserDetailDialogProps) {
+export function UserDetailDialog({ user, open, onOpenChange, onAdjusted, onNotify }: UserDetailDialogProps) {
   const [activeTab, setActiveTab] = useState('overview');
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [usageLogs, setUsageLogs] = useState<UsageLog[]>([]);
   const [adjustAmount, setAdjustAmount] = useState('');
   const [adjustReason, setAdjustReason] = useState('');
   const [adjustLoading, setAdjustLoading] = useState(false);
+  const [adjustMessage, setAdjustMessage] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
   const [txPage, setTxPage] = useState(1);
   const [txTotal, setTxTotal] = useState(0);
 
@@ -58,11 +62,14 @@ export function UserDetailDialog({ user, open, onOpenChange }: UserDetailDialogP
         const data = await response.json();
         setTransactions(data.items || []);
         setTxTotal(data.total || 0);
+      } else {
+        onNotify?.('error', '加载失败', await readBillingResponseError(response, '无法获取积分历史'));
       }
     } catch (error) {
       console.error('获取交易记录失败:', error);
+      onNotify?.('error', '加载失败', getBillingErrorMessage(error, '无法获取积分历史'));
     }
-  }, [user, txPage]);
+  }, [onNotify, user, txPage]);
 
   const fetchUsageLogs = useCallback(async () => {
     if (!user) return;
@@ -73,11 +80,14 @@ export function UserDetailDialog({ user, open, onOpenChange }: UserDetailDialogP
       if (response.ok) {
         const data = await response.json();
         setUsageLogs(data.items || []);
+      } else {
+        onNotify?.('error', '加载失败', await readBillingResponseError(response, '无法获取使用明细'));
       }
     } catch (error) {
       console.error('获取使用明细失败:', error);
+      onNotify?.('error', '加载失败', getBillingErrorMessage(error, '无法获取使用明细'));
     }
-  }, [user]);
+  }, [onNotify, user]);
 
   useEffect(() => {
     if (user && open) {
@@ -88,24 +98,42 @@ export function UserDetailDialog({ user, open, onOpenChange }: UserDetailDialogP
 
   const handleAdjust = async () => {
     if (!user || !adjustAmount) return;
+    const amount = Number(adjustAmount);
+    if (!Number.isInteger(amount) || amount <= 0) {
+      setAdjustMessage({ tone: 'error', text: '调整金额必须是大于 0 的整数' });
+      onNotify?.('error', '调整失败', '调整金额必须是大于 0 的整数');
+      return;
+    }
     setAdjustLoading(true);
+    setAdjustMessage(null);
     try {
       const response = await fetch(`/api/internal/billing/users/${user.userId}/adjust`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          amount: parseInt(adjustAmount),
+          amount,
           reason: adjustReason || '人工调整',
         }),
       });
+      const data = await response.json().catch(() => null);
       if (response.ok) {
         setAdjustAmount('');
         setAdjustReason('');
+        setAdjustMessage({ tone: 'success', text: `已增加 ${amount.toLocaleString()} credits` });
+        onNotify?.('success', '积分已调整', `已为 ${user.displayName || user.email} 增加 ${amount.toLocaleString()} credits`);
+        onAdjusted?.({ amount, balanceAfter: Number(data?.balanceAfter ?? user.balance + amount) });
         fetchTransactions();
+      } else {
+        const message = data?.error || data?.message || '调整积分失败';
+        setAdjustMessage({ tone: 'error', text: message });
+        onNotify?.('error', '调整失败', message);
       }
     } catch (error) {
       console.error('调整积分失败:', error);
+      const message = getBillingErrorMessage(error, '调整积分失败，请稍后重试');
+      setAdjustMessage({ tone: 'error', text: message });
+      onNotify?.('error', '调整失败', message);
     } finally {
       setAdjustLoading(false);
     }
@@ -119,6 +147,8 @@ export function UserDetailDialog({ user, open, onOpenChange }: UserDetailDialogP
     { key: 'usage', label: '使用明细' },
     { key: 'adjust', label: '积分调整' },
   ];
+  const parsedAdjustAmount = Number(adjustAmount);
+  const canSubmitAdjust = Number.isInteger(parsedAdjustAmount) && parsedAdjustAmount > 0;
 
   return (
     <>
@@ -422,7 +452,7 @@ export function UserDetailDialog({ user, open, onOpenChange }: UserDetailDialogP
                 <span>调整金额</span>
                 <input
                   type="number"
-                  placeholder="正数增加，负数减少"
+                  placeholder="输入正整数增加积分"
                   value={adjustAmount}
                   onChange={(e) => setAdjustAmount(e.target.value)}
                 />
@@ -442,11 +472,22 @@ export function UserDetailDialog({ user, open, onOpenChange }: UserDetailDialogP
                 type="button"
                 className="secondary-btn"
                 onClick={handleAdjust}
-                disabled={adjustLoading || !adjustAmount}
+                disabled={adjustLoading || !canSubmitAdjust}
               >
                 {adjustLoading ? '调整中...' : '确认调整'}
               </button>
             </div>
+            {adjustMessage && (
+              <p
+                className="panel-caption"
+                style={{
+                  marginTop: '10px',
+                  color: adjustMessage.tone === 'error' ? '#c03d3d' : '#0f766e',
+                }}
+              >
+                {adjustMessage.text}
+              </p>
+            )}
           </div>
         </section>
       )}

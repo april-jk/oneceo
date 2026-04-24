@@ -7,6 +7,16 @@ import { pricingService } from '../services/pricing-service';
 import { adminAuthMiddleware } from '../middleware/admin-auth-middleware';
 
 const router = express.Router();
+const POSTGRES_INTEGER_MAX = 2147483647;
+
+function isPositivePostgresInteger(value: unknown) {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value > 0 &&
+    value <= POSTGRES_INTEGER_MAX
+  );
+}
 
 router.use(adminAuthMiddleware);
 
@@ -89,15 +99,15 @@ router.get('/users', async (req, res) => {
 router.post('/users/:userId/adjust', async (req, res) => {
   try {
     const { userId } = req.params;
-    const { amount, reason, adminId } = req.body;
+    const { amount, reason } = req.body;
 
-    if (!amount || typeof amount !== 'number') {
-      return res.status(400).json({ error: '缺少调整金额' });
+    if (!isPositivePostgresInteger(amount)) {
+      return res.status(400).json({ error: '调整金额必须是大于 0 的整数' });
     }
 
     const result = await billingService.addCredits(userId, amount, 'adjust', {
       description: reason || '人工调整',
-      adminId: adminId || (req as any).user?.id,
+      adminId: (req as any).adminUser?.id,
     });
 
     if (!result.success) {
@@ -171,8 +181,14 @@ router.post('/pricing', async (req, res) => {
   try {
     const { model, modelProvider, promptPricePer1kTokens, completionPricePer1kTokens } = req.body;
 
-    if (!model || !modelProvider || !promptPricePer1kTokens || !completionPricePer1kTokens) {
+    if (!model || !modelProvider) {
       return res.status(400).json({ error: '缺少必要参数' });
+    }
+    if (
+      !isPositivePostgresInteger(promptPricePer1kTokens) ||
+      !isPositivePostgresInteger(completionPricePer1kTokens)
+    ) {
+      return res.status(400).json({ error: '模型定价必须是大于 0 的整数' });
     }
 
     const result = await pricingService.createPricing({

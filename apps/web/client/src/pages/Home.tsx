@@ -138,8 +138,16 @@ import type { TaskProjectSelection } from "@/lib/task-project-selection";
 import i18n from "@/i18n";
 import { useLocation, useSearch } from "wouter";
 import { Streamdown } from "streamdown";
+import { useAuth } from "@/contexts/AuthContext";
 
 type PageMode = "input" | "chat";
+const BILLING_TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "stopped"]);
+
+function isInsufficientCreditsError(error: unknown) {
+  const text = error instanceof Error ? error.message : String(error || "");
+  return /INSUFFICIENT_CREDITS|积分不足|\b402\b/i.test(text);
+}
+
 type PersistedMessageScrollAnchor = {
   anchorMessageKey: string | null;
   anchorOffsetTop: number;
@@ -303,6 +311,7 @@ const NO_PROJECT_VALUE = "__no_project__";
 
 export default function Home() {
   const { t } = useTranslation();
+  const { refreshCredits } = useAuth();
   const MESSAGE_SCROLL_CACHE_PREFIX = "task_creation_history_scroll:";
   const PREVIEW_STATE_CACHE_PREFIX = "task_creation_preview_state:";
   const [location, setLocation] = useLocation();
@@ -351,6 +360,8 @@ export default function Home() {
   const [altusReplayIndex, setAltusReplayIndex] = useState(0);
   const [pendingAltusReplayToolCallId, setPendingAltusReplayToolCallId] =
     useState<string | null>(null);
+  const refreshCreditsRef = useRef(refreshCredits);
+  const lastCreditRefreshRunStatusRef = useRef<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">(
     "pro",
   );
@@ -478,6 +489,7 @@ export default function Home() {
     isConnected,
     isProcessing,
     managedRunActive,
+    managedRunStatus,
     isInterrupting,
     messages,
     hasOlderHistory,
@@ -504,6 +516,20 @@ export default function Home() {
       console.error("任务创建失败:", error);
     },
   });
+
+  useEffect(() => {
+    refreshCreditsRef.current = refreshCredits;
+  }, [refreshCredits]);
+
+  useEffect(() => {
+    if (!managedRunStatus || !BILLING_TERMINAL_RUN_STATUSES.has(managedRunStatus)) {
+      lastCreditRefreshRunStatusRef.current = null;
+      return;
+    }
+    if (lastCreditRefreshRunStatusRef.current === managedRunStatus) return;
+    lastCreditRefreshRunStatusRef.current = managedRunStatus;
+    void refreshCreditsRef.current();
+  }, [managedRunStatus]);
 
   const slashQuery = useMemo(() => parseTrailingSlashQuery(message), [message]);
 
@@ -1176,6 +1202,9 @@ export default function Home() {
           ? error.message
           : t("homeWorkspace.attachmentSendFailed"),
       );
+      if (isInsufficientCreditsError(error)) {
+        void refreshCreditsRef.current();
+      }
     }
   }
 
@@ -1342,6 +1371,9 @@ export default function Home() {
           ? error.message
           : t("homeWorkspace.attachmentSendFailed"),
       );
+      if (isInsufficientCreditsError(error)) {
+        void refreshCreditsRef.current();
+      }
     }
   }
 

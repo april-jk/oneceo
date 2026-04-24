@@ -400,6 +400,8 @@ describe("managed run status dialogue", () => {
 
     expect(firstGroup.title).toBe("正在搭建页面结构");
     expect(secondGroup.title).toBe("正在验证最终效果");
+    expect(firstGroup.defaultExpanded).toBe(false);
+    expect(secondGroup.defaultExpanded).toBe(false);
     expect(
       secondGroup.items.filter(
         (item) => item.kind === "managed_tool" && item.toolName === "todowrite",
@@ -410,6 +412,74 @@ describe("managed run status dialogue", () => {
       toolName: "complete_task",
       status: "completed",
     });
+  });
+
+  it("only expands the latest running todo activity group by default", () => {
+    const visibleItems = groupManagedActivityItems(
+      buildChatItems([
+        createManagedTodoWriteMessage("todo-stage-1-running", [
+          {
+            content: "搭建页面结构",
+            status: "in_progress",
+            activeForm: "正在搭建页面结构",
+          },
+          {
+            content: "验证最终效果",
+            status: "pending",
+            activeForm: "正在验证最终效果",
+          },
+        ]),
+        createManagedToolMessage({
+          eventType: "tool_call_completed",
+          content: "工具 write_file 已完成",
+          toolCallId: "tool-write-stage-1-running",
+          toolName: "write_file",
+          metadata: {
+            arguments: {
+              path: "game-2048/index.html",
+              content: "<!DOCTYPE html>",
+            },
+          },
+        }),
+        createManagedTodoWriteMessage("todo-stage-2-running", [
+          {
+            content: "搭建页面结构",
+            status: "completed",
+            activeForm: "正在搭建页面结构",
+          },
+          {
+            content: "验证最终效果",
+            status: "in_progress",
+            activeForm: "正在验证最终效果",
+          },
+        ]),
+        createManagedToolMessage({
+          eventType: "tool_call_completed",
+          content: "工具 shell_execute 已完成",
+          toolCallId: "tool-check-stage-2-running",
+          toolName: "shell_execute",
+          metadata: {
+            arguments: {
+              command: "pnpm test",
+            },
+          },
+        }),
+      ]).filter(
+        (item) =>
+          item.kind !== "managed_status" || item.displayInTimeline !== false,
+      ),
+    );
+
+    const groups = visibleItems.filter(
+      (item): item is Extract<ChatItem, { kind: "managed_activity_group" }> =>
+        item.kind === "managed_activity_group",
+    );
+
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.title).toBe("正在搭建页面结构");
+    expect(groups[1]?.title).toBe("正在验证最终效果");
+    expect(groups[0]?.defaultExpanded).toBe(false);
+    expect(groups[1]?.defaultExpanded).toBe(true);
   });
 
   it("starts a fresh managed run_status after a new user round", () => {

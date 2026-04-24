@@ -2746,6 +2746,7 @@ export type ChatItem =
       kind: "managed_activity_group";
       title: string;
       messageKey?: string;
+      defaultExpanded?: boolean;
       items: Array<
         | {
             kind: "managed_status";
@@ -4131,6 +4132,12 @@ function getManagedActivityState(
   return "completed";
 }
 
+function hasManagedTodoActivity(items: ManagedActivityTimelineItem[]) {
+  return items.some(
+    (item) => item.kind === "managed_tool" && item.toolName === "todowrite",
+  );
+}
+
 function normalizeManagedStageTitle(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -4154,11 +4161,13 @@ export function groupManagedActivityItems(items: ChatItem[]): ChatItem[] {
 
   const flush = () => {
     if (buffer.length === 0) return;
+    const groupItems = buffer;
     grouped.push({
       kind: "managed_activity_group",
-      title: bufferTitle || getManagedActivityTitle(buffer),
-      messageKey: buffer.map((item) => item.messageKey).filter(Boolean).join("|"),
-      items: buffer,
+      title: bufferTitle || getManagedActivityTitle(groupItems),
+      messageKey: groupItems.map((item) => item.messageKey).filter(Boolean).join("|"),
+      defaultExpanded: !hasManagedTodoActivity(groupItems),
+      items: groupItems,
     });
     buffer = [];
     bufferTitle = "";
@@ -4184,6 +4193,34 @@ export function groupManagedActivityItems(items: ChatItem[]): ChatItem[] {
     grouped.push(item);
   }
   flush();
+
+  let latestTodoGroupIndex = -1;
+  let latestTodoHasInProgress = false;
+  grouped.forEach((item, index) => {
+    if (item.kind !== "managed_activity_group") return;
+    for (const entry of item.items) {
+      if (entry.kind !== "managed_tool" || entry.toolName !== "todowrite") {
+        continue;
+      }
+      latestTodoGroupIndex = index;
+      latestTodoHasInProgress = readManagedTodoItems(entry.metadata).some(
+        (todo) => todo.status === "in_progress",
+      );
+    }
+  });
+
+  if (latestTodoGroupIndex >= 0) {
+    grouped.forEach((item, index) => {
+      if (
+        item.kind === "managed_activity_group" &&
+        hasManagedTodoActivity(item.items)
+      ) {
+        item.defaultExpanded =
+          latestTodoHasInProgress && index === latestTodoGroupIndex;
+      }
+    });
+  }
+
   return grouped;
 }
 
@@ -6837,7 +6874,10 @@ function ManagedActivityGroup({
   item: Extract<ChatItem, { kind: "managed_activity_group" }>;
   onOpenReplay?: (runId: string, toolCallId: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(item.defaultExpanded ?? true);
+  useEffect(() => {
+    setExpanded(item.defaultExpanded ?? true);
+  }, [item.defaultExpanded, item.messageKey]);
   const toolCount = item.items.filter((entry) => entry.kind === "managed_tool").length;
   const completedToolCount = item.items.filter(
     (entry) => entry.kind === "managed_tool" && entry.status === "completed",

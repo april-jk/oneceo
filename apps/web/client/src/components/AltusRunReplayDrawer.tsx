@@ -963,7 +963,7 @@ function ReplayHeaderTab({
 }
 
 function formatAltusTimestamp(value?: string | null): string {
-  if (!value) return i18n.t("replayDrawer.unknownTime");
+  if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString(i18n.language === "zh" ? "zh-CN" : "en-US", {
@@ -1006,16 +1006,16 @@ function AltusPreviewChangesPanel({
           {i18n.t("replayDrawer.openInPreview")}
         </Button>
       </div>
-      <div className="flex-1 min-h-0 overflow-auto px-4 py-4 space-y-4">
+      <div className="flex-1 min-h-0 overflow-auto px-4 py-4 space-y-5">
         {diffItems.length ? (
           <>
-            <section className="rounded-lg border border-slate-200/80 bg-white p-4">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">
-                  {i18n.t("replayDrawer.recentChanges")}
-                </span>
+            <section className="space-y-2">
+              <div className="text-xs font-medium text-muted-foreground">
+                {i18n.t("replayDrawer.recentChanges")}
+              </div>
+              <div className="flex items-center">
                 <select
-                  className="text-xs border border-border rounded-md bg-background px-2 py-1 flex-1"
+                  className="h-9 min-w-0 flex-1 rounded-md bg-transparent px-0 text-sm font-medium text-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-0"
                   value={
                     currentDiff?.id || diffItems[diffItems.length - 1]?.id || ""
                   }
@@ -1026,44 +1026,38 @@ function AltusPreviewChangesPanel({
                     .reverse()
                     .map((item, index) => (
                       <option key={item.id} value={item.id}>
-                        {(item.title || `Diff #${diffItems.length - index}`) +
-                          ` · ${formatAltusTimestamp(item.createdAt)}`}
+                        {[
+                          item.title || `Diff #${diffItems.length - index}`,
+                          formatAltusTimestamp(item.createdAt),
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
                       </option>
                     ))}
                 </select>
               </div>
             </section>
             {currentDiff ? (
-              <section className="rounded-lg border border-slate-200/80 bg-white p-4 space-y-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">
-                      {i18n.t("replayDrawer.currentChange")}
-                    </div>
-                    <div className="mt-1 truncate text-sm font-medium text-slate-900">
-                      {currentDiff.title ||
-                        i18n.t("replayDrawer.recentChangeFallback")}
-                    </div>
-                  </div>
-                  <span className="text-xs text-slate-500">
-                    {formatAltusTimestamp(currentDiff.createdAt)}
-                  </span>
-                </div>
+              <section className="space-y-3">
                 {currentDiff.files?.length ? (
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-1.5">
                     {currentDiff.files.slice(0, 4).map((file) => (
                       <span
                         key={file.file}
-                        className="rounded-full border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600"
+                        className="rounded-md bg-muted px-2 py-0.5 text-[11px] text-muted-foreground"
                       >
                         {file.file}
                       </span>
                     ))}
                   </div>
                 ) : null}
-                <pre className="max-h-[28rem] overflow-auto whitespace-pre-wrap break-all rounded-md border border-border/60 bg-muted/40 p-3 text-xs leading-5 text-foreground">
-                  {currentDiff.diff || i18n.t("replayDrawer.noRawDiff")}
-                </pre>
+                <div className="overflow-hidden rounded-xl bg-zinc-950 text-zinc-100 shadow-inner ring-1 ring-zinc-900/10 dark:bg-zinc-950/80">
+                  <pre className="max-h-[30rem] overflow-auto p-4 font-mono text-[12px] leading-5 [tab-size:2]">
+                    <code>
+                      {currentDiff.diff || i18n.t("replayDrawer.noRawDiff")}
+                    </code>
+                  </pre>
+                </div>
               </section>
             ) : null}
           </>

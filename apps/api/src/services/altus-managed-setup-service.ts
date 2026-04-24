@@ -118,6 +118,43 @@ const NO_INTEGRATION_RESPONSE_KEYWORDS = [
   '独立实现',
   '不和现有系统打通',
 ];
+const CLARIFICATION_DELEGATION_RESPONSE_KEYWORDS = [
+  '按你觉得',
+  '你决定',
+  '你来定',
+  '默认',
+  '没有指定',
+  '没指定',
+  '都可以',
+  '随便',
+  '合适的方式',
+  '仓库现有',
+  '现有技术栈',
+] as const;
+const NEW_TURN_RESPONSE_KEYWORDS = [
+  '帮我',
+  '请帮',
+  '查查',
+  '查一下',
+  '搜索',
+  '检索',
+  '最近',
+  '年报',
+  '报告',
+  '行业',
+  '开发者',
+  '谁开发',
+  '你是谁',
+  '能做什么',
+  '还能做什么',
+  '做什么',
+  '什么？',
+  '什么?',
+  'what',
+  'search',
+  'research',
+  'report',
+] as const;
 const ACCEPTANCE_RESPONSE_KEYWORDS = [
   '只要源码',
   '源码',
@@ -185,6 +222,30 @@ function coversIntegrationTarget(text: string) {
 
 function coversAcceptanceRequirement(text: string) {
   return includesAnyKeyword(text, ACCEPTANCE_RESPONSE_KEYWORDS);
+}
+
+function shouldTreatPendingClarificationAsNewTurn(
+  text: string,
+  pendingClarificationType: Exclude<TaskClarificationType, 'none'>,
+  workspaceHints: WorkspaceTechStackHints
+) {
+  const normalized = normalizeText(text);
+  if (!normalized) return false;
+  if (includesAnyKeyword(normalized, CLARIFICATION_DELEGATION_RESPONSE_KEYWORDS)) {
+    return false;
+  }
+  if (coversClarificationType(pendingClarificationType, normalized, workspaceHints)) {
+    return false;
+  }
+  if (
+    coversArtifactType(normalized) ||
+    coversScopeBoundary(normalized) ||
+    coversIntegrationTarget(normalized) ||
+    coversAcceptanceRequirement(normalized)
+  ) {
+    return false;
+  }
+  return includesAnyKeyword(normalized, NEW_TURN_RESPONSE_KEYWORDS);
 }
 
 function coversClarificationType(
@@ -1038,17 +1099,29 @@ export class AltusManagedSetupService {
     const shape = classifyTaskIntentShape(texts);
     const workspaceHints = await deriveWorkspaceTechStackHints(resolveOpencodeWorkspacePath(sessionId));
     const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId).catch(() => null);
+    const pendingClarificationType = sessionMemory?.pendingClarificationType || null;
+    const treatAsNewTurn = Boolean(
+      messageType === 'user_response' &&
+        pendingClarificationType &&
+        shouldTreatPendingClarificationAsNewTurn(currentText, pendingClarificationType, workspaceHints)
+    );
+    const effectiveTexts = treatAsNewTurn && currentText ? [currentText] : texts;
+    const effectiveMessageType = treatAsNewTurn ? 'user_input' : messageType;
+    const effectiveBaseProfile = treatAsNewTurn
+      ? deriveManagedTaskIntentProfile(effectiveTexts)
+      : baseProfile;
+    const effectiveShape = treatAsNewTurn ? classifyTaskIntentShape(effectiveTexts) : shape;
     const clarificationDecision = resolveClarificationDecision({
-      shape,
+      shape: effectiveShape,
       currentText: normalizeText(currentText),
-      messageType,
-      pendingClarificationType: sessionMemory?.pendingClarificationType || null,
+      messageType: effectiveMessageType,
+      pendingClarificationType: treatAsNewTurn ? null : pendingClarificationType,
       workspaceHints,
     });
-    const todoDecision = resolveTodoDecision(shape);
+    const todoDecision = resolveTodoDecision(effectiveShape);
 
     return {
-      ...baseProfile,
+      ...effectiveBaseProfile,
       ...todoDecision,
       needsClarification: clarificationDecision.needsClarification,
       clarificationType: clarificationDecision.clarificationType,

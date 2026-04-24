@@ -34,6 +34,10 @@ import {
   TaskSessionDeliverableService,
   taskSessionDeliverableService,
 } from './task-session-deliverable-service';
+import {
+  isValidOpenAiToolCallArguments,
+  normalizeOpenAiToolCallArguments,
+} from '../utils/openai-chat-sanitizer';
 
 const DELIVERABLES_READY_TEXT = '交付文件已生成';
 const DEPLOYMENT_COMPLETION_BLOCKED_PREFIX = 'deployment_completion_blocked:';
@@ -184,23 +188,38 @@ function buildWriteFileProgress(rawArguments: string) {
 
 function sanitizeMessagesForModel(messages: ChatMessage[]): ChatMessage[] {
   return messages.map((message) => {
-    if (!Array.isArray(message.content)) {
-      return message;
+    let nextMessage = message;
+    if (Array.isArray(message.content)) {
+      nextMessage = {
+        ...nextMessage,
+        content: message.content.map((part) => {
+          if (part?.type !== 'image_url') {
+            return part;
+          }
+          return {
+            type: 'image_url' as const,
+            image_url: {
+              url: part.image_url.url,
+            },
+          };
+        }),
+      };
     }
-    return {
-      ...message,
-      content: message.content.map((part) => {
-        if (part?.type !== 'image_url') {
-          return part;
-        }
-        return {
-          type: 'image_url' as const,
-          image_url: {
-            url: part.image_url.url,
+
+    if (Array.isArray(message.tool_calls)) {
+      nextMessage = {
+        ...nextMessage,
+        tool_calls: message.tool_calls.map((toolCall) => ({
+          ...toolCall,
+          function: {
+            ...toolCall.function,
+            arguments: normalizeOpenAiToolCallArguments(toolCall?.function?.arguments),
           },
-        };
-      }),
-    };
+        })),
+      };
+    }
+
+    return nextMessage;
   });
 }
 
@@ -1491,7 +1510,22 @@ export class AltusRunCoordinator {
         },
       });
       const assistantContent = truncate(asText(assistant.content), 24000);
-      const toolCalls = Array.isArray(assistant.tool_calls) ? assistant.tool_calls : [];
+      const rawToolCalls = Array.isArray(assistant.tool_calls) ? assistant.tool_calls : [];
+      const invalidToolCallIds = new Set<string>();
+      const toolCalls = rawToolCalls.map((toolCall) => {
+        const rawArguments = toolCall?.function?.arguments;
+        const toolCallId = asText(toolCall?.id);
+        if (!isValidOpenAiToolCallArguments(rawArguments) && toolCallId) {
+          invalidToolCallIds.add(toolCallId);
+        }
+        return {
+          ...toolCall,
+          function: {
+            ...toolCall.function,
+            arguments: normalizeOpenAiToolCallArguments(rawArguments),
+          },
+        };
+      });
 
       if (toolCalls.length === 0) {
         if (assistantContent && this.isClarificationResponse(assistantContent)) {
@@ -1608,6 +1642,43 @@ export class AltusRunCoordinator {
         const toolName = asText(toolCall?.function?.name);
         if (!toolName) continue;
         const args = parseToolArguments(asText(toolCall?.function?.arguments));
+        if (invalidToolCallIds.has(toolCall.id)) {
+          const errorContent = '工具参数不是合法 JSON object，已要求模型重新生成工具调用。';
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            state.input.userId,
+            'tool_call_failed',
+            {
+              toolName,
+              content: this.buildToolEventContent(toolName, 'failed'),
+              arguments: args,
+              toolCallId: toolCall.id,
+              error: errorContent,
+              transitionReason: 'tool_failed_but_recoverable',
+            }
+          );
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            name: toolName,
+            content: JSON.stringify({
+              error: 'invalid_tool_arguments_json',
+              detail: 'Tool arguments must be a JSON object string. Retry the tool call with valid JSON object arguments.',
+            }),
+          });
+          nextRoundStatusContent = '模型生成的工具参数格式不合法，已要求重新生成';
+          await this.syncLoopSnapshot(state, {
+            lastTransitionReason: 'tool_failed_but_recoverable',
+            recoveryMode: 'tool_repair',
+            currentRound,
+            maxRounds: maxToolRounds,
+            plainTextRecoveryUsed,
+            lastToolName: toolName,
+            lastToolCallId: toolCall.id,
+          });
+          continue;
+        }
         const envelope = await toolExecutor.executeToolCall({
           toolCall,
           args,

@@ -2,6 +2,7 @@ import { getPublicErrorMessage } from '../utils/error-response';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import type { IncomingHttpHeaders, IncomingMessage } from 'node:http';
+import { sanitizeOpenAiChatCompletionPayload } from '../utils/openai-chat-sanitizer';
 
 type ProxyConfig = {
   upstreamBaseUrl: string;
@@ -301,6 +302,17 @@ function parseJsonBody<T>(body: unknown): T {
   throw new Error('Invalid JSON body');
 }
 
+export function sanitizeOpenAiChatCompletionProxyBody(path: string, body: unknown): unknown {
+  if (path !== '/v1/chat/completions') return body;
+  try {
+    const payload = parseJsonBody<OpenAiChatCompletionRequest>(body);
+    const sanitizedPayload = sanitizeOpenAiChatCompletionPayload(payload);
+    return sanitizedPayload === payload ? body : Buffer.from(JSON.stringify(sanitizedPayload), 'utf-8');
+  } catch {
+    return body;
+  }
+}
+
 function extractTextContent(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -454,6 +466,7 @@ function normalizeToolChoice(
 }
 
 export function toAnthropicRequest(payload: OpenAiChatCompletionRequest): AnthropicMessageRequest {
+  payload = sanitizeOpenAiChatCompletionPayload(payload);
   const model = String(payload.model || '').trim();
   if (!model) {
     throw new Error('Missing model');
@@ -1009,6 +1022,7 @@ export class LlmProxyConnector {
       if (!requestHeaders.connection) {
         requestHeaders.connection = 'keep-alive';
       }
+      const requestBody = sanitizeOpenAiChatCompletionProxyBody(req.path, req.body);
 
       let finalResponse: IncomingMessage | null = null;
       let finalError: unknown = null;
@@ -1039,8 +1053,8 @@ export class LlmProxyConnector {
 
             upstreamRequest.on('error', (error) => reject(error));
 
-            if (req.method !== 'GET' && req.method !== 'HEAD' && req.body !== undefined) {
-              upstreamRequest.write(req.body);
+            if (req.method !== 'GET' && req.method !== 'HEAD' && requestBody !== undefined) {
+              upstreamRequest.write(requestBody);
             }
 
             upstreamRequest.end();

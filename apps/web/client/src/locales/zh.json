@@ -186,7 +186,8 @@
     "altusControlLabel": "Altus 接管设置",
     "altusControlDescription": "控制对话是否由 Altus 接管",
     "altusSandboxDirect": "sandbox 直通",
-    "altusManaged": "Altus 接管对话"
+    "altusManaged": "Altus 接管对话",
+    "description": "管理您的个性化信息、账户设置、模型偏好和积分消费。"
   },
   "auth": {
     "nameLabel": "名称",

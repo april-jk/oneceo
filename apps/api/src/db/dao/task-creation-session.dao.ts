@@ -33,6 +33,25 @@ import {
   normalizeUserId,
 } from '../../utils/user-id';
 
+type TaskCreationSessionRecord = typeof taskCreationSessions.$inferSelect & {
+  projectId: string | null;
+  projectName: string | null;
+};
+
+type TaskCreationSessionTitleSearchHit = {
+  sessionId: string;
+  matchedTitle: string;
+  matchedAt: Date | string | null;
+  updatedAt: Date | string | null;
+};
+
+type TaskCreationSessionMessageSearchHit = {
+  sessionId: string;
+  snippet: string;
+  matchedAt: Date | string | null;
+  updatedAt: Date | string | null;
+};
+
 type ConversationMessageWriteInput = {
   id?: string;
   sessionId: string;
@@ -57,6 +76,7 @@ type RecentMessageSnapshotInput = {
  */
 export class TaskCreationSessionDAO {
   private static readonly RECENT_MESSAGE_LIMIT = 50;
+  private static readonly SESSION_PROJECT_NAME_LIMIT = 80;
   private readonly recentStoragePrunedAt = new Map<string, number>();
   private readonly recentMetadataCompactedAt = new Map<string, number>();
 
@@ -70,6 +90,41 @@ export class TaskCreationSessionDAO {
 
   private asRecord(value: unknown): Record<string, unknown> {
     return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  }
+
+  private escapeLikePattern(value: string): string {
+    return value.replace(/[\\%_]/g, '\\$&');
+  }
+
+  private readSessionProject(metadataRaw: unknown) {
+    const metadata = this.asRecord(metadataRaw);
+    const projectId = this.asText(metadata.projectId) || null;
+    const projectName = this.asText(metadata.projectName).slice(
+      0,
+      TaskCreationSessionDAO.SESSION_PROJECT_NAME_LIMIT
+    ) || null;
+    if (!projectId || !projectName) {
+      return {
+        projectId: null,
+        projectName: null,
+      };
+    }
+    return {
+      projectId,
+      projectName,
+    };
+  }
+
+  private decorateSessionRecord(
+    session: typeof taskCreationSessions.$inferSelect | null | undefined
+  ): TaskCreationSessionRecord | null {
+    if (!session) return null;
+    const project = this.readSessionProject(session.metadataJson);
+    return {
+      ...session,
+      projectId: project.projectId,
+      projectName: project.projectName,
+    };
   }
 
   private isUnsafeRelativePath(value: string): boolean {
@@ -890,7 +945,7 @@ export class TaskCreationSessionDAO {
   /**
    * 创建新的任务创建会话
    */
-  async createSession(data: Partial<NewTaskCreationSession> = {}) {
+  async createSession(data: Partial<NewTaskCreationSession> = {}): Promise<TaskCreationSessionRecord> {
     const normalizedUserId = normalizeUserId(data.userId);
     if (!normalizedUserId) {
       console.warn('[TASK_SESSION_CREATE_MISSING_USER_ID]', {
@@ -911,7 +966,7 @@ export class TaskCreationSessionDAO {
       .returning();
 
     if (session) {
-      return session;
+      return this.decorateSessionRecord(session)!;
     }
 
     if (data.id) {
@@ -927,19 +982,124 @@ export class TaskCreationSessionDAO {
   /**
    * 获取会话信息
    */
-  async getSession(sessionId: string) {
+  async getSession(sessionId: string): Promise<TaskCreationSessionRecord | null> {
     const [session] = await db
       .select()
       .from(taskCreationSessions)
       .where(eq(taskCreationSessions.id, sessionId));
 
-    return session;
+    return this.decorateSessionRecord(session);
+  }
+
+  async getSessionMetadataJson(sessionId: string) {
+    const session = await this.getSession(sessionId);
+    return this.asRecord(session?.metadataJson);
+  }
+
+  async patchSessionMetadataJson(
+    sessionId: string,
+    patch: Record<string, unknown>
+  ): Promise<TaskCreationSessionRecord | null> {
+    const current = await this.getSessionMetadataJson(sessionId);
+    const [session] = await db
+      .update(taskCreationSessions)
+      .set({
+        metadataJson: {
+          ...current,
+          ...this.asRecord(patch),
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(taskCreationSessions.id, sessionId))
+      .returning();
+
+    return this.decorateSessionRecord(session) || null;
+  }
+
+  async updateSessionProject(
+    sessionId: string,
+    payload: {
+      projectId?: string | null;
+      projectName?: string | null;
+    }
+  ): Promise<TaskCreationSessionRecord | null> {
+    const projectId =
+      payload.projectId === undefined ? undefined : this.asText(payload.projectId) || null;
+    const projectName =
+      payload.projectName === undefined
+        ? undefined
+        : this.asText(payload.projectName).slice(0, TaskCreationSessionDAO.SESSION_PROJECT_NAME_LIMIT) || null;
+
+    const nextProjectId = projectId || null;
+    const nextProjectName = nextProjectId && projectName ? projectName : null;
+    return this.patchSessionMetadataJson(sessionId, {
+      projectId: nextProjectId,
+      projectName: nextProjectName,
+    });
+  }
+
+  async clearProjectAssignmentForUser(userId: string, projectId: string): Promise<number> {
+    const normalizedUserId = normalizeUserId(userId);
+    const normalizedProjectId = this.asText(projectId);
+    if (!normalizedUserId || !normalizedProjectId) return 0;
+
+    const result = await db.execute(sql`
+      UPDATE task_creation_sessions
+      SET metadata_json = jsonb_set(
+        jsonb_set(COALESCE(metadata_json, '{}'::jsonb), '{projectId}', 'null'::jsonb, true),
+        '{projectName}',
+        'null'::jsonb,
+        true
+      ),
+      updated_at = NOW()
+      WHERE user_id = ${normalizedUserId}
+        AND COALESCE(metadata_json->>'projectId', '') = ${normalizedProjectId}
+    `);
+
+    return Number((result as any)?.rowCount || 0);
+  }
+
+  async countOwnedProjectSessions(userId: string, projectId: string): Promise<number> {
+    const normalizedUserId = normalizeUserId(userId);
+    const normalizedProjectId = this.asText(projectId);
+    if (!normalizedUserId || !normalizedProjectId) return 0;
+
+    const result = await db.execute(sql`
+      SELECT COUNT(*)::int AS count
+      FROM task_creation_sessions
+      WHERE user_id = ${normalizedUserId}
+        AND COALESCE(metadata_json->>'projectId', '') = ${normalizedProjectId}
+    `);
+    const row = Array.isArray((result as any)?.rows) ? (result as any).rows[0] : null;
+    return Number(row?.count || 0);
+  }
+
+  async syncOwnedProjectName(userId: string, projectId: string, projectName: string): Promise<number> {
+    const normalizedUserId = normalizeUserId(userId);
+    const normalizedProjectId = this.asText(projectId);
+    const normalizedProjectName =
+      this.asText(projectName).slice(0, TaskCreationSessionDAO.SESSION_PROJECT_NAME_LIMIT) || null;
+    if (!normalizedUserId || !normalizedProjectId || !normalizedProjectName) return 0;
+
+    const result = await db.execute(sql`
+      UPDATE task_creation_sessions
+      SET metadata_json = jsonb_set(
+        COALESCE(metadata_json, '{}'::jsonb),
+        '{projectName}',
+        to_jsonb(${normalizedProjectName}::text),
+        true
+      ),
+      updated_at = NOW()
+      WHERE user_id = ${normalizedUserId}
+        AND COALESCE(metadata_json->>'projectId', '') = ${normalizedProjectId}
+    `);
+    return Number((result as any)?.rowCount || 0);
   }
 
   /**
    * 如果会话尚未绑定用户，则绑定到当前用户
    */
-  async bindUserIfMissing(sessionId: string, userId: string) {
+  async bindUserIfMissing(sessionId: string, userId: string): Promise<TaskCreationSessionRecord | null> {
     const normalizedUserId = normalizeUserId(userId);
     if (!normalizedUserId) return this.getSession(sessionId);
 
@@ -958,7 +1118,7 @@ export class TaskCreationSessionDAO {
             })
             .where(eq(taskCreationSessions.id, sessionId))
             .returning();
-          return normalized || session;
+          return this.decorateSessionRecord(normalized) || session;
         }
         return session;
       }
@@ -974,13 +1134,17 @@ export class TaskCreationSessionDAO {
       })
       .where(and(eq(taskCreationSessions.id, sessionId), unownedFilter))
       .returning();
-    return updated || this.getSession(sessionId);
+    return this.decorateSessionRecord(updated) || this.getSession(sessionId);
   }
 
   /**
    * 仅当会话 owner 为指定 legacy id 时，迁移到当前登录用户
    */
-  async adoptSessionFromLegacyUserId(sessionId: string, userId: string, legacyUserId: string) {
+  async adoptSessionFromLegacyUserId(
+    sessionId: string,
+    userId: string,
+    legacyUserId: string
+  ): Promise<TaskCreationSessionRecord | null> {
     const normalizedUserId = normalizeUserId(userId);
     const normalizedLegacyUserId = normalizeUserId(legacyUserId);
     if (!normalizedUserId || !normalizedLegacyUserId || !isLegacyClientUserId(normalizedLegacyUserId)) {
@@ -1001,7 +1165,7 @@ export class TaskCreationSessionDAO {
       )
       .returning();
 
-    return updated || this.getSession(sessionId);
+    return this.decorateSessionRecord(updated) || this.getSession(sessionId);
   }
 
   /**
@@ -1010,7 +1174,7 @@ export class TaskCreationSessionDAO {
   async updateSessionStatus(
     sessionId: string,
     status: 'in_progress' | 'waiting_user' | 'completed' | 'failed'
-  ) {
+  ): Promise<TaskCreationSessionRecord | null> {
     const [session] = await db
       .update(taskCreationSessions)
       .set({
@@ -1021,7 +1185,7 @@ export class TaskCreationSessionDAO {
       .where(eq(taskCreationSessions.id, sessionId))
       .returning();
 
-    return session;
+    return this.decorateSessionRecord(session);
   }
 
   /**
@@ -1262,7 +1426,7 @@ export class TaskCreationSessionDAO {
   /**
    * 获取最近的会话列表
    */
-  async getRecentSessions(limit: number = 10, userId?: string) {
+  async getRecentSessions(limit: number = 10, userId?: string): Promise<TaskCreationSessionRecord[]> {
     const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.floor(limit), 5000)) : 10;
     const normalizedUserId = normalizeUserId(userId);
     const query = db
@@ -1275,7 +1439,126 @@ export class TaskCreationSessionDAO {
       query.where(sql`btrim(coalesce(${taskCreationSessions.userId}, '')) = ${normalizedUserId}`);
     }
 
-    return await query;
+    const sessions = await query;
+    return sessions
+      .map((session) => this.decorateSessionRecord(session))
+      .filter((session): session is TaskCreationSessionRecord => Boolean(session));
+  }
+
+  async listOwnedProjectSessions(userId: string, projectId: string): Promise<TaskCreationSessionRecord[]> {
+    const normalizedUserId = normalizeUserId(userId);
+    const normalizedProjectId = this.asText(projectId);
+    if (!normalizedUserId || !normalizedProjectId) return [];
+
+    const sessions = await db
+      .select()
+      .from(taskCreationSessions)
+      .where(
+        and(
+          sql`btrim(coalesce(${taskCreationSessions.userId}, '')) = ${normalizedUserId}`,
+          sql`COALESCE(${taskCreationSessions.metadataJson}->>'projectId', '') = ${normalizedProjectId}`
+        )
+      )
+      .orderBy(
+        desc(taskCreationSessions.updatedAt),
+        desc(taskCreationSessions.createdAt),
+        desc(taskCreationSessions.id)
+      );
+
+    return sessions
+      .map((session) => this.decorateSessionRecord(session))
+      .filter((session): session is TaskCreationSessionRecord => Boolean(session));
+  }
+
+  async searchOwnedSessionTitles(
+    userId: string,
+    query: string,
+    limit: number = 20
+  ): Promise<TaskCreationSessionTitleSearchHit[]> {
+    const normalizedUserId = normalizeUserId(userId);
+    const normalizedQuery = this.asText(query);
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.floor(limit), 50)) : 20;
+    if (!normalizedUserId || !normalizedQuery) return [];
+
+    const likePattern = `%${this.escapeLikePattern(normalizedQuery)}%`;
+    const result = await db.execute(sql`
+      SELECT *
+      FROM (
+        SELECT DISTINCT ON (td.session_id)
+          td.session_id AS "sessionId",
+          td.title AS "matchedTitle",
+          td.created_at AS "matchedAt",
+          tcs.updated_at AS "updatedAt"
+        FROM task_descriptions td
+        JOIN task_creation_sessions tcs ON tcs.id = td.session_id
+        WHERE btrim(coalesce(tcs.user_id, '')) = ${normalizedUserId}
+          AND btrim(coalesce(td.title, '')) <> ''
+          AND td.title ILIKE ${likePattern} ESCAPE '\\'
+        ORDER BY td.session_id, td.created_at DESC, td.id DESC
+      ) hits
+      ORDER BY hits."updatedAt" DESC, hits."matchedAt" DESC, hits."sessionId" DESC
+      LIMIT ${safeLimit}
+    `);
+
+    const rows: any[] = Array.isArray((result as any)?.rows) ? (result as any).rows : [];
+    return rows
+      .map((row) => ({
+        sessionId: this.asText(row?.sessionId),
+        matchedTitle: this.asText(row?.matchedTitle),
+        matchedAt: row?.matchedAt ?? null,
+        updatedAt: row?.updatedAt ?? null,
+      }))
+      .filter((row): row is TaskCreationSessionTitleSearchHit => Boolean(row.sessionId && row.matchedTitle));
+  }
+
+  async searchOwnedSessionMessages(
+    userId: string,
+    query: string,
+    limit: number = 20
+  ): Promise<TaskCreationSessionMessageSearchHit[]> {
+    const normalizedUserId = normalizeUserId(userId);
+    const normalizedQuery = this.asText(query);
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.floor(limit), 50)) : 20;
+    if (!normalizedUserId || !normalizedQuery) return [];
+
+    const likePattern = `%${this.escapeLikePattern(normalizedQuery)}%`;
+    const result = await db.execute(sql`
+      SELECT *
+      FROM (
+        SELECT DISTINCT ON (cm.session_id)
+          cm.session_id AS "sessionId",
+          cm.content AS "snippet",
+          cm.created_at AS "matchedAt",
+          tcs.updated_at AS "updatedAt"
+        FROM conversation_messages cm
+        JOIN task_creation_sessions tcs ON tcs.id = cm.session_id
+        WHERE btrim(coalesce(tcs.user_id, '')) = ${normalizedUserId}
+          AND btrim(coalesce(cm.content, '')) <> ''
+          AND lower(coalesce(cm.role, '')) IN ('user', 'assistant', 'agent')
+          AND coalesce(cm.message_type, 'message') NOT IN (
+            'session_started',
+            'status_update',
+            'executor_event',
+            'opencode_event',
+            'error',
+            'opencode_error'
+          )
+          AND cm.content ILIKE ${likePattern} ESCAPE '\\'
+        ORDER BY cm.session_id, cm.created_at DESC, cm.id DESC
+      ) hits
+      ORDER BY hits."updatedAt" DESC, hits."matchedAt" DESC, hits."sessionId" DESC
+      LIMIT ${safeLimit}
+    `);
+
+    const rows: any[] = Array.isArray((result as any)?.rows) ? (result as any).rows : [];
+    return rows
+      .map((row) => ({
+        sessionId: this.asText(row?.sessionId),
+        snippet: this.asText(row?.snippet),
+        matchedAt: row?.matchedAt ?? null,
+        updatedAt: row?.updatedAt ?? null,
+      }))
+      .filter((row): row is TaskCreationSessionMessageSearchHit => Boolean(row.sessionId && row.snippet));
   }
 
   /**
@@ -1385,13 +1668,16 @@ export class TaskCreationSessionDAO {
   /**
    * 获取管理态最近会话列表（不按用户过滤）
    */
-  async getRecentSessionsForAdmin(limit: number = 50) {
+  async getRecentSessionsForAdmin(limit: number = 50): Promise<TaskCreationSessionRecord[]> {
     const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.floor(limit), 5000)) : 50;
-    return await db
+    const sessions = await db
       .select()
       .from(taskCreationSessions)
       .orderBy(desc(taskCreationSessions.updatedAt), desc(taskCreationSessions.createdAt), desc(taskCreationSessions.id))
       .limit(safeLimit);
+    return sessions
+      .map((session) => this.decorateSessionRecord(session))
+      .filter((session): session is TaskCreationSessionRecord => Boolean(session));
   }
 
   /**

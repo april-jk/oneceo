@@ -481,4 +481,117 @@ describe('managed message stream identity', () => {
     expect(merged[2]?.content).toContain('第二段说明');
     expect(merged[2]?.messageKey).toContain(':segment:');
   });
+
+  it('replaces duplicate streamed completion text when final managed assistant message arrives after complete_task', () => {
+    const key = 'managed:run-complete-1:assistant';
+    const streamed = mergeRealtimeMessage(
+      [],
+      {
+        type: 'agent_message',
+        content: 'watson，已进一步优化2048小游戏的动画流畅度。',
+        agent: 'altus',
+        messageKey: key,
+        metadata: {
+          eventType: 'assistant_delta',
+          runId: 'run-complete-1',
+          sequence: 1,
+          streamDelta: true,
+          messageKey: key,
+        },
+      },
+      WELCOME_MESSAGE
+    );
+
+    const withTool = mergeRealtimeMessage(
+      streamed,
+      {
+        type: 'executor_event',
+        content: '完成任务',
+        messageKey: 'managed:run-complete-1:tool:complete',
+        metadata: {
+          eventType: 'tool_call_completed',
+          runId: 'run-complete-1',
+          toolName: 'complete_task',
+          toolCallId: 'complete',
+          messageKey: 'managed:run-complete-1:tool:complete',
+        },
+      },
+      WELCOME_MESSAGE
+    );
+
+    const finalState = mergeRealtimeMessage(
+      withTool,
+      {
+        type: 'agent_message',
+        content: 'watson，已进一步优化2048小游戏的动画流畅度。',
+        agent: 'altus',
+        messageKey: key,
+        metadata: {
+          eventType: 'assistant_message',
+          runId: 'run-complete-1',
+          sequence: 3,
+          messageKey: key,
+        },
+      },
+      WELCOME_MESSAGE
+    );
+
+    expect(finalState).toHaveLength(2);
+    expect(finalState[0]?.type).toBe('executor_event');
+    expect(finalState[1]?.type).toBe('agent_message');
+    expect(finalState[1]?.content).toBe('watson，已进一步优化2048小游戏的动画流畅度。');
+    expect(finalState[1]?.messageKey).toContain(':segment:');
+  });
+
+  it('dedupes managed recovery history when cached streamed completion matches persisted final assistant message', () => {
+    const merged = mergeHistoryAgentMessages(
+      [
+        {
+          type: 'agent_message',
+          content: 'watson，已进一步优化2048小游戏的动画流畅度。',
+          agent: 'altus',
+          messageKey: 'managed:run-complete-2:assistant',
+          metadata: {
+            eventType: 'assistant_delta',
+            runId: 'run-complete-2',
+            sequence: 1,
+            streamDelta: true,
+            messageKey: 'managed:run-complete-2:assistant',
+          },
+        },
+        {
+          type: 'executor_event',
+          content: '完成任务',
+          messageKey: 'managed:run-complete-2:tool:complete',
+          metadata: {
+            eventType: 'tool_call_completed',
+            runId: 'run-complete-2',
+            toolName: 'complete_task',
+            toolCallId: 'complete',
+            messageKey: 'managed:run-complete-2:tool:complete',
+          },
+        },
+      ],
+      [
+        {
+          type: 'agent_message',
+          content: 'watson，已进一步优化2048小游戏的动画流畅度。',
+          agent: 'altus',
+          messageKey: 'managed:run-complete-2:assistant',
+          metadata: {
+            eventType: 'assistant_message',
+            runId: 'run-complete-2',
+            sequence: 3,
+            messageKey: 'managed:run-complete-2:assistant',
+          },
+        },
+      ]
+    );
+
+    expect(merged).toHaveLength(2);
+    expect(merged[0]?.type).toBe('executor_event');
+    expect(merged[1]?.type).toBe('agent_message');
+    expect(merged[1]?.content).toBe('watson，已进一步优化2048小游戏的动画流畅度。');
+    expect(merged[1]?.metadata?.eventType).toBe('assistant_message');
+  });
 });

@@ -33,8 +33,13 @@ import {
   type OpencodePendingQuestion,
 } from './opencode-question-adapter';
 import { DEFAULT_CODEX_MODEL } from '../utils/codex-runtime-config';
+import { altusManagedSetupService } from './altus-managed-setup-service';
+import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-service';
 import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
+import { taskSessionSkillStateService, type SkillSelectionInput } from './task-session-skill-state-service';
 import { taskSessionRedisCacheService } from './task-session-redis-cache-service';
+import { classifyTaskIntentShape } from './task-intent-shape-service';
+import { userSkillService } from './user-skill-service';
 
 type OpencodeEventListenerPayload = {
   taskSessionId: string;
@@ -118,6 +123,26 @@ type OpencodeMessageRoleEntry = {
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function buildNeutralTaskIntentProfile(): AltusManagedTaskIntentProfile {
+  return {
+    mode: 'neutral',
+    reason: 'unknown',
+    recentUserMessages: [],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: false,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: true,
+    needsClarification: false,
+    clarificationQuestion: '',
+    clarificationType: 'none',
+    todoRequired: false,
+    todoReason: 'none',
+  };
 }
 
 function sleep(ms: number) {
@@ -241,7 +266,7 @@ function resolveNativeMessageRole(record: Record<string, unknown>): string {
   return (asString(record.role) || asString(info.role)).toLowerCase();
 }
 
-function inspectLatestAssistantTurn(
+export function inspectLatestAssistantTurn(
   rawMessages: unknown[],
   promptedAt: number
 ): {
@@ -255,6 +280,29 @@ function inspectLatestAssistantTurn(
     .map((item) => item as Record<string, unknown>)
     .sort((left, right) => resolveNativeMessageTimestamp(left) - resolveNativeMessageTimestamp(right));
 
+  const isMeaningfulAssistantRecord = (record: Record<string, unknown>) => {
+    const info = toRecord(record.info);
+    const parts = Array.isArray(record.parts) ? record.parts : [];
+    const content = asString(record.content);
+    const summary = asString(info.summary);
+
+    if (parts.length > 0) {
+      const meaningfulPart = parts.some((rawPart) => {
+        const part = toRecord(rawPart);
+        const partType = asString(part.type).toLowerCase();
+        if (!partType) return false;
+        if (partType === 'step-start' || partType === 'step-finish') {
+          return false;
+        }
+        return true;
+      });
+      if (meaningfulPart) return true;
+    }
+    if (content) return true;
+    if (summary) return true;
+    return false;
+  };
+
   let latestAssistant: Record<string, unknown> | null = null;
   for (const record of records) {
     if (resolveNativeMessageRole(record) !== 'assistant') {
@@ -262,6 +310,9 @@ function inspectLatestAssistantTurn(
     }
     const createdAt = resolveNativeMessageTimestamp(record);
     if (promptedAt > 0 && Number.isFinite(createdAt) && createdAt + 1000 < promptedAt) {
+      continue;
+    }
+    if (!isMeaningfulAssistantRecord(record)) {
       continue;
     }
     latestAssistant = record;
@@ -303,7 +354,7 @@ function inspectLatestAssistantTurn(
         assistantObserved = true;
         latestAssistantText = text;
       }
-      if ((text || start > 0) && end <= 0) {
+      if (start > 0 && end <= 0) {
         hasActiveAssistantParts = true;
       }
       partSignatures.push(`${partType}:${partId}:${text.length}:${start}:${end}`);
@@ -350,9 +401,6 @@ function inspectLatestAssistantTurn(
     }
   }
 
-  if (!messageCompletedAt && (assistantObserved || parts.length > 0)) {
-    hasActiveAssistantParts = true;
-  }
   if (pendingStepCount > 0) {
     hasActiveAssistantParts = true;
   }
@@ -681,6 +729,92 @@ function diffHasWorkspaceChange(diff: unknown, workspaceRoot: string): boolean {
   return paths.some((path) => isWorkspaceFilePath(path, workspaceRoot));
 }
 
+function resolveArtifactKind(value: unknown): string {
+  const kind = asString(value).toLowerCase();
+  return kind || 'software_artifact';
+}
+
+export function isMeaningfulArtifactFile(filePath: string, artifactKind: string): boolean {
+  const normalized = normalizePath(filePath).toLowerCase();
+  if (!normalized || normalized.startsWith('.git/')) {
+    return false;
+  }
+
+  const basename = normalized.split('/').pop() || normalized;
+  const ext = path.posix.extname(normalized);
+  const kind = resolveArtifactKind(artifactKind);
+
+  const scriptOutputs = new Set([
+    '.py',
+    '.sh',
+    '.bash',
+    '.zsh',
+    '.js',
+    '.mjs',
+    '.cjs',
+    '.ts',
+    '.rb',
+    '.go',
+    '.rs',
+    '.java',
+    '.php',
+    '.pl',
+    '.r',
+    '.md',
+    '.txt',
+    '.html',
+  ]);
+  const webOutputs = new Set([
+    '.html',
+    '.css',
+    '.js',
+    '.mjs',
+    '.cjs',
+    '.ts',
+    '.tsx',
+    '.jsx',
+    '.vue',
+    '.svelte',
+  ]);
+  const softwareOutputs = new Set([
+    ...scriptOutputs,
+    '.tsx',
+    '.jsx',
+    '.json',
+    '.yaml',
+    '.yml',
+    '.toml',
+    '.sql',
+  ]);
+  const ignoredDataOnly = new Set([
+    '.csv',
+    '.tsv',
+    '.xls',
+    '.xlsx',
+    '.jsonl',
+    '.parquet',
+    '.db',
+    '.sqlite',
+  ]);
+
+  if (kind === 'script_artifact') {
+    if (ignoredDataOnly.has(ext)) return false;
+    return scriptOutputs.has(ext) || basename === 'readme' || basename === 'readme.md';
+  }
+
+  if (kind === 'web_app') {
+    return webOutputs.has(ext);
+  }
+
+  if (kind === 'business_system' || kind === 'software_artifact') {
+    if (ignoredDataOnly.has(ext)) return false;
+    return softwareOutputs.has(ext) || basename === 'package.json' || basename === 'readme.md';
+  }
+
+  if (ignoredDataOnly.has(ext)) return false;
+  return Boolean(ext);
+}
+
 function extractFilePathsFromEvent(properties: Record<string, unknown>, event?: Record<string, unknown>): string[] {
   const paths: string[] = [];
   const add = (value: unknown) => {
@@ -987,6 +1121,41 @@ function formatPhaseStatus(phase: FlowPhase, message: string): string {
   return suffix ? `${prefix}：${suffix}` : prefix;
 }
 
+type ValidationMode = 'browser' | 'generic';
+
+function resolveValidationMode(payload: {
+  userInput: string;
+  taskDescription: TaskDescription;
+  executionPlan: ExecutionPlan;
+}): ValidationMode {
+  const shape = classifyTaskIntentShape([
+    payload.userInput,
+    payload.taskDescription.title,
+    payload.taskDescription.objective,
+    payload.taskDescription.scope,
+    ...(Array.isArray(payload.taskDescription.deliverables) ? payload.taskDescription.deliverables : []),
+    ...(Array.isArray(payload.taskDescription.constraints) ? payload.taskDescription.constraints : []),
+    String(payload.taskDescription.additional_info?.artifactKind || ''),
+    payload.executionPlan.project?.title || '',
+    payload.executionPlan.project?.description || '',
+  ]);
+  return shape.artifactKind === 'web_app' && !shape.explicitNoWeb ? 'browser' : 'generic';
+}
+
+function buildNoArtifactFollowUp(validationMode: ValidationMode): string {
+  return validationMode === 'browser'
+    ? [
+        '当前未检测到任何文件产出，请继续完成交付物。',
+        '请直接在当前工作区生成实际网站文件，并保证能够被浏览器验证。',
+        '完成后再执行 Playwright 测试（连接 CDP 9222，同一浏览器窗口）。',
+      ].join('\n')
+    : [
+        '当前未检测到任何文件产出，请继续完成交付物。',
+        '请直接在当前工作区生成与任务匹配的脚本或源码文件，不要改造成网页应用。',
+        '完成后按任务类型执行本地验证，并在结果中说明命令、输出和文件路径。',
+      ].join('\n');
+}
+
 function buildReviewFeedbackPrompt(payload: {
   userInput: string;
   taskDescription: TaskDescription;
@@ -994,7 +1163,30 @@ function buildReviewFeedbackPrompt(payload: {
   lastOutput: string;
   feedback: string;
   runSummary?: string;
+  validationMode?: ValidationMode;
 }): string {
+  if ((payload.validationMode || 'browser') === 'generic') {
+    return [
+      '当前处于【修复阶段】',
+      '你是执行智能体，请基于上一轮执行结果进行修订与完善：',
+      `用户需求: ${payload.userInput}`,
+      `任务描述: ${JSON.stringify(payload.taskDescription)}`,
+      `执行计划摘要: ${JSON.stringify(buildExecutionSummary(payload.executionPlan))}`,
+      `上一轮输出: ${payload.lastOutput}`,
+      payload.runSummary ? `上一轮执行摘要: ${payload.runSummary}` : '',
+      `改进要求: ${payload.feedback}`,
+      '要求：',
+      '1) 继续命令行模式执行（不要进入交互式界面）。',
+      '2) 补齐缺口并输出更新后的交付物说明。',
+      '3) 如需生成/修改文件，请直接写入当前工作区并在输出中说明文件路径。',
+      '4) 继续按任务类型做本地验证：脚本/CLI 跑通命令与样例输入，源码类任务核对文件结构、入口和使用说明。',
+      '5) 不要引入 Playwright、浏览器自动化或部署步骤，除非任务本身明确要求网页验证。',
+      '6) 输出本轮验证步骤、结果与剩余风险。',
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+
   return [
     '当前处于【修复阶段】',
     '你是执行智能体，请基于上一轮执行结果进行修订与完善：',
@@ -1039,6 +1231,35 @@ function buildPlaywrightTestPrompt(payload: {
     '7) 输出测试步骤、覆盖的关键路径，以及每项测试结果（通过/失败）。',
     '8) 如发现问题，请总结失败原因，等待下一步修复指令，不要直接进入修复。',
     '9) 如需用户协助（例如账号、权限、业务确认），请明确提出。',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+function buildGenericTestPrompt(payload: {
+  userInput: string;
+  taskDescription: TaskDescription;
+  executionPlan: ExecutionPlan;
+  lastOutput?: string;
+  runSummary?: string;
+}): string {
+  return [
+    '当前处于【测试阶段】',
+    '你是执行智能体，需要对当前实现做与任务形态匹配的验证。',
+    `用户需求: ${payload.userInput}`,
+    `任务描述: ${JSON.stringify(payload.taskDescription)}`,
+    `执行计划摘要: ${JSON.stringify(buildExecutionSummary(payload.executionPlan))}`,
+    payload.lastOutput ? `当前交付物摘要: ${payload.lastOutput}` : '',
+    payload.runSummary ? `上一轮执行摘要: ${payload.runSummary}` : '',
+    '要求：',
+    '1) 脚本/CLI 任务请直接运行命令或样例输入，验证输出与预期结构。',
+    '2) 若验证依赖输入样例而用户未提供，请在工作区构造最小可验证样例，并明确说明这是用于本地验证的临时样例。',
+    '3) 若脚本依赖环境中不存在的第三方包，请先改写为无需新增依赖的最小可运行版本，再继续验证。',
+    '4) 源码类任务请核对文件结构、入口文件、关键说明和可执行步骤。',
+    '5) 不要引入 Playwright、浏览器自动化或部署步骤，除非任务本身明确要求网页验证。',
+    '6) 输出验证步骤、覆盖的关键路径，以及每项验证结果（通过/失败）。',
+    '7) 如发现问题，请总结失败原因，等待下一步修复指令，不要直接进入修复。',
+    '8) 如需用户协助（例如账号、权限、业务确认），请明确提出。',
   ]
     .filter(Boolean)
     .join('\n');
@@ -1367,6 +1588,47 @@ export class OpencodeRemoteService {
   private messageWalPath =
     asString(process.env.TASK_CREATION_MESSAGE_WAL_PATH) ||
     path.resolve(process.cwd(), 'data', 'task-creation-message-queue.wal.jsonl');
+
+  private async prepareDirectResidentSkillSelections(input: {
+    taskSessionId: string;
+    content: string;
+    source?: 'user' | 'agent';
+    submittedSelections?: unknown;
+    pendingQuestion?: unknown;
+  }): Promise<{
+    residentSkillSelections: SkillSelectionInput[];
+  }> {
+    const source = input.source === 'agent' ? 'agent' : 'user';
+    const currentState = await taskSessionSkillStateService.getSessionSkillState(input.taskSessionId);
+    if (source === 'agent') {
+      return {
+        residentSkillSelections: currentState.residentSelections,
+      };
+    }
+
+    const session = await taskCreationSessionDAO.getSession(input.taskSessionId).catch(() => null);
+    const userId = asString(session?.userId);
+    if (!userId) {
+      return {
+        residentSkillSelections: currentState.residentSelections,
+      };
+    }
+
+    const skillCatalog = await userSkillService.listAvailableSkills(userId).catch(() => []);
+    const taskIntentProfile = await altusManagedSetupService
+      .buildTaskIntentProfile(input.taskSessionId, input.content)
+      .catch(() => buildNeutralTaskIntentProfile());
+    const prepared = await taskSessionSkillStateService.prepareRunState({
+      sessionId: input.taskSessionId,
+      skillCatalog: skillCatalog as any,
+      taskIntentProfile,
+      submittedSelections: input.submittedSelections,
+      messageType: input.pendingQuestion ? 'user_response' : 'user_input',
+    });
+    return {
+      residentSkillSelections: prepared.residentSkillSelections,
+    };
+  }
 
   private buildRunKey(taskSessionId: string, opencodeSessionId: string): string {
     return `${taskSessionId}::${opencodeSessionId}`;
@@ -1706,7 +1968,8 @@ export class OpencodeRemoteService {
   private async detectWorkspaceArtifactsAfterBaseline(
     sessionId: string,
     orchestratorSessionId: string,
-    workspaceRoot: string
+    workspaceRoot: string,
+    artifactKind?: string
   ): Promise<boolean> {
     const files = await listWorkspaceFiles(orchestratorSessionId, workspaceRoot);
     if (files.length === 0) {
@@ -1719,7 +1982,7 @@ export class OpencodeRemoteService {
     }
     let hasNew = false;
     for (const file of files) {
-      if (!baseline.has(file)) {
+      if (!baseline.has(file) && isMeaningfulArtifactFile(file, artifactKind || 'software_artifact')) {
         hasNew = true;
         break;
       }
@@ -1728,6 +1991,15 @@ export class OpencodeRemoteService {
       this.workspaceBaselines.set(sessionId, new Set(files));
     }
     return hasNew;
+  }
+
+  private async hasCurrentMeaningfulArtifacts(
+    orchestratorSessionId: string,
+    workspaceRoot: string,
+    artifactKind?: string
+  ): Promise<boolean> {
+    const files = await listWorkspaceFiles(orchestratorSessionId, workspaceRoot);
+    return files.some((file) => isMeaningfulArtifactFile(file, artifactKind || 'software_artifact'));
   }
 
   private async ensureWorkspaceBaseline(
@@ -1855,6 +2127,49 @@ export class OpencodeRemoteService {
     if (session.stage === 'completed' || session.stage === 'failed') return;
     const runKey = this.buildRunKey(taskSessionId, opencodeSessionId);
     if (this.finalizedRuns.has(runKey)) return;
+    const context = await this.resolveReviewContext(taskSessionId);
+    const artifactKind = resolveArtifactKind(context?.taskDescription?.additional_info?.artifactKind);
+    const workspaceRoot = resolveOpencodeWorkspacePath(taskSessionId) || '';
+    if (workspaceRoot) {
+      try {
+        const hasMeaningfulArtifacts = await this.hasCurrentMeaningfulArtifacts(
+          orchestratorSessionId,
+          workspaceRoot,
+          artifactKind
+        );
+        if (hasMeaningfulArtifacts) {
+          const latestOutput = await this.resolveLatestOutput(taskSessionId);
+          const syntheticMessage: OsacMessage = {
+            type: 'OPENCODE_EVENT',
+            payload: {
+              seq: Date.now(),
+              timestamp: Date.now(),
+              eventType: 'message.final',
+              orchestratorSessionId,
+              opencodeSessionId,
+              event: {
+                type: 'message.final',
+                directory: workspaceRoot,
+                properties: {
+                  sessionID: opencodeSessionId,
+                  text: latestOutput || '已检测到工作区交付物，转入验证阶段。',
+                  source: 'stream_idle_artifacts',
+                },
+              },
+            },
+          };
+          await this.handleOsacMessage(orchestratorSessionId, syntheticMessage);
+          return;
+        }
+      } catch (error) {
+        console.warn('[OPENCODE_STREAM_IDLE_ARTIFACT_CHECK_FAILED]', {
+          taskSessionId,
+          orchestratorSessionId,
+          opencodeSessionId,
+          error,
+        });
+      }
+    }
     this.scheduleNativeHistoryPoll(taskSessionId, orchestratorSessionId, opencodeSessionId, 0);
   }
 
@@ -2559,25 +2874,65 @@ export class OpencodeRemoteService {
         }
       }
 
+      const effectiveAssistantText =
+        syncResult.latestAssistantText ||
+        livePreview?.content ||
+        artifact.lastText ||
+        '';
+      const effectiveAssistantObserved =
+        syncResult.assistantObserved || Boolean(effectiveAssistantText);
+      const effectiveAssistantSignature =
+        syncResult.latestAssistantSignature ||
+        (effectiveAssistantText
+          ? JSON.stringify({
+              source: 'live_stream_fallback',
+              textLength: effectiveAssistantText.length,
+              tail: effectiveAssistantText.slice(-400),
+            })
+          : '');
+      const context = await this.resolveReviewContext(taskSessionId);
+      const validationMode = context ? resolveValidationMode(context) : 'browser';
+      const artifactKind = resolveArtifactKind(context?.taskDescription?.additional_info?.artifactKind);
+      const workspaceRoot = resolveOpencodeWorkspacePath(taskSessionId) || '';
+      let hasMeaningfulArtifacts = false;
+      if (workspaceRoot) {
+        try {
+          hasMeaningfulArtifacts = await this.hasCurrentMeaningfulArtifacts(
+            orchestratorSessionId,
+            workspaceRoot,
+            artifactKind
+          );
+        } catch (error) {
+          console.warn('[OPENCODE_POLL_ARTIFACT_SCAN_FAILED]', {
+            taskSessionId,
+            orchestratorSessionId,
+            opencodeSessionId,
+            error,
+          });
+        }
+      }
+
       if (syncResult.hasActiveAssistantParts) {
         artifact.stableNativeHistoryPolls = 0;
         artifact.lastNativeAssistantSignature = syncResult.latestAssistantSignature;
-      } else if (syncResult.assistantObserved) {
+      } else if (effectiveAssistantObserved) {
+        const hasExecutionEvidence =
+          artifact.commandEvents > 0 ||
+          artifact.toolEvents > 0 ||
+          artifact.todoEvents > 0 ||
+          hasMeaningfulArtifacts;
         if (
-          syncResult.latestAssistantSignature &&
-          syncResult.latestAssistantSignature === artifact.lastNativeAssistantSignature
+          effectiveAssistantSignature &&
+          effectiveAssistantSignature === artifact.lastNativeAssistantSignature
         ) {
           artifact.stableNativeHistoryPolls += 1;
         } else {
           artifact.stableNativeHistoryPolls = 1;
-          artifact.lastNativeAssistantSignature = syncResult.latestAssistantSignature;
+          artifact.lastNativeAssistantSignature = effectiveAssistantSignature;
         }
-        if (artifact.stableNativeHistoryPolls >= 2) {
+        if (artifact.stableNativeHistoryPolls >= 2 && hasExecutionEvidence && hasMeaningfulArtifacts) {
           const completionPreview =
-            syncResult.latestAssistantText ||
-            livePreview?.content ||
-            artifact.lastText ||
-            'OpenCode 已产出回复';
+            effectiveAssistantText || 'OpenCode 已产出回复';
           const syntheticMessage: OsacMessage = {
             type: 'OPENCODE_EVENT',
             payload: {
@@ -2600,9 +2955,37 @@ export class OpencodeRemoteService {
           await this.handleOsacMessage(orchestratorSessionId, syntheticMessage);
           return;
         }
+        if (artifact.stableNativeHistoryPolls >= 2 && hasExecutionEvidence && !hasMeaningfulArtifacts) {
+          const nudged = artifact.missingArtifactNudges;
+          if (nudged < 1 && workspaceRoot) {
+            artifact.missingArtifactNudges += 1;
+            await this.notify({
+              taskSessionId,
+              message: {
+                type: 'status_update',
+                content: '未检测到有效交付物，继续要求执行生成真实产物...',
+                stage: 'executing',
+                tone: 'execution',
+                metadata: {
+                  source: 'native_history_poll_no_artifacts',
+                  orchestratorSessionId,
+                  opencodeSessionId,
+                },
+              },
+            });
+            await this.sendUserInput({
+              taskSessionId,
+              content: buildNoArtifactFollowUp(validationMode),
+              orchestratorSessionId,
+              workspacePath: workspaceRoot,
+              source: 'agent',
+            });
+          }
+          artifact.stableNativeHistoryPolls = 0;
+        }
       } else {
         artifact.stableNativeHistoryPolls = 0;
-        artifact.lastNativeAssistantSignature = syncResult.latestAssistantSignature;
+        artifact.lastNativeAssistantSignature = effectiveAssistantSignature;
       }
 
       if (artifact.nativeHistoryPollAttempts < this.nativeHistoryPollMaxAttempts) {
@@ -3401,6 +3784,16 @@ export class OpencodeRemoteService {
     const currentSession = await taskCreationFileMemoryStore.getSession(taskSessionId);
     let preferredRecoveredOpencodeSessionId =
       asString(runtime?.opencodeSessionId) || asString(currentSession?.runtime?.opencodeSessionId) || undefined;
+    const directSkillSelections = await this.prepareDirectResidentSkillSelections({
+      taskSessionId,
+      content,
+      source: input.source,
+      submittedSelections:
+        input.metadata && Object.prototype.hasOwnProperty.call(input.metadata, 'skills')
+          ? input.metadata.skills
+          : undefined,
+      pendingQuestion: currentSession?.pendingQuestion,
+    });
 
     let orchestratorSessionId = runtime.orchestratorSessionId;
     const workspacePath = asString(input.workspacePath) || resolveOpencodeWorkspacePath(taskSessionId);
@@ -3429,8 +3822,22 @@ export class OpencodeRemoteService {
           await sandboxSkillSyncService.syncSelectedSkills({
             taskSessionId,
             orchestratorSessionId,
-            skills: input.metadata?.skills,
+            skills: directSkillSelections.residentSkillSelections,
           });
+          try {
+            await taskSessionSkillStateService.markResidentSkillsMaterialized({
+              sessionId: taskSessionId,
+              sandboxId: orchestratorSessionId,
+              workspaceRoot: workspacePath,
+              residentSelections: directSkillSelections.residentSkillSelections,
+            });
+          } catch (error) {
+            console.warn('[OPENCODE_DIRECT_SKILL_MEMORY_INIT_WARN]', {
+              taskSessionId,
+              orchestratorSessionId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
           await osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
             workspacePath: workspacePath || undefined,
             host: opencodeHost,
@@ -3752,9 +4159,7 @@ export class OpencodeRemoteService {
           });
         }
         this.touchStreamIdle(session.id, orchestratorSessionId, opencodeSessionId);
-        if (this.isDirectSession(session)) {
-          this.scheduleNativeHistoryPoll(session.id, orchestratorSessionId, opencodeSessionId);
-        }
+        this.scheduleNativeHistoryPoll(session.id, orchestratorSessionId, opencodeSessionId);
         if (!hadFinalized) {
           await taskCreationFileMemoryStore.updateSessionState(session.id, {
             status: 'in_progress',
@@ -4433,11 +4838,20 @@ export class OpencodeRemoteService {
         return;
       }
       const workspaceRoot = resolveOpencodeWorkspacePath(session.id) || '';
+      const context = await this.resolveReviewContext(session.id);
+      const artifactKind = resolveArtifactKind(context?.taskDescription?.additional_info?.artifactKind);
 
       if ((currentPhase === 'development' || currentPhase === 'repair') && artifact && !artifact.hasFileChange) {
         if (orchestratorSessionId && workspaceRoot) {
           try {
-            if (await this.detectWorkspaceArtifactsAfterBaseline(session.id, orchestratorSessionId, workspaceRoot)) {
+            if (
+              await this.detectWorkspaceArtifactsAfterBaseline(
+                session.id,
+                orchestratorSessionId,
+                workspaceRoot,
+                artifactKind
+              )
+            ) {
               artifact.hasFileChange = true;
               this.sessionArtifactsSeen.add(session.id);
             }
@@ -4448,7 +4862,19 @@ export class OpencodeRemoteService {
       }
 
       const sessionHasArtifacts = this.sessionArtifactsSeen.has(session.id);
-      let hasArtifacts = artifact.hasFileChange || sessionHasArtifacts;
+      let workspaceHasMeaningfulArtifacts = false;
+      if (orchestratorSessionId && workspaceRoot) {
+        try {
+          workspaceHasMeaningfulArtifacts = await this.hasCurrentMeaningfulArtifacts(
+            orchestratorSessionId,
+            workspaceRoot,
+            artifactKind
+          );
+        } catch (error) {
+          console.warn('[OPENCODE_MEANINGFUL_ARTIFACT_SCAN_FAILED]', error);
+        }
+      }
+      let hasArtifacts = workspaceHasMeaningfulArtifacts;
       const revision = this.sessionArtifactRevision.get(session.id) || 0;
       if (artifact.hasPlaywrightUsage) {
         this.sessionTestedRevision.set(session.id, revision);
@@ -4465,8 +4891,11 @@ export class OpencodeRemoteService {
         Boolean(aggregated);
 
       if (currentPhase === 'development' || currentPhase === 'repair') {
-        if (sessionHasArtifacts && !artifact.hasFileChange) {
+        if (workspaceHasMeaningfulArtifacts && !artifact.hasFileChange) {
           artifact.hasFileChange = true;
+          if (!sessionHasArtifacts) {
+            this.sessionArtifactsSeen.add(session.id);
+          }
           hasArtifacts = true;
         }
         if (!hasArtifacts) {
@@ -4475,6 +4904,7 @@ export class OpencodeRemoteService {
           if (shouldNudge) {
             artifact.missingArtifactNudges += 1;
             this.sessionNoArtifactNudges.set(session.id, nudged + 1);
+            const validationMode = context ? resolveValidationMode(context) : 'browser';
             await this.emitPhaseStatus({
               sessionId: session.id,
               phase: currentPhase,
@@ -4487,11 +4917,7 @@ export class OpencodeRemoteService {
                 reason: 'no_artifacts_retry',
               },
             });
-            const followUp = [
-              '当前未检测到任何文件产出，请继续完成交付物。',
-              '请直接在当前工作区生成单 HTML 文件（包含 HTML/CSS/JS）。',
-              '完成后再执行 Playwright 测试（连接 CDP 9222，同一浏览器窗口）。',
-            ].join('\n');
+            const followUp = buildNoArtifactFollowUp(validationMode);
             await this.sendUserInput({
               taskSessionId: session.id,
               content: followUp,
@@ -4539,10 +4965,11 @@ export class OpencodeRemoteService {
             stage: 'reviewing',
           });
 
+          const validationMode = context ? resolveValidationMode(context) : 'browser';
           await this.emitPhaseStatus({
             sessionId: session.id,
             phase: 'testing',
-            message: '正在执行自动化测试...',
+            message: validationMode === 'browser' ? '正在执行自动化测试...' : '正在执行任务类型验证...',
             stage: 'reviewing',
             tone: 'review',
             metadata: {
@@ -4552,27 +4979,36 @@ export class OpencodeRemoteService {
           });
           this.sessionTestDispatchedRevision.set(session.id, revision);
 
-          await osacAgentService.ensurePlaywrightMcp(orchestratorSessionId);
-          try {
-            await ensureNekoDebug(orchestratorSessionId);
-          } catch (error) {
-            if (isSandboxNotFoundError(error)) {
-              await markSandboxClosed(orchestratorSessionId);
-              return;
-            }
-            console.warn('[OPENCODE_NEKO_START_FAILED]', error);
-          }
-
-          const context = await this.resolveReviewContext(session.id);
           const runSummary = await this.resolveLatestRunSummary(session.id);
           if (context) {
-            const testPrompt = buildPlaywrightTestPrompt({
-              userInput: context.userInput || '（未提供用户输入）',
-              taskDescription: context.taskDescription,
-              executionPlan: context.executionPlan,
-              lastOutput: aggregated || undefined,
-              runSummary: runSummary || undefined,
-            });
+            if (validationMode === 'browser') {
+              await osacAgentService.ensurePlaywrightMcp(orchestratorSessionId);
+              try {
+                await ensureNekoDebug(orchestratorSessionId);
+              } catch (error) {
+                if (isSandboxNotFoundError(error)) {
+                  await markSandboxClosed(orchestratorSessionId);
+                  return;
+                }
+                console.warn('[OPENCODE_NEKO_START_FAILED]', error);
+              }
+            }
+            const testPrompt =
+              validationMode === 'browser'
+                ? buildPlaywrightTestPrompt({
+                    userInput: context.userInput || '（未提供用户输入）',
+                    taskDescription: context.taskDescription,
+                    executionPlan: context.executionPlan,
+                    lastOutput: aggregated || undefined,
+                    runSummary: runSummary || undefined,
+                  })
+                : buildGenericTestPrompt({
+                    userInput: context.userInput || '（未提供用户输入）',
+                    taskDescription: context.taskDescription,
+                    executionPlan: context.executionPlan,
+                    lastOutput: aggregated || undefined,
+                    runSummary: runSummary || undefined,
+                  });
             await this.sendUserInput({
               taskSessionId: session.id,
               content: testPrompt,
@@ -4645,6 +5081,7 @@ export class OpencodeRemoteService {
                 lastOutput: lastOutput || '（无输出）',
                 feedback: reviewResult.nextInstructions,
                 runSummary: runSummary || undefined,
+                validationMode: resolveValidationMode(context),
               })
             : '';
 

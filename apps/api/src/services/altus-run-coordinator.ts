@@ -1,6 +1,9 @@
 import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
 import { AltusManagedToolRuntime } from './altus-managed-tool-runtime';
-import { altusManagedPromptService } from './altus-managed-prompt-service';
+import {
+  altusManagedPromptService,
+  type AltusManagedTaskIntentProfile,
+} from './altus-managed-prompt-service';
 import { connectorGuideService } from './connector-guide-service';
 import {
   asText,
@@ -13,8 +16,19 @@ import {
 import { AltusManagedSetupService, altusManagedSetupService } from './altus-managed-setup-service';
 import { AltusRunEventWriter, altusRunEventWriter } from './altus-run-event-writer';
 import { AltusRunLifecycleService, altusRunLifecycleService } from './altus-run-lifecycle-service';
+import {
+  AltusManagedContextBudgetService,
+  altusManagedContextBudgetService,
+} from './altus-managed-context-budget-service';
+import { AltusManagedToolExecutor } from './altus-managed-tool-executor';
 import { AltusRunState } from './altus-run-state';
+import {
+  type AltusRunRecoveryMode,
+  type AltusRunTransitionReason,
+} from './altus-run-loop-state';
 import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
+import { taskSessionAltusMemoryService } from './task-session-altus-memory-service';
+import { taskSessionSkillStateService } from './task-session-skill-state-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 import {
   TaskSessionDeliverableService,
@@ -23,6 +37,17 @@ import {
 
 const DELIVERABLES_READY_TEXT = '交付文件已生成';
 const DEPLOYMENT_COMPLETION_BLOCKED_PREFIX = 'deployment_completion_blocked:';
+const DEPLOYMENT_PENDING_STATUSES = new Set([
+  '',
+  'unknown',
+  'building',
+  'deploying',
+  'initializing',
+  'queued',
+  'waiting',
+  'pending',
+  'provisioning',
+]);
 
 type DeploymentCompletionIntent = {
   mode: 'none' | 'deploy' | 'redeploy' | 'rollback';
@@ -67,6 +92,14 @@ type StreamedToolCallState = {
     arguments: string;
   };
 };
+
+function basenameLike(value: unknown) {
+  const text = asText(value).replace(/\\/g, '/');
+  if (!text) return '';
+  const normalized = text.replace(/\/+$/, '');
+  const parts = normalized.split('/');
+  return parts[parts.length - 1] || normalized;
+}
 
 type ExtractedJsonStringField = {
   value: string;
@@ -183,7 +216,8 @@ export class AltusRunCoordinator {
     private readonly setupService: AltusManagedSetupService = altusManagedSetupService,
     private readonly eventWriter: AltusRunEventWriter = altusRunEventWriter,
     private readonly lifecycleService: AltusRunLifecycleService = altusRunLifecycleService,
-    private readonly deliverableService: TaskSessionDeliverableService = taskSessionDeliverableService
+    private readonly deliverableService: TaskSessionDeliverableService = taskSessionDeliverableService,
+    private readonly budgetService: AltusManagedContextBudgetService = altusManagedContextBudgetService
   ) {}
 
   private getModelName(messages: ChatMessage[], fallbackModel?: string | null) {
@@ -205,16 +239,17 @@ export class AltusRunCoordinator {
   }
 
   private getMaxToolRounds() {
-    const fallback = 32;
+    const fallback = 192;
     const parsed = Number(process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS || fallback);
     if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
-    return Math.min(32, Math.floor(parsed));
+    return Math.min(384, Math.floor(parsed));
   }
 
   private getModelRetryLimit() {
-    const parsed = Number(process.env.ALTUS_MANAGED_MODEL_RETRIES || 1);
-    if (!Number.isFinite(parsed) || parsed < 0) return 1;
-    return Math.min(3, Math.floor(parsed));
+    const fallback = 3;
+    const parsed = Number(process.env.ALTUS_MANAGED_MODEL_RETRIES || fallback);
+    if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+    return Math.min(5, Math.floor(parsed));
   }
 
   private getModelRetryDelayMs(attempt: number) {
@@ -226,6 +261,71 @@ export class AltusRunCoordinator {
   private async delay(ms: number) {
     if (ms <= 0) return;
     await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private async flushSandboxSkillMemory(
+    state: AltusRunState,
+    reason: 'waiting_user' | 'completed' | 'failed' | 'stopped'
+  ) {
+    if (!state.sandboxId || !state.workspaceRoot) return;
+    try {
+      await taskSessionSkillStateService.saveSandboxFileMemoryToDb({
+        sessionId: state.input.sessionId,
+        sandboxId: state.sandboxId,
+        workspaceRoot: state.workspaceRoot,
+        reason,
+      });
+    } catch (error) {
+      console.warn('[ALTUS_RUN_SKILL_MEMORY_FLUSH_WARN]', {
+        sessionId: state.input.sessionId,
+        runId: state.input.runId,
+        sandboxId: state.sandboxId,
+        reason,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async flushSandboxAltusMemory(
+    state: AltusRunState,
+    reason: 'waiting_user' | 'completed' | 'failed' | 'stopped'
+  ) {
+    if (!state.sandboxId || !state.workspaceRoot) {
+      try {
+        const next = await taskSessionAltusMemoryService.saveTimelineDerivedMemory({
+          sessionId: state.input.sessionId,
+          runId: state.input.runId,
+          reason,
+        });
+        state.input.sessionAltusMemory = next;
+      } catch (error) {
+        console.warn('[ALTUS_RUN_MEMORY_DERIVED_FLUSH_WARN]', {
+          sessionId: state.input.sessionId,
+          runId: state.input.runId,
+          reason,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+    try {
+      const next = await taskSessionAltusMemoryService.saveSandboxFileMemoryToDb({
+        sessionId: state.input.sessionId,
+        sandboxId: state.sandboxId,
+        workspaceRoot: state.workspaceRoot,
+        runId: state.input.runId,
+        reason,
+      });
+      state.input.sessionAltusMemory = next;
+    } catch (error) {
+      console.warn('[ALTUS_RUN_MEMORY_FLUSH_WARN]', {
+        sessionId: state.input.sessionId,
+        runId: state.input.runId,
+        sandboxId: state.sandboxId,
+        reason,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private extractModelError(error: unknown) {
@@ -296,6 +396,69 @@ export class AltusRunCoordinator {
     return keywords.some((keyword) => lower.includes(keyword.toLowerCase()));
   }
 
+  private shouldAcceptPlainTextConversationCompletion(userInput: string, assistantContent: string) {
+    const normalizedInput = asText(userInput).toLowerCase();
+    const normalizedAssistant = asText(assistantContent);
+    if (!normalizedInput || !normalizedAssistant) return false;
+
+    const conversationKeywords = [
+      '我是谁',
+      '你是谁',
+      '记得我吗',
+      '你还记得我吗',
+      '我叫什么',
+      '我的名字',
+      '我的职业',
+      '我的身份',
+      '我在哪',
+      '我的所在地',
+      '我的偏好',
+      '你知道我什么',
+      '介绍一下我',
+      'who am i',
+      'who are you',
+      'do you remember me',
+      'what is my name',
+      'what do you know about me',
+      'what are my preferences',
+      'where am i from',
+    ];
+    const actionKeywords = [
+      '帮我',
+      '请帮',
+      '修复',
+      '开发',
+      '实现',
+      '创建',
+      '修改',
+      '部署',
+      '上线',
+      '调试',
+      '测试',
+      '检查',
+      '分析',
+      '查一下',
+      'run ',
+      'debug',
+      'fix ',
+      'build ',
+      'deploy',
+      'implement',
+      'create ',
+      'write ',
+      'search ',
+      'test ',
+      'investigate',
+    ];
+    if (!conversationKeywords.some((keyword) => normalizedInput.includes(keyword))) {
+      return false;
+    }
+    if (actionKeywords.some((keyword) => normalizedInput.includes(keyword))) {
+      return false;
+    }
+    return !this.isClarificationResponse(normalizedAssistant);
+  }
+
   private buildContinuationReminder(assistantContent: string) {
     const reminder = [
       'System reminder: continue from the latest tool result.',
@@ -309,7 +472,77 @@ export class AltusRunCoordinator {
     return `${reminder.join(' ')} Latest plain assistant text: ${excerpt}`;
   }
 
-  private resolveDeploymentCompletionIntent(userInput: string): DeploymentCompletionIntent {
+  private resolvePreExecutionClarificationQuestion(state: AltusRunState) {
+    const profile = state.input.taskIntentProfile;
+    const question = asText(profile?.clarificationQuestion);
+    if (!profile?.needsClarification || !question) {
+      return '';
+    }
+    return question;
+  }
+
+  private resolvePreExecutionClarificationOptions(state: AltusRunState) {
+    const profile = state.input.taskIntentProfile;
+    if (!profile?.needsClarification || !Array.isArray(profile.clarificationOptions)) {
+      return undefined;
+    }
+    const options = profile.clarificationOptions.map((item) => asText(item)).filter(Boolean);
+    return options.length > 0 ? options : undefined;
+  }
+
+  private resolvePreExecutionClarificationType(state: AltusRunState) {
+    const profile = state.input.taskIntentProfile;
+    return profile?.needsClarification && profile.clarificationType !== 'none'
+      ? profile.clarificationType
+      : undefined;
+  }
+
+  private async finalizePlainTextConversationCompletion(
+    state: AltusRunState,
+    assistantContent: string,
+    assistantStreamMessageKey: string,
+  ) {
+    const finalContent = truncate(asText(assistantContent), 24000).trim();
+    if (!finalContent) {
+      throw new Error('managed_plain_text_conversation_completion_empty');
+    }
+    await this.setupService.persistTimelineMessage({
+      sessionId: state.input.sessionId,
+      role: 'agent',
+      messageType: 'assistant_message',
+      content: finalContent,
+      metadata: {
+        agent: 'altus',
+        runId: state.input.runId,
+        completionMode: 'plain_text_conversation',
+      },
+      messageKey: assistantStreamMessageKey,
+    });
+    await this.eventWriter.appendRunEvent(
+      state.input.runId,
+      state.input.sessionId,
+      state.input.userId,
+      'assistant_message',
+      {
+        content: finalContent,
+        messageKey: assistantStreamMessageKey,
+        completionMode: 'plain_text_conversation',
+      }
+    );
+    return { outcome: 'completed' as const, content: finalContent, deliverables: [] };
+  }
+
+  private resolveDeploymentCompletionIntent(
+    userInput: string,
+    taskIntentProfile?: AltusManagedTaskIntentProfile
+  ): DeploymentCompletionIntent {
+    if (taskIntentProfile && !taskIntentProfile.deploymentAllowed) {
+      return {
+        mode: 'none',
+        acceptedToolNames: [],
+        requiresManagedSuccess: false,
+      };
+    }
     const normalized = asText(userInput).toLowerCase();
     if (!normalized) {
       return {
@@ -320,6 +553,28 @@ export class AltusRunCoordinator {
     }
 
     const includesAny = (keywords: string[]) => keywords.some((keyword) => normalized.includes(keyword));
+    if (
+      includesAny([
+        '不要部署',
+        '不需要部署',
+        '无需部署',
+        '不要发布',
+        '不需要发布',
+        '无需发布',
+        '不要上线',
+        '无需上线',
+        'do not deploy',
+        "don't deploy",
+        'no deploy',
+        'do not publish',
+      ])
+    ) {
+      return {
+        mode: 'none',
+        acceptedToolNames: [],
+        requiresManagedSuccess: false,
+      };
+    }
 
     if (
       includesAny([
@@ -332,7 +587,7 @@ export class AltusRunCoordinator {
     ) {
       return {
         mode: 'rollback',
-        acceptedToolNames: ['rollback_application_deployment'],
+        acceptedToolNames: ['rollback_application_deployment', 'get_application_deployment_status'],
         requiresManagedSuccess: true,
       };
     }
@@ -349,7 +604,7 @@ export class AltusRunCoordinator {
     ) {
       return {
         mode: 'redeploy',
-        acceptedToolNames: ['redeploy_application', 'deploy_application'],
+        acceptedToolNames: ['redeploy_application', 'deploy_application', 'get_application_deployment_status'],
         requiresManagedSuccess: true,
       };
     }
@@ -365,7 +620,7 @@ export class AltusRunCoordinator {
     ) {
       return {
         mode: 'deploy',
-        acceptedToolNames: ['deploy_application', 'redeploy_application'],
+        acceptedToolNames: ['deploy_application', 'redeploy_application', 'get_application_deployment_status'],
         requiresManagedSuccess: true,
       };
     }
@@ -391,6 +646,25 @@ export class AltusRunCoordinator {
     } catch {
       return null;
     }
+  }
+
+  private isManagedDeploymentEvidenceSuccessful(
+    intent: DeploymentCompletionIntent,
+    evidence: DeploymentCompletionEvidence | null
+  ) {
+    if (!intent.requiresManagedSuccess || !evidence) {
+      return false;
+    }
+    if (!intent.acceptedToolNames.includes(evidence.toolName)) {
+      return false;
+    }
+    if (evidence.status !== 'success') {
+      return false;
+    }
+    if (evidence.toolName !== 'get_application_deployment_status') {
+      return true;
+    }
+    return !DEPLOYMENT_PENDING_STATUSES.has(evidence.deploymentStatus);
   }
 
   private buildDeploymentCompletionBlockedError(
@@ -452,7 +726,11 @@ export class AltusRunCoordinator {
       const publicLines: string[] = [];
       if (summary) publicLines.push(summary);
       if (status === 'retryable_repair_required') {
-        publicLines.push('Altus 正在按平台部署基线自动修复后重试。');
+        publicLines.push(
+          repairCategory === 'resource_binding'
+            ? 'Altus 正在优先修复平台部署资源绑定，并将在资源恢复后重试发布。'
+            : 'Altus 正在按平台部署基线自动修复后重试。'
+        );
       } else if (deploymentStatus) {
         publicLines.push(`当前状态：${deploymentStatus}`);
       }
@@ -463,7 +741,9 @@ export class AltusRunCoordinator {
       const publicPreview = url
         ? `访问地址 ${url}`
         : status === 'retryable_repair_required'
-          ? '已识别到发布配置问题，Altus 正在自动修复后重试。'
+          ? repairCategory === 'resource_binding'
+            ? '已识别到平台部署资源问题，Altus 正在修复绑定后重试。'
+            : '已识别到发布配置问题，Altus 正在自动修复后重试。'
           : summary || this.buildToolEventContent(toolName, 'completed');
 
       const internalLines: string[] = [];
@@ -530,9 +810,106 @@ export class AltusRunCoordinator {
     return `正在准备工具 ${toolName}`;
   }
 
+  private buildPostToolRunStatusContent(input: {
+    toolName: string;
+    args?: Record<string, unknown>;
+    outcome: 'completed' | 'failed';
+    transitionReason?: AltusRunTransitionReason;
+    error?: string;
+  }) {
+    const toolName = asText(input.toolName);
+    const args = input.args || {};
+    const pathValue = asText(args.path);
+    const commandValue = asText(args.command);
+    const urlValue = asText(args.url);
+    const displayPath = basenameLike(pathValue);
+    const lowerDisplayPath = displayPath.toLowerCase();
+
+    if (input.outcome === 'failed') {
+      if (toolName === 'shell_execute') {
+        return '刚才那一步执行没成功，我换个方式继续';
+      }
+      if (toolName === 'debug_open_page') {
+        return '页面打开得不太对，我正在检查启动方式和访问地址';
+      }
+      if (toolName === 'write_file') {
+        return displayPath
+          ? `${displayPath} 这一步出了点问题，我先修正后继续`
+          : '刚才写文件时出了点问题，我先修正后继续';
+      }
+      if (toolName === 'complete_task') {
+        return '最后收尾检查还没过，我再修一下';
+      }
+      return '刚才那一步没成功，我调整后继续';
+    }
+
+    if (toolName === 'write_file') {
+      if (lowerDisplayPath === 'index.html') {
+        return '页面框架已经搭好，我继续把样式和交互补完整';
+      }
+      if (lowerDisplayPath === 'style.css') {
+        return '界面样式已经整理好了，我继续补上操作逻辑';
+      }
+      if (lowerDisplayPath === 'script.js' || lowerDisplayPath === 'game.js') {
+        return '主要交互已经接上了，我继续补齐运行需要的内容';
+      }
+      if (lowerDisplayPath === 'package.json') {
+        return '项目运行配置已经准备好，我继续把启动流程收好';
+      }
+      if (lowerDisplayPath === 'server.js') {
+        return '预览服务已经准备好，我继续检查能不能顺利跑起来';
+      }
+      if (lowerDisplayPath === 'oneceo.manifest.json') {
+        return '发布清单已经准备好，我继续做最后检查';
+      }
+      return displayPath
+        ? `${displayPath} 已经处理好了，我继续完善剩下的部分`
+        : '这一部分已经处理好了，我继续完善剩下的部分';
+    }
+    if (toolName === 'read_file') {
+      return displayPath
+        ? `${displayPath} 我已经看过了，接着往下处理`
+        : '这部分内容我已经看过了，接着往下处理';
+    }
+    if (toolName === 'list_directory') {
+      return '目录结构已经理清了，我继续往下完善';
+    }
+    if (toolName === 'search_code') {
+      const queryValue = asText(args.query);
+      return queryValue
+        ? `和“${queryValue}”相关的位置我已经找到了，继续往下处理`
+        : '相关代码位置我已经找到了，继续往下处理';
+    }
+    if (toolName === 'shell_execute') {
+      if (commandValue.includes('mkdir')) {
+        return '运行环境已经准备好了，我开始生成项目内容';
+      }
+      if (commandValue.includes('ls')) {
+        return '文件我已经核对过了，接着做最后整理';
+      }
+      return '这一步已经跑完了，我继续处理后面的内容';
+    }
+    if (toolName === 'debug_open_page') {
+      return '页面已经打开，我正在确认实际效果';
+    }
+    if (toolName === 'get_application_deployment_status') {
+      return '部署状态我已经拿到了，正在确认是否一切正常';
+    }
+    if (toolName === 'deploy_application' || toolName === 'redeploy_application') {
+      return '部署已经发出去了，我继续盯一下结果';
+    }
+    if (toolName === 'rollback_application_deployment') {
+      return '回滚已经开始，我继续确认是否恢复正常';
+    }
+    return '这一步已经完成，我继续处理下一步';
+  }
+
   private sanitizeToolEventError(toolName: string, errorMessage: string) {
     if (errorMessage.startsWith(DEPLOYMENT_COMPLETION_BLOCKED_PREFIX)) {
       return '线上部署尚未完成，Altus 将继续修复并重试发布。';
+    }
+    if (errorMessage.startsWith('deployment_tool_not_allowed_without_explicit_request')) {
+      return '当前任务没有明确部署请求，Altus 已阻止误触发部署，并将继续按交付物生成处理。';
     }
     if (!this.isDeploymentTool(toolName)) {
       return errorMessage;
@@ -546,12 +923,20 @@ export class AltusRunCoordinator {
     return '发布暂未完成，内部调试信息已记录。';
   }
 
-  private async requestClarification(state: AltusRunState, input: { question: string; options?: string[] }) {
+  private async requestClarification(
+    state: AltusRunState,
+    input: {
+      question: string;
+      options?: string[];
+      clarificationType?: Exclude<AltusManagedTaskIntentProfile['clarificationType'], 'none'>;
+    }
+  ) {
     const clarificationMessageKey = `managed:${state.input.runId}:clarification`;
     await taskCreationFileMemoryStore.setPendingClarification(
       state.input.sessionId,
       input.question,
-      input.options
+      input.options,
+      input.clarificationType
     );
     await this.setupService.persistTimelineMessage({
       sessionId: state.input.sessionId,
@@ -561,6 +946,7 @@ export class AltusRunCoordinator {
       metadata: {
         question: input.question,
         options: input.options,
+        clarificationType: input.clarificationType,
         runId: state.input.runId,
       },
       messageKey: clarificationMessageKey,
@@ -573,8 +959,10 @@ export class AltusRunCoordinator {
       {
       question: input.question,
       options: input.options,
+      clarificationType: input.clarificationType,
       content: input.question,
       messageKey: clarificationMessageKey,
+      transitionReason: 'clarification_requested',
       }
     );
     return {
@@ -593,14 +981,15 @@ export class AltusRunCoordinator {
     fallbackModel?: string | null;
   }) {
     const baseUrl = `http://127.0.0.1:${process.env.PORT || '4000'}/api/llm-proxy/v1/chat/completions`;
+    const projectedMessages = this.budgetService.projectMessagesForModel(input.messages);
     const response = await fetch(baseUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: this.getModelName(input.messages, input.fallbackModel),
-        messages: sanitizeMessagesForModel(input.messages),
+        model: this.getModelName(projectedMessages, input.fallbackModel),
+        messages: sanitizeMessagesForModel(projectedMessages),
         tools: buildManagedToolDefinitionsWithMcp({
           mcpProviders: Array.isArray(input.mcpProviders) ? input.mcpProviders : [],
         }),
@@ -643,6 +1032,7 @@ export class AltusRunCoordinator {
     mcpProviders?: any[];
     onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
     onAssistantTextDelta?: (deltaText: string, fullText: string) => Promise<void> | void;
+    onRetryableError?: (error: unknown, attempt: number, delayMs: number) => Promise<void> | void;
     fallbackModel?: string | null;
   }) {
     const maxAttempts = Math.max(1, this.getModelRetryLimit() + 1);
@@ -658,10 +1048,32 @@ export class AltusRunCoordinator {
         if (attempt >= maxAttempts || !this.isRetryableModelError(error)) {
           throw error;
         }
-        await this.delay(this.getModelRetryDelayMs(attempt));
+        const delayMs = this.getModelRetryDelayMs(attempt);
+        await input.onRetryableError?.(error, attempt, delayMs);
+        await this.delay(delayMs);
       }
     }
     throw (lastError instanceof Error ? lastError : new Error(String(lastError || 'managed_model_error')));
+  }
+
+  private async syncLoopSnapshot(
+    state: AltusRunState,
+    input: {
+      lastTransitionReason: AltusRunTransitionReason;
+      recoveryMode?: AltusRunRecoveryMode;
+      currentRound?: number;
+      maxRounds?: number;
+      plainTextRecoveryUsed?: boolean;
+      lastToolName?: string | null;
+      lastToolCallId?: string | null;
+    }
+  ) {
+    await (this.lifecycleService as AltusRunLifecycleService & {
+      syncLoopSnapshot?: (state: AltusRunState, loop: Record<string, unknown>) => Promise<void>;
+    }).syncLoopSnapshot?.(state, {
+      ...input,
+      updatedAt: new Date(),
+    });
   }
 
   private parseSseBlock(rawBlock: string) {
@@ -869,8 +1281,20 @@ export class AltusRunCoordinator {
       userId: state.input.userId,
       sandboxId: state.sandboxId,
       workspaceRoot: state.workspaceRoot,
+      userInput: state.input.userInput,
+      taskIntentProfile: state.input.taskIntentProfile,
+      availableSkills: state.input.skillCatalog,
       activeSkills: state.input.skills,
       mcpProviders: state.input.mcpProviders,
+    });
+    const toolExecutor = new AltusManagedToolExecutor({
+      runId: state.input.runId,
+      sessionId: state.input.sessionId,
+      userId: state.input.userId,
+      runtime,
+      eventWriter: this.eventWriter,
+      buildToolEventContent: (toolName, phase) => this.buildToolEventContent(toolName, phase),
+      sanitizeToolEventError: (toolName, errorMessage) => this.sanitizeToolEventError(toolName, errorMessage),
     });
     const connectorGuideSections = await connectorGuideService.buildPromptSections(state.input.sessionId);
     const systemPrompt = altusManagedPromptService.buildSystemPrompt({
@@ -878,6 +1302,7 @@ export class AltusRunCoordinator {
       sessionTitle: state.input.sessionTitle,
       workspaceRoot: state.workspaceRoot,
       connectors: state.input.connectors as any,
+      taskIntentProfile: state.input.taskIntentProfile,
       connectorGuideSections,
     });
     writeConnectorDebugLog('[ALTUS_RUN_PROMPT_READY]', {
@@ -889,7 +1314,14 @@ export class AltusRunCoordinator {
     });
     const skillCatalogPrompt = altusManagedPromptService.buildSkillCatalogPrompt(state.input.skillCatalog);
     const skillPrompt = altusManagedPromptService.buildSkillContextPrompt(state.input.skills);
-    const compositeSystemPrompt = [systemPrompt, skillCatalogPrompt, skillPrompt].filter(Boolean).join('\n\n');
+    const compositeSystemPrompt = [
+      systemPrompt,
+      state.input.memoryContextPrompt || '',
+      skillCatalogPrompt,
+      skillPrompt,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
     const messages = await this.setupService.buildConversationMessages(
       state.input.sessionId,
       state.input.userInput,
@@ -898,14 +1330,36 @@ export class AltusRunCoordinator {
     let plainTextRecoveryUsed = false;
     const assistantStreamMessageKey = `managed:${state.input.runId}:assistant`;
     const deploymentCompletionIntent = this.resolveDeploymentCompletionIntent(
-      state.input.userInput
+      state.input.userInput,
+      state.input.taskIntentProfile
     );
-    let deploymentCompletionUnlocked = !deploymentCompletionIntent.requiresManagedSuccess;
     let lastDeploymentEvidence: DeploymentCompletionEvidence | null = null;
+    const maxToolRounds = this.getMaxToolRounds();
+    let nextRoundStatusContent = '正在分析并执行任务';
 
-    for (let round = 0; round < this.getMaxToolRounds(); round += 1) {
+    for (let round = 0; round < maxToolRounds; round += 1) {
       if (signal.aborted) {
         throw new Error('managed_run_aborted');
+      }
+
+      const currentRound = round + 1;
+      const roundTransitionReason: AltusRunTransitionReason =
+        round === 0 ? 'initial_execution' : 'tool_result_continue';
+      await this.syncLoopSnapshot(state, {
+        lastTransitionReason: roundTransitionReason,
+        recoveryMode: 'none',
+        currentRound,
+        maxRounds: maxToolRounds,
+        plainTextRecoveryUsed,
+      });
+      if (currentRound >= Math.max(1, maxToolRounds - 1)) {
+        await this.syncLoopSnapshot(state, {
+          lastTransitionReason: 'tool_round_limit_near',
+          recoveryMode: 'context_pressure',
+          currentRound,
+          maxRounds: maxToolRounds,
+          plainTextRecoveryUsed,
+        });
       }
 
       await this.eventWriter.appendRunEvent(
@@ -915,7 +1369,10 @@ export class AltusRunCoordinator {
         'run_status',
         {
         status: round === 0 ? 'running' : 'waiting_tool',
-        content: round === 0 ? '正在分析并执行任务' : '继续处理工具结果',
+        content: round === 0 ? '正在分析并执行任务' : nextRoundStatusContent,
+        transitionReason: roundTransitionReason,
+        currentRound,
+        maxRounds: maxToolRounds,
         }
       );
 
@@ -927,6 +1384,30 @@ export class AltusRunCoordinator {
         signal,
         mcpProviders: state.input.mcpProviders,
         fallbackModel: state.input.model,
+        onRetryableError: async (error, attempt, delayMs) => {
+          const parsed = this.extractModelError(error);
+          await this.syncLoopSnapshot(state, {
+            lastTransitionReason: 'model_retryable_error',
+            recoveryMode: 'model_retry',
+            currentRound,
+            maxRounds: maxToolRounds,
+            plainTextRecoveryUsed,
+          });
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            state.input.userId,
+            'run_status',
+            {
+              status: 'running',
+              content: '模型上游暂时不可用，正在自动重试',
+              transitionReason: 'model_retryable_error',
+              attempt,
+              retryDelayMs: delayMs,
+              error: parsed.message,
+            }
+          );
+        },
         onAssistantTextDelta: async (deltaText, fullText) => {
           await this.eventWriter.appendRunEvent(
             state.input.runId,
@@ -980,9 +1461,46 @@ export class AltusRunCoordinator {
 
       if (toolCalls.length === 0) {
         if (assistantContent && this.isClarificationResponse(assistantContent)) {
+          await this.syncLoopSnapshot(state, {
+            lastTransitionReason: 'clarification_requested',
+            recoveryMode: 'awaiting_user',
+            currentRound,
+            maxRounds: maxToolRounds,
+            plainTextRecoveryUsed,
+          });
           return this.requestClarification(state, {
             question: assistantContent,
           });
+        }
+        if (
+          assistantContent &&
+          this.shouldAcceptPlainTextConversationCompletion(state.input.userInput, assistantContent)
+        ) {
+          await this.syncLoopSnapshot(state, {
+            lastTransitionReason: 'plain_text_conversation_completed',
+            recoveryMode: 'none',
+            currentRound,
+            maxRounds: maxToolRounds,
+            plainTextRecoveryUsed,
+          });
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            state.input.userId,
+            'run_status',
+            {
+              status: 'running',
+              content: '识别为纯会话型记忆问答，已直接回复',
+              transitionReason: 'plain_text_conversation_completed',
+              currentRound,
+              maxRounds: maxToolRounds,
+            }
+          );
+          return this.finalizePlainTextConversationCompletion(
+            state,
+            assistantContent,
+            assistantStreamMessageKey,
+          );
         }
         if (assistantContent) {
           messages.push({
@@ -994,6 +1512,26 @@ export class AltusRunCoordinator {
           const plainTextExcerpt = assistantContent
             ? truncate(assistantContent, 1000)
             : 'empty assistant response';
+          await this.syncLoopSnapshot(state, {
+            lastTransitionReason: 'plain_text_continuation_failed',
+            recoveryMode: 'model_retry',
+            currentRound,
+            maxRounds: maxToolRounds,
+            plainTextRecoveryUsed: true,
+          });
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            state.input.userId,
+            'run_status',
+            {
+              status: 'running',
+              content: '模型连续两次未调用工具，停止当前 managed run',
+              transitionReason: 'plain_text_continuation_failed',
+              currentRound,
+              maxRounds: maxToolRounds,
+            }
+          );
           throw new Error(`managed_model_plain_text_without_tool_call:${plainTextExcerpt}`);
         }
         messages.push({
@@ -1001,6 +1539,26 @@ export class AltusRunCoordinator {
           content: this.buildContinuationReminder(assistantContent),
         });
         plainTextRecoveryUsed = true;
+        await this.syncLoopSnapshot(state, {
+          lastTransitionReason: 'plain_text_continuation_prompted',
+          recoveryMode: 'model_retry',
+          currentRound,
+          maxRounds: maxToolRounds,
+          plainTextRecoveryUsed,
+        });
+        await this.eventWriter.appendRunEvent(
+          state.input.runId,
+          state.input.sessionId,
+          state.input.userId,
+          'run_status',
+          {
+            status: 'running',
+            content: '模型未调用工具，已注入继续执行提醒',
+            transitionReason: 'plain_text_continuation_prompted',
+            currentRound,
+            maxRounds: maxToolRounds,
+          }
+        );
         continue;
       }
 
@@ -1016,43 +1574,181 @@ export class AltusRunCoordinator {
         const toolName = asText(toolCall?.function?.name);
         if (!toolName) continue;
         const args = parseToolArguments(asText(toolCall?.function?.arguments));
-        await this.eventWriter.appendRunEvent(
-          state.input.runId,
-          state.input.sessionId,
-          state.input.userId,
-          'tool_call_started',
-          {
-          toolName,
-          content: this.buildToolEventContent(toolName, 'started'),
-          arguments: args,
-          toolCallId: toolCall.id,
-          }
-        );
+        const envelope = await toolExecutor.executeToolCall({
+          toolCall,
+          args,
+          signal,
+          onResult: (result) => {
+            let postToolTransitionReason: AltusRunTransitionReason = 'tool_result_continue';
+            let postToolRecoveryMode: AltusRunRecoveryMode = 'none';
+            const eventPayload: Record<string, unknown> = {
+              outputPreview: truncate(result.content, 4000),
+            };
 
-        try {
-          const result = await runtime.execute(toolName, args, signal);
-          if (result.type === 'ask_user') {
+            if (this.isDeploymentTool(toolName)) {
+              const evidence = this.parseDeploymentCompletionEvidence(result.content);
+              if (evidence) {
+                lastDeploymentEvidence = {
+                  ...evidence,
+                  toolName,
+                };
+                if (evidence.status === 'retryable_repair_required') {
+                  postToolTransitionReason = 'deployment_repair_required';
+                  postToolRecoveryMode = 'tool_repair';
+                }
+              }
+              Object.assign(eventPayload, this.buildDeploymentToolViewProjection(toolName, result.content) || {});
+            }
+
+            return {
+              transitionReason: postToolTransitionReason,
+              recoveryMode: postToolRecoveryMode,
+              eventPayload: {
+                transitionReason: postToolTransitionReason,
+                ...eventPayload,
+              },
+            };
+          },
+          onFailure: (rawError, sanitizedError) => {
+            const failedTransitionReason: AltusRunTransitionReason = rawError.startsWith(DEPLOYMENT_COMPLETION_BLOCKED_PREFIX)
+              ? 'deployment_completion_blocked'
+              : 'tool_failed_but_recoverable';
+            return {
+              transitionReason: failedTransitionReason,
+              recoveryMode: 'tool_repair',
+              eventPayload: this.isDeploymentTool(toolName)
+                ? {
+                    userView: {
+                      summary: sanitizedError,
+                      preview: sanitizedError,
+                      detail: sanitizedError,
+                    },
+                    internalView: {
+                      detail: [`工具: ${toolName}`, `rawError: ${rawError}`].join('\n'),
+                    },
+                  }
+                : undefined,
+            };
+          },
+        });
+        const executionResult = envelope.status === 'failed' ? null : envelope.result;
+        if (executionResult && Array.isArray(executionResult.activatedSkills) && executionResult.activatedSkills.length > 0) {
+          const autoAttachedPrompt = altusManagedPromptService.buildAutoAttachedSkillPrompt(
+            executionResult.activatedSkills,
+            toolName,
+          );
+          messages.push({
+            role: 'system',
+            content: autoAttachedPrompt,
+          });
+          await this.setupService.persistTimelineMessage({
+            sessionId: state.input.sessionId,
+            role: 'system',
+            messageType: 'status_update',
+            content: `已自动加载技能：${executionResult.activatedSkills.map((item) => item.name).join('、')}`,
+            metadata: {
+              eventType: 'managed_skill_auto_attached',
+              toolName,
+              runId: state.input.runId,
+              sessionId: state.input.sessionId,
+              skillIds: executionResult.activatedSkills.map((item) => item.skillId),
+              skillRevisionIds: executionResult.activatedSkills.map((item) => item.revisionId),
+              skillSlugs: executionResult.activatedSkills.map((item) => item.slug),
+              promptMarkdown: autoAttachedPrompt,
+            },
+            messageKey: `managed:${state.input.runId}:auto_attached_skills:${toolName}:${toolCall.id}`,
+          });
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            state.input.userId,
+            'run_status',
+            {
+              status: 'running',
+              content: `已自动加载技能：${executionResult.activatedSkills.map((item) => item.name).join('、')}`,
+              toolName,
+              skillIds: executionResult.activatedSkills.map((item) => item.skillId),
+              skillRevisionIds: executionResult.activatedSkills.map((item) => item.revisionId),
+              skillSlugs: executionResult.activatedSkills.map((item) => item.slug),
+              promptMarkdown: autoAttachedPrompt,
+            }
+          );
+        }
+
+        if (envelope.status === 'ask_user') {
+          const result = envelope.result;
+            await this.syncLoopSnapshot(state, {
+              lastTransitionReason: 'clarification_requested',
+              recoveryMode: 'awaiting_user',
+              currentRound,
+              maxRounds: maxToolRounds,
+              plainTextRecoveryUsed,
+              lastToolName: toolName,
+              lastToolCallId: toolCall.id,
+            });
             return this.requestClarification(state, {
               question: result.question,
               options: result.options,
             });
-          }
+        }
 
+        if (envelope.status === 'complete') {
+          const result = envelope.result;
           if (
-            result.type === 'complete' &&
             toolName === 'complete_task' &&
             deploymentCompletionIntent.requiresManagedSuccess &&
-            !deploymentCompletionUnlocked
+            !this.isManagedDeploymentEvidenceSuccessful(
+              deploymentCompletionIntent,
+              lastDeploymentEvidence
+            )
           ) {
-            throw new Error(
-              this.buildDeploymentCompletionBlockedError(
-                deploymentCompletionIntent,
-                lastDeploymentEvidence
-              )
+            const blockedMessage = this.buildDeploymentCompletionBlockedError(
+              deploymentCompletionIntent,
+              lastDeploymentEvidence
             );
+            const blockedEventError = this.sanitizeToolEventError(toolName, blockedMessage);
+            await this.eventWriter.appendRunEvent(
+              state.input.runId,
+              state.input.sessionId,
+              state.input.userId,
+              'tool_call_failed',
+              {
+                toolName,
+                content: this.buildToolEventContent(toolName, 'failed'),
+                arguments: args,
+                toolCallId: toolCall.id,
+                error: blockedEventError,
+                transitionReason: 'deployment_completion_blocked',
+                userView: {
+                  summary: blockedEventError,
+                  preview: blockedEventError,
+                  detail: blockedEventError,
+                },
+                internalView: {
+                  detail: [`工具: ${toolName}`, `rawError: ${blockedMessage}`].join('\n'),
+                },
+              }
+            );
+            await this.syncLoopSnapshot(state, {
+              lastTransitionReason: 'deployment_completion_blocked',
+              recoveryMode: 'tool_repair',
+              currentRound,
+              maxRounds: maxToolRounds,
+              plainTextRecoveryUsed,
+              lastToolName: toolName,
+              lastToolCallId: toolCall.id,
+            });
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              name: toolName,
+              content: JSON.stringify({
+                error: blockedMessage,
+              }),
+            });
+            continue;
           }
 
-          if (result.type === 'complete') {
             if (!state.sandboxId || !state.workspaceRoot) {
               throw new Error('managed_run_missing_sandbox_context');
             }
@@ -1101,7 +1797,7 @@ export class AltusRunCoordinator {
               messageType: 'assistant_message',
               content: finalContent,
               metadata: {
-                agent: 'assistant',
+                agent: 'altus',
                 runId: state.input.runId,
                 verification: result.verification,
                 deliverables,
@@ -1118,6 +1814,7 @@ export class AltusRunCoordinator {
               content: this.buildToolEventContent(toolName, 'completed'),
               arguments: args,
               toolCallId: toolCall.id,
+              transitionReason: deliverables.length > 0 ? 'completed_with_deliverables' : 'completed_without_deliverables',
               outputPreview: truncate(
                 JSON.stringify({
                   summary: result.summary,
@@ -1141,92 +1838,96 @@ export class AltusRunCoordinator {
               }
             );
             return { outcome: 'completed' as const, content: finalContent, deliverables };
-          }
+        }
 
-          if (this.isDeploymentTool(toolName)) {
-            const evidence = this.parseDeploymentCompletionEvidence(result.content);
-            if (evidence) {
-              lastDeploymentEvidence = {
-                ...evidence,
-                toolName,
-              };
-              if (
-                deploymentCompletionIntent.requiresManagedSuccess &&
-                deploymentCompletionIntent.acceptedToolNames.includes(toolName) &&
-                evidence.status === 'success'
-              ) {
-                deploymentCompletionUnlocked = true;
-              }
-            }
-          }
-
+        if (envelope.status === 'result') {
+          const result = envelope.result;
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
             name: toolName,
             content: result.content,
           });
-          await this.eventWriter.appendRunEvent(
-            state.input.runId,
-            state.input.sessionId,
-            state.input.userId,
-            'tool_call_completed',
-            {
+          nextRoundStatusContent = this.buildPostToolRunStatusContent({
             toolName,
-            content: this.buildToolEventContent(toolName, 'completed'),
-            arguments: args,
-            toolCallId: toolCall.id,
-            outputPreview: truncate(result.content, 4000),
-            ...(this.isDeploymentTool(toolName)
-              ? this.buildDeploymentToolViewProjection(toolName, result.content) || {}
-              : {}),
-            }
-          );
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error || 'tool_failed');
-          const eventError = this.sanitizeToolEventError(toolName, message);
-          await this.eventWriter.appendRunEvent(
-            state.input.runId,
-            state.input.sessionId,
-            state.input.userId,
-            'tool_call_failed',
-            {
+            args,
+            outcome: 'completed',
+            transitionReason: envelope.transitionReason,
+          });
+          await this.syncLoopSnapshot(state, {
+            lastTransitionReason: envelope.transitionReason,
+            recoveryMode: envelope.recoveryMode,
+            currentRound,
+            maxRounds: maxToolRounds,
+            plainTextRecoveryUsed,
+            lastToolName: toolName,
+            lastToolCallId: toolCall.id,
+          });
+          continue;
+        }
+
+        if (envelope.status === 'failed') {
+          nextRoundStatusContent = this.buildPostToolRunStatusContent({
             toolName,
-            content: this.buildToolEventContent(toolName, 'failed'),
-            arguments: args,
-            toolCallId: toolCall.id,
-            error: eventError,
-            ...(this.isDeploymentTool(toolName)
-              ? {
-                  userView: {
-                    summary: eventError,
-                    preview: eventError,
-                    detail: eventError,
-                  },
-                  internalView: {
-                    detail: [`工具: ${toolName}`, `rawError: ${message}`].join('\n'),
-                  },
-                }
-              : {}),
-            }
-          );
+            args,
+            outcome: 'failed',
+            transitionReason: envelope.transitionReason,
+            error: envelope.error,
+          });
+          await this.syncLoopSnapshot(state, {
+            lastTransitionReason: envelope.transitionReason,
+            recoveryMode: envelope.recoveryMode,
+            currentRound,
+            maxRounds: maxToolRounds,
+            plainTextRecoveryUsed,
+            lastToolName: toolName,
+            lastToolCallId: toolCall.id,
+          });
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
             name: toolName,
             content: JSON.stringify({
-              error: message,
+              error: envelope.rawError,
             }),
           });
         }
       }
     }
 
+    await this.syncLoopSnapshot(state, {
+      lastTransitionReason: 'tool_round_limit_exceeded',
+      recoveryMode: 'context_pressure',
+      currentRound: maxToolRounds,
+      maxRounds: maxToolRounds,
+      plainTextRecoveryUsed,
+    });
     throw new Error('managed_run_tool_round_limit_exceeded');
   }
 
   async execute(state: AltusRunState, abortController: AbortController) {
     try {
+      const preExecutionClarificationQuestion = this.resolvePreExecutionClarificationQuestion(state);
+      if (preExecutionClarificationQuestion) {
+        const preExecutionClarificationOptions = this.resolvePreExecutionClarificationOptions(state);
+        const preExecutionClarificationType = this.resolvePreExecutionClarificationType(state);
+        state.markWaitingUser();
+        await this.syncLoopSnapshot(state, {
+          lastTransitionReason: 'clarification_requested',
+          recoveryMode: 'awaiting_user',
+          currentRound: 0,
+          maxRounds: this.getMaxToolRounds(),
+          plainTextRecoveryUsed: false,
+        });
+        await this.requestClarification(state, {
+          question: preExecutionClarificationQuestion,
+          options: preExecutionClarificationOptions,
+          clarificationType: preExecutionClarificationType,
+        });
+        await this.lifecycleService.markWaitingUser(state);
+        return;
+      }
+
       await this.eventWriter.appendRunEvent(
         state.input.runId,
         state.input.sessionId,
@@ -1241,17 +1942,38 @@ export class AltusRunCoordinator {
         state.input.sessionId,
         state.input.sessionTitle
       );
-      if (state.input.skills.length > 0) {
+      const residentSkillSelections = Array.isArray(state.input.residentSkillSelections)
+        ? state.input.residentSkillSelections
+        : [];
+      const residentSelectionsForSync =
+        residentSkillSelections.length > 0
+          ? residentSkillSelections
+          : Array.isArray(state.input.skills)
+            ? state.input.skills.map((item) => ({
+                sourceType: item.sourceType,
+                skillId: item.skillId,
+                revisionId: item.revisionId,
+              }))
+            : [];
+      if (residentSkillSelections.length > 0) {
+        await sandboxSkillSyncService.syncSelectedSkills({
+          taskSessionId: state.input.sessionId,
+          orchestratorSessionId: sandbox.sandboxId,
+          skills: residentSkillSelections,
+        });
+      } else if (Array.isArray(state.input.skills) && state.input.skills.length > 0) {
         await sandboxSkillSyncService.syncResolvedSkills({
           taskSessionId: state.input.sessionId,
           orchestratorSessionId: sandbox.sandboxId,
           skills: state.input.skills,
         });
+      }
+      if (residentSelectionsForSync.length > 0) {
         writeConnectorDebugLog('[ALTUS_RUN_SKILL_SYNC_READY]', {
           sessionId: state.input.sessionId,
           runId: state.input.runId,
           orchestratorSessionId: sandbox.sandboxId,
-          resolvedSkillCount: state.input.skills.length,
+          resolvedSkillCount: residentSelectionsForSync.length,
         });
       }
       state.markRunning({
@@ -1259,11 +1981,35 @@ export class AltusRunCoordinator {
         workspaceRoot: sandbox.workspaceRoot,
         reused: sandbox.reused,
       });
+      try {
+        await taskSessionSkillStateService.markResidentSkillsMaterialized({
+          sessionId: state.input.sessionId,
+          sandboxId: sandbox.sandboxId,
+          workspaceRoot: sandbox.workspaceRoot,
+          residentSelections: residentSelectionsForSync,
+        });
+        const nextAltusMemory = await taskSessionAltusMemoryService.markMaterialized({
+          sessionId: state.input.sessionId,
+          sandboxId: sandbox.sandboxId,
+          workspaceRoot: sandbox.workspaceRoot,
+          runId: state.input.runId,
+        });
+        state.input.sessionAltusMemory = nextAltusMemory;
+      } catch (error) {
+        console.warn('[ALTUS_RUN_SKILL_MEMORY_INIT_WARN]', {
+          sessionId: state.input.sessionId,
+          runId: state.input.runId,
+          sandboxId: sandbox.sandboxId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       await this.lifecycleService.markRunning(state);
 
       const result = await this.runModelLoop(state, abortController.signal);
       if (result.outcome === 'waiting_user') {
         state.markWaitingUser();
+        await this.flushSandboxSkillMemory(state, 'waiting_user');
+        await this.flushSandboxAltusMemory(state, 'waiting_user');
         await this.lifecycleService.markWaitingUser(state);
         return;
       }
@@ -1271,16 +2017,22 @@ export class AltusRunCoordinator {
       state.markCompleted({
         deliverables: state.deliverables,
       });
+      await this.flushSandboxSkillMemory(state, 'completed');
+      await this.flushSandboxAltusMemory(state, 'completed');
       await this.lifecycleService.markCompleted(state);
     } catch (error) {
       if (abortController.signal.aborted || asText((error as Error)?.message) === 'managed_run_aborted') {
         state.markStopped('user_interrupt');
+        await this.flushSandboxSkillMemory(state, 'stopped');
+        await this.flushSandboxAltusMemory(state, 'stopped');
         await this.lifecycleService.markStopped(state, 'user_interrupt');
         return;
       }
 
       const message = error instanceof Error ? error.message : String(error || 'managed run failed');
       state.markFailed(message);
+      await this.flushSandboxSkillMemory(state, 'failed');
+      await this.flushSandboxAltusMemory(state, 'failed');
       await this.lifecycleService.markFailed(state, message);
     }
   }

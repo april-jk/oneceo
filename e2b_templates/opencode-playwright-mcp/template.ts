@@ -1,14 +1,31 @@
 import { Template } from 'e2b';
 
 const playwrightPath = '/opt/ms-playwright';
+const opencodeBaseDir = '/opt/.altus/opencode';
+const sandboxUser = 'user:user';
 
-export function buildTemplate(patchUrl?: string) {
-  const patchSteps = patchUrl
+export function buildTemplate(input?: {
+  patchUrl?: string;
+  osacDownloadUrl?: string;
+  osacSha256?: string;
+  osacVersion?: string;
+}) {
+  const patchSteps = input?.patchUrl
     ? [
-        `curl -fsSL -o /tmp/neko-ui.patch "${patchUrl}"`,
+        `curl -fsSL -o /tmp/neko-ui.patch "${input.patchUrl}"`,
         'cd /opt/neko-src && git apply --ignore-space-change --ignore-whitespace /tmp/neko-ui.patch',
       ]
     : [];
+  const osacSteps =
+    input?.osacDownloadUrl && input?.osacSha256
+      ? [
+          `mkdir -p ${opencodeBaseDir} ${opencodeBaseDir}/log ${opencodeBaseDir}/tmp ${opencodeBaseDir}/workspaces ${opencodeBaseDir}/state`,
+          `curl -fsSL -o ${opencodeBaseDir}/osac "${input.osacDownloadUrl}"`,
+          `printf '%s  %s\n' '${input.osacSha256}' '${opencodeBaseDir}/osac' | sha256sum -c -`,
+          `chmod +x ${opencodeBaseDir}/osac`,
+          `chown -R ${sandboxUser} ${opencodeBaseDir}`,
+        ]
+      : [];
 
   return Template()
     .fromTemplate('opencode')
@@ -60,15 +77,17 @@ export function buildTemplate(patchUrl?: string) {
       'rm -rf /opt/neko && mkdir -p /opt/neko/client/dist',
       'cp -R /opt/neko-src/client/dist/* /opt/neko/client/dist/',
       'chmod -R 755 /opt/neko',
+      ...osacSteps,
       `mkdir -p ${playwrightPath}`,
       'npm install -g playwright @playwright/mcp@latest',
       `PLAYWRIGHT_BROWSERS_PATH=${playwrightPath} playwright install --with-deps chromium`,
       `chmod -R 755 ${playwrightPath}`,
-      `chown -R 1000:1000 ${playwrightPath}`,
+      `chown -R ${sandboxUser} ${playwrightPath}`,
     ])
     .setUser('user')
     .setEnvs({
       PLAYWRIGHT_BROWSERS_PATH: playwrightPath,
+      OSAC_TEMPLATE_PREBUILT_VERSION: input?.osacVersion || '',
     });
 }
 

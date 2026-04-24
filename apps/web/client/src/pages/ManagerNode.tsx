@@ -188,7 +188,7 @@ export default function ManagerNode() {
   const getStatusColor = (status: AssignedTask['status']) => {
     const colors = {
       pending: 'bg-muted text-muted-foreground',
-      'in-progress': 'bg-blue-100 text-blue-700',
+      'in-progress': 'border border-[var(--brand-border)] bg-[var(--brand-soft)] text-[var(--brand-soft-foreground)]',
       completed: 'bg-green-100 text-green-700',
       rejected: 'bg-red-100 text-red-700',
     };
@@ -197,10 +197,10 @@ export default function ManagerNode() {
 
   const getStatusLabel = (status: AssignedTask['status']) => {
     const labels = {
-      pending: '待处理',
-      'in-progress': '进行中',
-      completed: '已完成',
-      rejected: '已拒绝',
+      pending: t('managerNode.status.pending'),
+      'in-progress': t('managerNode.status.inProgress'),
+      completed: t('managerNode.status.completed'),
+      rejected: t('managerNode.status.rejected'),
     };
     return labels[status];
   };
@@ -216,9 +216,9 @@ export default function ManagerNode() {
 
   const getPriorityLabel = (priority: AssignedTask['priority']) => {
     const labels = {
-      low: '低',
-      medium: '中',
-      high: '高',
+      low: t('managerNode.priority.low'),
+      medium: t('managerNode.priority.medium'),
+      high: t('managerNode.priority.high'),
     };
     return labels[priority];
   };
@@ -228,7 +228,7 @@ export default function ManagerNode() {
       case 'perfect':
         return <Star className="w-4 h-4 text-green-600" />;
       case 'acceptable':
-        return <CheckCircle className="w-4 h-4 text-blue-600" />;
+        return <CheckCircle className="h-4 w-4 text-[var(--brand-link)]" />;
       case 'unacceptable':
         return <XCircle className="w-4 h-4 text-red-600" />;
     }
@@ -236,16 +236,16 @@ export default function ManagerNode() {
 
   const getEvaluationLabel = (rating: 'acceptable' | 'unacceptable' | 'perfect') => {
     const labels = {
-      perfect: '完美',
-      acceptable: '可接受',
-      unacceptable: '不可接受',
+      perfect: t('managerNode.perfect'),
+      acceptable: t('managerNode.acceptable'),
+      unacceptable: t('managerNode.unacceptable'),
     };
     return labels[rating];
   };
 
   const getEmployeeName = (employeeId: string) => {
     const employee = employees.find(e => e.id === employeeId);
-    return employee?.name || 'Unknown';
+    return employee?.name || t('managerNode.unknownEmployee');
   };
 
   return (
@@ -256,44 +256,44 @@ export default function ManagerNode() {
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-2xl font-semibold text-foreground">
-                经理节点
+                {t('managerNode.title')}
               </h1>
               <p className="text-sm text-muted-foreground mt-1">
-                分配任务给员工，评价工作成果
+                {t('managerNode.pageDescription')}
               </p>
             </div>
             <Dialog open={assignTaskOpen} onOpenChange={setAssignTaskOpen}>
               <DialogTrigger asChild>
                 <Button className="gap-2">
                   <Plus className="w-4 h-4" />
-                  分配任务
+                  {t('managerNode.assignTask')}
                 </Button>
               </DialogTrigger>
               <DialogContent>
                 <DialogHeader>
-                  <DialogTitle>分配新任务</DialogTitle>
+                  <DialogTitle>{t('managerNode.assignTaskTitle')}</DialogTitle>
                   <DialogDescription>
-                    为员工创建并分配一个新任务
+                    {t('managerNode.assignTaskDescription')}
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4 py-4">
                   <div className="space-y-2">
-                    <Label htmlFor="task-title">任务标题</Label>
-                    <Input id="task-title" placeholder="例如：API 设计" />
+                    <Label htmlFor="task-title">{t('managerNode.taskTitleLabel')}</Label>
+                    <Input id="task-title" placeholder={t('managerNode.taskTitlePlaceholder')} />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="task-description">任务描述</Label>
+                    <Label htmlFor="task-description">{t('managerNode.taskDescriptionLabel')}</Label>
                     <Textarea
                       id="task-description"
-                      placeholder="详细描述任务要求..."
+                      placeholder={t('managerNode.taskDescriptionPlaceholder')}
                       rows={3}
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="task-assignee">分配给</Label>
+                    <Label htmlFor="task-assignee">{t('managerNode.assigneeLabel')}</Label>
                     <Select>
                       <SelectTrigger>
-                        <SelectValue placeholder="选择员工" />
+                        <SelectValue placeholder={t('managerNode.assigneePlaceholder')} />
                       </SelectTrigger>
                       <SelectContent>
                         {employees.map((employee) => (
@@ -306,30 +306,30 @@ export default function ManagerNode() {
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label htmlFor="task-priority">优先级</Label>
+                      <Label htmlFor="task-priority">{t('managerNode.priorityLabel')}</Label>
                       <Select>
                         <SelectTrigger>
-                          <SelectValue placeholder="选择优先级" />
+                          <SelectValue placeholder={t('managerNode.priorityPlaceholder')} />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="low">低</SelectItem>
-                          <SelectItem value="medium">中</SelectItem>
-                          <SelectItem value="high">高</SelectItem>
+                          <SelectItem value="low">{t('managerNode.priority.low')}</SelectItem>
+                          <SelectItem value="medium">{t('managerNode.priority.medium')}</SelectItem>
+                          <SelectItem value="high">{t('managerNode.priority.high')}</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="task-duedate">截止日期</Label>
+                      <Label htmlFor="task-duedate">{t('managerNode.dueDateLabel')}</Label>
                       <Input id="task-duedate" type="date" />
                     </div>
                   </div>
                 </div>
                 <div className="flex justify-end gap-2">
                   <Button variant="outline" onClick={() => setAssignTaskOpen(false)}>
-                    取消
+                    {t('common.cancel')}
                   </Button>
                   <Button onClick={() => setAssignTaskOpen(false)}>
-                    分配任务
+                    {t('managerNode.assignTask')}
                   </Button>
                 </div>
               </DialogContent>
@@ -341,8 +341,8 @@ export default function ManagerNode() {
         <Tabs defaultValue="tasks" className="flex-1 flex flex-col overflow-hidden">
           <div className="border-b border-border bg-background px-6">
             <TabsList className="bg-transparent">
-              <TabsTrigger value="tasks">任务列表</TabsTrigger>
-              <TabsTrigger value="employees">员工管理</TabsTrigger>
+              <TabsTrigger value="tasks">{t('managerNode.taskList')}</TabsTrigger>
+              <TabsTrigger value="employees">{t('managerNode.employeeManagement')}</TabsTrigger>
             </TabsList>
           </div>
 
@@ -365,7 +365,7 @@ export default function ManagerNode() {
                               {getStatusLabel(task.status)}
                             </Badge>
                             <Badge className={getPriorityColor(task.priority)}>
-                              优先级: {getPriorityLabel(task.priority)}
+                              {t('managerNode.priorityBadge', { value: getPriorityLabel(task.priority) })}
                             </Badge>
                           </div>
                           <CardDescription>{task.description}</CardDescription>
@@ -376,7 +376,7 @@ export default function ManagerNode() {
                             </div>
                             <div className="flex items-center gap-1">
                               <Calendar className="w-4 h-4" />
-                              截止: {task.dueDate.toLocaleDateString('zh-CN')}
+                              {t('managerNode.dueDateValue', { value: task.dueDate.toLocaleDateString() })}
                             </div>
                           </div>
                         </div>
@@ -389,7 +389,7 @@ export default function ManagerNode() {
                         <div className="space-y-3">
                           <div>
                             <div className="text-sm font-medium text-foreground mb-2">
-                              工作成果
+                              {t('managerNode.workResult')}
                             </div>
                             <div className="flex items-start justify-between gap-3">
                               <div className="flex-1">
@@ -397,7 +397,9 @@ export default function ManagerNode() {
                                   {task.result.content}
                                 </div>
                                 <div className="text-xs text-muted-foreground mt-2">
-                                  提交时间: {task.result.submittedAt ? new Date(task.result.submittedAt).toLocaleString('zh-CN') : '未知时间'}
+                                  {t('managerNode.submittedAt', {
+                                    value: task.result.submittedAt ? new Date(task.result.submittedAt).toLocaleString() : t('managerNode.unknownTime'),
+                                  })}
                                 </div>
                               </div>
                               <Button
@@ -410,7 +412,7 @@ export default function ManagerNode() {
                                 }}
                               >
                                 <FileText className="w-4 h-4" />
-                                查看交付文档
+                                {t('managerNode.viewDeliverable')}
                               </Button>
                             </div>
                           </div>
@@ -420,7 +422,9 @@ export default function ManagerNode() {
                               <div className="flex items-center gap-2 mb-2">
                                 {getEvaluationIcon(task.result.evaluation.rating)}
                                 <span className="font-medium text-sm">
-                                  评价: {getEvaluationLabel(task.result.evaluation.rating)}
+                                  {t('managerNode.evaluationLabel', {
+                                    value: getEvaluationLabel(task.result.evaluation.rating),
+                                  })}
                                 </span>
                               </div>
                               <div className="text-sm text-muted-foreground">
@@ -440,49 +444,51 @@ export default function ManagerNode() {
                                   onClick={() => setSelectedTask(task)}
                                 >
                                   <Star className="w-4 h-4" />
-                                  评价工作成果
+                                  {t('managerNode.evaluateWork')}
                                 </Button>
                               </DialogTrigger>
                               <DialogContent>
                                 <DialogHeader>
-                                  <DialogTitle>评价工作成果</DialogTitle>
+                                  <DialogTitle>{t('managerNode.evaluateWorkTitle')}</DialogTitle>
                                   <DialogDescription>
-                                    为 {getEmployeeName(task.assignedTo)} 的工作成果打分
+                                    {t('managerNode.evaluateWorkDescription', {
+                                      name: getEmployeeName(task.assignedTo),
+                                    })}
                                   </DialogDescription>
                                 </DialogHeader>
                                 <div className="space-y-4 py-4">
                                   <div className="space-y-2">
-                                    <Label>评价等级</Label>
+                                    <Label>{t('managerNode.evaluationLevelLabel')}</Label>
                                     <div className="grid grid-cols-3 gap-2">
                                       <Button variant="outline" className="gap-2">
                                         <Star className="w-4 h-4 text-green-600" />
-                                        完美
+                                        {t('managerNode.perfect')}
                                       </Button>
                                       <Button variant="outline" className="gap-2">
-                                        <CheckCircle className="w-4 h-4 text-blue-600" />
-                                        可接受
+                                        <CheckCircle className="h-4 w-4 text-[var(--brand-link)]" />
+                                        {t('managerNode.acceptable')}
                                       </Button>
                                       <Button variant="outline" className="gap-2">
                                         <XCircle className="w-4 h-4 text-red-600" />
-                                        不可接受
+                                        {t('managerNode.unacceptable')}
                                       </Button>
                                     </div>
                                   </div>
                                   <div className="space-y-2">
-                                    <Label htmlFor="evaluation-feedback">评价反馈</Label>
+                                    <Label htmlFor="evaluation-feedback">{t('managerNode.evaluationFeedbackLabel')}</Label>
                                     <Textarea
                                       id="evaluation-feedback"
-                                      placeholder="提供详细的评价反馈..."
+                                      placeholder={t('managerNode.evaluationFeedbackPlaceholder')}
                                       rows={4}
                                     />
                                   </div>
                                 </div>
                                 <div className="flex justify-end gap-2">
                                   <Button variant="outline" onClick={() => setEvaluateTaskOpen(false)}>
-                                    取消
+                                    {t('common.cancel')}
                                   </Button>
                                   <Button onClick={() => setEvaluateTaskOpen(false)}>
-                                    提交评价
+                                    {t('managerNode.submitEvaluation')}
                                   </Button>
                                 </div>
                               </DialogContent>
@@ -523,7 +529,7 @@ export default function ManagerNode() {
                         <div className="space-y-3">
                           <div>
                             <div className="text-sm font-medium text-foreground mb-2">
-                              技能
+                              {t('managerNode.skillsLabel')}
                             </div>
                             <div className="flex flex-wrap gap-1">
                               {employee.skills.map((skill, idx) => (
@@ -536,24 +542,24 @@ export default function ManagerNode() {
                           <Separator />
                           <div>
                             <div className="text-sm font-medium text-foreground mb-2">
-                              绩效统计
+                              {t('managerNode.performanceStats')}
                             </div>
                             <div className="grid grid-cols-2 gap-2 text-xs">
                               <div className="flex items-center gap-1 text-green-600">
                                 <Star className="w-3 h-3" />
-                                完美: {employee.performance.perfect}
+                                {t('managerNode.performancePerfect', { count: employee.performance.perfect })}
                               </div>
-                              <div className="flex items-center gap-1 text-blue-600">
+                              <div className="flex items-center gap-1 text-[var(--brand-link)]">
                                 <CheckCircle className="w-3 h-3" />
-                                可接受: {employee.performance.acceptable}
+                                {t('managerNode.performanceAcceptable', { count: employee.performance.acceptable })}
                               </div>
                               <div className="flex items-center gap-1 text-red-600">
                                 <XCircle className="w-3 h-3" />
-                                拒绝: {employee.performance.rejected}
+                                {t('managerNode.performanceRejected', { count: employee.performance.rejected })}
                               </div>
                               <div className="flex items-center gap-1 text-muted-foreground">
                                 <Briefcase className="w-3 h-3" />
-                                总计: {employee.tasksCompleted}
+                                {t('managerNode.performanceTotal', { count: employee.tasksCompleted })}
                               </div>
                             </div>
                           </div>
@@ -577,7 +583,7 @@ export default function ManagerNode() {
             }}
           >
             <FileText className="w-4 h-4" />
-            查看经理交付文档
+            {t('managerNode.viewManagerDeliverable')}
           </Button>
         </div>
       </div>

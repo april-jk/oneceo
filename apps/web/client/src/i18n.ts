@@ -3,8 +3,19 @@ import { initReactI18next } from 'react-i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
 
 // 导入翻译文件
-import en from './locales/en.json';
-import zh from './locales/zh.json';
+import en from './locales/en.json' with { type: 'json' };
+import zh from './locales/zh.json' with { type: 'json' };
+
+export const SUPPORTED_LANGUAGES = ['zh', 'en'] as const;
+export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
+
+export function normalizeLanguage(value: string | null | undefined): SupportedLanguage {
+  const normalized = (value || '').trim().toLowerCase();
+  if (normalized.startsWith('zh')) {
+    return 'zh';
+  }
+  return 'en';
+}
 
 // 配置 i18n
 i18n
@@ -19,7 +30,10 @@ i18n
         translation: zh,
       },
     },
-    fallbackLng: 'en', // 默认语言
+    fallbackLng: 'zh', // 默认语言
+    supportedLngs: SUPPORTED_LANGUAGES,
+    nonExplicitSupportedLngs: true,
+    load: 'languageOnly',
     debug: false,
     interpolation: {
       escapeValue: false, // React 已经处理了 XSS

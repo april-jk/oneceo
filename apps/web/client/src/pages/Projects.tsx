@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
@@ -26,6 +27,7 @@ interface Project {
 
 export default function Projects() {
   const [location, navigate] = useLocation();
+  const { t } = useTranslation();
   const [projects, setProjects] = useState<Project[]>([
     {
       id: '1',
@@ -89,31 +91,31 @@ export default function Projects() {
       {/* Header */}
       <div className="h-14 flex items-center justify-between px-6 border-b border-border bg-background">
         <div>
-          <h1 className="text-xl font-semibold text-foreground">Projects</h1>
-          <p className="text-sm text-muted-foreground">Manage your projects and modules</p>
+          <h1 className="text-xl font-semibold text-foreground">{t('projects.title')}</h1>
+          <p className="text-sm text-muted-foreground">{t('projectsPage.subtitle')}</p>
         </div>
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
             <Button className="gap-2 rounded-xl bg-foreground hover:bg-foreground/90 text-background">
               <Plus className="w-4 h-4" />
-              New Project
+              {t('projectsPage.newProject')}
             </Button>
           </DialogTrigger>
           <DialogContent className="sm:max-w-[500px] rounded-2xl">
             <DialogHeader>
-              <DialogTitle className="text-foreground">Create New Project</DialogTitle>
+              <DialogTitle className="text-foreground">{t('projectsPage.createTitle')}</DialogTitle>
               <DialogDescription>
-                Create a new project folder to organize your work
+                {t('projectsPage.createDescription')}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="project-name" className="text-foreground">
-                  Project Name
+                  {t('projectsPage.projectName')}
                 </Label>
                 <Input
                   id="project-name"
-                  placeholder="Enter project name"
+                  placeholder={t('projectsPage.projectNamePlaceholder')}
                   value={newProject.name}
                   onChange={(e) => setNewProject({ ...newProject, name: e.target.value })}
                   className="rounded-xl border-border"
@@ -121,11 +123,11 @@ export default function Projects() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="project-desc" className="text-foreground">
-                  Description
+                  {t('projectsPage.projectDescription')}
                 </Label>
                 <Textarea
                   id="project-desc"
-                  placeholder="Enter project description"
+                  placeholder={t('projectsPage.projectDescriptionPlaceholder')}
                   value={newProject.description}
                   onChange={(e) => setNewProject({ ...newProject, description: e.target.value })}
                   className="rounded-xl border-border min-h-24"
@@ -135,7 +137,7 @@ export default function Projects() {
                 onClick={handleCreateProject}
                 className="w-full rounded-xl bg-foreground hover:bg-foreground/90 text-background"
               >
-                Create Project
+                {t('projectsPage.createProject')}
               </Button>
             </div>
           </DialogContent>
@@ -167,7 +169,7 @@ export default function Projects() {
                           {project.name}
                         </CardTitle>
                         <CardDescription className="text-xs text-muted-foreground mt-1">
-                          Created {project.createdAt.toLocaleDateString()}
+                          {t('projectsPage.createdAt', { date: project.createdAt.toLocaleDateString() })}
                         </CardDescription>
                       </div>
                     </div>
@@ -186,7 +188,7 @@ export default function Projects() {
                           className="text-destructive rounded-lg"
                         >
                           <Trash2 className="w-4 h-4 mr-2" />
-                          Delete
+                          {t('common.delete')}
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
@@ -198,7 +200,7 @@ export default function Projects() {
                   </p>
                   <div className="space-y-2">
                     <div className="flex items-center justify-between text-xs">
-                      <span className="text-muted-foreground">Progress</span>
+                      <span className="text-muted-foreground">{t('projectsPage.progress')}</span>
                       <span className="font-semibold text-foreground">{project.progress}%</span>
                     </div>
                     <div className="h-2 bg-secondary rounded-full overflow-hidden">
@@ -214,13 +216,17 @@ export default function Projects() {
                     <span
                       className={`text-xs font-medium px-2 py-1 rounded-lg ${
                         project.status === 'active'
-                          ? 'bg-blue-50 text-blue-700'
+                          ? 'border border-[var(--brand-border)] bg-[var(--brand-soft)] text-[var(--brand-soft-foreground)]'
                           : project.status === 'completed'
                           ? 'bg-green-50 text-green-700'
                           : 'bg-gray-100 text-gray-700'
                       }`}
                     >
-                      {project.status.charAt(0).toUpperCase() + project.status.slice(1)}
+                      {project.status === 'active'
+                        ? t('agentProject.statusActive')
+                        : project.status === 'completed'
+                          ? t('agentProject.statusCompleted')
+                          : t('projectsPage.archived')}
                     </span>
                   </div>
                 </CardContent>

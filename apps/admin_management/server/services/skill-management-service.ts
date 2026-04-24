@@ -7,6 +7,10 @@ export class SkillManagementService {
     return this.oneceoApi.listSkills(filters);
   }
 
+  getSkillGovernanceOptions() {
+    return this.oneceoApi.getSkillGovernanceOptions();
+  }
+
   getSkill(skillId: string) {
     return this.oneceoApi.getSkill(skillId);
   }
@@ -16,6 +20,16 @@ export class SkillManagementService {
     name: string;
     description?: string;
     category?: string;
+    governance?: {
+      systemRole?: string | null;
+      adminManaged?: boolean;
+      required?: boolean;
+      autoActivation?: {
+        enabled?: boolean;
+        triggers?: string[];
+        toolNames?: string[];
+      };
+    };
     bodyMarkdown: string;
     resources?: Array<{
       resourcePath: string;
@@ -33,6 +47,16 @@ export class SkillManagementService {
       name?: string;
       description?: string;
       category?: string;
+      governance?: {
+        systemRole?: string | null;
+        adminManaged?: boolean;
+        required?: boolean;
+        autoActivation?: {
+          enabled?: boolean;
+          triggers?: string[];
+          toolNames?: string[];
+        };
+      };
       bodyMarkdown?: string;
       resources?: Array<{
         resourcePath: string;

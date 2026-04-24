@@ -44,7 +44,10 @@ function Router() {
       <Route path={"/search"} component={withUserAuth(Search)} />
       <Route path="/library" component={withUserAuth(Library)} />
       <Route path="/projects" component={withUserAuth(ManagerView)} />
-      <Route path="/project/:id" component={withUserAuth(ProjectDetailWrapper)} />
+      <Route
+        path="/project/:id"
+        component={withUserAuth(ProjectDetailWrapper)}
+      />
       <Route path="/manager-node" component={withUserAuth(ManagerNode)} />
       <Route path="/manager-view" component={withUserAuth(ManagerView)} />
       <Route path="/notion/callback" component={withUserAuth(Home)} />
@@ -54,7 +57,10 @@ function Router() {
       <Route path="/ai-workspace" component={withUserAuth(AIWorkspace)} />
       <Route path="/agent-project" component={withUserAuth(AgentProject)} />
       <Route path="/ceo-view" component={withUserAuth(CEOView)} />
-      <Route path="/task/:projectId/:managerId/:taskId" component={withUserAuth(TaskDetail)} />
+      <Route
+        path="/task/:projectId/:managerId/:taskId"
+        component={withUserAuth(TaskDetail)}
+      />
       <Route path={"/404"} component={NotFound} />
       {/* Final fallback route */}
       <Route component={NotFound} />
@@ -71,10 +77,7 @@ function App() {
   return (
     <ErrorBoundary>
       <AuthProvider>
-        <ThemeProvider
-          defaultTheme="light"
-          // switchable
-        >
+        <ThemeProvider defaultTheme="light" switchable>
           <TooltipProvider>
             <Toaster />
             <Router />

@@ -4,6 +4,7 @@
  */
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import WorkspaceLayout from "@/components/WorkspaceLayout";
 import { Button } from "@/components/ui/button";
@@ -90,9 +91,10 @@ const mockProjects = [
 ];
 
 export default function CEOView() {
+  const { t } = useTranslation();
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
-  const [selectedModel, setSelectedModel] = useState("Agent Pro");
+  const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">("pro");
   const projects = mockProjects;
 
   // 计算统计数据
@@ -140,9 +142,9 @@ export default function CEOView() {
         {/* 上方：统计数据卡片 */}
         <div className="flex-shrink-0 p-6 space-y-4">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">总经理视图</h1>
+            <h1 className="text-3xl font-bold tracking-tight">{t("ceoView.title")}</h1>
             <p className="text-muted-foreground mt-1">
-              与总经理 AI 对话，调度项目和经理
+              {t("ceoView.subtitle")}
             </p>
           </div>
 
@@ -152,14 +154,14 @@ export default function CEOView() {
             <Card className="p-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-muted-foreground">项目总数</p>
+                  <p className="text-sm text-muted-foreground">{t("ceoView.totalProjects")}</p>
                   <p className="text-3xl font-bold mt-2">{stats.totalProjects}</p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    {stats.activeProjects} 个进行中
+                    {t("ceoView.activeProjects", { count: stats.activeProjects })}
                   </p>
                 </div>
-                <div className="w-12 h-12 bg-blue-500/10 rounded-xl flex items-center justify-center">
-                  <FolderOpen className="w-6 h-6 text-blue-500" />
+                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--brand-soft)]">
+                  <FolderOpen className="h-6 w-6 text-[var(--brand-link)]" />
                 </div>
               </div>
             </Card>
@@ -168,12 +170,12 @@ export default function CEOView() {
             <Card className="p-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-muted-foreground">团队规模</p>
+                  <p className="text-sm text-muted-foreground">{t("ceoView.teamSize")}</p>
                   <p className="text-3xl font-bold mt-2">
                     {stats.totalManagers + stats.totalEmployees}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    {stats.totalManagers} 经理 · {stats.totalEmployees} 员工
+                    {t("ceoView.teamBreakdown", { managers: stats.totalManagers, employees: stats.totalEmployees })}
                   </p>
                 </div>
                 <div className="w-12 h-12 bg-green-500/10 rounded-xl flex items-center justify-center">
@@ -186,12 +188,12 @@ export default function CEOView() {
             <Card className="p-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-muted-foreground">任务完成率</p>
+                  <p className="text-sm text-muted-foreground">{t("ceoView.taskCompletion")}</p>
                   <p className="text-3xl font-bold mt-2">
                     {Math.round((stats.completedTasks / stats.totalTasks) * 100)}%
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    {stats.completedTasks} / {stats.totalTasks} 已完成
+                    {t("ceoView.completedTasks", { completed: stats.completedTasks, total: stats.totalTasks })}
                   </p>
                 </div>
                 <div className="w-12 h-12 bg-purple-500/10 rounded-xl flex items-center justify-center">
@@ -204,10 +206,10 @@ export default function CEOView() {
             <Card className="p-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-muted-foreground">平均进度</p>
+                  <p className="text-sm text-muted-foreground">{t("ceoView.averageProgress")}</p>
                   <p className="text-3xl font-bold mt-2">{stats.averageProgress}%</p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    所有项目平均
+                    {t("ceoView.averageProgressHint")}
                   </p>
                 </div>
                 <div className="w-12 h-12 bg-orange-500/10 rounded-xl flex items-center justify-center">
@@ -233,21 +235,21 @@ export default function CEOView() {
                 <div className="flex-1">
                   <div className="bg-muted/50 rounded-2xl rounded-tl-none p-4">
                     <p className="text-sm leading-relaxed">
-                      您好！我是总经理 AI 助手。我可以帮助您：
+                      {t("ceoView.welcomeIntro")}
                     </p>
                     <ul className="text-sm leading-relaxed mt-2 space-y-1 list-disc list-inside text-muted-foreground">
-                      <li>查看和分析项目进度</li>
-                      <li>调度和分配经理资源</li>
-                      <li>评估团队绩效</li>
-                      <li>制定战略决策</li>
-                      <li>优化项目优先级</li>
+                      <li>{t("ceoView.helpItem1")}</li>
+                      <li>{t("ceoView.helpItem2")}</li>
+                      <li>{t("ceoView.helpItem3")}</li>
+                      <li>{t("ceoView.helpItem4")}</li>
+                      <li>{t("ceoView.helpItem5")}</li>
                     </ul>
                     <p className="text-sm leading-relaxed mt-2">
-                      请告诉我您需要什么帮助？
+                      {t("ceoView.welcomeAsk")}
                     </p>
                   </div>
                   <p className="text-xs text-muted-foreground mt-2 ml-1">
-                    刚刚
+                    {t("ceoView.justNow")}
                   </p>
                 </div>
               </div>
@@ -261,7 +263,7 @@ export default function CEOView() {
                 <div className="space-y-3">
                   {/* Textarea */}
                   <Textarea
-                    placeholder="输入您的指令或问题..."
+                    placeholder={t("ceoView.messagePlaceholder")}
                     value={message}
                     onChange={(e) => setMessage(e.target.value)}
                     onKeyDown={handleKeyDown}
@@ -292,43 +294,43 @@ export default function CEOView() {
                                 >
                                   <Sparkles className="w-4 h-4 text-muted-foreground" />
                                   <span className="text-sm text-muted-foreground">
-                                    {selectedModel}
+                                    {t(`homePage.models.${selectedModel}`)}
                                   </span>
                                 </Button>
                               </DropdownMenuTrigger>
                             </TooltipTrigger>
                             <TooltipContent>
-                              <p>Select AI model</p>
+                              <p>{t("homePage.selectModel")}</p>
                             </TooltipContent>
                           </Tooltip>
                           <DropdownMenuContent align="start" className="w-48">
                             <DropdownMenuItem
-                              onClick={() => setSelectedModel("Agent Lite")}
+                              onClick={() => setSelectedModel("lite")}
                             >
                               <div className="flex flex-col gap-1">
-                                <span className="font-medium">Agent Lite</span>
+                                <span className="font-medium">{t("homePage.models.lite")}</span>
                                 <span className="text-xs text-muted-foreground">
-                                  Fast & efficient
+                                  {t("ceoView.modelLiteHint")}
                                 </span>
                               </div>
                             </DropdownMenuItem>
                             <DropdownMenuItem
-                              onClick={() => setSelectedModel("Agent Pro")}
+                              onClick={() => setSelectedModel("pro")}
                             >
                               <div className="flex flex-col gap-1">
-                                <span className="font-medium">Agent Pro</span>
+                                <span className="font-medium">{t("homePage.models.pro")}</span>
                                 <span className="text-xs text-muted-foreground">
-                                  Balanced performance
+                                  {t("ceoView.modelProHint")}
                                 </span>
                               </div>
                             </DropdownMenuItem>
                             <DropdownMenuItem
-                              onClick={() => setSelectedModel("Agent Max")}
+                              onClick={() => setSelectedModel("max")}
                             >
                               <div className="flex flex-col gap-1">
-                                <span className="font-medium">Agent Max</span>
+                                <span className="font-medium">{t("homePage.models.max")}</span>
                                 <span className="text-xs text-muted-foreground">
-                                  Maximum capability
+                                  {t("ceoView.modelMaxHint")}
                                 </span>
                               </div>
                             </DropdownMenuItem>
@@ -350,7 +352,7 @@ export default function CEOView() {
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>
-                            <p>Voice input</p>
+                            <p>{t("homePage.voiceInput")}</p>
                           </TooltipContent>
                         </Tooltip>
 
@@ -366,9 +368,9 @@ export default function CEOView() {
                               <Send className="w-4 h-4" />
                             </Button>
                           </TooltipTrigger>
-                          <TooltipContent>
-                            <p>Send message</p>
-                          </TooltipContent>
+                        <TooltipContent>
+                          <p>{t("homePage.sendMessage")}</p>
+                        </TooltipContent>
                         </Tooltip>
                       </div>
                     </div>

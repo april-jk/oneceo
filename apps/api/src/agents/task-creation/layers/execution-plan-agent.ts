@@ -82,6 +82,16 @@ export class ExecutionPlanAgent extends BaseAgent {
    * @returns 执行计划
    */
   async generateExecutionPlan(taskDescription: TaskDescription): Promise<ExecutionPlan> {
+    const artifactKind = String((taskDescription as any)?.additional_info?.artifactKind || '').trim().toLowerCase();
+    if (
+      artifactKind === 'script_artifact' ||
+      artifactKind === 'web_app' ||
+      artifactKind === 'business_system' ||
+      artifactKind === 'software_artifact'
+    ) {
+      return this.buildFallbackPlan(taskDescription);
+    }
+
     const prompt = `任务描述：
 ${JSON.stringify(taskDescription, null, 2)}
 

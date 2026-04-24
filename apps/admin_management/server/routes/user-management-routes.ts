@@ -12,6 +12,8 @@ const listQuerySchema = z.object({
   hasConversation: z.string().trim().optional(),
   hasSandbox: z.string().trim().optional(),
   ownershipHealth: z.string().trim().optional(),
+  sortKey: z.string().trim().optional(),
+  sortDirection: z.string().trim().optional(),
 });
 
 const statusSchema = z.object({
@@ -43,14 +45,6 @@ export function createUserManagementRoutes(service: UserManagementService) {
     asyncHandler(async (req, res) => {
       const body = statusSchema.parse(req.body || {});
       const result = await service.updateAppUserStatus(req.params.userId, body.status);
-      return ok(res, result);
-    })
-  );
-
-  router.post(
-    '/app-users/:userId/revoke-sessions',
-    asyncHandler(async (req, res) => {
-      const result = await service.revokeAppUserSessions(req.params.userId);
       return ok(res, result);
     })
   );

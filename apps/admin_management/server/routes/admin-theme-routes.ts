@@ -15,7 +15,7 @@ export function createAdminThemeRoutes(service: AdminThemeService) {
   router.put(
     '/',
     asyncHandler(async (req, res) => {
-      const result = await service.updateTheme(String(req.body?.themeKey || ''));
+      const result = await service.updateTheme(String(req.body?.themeKey || ''), String(req.body?.mode || ''));
       return ok(res, result);
     })
   );

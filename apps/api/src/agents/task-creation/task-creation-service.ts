@@ -4,26 +4,29 @@
  * 负责编排三层 Agent 的工作流程
  */
 
+import { randomUUID } from 'node:crypto';
 import { IntentRecognitionAgent } from './layers/intent-recognition-agent';
 import { PlanningAgent } from './layers/planning-agent';
 import { ExecutionPlanAgent } from './layers/execution-plan-agent';
-import { executionReviewAgent } from './layers/execution-review-agent';
-import type { ExecutionPlan, WebSocketMessage, MessageType, IntentRecognitionResult } from './types/intent';
-import { taskCreationSessionDAO } from '../../db/dao';
+import type { ExecutionPlan, WebSocketMessage, IntentRecognitionResult } from './types/intent';
+import { taskCreationSessionDAO, taskSessionRunDAO } from '../../db/dao';
 import { ensureDatabaseConnection } from '../../config/database';
 import { getPublicErrorMessage } from '../../utils/error-response';
-import { normalizeOpencodeModel } from '../../utils/opencode-model';
 import {
   InterruptedTaskError,
   isAwaitingUserInputError,
   isInterruptedTaskError,
   RecoverableAgentError,
 } from './errors';
-import { sandboxAgentProvisionService } from '../../services/sandbox-agent-provision-service';
-import { osacAgentService } from '../../services/osac-agent-service';
-import { opencodeRemoteService } from '../../services/opencode-remote-service';
-import { resolveOpencodeWorkspacePath } from '../../utils/opencode-workspace';
+import { classifyTaskIntentShape, type TaskIntentShape } from '../../services/task-intent-shape-service';
 import { taskCreationFileMemoryStore } from './file-memory-store';
+import { AltusRunState } from '../../services/altus-run-state';
+import { altusRunCoordinator } from '../../services/altus-run-coordinator';
+import { altusMemoryContextService } from '../../services/altus-memory-context-service';
+import { altusManagedSetupService } from '../../services/altus-managed-setup-service';
+import { deriveManagedTaskIntentProfile } from '../../services/altus-managed-prompt-service';
+import { readManagedSkillCatalog, readManagedSkillContext } from '../../services/altus-managed-shared';
+import { readSessionSkillState } from '../../services/task-session-skill-state-service';
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -47,7 +50,7 @@ export class TaskCreationService {
   private phase: 'ideation' | 'analysis' | 'development' | 'testing' | 'repair' | 'delivery' = 'ideation';
   private osacEnabled = (process.env.OSAC_EXECUTION_ENABLED || 'false').toLowerCase() === 'true';
   private osacMaxAttempts = Number(process.env.OSAC_EXECUTION_RETRIES || 2);
-  private osacExecutionMode = (process.env.OSAC_EXECUTION_MODE || 'opencode_remote').trim().toLowerCase();
+  private osacExecutionMode = this.normalizeExecutionMode(process.env.OSAC_EXECUTION_MODE);
   private runControl:
     | {
         isCancelled: () => boolean;
@@ -368,12 +371,13 @@ export class TaskCreationService {
 
         await this.executeInSandbox({
           userInput,
+          userId: resolvedUserId,
+          metadata,
           taskDescription,
           executionPlan,
         });
 
         if (this.osacExecutionMode !== 'command') {
-          // OpenCode 远程模式下，后续由 OPENCODE_EVENT 决定 completed/failed
           return executionPlan;
         }
 
@@ -608,7 +612,7 @@ export class TaskCreationService {
     }
   }
 
-  private buildOpencodePrompt(
+  private buildExecutionBrief(
     payload: {
       userInput: string;
       taskDescription: any;
@@ -622,16 +626,8 @@ export class TaskCreationService {
         : phase === 'repair'
           ? '当前处于【修复阶段】'
           : '当前处于【开发阶段】';
-    const playwrightRequirement = [
-      '必须使用 playwright-mcp 进行浏览器自动化验证（在开发/测试/修复阶段均需使用）。',
-      'playwright-mcp 已预置，无需安装任何 Playwright 依赖，也不要修改 package.json 或执行 npm/pnpm 安装。',
-      '必须连接到与 n.eko 同一实例的 Chromium（CDP 9222，例如 http://127.0.0.1:9222），不要启动新的独立浏览器实例。',
-      '连接后复用现有浏览器上下文与首个页面（contexts[0] 与 pages[0]）；若无页面，仅在该上下文中创建一个新页面，确保同一个窗口可被 n.eko 捕获。',
-      '要求 Playwright 以可视模式运行（headless=false），保证画面在调试窗口可见。',
-      '若需启动网页服务，请使用可访问端口并明确输出访问地址。',
-      '在输出中说明测试步骤、结果与发现的问题。',
-      '如需用户协助（账号/权限/业务确认），请明确提出。',
-    ].join('\n');
+    const shape = this.resolveExecutionShape(payload);
+    const requirements = this.buildExecutionRequirements(shape);
     return [
       phaseHint,
       '你是执行智能体，请依据以下任务信息在当前工作区完成执行：',
@@ -642,223 +638,115 @@ export class TaskCreationService {
       '1) 以命令行模式执行（不要进入交互式界面）。',
       '2) 输出可落地的执行结果与产出说明。',
       '3) 如需生成文件，请直接写入当前工作区并在输出中说明文件路径。',
-      '4) ' + playwrightRequirement,
+      ...requirements.map((item, index) => `${index + 4}) ${item}`),
     ].join('\n');
-  }
-
-  private buildOpencodeCommand(payload: {
-    userInput: string;
-    taskDescription: any;
-    executionPlan: ExecutionPlan;
-  }): string {
-    const prompt = this.buildOpencodePrompt(payload, 'development');
-
-    const flattened = prompt
-      .replace(/\r?\n/g, ' ')
-      .replace(/"/g, "'")
-      .replace(/\s+/g, ' ')
-      .trim();
-
-    // 注意：OSAC 侧以空格拆分命令参数，避免使用引号包裹导致解析异常
-    return `run --format json --model ${this.resolveOpencodeModel()} ${flattened}`;
-  }
-
-  private buildOpencodeCommandWithFeedback(payload: {
-    userInput: string;
-    taskDescription: any;
-    executionPlan: ExecutionPlan;
-    lastOutput: string;
-    feedback: string;
-  }): string {
-    const prompt = [
-      '当前处于【修复阶段】',
-      '你是执行智能体，请基于上一轮执行结果进行修订与完善：',
-      `用户需求: ${payload.userInput}`,
-      `任务描述: ${JSON.stringify(this.pickTaskDescription(payload.taskDescription))}`,
-      `执行计划摘要: ${JSON.stringify(this.pickExecutionSummary(payload.executionPlan))}`,
-      `上一轮输出: ${payload.lastOutput}`,
-      `改进要求: ${payload.feedback}`,
-      '要求：',
-      '1) 继续命令行模式执行（不要进入交互式界面）。',
-      '2) 补齐缺口并输出更新后的交付物说明。',
-      '3) 如需生成/修改文件，请直接写入当前工作区并在输出中说明文件路径。',
-      '4) 必须使用 playwright-mcp 进行浏览器自动化验证（headless=false），输出测试步骤与结果。',
-      '5) playwright-mcp 已预置，无需安装任何 Playwright 依赖，也不要修改 package.json 或执行 npm/pnpm 安装。',
-      '6) 必须连接到与 n.eko 同一实例的 Chromium（CDP 9222，例如 http://127.0.0.1:9222），不要启动新的独立浏览器实例。',
-      '7) 连接后复用现有浏览器上下文与首个页面（contexts[0] 与 pages[0]）；若无页面，仅在该上下文中创建一个新页面，确保同一个窗口可被 n.eko 捕获。',
-    ].join('\n');
-
-    const flattened = prompt
-      .replace(/\r?\n/g, ' ')
-      .replace(/"/g, "'")
-      .replace(/\s+/g, ' ')
-      .trim();
-
-    return `run --format json --model ${this.resolveOpencodeModel()} ${flattened}`;
-  }
-
-  private resolveOpencodeModel(): string {
-    const raw = (process.env.OPENCODE_MODEL || '').trim();
-    if (!raw) {
-      throw new Error('OPENCODE_MODEL 未配置');
-    }
-    const normalized = normalizeOpencodeModel(
-      raw,
-      process.env.OPENCODE_PROVIDER_ID || 'openai'
-    );
-    if (!normalized) {
-      throw new Error('OPENCODE_MODEL 格式无效');
-    }
-    return normalized.fullModel;
-  }
-
-  private resolveWorkspacePath(): string | null {
-    if (!this.sessionId) return null;
-    return resolveOpencodeWorkspacePath(this.sessionId);
   }
 
   private async executeInSandbox(payload: {
     userInput: string;
+    userId: string;
+    metadata?: Record<string, unknown>;
     taskDescription: any;
     executionPlan: ExecutionPlan;
   }) {
     this.throwIfCancelled();
     this.setStage('executing');
-    this.sendPhaseStatus('development', '开发阶段：正在启动执行环境...', 'execution');
+    this.sendPhaseStatus('development', '开发阶段：正在启动 Altus 执行环境...', 'execution');
 
     let lastError: unknown;
     for (let attempt = 1; attempt <= this.osacMaxAttempts; attempt++) {
       try {
         this.throwIfCancelled();
-        const provision = await sandboxAgentProvisionService.provision({
-          metadata: {
-            taskSessionId: this.sessionId,
-            taskTitle: payload.executionPlan?.project?.title,
+        if (!this.sessionId) {
+          throw new Error('当前任务会话不存在，无法启动 Altus 执行');
+        }
+        if (!payload.userId) {
+          throw new Error('当前用户不存在，无法启动 Altus 执行');
+        }
+
+        await altusManagedSetupService.ensureSessionOwnership(this.sessionId, payload.userId);
+        const connectorSnapshot = await altusManagedSetupService.captureConnectorSnapshot(this.sessionId, payload.userId);
+        const mcpToolSnapshot = await altusManagedSetupService.captureMcpToolSnapshot(this.sessionId);
+        const sessionMemory = await taskCreationFileMemoryStore.getSession(this.sessionId);
+        const executionShape = this.resolveExecutionShape(payload);
+        const run = await taskSessionRunDAO.createRun({
+          id: randomUUID(),
+          sessionId: this.sessionId,
+          status: 'queued',
+          mode: 'managed',
+          model: this.resolveAltusModel(),
+          connectorSnapshotId: connectorSnapshot.snapshotId,
+          mcpToolSnapshotId: mcpToolSnapshot.snapshotId,
+          metadataJson: {
+            trigger: 'task_creation_execution_handoff',
+            source: 'task_creation_service',
+            executionMode: this.osacExecutionMode,
+            artifactKind: executionShape.artifactKind,
           },
         });
-        const workspacePath = this.resolveWorkspacePath();
+        const taskIntentProfile = deriveManagedTaskIntentProfile([
+          payload.userInput,
+          asText(payload.taskDescription?.title),
+          asText(payload.taskDescription?.objective),
+          ...(Array.isArray(payload.taskDescription?.deliverables) ? payload.taskDescription.deliverables : []),
+          ...(Array.isArray(payload.taskDescription?.constraints) ? payload.taskDescription.constraints : []),
+        ]);
+        const skillCatalog = readManagedSkillCatalog(payload.metadata?.managedSkillCatalog);
+        const skills = readManagedSkillContext(payload.metadata?.managedSkillContext);
+        const residentSkillSelections = skills.map((item) => ({
+          sourceType: item.sourceType,
+          skillId: item.skillId,
+          revisionId: item.revisionId,
+        }));
+        const sessionSkillState = readSessionSkillState(payload.metadata?.sessionSkillState);
+        const memoryContext = await altusMemoryContextService.buildPromptSectionForRun({
+          sessionId: this.sessionId,
+          userId: payload.userId,
+        });
+        const state = new AltusRunState({
+          runId: run.id,
+          sessionId: this.sessionId,
+          userId: payload.userId,
+          model: run.model || this.resolveAltusModel(),
+          userInput: this.buildExecutionBrief(payload, 'development'),
+          messageType: 'user_input',
+          sessionTitle: sessionMemory?.title || null,
+          memoryContextPrompt: memoryContext.promptSection,
+          userMemory: memoryContext.userMemory,
+          projectMemory: memoryContext.projectMemory,
+          sessionAltusMemory: memoryContext.sessionMemory,
+          connectors: connectorSnapshot.statuses,
+          mcpProviders: mcpToolSnapshot.providers as any,
+          skillCatalog,
+          skills,
+          residentSkillSelections,
+          sessionSkillState,
+          taskIntentProfile,
+        });
 
         this.sendMessage({
           type: 'agent_message' as any,
           agent: 'execution_plan',
-          content: '执行环境已就绪，开始下发执行指令...',
+          content: '执行环境已就绪，已切换到 Altus 执行循环。',
           metadata: {
-            osacEndpoint: provision.osacEndpoint,
-            osacHost: provision.osacHost,
-            osacHostPort: provision.osacHostPort,
-            osacConnectionMode: provision.osacConnectionMode,
-            osacAuthToken: provision.osacAuthToken,
-            orchestratorSessionId: provision.sessionId,
-            workspacePath: workspacePath || undefined,
+            runId: run.id,
+            executor: 'altus',
+            executionMode: 'altus_managed',
+            artifactKind: executionShape.artifactKind,
           },
         });
 
-        await osacAgentService.ensurePlaywrightMcp(provision.sessionId);
-        this.throwIfCancelled();
-
-        if (this.osacExecutionMode !== 'command') {
-          if (!this.sessionId) {
-            throw new Error('当前任务会话不存在，无法下发 OpenCode 指令');
+        const abortController = new AbortController();
+        const cancelWatcher = setInterval(() => {
+          if (!abortController.signal.aborted && this.runControl?.isCancelled?.()) {
+            abortController.abort();
           }
+        }, 500);
 
-          const accepted = await opencodeRemoteService.sendUserInput({
-            taskSessionId: this.sessionId,
-            content: this.buildOpencodePrompt(payload, 'development'),
-            orchestratorSessionId: provision.sessionId,
-            workspacePath: workspacePath || undefined,
-            source: 'agent',
-          });
-
-          this.sendMessage({
-            type: 'agent_message' as any,
-            agent: 'execution_plan',
-            content: '任务已发送到 OpenCode，正在流式执行，后续会实时回传每一步状态...',
-            metadata: {
-              orchestratorSessionId: accepted.orchestratorSessionId,
-              opencodeSessionId: accepted.opencodeSessionId,
-              workspacePath: workspacePath || undefined,
-              executionMode: 'opencode_remote',
-            },
-          });
-          return;
-        }
-
-        const maxRounds = Number(process.env.OSAC_EXECUTION_ROUNDS || 3);
-        let lastOutput = '';
-        let command = this.buildOpencodeCommand(payload);
-        const commandOptions: Record<string, unknown> = {};
-        if (workspacePath) {
-          commandOptions.cwd = workspacePath;
-        }
-        commandOptions.shell = true;
-
-        for (let round = 1; round <= maxRounds; round += 1) {
-          this.sendMessage({
-            type: 'agent_message' as any,
-            agent: 'execution_plan',
-            content: `执行指令已提交到 OSAC，正在执行中...（第 ${round}/${maxRounds} 轮）`,
-            metadata: {
-              osacCommand: command,
-              orchestratorSessionId: provision.sessionId,
-              workspacePath: workspacePath || undefined,
-            },
-          });
-
-          const result = await osacAgentService.executeCommandAndWait(
-            provision.sessionId,
-            {
-              command,
-              options: commandOptions,
-            },
-            {
-              timeoutMs: Number(process.env.OSAC_COMMAND_TIMEOUT_MS || 900000),
-              pollMs: Number(process.env.OSAC_COMMAND_POLL_MS || 2000),
-            }
-          );
-
-          lastOutput = result.output || lastOutput;
-
-          if (result.status && result.status !== 'completed' && result.status !== 'success') {
-            this.sendMessage({
-              type: 'agent_message' as any,
-              agent: 'execution_plan',
-              content: `OSAC 执行返回状态: ${result.status}`,
-            });
-          }
-
-          this.setStage('reviewing');
-          this.sendStatus('review', '正在审查执行结果...');
-
-          const review = await executionReviewAgent.review({
-            userInput: payload.userInput,
-            taskDescription: payload.taskDescription,
-            executionPlan: payload.executionPlan,
-            executionOutput: lastOutput || '（无输出）',
-          });
-
-          this.sendMessage({
-            type: 'agent_message' as any,
-            agent: 'execution_plan',
-            content: review.summary || '已完成执行结果评估',
-            metadata: {
-              reviewDone: review.done,
-              reviewIssues: review.issues,
-              workspacePath: workspacePath || undefined,
-            },
-          });
-
-          if (review.done || !review.next_instructions) {
-            break;
-          }
-
-          this.setStage('executing');
-          this.sendStatus('execution', '审查未通过，正在根据反馈继续执行...');
-
-          command = this.buildOpencodeCommandWithFeedback({
-            ...payload,
-            lastOutput,
-            feedback: review.next_instructions,
-          });
+        try {
+          await altusRunCoordinator.execute(state, abortController);
+        } finally {
+          clearInterval(cancelWatcher);
         }
         return;
       } catch (error) {
@@ -886,7 +774,113 @@ export class TaskCreationService {
       scope: taskDescription.scope,
       deliverables: taskDescription.deliverables,
       constraints: taskDescription.constraints,
+      additional_info: taskDescription.additional_info,
     };
+  }
+
+  private resolveExecutionShape(payload: {
+    userInput: string;
+    taskDescription: any;
+    executionPlan: ExecutionPlan;
+  }): TaskIntentShape {
+    return classifyTaskIntentShape([
+      payload.userInput,
+      asText(payload.taskDescription?.title),
+      asText(payload.taskDescription?.objective),
+      asText(payload.taskDescription?.scope),
+      ...(Array.isArray(payload.taskDescription?.deliverables) ? payload.taskDescription.deliverables : []),
+      ...(Array.isArray(payload.taskDescription?.constraints) ? payload.taskDescription.constraints : []),
+      asText(payload.taskDescription?.additional_info?.artifactKind),
+      asText(payload.executionPlan?.project?.title),
+      asText(payload.executionPlan?.project?.description),
+    ]);
+  }
+
+  private shouldUseBrowserValidation(shape: TaskIntentShape): boolean {
+    return shape.artifactKind === 'web_app' && !shape.explicitNoWeb;
+  }
+
+  private normalizeExecutionMode(raw: unknown): string {
+    const normalized = String(raw || '').trim().toLowerCase();
+    if (!normalized || normalized === 'opencode_remote') {
+      return 'altus_managed';
+    }
+    return normalized;
+  }
+
+  private resolveAltusModel(): string {
+    return (
+      asText(process.env.ALTUS_MANAGED_MODEL) ||
+      asText(process.env.AGENT_OPENAI_MODEL) ||
+      asText(process.env.OPENAI_MODEL) ||
+      'qwen3-max'
+    );
+  }
+
+  private buildExecutionRequirements(shape: TaskIntentShape): string[] {
+    if (this.shouldUseBrowserValidation(shape)) {
+      return [
+        '必须使用 playwright-mcp 进行浏览器自动化验证。',
+        'playwright-mcp 已预置，无需安装任何 Playwright 依赖，也不要修改 package.json 或执行 npm/pnpm 安装。',
+        '必须连接到与 n.eko 同一实例的 Chromium（CDP 9222，例如 http://127.0.0.1:9222），不要启动新的独立浏览器实例。',
+        '连接后复用现有浏览器上下文与首个页面（contexts[0] 与 pages[0]）；若无页面，仅在该上下文中创建一个新页面，确保同一个窗口可被 n.eko 捕获。',
+        '要求 Playwright 以可视模式运行（headless=false），保证画面在调试窗口可见。',
+        '若需启动网页服务，请使用可访问端口并明确输出访问地址。',
+        '在输出中说明测试步骤、结果与发现的问题。',
+        '如需用户协助（账号/权限/业务确认），请明确提出。',
+      ];
+    }
+
+    const requirements = [
+      '先直接产出最小可验证的实际文件，不要停留在规划、空回复或只描述方案。',
+      '按任务类型做本地验证：脚本/CLI 用命令或样例输入验证，源码类任务检查文件结构、入口与使用说明。',
+      '不要擅自改造成网页应用、浏览器自动化或部署流程；除非任务本身明确要求网页验证。',
+      '如需运行命令，请优先使用最小可验证路径，并保留关键输出摘要。',
+      '在输出中说明验证步骤、验证结果与发现的问题。',
+      '如需用户协助（账号/权限/业务确认），请明确提出。',
+    ];
+
+    if (shape.artifactKind === 'script_artifact' || shape.scriptArtifactRequested) {
+      requirements.splice(
+        1,
+        0,
+        '脚本任务必须至少生成一个可执行脚本文件；若缺少输入样例，请在当前工作区创建最小样例数据并跑通至少一次命令验证。',
+        '除非用户明确要求，否则不要引入新的第三方依赖；Python 脚本优先使用标准库完成 CSV/文本处理，避免因为环境缺包而中断交付。'
+      );
+    } else {
+      requirements.splice(1, 0, '源码类任务至少生成入口文件或核心源码文件，并补充最小使用说明。');
+    }
+
+    return requirements;
+  }
+
+  private buildRepairRequirements(shape: TaskIntentShape): string[] {
+    if (this.shouldUseBrowserValidation(shape)) {
+      return [
+        '必须使用 playwright-mcp 进行浏览器自动化验证（headless=false），输出测试步骤与结果。',
+        'playwright-mcp 已预置，无需安装任何 Playwright 依赖，也不要修改 package.json 或执行 npm/pnpm 安装。',
+        '必须连接到与 n.eko 同一实例的 Chromium（CDP 9222，例如 http://127.0.0.1:9222），不要启动新的独立浏览器实例。',
+        '连接后复用现有浏览器上下文与首个页面（contexts[0] 与 pages[0]）；若无页面，仅在该上下文中创建一个新页面，确保同一个窗口可被 n.eko 捕获。',
+      ];
+    }
+
+    const requirements = [
+      '先补齐实际文件产出，再做最小验证闭环，不要只返回分析或计划。',
+      '继续按任务类型做最小验证闭环：脚本/CLI 跑通命令与样例输入，源码类任务核对文件结构和使用说明。',
+      '不要引入 Playwright、浏览器自动化或部署步骤，除非任务本身明确要求网页验证。',
+      '补齐缺口后输出更新后的验证步骤、结果与剩余风险。',
+    ];
+
+    if (shape.artifactKind === 'script_artifact' || shape.scriptArtifactRequested) {
+      requirements.splice(
+        1,
+        0,
+        '若用户未提供样例输入，请先构造最小样例数据并验证脚本输出。',
+        '若当前实现依赖环境中不存在的第三方包，请先改写为无需新增依赖的最小可运行版本，再继续验证。'
+      );
+    }
+
+    return requirements;
   }
 
   private pickExecutionSummary(executionPlan: ExecutionPlan) {
@@ -1106,6 +1100,7 @@ export class TaskCreationService {
     if (this.osacEnabled && executionPlan) {
       await this.executeInSandbox({
         userInput: firstUserInput,
+        userId: resolvedUserId,
         taskDescription,
         executionPlan,
       });

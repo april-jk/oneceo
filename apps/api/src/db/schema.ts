@@ -14,6 +14,7 @@ export const appUsers = pgTable(
     email: text('email').notNull(),
     passwordHash: text('password_hash').notNull(),
     displayName: text('display_name').notNull(),
+    profileJson: jsonb('profile_json').notNull().default(sql`'{}'::jsonb`),
     status: text('status').notNull().default('active'),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
@@ -33,7 +34,7 @@ export const appUserLegacyIdMappings = pgTable(
       .notNull()
       .references(() => appUsers.id, { onDelete: 'cascade' }),
     legacyUserId: text('legacy_user_id').notNull(),
-    source: text('source').notNull().default('request_header'),
+    source: text('source').notNull().default('auth_bootstrap'),
     firstSeenAt: timestamp('first_seen_at').notNull().defaultNow(),
     lastSeenAt: timestamp('last_seen_at').notNull().defaultNow(),
     createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -65,6 +66,51 @@ export const appUserSessions = pgTable(
     tokenHashUnique: uniqueIndex('idx_app_user_sessions_token_hash').on(table.sessionTokenHash),
     userIdIdx: index('idx_app_user_sessions_user_id').on(table.userId),
     expiresAtIdx: index('idx_app_user_sessions_expires_at').on(table.expiresAt),
+  })
+);
+
+export const appUserProjects = pgTable(
+  'app_user_projects',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => appUsers.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    projectType: text('project_type').notNull().default('standard'),
+    status: text('status').notNull().default('active'),
+    metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userProjectNameUnique: uniqueIndex('idx_app_user_projects_user_name').on(table.userId, table.name),
+    userIdIdx: index('idx_app_user_projects_user_id').on(table.userId),
+    userTypeStatusIdx: index('idx_app_user_projects_user_type_status').on(
+      table.userId,
+      table.projectType,
+      table.status
+    ),
+  })
+);
+
+export const appUserEmailVerifications = pgTable(
+  'app_user_email_verifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    email: text('email').notNull(),
+    purpose: text('purpose').notNull().default('register'),
+    codeHash: text('code_hash').notNull(),
+    expiresAt: timestamp('expires_at').notNull(),
+    consumedAt: timestamp('consumed_at'),
+    lastSentAt: timestamp('last_sent_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    emailPurposeUnique: uniqueIndex('idx_app_user_email_verifications_email_purpose').on(table.email, table.purpose),
+    expiresAtIdx: index('idx_app_user_email_verifications_expires_at').on(table.expiresAt),
   })
 );
 
@@ -120,6 +166,7 @@ export const taskCreationSessions = pgTable('task_creation_sessions', {
   id: uuid('id').primaryKey(),
   userId: text('user_id'), // 用户ID（可选，未来可以关联用户系统）
   status: text('status').notNull().default('in_progress'), // in_progress, completed, failed
+  metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
   completedAt: timestamp('completed_at'),
@@ -383,6 +430,7 @@ export const platformSkills = pgTable(
     description: text('description').notNull().default(''),
     category: text('category').notNull().default('general'),
     status: text('status').notNull().default('active'),
+    metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
     publishedRevisionId: uuid('published_revision_id'),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
@@ -970,6 +1018,37 @@ export const taskSessionMcpRecoveryJobs = pgTable(
   })
 );
 
+export const taskSessionDeploymentSyncJobs = pgTable(
+  'task_session_deployment_sync_jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    taskSessionId: text('task_session_id').notNull(),
+    orchestratorSessionId: text('orchestrator_session_id').notNull(),
+    syncKey: text('sync_key').notNull(),
+    jobType: text('job_type').notNull().default('deployment_panel_sync'),
+    status: text('status').notNull().default('pending'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    lastError: text('last_error'),
+    payloadJson: jsonb('payload_json'),
+    nextRetryAt: timestamp('next_retry_at'),
+    startedAt: timestamp('started_at'),
+    completedAt: timestamp('completed_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    syncKeyUnique: uniqueIndex('idx_task_session_deployment_sync_jobs_sync_key').on(table.syncKey),
+    sessionStatusIdx: index('idx_task_session_deployment_sync_jobs_session_status').on(
+      table.taskSessionId,
+      table.status
+    ),
+    orchestratorIdx: index('idx_task_session_deployment_sync_jobs_orchestrator_session_id').on(
+      table.orchestratorSessionId
+    ),
+    nextRetryIdx: index('idx_task_session_deployment_sync_jobs_next_retry_at').on(table.nextRetryAt),
+  })
+);
+
 export const platformRuntimeArtifactReleases = pgTable(
   'platform_runtime_artifact_releases',
   {
@@ -1148,6 +1227,8 @@ export type TaskSessionConnectorGuide = typeof taskSessionConnectorGuides.$infer
 export type NewTaskSessionConnectorGuide = typeof taskSessionConnectorGuides.$inferInsert;
 export type TaskSessionMcpRecoveryJob = typeof taskSessionMcpRecoveryJobs.$inferSelect;
 export type NewTaskSessionMcpRecoveryJob = typeof taskSessionMcpRecoveryJobs.$inferInsert;
+export type TaskSessionDeploymentSyncJob = typeof taskSessionDeploymentSyncJobs.$inferSelect;
+export type NewTaskSessionDeploymentSyncJob = typeof taskSessionDeploymentSyncJobs.$inferInsert;
 
 export type PlatformRuntimeArtifactRelease = typeof platformRuntimeArtifactReleases.$inferSelect;
 export type NewPlatformRuntimeArtifactRelease = typeof platformRuntimeArtifactReleases.$inferInsert;

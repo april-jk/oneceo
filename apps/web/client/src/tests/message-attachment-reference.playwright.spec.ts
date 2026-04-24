@@ -1,9 +1,11 @@
 import { expect, request as playwrightRequest, test, type BrowserContext, type Page } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { bootstrapSharedAuthenticatedUser } from "./playwright-auth";
+import { composerTextarea } from "./playwright-locators";
 
-const WEB_URL = "http://localhost:3000";
-const API_URL = "http://localhost:4000";
+const WEB_URL = "http://oneceo.ai:3000";
+const API_URL = "http://oneceo.ai:3000";
 const SESSION_URL_TIMEOUT_MS = 20_000;
 
 type SkillSettingsPayload = {
@@ -27,24 +29,6 @@ function uniqueToken() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-async function bootstrapAuthenticatedUser(browser: import("@playwright/test").Browser, token: string) {
-  const api = await playwrightRequest.newContext({ baseURL: API_URL });
-  try {
-    const response = await api.post("/api/auth/register", {
-      data: {
-        displayName: `playwright-issue26-${token}`,
-        email: `playwright-issue26-${token}@example.com`,
-        password: "playwright-issue26-123",
-      },
-    });
-    expect(response.ok()).toBe(true);
-    const storageState = await api.storageState();
-    return await browser.newContext({ storageState });
-  } finally {
-    await api.dispose();
-  }
-}
-
 async function createApiContextFromBrowser(context: BrowserContext) {
   const storageState = await context.storageState();
   return playwrightRequest.newContext({
@@ -60,7 +44,7 @@ async function ensureManagedMode(page: Page) {
     localStorage.removeItem("task_creation_session_id");
   });
   await page.goto(WEB_URL, { waitUntil: "domcontentloaded" });
-  await expect(page.getByRole("textbox", { name: "Type your message here..." })).toBeVisible();
+  await expect(composerTextarea(page)).toBeVisible();
 }
 
 async function ensureAtLeastOneSkill(context: BrowserContext) {
@@ -98,7 +82,7 @@ async function openFreshComposer(page: Page) {
     localStorage.removeItem("task_creation_session_id");
   });
   await page.goto(WEB_URL, { waitUntil: "domcontentloaded" });
-  await expect(page.getByRole("textbox", { name: "Type your message here..." })).toBeVisible();
+  await expect(composerTextarea(page)).toBeVisible();
 }
 
 async function attachSkill(page: Page, skillName: string) {
@@ -115,7 +99,7 @@ async function attachLocalFile(page: Page, filePath: string, fileName: string) {
 }
 
 async function sendMessage(page: Page, text: string) {
-  const textbox = page.getByRole("textbox", { name: "Type your message here..." });
+  const textbox = composerTextarea(page);
   await textbox.fill(text);
   await textbox.press("Enter");
   await expect(page).toHaveURL(/\/session\//, { timeout: SESSION_URL_TIMEOUT_MS });
@@ -127,7 +111,7 @@ function userBubble(page: Page, text: string) {
 
 test("issue #26 message attachment reference visuals", async ({ browser }, testInfo) => {
   const token = uniqueToken();
-  const context = await bootstrapAuthenticatedUser(browser, token);
+  const context = await bootstrapSharedAuthenticatedUser(browser, WEB_URL);
   const page = await context.newPage();
   const screenshotDir = testInfo.outputPath("issue26-reference-visuals");
   mkdirSync(screenshotDir, { recursive: true });

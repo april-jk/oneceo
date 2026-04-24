@@ -15,6 +15,14 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
 }
 
+function pickFirstText(...values: unknown[]): string {
+  for (const value of values) {
+    const normalized = asText(value);
+    if (normalized) return normalized;
+  }
+  return '';
+}
+
 function toPortFromEndpoint(endpoint: string): number | null {
   const value = asText(endpoint);
   if (!value) return null;
@@ -168,18 +176,42 @@ router.post('/environment/:sessionId/restore', async (req, res) => {
 
 router.post('/environment/:sessionId/connectivity-check', async (req, res) => {
   try {
-    const environment = await sandboxEnvironmentService.getEnvironment(req.params.sessionId);
-    const metadata = asRecord(environment.metadata);
+    const environment = await sandboxEnvironmentService.findEnvironment(req.params.sessionId);
+    const liveSandboxInfo = await e2bConnector.getSandboxInfo(req.params.sessionId).catch(() => null);
+    if (!environment && !liveSandboxInfo) {
+      throw new Error(`未找到环境记录: ${req.params.sessionId}`);
+    }
+
+    const metadata = {
+      ...asRecord(environment?.metadata),
+      ...asRecord(liveSandboxInfo?.metadata),
+    };
     const e2bMeta = asRecord(metadata.e2b);
-    const osacEndpoint = asText(metadata.osacEndpoint);
-    const opencodeBaseUrl = asText(metadata.opencodeBaseUrl);
+    const nestedOsac = asRecord(metadata.osac);
+    const nestedOpencode = asRecord(metadata.opencode);
+    const osacEndpoint = pickFirstText(metadata.osacEndpoint, nestedOsac.endpoint, nestedOsac.baseUrl);
+    const opencodeBaseUrl = pickFirstText(
+      metadata.opencodeBaseUrl,
+      metadata.altusBaseUrl,
+      metadata.sandboxBaseUrl,
+      nestedOpencode.baseUrl
+    );
     const trafficAccessToken =
       asText(metadata.trafficAccessToken) ||
       asText(e2bMeta.trafficAccessToken) ||
       undefined;
-    const workspaceRoot = asText(metadata.opencodeWorkspaceRoot);
-    const stateRoot = asText(metadata.opencodeStateRoot);
-    const osacPort = toPortFromEndpoint(osacEndpoint) || Number(metadata.osacPort || 18080);
+    const workspaceRoot = pickFirstText(
+      metadata.opencodeWorkspaceRoot,
+      metadata.altusWorkspaceRoot,
+      metadata.workspaceRoot
+    );
+    const stateRoot = pickFirstText(
+      metadata.opencodeStateRoot,
+      metadata.altusStateRoot,
+      metadata.stateRoot
+    );
+    const osacPort =
+      toPortFromEndpoint(osacEndpoint) || Number(metadata.osacHostPort || metadata.osacPort || 18080);
 
     let opencode: Record<string, unknown> = {
       configured: Boolean(opencodeBaseUrl),
@@ -262,6 +294,7 @@ router.post('/environment/:sessionId/connectivity-check', async (req, res) => {
       data: {
         sessionId: req.params.sessionId,
         checkedAt: new Date().toISOString(),
+        source: environment ? 'tracked' : 'live_only',
         osac,
         opencode,
         workspace,

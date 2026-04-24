@@ -1,5 +1,16 @@
-import { type ReactNode, useEffect, useMemo, useState } from "react";
-import { Activity, Bug, Check, ChevronLeft, ChevronRight, Clock3, FileText, ListTodo, Rocket, XCircle } from "lucide-react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Activity,
+  Bug,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Clock3,
+  FileText,
+  ListTodo,
+  Rocket,
+  XCircle,
+} from "lucide-react";
 import type { AltusArtifactFile } from "@/components/AltusArtifactPreviewCard";
 import {
   DebugPreview,
@@ -23,6 +34,8 @@ import {
 import { cn } from "@/lib/utils";
 import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
 import type { PreviewDiffItem } from "@/lib/opencode-preview";
+import i18n from "@/i18n";
+import { useTranslation } from "react-i18next";
 
 export type AltusReplayActionStatus =
   | "running"
@@ -52,6 +65,7 @@ export type AltusReplayFile = AltusArtifactFile & {
 type AltusRunReplayDrawerProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  embedded?: boolean;
   sessionId: string;
   runId: string;
   runTitle?: string;
@@ -65,19 +79,14 @@ type AltusRunReplayDrawerProps = {
   runtimeReady?: boolean;
   runtimeStarting?: boolean;
   onEnsureRuntime?: () => Promise<void>;
+  runtimeSwitchBlocked?: boolean;
   onRequestStartDebugByMessage?: () => void;
   onRequestDeployByMessage?: () => void;
   onRequestRedeployByMessage?: () => void;
   onRequestRollbackByMessage?: () => void;
-  onOpenPreviewTab?: (tab: "files" | "changes" | "debug" | "deployment") => void;
 };
 
-type AltusDrawerView =
-  | "actions"
-  | "files"
-  | "changes"
-  | "debug"
-  | "deployment";
+type AltusDrawerView = "actions" | "files" | "changes" | "debug" | "deployment";
 
 function getStatusIcon(status: AltusReplayActionStatus) {
   if (status === "completed") {
@@ -91,15 +100,15 @@ function getStatusIcon(status: AltusReplayActionStatus) {
 
 function getStatusBadgeCopy(status: AltusReplayActionStatus) {
   if (status === "completed") {
-    return "已完成";
+    return i18n.t("replayDrawer.completed");
   }
   if (status === "failed") {
-    return "失败";
+    return i18n.t("replayDrawer.failed");
   }
   if (status === "running") {
-    return "进行中";
+    return i18n.t("replayDrawer.running");
   }
-  return "待处理";
+  return i18n.t("replayDrawer.unknown");
 }
 
 function getStatusBadgeClass(status: AltusReplayActionStatus) {
@@ -115,7 +124,10 @@ function getStatusBadgeClass(status: AltusReplayActionStatus) {
 function uniqueFiles(files: AltusReplayFile[], sessionId: string) {
   const map = new Map<string, AltusReplayFile>();
   for (const file of files) {
-    const normalizedPath = normalizeWorkspaceRelativePath(file.path || "", sessionId);
+    const normalizedPath = normalizeWorkspaceRelativePath(
+      file.path || "",
+      sessionId,
+    );
     if (!normalizedPath || map.has(normalizedPath)) continue;
     map.set(normalizedPath, {
       ...file,
@@ -125,9 +137,54 @@ function uniqueFiles(files: AltusReplayFile[], sessionId: string) {
   return Array.from(map.values());
 }
 
+export function resolveReplayPreferredFilePath(
+  files: AltusReplayFile[],
+  artifactPaths: string[] | undefined,
+) {
+  if (!files.length) return "";
+  const normalizedArtifactPaths = Array.isArray(artifactPaths)
+    ? artifactPaths.filter(Boolean)
+    : [];
+  return (
+    normalizedArtifactPaths.find((path) =>
+      files.some((file) => file.path === path),
+    ) ||
+    files[0]?.path ||
+    ""
+  );
+}
+
+export function resolveReplaySelectedFilePath(input: {
+  currentSelectedPath: string;
+  files: AltusReplayFile[];
+  artifactPaths?: string[] | undefined;
+  forcePreferred: boolean;
+}) {
+  const { currentSelectedPath, files, artifactPaths, forcePreferred } = input;
+  const preferredPath = resolveReplayPreferredFilePath(files, artifactPaths);
+  if (forcePreferred) {
+    return preferredPath;
+  }
+  if (
+    currentSelectedPath &&
+    files.some((file) => file.path === currentSelectedPath)
+  ) {
+    return currentSelectedPath;
+  }
+  return preferredPath;
+}
+
+function isClickInsideElement(
+  target: EventTarget | null,
+  element: HTMLElement | null,
+) {
+  return Boolean(target instanceof Node && element?.contains(target));
+}
+
 export default function AltusRunReplayDrawer({
   open,
   onOpenChange,
+  embedded = false,
   sessionId,
   runId,
   runTitle,
@@ -141,18 +198,21 @@ export default function AltusRunReplayDrawer({
   runtimeReady,
   runtimeStarting,
   onEnsureRuntime,
+  runtimeSwitchBlocked = false,
   onRequestStartDebugByMessage,
   onRequestDeployByMessage,
   onRequestRedeployByMessage,
   onRequestRollbackByMessage,
-  onOpenPreviewTab,
 }: AltusRunReplayDrawerProps) {
+  useTranslation();
   const normalizedFiles = useMemo(
     () => uniqueFiles(files, sessionId),
     [files, sessionId],
   );
   const selectedAction =
-    currentIndex >= 0 && currentIndex < actions.length ? actions[currentIndex] : null;
+    currentIndex >= 0 && currentIndex < actions.length
+      ? actions[currentIndex]
+      : null;
   const [selectedFilePath, setSelectedFilePath] = useState<string>(
     normalizedFiles[0]?.path || "",
   );
@@ -166,6 +226,7 @@ export default function AltusRunReplayDrawer({
   const [detailViewMode, setDetailViewMode] = useState<"user" | "internal">(
     "user",
   );
+  const [selectedActionVisible, setSelectedActionVisible] = useState(true);
   const [selectedDeploymentId, setSelectedDeploymentId] = useState<
     string | null
   >(null);
@@ -173,12 +234,15 @@ export default function AltusRunReplayDrawer({
     useState<TaskCreationDeploymentInfo | null>(null);
   const [deploymentLoading, setDeploymentLoading] = useState(false);
   const [deploymentError, setDeploymentError] = useState<string | null>(null);
+  const effectiveEnsureRuntime = runtimeSwitchBlocked
+    ? undefined
+    : onEnsureRuntime;
   const filePreview = useWorkspaceFilePreviewState({
     sessionId,
     open: open && drawerView === "files",
     runtimeReady,
     runtimeStarting,
-    onEnsureRuntime,
+    onEnsureRuntime: effectiveEnsureRuntime,
     selectedWorkspacePath: selectedFilePath || normalizedFiles[0]?.path || null,
     diffItems,
   });
@@ -188,16 +252,26 @@ export default function AltusRunReplayDrawer({
     active: drawerView === "debug",
     runtimeReady,
     runtimeStarting,
-    onEnsureRuntime,
+    onEnsureRuntime: effectiveEnsureRuntime,
   });
+  const selectedActionKey = `${runId}:${selectedAction?.toolCallId || "none"}`;
+  const previousSelectedActionKeyRef = useRef(selectedActionKey);
+  const drawerContentRef = useRef<HTMLDivElement | null>(null);
+  const selectedActionPanelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    const preferredPath =
-      selectedAction?.artifactPaths.find((path) =>
-        normalizedFiles.some((file) => file.path === path),
-      ) || normalizedFiles[0]?.path || "";
-    setSelectedFilePath(preferredPath);
-  }, [normalizedFiles, runId, selectedAction?.artifactPaths]);
+    const actionChanged =
+      previousSelectedActionKeyRef.current !== selectedActionKey;
+    setSelectedFilePath((prev) =>
+      resolveReplaySelectedFilePath({
+        currentSelectedPath: prev,
+        files: normalizedFiles,
+        artifactPaths: selectedAction?.artifactPaths,
+        forcePreferred: actionChanged || !prev,
+      }),
+    );
+    previousSelectedActionKeyRef.current = selectedActionKey;
+  }, [normalizedFiles, selectedActionKey]);
 
   useEffect(() => {
     setDrawerView("actions");
@@ -206,6 +280,26 @@ export default function AltusRunReplayDrawer({
   useEffect(() => {
     setDetailViewMode("user");
   }, [runId, selectedAction?.toolCallId]);
+
+  useEffect(() => {
+    setSelectedActionVisible(true);
+  }, [runId, selectedAction?.toolCallId]);
+
+  useEffect(() => {
+    if (!open || drawerView !== "actions" || !selectedActionVisible) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!isClickInsideElement(target, drawerContentRef.current)) return;
+      if (isClickInsideElement(target, selectedActionPanelRef.current)) return;
+      setSelectedActionVisible(false);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [drawerView, open, selectedActionVisible]);
 
   useEffect(() => {
     if (!diffItems.length) {
@@ -219,6 +313,12 @@ export default function AltusRunReplayDrawer({
 
   useEffect(() => {
     if (!open || drawerView !== "deployment") return;
+    if (runtimeSwitchBlocked) {
+      setDeploymentInfo(null);
+      setDeploymentError(i18n.t("previewPanel.deployment.blockedDuringRun"));
+      setDeploymentLoading(false);
+      return;
+    }
     let cancelled = false;
     setDeploymentLoading(true);
     setDeploymentError(null);
@@ -231,7 +331,9 @@ export default function AltusRunReplayDrawer({
       .catch((error) => {
         if (cancelled) return;
         setDeploymentError(
-          error instanceof Error ? error.message : "加载部署信息失败",
+          error instanceof Error
+            ? error.message
+            : i18n.t("replayDrawer.loadDeploymentFailed"),
         );
       })
       .finally(() => {
@@ -241,11 +343,13 @@ export default function AltusRunReplayDrawer({
     return () => {
       cancelled = true;
     };
-  }, [drawerView, open, sessionId]);
+  }, [drawerView, open, runtimeSwitchBlocked, sessionId]);
 
   const canGoPrev = currentIndex > 0;
   const canGoNext = currentIndex < latestIndex;
-  const completedCount = actions.filter((action) => action.status === "completed").length;
+  const completedCount = actions.filter(
+    (action) => action.status === "completed",
+  ).length;
   const currentDiff =
     diffItems.find((item) => item.id === selectedDiffId) ||
     diffItems[diffItems.length - 1] ||
@@ -257,21 +361,26 @@ export default function AltusRunReplayDrawer({
       : selectedAction?.detail || "";
 
   const refreshDeployment = async (deploymentId?: string) => {
+    if (runtimeSwitchBlocked) {
+      setDeploymentError(i18n.t("previewPanel.deployment.blockedDuringRun"));
+      return;
+    }
     setDeploymentLoading(true);
     setDeploymentError(null);
     try {
-      const targetDeploymentId = deploymentId || selectedDeploymentId || undefined;
+      const targetDeploymentId =
+        deploymentId || selectedDeploymentId || undefined;
       const info = await getTaskCreationDeploymentInfo(
         sessionId,
         targetDeploymentId,
       );
       setDeploymentInfo(info);
-      setSelectedDeploymentId(
-        info?.deploymentId || targetDeploymentId || null,
-      );
+      setSelectedDeploymentId(info?.deploymentId || targetDeploymentId || null);
     } catch (error) {
       setDeploymentError(
-        error instanceof Error ? error.message : "加载部署信息失败",
+        error instanceof Error
+          ? error.message
+          : i18n.t("replayDrawer.loadDeploymentFailed"),
       );
     } finally {
       setDeploymentLoading(false);
@@ -281,6 +390,10 @@ export default function AltusRunReplayDrawer({
   const runDeploymentAction = async (
     action: "deploy" | "redeploy" | "rollback",
   ) => {
+    if (runtimeSwitchBlocked) {
+      setDeploymentError(i18n.t("previewPanel.deployment.blockedDuringRun"));
+      return;
+    }
     setDeploymentAction(action);
     setDeploymentError(null);
     try {
@@ -295,184 +408,302 @@ export default function AltusRunReplayDrawer({
         setDeploymentAction(null);
         return;
       }
-      setDeploymentError("当前页面未绑定部署消息入口，请回到会话页触发部署。");
+      setDeploymentError(i18n.t("replayDrawer.missingDeployEntry"));
     } catch (error) {
-      setDeploymentError(error instanceof Error ? error.message : "部署操作失败");
+      setDeploymentError(
+        error instanceof Error
+          ? error.message
+          : i18n.t("replayDrawer.deployActionFailed"),
+      );
     } finally {
       setDeploymentAction(null);
     }
   };
 
-  return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent
-        side="right"
-        className="top-4 right-4 bottom-4 left-auto flex h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] max-w-none flex-col overflow-hidden rounded-2xl border border-border/70 p-0 shadow-sm sm:max-w-none md:w-[calc((100vw-6rem)*0.66)] lg:w-[calc((100vw-18rem)*0.66)] [&>button.absolute]:hidden"
-      >
-        <div className="h-12 flex-shrink-0 px-3 flex items-center justify-between border-b border-border bg-background/95 backdrop-blur-sm">
-          <div className="flex items-center min-w-0">
-            <SheetTitle className="text-base font-semibold truncate">
-              {runTitle || "Altus Run Replay"}
-            </SheetTitle>
-            <SheetDescription className="sr-only">
-              Altus 接管模式的 Actions 与 Files 回放查看器
-            </SheetDescription>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className="relative flex flex-wrap items-center rounded-full bg-zinc-100 p-[2px] dark:bg-zinc-800/90">
-              <ReplayHeaderTab
-                active={drawerView === "actions"}
-                onClick={() => setDrawerView("actions")}
-              >
-                <Activity className="h-3 w-3" />
-                <span>Actions</span>
-              </ReplayHeaderTab>
-              <ReplayHeaderTab
-                active={drawerView === "files"}
-                onClick={() => setDrawerView("files")}
-              >
-                <FileText className="h-3 w-3" />
-                <span>文件</span>
-              </ReplayHeaderTab>
-              <ReplayHeaderTab
-                active={drawerView === "changes"}
-                onClick={() => setDrawerView("changes")}
-              >
-                <FileText className="h-3 w-3" />
-                <span>更改</span>
-              </ReplayHeaderTab>
-              <ReplayHeaderTab
-                active={drawerView === "debug"}
-                onClick={() => setDrawerView("debug")}
-              >
-                <Bug className="h-3 w-3" />
-                <span>调试</span>
-              </ReplayHeaderTab>
-              <ReplayHeaderTab
-                active={drawerView === "deployment"}
-                onClick={() => setDrawerView("deployment")}
-              >
-                <Rocket className="h-3 w-3" />
-                <span>部署</span>
-              </ReplayHeaderTab>
-            </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 rounded-2xl text-muted-foreground hover:text-foreground"
-              onClick={() => onOpenChange(false)}
-              title="关闭"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
+  const handleReplayFileSelect = async (path: string) => {
+    const normalizedPath = normalizeWorkspaceRelativePath(path, sessionId);
+    if (!normalizedPath) return;
+    setSelectedFilePath(normalizedPath);
+    await filePreview.handleFileSelect(normalizedPath);
+  };
 
-        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-          {drawerView === "actions" ? (
-            <div className="h-full w-full overflow-hidden">
-              <div className="flex h-full flex-col overflow-hidden bg-card">
-                <div className="h-14 border-b bg-zinc-50/80 px-4 py-2 backdrop-blur-sm dark:bg-zinc-900/80">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <div className="rounded-lg border bg-zinc-100 p-2 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700">
-                        <ListTodo className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="truncate text-base font-medium text-zinc-900 dark:text-zinc-100">
-                          Update Tasks
-                        </div>
-                      </div>
+  const handleSelectActionIndex = (index: number) => {
+    setSelectedActionVisible(true);
+    onSelectIndex(index);
+  };
+
+  const handleJumpToLatestAction = () => {
+    setSelectedActionVisible(true);
+    onJumpToLatest();
+  };
+
+  const content = (
+    <div
+      ref={drawerContentRef}
+      className={cn(
+        "flex h-full min-h-0 flex-col overflow-hidden",
+        embedded ? "gap-3 p-2" : "",
+      )}
+    >
+      <div
+        className={cn(
+          "h-12 flex-shrink-0 px-3 flex items-center justify-between",
+          embedded
+            ? "rounded-xl border border-border/60 bg-card/80"
+            : "border-b border-border bg-background/95 backdrop-blur-sm",
+        )}
+      >
+        <div className="flex items-center min-w-0">
+          {embedded ? (
+            <div className="text-base font-semibold truncate">
+              {runTitle || i18n.t("replayDrawer.titleFallback")}
+            </div>
+          ) : (
+            <>
+              <SheetTitle className="text-base font-semibold truncate">
+                {runTitle || i18n.t("replayDrawer.titleFallback")}
+              </SheetTitle>
+              <SheetDescription className="sr-only">
+                {i18n.t("replayDrawer.description")}
+              </SheetDescription>
+            </>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5">
+          <div className="relative flex flex-wrap items-center rounded-full bg-zinc-100 p-[2px] dark:bg-zinc-800/90">
+            <ReplayHeaderTab
+              active={drawerView === "actions"}
+              onClick={() => setDrawerView("actions")}
+            >
+              <Activity className="h-3 w-3" />
+              <span>Actions</span>
+            </ReplayHeaderTab>
+            <ReplayHeaderTab
+              active={drawerView === "files"}
+              onClick={() => setDrawerView("files")}
+            >
+              <FileText className="h-3 w-3" />
+              <span>{i18n.t("replayDrawer.tabs.files")}</span>
+            </ReplayHeaderTab>
+            <ReplayHeaderTab
+              active={drawerView === "changes"}
+              onClick={() => setDrawerView("changes")}
+            >
+              <FileText className="h-3 w-3" />
+              <span>{i18n.t("replayDrawer.tabs.changes")}</span>
+            </ReplayHeaderTab>
+            <ReplayHeaderTab
+              active={drawerView === "debug"}
+              onClick={() => setDrawerView("debug")}
+            >
+              <Bug className="h-3 w-3" />
+              <span>{i18n.t("replayDrawer.tabs.debug")}</span>
+            </ReplayHeaderTab>
+            <ReplayHeaderTab
+              active={drawerView === "deployment"}
+              onClick={() => setDrawerView("deployment")}
+            >
+              <Rocket className="h-3 w-3" />
+              <span>{i18n.t("replayDrawer.tabs.deployment")}</span>
+            </ReplayHeaderTab>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-2xl text-muted-foreground hover:text-foreground"
+            onClick={() => onOpenChange(false)}
+            title={i18n.t("replayDrawer.close")}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+
+      <div
+        className={cn(
+          "flex-1 min-h-0 flex flex-col overflow-hidden",
+          embedded ? "rounded-xl border border-border/60 bg-card/60" : "",
+        )}
+      >
+        {drawerView === "actions" ? (
+          <div className="h-full w-full overflow-hidden">
+            <div
+              className={cn(
+                "flex h-full flex-col overflow-hidden",
+                embedded ? "bg-transparent" : "bg-card",
+              )}
+            >
+              <div
+                className={cn(
+                  "h-14 px-4 py-2 backdrop-blur-sm",
+                  embedded
+                    ? "bg-transparent"
+                    : "border-b bg-zinc-50/80 dark:bg-zinc-900/80",
+                )}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div
+                      className={cn(
+                        "rounded-lg p-2",
+                        embedded
+                          ? "bg-zinc-100/70 dark:bg-zinc-800/60"
+                          : "border bg-zinc-100 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700",
+                      )}
+                    >
+                      <ListTodo className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="inline-flex items-center justify-center rounded-2xl border px-3 py-1.5 text-xs font-normal text-foreground">
-                        {completedCount} / {actions.length} tasks
-                      </span>
+                    <div className="min-w-0">
+                      <div className="truncate text-base font-medium text-zinc-900 dark:text-zinc-100">
+                        {i18n.t("replayDrawer.updateTasks")}
+                      </div>
                     </div>
                   </div>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={cn(
+                        "inline-flex items-center justify-center rounded-2xl px-3 py-1.5 text-xs font-normal text-foreground",
+                        embedded
+                          ? "bg-zinc-100/70 dark:bg-zinc-800/60"
+                          : "border",
+                      )}
+                    >
+                      {i18n.t("replayDrawer.tasksProgress", {
+                        completed: completedCount,
+                        total: actions.length,
+                      })}
+                    </span>
+                  </div>
                 </div>
+              </div>
 
-                <ScrollArea className="flex-1 min-h-0">
-                  <div className="py-0">
-                    {actions.length === 0 ? (
-                      <div className="px-4 py-8 text-sm text-muted-foreground">
-                        当前 run 还没有可回放的动作。
-                      </div>
-                    ) : (
-                      <div className="border-b border-zinc-200 dark:border-zinc-800 last:border-b-0">
-                        <div className="flex items-center justify-between bg-zinc-50/80 px-4 py-3 border-b border-zinc-200 dark:border-zinc-700 dark:bg-zinc-900/80">
-                          <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                            {runTitle || "当前任务"}
-                          </h3>
-                          <div className="flex items-center gap-2">
-                            <span className="inline-flex items-center justify-center rounded-2xl border bg-white px-2 py-0 text-xs font-normal text-foreground dark:bg-zinc-800">
-                              {Math.min(currentIndex + 1, actions.length)}/{actions.length}
-                            </span>
-                            <span className={cn("inline-flex items-center justify-center rounded-2xl border px-2 py-0 text-xs h-5", getStatusBadgeClass(selectedAction?.status || "unknown"))}>
-                              {getStatusBadgeCopy(selectedAction?.status || "unknown")}
-                            </span>
-                          </div>
+              <ScrollArea className="flex-1 min-h-0">
+                <div className="py-0">
+                  {actions.length === 0 ? (
+                    <div className="px-4 py-8 text-sm text-muted-foreground">
+                      {i18n.t("replayDrawer.emptyActions")}
+                    </div>
+                  ) : (
+                    <div
+                      className={cn(
+                        "last:border-b-0",
+                        embedded
+                          ? ""
+                          : "border-b border-zinc-200 dark:border-zinc-800",
+                      )}
+                    >
+                      <div
+                        className={cn(
+                          "flex items-center justify-between px-4 py-3",
+                          embedded
+                            ? "bg-transparent"
+                            : "bg-zinc-50/80 border-b border-zinc-200 dark:border-zinc-700 dark:bg-zinc-900/80",
+                        )}
+                      >
+                        <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                          {runTitle || i18n.t("replayDrawer.currentTask")}
+                        </h3>
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex items-center justify-center rounded-2xl border bg-white px-2 py-0 text-xs font-normal text-foreground dark:bg-zinc-800">
+                            {Math.min(currentIndex + 1, actions.length)}/
+                            {actions.length}
+                          </span>
+                          <span
+                            className={cn(
+                              "inline-flex items-center justify-center rounded-2xl border px-2 py-0 text-xs h-5",
+                              getStatusBadgeClass(
+                                selectedAction?.status || "unknown",
+                              ),
+                            )}
+                          >
+                            {getStatusBadgeCopy(
+                              selectedAction?.status || "unknown",
+                            )}
+                          </span>
                         </div>
+                      </div>
 
-                        <div className="bg-card">
-                          {actions.map((action) => {
-                            const isActive = action.stepIndex === currentIndex;
-                            return (
-                              <button
-                                key={action.toolCallId}
-                                type="button"
-                                onClick={() => onSelectIndex(action.stepIndex)}
-                                className={cn(
-                                  "flex w-full items-start gap-3 border-b border-zinc-100 px-4 py-3 text-left transition-colors last:border-b-0 dark:border-zinc-800",
-                                  isActive
-                                    ? "bg-zinc-100/90 dark:bg-zinc-800/70"
-                                    : "hover:bg-zinc-50/60 dark:hover:bg-zinc-800/40",
-                                )}
-                              >
-                                <div className="flex-shrink-0 pt-0.5">
-                                  {getStatusIcon(action.status)}
-                                </div>
-                                <div className="min-w-0 flex-1 space-y-1">
-                                  <div className="flex items-center justify-between gap-2">
-                                    <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                                      {action.displayName}
-                                    </p>
-                                    <span className={cn("inline-flex shrink-0 items-center justify-center rounded-2xl border px-2 py-0 text-xs", getStatusBadgeClass(action.status))}>
-                                      {getStatusBadgeCopy(action.status)}
-                                    </span>
-                                  </div>
-                                  <p className="text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
-                                    {action.summary}
+                      <div
+                        className={cn(embedded ? "bg-transparent" : "bg-card")}
+                      >
+                        {actions.map((action) => {
+                          const isActive = action.stepIndex === currentIndex;
+                          return (
+                            <button
+                              key={action.toolCallId}
+                              type="button"
+                              onClick={() =>
+                                handleSelectActionIndex(action.stepIndex)
+                              }
+                              className={cn(
+                                "flex w-full items-start gap-3 border-b border-zinc-100 px-4 py-3 text-left transition-colors last:border-b-0 dark:border-zinc-800",
+                                isActive
+                                  ? "bg-zinc-100/90 dark:bg-zinc-800/70"
+                                  : "hover:bg-zinc-50/60 dark:hover:bg-zinc-800/40",
+                              )}
+                            >
+                              <div className="flex-shrink-0 pt-0.5">
+                                {getStatusIcon(action.status)}
+                              </div>
+                              <div className="min-w-0 flex-1 space-y-1">
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                                    {action.displayName}
                                   </p>
-                                  {action.artifactPaths.length > 0 ? (
-                                    <div className="flex flex-wrap gap-1.5 pt-1">
-                                      {action.artifactPaths.slice(0, 3).map((path) => (
+                                  <span
+                                    className={cn(
+                                      "inline-flex shrink-0 items-center justify-center rounded-2xl border px-2 py-0 text-xs",
+                                      getStatusBadgeClass(action.status),
+                                    )}
+                                  >
+                                    {getStatusBadgeCopy(action.status)}
+                                  </span>
+                                </div>
+                                <p className="text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
+                                  {action.summary}
+                                </p>
+                                {action.artifactPaths.length > 0 ? (
+                                  <div className="flex flex-wrap gap-1.5 pt-1">
+                                    {action.artifactPaths
+                                      .slice(0, 3)
+                                      .map((path) => (
                                         <span
                                           key={`${action.toolCallId}:${path}`}
                                           className="inline-flex max-w-full items-center rounded-full border border-zinc-200 bg-white px-2 py-0.5 text-[11px] text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
                                         >
-                                          <span className="truncate">{path}</span>
+                                          <span className="truncate">
+                                            {path}
+                                          </span>
                                         </span>
                                       ))}
-                                    </div>
-                                  ) : null}
-                                </div>
-                              </button>
-                            );
-                          })}
-                        </div>
+                                  </div>
+                                ) : null}
+                              </div>
+                            </button>
+                          );
+                        })}
                       </div>
-                    )}
-                  </div>
-                </ScrollArea>
+                    </div>
+                  )}
+                </div>
+              </ScrollArea>
 
-                <div className="border-t border-zinc-200 bg-zinc-50/90 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/90">
+              {selectedActionVisible ? (
+                <div
+                  ref={selectedActionPanelRef}
+                  className={cn(
+                    "px-4 py-3",
+                    embedded
+                      ? "bg-transparent"
+                      : "border-t border-zinc-200 bg-zinc-50/90 dark:border-zinc-800 dark:bg-zinc-900/90",
+                  )}
+                >
                   <div className="space-y-2">
                     <div className="text-xs font-medium uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
-                      Selected Action
+                      {i18n.t("replayDrawer.selectedAction")}
                     </div>
-                    <div className="rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-700 dark:bg-zinc-900">
+                    <div className="max-h-[30vh] overflow-y-auto rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-700 dark:bg-zinc-900">
                       {selectedAction ? (
                         <div className="space-y-2">
                           <div className="flex items-center justify-between gap-2">
@@ -484,7 +715,12 @@ export default function AltusRunReplayDrawer({
                                 {selectedAction.toolName}
                               </div>
                             </div>
-                            <span className={cn("inline-flex shrink-0 items-center justify-center rounded-2xl border px-2 py-0 text-xs", getStatusBadgeClass(selectedAction.status))}>
+                            <span
+                              className={cn(
+                                "inline-flex shrink-0 items-center justify-center rounded-2xl border px-2 py-0 text-xs",
+                                getStatusBadgeClass(selectedAction.status),
+                              )}
+                            >
                               {getStatusBadgeCopy(selectedAction.status)}
                             </span>
                           </div>
@@ -500,7 +736,7 @@ export default function AltusRunReplayDrawer({
                                     : "border-zinc-200 bg-white text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400",
                                 )}
                               >
-                                用户态
+                                {i18n.t("replayDrawer.userDetail")}
                               </button>
                               <button
                                 type="button"
@@ -512,7 +748,7 @@ export default function AltusRunReplayDrawer({
                                     : "border-zinc-200 bg-white text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400",
                                 )}
                               >
-                                内部态
+                                {i18n.t("replayDrawer.internalDetail")}
                               </button>
                             </div>
                           ) : null}
@@ -521,93 +757,111 @@ export default function AltusRunReplayDrawer({
                           </pre>
                         </div>
                       ) : (
-                        <div className="text-sm text-muted-foreground">暂无选中的步骤。</div>
+                        <div className="text-sm text-muted-foreground">
+                          {i18n.t("replayDrawer.noSelectedStep")}
+                        </div>
                       )}
                     </div>
                   </div>
                 </div>
-              </div>
+              ) : null}
             </div>
-          ) : drawerView === "files" ? (
-            <FilePreview
-              sessionId={sessionId}
-              tree={filePreview.effectiveTree}
-              loading={filePreview.treeLoading}
-              error={filePreview.treeError}
-              selectedPath={filePreview.selectedPath}
-              file={filePreview.fileData}
-              contentError={filePreview.fileError}
-              contentLoading={filePreview.fileLoading}
-              expandedPaths={filePreview.expandedPaths}
-              dirState={filePreview.dirState}
-              onTogglePath={filePreview.handleTogglePath}
-              onLoadMoreDir={filePreview.handleLoadMoreDirectory}
-              onRefresh={() => void filePreview.refreshTree("manual")}
-              onSelectFile={filePreview.handleFileSelect}
-              runtimeReady={runtimeReady !== false}
-              runtimeStarting={runtimeStarting === true}
-            />
-          ) : drawerView === "changes" ? (
-            <AltusPreviewChangesPanel
-              diffItems={diffItems}
-              currentDiff={currentDiff}
-              onSelectDiff={setSelectedDiffId}
-              onOpenPreviewTab={onOpenPreviewTab}
-            />
-          ) : drawerView === "debug" ? (
-            <DebugPreview
-              info={debugPreview.debugInfo}
-              loading={debugPreview.debugLoading}
-              error={debugPreview.debugError}
-              runtimeReady={runtimeReady !== false}
-              starting={debugPreview.debugStarting}
-              onRequestStartDebugByMessage={onRequestStartDebugByMessage}
-              onStart={async () => {
-                if (runtimeReady === false) {
-                  if (onEnsureRuntime) {
-                    debugPreview.setDebugStarting(true);
-                    try {
-                      await onEnsureRuntime();
-                    } finally {
-                      debugPreview.setDebugStarting(false);
-                    }
+          </div>
+        ) : drawerView === "files" ? (
+          <FilePreview
+            sessionId={sessionId}
+            tree={filePreview.effectiveTree}
+            loading={filePreview.treeLoading}
+            error={filePreview.treeError}
+            selectedPath={filePreview.selectedPath}
+            file={filePreview.fileData}
+            contentError={filePreview.fileError}
+            contentLoading={filePreview.fileLoading}
+            expandedPaths={filePreview.expandedPaths}
+            dirState={filePreview.dirState}
+            onTogglePath={filePreview.handleTogglePath}
+            onLoadMoreDir={filePreview.handleLoadMoreDirectory}
+            onRefresh={() => void filePreview.refreshTree("manual")}
+            onSelectFile={handleReplayFileSelect}
+            runtimeReady={runtimeReady !== false}
+            runtimeStarting={runtimeStarting === true}
+            runtimeSwitchBlocked={runtimeSwitchBlocked}
+          />
+        ) : drawerView === "changes" ? (
+          <AltusPreviewChangesPanel
+            diffItems={diffItems}
+            currentDiff={currentDiff}
+            onSelectDiff={setSelectedDiffId}
+          />
+        ) : drawerView === "debug" ? (
+          <DebugPreview
+            info={debugPreview.debugInfo}
+            loading={debugPreview.debugLoading}
+            error={debugPreview.debugError}
+            runtimeReady={runtimeReady !== false}
+            starting={debugPreview.debugStarting}
+            onRequestStartDebugByMessage={onRequestStartDebugByMessage}
+            onStart={async () => {
+              if (runtimeReady === false) {
+                if (runtimeSwitchBlocked) {
+                  debugPreview.setDebugError(
+                    i18n.t("previewPanel.runtimeSwitchBlocked"),
+                  );
+                  return;
+                }
+                if (effectiveEnsureRuntime) {
+                  debugPreview.setDebugStarting(true);
+                  try {
+                    await effectiveEnsureRuntime();
+                  } finally {
+                    debugPreview.setDebugStarting(false);
                   }
-                  return;
                 }
-                if (!onRequestStartDebugByMessage) {
-                  debugPreview.setDebugError("缺少启动调试消息入口");
-                  return;
-                }
-                onRequestStartDebugByMessage();
-              }}
-            />
-          ) : (
-            <DeploymentPreview
-              sessionId={sessionId}
-              info={deploymentInfo}
-              templateBaseline={null}
-              templateBaselineLoading={false}
-              templateBaselineError={null}
-              loading={deploymentLoading}
-              error={deploymentError}
-              actionLoading={deploymentAction}
-              selectedDeploymentId={selectedDeploymentId}
-              onRefresh={(deploymentId) => void refreshDeployment(deploymentId)}
-              onSelectDeployment={(deploymentId) => {
-                setSelectedDeploymentId(deploymentId);
-                void refreshDeployment(deploymentId);
-              }}
-              onDeploy={() => void runDeploymentAction("deploy")}
-              onRedeploy={() => void runDeploymentAction("redeploy")}
-              onRollback={() => void runDeploymentAction("rollback")}
-              tokenRotationLoading={false}
-              onRotateDeploymentToken={() => undefined}
-            />
-          )}
-        </div>
+                return;
+              }
+              if (!onRequestStartDebugByMessage) {
+                debugPreview.setDebugError(
+                  i18n.t("previewPanel.debug.missingStartEntry"),
+                );
+                return;
+              }
+              onRequestStartDebugByMessage();
+            }}
+          />
+        ) : (
+          <DeploymentPreview
+            sessionId={sessionId}
+            info={deploymentInfo}
+            templateBaseline={null}
+            templateBaselineLoading={false}
+            templateBaselineError={null}
+            loading={deploymentLoading}
+            error={deploymentError}
+            actionLoading={deploymentAction}
+            selectedDeploymentId={selectedDeploymentId}
+            onRefresh={(deploymentId) => void refreshDeployment(deploymentId)}
+            onSelectDeployment={(deploymentId) => {
+              setSelectedDeploymentId(deploymentId);
+              void refreshDeployment(deploymentId);
+            }}
+            onDeploy={() => void runDeploymentAction("deploy")}
+            onRedeploy={() => void runDeploymentAction("redeploy")}
+            onRollback={() => void runDeploymentAction("rollback")}
+            tokenRotationLoading={false}
+            onRotateDeploymentToken={() => undefined}
+          />
+        )}
+      </div>
 
-        {drawerView === "actions" ? (
-        <div className="flex-shrink-0 border-t border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900">
+      {drawerView === "actions" ? (
+        <div
+          className={cn(
+            "flex-shrink-0 p-3",
+            embedded
+              ? "bg-transparent"
+              : "border-t border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900",
+          )}
+        >
           <div className="flex items-center justify-between">
             <Button
               type="button"
@@ -615,23 +869,27 @@ export default function AltusRunReplayDrawer({
               size="sm"
               disabled={!canGoPrev}
               className="h-8 rounded-2xl text-xs"
-              onClick={() => onSelectIndex(Math.max(0, currentIndex - 1))}
+              onClick={() =>
+                handleSelectActionIndex(Math.max(0, currentIndex - 1))
+              }
             >
               <ChevronLeft className="mr-1 h-3.5 w-3.5" />
-              <span>Prev</span>
+              <span>{i18n.t("replayDrawer.prev")}</span>
             </Button>
             <div className="flex items-center gap-1.5">
               <span className="min-w-[44px] text-xs font-medium tabular-nums text-zinc-600 dark:text-zinc-400">
-                {actions.length === 0 ? "0/0" : `${Math.min(currentIndex + 1, actions.length)}/${actions.length}`}
+                {actions.length === 0
+                  ? "0/0"
+                  : `${Math.min(currentIndex + 1, actions.length)}/${actions.length}`}
               </span>
               <button
                 type="button"
-                onClick={onJumpToLatest}
+                onClick={handleJumpToLatestAction}
                 className="flex items-center justify-center gap-1.5 rounded-full border border-zinc-200 bg-zinc-100 px-2.5 py-0.5 transition-colors hover:bg-zinc-200 dark:border-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700"
               >
                 <div className="h-1.5 w-1.5 rounded-full bg-zinc-500" />
                 <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                  Jump to Latest
+                  {i18n.t("replayDrawer.jumpToLatest")}
                 </span>
               </button>
             </div>
@@ -641,14 +899,34 @@ export default function AltusRunReplayDrawer({
               size="sm"
               disabled={!canGoNext}
               className="h-8 rounded-2xl text-xs"
-              onClick={() => onSelectIndex(Math.min(latestIndex, currentIndex + 1))}
+              onClick={() =>
+                handleSelectActionIndex(Math.min(latestIndex, currentIndex + 1))
+              }
             >
-              <span>Next</span>
+              <span>{i18n.t("replayDrawer.next")}</span>
               <ChevronRight className="ml-1 h-3.5 w-3.5" />
             </Button>
           </div>
         </div>
-        ) : null}
+      ) : null}
+    </div>
+  );
+
+  if (embedded) {
+    return (
+      <div className="flex h-full min-h-0 flex-col overflow-hidden bg-transparent">
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side="right"
+        className="top-4 right-4 bottom-4 left-auto flex h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] max-w-none flex-col overflow-hidden rounded-2xl border border-border/70 p-0 shadow-sm sm:max-w-none md:w-[calc((100vw-6rem)*0.66)] lg:w-[calc((100vw-18rem)*0.66)] [&>button.absolute]:hidden"
+      >
+        {content}
       </SheetContent>
     </Sheet>
   );
@@ -680,10 +958,10 @@ function ReplayHeaderTab({
 }
 
 function formatAltusTimestamp(value?: string | null): string {
-  if (!value) return "时间未知";
+  if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", {
+  return date.toLocaleString(i18n.language === "zh" ? "zh-CN" : "en-US", {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -695,38 +973,35 @@ function AltusPreviewChangesPanel({
   diffItems,
   currentDiff,
   onSelectDiff,
-  onOpenPreviewTab,
 }: {
   diffItems: PreviewDiffItem[];
   currentDiff: PreviewDiffItem | null;
   onSelectDiff: (id: string) => void;
-  onOpenPreviewTab?: (tab: "files" | "changes" | "debug" | "deployment") => void;
 }) {
+  useTranslation();
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-          更改
-          <span className="text-xs text-muted-foreground">{diffItems.length}</span>
+          {i18n.t("replayDrawer.changesTitle")}
+          <span className="text-xs text-muted-foreground">
+            {diffItems.length}
+          </span>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 rounded-full"
-          onClick={() => onOpenPreviewTab?.("changes")}
-        >
-          在内容预览中打开
-        </Button>
       </div>
-      <div className="flex-1 min-h-0 overflow-auto px-4 py-4 space-y-4">
+      <div className="flex-1 min-h-0 overflow-auto px-4 py-4 space-y-5">
         {diffItems.length ? (
           <>
-            <section className="rounded-lg border border-slate-200/80 bg-white p-4">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">最近更改</span>
+            <section className="space-y-2">
+              <div className="text-xs font-medium text-muted-foreground">
+                {i18n.t("replayDrawer.recentChanges")}
+              </div>
+              <div className="flex items-center">
                 <select
-                  className="text-xs border border-border rounded-md bg-background px-2 py-1 flex-1"
-                  value={currentDiff?.id || diffItems[diffItems.length - 1]?.id || ""}
+                  className="h-9 min-w-0 flex-1 rounded-md bg-transparent px-0 text-sm font-medium text-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-0"
+                  value={
+                    currentDiff?.id || diffItems[diffItems.length - 1]?.id || ""
+                  }
                   onChange={(event) => onSelectDiff(event.target.value)}
                 >
                   {diffItems
@@ -734,49 +1009,44 @@ function AltusPreviewChangesPanel({
                     .reverse()
                     .map((item, index) => (
                       <option key={item.id} value={item.id}>
-                        {(item.title || `Diff #${diffItems.length - index}`) +
-                          ` · ${formatAltusTimestamp(item.createdAt)}`}
+                        {[
+                          item.title || `Diff #${diffItems.length - index}`,
+                          formatAltusTimestamp(item.createdAt),
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
                       </option>
                     ))}
                 </select>
               </div>
             </section>
             {currentDiff ? (
-              <section className="rounded-lg border border-slate-200/80 bg-white p-4 space-y-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">
-                      当前更改
-                    </div>
-                    <div className="mt-1 truncate text-sm font-medium text-slate-900">
-                      {currentDiff.title || "最近更改"}
-                    </div>
-                  </div>
-                  <span className="text-xs text-slate-500">
-                    {formatAltusTimestamp(currentDiff.createdAt)}
-                  </span>
-                </div>
+              <section className="space-y-3">
                 {currentDiff.files?.length ? (
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-1.5">
                     {currentDiff.files.slice(0, 4).map((file) => (
                       <span
                         key={file.file}
-                        className="rounded-full border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600"
+                        className="rounded-md bg-muted px-2 py-0.5 text-[11px] text-muted-foreground"
                       >
                         {file.file}
                       </span>
                     ))}
                   </div>
                 ) : null}
-                <pre className="max-h-[28rem] overflow-auto whitespace-pre-wrap break-all rounded-md border border-border/60 bg-muted/40 p-3 text-xs leading-5 text-foreground">
-                  {currentDiff.diff || "当前更改没有可展示的原始 diff。"}
-                </pre>
+                <div className="overflow-hidden rounded-xl bg-zinc-950 text-zinc-100 shadow-inner ring-1 ring-zinc-900/10 dark:bg-zinc-950/80">
+                  <pre className="max-h-[30rem] overflow-auto p-4 font-mono text-[12px] leading-5 [tab-size:2]">
+                    <code>
+                      {currentDiff.diff || i18n.t("replayDrawer.noRawDiff")}
+                    </code>
+                  </pre>
+                </div>
               </section>
             ) : null}
           </>
         ) : (
           <div className="rounded-lg border border-dashed border-slate-200 px-6 py-12 text-center text-sm text-slate-500">
-            暂无更改
+            {i18n.t("replayDrawer.noChanges")}
           </div>
         )}
       </div>

@@ -49,6 +49,9 @@ export function createBillingManagementRoutes() {
   // 用户积分列表
   router.get('/users', proxyToApi);
 
+  // 计费规则元信息
+  router.get('/meta', proxyToApi);
+
   // 用户交易记录
   router.get('/users/:userId/transactions', proxyToApi);
 

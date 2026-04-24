@@ -53,6 +53,17 @@ export class ConversionService {
   }
 
   /**
+   * 获取当前计费换算规则（只读展示用）
+   */
+  getExchangeConfig() {
+    return {
+      creditToRmb: DEFAULT_CREDIT_TO_RMB,
+      rmbPer100Credits: this.creditsToRmb(100),
+      platformMargin: DEFAULT_PLATFORM_MARGIN,
+    };
+  }
+
+  /**
    * 根据 API 成本计算建议定价（credits / 1k tokens）
    */
   calculateSuggestedPricing(

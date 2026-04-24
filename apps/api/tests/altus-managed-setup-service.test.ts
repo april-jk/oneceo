@@ -304,3 +304,42 @@ test('buildTaskIntentProfile keeps clarifying the same field when a user respons
   assert.equal(profile.clarificationType, 'artifact_type');
   assert.match(profile.clarificationQuestion, /我还需要先确认这一点/);
 });
+
+test('buildTaskIntentProfile treats unrelated user_response as a new turn instead of reusing stale clarification', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我做一个企业管理系统',
+      metadata: {},
+    },
+    {
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这次希望使用哪种开发语言或框架？如果没有指定，我将按仓库现有技术栈继续。',
+      metadata: {},
+    },
+    {
+      role: 'user',
+      messageType: 'user_response',
+      content: '你帮我查查最近半导体行业的年报',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    pendingQuestion: '这次希望使用哪种开发语言或框架？如果没有指定，我将按仓库现有技术栈继续。',
+    pendingOptions: undefined,
+    pendingClarificationType: 'tech_stack',
+  }) as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-stale-clarification-new-turn',
+    '你帮我查查最近半导体行业的年报',
+    'user_response'
+  );
+
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.clarificationType, 'none');
+  assert.doesNotMatch(profile.clarificationQuestion, /开发语言或框架/);
+});

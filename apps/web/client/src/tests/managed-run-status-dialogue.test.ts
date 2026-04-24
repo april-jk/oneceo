@@ -5,6 +5,7 @@ import {
   getActiveManagedStatusText,
   getManagedToolPurposeSummary,
   groupManagedActivityItems,
+  resolveManagedToolReplayView,
   type ChatItem,
 } from "@/pages/Home";
 import type { AgentMessage } from "@/hooks/useTaskCreationAgent";
@@ -87,6 +88,20 @@ function createManagedTodoWriteMessage(
 }
 
 describe("managed run status dialogue", () => {
+  it("routes managed tool clicks to the matching replay drawer view", () => {
+    expect(resolveManagedToolReplayView("write_file")).toBe("actions");
+    expect(resolveManagedToolReplayView("debug_open_page")).toBe("debug");
+    expect(resolveManagedToolReplayView("deploy_application")).toBe(
+      "deployment",
+    );
+    expect(resolveManagedToolReplayView("redeploy_application")).toBe(
+      "deployment",
+    );
+    expect(
+      resolveManagedToolReplayView("get_application_deployment_status"),
+    ).toBe("deployment");
+  });
+
   it("keeps managed run_status between two tool cards", () => {
     const items = buildChatItems([
       createManagedToolMessage({

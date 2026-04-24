@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildChatItems,
   collapseRepeatedChatAuthors,
+  getActiveManagedStatusText,
   type ChatItem,
 } from "@/pages/Home";
 import type { AgentMessage } from "@/hooks/useTaskCreationAgent";
@@ -62,7 +63,7 @@ function createManagedStartingStatusMessage(content: string): AgentMessage {
 }
 
 describe("managed run status dialogue", () => {
-  it("renders managed run_status between tool cards as Altus dialogue", () => {
+  it("drops stale managed run_status once a following tool card arrives", () => {
     const items = buildChatItems([
       createManagedToolMessage({
         eventType: "tool_call_completed",
@@ -78,15 +79,33 @@ describe("managed run status dialogue", () => {
       }),
     ]);
 
-    expect(items).toHaveLength(3);
+    expect(items).toHaveLength(2);
     expect(items[0]?.kind).toBe("managed_tool");
-    expect(items[1]?.kind).toBe("agent_plain");
-    expect((items[1] as Extract<ChatItem, { kind: "agent_plain" }>).author).toBe("Altus");
-    expect((items[1] as Extract<ChatItem, { kind: "agent_plain" }>).text).toContain("决定下一步操作");
-    expect(items[2]?.kind).toBe("managed_tool");
+    expect(items[1]?.kind).toBe("managed_tool");
+    expect(
+      items.some(
+        (item) =>
+          item.kind === "agent_plain" &&
+          item.text.includes("决定下一步操作"),
+      ),
+    ).toBe(false);
   });
 
-  it("does not render managed starting run_status as dialogue", () => {
+  it("renders only the latest trailing managed run_status as an atomic status", () => {
+    const items = buildChatItems([
+      createManagedRunStatusMessage("已创建新的 sandbox，开始执行"),
+      createManagedRunStatusMessage("正在分析并执行任务"),
+    ]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.kind).toBe("managed_status");
+    expect(
+      (items[0] as Extract<ChatItem, { kind: "managed_status" }>).text,
+    ).toBe("正在分析并执行任务");
+    expect(getActiveManagedStatusText(items)).toBe("正在分析并执行任务");
+  });
+
+  it("drops stale managed starting run_status once a following tool card arrives", () => {
     const items = buildChatItems([
       createManagedStartingStatusMessage("正在准备 sandbox 与运行环境"),
       createManagedToolMessage({
@@ -101,7 +120,7 @@ describe("managed run status dialogue", () => {
     expect(items[0]?.kind).toBe("managed_tool");
   });
 
-  it("shows Altus author only once across consecutive narration separated by managed tools", () => {
+  it("keeps only the latest managed run_status around managed tools", () => {
     const items = collapseRepeatedChatAuthors(
       buildChatItems([
         createManagedRunStatusMessage("运行环境已经准备好了，我开始生成项目内容"),
@@ -122,18 +141,19 @@ describe("managed run status dialogue", () => {
       ]),
     );
 
-    const agentPlainItems = items.filter(
-      (item): item is Extract<ChatItem, { kind: "agent_plain" }> =>
-        item.kind === "agent_plain",
+    const managedStatusItems = items.filter(
+      (item): item is Extract<ChatItem, { kind: "managed_status" }> =>
+        item.kind === "managed_status",
     );
 
-    expect(agentPlainItems).toHaveLength(3);
-    expect(agentPlainItems[0]?.showAuthor).toBe(true);
-    expect(agentPlainItems[1]?.showAuthor).toBe(false);
-    expect(agentPlainItems[2]?.showAuthor).toBe(false);
+    expect(managedStatusItems).toHaveLength(1);
+    expect(managedStatusItems[0]?.text).toBe(
+      "界面样式已经整理好了，我继续补上操作逻辑",
+    );
+    expect(items.filter((item) => item.kind === "managed_tool")).toHaveLength(2);
   });
 
-  it("shows Altus author again after a new user round starts", () => {
+  it("starts a fresh managed run_status after a new user round", () => {
     const items = collapseRepeatedChatAuthors(
       buildChatItems([
         createManagedRunStatusMessage("运行环境已经准备好了，我开始生成项目内容"),
@@ -150,13 +170,9 @@ describe("managed run status dialogue", () => {
       ]),
     );
 
-    const agentPlainItems = items.filter(
-      (item): item is Extract<ChatItem, { kind: "agent_plain" }> =>
-        item.kind === "agent_plain",
-    );
-
-    expect(agentPlainItems).toHaveLength(2);
-    expect(agentPlainItems[0]?.showAuthor).toBe(true);
-    expect(agentPlainItems[1]?.showAuthor).toBe(true);
+    expect(items.some((item) => item.kind === "managed_status")).toBe(true);
+    expect(items[0]?.kind).toBe("user");
+    expect(items[1]?.kind).toBe("managed_status");
+    expect(getActiveManagedStatusText(items)).toBe("我继续补齐动效和收尾细节");
   });
 });

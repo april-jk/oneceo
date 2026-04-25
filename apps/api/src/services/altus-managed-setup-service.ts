@@ -199,6 +199,11 @@ export class AltusManagedSetupService {
   }
 
   async captureConnectorSnapshot(sessionId: string, userId: string) {
+    const memory = await taskCreationFileMemoryStore.getSession(sessionId).catch(() => null);
+    const orchestratorSessionId = asText(memory?.runtime?.orchestratorSessionId);
+    if (orchestratorSessionId) {
+      await sessionMcpRecoveryService.ensureSessionRecovered(sessionId, orchestratorSessionId).catch(() => null);
+    }
     let statuses = await sessionConnectorService.listSessionConnectors(sessionId, userId).catch(() => []);
     const attached = statuses
       .filter((item) => item.attached)

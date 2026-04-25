@@ -274,18 +274,7 @@ export class SessionMcpRecoveryService {
       orchestratorSessionId,
       jobId: job.id,
     });
-    void this.runRecoveryJob(job.id, taskSessionId).catch((error) => {
-      writeConnectorDebugLog(
-        '[SESSION_MCP_RECOVERY_RUN_ASYNC_FAILED]',
-        {
-          taskSessionId,
-          orchestratorSessionId,
-          jobId: job.id,
-          error: error instanceof Error ? error.message : String(error),
-        },
-        'error'
-      );
-    });
+    await this.runRecoveryJob(job.id, taskSessionId);
     return true;
   }
 

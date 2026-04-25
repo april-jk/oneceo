@@ -812,6 +812,26 @@ router.get('/stats', async (req, res) => {
 
     const totalTokens = Number(tokensResult[0]?.totalTokens || 0);
     const cachedTokens = Number(tokensResult[0]?.cachedTokens || 0);
+
+    // 积分消费/充值趋势
+    const dateFormat = period === 'today' ? 'HH24:00' : 'YYYY-MM-DD';
+    const trendResult = await db.execute(sql`
+      SELECT
+        TO_CHAR(created_at, ${dateFormat}) as label,
+        SUM(CASE WHEN type = 'consume' THEN ABS(amount) ELSE 0 END)::int as consumed,
+        SUM(CASE WHEN type IN ('recharge', 'adjust') THEN amount ELSE 0 END)::int as recharged
+      FROM credit_transactions
+      WHERE created_at >= ${startDate}
+      GROUP BY 1
+      ORDER BY 1
+    `);
+
+    const trendRows = Array.isArray((trendResult as any)?.rows) ? (trendResult as any).rows : [];
+    const trend = trendRows.map((row: any) => ({
+      label: String(row.label),
+      consumed: Number(row.consumed || 0),
+      recharged: Number(row.recharged || 0),
+    }));
     
     res.json({
       period,
@@ -829,6 +849,7 @@ router.get('/stats', async (req, res) => {
       topUsers,
       topModels,
       balanceDistribution,
+      trend,
       updatedAt: new Date().toISOString(),
     });
   } catch (error) {

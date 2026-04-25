@@ -1,5 +1,9 @@
 # Vercel 内部 MCP 包装层 OAuth-only 接入执行方案 [20260422-2201已采用]
 
+## 20260424 状态更新
+
+本文件中关于 “OAuth-only / Sign in with Vercel / PKCE / userinfo / refresh token / revoke token” 的授权描述已被 `vercel_integration_oauth_migration_doc_[20260424-2035已采用].md` 替代。当前仍沿用本文件的部分只有 internal MCP wrapper 与 sandbox 不直连 Vercel token 的运行边界。
+
 ## 1. 背景与目标
 
 当前仓库里的 `vercel` 连接器实现方向与本次需求不一致：

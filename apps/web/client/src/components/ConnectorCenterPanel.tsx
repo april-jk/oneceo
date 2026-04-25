@@ -157,6 +157,10 @@ function buildConnectorRedirectUri(
   [
     "code",
     "state",
+    "teamId",
+    "configurationId",
+    "next",
+    "source",
     "settings",
     "settingsTab",
     "connector_oauth",
@@ -221,6 +225,10 @@ export function cleanupConnectorQuery(
   [
     "code",
     "state",
+    "teamId",
+    "configurationId",
+    "next",
+    "source",
     "connector_oauth",
     "connector",
     "profileId",
@@ -352,7 +360,7 @@ function isGithubConnector(item: ConnectorCatalogItem | null | undefined) {
 }
 
 export function shouldUseConnectorLevelOauth(connectorKey: ConnectorKey | null | undefined) {
-  return connectorKey === "notion" || connectorKey === "slack";
+  return connectorKey === "notion" || connectorKey === "slack" || connectorKey === "vercel";
 }
 
 export function shouldUseUnifiedConnectorCard(connectorKey: ConnectorKey | null | undefined) {
@@ -464,7 +472,7 @@ export function ConnectorCenterPanel({
     const connector = callbackContext.connector;
     const profileId = params.get("profileId");
     const useConnectorLevelOauth = shouldUseConnectorLevelOauth(connector);
-    const useConnectorLevelCallback = useConnectorLevelOauth || (connector === "vercel" && !profileId);
+    const useConnectorLevelCallback = useConnectorLevelOauth;
     if (!callbackContext.shouldHandle) return;
     if (!code || !state || !connector) return;
     if (!useConnectorLevelCallback && !profileId) return;
@@ -513,6 +521,10 @@ export function ConnectorCenterPanel({
             code,
             state,
             redirectUri,
+            teamId: asText(params.get("teamId")),
+            configurationId: asText(params.get("configurationId")),
+            next: asText(params.get("next")),
+            source: asText(params.get("source")),
           });
           completedProfileId =
             result.account?.defaultProfileId || result.account?.profileId || completedProfileId;
@@ -524,6 +536,10 @@ export function ConnectorCenterPanel({
             code,
             state,
             redirectUri,
+            teamId: asText(params.get("teamId")),
+            configurationId: asText(params.get("configurationId")),
+            next: asText(params.get("next")),
+            source: asText(params.get("source")),
           });
           completedProfileId =
             result.profile?.profileId || result.account?.profileId || completedProfileId;
@@ -817,6 +833,10 @@ export function ConnectorCenterPanel({
                   ? {
                       callbackPath: NOTION_FIXED_CALLBACK_PATH,
                     }
+                  : detailItem.key === "vercel"
+                    ? {
+                        callbackPath: VERCEL_FIXED_CALLBACK_PATH,
+                      }
                   : undefined
               );
         const { authUrl } = await startConnectorOauth(detailItem.key, {

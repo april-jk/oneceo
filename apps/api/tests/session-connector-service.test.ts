@@ -19,6 +19,7 @@ const envBackup = {
   VERCEL_CONNECTOR_CLIENT_ID: process.env.VERCEL_CONNECTOR_CLIENT_ID,
   VERCEL_CONNECTOR_CLIENT_SECRET: process.env.VERCEL_CONNECTOR_CLIENT_SECRET,
   VERCEL_CONNECTOR_REDIRECT_URI: process.env.VERCEL_CONNECTOR_REDIRECT_URI,
+  VERCEL_INTERNAL_MCP_URL: process.env.VERCEL_INTERNAL_MCP_URL,
   ONECEO_INTERNAL_TOKEN: process.env.ONECEO_INTERNAL_TOKEN,
   CONNECTOR_SECRET_KEY: process.env.CONNECTOR_SECRET_KEY,
   FRONTEND_URL: process.env.FRONTEND_URL,
@@ -71,11 +72,13 @@ test('buildProviderTransport injects proxy env for supabase local bridge transpo
   assert.equal(result.transport.env.no_proxy, 'localhost,127.0.0.1');
 });
 
-test('buildProviderTransport keeps non-supabase remote transport unchanged', () => {
+test('buildProviderTransport materializes vercel as local stdio bridge', () => {
   process.env.ONECEO_PROXY_ENABLED = 'true';
   process.env.HTTP_PROXY = 'http://127.0.0.1:7890';
   process.env.HTTPS_PROXY = 'http://127.0.0.1:7890';
+  process.env.NO_PROXY = 'localhost,127.0.0.1';
   process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
+  process.env.VERCEL_INTERNAL_MCP_URL = 'https://dev.oneceo.ai/api/internal/connectors/vercel/mcp';
   process.env.VERCEL_CONNECTOR_CLIENT_ID = 'vercel-client';
   process.env.VERCEL_CONNECTOR_CLIENT_SECRET = 'vercel-secret';
   process.env.VERCEL_CONNECTOR_REDIRECT_URI = '/vercel/callback';
@@ -88,11 +91,19 @@ test('buildProviderTransport keeps non-supabase remote transport unchanged', () 
     userId: 'user-1',
   });
 
-  assert.equal(result.transport.type, 'streamable_http');
-  assert.deepEqual(result.transport.env, {});
-  assert.equal(result.transport.headers['x-oneceo-internal-token'], 'internal-token');
+  assert.equal(result.transport.type, 'local_stdio');
+  assert.equal(result.transport.command[0], 'node');
+  assert.equal(result.transport.command[1], '-e');
+  assert.match(result.transport.command[2], /VERCEL_BRIDGE_RUNTIME_AUTH/);
+  assert.equal(result.transport.env.VERCEL_INTERNAL_TOKEN, 'internal-token');
+  assert.equal(
+    result.transport.env.VERCEL_INTERNAL_MCP_URL,
+    'https://dev.oneceo.ai/api/internal/connectors/vercel/mcp'
+  );
+  assert.equal(result.transport.env.HTTP_PROXY, 'http://127.0.0.1:7890');
+  assert.equal(result.transport.env.NO_PROXY, 'localhost,127.0.0.1');
   const runtimeContext = parseInternalConnectorRuntimeToken(
-    String(result.transport.headers['x-oneceo-connector-runtime-auth'] || ''),
+    String(result.transport.env.VERCEL_BRIDGE_RUNTIME_AUTH || ''),
     'vercel'
   );
   assert.equal(runtimeContext.taskSessionId, 'task-1');

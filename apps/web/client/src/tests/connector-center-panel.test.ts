@@ -19,9 +19,10 @@ describe("connector center panel profile id normalization", () => {
     expect(normalizeEditableProfileId("profile-123")).toBe("profile-123");
   });
 
-  it("uses connector-level OAuth for Notion", () => {
+  it("uses connector-level OAuth for Notion, Slack, and Vercel", () => {
     expect(shouldUseConnectorLevelOauth("notion")).toBe(true);
     expect(shouldUseConnectorLevelOauth("slack")).toBe(true);
+    expect(shouldUseConnectorLevelOauth("vercel")).toBe(true);
     expect(shouldUseConnectorLevelOauth("github")).toBe(false);
   });
 

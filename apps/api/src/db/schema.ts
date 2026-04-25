@@ -1346,10 +1346,35 @@ export const modelPricing = pgTable(
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },
   (table) => ({
-    modelUnique: uniqueIndex('idx_model_pricing_model_active')
-      .on(table.model)
-      .where(sql`${table.isActive} = true`),
+    modelActiveIdx: index('idx_model_pricing_model_active')
+      .on(table.model, table.isActive, table.effectiveFrom),
     activeIdx: index('idx_model_pricing_active').on(table.isActive),
+  })
+);
+
+/**
+ * 缓存计费比例配置表
+ *
+ * 各模型提供商的缓存命中/创建计费比例（千分比整数存库）
+ * 如 hitRatio=500 表示 50%，creationRatio=1250 表示 125%
+ */
+export const cachePricingConfig = pgTable(
+  'cache_pricing_config',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    provider: text('provider').notNull(),
+    hitRatio: integer('hit_ratio').notNull(),
+    creationRatio: integer('creation_ratio').notNull(),
+    isActive: boolean('is_active').notNull().default(true),
+    effectiveFrom: timestamp('effective_from').notNull().defaultNow(),
+    effectiveUntil: timestamp('effective_until'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    providerUnique: uniqueIndex('idx_cache_pricing_config_provider_active')
+      .on(table.provider)
+      .where(sql`${table.isActive} = true`),
   })
 );
 
@@ -1357,6 +1382,8 @@ export type UserCredit = typeof userCredits.$inferSelect;
 export type NewUserCredit = typeof userCredits.$inferInsert;
 export type CreditTransaction = typeof creditTransactions.$inferSelect;
 export type NewCreditTransaction = typeof creditTransactions.$inferInsert;
+export type CachePricingConfig = typeof cachePricingConfig.$inferSelect;
+export type NewCachePricingConfig = typeof cachePricingConfig.$inferInsert;
 export type TokenUsageLog = typeof tokenUsageLogs.$inferSelect;
 export type NewTokenUsageLog = typeof tokenUsageLogs.$inferInsert;
 export type ModelPricing = typeof modelPricing.$inferSelect;

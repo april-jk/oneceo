@@ -47,7 +47,9 @@ router.get('/transactions', async (req, res) => {
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
     const type = req.query.type as string | undefined;
 
-    const result = await billingService.getTransactions(userId, { page, limit, type });
+    const result = type
+      ? await billingService.getTransactions(userId, { page, limit, type })
+      : await billingService.getSessionConsumptionRecords(userId, { page, limit });
 
     res.json({
       items: result.items,
@@ -78,8 +80,6 @@ router.get('/session/:sessionId/usage', async (req, res) => {
     res.json({
       sessionId,
       totalCredits: usage.totalCredits,
-      totalTokens: usage.totalTokens,
-      modelBreakdown: usage.modelBreakdown,
     });
   } catch (error) {
     console.error('[Billing] 获取会话使用记录失败:', error);
@@ -96,14 +96,16 @@ router.get('/pricing', async (req, res) => {
     const pricingList = await pricingService.listActivePricing();
     
     // 添加缓存比例信息
-    const pricingWithCache = pricingList.map((p) => {
-      const ratios = pricingService.getCacheRatios(p.modelProvider);
-      return {
-        ...p,
-        cacheHitRatio: ratios?.hit || 0,
-        cacheCreationRatio: ratios?.creation || 0,
-      };
-    });
+    const pricingWithCache = await Promise.all(
+      pricingList.map(async (p) => {
+        const ratios = await pricingService.getCacheRatiosForPricing(p);
+        return {
+          ...p,
+          cacheHitRatio: ratios?.hit || 0,
+          cacheCreationRatio: ratios?.creation || 0,
+        };
+      })
+    );
 
     res.json({ items: pricingWithCache });
   } catch (error) {

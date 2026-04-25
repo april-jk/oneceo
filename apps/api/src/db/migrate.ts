@@ -1466,7 +1466,7 @@ CREATE TABLE IF NOT EXISTS model_pricing (
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 DROP INDEX IF EXISTS idx_model_pricing_model_active;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_model_pricing_model_active ON model_pricing(model) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_model_pricing_model_active ON model_pricing(model, is_active, effective_from);
 CREATE INDEX IF NOT EXISTS idx_model_pricing_active ON model_pricing(is_active);
 
 -- 缓存计费比例配置表
@@ -1491,7 +1491,8 @@ CREATE UNIQUE INDEX idx_cache_pricing_config_provider_active
 INSERT INTO cache_pricing_config (provider, hit_ratio, creation_ratio, is_active)
 VALUES
   ('openai', 500, 0, true),
-  ('anthropic', 100, 1250, true)
+  ('anthropic', 100, 1250, true),
+  ('qwen', 200, 1250, true)
 ON CONFLICT DO NOTHING;
 `;
 
@@ -1554,14 +1555,6 @@ export async function inspectDatabaseSchemaReadiness(): Promise<SchemaReadinessR
     }
   }
 
-  const pricingActiveIndexDefinition = indexDefinitions.get('idx_model_pricing_model_active') || '';
-  if (
-    pricingActiveIndexDefinition &&
-    !pricingActiveIndexDefinition.toLowerCase().includes('where (is_active = true)')
-  ) {
-    missing.push('index:idx_model_pricing_model_active(partial-active)');
-  }
-
   const cacheConfigActiveIndexDefinition = indexDefinitions.get('idx_cache_pricing_config_provider_active') || '';
   if (
     cacheConfigActiveIndexDefinition &&
@@ -1594,12 +1587,27 @@ export async function runMigration() {
 
     // 插入当前使用的模型默认定价（如不存在）
     await db.execute(sql.raw(`
+      WITH seed(model, model_provider, prompt_price_per_1k_tokens, completion_price_per_1k_tokens) AS (
+        VALUES
+          ('qwen3-max-2026-01-23', 'qwen', 3, 6),
+          ('qwen3-vl-plus', 'qwen', 5, 10),
+          ('claude-haiku-4-5-20251001', 'anthropic', 5, 10)
+      )
       INSERT INTO model_pricing (model, model_provider, prompt_price_per_1k_tokens, completion_price_per_1k_tokens, is_active, effective_from)
-      VALUES
-        ('qwen3-max-2026-01-23', 'openai', 3, 6, true, NOW()),
-        ('qwen3-vl-plus', 'openai', 5, 10, true, NOW()),
-        ('claude-haiku-4-5-20251001', 'anthropic', 5, 10, true, NOW())
-      ON CONFLICT (model) WHERE is_active = TRUE DO NOTHING;
+      SELECT seed.model, seed.model_provider, seed.prompt_price_per_1k_tokens, seed.completion_price_per_1k_tokens, true, NOW()
+      FROM seed
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM model_pricing existing
+        WHERE existing.model = seed.model
+          AND existing.is_active = TRUE
+          AND existing.effective_from <= NOW()
+          AND (existing.effective_until IS NULL OR existing.effective_until > NOW())
+      );
+
+      UPDATE model_pricing
+      SET model_provider = 'qwen', updated_at = NOW()
+      WHERE LOWER(model) LIKE 'qwen%';
     `));
 
     console.log('✅ 数据库迁移完成！');

@@ -9,12 +9,159 @@ import { adminAuthMiddleware } from '../middleware/admin-auth-middleware';
 
 const router = express.Router();
 const POSTGRES_INTEGER_MAX = 2147483647;
+const CACHE_HIT_RATIO_MAX = 1000; // 100%，存储单位为千分比
+const CACHE_CREATION_RATIO_MAX = 10000; // 1000%，允许缓存创建倍率高于 100%
+const BILLING_DEBUG_MAX_PROMPT_CHARS = 24000;
+const BILLING_DEBUG_MAX_TOKENS = 512;
+
+type BillingDebugMode = 'request_only' | 'dry_run';
+
+function readNumericField(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function pickNumericField(warnings: string[], label: string, candidates: Array<[string, unknown]>) {
+  const values = candidates
+    .map(([path, value]) => ({ path, value: readNumericField(value), raw: value }))
+    .filter((item) => item.value !== undefined) as Array<{ path: string; value: number; raw: unknown }>;
+  if (values.length === 0) return 0;
+  const first = values[0];
+  const conflicts = values.filter((item) => item.value !== first.value);
+  if (conflicts.length > 0) {
+    warnings.push(`${label} 等价字段不一致：${values.map((item) => `${item.path}=${item.value}`).join(', ')}`);
+  }
+  for (const item of values) {
+    if (typeof item.raw === 'string') warnings.push(`${item.path} 为字符串，已转换为数字`);
+    if (item.value < 0) warnings.push(`${item.path} 为负数`);
+  }
+  return Math.max(0, first.value);
+}
+
+function normalizeBillingDebugUsage(rawUsage: any) {
+  const warnings: string[] = [];
+  const usage = rawUsage && typeof rawUsage === 'object' ? rawUsage : {};
+  const details = usage.prompt_tokens_details && typeof usage.prompt_tokens_details === 'object'
+    ? usage.prompt_tokens_details
+    : {};
+  const cacheCreation = details.cache_creation && typeof details.cache_creation === 'object'
+    ? details.cache_creation
+    : {};
+
+  const promptTokens = pickNumericField(warnings, 'prompt tokens', [
+    ['usage.prompt_tokens', usage.prompt_tokens],
+    ['usage.input_tokens', usage.input_tokens],
+  ]);
+  const completionTokens = pickNumericField(warnings, 'completion tokens', [
+    ['usage.completion_tokens', usage.completion_tokens],
+    ['usage.output_tokens', usage.output_tokens],
+  ]);
+  const totalTokensFromUsage = pickNumericField(warnings, 'total tokens', [
+    ['usage.total_tokens', usage.total_tokens],
+  ]);
+  const cachedPromptTokens = pickNumericField(warnings, 'cached prompt tokens', [
+    ['usage.prompt_tokens_details.cached_tokens', details.cached_tokens],
+    ['usage.cached_tokens', usage.cached_tokens],
+    ['usage.cache_read_input_tokens', usage.cache_read_input_tokens],
+  ]);
+  const cacheCreationTokens = pickNumericField(warnings, 'cache creation tokens', [
+    ['usage.prompt_tokens_details.cache_creation_input_tokens', details.cache_creation_input_tokens],
+    ['usage.prompt_tokens_details.cache_creation.cache_creation_input_tokens', cacheCreation.cache_creation_input_tokens],
+    ['usage.prompt_tokens_details.cache_creation.ephemeral_5m_input_tokens', cacheCreation.ephemeral_5m_input_tokens],
+    ['usage.cache_creation_input_tokens', usage.cache_creation_input_tokens],
+  ]);
+
+  if (!rawUsage || typeof rawUsage !== 'object') warnings.push('上游未返回 usage，不能计算真实扣费');
+  if (promptTokens <= 0) warnings.push('缺少有效 prompt/input tokens');
+  if (completionTokens < 0) warnings.push('completion/output tokens 异常');
+  if (cachedPromptTokens + cacheCreationTokens > promptTokens) {
+    warnings.push('cached tokens + cache creation tokens 超过 prompt tokens');
+  }
+
+  const nonCachedPromptTokens = Math.max(0, promptTokens - cachedPromptTokens - cacheCreationTokens);
+  return {
+    normalizedUsage: {
+      promptTokens,
+      cachedPromptTokens,
+      cacheCreationTokens,
+      nonCachedPromptTokens,
+      completionTokens,
+      totalTokens: totalTokensFromUsage || promptTokens + completionTokens,
+    },
+    warnings,
+  };
+}
+
+function buildBillingDebugMessages(input: { cacheMode: string; systemPrompt: string; userPrompt: string }) {
+  if (input.cacheMode === 'explicit') {
+    return [
+      {
+        role: 'system',
+        content: [
+          {
+            type: 'text',
+            text: input.systemPrompt,
+            cache_control: { type: 'ephemeral' },
+          },
+        ],
+      },
+      { role: 'user', content: input.userPrompt },
+    ];
+  }
+  return [
+    { role: 'system', content: input.systemPrompt },
+    { role: 'user', content: input.userPrompt },
+  ];
+}
+
+function calculateBillingDebugBreakdown(input: {
+  promptPricePer1kTokens: number;
+  completionPricePer1kTokens: number;
+  cacheHitRatio: number;
+  cacheCreationRatio: number;
+  normalizedUsage: {
+    nonCachedPromptTokens: number;
+    cachedPromptTokens: number;
+    cacheCreationTokens: number;
+    completionTokens: number;
+  };
+  totalCredits: number;
+  creditToRmb: number;
+}) {
+  const regularPromptCredits = input.normalizedUsage.nonCachedPromptTokens * input.promptPricePer1kTokens / 1000;
+  const cachedPromptCredits = input.normalizedUsage.cachedPromptTokens * input.promptPricePer1kTokens * input.cacheHitRatio / 1000;
+  const cacheCreationCredits = input.normalizedUsage.cacheCreationTokens * input.promptPricePer1kTokens * input.cacheCreationRatio / 1000;
+  const completionCredits = input.normalizedUsage.completionTokens * input.completionPricePer1kTokens / 1000;
+  const totalCreditsBeforeCeil = regularPromptCredits + cachedPromptCredits + cacheCreationCredits + completionCredits;
+  return {
+    regularPromptCredits,
+    cachedPromptCredits,
+    cacheCreationCredits,
+    completionCredits,
+    totalCreditsBeforeCeil,
+    totalCredits: input.totalCredits,
+    rmbEquivalent: conversionService.creditsToRmb(input.totalCredits, input.creditToRmb),
+  };
+}
 
 function isPositivePostgresInteger(value: unknown) {
   return (
     typeof value === 'number' &&
     Number.isInteger(value) &&
     value > 0 &&
+    value <= POSTGRES_INTEGER_MAX
+  );
+}
+
+function isNonNegativePostgresInteger(value: unknown) {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 0 &&
     value <= POSTGRES_INTEGER_MAX
   );
 }
@@ -28,11 +175,17 @@ router.use(adminAuthMiddleware);
 router.get('/meta', async (_req, res) => {
   try {
     const exchange = conversionService.getExchangeConfig();
+    const [openaiRatios, anthropicRatios, qwenRatios] = await Promise.all([
+      pricingService.getCacheRatios('openai'),
+      pricingService.getCacheRatios('anthropic'),
+      pricingService.getCacheRatios('qwen'),
+    ]);
     res.json({
       ...exchange,
       cacheRatios: {
-        openai: pricingService.getCacheRatios('openai'),
-        anthropic: pricingService.getCacheRatios('anthropic'),
+        openai: openaiRatios,
+        anthropic: anthropicRatios,
+        qwen: qwenRatios,
       },
     });
   } catch (error) {
@@ -114,6 +267,37 @@ router.get('/users', async (req, res) => {
 });
 
 /**
+ * GET /api/internal/billing/users/:userId/billing-detail
+ * 用户详情页计费信息：余额、使用明细、获取历史
+ */
+router.get('/users/:userId/billing-detail', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const [credits, usageRecords, acquisitionHistory] = await Promise.all([
+      billingService.getUserCredits(userId),
+      billingService.getSessionConsumptionRecords(userId, { page: 1, limit: 20 }),
+      billingService.getCreditAcquisitionHistory(userId, { page: 1, limit: 20 }),
+    ]);
+
+    res.json({
+      credits: credits
+        ? {
+            balance: credits.balance,
+            totalEarned: credits.totalEarned,
+            totalConsumed: credits.totalConsumed,
+            lastRechargeAt: credits.lastRechargeAt,
+          }
+        : { balance: 0, totalEarned: 0, totalConsumed: 0, lastRechargeAt: null },
+      usageRecords,
+      acquisitionHistory,
+    });
+  } catch (error) {
+    console.error('[Billing Admin] 获取用户计费详情失败:', error);
+    res.status(500).json({ error: '获取用户计费详情失败' });
+  }
+});
+
+/**
  * POST /api/internal/billing/users/:userId/adjust
  * 手动调整用户积分
  */
@@ -171,21 +355,230 @@ router.get('/users/:userId/transactions', async (req, res) => {
 });
 
 /**
+ * GET /api/internal/billing/cache-config
+ * 缓存比例配置列表
+ */
+router.get('/cache-config', async (_req, res) => {
+  try {
+    const configs = await pricingService.listActiveCacheConfigs();
+    res.json({ items: configs });
+  } catch (error) {
+    console.error('[Billing Admin] 获取缓存配置失败:', error);
+    res.status(500).json({ error: '获取缓存配置失败' });
+  }
+});
+
+/**
+ * POST /api/internal/billing/cache-config
+ * 新增/更新缓存比例配置
+ */
+router.post('/cache-config', async (req, res) => {
+  try {
+    const { provider, hitRatio, creationRatio } = req.body;
+
+    if (!provider || typeof provider !== 'string') {
+      return res.status(400).json({ error: '缺少 provider 参数' });
+    }
+    if (
+      typeof hitRatio !== 'number' ||
+      !Number.isInteger(hitRatio) ||
+      hitRatio < 0 ||
+      hitRatio > CACHE_HIT_RATIO_MAX
+    ) {
+      return res.status(400).json({ error: 'hitRatio 必须是 0 到 1000 之间的整数' });
+    }
+    if (
+      typeof creationRatio !== 'number' ||
+      !Number.isInteger(creationRatio) ||
+      creationRatio < 0 ||
+      creationRatio > CACHE_CREATION_RATIO_MAX
+    ) {
+      return res.status(400).json({ error: 'creationRatio 必须是 0 到 10000 之间的整数' });
+    }
+
+    const result = await pricingService.createCacheConfig({
+      provider,
+      hitRatio,
+      creationRatio,
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error('[Billing Admin] 创建缓存配置失败:', error);
+    res.status(500).json({ error: '创建缓存配置失败' });
+  }
+});
+
+/**
+ * POST /api/internal/billing/debug/llm-request
+ * 管理端计费调试：发起真实上游请求，返回 usage 归一化与 dry-run 积分计算；不扣用户积分。
+ */
+router.post('/debug/llm-request', async (req, res) => {
+  try {
+    const {
+      model,
+      cacheMode = 'implicit',
+      systemPrompt,
+      userPrompt,
+      maxTokens = 64,
+      temperature = 0,
+      mode = 'request_only',
+    } = req.body || {};
+
+    if (!model || typeof model !== 'string') {
+      return res.status(400).json({ error: '缺少模型名称' });
+    }
+    if (!['none', 'implicit', 'explicit'].includes(String(cacheMode))) {
+      return res.status(400).json({ error: 'cacheMode 必须是 none、implicit 或 explicit' });
+    }
+    if (!['request_only', 'dry_run'].includes(String(mode))) {
+      return res.status(400).json({ error: 'mode 首版仅支持 request_only 或 dry_run' });
+    }
+
+    const safeSystemPrompt = String(systemPrompt || '').trim();
+    const safeUserPrompt = String(userPrompt || '').trim();
+    if (!safeSystemPrompt || !safeUserPrompt) {
+      return res.status(400).json({ error: 'systemPrompt 和 userPrompt 不能为空' });
+    }
+    if (safeSystemPrompt.length + safeUserPrompt.length > BILLING_DEBUG_MAX_PROMPT_CHARS) {
+      return res.status(400).json({ error: `调试 prompt 总长度不能超过 ${BILLING_DEBUG_MAX_PROMPT_CHARS} 字符` });
+    }
+
+    const parsedMaxTokens = Math.min(
+      BILLING_DEBUG_MAX_TOKENS,
+      Math.max(1, Math.floor(Number(maxTokens) || 64))
+    );
+    const parsedTemperature = Math.min(2, Math.max(0, Number(temperature) || 0));
+    const messages = buildBillingDebugMessages({
+      cacheMode: String(cacheMode),
+      systemPrompt: safeSystemPrompt,
+      userPrompt: safeUserPrompt,
+    });
+    const startedAt = Date.now();
+    const localProxyUrl = `http://127.0.0.1:${process.env.PORT || '4000'}/api/llm-proxy/v1/chat/completions`;
+
+    const upstreamResponse = await fetch(localProxyUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: model.trim(),
+        messages,
+        max_tokens: parsedMaxTokens,
+        temperature: parsedTemperature,
+        stream: false,
+      }),
+    });
+    const responseText = await upstreamResponse.text();
+    let responseJson: any = null;
+    try {
+      responseJson = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      responseJson = null;
+    }
+
+    const rawUsage = responseJson?.usage || null;
+    const { normalizedUsage, warnings } = normalizeBillingDebugUsage(rawUsage);
+    const exchange = conversionService.getExchangeConfig();
+    const pricing = await pricingService.getActivePricing(model.trim());
+    const provider = pricing
+      ? pricingService.resolveCacheProvider(pricing)
+      : pricingService.resolveCacheProvider({ model: model.trim(), modelProvider: 'openai' });
+    const cacheRatios = pricing ? await pricingService.getCacheRatiosForPricing(pricing) : await pricingService.getCacheRatios(provider);
+
+    let calculation: any = null;
+    let pricingSnapshot: any = null;
+    if (!pricing) {
+      warnings.push(`模型 ${model.trim()} 没有生效定价，无法计算积分`);
+    } else if (normalizedUsage.promptTokens <= 0) {
+      warnings.push('缺少有效 usage，无法计算积分');
+    } else if (normalizedUsage.cachedPromptTokens + normalizedUsage.cacheCreationTokens > normalizedUsage.promptTokens) {
+      warnings.push('usage 字段不可信，已阻断积分计算');
+    } else {
+      const totalCredits = pricingService.calculateCredits(
+        {
+          promptTokens: normalizedUsage.promptTokens,
+          cachedPromptTokens: normalizedUsage.cachedPromptTokens,
+          nonCachedPromptTokens: normalizedUsage.nonCachedPromptTokens,
+          cacheCreationTokens: normalizedUsage.cacheCreationTokens,
+          completionTokens: normalizedUsage.completionTokens,
+        },
+        pricing,
+        cacheRatios || undefined
+      );
+      pricingSnapshot = {
+        model: pricing.model,
+        modelProvider: provider,
+        originalModelProvider: pricing.modelProvider,
+        resolvedCacheProvider: provider,
+        promptPricePer1kTokens: pricing.promptPricePer1kTokens,
+        completionPricePer1kTokens: pricing.completionPricePer1kTokens,
+        cacheHitRatio: cacheRatios?.hit || 0,
+        cacheCreationRatio: cacheRatios?.creation || 0,
+        creditToRmb: exchange.creditToRmb,
+      };
+      calculation = calculateBillingDebugBreakdown({
+        promptPricePer1kTokens: pricing.promptPricePer1kTokens,
+        completionPricePer1kTokens: pricing.completionPricePer1kTokens,
+        cacheHitRatio: cacheRatios?.hit || 0,
+        cacheCreationRatio: cacheRatios?.creation || 0,
+        normalizedUsage,
+        totalCredits,
+        creditToRmb: exchange.creditToRmb,
+      });
+    }
+
+    res.status(upstreamResponse.ok ? 200 : upstreamResponse.status).json({
+      mode: mode as BillingDebugMode,
+      dryRun: mode === 'dry_run',
+      charged: false,
+      upstream: {
+        provider: 'dashscope-compatible',
+        baseUrlName: 'dashscope-compatible',
+        model: model.trim(),
+        requestId: responseJson?.id || responseJson?.request_id || null,
+        status: upstreamResponse.status,
+        latencyMs: Date.now() - startedAt,
+      },
+      request: {
+        cacheMode: String(cacheMode),
+        stream: false,
+        maxTokens: parsedMaxTokens,
+        temperature: parsedTemperature,
+        promptChars: safeSystemPrompt.length + safeUserPrompt.length,
+      },
+      rawUsage,
+      normalizedUsage,
+      pricing: pricingSnapshot,
+      exchange,
+      calculation,
+      userVisiblePreview: calculation ? `本次消耗 ${calculation.totalCredits} 积分` : null,
+      warnings,
+      error: upstreamResponse.ok ? null : (responseJson?.error?.message || responseJson?.message || responseText.slice(0, 500)),
+    });
+  } catch (error) {
+    console.error('[Billing Admin] 调试 LLM 请求失败:', error);
+    res.status(500).json({ error: '调试 LLM 请求失败' });
+  }
+});
+
+/**
  * GET /api/internal/billing/pricing
  * 模型定价列表
  */
 router.get('/pricing', async (req, res) => {
   try {
     const pricingList = await pricingService.listAllPricing();
-    
-    const pricingWithCache = pricingList.map((p) => {
-      const ratios = pricingService.getCacheRatios(p.modelProvider);
-      return {
-        ...p,
-        cacheHitRatio: ratios?.hit || 0,
-        cacheCreationRatio: ratios?.creation || 0,
-      };
-    });
+
+    const pricingWithCache = await Promise.all(
+      pricingList.map(async (p) => {
+        const ratios = await pricingService.getCacheRatiosForPricing(p);
+        return {
+          ...p,
+          cacheHitRatio: ratios?.hit || 0,
+          cacheCreationRatio: ratios?.creation || 0,
+        };
+      })
+    );
 
     res.json({ items: pricingWithCache });
   } catch (error) {
@@ -195,12 +588,67 @@ router.get('/pricing', async (req, res) => {
 });
 
 /**
+ * GET /api/internal/billing/pricing/model-candidates
+ * 从当前定价与实际使用日志中读取模型候选，辅助管理员新建定价
+ */
+router.get('/pricing/model-candidates', async (_req, res) => {
+  try {
+    const result = await db.execute(sql`
+      WITH candidates AS (
+        SELECT model, model_provider AS provider, MAX(created_at) AS last_seen_at, BOOL_OR(is_active) AS has_active_pricing
+        FROM model_pricing
+        GROUP BY model, model_provider
+        UNION ALL
+        SELECT model, NULL::text AS provider, MAX(created_at) AS last_seen_at, false AS has_active_pricing
+        FROM token_usage_logs
+        GROUP BY model
+      )
+      SELECT
+        model,
+        CASE
+          WHEN LOWER(model) LIKE 'qwen%' OR LOWER(model) LIKE '%/qwen%' THEN 'qwen'
+          WHEN LOWER(model) LIKE 'claude%' OR LOWER(model) LIKE '%anthropic%' THEN 'anthropic'
+          WHEN LOWER(model) LIKE 'deepseek%' THEN 'deepseek'
+          ELSE COALESCE(MAX(provider), 'openai')
+        END AS provider,
+        MAX(last_seen_at) AS last_seen_at,
+        BOOL_OR(has_active_pricing) AS has_active_pricing
+      FROM candidates
+      WHERE model IS NOT NULL AND model <> ''
+      GROUP BY model
+      ORDER BY has_active_pricing ASC, last_seen_at DESC NULLS LAST, model ASC
+      LIMIT 100
+    `);
+    const rows = Array.isArray((result as any)?.rows) ? (result as any).rows : [];
+    res.json({
+      items: rows.map((row: any) => ({
+        model: String(row.model),
+        provider: String(row.provider || 'openai'),
+        lastSeenAt: row.last_seen_at instanceof Date ? row.last_seen_at.toISOString() : row.last_seen_at || null,
+        hasActivePricing: Boolean(row.has_active_pricing),
+      })),
+    });
+  } catch (error) {
+    console.error('[Billing Admin] 获取模型候选失败:', error);
+    res.status(500).json({ error: '获取模型候选失败' });
+  }
+});
+
+/**
  * POST /api/internal/billing/pricing
  * 新增/更新模型定价
  */
 router.post('/pricing', async (req, res) => {
   try {
-    const { model, modelProvider, promptPricePer1kTokens, completionPricePer1kTokens } = req.body;
+    const {
+      model,
+      modelProvider,
+      promptPricePer1kTokens,
+      completionPricePer1kTokens,
+      effectiveFrom,
+      cacheHitRatio,
+      cacheCreationRatio,
+    } = req.body;
 
     if (!model || !modelProvider) {
       return res.status(400).json({ error: '缺少必要参数' });
@@ -211,13 +659,35 @@ router.post('/pricing', async (req, res) => {
     ) {
       return res.status(400).json({ error: '模型定价必须是大于 0 的整数' });
     }
+    const parsedEffectiveFrom = effectiveFrom ? new Date(effectiveFrom) : undefined;
+    if (effectiveFrom && (!parsedEffectiveFrom || Number.isNaN(parsedEffectiveFrom.getTime()))) {
+      return res.status(400).json({ error: '生效时间格式不正确' });
+    }
+    const shouldUpdateCacheRatio = cacheHitRatio !== undefined || cacheCreationRatio !== undefined;
+    if (shouldUpdateCacheRatio) {
+      if (!isNonNegativePostgresInteger(cacheHitRatio) || !isNonNegativePostgresInteger(cacheCreationRatio)) {
+        return res.status(400).json({ error: '缓存计费比例必须是非负整数' });
+      }
+      if (cacheHitRatio > CACHE_HIT_RATIO_MAX || cacheCreationRatio > CACHE_CREATION_RATIO_MAX) {
+        return res.status(400).json({ error: '缓存计费比例超出允许范围' });
+      }
+    }
 
     const result = await pricingService.createPricing({
       model,
       modelProvider,
       promptPricePer1kTokens,
       completionPricePer1kTokens,
+      effectiveFrom: parsedEffectiveFrom,
     });
+
+    if (shouldUpdateCacheRatio) {
+      await pricingService.createCacheConfig({
+        provider: pricingService.resolveCacheProvider({ model, modelProvider }),
+        hitRatio: cacheHitRatio,
+        creationRatio: cacheCreationRatio,
+      });
+    }
 
     res.json(result);
   } catch (error) {
@@ -293,14 +763,17 @@ router.get('/stats', async (req, res) => {
     const topUsers = await db
       .select({
         userId: creditTransactions.userId,
+        email: appUsers.email,
+        displayName: appUsers.displayName,
         totalConsumed: sql`SUM(ABS(${creditTransactions.amount}))`,
       })
       .from(creditTransactions)
+      .leftJoin(appUsers, eq(appUsers.id, creditTransactions.userId))
       .where(and(
         eq(creditTransactions.type, 'consume'),
         gte(creditTransactions.createdAt, startDate)
       ))
-      .groupBy(creditTransactions.userId)
+      .groupBy(creditTransactions.userId, appUsers.email, appUsers.displayName)
       .orderBy(desc(sql`SUM(ABS(${creditTransactions.amount}))`))
       .limit(10);
 
@@ -356,6 +829,7 @@ router.get('/stats', async (req, res) => {
       topUsers,
       topModels,
       balanceDistribution,
+      updatedAt: new Date().toISOString(),
     });
   } catch (error) {
     console.error('[Billing Admin] 获取平台统计失败:', error);

@@ -99,15 +99,42 @@ describe('PricingService.calculateCredits', () => {
     assert.strictEqual(credits, 158);
   });
 
-  test('returns correct cache ratios', () => {
-    const openaiRatios = pricingService.getCacheRatios('openai');
+  test('returns correct default cache ratios via getDefaultCacheRatios', () => {
+    const openaiRatios = pricingService.getDefaultCacheRatios('openai');
     assert.deepStrictEqual(openaiRatios, { hit: 0.5, creation: 0 });
 
-    const anthropicRatios = pricingService.getCacheRatios('anthropic');
+    const anthropicRatios = pricingService.getDefaultCacheRatios('anthropic');
     assert.deepStrictEqual(anthropicRatios, { hit: 0.1, creation: 1.25 });
 
-    const unknownRatios = pricingService.getCacheRatios('unknown');
+    const unknownRatios = pricingService.getDefaultCacheRatios('unknown');
     assert.strictEqual(unknownRatios, null);
+  });
+
+  test('calculateCredits accepts explicit cacheRatio override', () => {
+    const pricing = {
+      id: '1',
+      model: 'gpt-4o',
+      modelProvider: 'openai',
+      promptPricePer1kTokens: 100,
+      completionPricePer1kTokens: 200,
+      isActive: true,
+      effectiveFrom: new Date(),
+      effectiveUntil: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    // 使用自定义缓存比例 30% 命中
+    const credits = pricingService.calculateCredits({
+      promptTokens: 1000,
+      cachedPromptTokens: 800,
+      nonCachedPromptTokens: 200,
+      completionTokens: 500,
+    }, pricing as any, { hit: 0.3, creation: 0 });
+
+    // (200 * 100 / 1000) + (800 * 30 / 1000) + (500 * 200 / 1000)
+    // = 20 + 24 + 100 = 144
+    assert.strictEqual(credits, 144);
   });
 
   test('ceil rounds up fractional credits', () => {
@@ -145,13 +172,13 @@ describe('BillingService', () => {
     // Restore any mocks
   });
 
-  test('getCacheRatios returns fixed system ratios', () => {
-    // Verify cache ratios are system-fixed and not configurable
-    const openai = pricingService.getCacheRatios('openai');
+  test('getDefaultCacheRatios returns hardcoded fallback ratios', () => {
+    // Verify default cache ratios are hardcoded fallbacks
+    const openai = pricingService.getDefaultCacheRatios('openai');
     assert.strictEqual(openai?.hit, 0.5);
     assert.strictEqual(openai?.creation, 0);
 
-    const anthropic = pricingService.getCacheRatios('anthropic');
+    const anthropic = pricingService.getDefaultCacheRatios('anthropic');
     assert.strictEqual(anthropic?.hit, 0.1);
     assert.strictEqual(anthropic?.creation, 1.25);
   });

@@ -923,6 +923,9 @@ test('execute completes after tool round and final assistant response', async ()
   assert.match(String(eventCalls[4]?.payload.content || ''), /页面框架已经搭好|继续把样式和交互补完整/);
   assert.equal(eventCalls[5]?.payload.toolName, 'complete_task');
   assert.equal(eventCalls[6]?.payload.toolName, 'complete_task');
+  assert.equal((eventCalls[6]?.payload.toolResultEnvelope as any)?.status, 'complete');
+  assert.equal((eventCalls[6]?.payload.toolResultEnvelope as any)?.toolUseId, 'tool-complete-1');
+  assert.match(String((eventCalls[6]?.payload.toolResultEnvelope as any)?.contentForModel || ''), /2048 已完成/);
 });
 
 test('execute preserves richer assistant text when complete_task summary is concise', async () => {
@@ -2009,6 +2012,127 @@ test('execute requests clarification and transitions to waiting_user', async () 
   );
   assert.equal(eventCalls[3]?.payload.question, '你希望是网页版本还是原生版本？');
   assert.equal(eventCalls[3]?.payload.messageKey, 'managed:run-coordinator-clarify:clarification');
+});
+
+test('execute defers sibling tool calls when ask_user appears in same tool batch', async () => {
+  const state = createState('run-coordinator-clarify-sibling', 'session-coordinator-clarify-sibling');
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-sibling',
+      workspaceRoot: '/workspace/session-coordinator-clarify-sibling',
+      reused: true,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => {}),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  global.fetch = mock.fn(async () =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-ask-sibling',
+                  type: 'function',
+                  function: {
+                    name: 'ask_user',
+                    arguments: JSON.stringify({
+                      question: '这次要交付网页应用还是后端 API？',
+                    }),
+                  },
+                },
+                {
+                  id: 'tool-read-sibling',
+                  type: 'function',
+                  function: {
+                    name: 'read_file',
+                    arguments: JSON.stringify({
+                      path: 'README.md',
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    )
+  ) as typeof fetch;
+
+  const setPendingClarificationMock = mock.method(
+    taskCreationFileMemoryStore,
+    'setPendingClarification',
+    async () => {}
+  );
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => ({
+    type: 'ask_user' as const,
+    question: '这次要交付网页应用还是后端 API？',
+  }));
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeMock.mock.callCount(), 1);
+  assert.deepEqual(lifecycleCalls, ['running', 'waiting_user']);
+  assert.deepEqual(
+    eventCalls.map((entry) => entry.eventType),
+    ['run_status', 'run_status', 'tool_call_started', 'tool_call_completed', 'clarification_requested']
+  );
+  const deferredEvent = eventCalls.find((entry) => entry.payload.toolCallId === 'tool-read-sibling');
+  assert.equal((deferredEvent?.payload.result as any)?.status, 'deferred_until_user_answer');
+  assert.equal((deferredEvent?.payload.result as any)?.askUserToolCallId, 'tool-ask-sibling');
+  const pendingArgs = setPendingClarificationMock.mock.calls[0]?.arguments as any[];
+  assert.deepEqual(pendingArgs[4], {
+    runId: 'run-coordinator-clarify-sibling',
+    toolCallId: 'tool-ask-sibling',
+    messageKey: 'managed:run-coordinator-clarify-sibling:clarification',
+  });
+  const clarificationEvent = eventCalls[eventCalls.length - 1];
+  assert.equal(clarificationEvent?.payload.toolCallId, 'tool-ask-sibling');
 });
 
 test('execute converts plain assistant clarification into waiting_user', async () => {

@@ -23,7 +23,10 @@ const originalGetLatestRun = runServiceAny.getLatestRun;
 const originalStreamRun = runServiceAny.streamRun;
 const originalStopRun = runServiceAny.stopRun;
 const originalGetSession = sessionDaoAny.getSession;
+const originalGetMessages = sessionDaoAny.getMessages;
 const originalGetRun = runDaoAny.getRun;
+const originalListRunEvents = runDaoAny.listRunEvents;
+const originalGetMcpToolSnapshot = runDaoAny.getMcpToolSnapshot;
 
 after(() => {
   inputServiceAny.submit = originalSubmit;
@@ -32,7 +35,10 @@ after(() => {
   runServiceAny.streamRun = originalStreamRun;
   runServiceAny.stopRun = originalStopRun;
   sessionDaoAny.getSession = originalGetSession;
+  sessionDaoAny.getMessages = originalGetMessages;
   runDaoAny.getRun = originalGetRun;
+  runDaoAny.listRunEvents = originalListRunEvents;
+  runDaoAny.getMcpToolSnapshot = originalGetMcpToolSnapshot;
 });
 
 async function startServer(): Promise<TestServer> {
@@ -221,6 +227,110 @@ test('POST /api/altus-managed/runs/:runId/stop forwards current user to stopRun'
     assert.equal(response.status, 200);
     assert.equal(receivedUserId, 'altus-user-5');
     assert.equal(payload.data.status, 'stopped');
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/altus-managed/sessions/:sessionId/context-debug returns recovery and cache diagnostics', async () => {
+  const server = await startServer();
+  sessionDaoAny.getSession = async () => ({ id: 'altus-session-debug', userId: 'altus-user-debug' });
+  sessionDaoAny.getMessages = async () => [
+    {
+      id: 'message-debug-1',
+      sessionId: 'altus-session-debug',
+      role: 'user',
+      content: '网页应用',
+      messageType: 'clarification_answer',
+      messageKey: 'message-debug-1',
+      timelineCursor: 1,
+      metadata: {
+        clarificationAnswer: true,
+        attachments: [{ externalObjectKey: 'object-debug-1', name: 'brief.png', mimeType: 'image/png' }],
+      },
+      createdAt: '2026-04-26T03:30:00.000Z',
+    },
+  ];
+  runDaoAny.getRun = async () => ({
+    id: 'run-debug-1',
+    sessionId: 'altus-session-debug',
+    status: 'waiting_user',
+    mode: 'managed',
+    model: 'test-model',
+    mcpToolSnapshotId: 'mcp-debug-1',
+  });
+  runDaoAny.getMcpToolSnapshot = async () => ({
+    id: 'mcp-debug-1',
+    snapshotJson: {
+      providers: [
+        {
+          providerId: 'provider-debug',
+          connectorKey: 'github',
+          tools: [{ toolName: 'search_repositories' }],
+        },
+      ],
+    },
+  });
+  runDaoAny.listRunEvents = async () => [
+    {
+      id: 'event-debug-1',
+      runId: 'run-debug-1',
+      sessionId: 'altus-session-debug',
+      eventType: 'tool_call_started',
+      sequence: 1,
+      payloadJson: {
+        toolCallId: 'tool-debug-1',
+        toolName: 'ask_user',
+        arguments: { question: '网页应用还是完整业务系统？' },
+      },
+      createdAt: '2026-04-26T03:30:01.000Z',
+    },
+    {
+      id: 'event-debug-2',
+      runId: 'run-debug-1',
+      sessionId: 'altus-session-debug',
+      eventType: 'tool_call_completed',
+      sequence: 2,
+      payloadJson: {
+        toolCallId: 'tool-debug-1',
+        toolName: 'ask_user',
+        toolResultEnvelope: {
+          status: 'ask_user',
+          toolUseId: 'tool-debug-1',
+          toolName: 'ask_user',
+          runId: 'run-debug-1',
+          modelRoundId: '1',
+          args: {},
+          contentForModel: '{"status":"ask_user"}',
+          contentForUser: '需要补充信息',
+          retryable: false,
+          sideEffects: [],
+          activatedSkills: [],
+        },
+      },
+      createdAt: '2026-04-26T03:30:02.000Z',
+    },
+  ];
+
+  try {
+    const response = await fetch(
+      `${server.origin}/api/altus-managed/sessions/altus-session-debug/context-debug?runId=run-debug-1`,
+      {
+        headers: { 'x-test-user-id': 'altus-user-debug' },
+      }
+    );
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.equal(payload.data.recovery.mode, 'db_backed_read_only');
+    assert.equal(payload.data.recovery.factsSource.redis, 'not_fact_source');
+    assert.equal(payload.data.recovery.recoveryState, 'recoverable');
+    assert.equal(payload.data.roundTrip.equivalent, true);
+    assert.equal(payload.data.budgetProjection.replacementCount, 0);
+    assert.ok(payload.data.cacheObservation.apiMessageHash);
+    assert.ok(payload.data.manifest.includedContext.blocks.some((block: any) => block.type === 'attachment'));
+    assert.ok(payload.data.manifest.includedContext.blocks.some((block: any) => block.type === 'mcp'));
   } finally {
     await server.close();
   }

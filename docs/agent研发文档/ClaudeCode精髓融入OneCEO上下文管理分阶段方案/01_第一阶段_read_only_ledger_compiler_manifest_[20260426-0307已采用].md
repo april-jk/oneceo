@@ -1,4 +1,4 @@
-# 01 第一阶段：Read-only Ledger、Compiler 与 Manifest [尚未采用]
+# 01 第一阶段：Read-only Ledger、Compiler 与 Manifest [20260426-0307已采用]
 
 ## 1. 阶段目标
 

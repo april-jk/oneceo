@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { sessionConnectorService } from '../src/services/session-connector-service';
-import { parseInternalConnectorRuntimeToken } from '../src/services/internal-mcp-auth-service';
 
 const envBackup = {
   ONECEO_PROXY_ENABLED: process.env.ONECEO_PROXY_ENABLED,
@@ -16,11 +15,10 @@ const envBackup = {
   NOTION_CONNECTOR_CLIENT_ID: process.env.NOTION_CONNECTOR_CLIENT_ID,
   NOTION_CONNECTOR_CLIENT_SECRET: process.env.NOTION_CONNECTOR_CLIENT_SECRET,
   NOTION_CONNECTOR_REDIRECT_URI: process.env.NOTION_CONNECTOR_REDIRECT_URI,
-  VERCEL_CONNECTOR_CLIENT_ID: process.env.VERCEL_CONNECTOR_CLIENT_ID,
-  VERCEL_CONNECTOR_CLIENT_SECRET: process.env.VERCEL_CONNECTOR_CLIENT_SECRET,
-  VERCEL_CONNECTOR_REDIRECT_URI: process.env.VERCEL_CONNECTOR_REDIRECT_URI,
-  VERCEL_INTERNAL_MCP_URL: process.env.VERCEL_INTERNAL_MCP_URL,
-  ONECEO_INTERNAL_TOKEN: process.env.ONECEO_INTERNAL_TOKEN,
+  VERCEL_INTEGRATION_CLIENT_ID: process.env.VERCEL_INTEGRATION_CLIENT_ID,
+  VERCEL_INTEGRATION_CLIENT_SECRET: process.env.VERCEL_INTEGRATION_CLIENT_SECRET,
+  VERCEL_INTEGRATION_REDIRECT_URI: process.env.VERCEL_INTEGRATION_REDIRECT_URI,
+  VERCEL_INTEGRATION_SLUG: process.env.VERCEL_INTEGRATION_SLUG,
   CONNECTOR_SECRET_KEY: process.env.CONNECTOR_SECRET_KEY,
   FRONTEND_URL: process.env.FRONTEND_URL,
 };
@@ -72,17 +70,16 @@ test('buildProviderTransport injects proxy env for supabase local bridge transpo
   assert.equal(result.transport.env.no_proxy, 'localhost,127.0.0.1');
 });
 
-test('buildProviderTransport materializes vercel as local stdio bridge', () => {
+test('buildProviderTransport materializes vercel as backend rpc transport', () => {
   process.env.ONECEO_PROXY_ENABLED = 'true';
   process.env.HTTP_PROXY = 'http://127.0.0.1:7890';
   process.env.HTTPS_PROXY = 'http://127.0.0.1:7890';
   process.env.NO_PROXY = 'localhost,127.0.0.1';
   process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
-  process.env.VERCEL_INTERNAL_MCP_URL = 'https://dev.oneceo.ai/api/internal/connectors/vercel/mcp';
-  process.env.VERCEL_CONNECTOR_CLIENT_ID = 'vercel-client';
-  process.env.VERCEL_CONNECTOR_CLIENT_SECRET = 'vercel-secret';
-  process.env.VERCEL_CONNECTOR_REDIRECT_URI = '/vercel/callback';
-  process.env.ONECEO_INTERNAL_TOKEN = 'internal-token';
+  process.env.VERCEL_INTEGRATION_SLUG = 'oneceo';
+  process.env.VERCEL_INTEGRATION_CLIENT_ID = 'vercel-client';
+  process.env.VERCEL_INTEGRATION_CLIENT_SECRET = 'vercel-secret';
+  process.env.VERCEL_INTEGRATION_REDIRECT_URI = 'https://dev.oneceo.ai/vercel/callback';
   process.env.CONNECTOR_SECRET_KEY = 'unit-test-secret';
 
   const serviceAny = sessionConnectorService as any;
@@ -91,24 +88,11 @@ test('buildProviderTransport materializes vercel as local stdio bridge', () => {
     userId: 'user-1',
   });
 
-  assert.equal(result.transport.type, 'local_stdio');
-  assert.equal(result.transport.command[0], 'node');
-  assert.equal(result.transport.command[1], '-e');
-  assert.match(result.transport.command[2], /VERCEL_BRIDGE_RUNTIME_AUTH/);
-  assert.equal(result.transport.env.VERCEL_INTERNAL_TOKEN, 'internal-token');
-  assert.equal(
-    result.transport.env.VERCEL_INTERNAL_MCP_URL,
-    'https://dev.oneceo.ai/api/internal/connectors/vercel/mcp'
-  );
-  assert.equal(result.transport.env.HTTP_PROXY, 'http://127.0.0.1:7890');
-  assert.equal(result.transport.env.NO_PROXY, 'localhost,127.0.0.1');
-  const runtimeContext = parseInternalConnectorRuntimeToken(
-    String(result.transport.env.VERCEL_BRIDGE_RUNTIME_AUTH || ''),
-    'vercel'
-  );
-  assert.equal(runtimeContext.taskSessionId, 'task-1');
-  assert.equal(runtimeContext.userId, 'user-1');
-  assert.equal(runtimeContext.profileId, 'profile-vercel');
+  assert.equal(result.transport.type, 'backend_rpc');
+  assert.equal(result.transport.rpcNamespace, 'mcp');
+  assert.equal(result.transport.backendProvider, 'vercel');
+  assert.deepEqual(result.transport.capabilities, ['initialize', 'tools/list', 'tools/call']);
+  assert.equal(result.transportName, 'backend_rpc');
 });
 
 test('buildProviderTransport honors explicit notion remote transport', () => {

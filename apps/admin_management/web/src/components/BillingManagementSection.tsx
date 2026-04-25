@@ -3,6 +3,7 @@ import { BillingStatsDashboard } from './BillingStatsDashboard';
 import { BillingUsageLogs } from './BillingUsageLogs';
 import { BillingDebugPanel } from './BillingDebugPanel';
 import { getBillingErrorMessage, readBillingResponseError, type BillingNotify } from './billing-feedback';
+import { AdminButton, AdminDetailShell, AdminStickyInspector, AdminTabs, AuditTimeline, DangerConfirmDialog, DiffDrawer, IdToken, StatusBadge, getAdminActionIcon, getAdminModuleIcon } from './admin-ui';
 
 interface Pricing {
   id: string;
@@ -82,6 +83,10 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
   });
   const [pricingFormLoading, setPricingFormLoading] = useState(false);
   const [pricingFormTouched, setPricingFormTouched] = useState<Record<string, boolean>>({});
+  const [deletePricingTarget, setDeletePricingTarget] = useState<Pricing | null>(null);
+  const [deletePricingLoading, setDeletePricingLoading] = useState(false);
+  const [updateConfirmOpen, setUpdateConfirmOpen] = useState(false);
+  const [pricingDiffOpen, setPricingDiffOpen] = useState(false);
 
   // Cache config state
   const [cacheConfigs, setCacheConfigs] = useState<CacheConfig[]>([]);
@@ -271,7 +276,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
     }, 'update');
   }, [openPricingForm]);
 
-  const handleCreatePricing = async () => {
+  const submitPricing = async () => {
     if (!canSubmitPricing) return;
     setPricingFormLoading(true);
     try {
@@ -315,10 +320,20 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
     }
   };
 
-  const handleDeletePricing = async (id: string) => {
-    if (!confirm('确定要删除此定价吗？删除后该规则不再参与新请求计费，历史账单不会回写。')) return;
+  const handleCreatePricing = async () => {
+    if (!canSubmitPricing) return;
+    if (pricingFormMode === 'update') {
+      setUpdateConfirmOpen(true);
+      return;
+    }
+    await submitPricing();
+  };
+
+  const handleDeletePricing = async () => {
+    if (!deletePricingTarget) return;
+    setDeletePricingLoading(true);
     try {
-      const response = await fetch(`/api/internal/billing/pricing/${id}`, {
+      const response = await fetch(`/api/internal/billing/pricing/${deletePricingTarget.id}`, {
         method: 'DELETE',
         credentials: 'include',
       });
@@ -333,6 +348,9 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
     } catch (error) {
       console.error('删除定价失败:', error);
       onNotify?.('error', '删除失败', getBillingErrorMessage(error, '删除模型定价失败'));
+    } finally {
+      setDeletePricingLoading(false);
+      setDeletePricingTarget(null);
     }
   };
 
@@ -368,18 +386,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
 
       {/* Tab Bar */}
       <section className="sub-panel user-management-filter-panel billing-management-tab-scroll">
-        <div className="user-management-tab-strip" style={{ margin: 0 }}>
-          {tabs.map((tab) => (
-            <button
-              key={tab.key}
-              type="button"
-              className={`secondary-btn ${activeTab === tab.key ? 'active' : ''}`}
-              onClick={() => setActiveTab(tab.key)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+        <AdminTabs value={activeTab} items={tabs} onChange={(value) => setActiveTab(value)} ariaLabel="计费管理分页" />
       </section>
 
       <div className={`billing-management-tab-content billing-management-tab-content-${activeTab}`}>
@@ -393,9 +400,9 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                 <p className="panel-caption">共 {activePricing.length} 条生效规则</p>
               </div>
               <div className="user-management-filter-actions">
-                <button type="button" className="secondary-btn" onClick={() => openPricingForm()}>
+                <AdminButton variant="secondary" onClick={() => openPricingForm()}>
                   + 新建定价
-                </button>
+                </AdminButton>
               </div>
             </div>
 
@@ -438,9 +445,9 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                         </td>
                         <td>
                           <div className="user-management-table-cell-stack">
-                            <span className={`state-chip ${normalizedProvider === 'openai' ? 'status-running' : 'status-paused'}`}>
+                            <StatusBadge tone={normalizedProvider === 'openai' ? 'success' : 'neutral'}>
                               {providerLabel(normalizedProvider)}
-                            </span>
+                            </StatusBadge>
                           </div>
                         </td>
                         <td>
@@ -468,9 +475,9 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                         </td>
                         <td>
                           <div className="user-management-table-cell-stack">
-                            <span className={`state-chip ${p.isActive ? 'status-running' : 'status-error'}`}>
+                            <StatusBadge tone={p.isActive ? 'success' : 'danger'}>
                               {p.isActive ? '生效中' : '已删除'}
-                            </span>
+                            </StatusBadge>
                           </div>
                         </td>
                         <td>
@@ -489,6 +496,15 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                   )}
                 </tbody>
               </table>
+            </div>
+            <div className="admin-mobile-card-list" aria-label="定价配置移动列表">
+              {activePricing.length === 0 ? <p className="empty">暂无定价数据</p> : activePricing.map((p) => (
+                <article key={p.id} className="admin-mobile-card">
+                  <div className="admin-mobile-card-head"><strong>{p.model}</strong><StatusBadge tone={p.isActive ? 'success' : 'danger'}>{p.isActive ? '生效中' : '已删除'}</StatusBadge></div>
+                  <div className="admin-mobile-card-meta"><span>{providerLabel(normalizePricingProvider(p.model, p.modelProvider))}</span><span>输入 {p.promptPricePer1kTokens}</span><span>输出 {p.completionPricePer1kTokens}</span></div>
+                  <AdminButton variant="link" onClick={() => openPricingDetail(p)}>详情</AdminButton>
+                </article>
+              ))}
             </div>
           </section>
 
@@ -727,36 +743,15 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
           )}
 
           {pricingDetailOpen && selectedPricing && (
-            <div className="modal-backdrop" onClick={() => setPricingDetailOpen(false)}>
-              <aside
-                className="pricing-form-modal pricing-detail-modal"
-                role="dialog"
-                aria-modal="true"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <div className="pricing-form-modal-header">
-                  <div className="pricing-form-modal-heading">
-                    <p className="section-tag">定价详情</p>
-                    <h2>{selectedPricing.model}</h2>
-                    <p className="panel-caption">查看当前定价快照，并在此更新或删除该规则。</p>
-                  </div>
-                  <button
-                    type="button"
-                    className="pricing-form-modal-close"
-                    onClick={() => setPricingDetailOpen(false)}
-                    aria-label="关闭"
-                  >
-                    ×
-                  </button>
-                </div>
-
-                <div className="pricing-form-modal-body">
-                  <section className="pricing-detail-section">
+            <>
+            <AdminDetailShell open={pricingDetailOpen} onClose={() => setPricingDetailOpen(false)} eyebrow="定价详情" title={selectedPricing.model} subtitle="查看当前定价快照，并在此更新或删除该规则。" icon={getAdminModuleIcon('billing')} entityType="Billing Pricing" lastUpdated={`生效 ${selectedPricing.effectiveFrom ? new Date(selectedPricing.effectiveFrom).toLocaleString('zh-CN', { hour12: false }) : '-'}`} risk={selectedPricing.isActive ? '风险：影响新请求计费' : '风险：已删除规则'} metrics={[{ label: '输入单价', value: selectedPricing.promptPricePer1kTokens }, { label: '输出单价', value: selectedPricing.completionPricePer1kTokens }, { label: '缓存命中', value: `${(selectedPricing.cacheHitRatio * 100).toFixed(0)}%` }, { label: '缓存创建', value: `${(selectedPricing.cacheCreationRatio * 100).toFixed(0)}%` }]} status={<StatusBadge tone={selectedPricing.isActive ? 'success' : 'danger'}>{selectedPricing.isActive ? '生效中' : '已删除'}</StatusBadge>} size="lg" moreActions={<AdminButton variant="secondary" icon={getAdminActionIcon('logs')} onClick={() => setPricingDiffOpen(true)}>查看 Diff</AdminButton>} inspector={<AdminStickyInspector compact title="Actionable Inspector" sections={[{ key: 'risk', title: '当前风险', children: <div className="signal-list"><p>{selectedPricing.isActive ? '影响新请求计费，更新会创建新版本。' : '规则已删除，不参与新请求计费。'}</p></div> }, { key: 'impact', title: '影响范围', children: <div className="signal-list"><p>新请求计费。</p><p>历史 usage 与账单不回写。</p></div> }, { key: 'recent', title: '最近操作', children: <AuditTimeline compact emptyText="暂无定价历史事件。" items={[...(selectedPricing.effectiveFrom ? [{ id: 'effective-from', title: selectedPricing.isActive ? '当前定价生效' : '定价记录生效', time: new Date(selectedPricing.effectiveFrom).toLocaleString('zh-CN', { hour12: false }), tone: selectedPricing.isActive ? 'success' as const : 'neutral' as const, meta: [{ label: '生效状态', value: selectedPricing.isActive ? '生效中' : '已删除' }] }] : []), ...(selectedPricing.effectiveUntil ? [{ id: 'effective-until', title: '定价结束', time: new Date(selectedPricing.effectiveUntil).toLocaleString('zh-CN', { hour12: false }), tone: 'warning' as const }] : [])]} /> }, { key: 'blockers', title: '阻断原因', children: <div className="signal-list"><p>{selectedPricing.isActive ? '当前无前端可见阻断。' : '已删除规则不能继续更新。'}</p></div> }, { key: 'recommend', title: '推荐动作', children: <div className="signal-list"><p>{selectedPricing.isActive ? '更新前查看规则 Diff，确认新请求计费影响。' : '如需恢复请新建定价规则。'}</p></div> }, { key: 'actions', title: '快捷动作', children: <AdminButton variant="secondary" size="sm" onClick={() => setPricingDiffOpen(true)}>查看规则 Diff</AdminButton> }]} />} footer={<><AdminButton variant="secondary" onClick={() => setPricingDetailOpen(false)}>关闭</AdminButton><AdminButton variant="primary" onClick={() => openPricingUpdate(selectedPricing)} disabled={!selectedPricing.isActive}>更新定价</AdminButton></>} dangerZone={<AdminButton variant="dangerSoft" onClick={() => setDeletePricingTarget(selectedPricing)} disabled={!selectedPricing.isActive}>删除</AdminButton>}>
+                <div className="admin-detail-section-stack pricing-detail-stack">
+                  <section className="admin-detail-section pricing-detail-section">
                     <h3 className="pricing-detail-section-title">审计摘要</h3>
                     <div className="pricing-detail-grid">
                       <div className="pricing-detail-item">
                         <span className="pricing-detail-label">模型</span>
-                        <span className="pricing-detail-value">{selectedPricing.model}</span>
+                        <IdToken label="模型" value={selectedPricing.model} head={18} tail={10} />
                       </div>
                       <div className="pricing-detail-item">
                         <span className="pricing-detail-label">提供商</span>
@@ -764,7 +759,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                       </div>
                       <div className="pricing-detail-item">
                         <span className="pricing-detail-label">状态</span>
-                        <span className={`pricing-detail-value ${selectedPricing.isActive ? 'status-active' : 'status-inactive'}`}>{selectedPricing.isActive ? '生效中' : '已删除'}</span>
+                        <StatusBadge tone={selectedPricing.isActive ? 'success' : 'danger'}>{selectedPricing.isActive ? '生效中' : '已删除'}</StatusBadge>
                       </div>
                       <div className="pricing-detail-item">
                         <span className="pricing-detail-label">生效时间</span>
@@ -773,7 +768,29 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                     </div>
                   </section>
 
-                  <section className="pricing-detail-section">
+                  <section className="admin-detail-section pricing-detail-section">
+                    <h3 className="pricing-detail-section-title">定价事件</h3>
+                    <AuditTimeline
+                      emptyText="暂无定价历史事件。"
+                      items={[
+                        ...(selectedPricing.effectiveFrom ? [{
+                          id: 'effective-from',
+                          title: selectedPricing.isActive ? '当前定价生效' : '定价记录生效',
+                          time: new Date(selectedPricing.effectiveFrom).toLocaleString('zh-CN', { hour12: false }),
+                          tone: selectedPricing.isActive ? 'success' as const : 'neutral' as const,
+                          meta: [{ label: '状态', value: selectedPricing.isActive ? '生效中' : '已删除' }],
+                        }] : []),
+                        ...(selectedPricing.effectiveUntil ? [{
+                          id: 'effective-until',
+                          title: '定价结束',
+                          time: new Date(selectedPricing.effectiveUntil).toLocaleString('zh-CN', { hour12: false }),
+                          tone: 'warning' as const,
+                        }] : []),
+                      ]}
+                    />
+                  </section>
+
+                  <section className="admin-detail-section pricing-detail-section">
                     <h3 className="pricing-detail-section-title">计费规则</h3>
                     <div className="pricing-detail-grid pricing-detail-grid-metrics">
                       <div className="pricing-detail-metric">
@@ -808,36 +825,12 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                   </section>
                 </div>
 
-                <div className="pricing-detail-actions">
-                  <button
-                    type="button"
-                    className="secondary-btn danger-btn"
-                    onClick={() => void handleDeletePricing(selectedPricing.id)}
-                    disabled={!selectedPricing.isActive}
-                  >
-                    删除
-                  </button>
-                  <div className="pricing-detail-actions-group">
-                    <button
-                      type="button"
-                      className="secondary-btn"
-                      onClick={() => setPricingDetailOpen(false)}
-                    >
-                      关闭
-                    </button>
-                    <button
-                      type="button"
-                      className="primary-btn"
-                      onClick={() => openPricingUpdate(selectedPricing)}
-                      disabled={!selectedPricing.isActive}
-                    >
-                      更新定价
-                    </button>
-                  </div>
-                </div>
-              </aside>
-            </div>
+              </AdminDetailShell>
+              <DiffDrawer open={pricingDiffOpen} onClose={() => setPricingDiffOpen(false)} title="Pricing Diff" objectLabel={selectedPricing.model} fields={[{ key: 'prompt', label: '输入单价', before: selectedPricing.promptPricePer1kTokens, after: pricingFormOpen ? pricingForm.promptPricePer1kTokens || '-' : selectedPricing.promptPricePer1kTokens, changeType: pricingFormOpen && String(selectedPricing.promptPricePer1kTokens) !== pricingForm.promptPricePer1kTokens ? 'changed' : 'unchanged' }, { key: 'completion', label: '输出单价', before: selectedPricing.completionPricePer1kTokens, after: pricingFormOpen ? pricingForm.completionPricePer1kTokens || '-' : selectedPricing.completionPricePer1kTokens, changeType: pricingFormOpen && String(selectedPricing.completionPricePer1kTokens) !== pricingForm.completionPricePer1kTokens ? 'changed' : 'unchanged' }, { key: 'cacheHit', label: '缓存命中', before: `${formatPercentInput(selectedPricing.cacheHitRatio * 100)}%`, after: pricingFormOpen ? `${pricingForm.cacheHitRatio || '-'}%` : `${formatPercentInput(selectedPricing.cacheHitRatio * 100)}%`, changeType: pricingFormOpen && formatPercentInput(selectedPricing.cacheHitRatio * 100) !== pricingForm.cacheHitRatio ? 'changed' : 'unchanged' }, { key: 'cacheCreation', label: '缓存创建', before: `${formatPercentInput(selectedPricing.cacheCreationRatio * 100)}%`, after: pricingFormOpen ? `${pricingForm.cacheCreationRatio || '-'}%` : `${formatPercentInput(selectedPricing.cacheCreationRatio * 100)}%`, changeType: pricingFormOpen && formatPercentInput(selectedPricing.cacheCreationRatio * 100) !== pricingForm.cacheCreationRatio ? 'changed' : 'unchanged' }]} impactItems={[selectedPricing.isActive ? '该规则影响新请求计费' : '该规则已删除，不参与新请求计费', '历史 usage 不回写']} rollbackHint="更新会创建新的定价版本；历史 usage 不回写。" syncHint="Before 使用 selectedPricing，After 仅在编辑表单打开时使用 pricingForm，否则保持当前快照。" />
+              </>
           )}
+          <DangerConfirmDialog open={Boolean(deletePricingTarget)} title="删除模型定价" objectLabel="模型定价" objectId={deletePricingTarget?.id} objectName={deletePricingTarget?.model} actionLabel="删除定价" confirmText="DELETE" reasonRequired loading={deletePricingLoading} reversibility="partially_reversible" impactItems={["该规则不再参与新请求计费", "历史账单不会回写"]} nonImpactItems={["不会删除历史使用明细"]} onCancel={() => setDeletePricingTarget(null)} onConfirm={() => void handleDeletePricing()} />
+          <DangerConfirmDialog open={updateConfirmOpen} title="确认更新模型定价" objectLabel="模型定价" objectName={pricingForm.model} actionLabel="保存新版本" confirmText="UPDATE" reasonRequired={false} loading={pricingFormLoading} reversibility="partially_reversible" objectMeta={[{ label: '输入单价', value: `${selectedPricing?.promptPricePer1kTokens ?? '-'} → ${promptPrice}` }, { label: '输出单价', value: `${selectedPricing?.completionPricePer1kTokens ?? '-'} → ${completionPrice}` }, { label: '缓存命中', value: `${selectedPricing ? formatPercentInput(selectedPricing.cacheHitRatio * 100) : '-'}% → ${cacheHitPercent}%` }, { label: '缓存创建', value: `${selectedPricing ? formatPercentInput(selectedPricing.cacheCreationRatio * 100) : '-'}% → ${cacheCreationPercent}%` }]} impactItems={["将创建新的定价版本", "历史 usage 不回写"]} onCancel={() => setUpdateConfirmOpen(false)} onConfirm={async () => { setUpdateConfirmOpen(false); await submitPricing(); }} />
         </>
       )}
 

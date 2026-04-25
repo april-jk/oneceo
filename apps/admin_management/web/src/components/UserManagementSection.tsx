@@ -13,6 +13,7 @@ import {
   DEFAULT_USER_MANAGEMENT_SORT,
   DEFAULT_USER_MANAGEMENT_VIEW_STATE,
 } from './adminViewState';
+import { AdminButton, AdminDetailShell, AdminTabs, DangerConfirmDialog, IdToken, StatusBadge } from './admin-ui';
 import type {
   UserDetailTab,
   UserManagementFilters,
@@ -68,6 +69,15 @@ type Props = {
   onOpenDeployment?: (taskSessionId: string, origin?: UserDetailJumpOrigin) => void;
   persistedState?: UserManagementViewState | null;
   onStateChange?: (state: UserManagementViewState) => void;
+};
+
+type UserStatusDangerAction = {
+  userId: string;
+  currentStatus: string;
+  nextStatus: 'active' | 'disabled';
+  label: string;
+  displayName?: string | null;
+  actionLabel: string;
 };
 
 const DEFAULT_FILTERS = DEFAULT_USER_MANAGEMENT_FILTERS;
@@ -379,6 +389,7 @@ export function UserManagementSection({
   const [adjustLoading, setAdjustLoading] = useState(false);
   const [adjustMessage, setAdjustMessage] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
   const [actionBusy, setActionBusy] = useState<'status' | null>(null);
+  const [statusDangerAction, setStatusDangerAction] = useState<UserStatusDangerAction | null>(null);
   const [summaryRefreshing, setSummaryRefreshing] = useState(false);
   const [summaryFetchedAt, setSummaryFetchedAt] = useState<string | null>(null);
   const [summaryClock, setSummaryClock] = useState(() => Date.now());
@@ -606,10 +617,9 @@ export function UserManagementSection({
     });
   }, []);
 
-  const handleStatusToggle = useCallback(async () => {
-    const userId = detail?.user?.id || selectedUserId;
-    const nextStatus = detail?.user?.status === 'disabled' ? 'active' : 'disabled';
-    if (!userId) return;
+  const handleStatusToggle = useCallback(async (payload: UserStatusDangerAction) => {
+    const userId = payload.userId;
+    const nextStatus = payload.nextStatus;
 
     setActionBusy('status');
     try {
@@ -622,7 +632,7 @@ export function UserManagementSection({
     } finally {
       setActionBusy(null);
     }
-  }, [detail?.user?.id, detail?.user?.status, filters, loadUsers, onError, selectedUserId]);
+  }, [filters, loadUsers, onError]);
 
   const handleAdjustCredits = useCallback(async () => {
     const userId = detail?.user?.id || selectedUserId;
@@ -668,6 +678,8 @@ export function UserManagementSection({
   const summary = response?.summary;
   const summaryAge = formatCompactRelativeTime(summaryFetchedAt, summaryClock);
   const detailUser = detail?.user || selectedListItem;
+  const statusConfirmText = detailUser?.email || detailUser?.id || selectedUserId || '';
+  const nextStatusLabel = detailUser?.status === 'disabled' ? '启用用户' : '禁用用户';
   const currentSortLabel = SORT_LABEL_MAP[sort.key] || '上次登录';
   const latestSessionRecord = detail?.recentSessions[0] || null;
   const recentSessions = detail?.recentSessions || [];
@@ -846,14 +858,14 @@ export function UserManagementSection({
                                 </button>
                               </div>
                               <p>{item.email}</p>
-                              <small title={item.id}>{truncateMiddle(item.id, 10, 8)}</small>
+                              <IdToken value={item.id} head={10} tail={8} />
                             </div>
                           </td>
                           <td>
                             <div className="user-management-table-cell-stack">
-                              <span className={`state-chip ${item.status === 'active' ? 'status-running' : 'status-error'}`}>
+                              <StatusBadge tone={item.status === 'active' ? 'success' : 'danger'}>
                                 {userStatusLabel(item.status)}
-                              </span>
+                              </StatusBadge>
                               <small>{item.status === 'active' ? '账号可用' : '账号已禁用'}</small>
                             </div>
                           </td>
@@ -903,61 +915,21 @@ export function UserManagementSection({
               </tbody>
             </table>
           </div>
+          <div className="admin-mobile-card-list" aria-label="用户移动列表">
+            {loading ? <p className="empty">正在加载用户列表...</p> : users.length === 0 ? <p className="empty">当前筛选条件下没有匹配用户</p> : users.map((item) => (
+              <article key={item.id} className="admin-mobile-card">
+                <div className="admin-mobile-card-head"><strong>{item.displayName}</strong><StatusBadge tone={item.status === 'active' ? 'success' : 'danger'}>{userStatusLabel(item.status)}</StatusBadge></div>
+                <div className="admin-mobile-card-meta"><span>{item.email}</span><span>对话 {item.conversationCount}</span><span>Sandbox {item.sandboxCount}</span></div>
+                <IdToken value={item.id} head={10} tail={8} />
+                <AdminButton variant="link" onClick={() => void openDetail(item.id)}>查看详情</AdminButton>
+              </article>
+            ))}
+          </div>
         </section>
       </main>
 
       {drawerOpen ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setDrawerOpen(false)}>
-          <aside
-            className="modal-card user-management-modal"
-            aria-labelledby="user-management-detail-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="modal-header user-management-modal-header">
-              <div className="user-management-modal-heading">
-                <p className="section-tag">用户详情</p>
-                <h2 id="user-management-detail-title">{detailUser?.displayName || '用户详情'}</h2>
-                <p className="panel-caption">{detailUser?.email || selectedUserId || '-'}</p>
-              </div>
-              <div className="user-management-modal-actions">
-                <button
-                  type="button"
-                  className="primary-btn"
-                  onClick={() => void handleStatusToggle()}
-                  disabled={actionBusy !== null || detailLoading || !detailUser}
-                >
-                  {actionBusy === 'status'
-                    ? '处理中...'
-                    : detailUser?.status === 'disabled'
-                      ? '启用用户'
-                      : '禁用用户'}
-                </button>
-                <button type="button" className="icon-btn" aria-label="关闭用户详情" onClick={() => setDrawerOpen(false)}>
-                  <span aria-hidden="true">×</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="user-management-tab-strip">
-              {([
-                ['overview', '概览'],
-                ['billing', '积分'],
-                ['conversations', '对话'],
-                ['sandboxes', 'Sandbox'],
-                ['deployments', '部署'],
-              ] as Array<[UserDetailTab, string]>).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  className={`secondary-btn ${detailTab === key ? 'active' : ''}`}
-                  onClick={() => setDetailTab(key)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            <div className="modal-body user-management-modal-body">
+        <AdminDetailShell open={drawerOpen} onClose={() => setDrawerOpen(false)} title={detailUser?.displayName || '用户详情'} eyebrow="用户详情" subtitle={detailUser?.email || selectedUserId || '-'} status={detailUser ? <StatusBadge tone={detailUser.status === 'active' ? 'success' : 'danger'}>{userStatusLabel(detailUser.status)}</StatusBadge> : null} actions={<AdminButton variant={detailUser?.status === 'disabled' ? 'primary' : 'dangerSoft'} loading={actionBusy === 'status'} onClick={() => detailUser && setStatusDangerAction({ userId: detailUser.id, currentStatus: detailUser.status, nextStatus: detailUser.status === 'disabled' ? 'active' : 'disabled', label: detailUser.email || detailUser.id, displayName: detailUser.displayName, actionLabel: nextStatusLabel })} disabled={actionBusy !== null || detailLoading || !detailUser}>{nextStatusLabel}</AdminButton>} tabs={<AdminTabs<UserDetailTab> value={detailTab} onChange={(value) => setDetailTab(value)} items={[{ key: 'overview', label: '概览' }, { key: 'billing', label: '积分' }, { key: 'conversations', label: '对话' }, { key: 'sandboxes', label: 'Sandbox' }, { key: 'deployments', label: '部署' }]} />} className="user-management-modal" contentClassName="user-management-modal-body" size="xl">
               {detailLoading ? <p className="user-management-empty">正在加载用户详情...</p> : null}
               {!detailLoading && detail && detailTab === 'overview' ? (
                 <div className="user-management-overview-layout">
@@ -1000,7 +972,7 @@ export function UserManagementSection({
                     <dl className="user-management-overview-facts">
                       <div>
                         <dt>用户 ID</dt>
-                        <dd className="mono">{detail.user?.id || '-'}</dd>
+                        <dd><IdToken value={detail.user?.id} /></dd>
                       </div>
                       <div>
                         <dt>最近来源 IP</dt>
@@ -1255,10 +1227,9 @@ export function UserManagementSection({
                         ))
                       : <DetailListEmpty title="当前用户暂无部署记录" />)
                 : null}
-            </div>
-          </aside>
-        </div>
+          </AdminDetailShell>
       ) : null}
+      <DangerConfirmDialog open={Boolean(statusDangerAction)} title={`${statusDangerAction?.actionLabel || nextStatusLabel}确认`} objectLabel="用户" objectId={statusDangerAction?.userId || selectedUserId} objectName={statusDangerAction?.label || statusDangerAction?.displayName} actionLabel={statusDangerAction?.actionLabel || nextStatusLabel} confirmText={statusDangerAction?.label || statusConfirmText} reasonRequired loading={actionBusy === 'status'} reversibility="partially_reversible" impactItems={statusDangerAction?.currentStatus === 'disabled' ? ['用户将恢复登录与业务访问能力'] : ['用户将无法继续登录或访问用户态能力']} nonImpactItems={['不会删除用户数据', '不会修改计费账本']} onCancel={() => setStatusDangerAction(null)} onConfirm={async () => { if (statusDangerAction) await handleStatusToggle(statusDangerAction); setStatusDangerAction(null); }} />
     </>
   );
 }

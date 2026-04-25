@@ -1,4 +1,4 @@
-import {
+﻿import {
   CONNECTOR_KEYS,
   buildConnectorDefinitions,
   resolveOauthProvider,
@@ -11,11 +11,6 @@ import {
   buildSupabaseBridgeEnvironment,
   buildSupabaseStdioBridgeCommand,
 } from '../connectors/bridges/supabase-stdio-bridge';
-import {
-  buildVercelBridgeEnvironment,
-  buildVercelStdioBridgeCommand,
-} from '../connectors/bridges/vercel-stdio-bridge';
-import { createInternalConnectorRuntimeToken } from './internal-mcp-auth-service';
 
 export { CONNECTOR_KEYS, type ConnectorKey };
 
@@ -72,6 +67,12 @@ export type ConnectorRuntimeConfig =
       enabled: boolean;
       command: string[];
       environment?: Record<string, string>;
+    }
+  | {
+      type: 'hosted';
+      enabled: boolean;
+      provider: ConnectorKey;
+      capabilities?: string[];
     }
   | {
       type: 'remote';
@@ -243,37 +244,6 @@ function buildGithubStdioWrapperCommand(): string {
   ].join('\n');
 }
 
-function buildInternalConnectorRuntimeAuth(input: {
-  connectorKey: ConnectorKey;
-  taskSessionId?: string;
-  userId?: string;
-  profileId?: string;
-}) {
-  const internalToken = asText(process.env.ONECEO_INTERNAL_TOKEN);
-  if (!internalToken) {
-    throw new Error(
-      `ONECEO_INTERNAL_TOKEN 未配置，无法构建 ${input.connectorKey} internal MCP 鉴权上下文`
-    );
-  }
-
-  const taskSessionId = asText(input.taskSessionId);
-  const userId = asText(input.userId);
-  const profileId = asText(input.profileId);
-  if (!taskSessionId || !userId || !profileId) {
-    throw new Error(`${input.connectorKey} internal MCP 缺少 session/profile 鉴权上下文`);
-  }
-
-  return {
-    internalToken,
-    runtimeAuth: createInternalConnectorRuntimeToken({
-      connectorKey: input.connectorKey,
-      taskSessionId,
-      userId,
-      profileId,
-    }),
-  };
-}
-
 function buildRemoteHeaders(
   connectorKey: ConnectorKey,
   item: ConnectorCatalogItem,
@@ -285,19 +255,6 @@ function buildRemoteHeaders(
     profileId?: string;
   }
 ): Record<string, string> {
-  if (connectorKey === 'vercel') {
-    const auth = buildInternalConnectorRuntimeAuth({
-      connectorKey,
-      taskSessionId: input.taskSessionId,
-      userId: input.userId,
-      profileId: input.profileId,
-    });
-    return {
-      'x-oneceo-internal-token': auth.internalToken,
-      'x-oneceo-connector-runtime-auth': auth.runtimeAuth,
-    };
-  }
-
   const template = item.runtime.headersEnv
     ? parseHeadersTemplate(process.env[item.runtime.headersEnv])
     : {};
@@ -336,13 +293,13 @@ function buildRemoteUrl(
   const configured = item.runtime.urlEnv ? asText(process.env[item.runtime.urlEnv]) : '';
   const baseUrl = configured || asText(item.runtime.urlDefault);
   if (!baseUrl) {
-    throw new Error(`${item.name} MCP remote URL 未配置`);
+    throw new Error(`${item.name} MCP remote URL is not configured`);
   }
   const url = new URL(baseUrl);
   if (input.connectorKey === 'notion') {
     const normalizedPath = url.pathname.replace(/\/+$/, '') || '/';
     if (!normalizedPath.endsWith('/sse')) {
-      throw new Error('Notion MCP remote URL 必须配置为 SSE 端点（/sse）');
+      throw new Error('Notion MCP remote URL must point to an SSE endpoint ending with /sse');
     }
   }
   return url.toString();
@@ -360,7 +317,7 @@ export class ConnectorRegistry {
   getCatalogItem(connectorKey: string): ConnectorCatalogItem {
     const item = this.listCatalog().find((entry) => entry.key === connectorKey);
     if (!item) {
-      throw new Error(`未知连接器: ${connectorKey}`);
+      throw new Error(`鏈煡杩炴帴鍣? ${connectorKey}`);
     }
     return item;
   }
@@ -387,7 +344,7 @@ export class ConnectorRegistry {
     if (connectorKey === 'github') {
       const accessToken = asText(secret.accessToken);
       if (!accessToken) {
-        throw new Error('GitHub 连接器缺少 access token');
+        throw new Error('GitHub 杩炴帴鍣ㄧ己灏?access token');
       }
       const repositories = normalizeGithubRepositories(
         (sessionConfig as Record<string, unknown>).repositories
@@ -410,7 +367,7 @@ export class ConnectorRegistry {
     if (connectorKey === 'postgres') {
       const dsn = asText(secret.dsn);
       if (!dsn) {
-        throw new Error('Postgres 连接器缺少 DSN');
+        throw new Error('Postgres 杩炴帴鍣ㄧ己灏?DSN');
       }
       return {
         type: 'local',
@@ -422,7 +379,7 @@ export class ConnectorRegistry {
     if (connectorKey === 'supabase') {
       const accessToken = asText(secret.accessToken);
       if (!accessToken) {
-        throw new Error('Supabase 连接器缺少 access token');
+        throw new Error('Supabase 杩炴帴鍣ㄧ己灏?access token');
       }
       const proxyEnabled = toBool(
         process.env.ONECEO_PROXY_ENABLED ?? process.env.E2B_PROXY_ENABLED ?? 'true',
@@ -445,33 +402,16 @@ export class ConnectorRegistry {
     const refreshToken = asText(secret.refreshToken);
     if (connectorKey === 'vercel') {
       if (!accessToken && !refreshToken) {
-        throw new Error('Vercel 连接器缺少 access token 或 refresh token');
+        throw new Error('Vercel 杩炴帴鍣ㄧ己灏?access token 鎴?refresh token');
       }
-      const auth = buildInternalConnectorRuntimeAuth({
-        connectorKey,
-        taskSessionId: asText(input.runtimeContext?.taskSessionId),
-        userId: asText(input.runtimeContext?.userId),
-        profileId: asText(account.profileId),
-      });
-      const proxyEnabled = toBool(
-        process.env.ONECEO_PROXY_ENABLED ?? process.env.E2B_PROXY_ENABLED ?? 'true',
-        true
-      );
       return {
-        type: 'local',
+        type: 'hosted',
         enabled: true,
-        command: ['node', '-e', buildVercelStdioBridgeCommand()],
-        environment: buildVercelBridgeEnvironment({
-          mcpUrl: buildRemoteUrl(item, {
-            connectorKey,
-          }),
-          internalToken: auth.internalToken,
-          runtimeAuth: auth.runtimeAuth,
-          proxyEnabled,
-        }),
+        provider: 'vercel',
+        capabilities: ['initialize', 'tools/list', 'tools/call'],
       };
     } else if (!accessToken) {
-      throw new Error(`${item.name} 连接器缺少 access token`);
+      throw new Error(`${item.name} 杩炴帴鍣ㄧ己灏?access token`);
     }
     const url = buildRemoteUrl(item, {
       connectorKey,

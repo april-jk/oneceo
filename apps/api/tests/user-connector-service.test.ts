@@ -8,9 +8,9 @@ import { userConnectorService } from '../src/services/user-connector-service';
 
 const originalFetch = global.fetch;
 const originalConnectorSecretKey = process.env.CONNECTOR_SECRET_KEY;
-const originalVercelClientId = process.env.VERCEL_CONNECTOR_CLIENT_ID;
-const originalVercelClientSecret = process.env.VERCEL_CONNECTOR_CLIENT_SECRET;
-const originalVercelRedirectUri = process.env.VERCEL_CONNECTOR_REDIRECT_URI;
+const originalVercelClientId = process.env.VERCEL_INTEGRATION_CLIENT_ID;
+const originalVercelClientSecret = process.env.VERCEL_INTEGRATION_CLIENT_SECRET;
+const originalVercelRedirectUri = process.env.VERCEL_INTEGRATION_REDIRECT_URI;
 const originalNotionClientId = process.env.NOTION_CONNECTOR_CLIENT_ID;
 const originalNotionClientSecret = process.env.NOTION_CONNECTOR_CLIENT_SECRET;
 const originalNotionRedirectUri = process.env.NOTION_CONNECTOR_REDIRECT_URI;
@@ -18,6 +18,8 @@ const originalSlackClientId = process.env.SLACK_CONNECTOR_CLIENT_ID;
 const originalSlackClientSecret = process.env.SLACK_CONNECTOR_CLIENT_SECRET;
 const originalSlackRedirectUri = process.env.SLACK_CONNECTOR_REDIRECT_URI;
 const originalSlackUserScopes = process.env.SLACK_CONNECTOR_USER_SCOPES;
+const originalSlackAuthorizeUrl = process.env.SLACK_CONNECTOR_AUTHORIZE_URL;
+const originalSlackTokenUrl = process.env.SLACK_CONNECTOR_TOKEN_URL;
 const originalSupabaseSecretKey = process.env.SUPABASE_CONNECTOR_SECRET_KEY;
 const originalFrontendUrl = process.env.FRONTEND_URL;
 
@@ -30,19 +32,19 @@ afterEach(() => {
     process.env.CONNECTOR_SECRET_KEY = originalConnectorSecretKey;
   }
   if (originalVercelClientId === undefined) {
-    delete process.env.VERCEL_CONNECTOR_CLIENT_ID;
+    delete process.env.VERCEL_INTEGRATION_CLIENT_ID;
   } else {
-    process.env.VERCEL_CONNECTOR_CLIENT_ID = originalVercelClientId;
+    process.env.VERCEL_INTEGRATION_CLIENT_ID = originalVercelClientId;
   }
   if (originalVercelClientSecret === undefined) {
-    delete process.env.VERCEL_CONNECTOR_CLIENT_SECRET;
+    delete process.env.VERCEL_INTEGRATION_CLIENT_SECRET;
   } else {
-    process.env.VERCEL_CONNECTOR_CLIENT_SECRET = originalVercelClientSecret;
+    process.env.VERCEL_INTEGRATION_CLIENT_SECRET = originalVercelClientSecret;
   }
   if (originalVercelRedirectUri === undefined) {
-    delete process.env.VERCEL_CONNECTOR_REDIRECT_URI;
+    delete process.env.VERCEL_INTEGRATION_REDIRECT_URI;
   } else {
-    process.env.VERCEL_CONNECTOR_REDIRECT_URI = originalVercelRedirectUri;
+    process.env.VERCEL_INTEGRATION_REDIRECT_URI = originalVercelRedirectUri;
   }
   if (originalNotionClientId === undefined) {
     delete process.env.NOTION_CONNECTOR_CLIENT_ID;
@@ -78,6 +80,16 @@ afterEach(() => {
     delete process.env.SLACK_CONNECTOR_USER_SCOPES;
   } else {
     process.env.SLACK_CONNECTOR_USER_SCOPES = originalSlackUserScopes;
+  }
+  if (originalSlackAuthorizeUrl === undefined) {
+    delete process.env.SLACK_CONNECTOR_AUTHORIZE_URL;
+  } else {
+    process.env.SLACK_CONNECTOR_AUTHORIZE_URL = originalSlackAuthorizeUrl;
+  }
+  if (originalSlackTokenUrl === undefined) {
+    delete process.env.SLACK_CONNECTOR_TOKEN_URL;
+  } else {
+    process.env.SLACK_CONNECTOR_TOKEN_URL = originalSlackTokenUrl;
   }
   if (originalSupabaseSecretKey === undefined) {
     delete process.env.SUPABASE_CONNECTOR_SECRET_KEY;
@@ -209,12 +221,11 @@ test('createProfile allows Supabase token-only save with empty profile/display n
 });
 
 test('startOAuthForProfile starts vercel integration install without PKCE', async () => {
-  process.env.VERCEL_CONNECTOR_MODE = 'integration';
   process.env.VERCEL_INTEGRATION_SLUG = 'oneceo';
   process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
-  process.env.VERCEL_CONNECTOR_CLIENT_ID = 'vercel-client';
-  process.env.VERCEL_CONNECTOR_CLIENT_SECRET = 'vercel-secret';
-  process.env.VERCEL_CONNECTOR_REDIRECT_URI = '/vercel/callback';
+  process.env.VERCEL_INTEGRATION_CLIENT_ID = 'vercel-client';
+  process.env.VERCEL_INTEGRATION_CLIENT_SECRET = 'vercel-secret';
+  process.env.VERCEL_INTEGRATION_REDIRECT_URI = 'https://dev.oneceo.ai/vercel/callback';
 
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
@@ -247,13 +258,12 @@ test('startOAuthForProfile starts vercel integration install without PKCE', asyn
 });
 
 test('completeOAuthByProfile stores vercel integration installation context', async () => {
-  process.env.VERCEL_CONNECTOR_MODE = 'integration';
   process.env.VERCEL_INTEGRATION_SLUG = 'oneceo';
   process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
   process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
-  process.env.VERCEL_CONNECTOR_CLIENT_ID = 'vercel-client';
-  process.env.VERCEL_CONNECTOR_CLIENT_SECRET = 'vercel-secret';
-  process.env.VERCEL_CONNECTOR_REDIRECT_URI = '/vercel/callback';
+  process.env.VERCEL_INTEGRATION_CLIENT_ID = 'vercel-client';
+  process.env.VERCEL_INTEGRATION_CLIENT_SECRET = 'vercel-secret';
+  process.env.VERCEL_INTEGRATION_REDIRECT_URI = 'https://dev.oneceo.ai/vercel/callback';
 
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
@@ -351,8 +361,8 @@ test('completeOAuthByProfile stores vercel integration installation context', as
 
 test('clearProfileAuth clears local vercel integration auth without remote revoke', async () => {
   process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
-  process.env.VERCEL_CONNECTOR_CLIENT_ID = 'vercel-client';
-  process.env.VERCEL_CONNECTOR_CLIENT_SECRET = 'vercel-secret';
+  process.env.VERCEL_INTEGRATION_CLIENT_ID = 'vercel-client';
+  process.env.VERCEL_INTEGRATION_CLIENT_SECRET = 'vercel-secret';
 
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
@@ -812,6 +822,7 @@ test('startOAuthForProfile uses fixed redirect uri and state payload for slack',
   process.env.SLACK_CONNECTOR_CLIENT_SECRET = 'slack-secret';
   process.env.SLACK_CONNECTOR_REDIRECT_URI = '/slack/callback';
   process.env.SLACK_CONNECTOR_USER_SCOPES = 'channels:history chat:write';
+  process.env.SLACK_CONNECTOR_AUTHORIZE_URL = 'https://slack.com/oauth/v2/authorize';
 
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
@@ -848,6 +859,7 @@ test('completeOAuthByProfile returns returnToSessionId and fixed redirect uri fo
   process.env.SLACK_CONNECTOR_CLIENT_ID = 'slack-client';
   process.env.SLACK_CONNECTOR_CLIENT_SECRET = 'slack-secret';
   process.env.SLACK_CONNECTOR_REDIRECT_URI = '/slack/callback';
+  process.env.SLACK_CONNECTOR_TOKEN_URL = 'https://slack.com/api/oauth.v2.access';
 
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({

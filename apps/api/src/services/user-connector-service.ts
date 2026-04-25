@@ -63,6 +63,10 @@ type CompleteOauthInput = {
   state: string;
   code: string;
   redirectUri: string;
+  teamId?: string;
+  configurationId?: string;
+  next?: string;
+  source?: string;
 };
 
 type ConnectorMeSnapshot = {
@@ -106,6 +110,10 @@ function toIso(value: unknown): string | null {
 function pickObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return value as Record<string, unknown>;
+}
+
+function isVercelIntegrationProvider(provider: { authorizationMode?: string } | null | undefined) {
+  return provider?.authorizationMode === 'vercel_integration';
 }
 
 async function fetchJson(url: string, init: RequestInit): Promise<Record<string, unknown>> {
@@ -243,30 +251,6 @@ function buildSecretPayload(
   };
 }
 
-async function resolveVercelProfile(accessToken: string): Promise<{ displayName?: string }> {
-  const payload = await fetchJson('https://api.vercel.com/login/oauth/userinfo', {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${accessToken}`,
-      'User-Agent': 'oneceo-connectors',
-    },
-  });
-  const user =
-    payload.user && typeof payload.user === 'object'
-      ? (payload.user as Record<string, unknown>)
-      : payload;
-  return {
-    displayName:
-      asText(user.preferred_username) ||
-      asText(user.username) ||
-      asText(user.name) ||
-      asText(user.email) ||
-      asText(user.sub) ||
-      undefined,
-  };
-}
-
 function calculateSecretExpiresAt(tokenPayload: Record<string, unknown>): string | undefined {
   const expiresAt = asText(tokenPayload.expires_at);
   if (expiresAt) return expiresAt;
@@ -275,58 +259,6 @@ function calculateSecretExpiresAt(tokenPayload: Record<string, unknown>): string
     return new Date(Date.now() + expiresIn * 1000).toISOString();
   }
   return undefined;
-}
-
-async function revokeVercelOauthGrant(token: string): Promise<void> {
-  const provider = connectorRegistry.getOauthProvider('vercel');
-  if (!provider) {
-    throw new Error('Vercel OAuth provider 未配置');
-  }
-
-  let response: Response;
-  try {
-    response = await fetch('https://api.vercel.com/login/oauth/token/revoke', {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Basic ${Buffer.from(
-          `${provider.clientId}:${provider.clientSecret}`,
-          'utf8'
-        ).toString('base64')}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'oneceo-connectors',
-      },
-      body: new URLSearchParams({
-        token,
-      }).toString(),
-      signal: AbortSignal.timeout(3000),
-    });
-  } catch (error) {
-    if (error instanceof Error && error.name === 'TimeoutError') {
-      throw new Error('Vercel 撤销授权超时，请稍后重试');
-    }
-    throw error;
-  }
-
-  if (response.ok || response.status === 404) {
-    return;
-  }
-
-  const text = await response.text();
-  let payload: Record<string, unknown> = {};
-  if (text) {
-    try {
-      payload = JSON.parse(text) as Record<string, unknown>;
-    } catch {
-      payload = { raw: text };
-    }
-  }
-  throw new Error(
-    asText(payload.error_description) ||
-      asText(payload.error) ||
-      asText(payload.message) ||
-      `Vercel revoke grant failed: ${response.status}`
-  );
 }
 
 function sanitizeConfig(
@@ -392,7 +324,7 @@ async function resolveGithubInstallationCount(accessToken: string): Promise<numb
   });
   const totalCount = Number(payload.total_count || 0);
   if (!Number.isFinite(totalCount)) {
-    throw new Error('GitHub 安装状态返回格式无效');
+    throw new Error('GitHub installation response is invalid');
   }
   return totalCount;
 }
@@ -400,7 +332,7 @@ async function resolveGithubInstallationCount(accessToken: string): Promise<numb
 async function revokeGithubOauthGrant(accessToken: string): Promise<void> {
   const provider = connectorRegistry.getOauthProvider('github');
   if (!provider) {
-    throw new Error('GitHub OAuth provider 未配置');
+    throw new Error('GitHub OAuth provider is not configured');
   }
 
   let response: Response;
@@ -427,7 +359,7 @@ async function revokeGithubOauthGrant(accessToken: string): Promise<void> {
     );
   } catch (error) {
     if (error instanceof Error && error.name === 'TimeoutError') {
-      throw new Error('GitHub 撤销授权超时，请稍后重试');
+      throw new Error('GitHub revoke authorization timed out. Please try again later.');
     }
     throw error;
   }
@@ -475,13 +407,13 @@ async function resolveDisplayNameForSave(input: {
 
 function ensureRequiredProfileName(profileName: string, connectorKey: ConnectorKey) {
   if (!profileName) {
-    throw new Error(`${connectorKey} 连接器缺少 profile name`);
+    throw new Error(`${connectorKey} connector requires a profile name`);
   }
 }
 
 function buildGithubProfileName(displayName?: string | null): string {
   const resolved = asText(displayName);
-  return resolved ? `GitHub · ${resolved}` : 'GitHub';
+  return resolved ? `GitHub - ${resolved}` : 'GitHub';
 }
 
 function resolveNotionWorkspaceName(payload: Record<string, unknown>): string {
@@ -497,7 +429,7 @@ function resolveNotionWorkspaceName(payload: Record<string, unknown>): string {
 
 function buildNotionProfileName(displayName?: string | null): string {
   const resolved = asText(displayName);
-  return resolved ? `Notion · ${resolved}` : 'Notion';
+  return resolved ? `Notion - ${resolved}` : 'Notion';
 }
 
 function buildDefaultProfileName(connectorKey: ConnectorKey, catalogName: string): string {
@@ -573,8 +505,10 @@ type UserConnectorProfileRow = {
 
 const SLACK_USER_OAUTH_MODE = 'user_oauth';
 const SLACK_USER_TOKEN_TYPE = 'user';
-const SLACK_USER_TOKEN_REAUTH_MESSAGE = 'Slack connector 已切换为 User OAuth Token，请重新连接。';
-const SUPABASE_SECRET_REAUTH_MESSAGE = 'Supabase connector 授权已过期，请重新连接。';
+const SLACK_USER_TOKEN_REAUTH_MESSAGE =
+  'Slack connector 已切换为 User OAuth Token，请重新连接。';
+const SUPABASE_SECRET_REAUTH_MESSAGE =
+  'Supabase connector 授权已过期，请重新连接。';
 
 function mergeMetadata(
   current: Record<string, unknown> | null | undefined,
@@ -681,13 +615,13 @@ function resolveOauthRedirectUri(
   if (connectorKey === 'notion' || connectorKey === 'slack' || connectorKey === 'vercel') {
     const fixedRedirectUri = asText(provider.redirectUri);
     if (!fixedRedirectUri) {
-      throw new Error(`${connectorKey} OAuth 固定回调地址未配置`);
+      throw new Error(`${connectorKey} OAuth fixed redirect URI is not configured`);
     }
     return fixedRedirectUri;
   }
   const dynamicRedirectUri = asText(inputRedirectUri);
   if (!dynamicRedirectUri) {
-    throw new Error('OAuth redirectUri 不能为空');
+    throw new Error('OAuth redirectUri cannot be empty');
   }
   return dynamicRedirectUri;
 }
@@ -897,7 +831,7 @@ export class UserConnectorService {
       (slackNormalized.row || null) as UserConnectorProfileRow | null
     );
     if (!normalized.row) {
-      throw new Error('连接器 profile 不存在');
+      throw new Error('Connector profile does not exist');
     }
     if (slackNormalized.mutated || normalized.mutated) {
       await this.invalidateMeCache(userId);
@@ -1008,10 +942,10 @@ export class UserConnectorService {
       asText(input.displayName) || asText(config.displayName) || asText(existing?.displayName) || '';
     const secret = buildSecretPayload(connectorKey, credentials, existingSecret);
     if (catalogItem.authMode === 'dsn' && !secret?.dsn) {
-      throw new Error('Postgres 连接器需要提供 DSN');
+      throw new Error('Postgres connector requires a DSN');
     }
     if (catalogItem.authMode === 'token' && !catalogItem.oauth?.supported && connectorKey !== 'postgres' && !secret?.accessToken) {
-      throw new Error(`${catalogItem.name} 连接器需要提供 access token`);
+      throw new Error(`${catalogItem.name} connector requires an access token`);
     }
     const resolvedDisplayName = await resolveDisplayNameForSave({
       connectorKey,
@@ -1064,7 +998,7 @@ export class UserConnectorService {
       } as any);
     }
     if (!saved) {
-      throw new Error('保存连接器 profile 失败');
+      throw new Error('Failed to save connector profile');
     }
     return buildProfileView(saved as any);
   }
@@ -1078,7 +1012,7 @@ export class UserConnectorService {
   async updateProfile(userId: string, profileId: string, input: SaveConnectorInput) {
     const existing = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
     if (!existing) {
-      throw new Error('连接器 profile 不存在');
+      throw new Error('Connector profile does not exist');
     }
     const saved = await this.saveProfileInternal(
       userId,
@@ -1094,7 +1028,7 @@ export class UserConnectorService {
     await connectorStorageBootstrap.ensureReady();
     const existing = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
     if (!existing) {
-      throw new Error('连接器 profile 不存在');
+      throw new Error('Connector profile does not exist');
     }
     await userConnectorProfileDAO.delete(profileId, userId);
     if (existing.isDefault) {
@@ -1116,12 +1050,12 @@ export class UserConnectorService {
     await connectorStorageBootstrap.ensureReady();
     const existing = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
     if (!existing) {
-      throw new Error('连接器 profile 不存在');
+      throw new Error('Connector profile does not exist');
     }
     await userConnectorProfileDAO.clearDefaultForConnector(userId, existing.connectorKey);
     const saved = await userConnectorProfileDAO.update(profileId, userId, { isDefault: true } as any);
     if (!saved) {
-      throw new Error('设置默认 profile 失败');
+      throw new Error('Failed to set default profile');
     }
     await this.invalidateMeCache(userId);
     return buildProfileView(saved as any);
@@ -1131,26 +1065,19 @@ export class UserConnectorService {
     await connectorStorageBootstrap.ensureReady();
     const existing = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
     if (!existing) {
-      throw new Error('连接器 profile 不存在');
+      throw new Error('Connector profile does not exist');
     }
     let remoteGrantRevoked = true;
     let remoteGrantError: string | null = null;
-    if ((existing.connectorKey === 'github' || existing.connectorKey === 'vercel') && existing.secretCiphertext) {
+    if (existing.connectorKey === 'github' && existing.secretCiphertext) {
       const secret = connectorSecretService.decryptJson<ConnectorAccountSecret>(
         existing.secretCiphertext,
         existing.connectorKey as ConnectorKey
       );
-      const revokeToken =
-        existing.connectorKey === 'vercel'
-          ? asText(secret?.accessToken) || asText(secret?.refreshToken)
-          : asText(secret?.accessToken);
+      const revokeToken = asText(secret?.accessToken);
       if (revokeToken) {
         try {
-          if (existing.connectorKey === 'github') {
-            await revokeGithubOauthGrant(revokeToken);
-          } else {
-            await revokeVercelOauthGrant(revokeToken);
-          }
+          await revokeGithubOauthGrant(revokeToken);
         } catch (error) {
           remoteGrantRevoked = false;
           remoteGrantError = error instanceof Error ? error.message : String(error);
@@ -1166,7 +1093,7 @@ export class UserConnectorService {
       lastError: null,
     } as any);
     if (!saved) {
-      throw new Error('断开连接器授权失败');
+      throw new Error('Failed to clear connector authorization');
     }
     await this.invalidateMeCache(userId);
     return {
@@ -1187,17 +1114,17 @@ export class UserConnectorService {
     await connectorStorageBootstrap.ensureReady();
     const existing = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
     if (!existing) {
-      throw new Error('连接器 profile 不存在');
+      throw new Error('Connector profile does not exist');
     }
     const catalogItem = connectorRegistry.getCatalogItem(existing.connectorKey);
     const saved = await userConnectorProfileDAO.update(profileId, userId, {
       authMode: catalogItem.authMode,
       authStatus: catalogItem.available ? 'needs_auth' : 'unavailable',
       secretCiphertext: input?.clearSecret === false ? existing.secretCiphertext : null,
-      lastError: asText(input?.lastError) || '授权已失效，需要重新授权',
+      lastError: asText(input?.lastError) || 'Authorization is invalid. Please reconnect.',
     } as any);
     if (!saved) {
-      throw new Error('更新连接器授权状态失败');
+      throw new Error('Failed to update connector authorization status');
     }
     await this.invalidateMeCache(userId);
     return buildProfileView(saved as any);
@@ -1211,7 +1138,7 @@ export class UserConnectorService {
     );
     const profile = normalized.row;
     if (!profile) {
-      throw new Error('连接器 profile 不存在');
+      throw new Error('Connector profile does not exist');
     }
     if (normalized.mutated) {
       await this.invalidateMeCache(userId);
@@ -1219,7 +1146,7 @@ export class UserConnectorService {
     const connectorKey = profile.connectorKey as ConnectorKey;
     const provider = connectorRegistry.getOauthProvider(connectorKey);
     if (!provider) {
-      throw new Error('当前连接器未配置 OAuth');
+      throw new Error('Current connector has no OAuth provider configured');
     }
     const requestId = randomUUID();
     const returnToSessionId = asText(input.returnToSessionId) || null;
@@ -1243,6 +1170,15 @@ export class UserConnectorService {
       status: 'pending',
       expiresAt: new Date(Date.now() + 10 * 60 * 1000),
     } as any);
+    if (connectorKey === 'vercel' && isVercelIntegrationProvider(provider)) {
+      const authUrl = new URL(provider.authorizationUrl);
+      authUrl.searchParams.set('state', state);
+      return {
+        requestId,
+        state,
+        authUrl: authUrl.toString(),
+      };
+    }
     const authUrl = new URL(provider.authorizationUrl);
     authUrl.searchParams.set('client_id', provider.clientId);
     authUrl.searchParams.set('redirect_uri', redirectUri);
@@ -1270,12 +1206,12 @@ export class UserConnectorService {
     await connectorStorageBootstrap.ensureReady();
     const profile = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
     if (!profile) {
-      throw new Error('连接器 profile 不存在');
+      throw new Error('Connector profile does not exist');
     }
     const connectorKey = profile.connectorKey as ConnectorKey;
     const provider = connectorRegistry.getOauthProvider(connectorKey);
     if (!provider) {
-      throw new Error('当前连接器未配置 OAuth');
+      throw new Error('Current connector has no OAuth provider configured');
     }
     const catalogItem = connectorRegistry.getCatalogItem(connectorKey);
     const request = await connectorAuthRequestDAO.getByState(input.state);
@@ -1285,11 +1221,11 @@ export class UserConnectorService {
       request.connectorKey !== connectorKey ||
       asText(request.profileId) !== profileId
     ) {
-      throw new Error('OAuth 请求不存在或不属于当前用户');
+      throw new Error('OAuth request does not exist or does not belong to current user');
     }
     if (request.expiresAt && request.expiresAt.getTime() < Date.now()) {
       await connectorAuthRequestDAO.markFailedByState(input.state, 'expired');
-      throw new Error('OAuth 请求已过期');
+      throw new Error('OAuth request has expired');
     }
 
     try {
@@ -1310,7 +1246,7 @@ export class UserConnectorService {
       if (provider.pkceMethod === 'S256') {
         const codeVerifier = asText(request.codeVerifier);
         if (!codeVerifier) {
-          throw new Error('OAuth 请求缺少 PKCE code_verifier');
+          throw new Error('OAuth 璇锋眰缂哄皯 PKCE code_verifier');
         }
         body.code_verifier = codeVerifier;
       }
@@ -1350,9 +1286,10 @@ export class UserConnectorService {
       }
       let accessToken = asText(tokenPayload.access_token);
       if (!accessToken && connectorKey !== 'slack') {
-        throw new Error('OAuth 回调未返回 access_token');
+        throw new Error('OAuth callback did not return access_token');
       }
       let metadataJson = pickObject(profile.metadataJson);
+      let configJson = pickObject(profile.configJson);
       let displayName =
         asText((tokenPayload.team as Record<string, unknown> | undefined)?.name) ||
         asText(tokenPayload.workspace_name) ||
@@ -1369,6 +1306,12 @@ export class UserConnectorService {
       const secret: ConnectorAccountSecret =
         connectorKey === 'slack'
           ? resolveSlackUserOauthSecret(tokenPayload)
+          : connectorKey === 'vercel' && isVercelIntegrationProvider(provider)
+            ? {
+                source: 'vercel_integration',
+                accessToken,
+                tokenType: asText(tokenPayload.token_type) || 'Bearer',
+              }
           : {
               accessToken,
               refreshToken: asText(tokenPayload.refresh_token) || undefined,
@@ -1378,7 +1321,7 @@ export class UserConnectorService {
             };
       accessToken = asText(secret.accessToken);
       if (!accessToken) {
-        throw new Error('OAuth 回调未返回 access_token');
+        throw new Error('OAuth callback did not return access_token');
       }
 
       let authStatus: ConnectorAuthStatus = 'authorized';
@@ -1398,7 +1341,7 @@ export class UserConnectorService {
         if (installationCount <= 0) {
           authStatus = 'needs_auth';
           lastError =
-            'GitHub App 已授权，但当前账号下没有任何可用安装。请先在 GitHub 安装该 App 或批准安装更新后，再重新连接。';
+            'GitHub App is authorized, but no available installation was found for this account. Install or approve the GitHub App, then reconnect.';
           secretCiphertext = null;
           lastAuthAt = null;
         }
@@ -1413,8 +1356,30 @@ export class UserConnectorService {
           profileName = buildNotionProfileName(displayName);
         }
       } else if (connectorKey === 'vercel') {
-        const vercelProfile = await resolveVercelProfile(accessToken);
-        displayName = vercelProfile.displayName || displayName;
+        if (isVercelIntegrationProvider(provider)) {
+          const teamId = asText(input.teamId) || asText(tokenPayload.team_id);
+          const configurationId =
+            asText(input.configurationId) ||
+            asText(tokenPayload.configuration_id) ||
+            asText(tokenPayload.integration_configuration_id);
+          const installationSource = asText(input.source) || 'external';
+          configJson = {
+            ...configJson,
+            vercelAuthMode: 'integration',
+            teamId: teamId || null,
+            configurationId: configurationId || null,
+            installationSource,
+          };
+          metadataJson = {
+            ...metadataJson,
+            vercelIntegrationSlug: asText(provider.integrationSlug) || null,
+            next: asText(input.next) || null,
+            installedAt: new Date().toISOString(),
+          };
+          displayName = teamId || configurationId || asText(provider.integrationSlug) || displayName || 'Vercel';
+        } else {
+          throw new Error('Vercel connector only supports Integration authorization.');
+        }
         if (!asText(profile.profileName) || profile.profileName === 'Vercel Default' || profile.profileName === 'Vercel') {
           profileName = displayName || 'Vercel';
         }
@@ -1439,13 +1404,14 @@ export class UserConnectorService {
         authMode: 'oauth',
         authStatus,
         displayName: displayName || profile.displayName || null,
+        configJson,
         secretCiphertext,
         metadataJson,
         lastAuthAt,
         lastError,
       } as any);
       if (!saved) {
-        throw new Error('OAuth 结果保存失败');
+        throw new Error('Failed to save OAuth result');
       }
       await this.invalidateMeCache(userId);
 
@@ -1475,7 +1441,7 @@ export class UserConnectorService {
   async clearConnectorAuth(userId: string, connectorKey: ConnectorKey) {
     const existing = await this.getDefaultOrFirstProfile(userId, connectorKey);
     if (!existing) {
-      throw new Error('连接器 profile 不存在');
+      throw new Error('Connector profile does not exist');
     }
     const cleared = await this.clearProfileAuth(userId, existing.profileId);
     return {
@@ -1498,7 +1464,7 @@ export class UserConnectorService {
   async completeOAuth(userId: string, connectorKey: ConnectorKey, input: CompleteOauthInput) {
     const request = await connectorAuthRequestDAO.getByState(input.state);
     if (!request || request.userId !== userId || request.connectorKey !== connectorKey || !request.profileId) {
-      throw new Error('OAuth 请求不存在或不属于当前用户');
+      throw new Error('OAuth request does not exist or does not belong to current user');
     }
     const result = await this.completeOAuthByProfile(userId, String(request.profileId), input);
     return {

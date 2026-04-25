@@ -239,7 +239,8 @@ export default function Sidebar({
   const [location, setLocation] = useLocation();
   const currentPath = React.useMemo(() => location.split("?")[0] || location, [location]);
   const { t } = useTranslation();
-  const { user } = useAuth();
+  const { user, credits } = useAuth();
+  const creditBalanceLabel = credits ? credits.balance.toLocaleString() : "--";
   const { projects: manualProjects } = useSharedManualProjects(user?.id);
   const [expandedProjectGroups, setExpandedProjectGroups] = React.useState<string[]>([]);
   const [expandedProjects, setExpandedProjects] = React.useState<string[]>([]);
@@ -1669,7 +1670,7 @@ export default function Sidebar({
                     </span>
                   </div>
                   <span className="text-sm font-bold text-foreground">
-                    13,639
+                    {creditBalanceLabel}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">

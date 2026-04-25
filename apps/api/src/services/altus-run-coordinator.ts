@@ -35,6 +35,11 @@ import {
   taskSessionDeliverableService,
 } from './task-session-deliverable-service';
 import {
+  taskSessionWebsitePreviewSnapshotService,
+  type WebsitePreviewSnapshot,
+  type TaskSessionWebsitePreviewSnapshotService,
+} from './task-session-website-preview-snapshot-service';
+import {
   isValidOpenAiToolCallArguments,
   normalizeOpenAiToolCallArguments,
 } from '../utils/openai-chat-sanitizer';
@@ -284,7 +289,8 @@ export class AltusRunCoordinator {
     private readonly eventWriter: AltusRunEventWriter = altusRunEventWriter,
     private readonly lifecycleService: AltusRunLifecycleService = altusRunLifecycleService,
     private readonly deliverableService: TaskSessionDeliverableService = taskSessionDeliverableService,
-    private readonly budgetService: AltusManagedContextBudgetService = altusManagedContextBudgetService
+    private readonly budgetService: AltusManagedContextBudgetService = altusManagedContextBudgetService,
+    private readonly websitePreviewSnapshotService: TaskSessionWebsitePreviewSnapshotService = taskSessionWebsitePreviewSnapshotService
   ) {}
 
   private getModelName(messages: ChatMessage[], fallbackModel?: string | null) {
@@ -1443,6 +1449,7 @@ export class AltusRunCoordinator {
       state.input.taskIntentProfile
     );
     let lastDeploymentEvidence: DeploymentCompletionEvidence | null = null;
+    let debugOpenPageSucceeded = false;
     const maxToolRounds = this.getMaxToolRounds();
     let nextRoundStatusContent = '正在分析并执行任务';
 
@@ -1760,6 +1767,9 @@ export class AltusRunCoordinator {
               }
               Object.assign(eventPayload, this.buildDeploymentToolViewProjection(toolName, result.content) || {});
             }
+            if (toolName === 'debug_open_page') {
+              debugOpenPageSucceeded = true;
+            }
 
             return {
               transitionReason: postToolTransitionReason,
@@ -1921,9 +1931,20 @@ export class AltusRunCoordinator {
               attachments: result.attachments || [],
             });
             state.deliverables = deliverables;
+            const previewSnapshot: WebsitePreviewSnapshot | null =
+              await this.websitePreviewSnapshotService.captureManagedRunPreview({
+                sessionId: state.input.sessionId,
+                runId: state.input.runId,
+                sandboxId: state.sandboxId,
+                workspaceRoot: state.workspaceRoot,
+                taskIntentProfile: state.input.taskIntentProfile,
+                attachments: result.attachments || [],
+                deliverables,
+                debugOpenPageSucceeded,
+              });
             const completionMessage = this.buildCompletionMessage(result.summary, result.verification);
             const finalContent = this.resolveFinalAssistantContent(assistantContent, completionMessage);
-            if (deliverables.length > 0) {
+            if (deliverables.length > 0 || previewSnapshot) {
               await this.setupService.persistTimelineMessage({
                 sessionId: state.input.sessionId,
                 role: 'system',
@@ -1938,6 +1959,7 @@ export class AltusRunCoordinator {
                   executor: 'altus',
                   executionMode: 'managed',
                   deliverables,
+                  previewSnapshot,
                 },
                 messageKey: `managed:${state.input.runId}:deliverables_ready`,
               });
@@ -1949,6 +1971,7 @@ export class AltusRunCoordinator {
                 {
                   content: DELIVERABLES_READY_TEXT,
                   deliverables,
+                  previewSnapshot,
                 }
               );
             }
@@ -1969,9 +1992,11 @@ export class AltusRunCoordinator {
                   verification: result.verification,
                   attachments: result.attachments,
                   deliverables,
+                  previewSnapshot,
                 }),
                 4000
               ),
+              previewSnapshot,
               }
             );
             await this.setupService.persistTimelineMessage({
@@ -1981,9 +2006,13 @@ export class AltusRunCoordinator {
               content: finalContent,
               metadata: {
                 agent: 'altus',
+                executor: 'altus',
+                executionMode: 'managed',
+                eventType: 'assistant_message',
                 runId: state.input.runId,
                 verification: result.verification,
                 deliverables,
+                previewSnapshot,
               },
               messageKey: finalAssistantMessageKey,
             });
@@ -1996,6 +2025,7 @@ export class AltusRunCoordinator {
               content: finalContent,
               messageKey: finalAssistantMessageKey,
               deliverables,
+              previewSnapshot,
               }
             );
             return { outcome: 'completed' as const, content: finalContent, deliverables };

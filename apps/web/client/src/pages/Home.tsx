@@ -113,6 +113,7 @@ import {
   type TaskCreationDeliverableArtifact,
   type TaskCreationPlatformSkill,
   type TaskCreationUploadedAttachment as UploadedTaskAttachment,
+  type TaskCreationWebsitePreviewSnapshot,
 } from "@/lib/task-creation-client";
 import { getMyConnectorAccounts } from "@/lib/connectors-client";
 import {
@@ -2784,6 +2785,7 @@ export type ChatItem =
       sessionId: string;
       runId: string;
       artifacts: AltusArtifactFile[];
+      previewSnapshot?: TaskCreationWebsitePreviewSnapshot | null;
       messageKey?: string;
     }
   | {
@@ -5218,7 +5220,9 @@ function MessageBubble({
       <div data-message-key={item.messageKey}>
         <AltusArtifactPreviewCard
           sessionId={item.sessionId}
+          runId={item.runId}
           artifacts={item.artifacts}
+          previewSnapshot={item.previewSnapshot}
           onOpenViewer={onOpenWorkspacePreview}
           onDeployRequested={onDeployArtifact}
           runtimeSwitchBlocked={runtimeSwitchBlocked}
@@ -7411,6 +7415,47 @@ function collectManagedWebArtifacts(input: {
   return Array.from(unique.values());
 }
 
+function extractManagedPreviewSnapshot(
+  metadataRaw: unknown,
+): TaskCreationWebsitePreviewSnapshot | null {
+  const metadata = toRecord(metadataRaw);
+  const raw = toRecord(metadata.previewSnapshot);
+  const status = asText(raw.status);
+  if (
+    raw.kind !== "website_screenshot" ||
+    ![
+      "captured",
+      "capture_unavailable",
+      "capture_failed",
+      "storage_failed",
+    ].includes(status)
+  ) {
+    return null;
+  }
+  const source = toRecord(raw.source);
+  const portValue = Number(source.port);
+  const widthValue = Number(raw.width);
+  const heightValue = Number(raw.height);
+  return {
+    kind: "website_screenshot",
+    status: status as TaskCreationWebsitePreviewSnapshot["status"],
+    storageKey: asText(raw.storageKey) || undefined,
+    mimeType: raw.mimeType === "image/png" ? "image/png" : undefined,
+    width: Number.isFinite(widthValue) ? widthValue : undefined,
+    height: Number.isFinite(heightValue) ? heightValue : undefined,
+    capturedAt: asText(raw.capturedAt) || undefined,
+    reasonCode: asText(raw.reasonCode) || undefined,
+    message: asText(raw.message) || undefined,
+    source: {
+      sandboxId: asText(source.sandboxId) || undefined,
+      port: Number.isFinite(portValue) ? portValue : undefined,
+      url: asText(source.url) || undefined,
+      command: asText(source.command) || undefined,
+      logPath: asText(source.logPath) || undefined,
+    },
+  };
+}
+
 export function buildManagedCompletionCardItem(input: {
   message: AgentMessage;
   managedArtifactsByRun: Map<string, AltusArtifactFile[]>;
@@ -7431,17 +7476,19 @@ export function buildManagedCompletionCardItem(input: {
 
   const eventType = asText(metadata.eventType).toLowerCase();
   const deliverables = extractManagedDeliverables(metadata);
+  const previewSnapshot = extractManagedPreviewSnapshot(metadata);
   const managedArtifacts = managedArtifactsByRun.get(runId) || [];
   const webArtifacts = collectManagedWebArtifacts({
     deliverables,
     managedArtifacts,
   });
   const shouldEmitFromDeliverablesContext = deliverables.length > 0;
+  const hasPreviewSnapshot = Boolean(previewSnapshot);
   const isRunCompletedContext =
     message.type === "status_update" && eventType === "run_completed";
   if (
-    (shouldEmitFromDeliverablesContext || isRunCompletedContext) &&
-    webArtifacts.length > 0
+    (shouldEmitFromDeliverablesContext || isRunCompletedContext || hasPreviewSnapshot) &&
+    (webArtifacts.length > 0 || hasPreviewSnapshot)
   ) {
     emittedManagedCompletionRuns.add(runId);
     return {
@@ -7449,6 +7496,7 @@ export function buildManagedCompletionCardItem(input: {
       sessionId,
       runId,
       artifacts: webArtifacts,
+      previewSnapshot,
       messageKey: `managed:${runId}:artifact_card`,
     };
   }
@@ -7468,7 +7516,7 @@ export function buildManagedCompletionCardItem(input: {
     return null;
   }
 
-  if (webArtifacts.length === 0) {
+  if (webArtifacts.length === 0 && !hasPreviewSnapshot) {
     return null;
   }
 
@@ -7478,6 +7526,7 @@ export function buildManagedCompletionCardItem(input: {
     sessionId,
     runId,
     artifacts: webArtifacts,
+    previewSnapshot,
     messageKey: `managed:${runId}:artifact_card`,
   };
 }

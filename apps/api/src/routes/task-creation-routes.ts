@@ -67,6 +67,7 @@ import {
 } from '../services/task-attachment-service';
 import { downloadFromR2 } from '../services/r2-client';
 import { taskSessionDeliverableService } from '../services/task-session-deliverable-service';
+import { taskSessionWebsitePreviewSnapshotService } from '../services/task-session-website-preview-snapshot-service';
 import { platformSkillService } from '../services/platform-skill-service';
 import { userSkillService } from '../services/user-skill-service';
 import { altusMemoryContextService } from '../services/altus-memory-context-service';
@@ -5320,6 +5321,36 @@ router.get('/sessions/:sessionId/deliverables/:artifactId/download', async (req,
     return res.status(ownershipError?.status || 400).json({
       success: false,
       error: getPublicErrorMessage(ownershipError?.message || error?.message || '下载交付物失败'),
+    });
+  }
+});
+
+router.get('/sessions/:sessionId/preview-snapshots/:runId/website.png', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { sessionId, runId } = req.params;
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const snapshot = await taskSessionWebsitePreviewSnapshotService.getSessionPreviewSnapshotImage({
+      sessionId,
+      runId,
+    });
+    if (!snapshot) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('预览截图不存在'),
+      });
+    }
+
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.setHeader('Content-Type', snapshot.mimeType);
+    res.setHeader('Content-Length', String(snapshot.body.length));
+    return res.status(200).send(snapshot.body);
+  } catch (error: any) {
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('读取预览截图失败:', error);
+    return res.status(ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(ownershipError?.message || error?.message || '读取预览截图失败'),
     });
   }
 });

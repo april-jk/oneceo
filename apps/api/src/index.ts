@@ -28,6 +28,7 @@ import { taskCreationWebSocketService } from './agents/task-creation/websocket-s
 import { closeDatabaseConnection, testDatabaseConnection } from './config/database';
 import { getPublicErrorMessage } from './utils/error-response';
 import { osacLlmProxyBridgeService } from './services/osac-llm-proxy-bridge';
+import { hostedProviderHostService } from './services/hosted-provider-host-service';
 import { osacPersistentRecoveryService } from './services/osac-persistent-recovery-service';
 import { sessionMcpRecoveryService } from './services/session-mcp-recovery-service';
 import { startSandboxArchiveJob, stopSandboxArchiveJob } from './services/sandbox-archive-job';
@@ -373,6 +374,7 @@ httpServer.on('error', (error: any) => {
 // 初始化任务创建 WebSocket 服务
 taskCreationWebSocketService.initialize(httpServer);
 osacLlmProxyBridgeService.initialize();
+hostedProviderHostService.initialize();
 
 async function startServer() {
   await connectorStorageBootstrap.ensureReady();

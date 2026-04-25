@@ -19,6 +19,10 @@ import { altusMemoryContextService } from './altus-memory-context-service';
 import { userSkillService } from './user-skill-service';
 import { taskSessionAltusMemoryService } from './task-session-altus-memory-service';
 import { taskSessionSkillStateService } from './task-session-skill-state-service';
+import {
+  AltusManagedAskUserPairingService,
+  altusManagedAskUserPairingService,
+} from './altus-managed-ask-user-pairing-service';
 
 export class AltusManagedRunEntryService {
   private readonly controllers = new Map<string, AbortController>();
@@ -30,7 +34,8 @@ export class AltusManagedRunEntryService {
     private readonly lifecycleService: AltusRunLifecycleService = altusRunLifecycleService,
     private readonly coordinator: AltusRunCoordinator = altusRunCoordinator,
     private readonly redisStateService: AltusRunRedisStateService = altusRunRedisStateService,
-    private readonly recoveryService: AltusRunRecoveryService = altusRunRecoveryService
+    private readonly recoveryService: AltusRunRecoveryService = altusRunRecoveryService,
+    private readonly askUserPairingService: AltusManagedAskUserPairingService = altusManagedAskUserPairingService
   ) {}
 
   private getModelName() {
@@ -79,6 +84,7 @@ export class AltusManagedRunEntryService {
     }
 
     const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId);
+    const pendingAskUser = await this.askUserPairingService.resolvePending(sessionId, sessionMemory as any);
     const orchestratorSessionId = asText(sessionMemory?.runtime?.orchestratorSessionId);
     if (orchestratorSessionId) {
       void sessionMcpRecoveryService.ensureSessionRecovered(sessionId, orchestratorSessionId).catch(() => null);
@@ -134,6 +140,14 @@ export class AltusManagedRunEntryService {
       metadata: {
         ...(input.metadata || {}),
         runId: run.id,
+        ...(pendingAskUser
+          ? {
+              clarificationAnswer: true,
+              clarificationRunId: pendingAskUser.runId,
+              clarificationToolCallId: pendingAskUser.toolCallId,
+              clarificationMessageKey: pendingAskUser.messageKey,
+            }
+          : {}),
       },
       messageKey,
     });
@@ -142,6 +156,17 @@ export class AltusManagedRunEntryService {
       content,
       messageType
     );
+    const closedAskUser = isClarificationAnswer
+      ? await this.askUserPairingService.closePending({
+          sessionId,
+          userId,
+          pending: pendingAskUser,
+          answer: content,
+          answerRunId: run.id,
+          answerMessageKey: messageKey,
+          taskIntentProfile,
+        })
+      : null;
     const skillCatalog = await userSkillService.listAvailableSkills(userId);
     const preparedSkills = await taskSessionSkillStateService.prepareRunState({
       sessionId,
@@ -195,6 +220,13 @@ export class AltusManagedRunEntryService {
       residentSkillSelections: preparedSkills.residentSkillSelections,
       sessionSkillState: preparedSkills.sessionSkillState,
       taskIntentProfile,
+      ...(closedAskUser?.closed
+        ? {
+            clarificationAnswerKind: closedAskUser.answerKind,
+            closedClarificationRunId: closedAskUser.pending?.runId,
+            closedClarificationToolCallId: closedAskUser.pending?.toolCallId,
+          }
+        : {}),
     });
     const abortController = new AbortController();
     this.controllers.set(run.id, abortController);

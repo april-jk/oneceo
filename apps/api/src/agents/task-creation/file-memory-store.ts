@@ -92,6 +92,14 @@ export interface FileSessionRecord {
     | 'scope_boundary'
     | 'integration_target'
     | 'acceptance_requirement';
+  pendingAskUser?: {
+    runId: string;
+    toolCallId: string;
+    toolName: 'ask_user';
+    messageKey: string;
+    question: string;
+    createdAt: string;
+  };
   pendingResume?: {
     stage: NonNullable<FileSessionRecord['stage']>;
     reason?: string;
@@ -914,7 +922,12 @@ class TaskCreationFileMemoryStore {
     sessionId: string,
     question: string,
     options?: string[],
-    clarificationType?: FileSessionRecord['pendingClarificationType']
+    clarificationType?: FileSessionRecord['pendingClarificationType'],
+    askUser?: {
+      runId: string;
+      toolCallId: string;
+      messageKey: string;
+    }
   ): Promise<void> {
     await this.withLock(async () => {
       const memory = await this.readMemory();
@@ -923,6 +936,16 @@ class TaskCreationFileMemoryStore {
       session.pendingQuestion = question;
       session.pendingOptions = options;
       session.pendingClarificationType = clarificationType;
+      session.pendingAskUser = askUser
+        ? {
+            runId: askUser.runId,
+            toolCallId: askUser.toolCallId,
+            toolName: 'ask_user',
+            messageKey: askUser.messageKey,
+            question,
+            createdAt: new Date().toISOString(),
+          }
+        : undefined;
       session.status = 'waiting_user';
       session.stage = 'clarifying';
       session.updatedAt = new Date().toISOString();
@@ -938,6 +961,7 @@ class TaskCreationFileMemoryStore {
       session.pendingQuestion = undefined;
       session.pendingOptions = undefined;
       session.pendingClarificationType = undefined;
+      session.pendingAskUser = undefined;
       if (session.status === 'waiting_user') {
         session.status = 'in_progress';
       }

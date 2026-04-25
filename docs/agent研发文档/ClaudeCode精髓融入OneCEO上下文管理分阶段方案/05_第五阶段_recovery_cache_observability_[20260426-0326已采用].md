@@ -1,4 +1,4 @@
-# 05 第五阶段：恢复、缓存稳定与可观测闭环 [尚未采用]
+# 05 第五阶段：恢复、缓存稳定与可观测闭环 [20260426-0326已采用]
 
 ## 1. 阶段目标
 
@@ -156,3 +156,26 @@ budget replacement 必须遵守：
 6. 文档化的运行手册。
 
 到这里，OneCEO managed context 才算从“临时 prompt 拼接”升级为“可恢复、可验证、可缓存的上下文系统”。
+
+## 9. 当前落实记录
+
+2026-04-26 已完成的代码落点：
+
+1. 新增 DB-backed recovery report，明确 messages / run events / dynamic context 的事实来源，并声明 Redis、UI projection、prompt cache、partial SSE 都不是事实源；
+2. 新增 cache observer，输出 stable system、tool schema、MCP、skill、memory、attachment、volatile、API message、budget replacement、unresolved pairing 等 hash 与 cacheBreakReason；
+3. 新增 manifest round-trip diff，按 expected volatile、expected dynamic context、unexpected fact drift、missing fact、projection bug 分类；
+4. budget projection 增加 replacement summary，保留原始 tool result，不改写 history / UI timeline；
+5. `context-debug` 返回 recovery、cacheObservation、roundTrip、budgetProjection，供 reload / retry / Redis clear 后诊断。
+6. 补充 `context-debug` 路由级测试，确认 Express API 实际返回 DB-backed recovery、cache hash、roundTrip、budgetProjection，并包含 attachment / MCP includedContext。
+
+已执行验证：
+
+1. `pnpm --filter api exec tsx --test tests/altus-managed-context-stage5.test.ts tests/altus-managed-context-budget-service.test.ts tests/altus-managed-context-stage1.test.ts`
+2. `pnpm --filter api type-check`
+3. `pnpm --filter api exec tsx --test tests/altus-managed-routes.test.ts tests/altus-managed-context-stage5.test.ts`
+
+剩余验收项：
+
+1. 真实 managed run 链路回归仍需在本地浏览器或 E2E 中补充；
+2. Redis clear 后的真实恢复链路仍需接入运行环境验证；
+3. attachment URL 重新签名需在附件服务真实对象存储链路上验证。

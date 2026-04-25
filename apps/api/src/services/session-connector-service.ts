@@ -456,6 +456,17 @@ export class SessionConnectorService {
         transportName: 'local_stdio',
       };
     }
+    if (runtimeConfig.type === 'hosted') {
+      return {
+        transport: {
+          type: 'backend_rpc' as const,
+          rpcNamespace: 'mcp',
+          backendProvider: runtimeConfig.provider,
+          capabilities: runtimeConfig.capabilities || ['initialize', 'tools/list', 'tools/call'],
+        },
+        transportName: 'backend_rpc',
+      };
+    }
     const proxyEnv = buildSupabaseProxyEnv(connectorKey);
     return {
       transport: {

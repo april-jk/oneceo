@@ -1,5 +1,13 @@
 # Vercel Connector 迁移到 Integration OAuth 授权方案 [20260424-2035已采用]
 
+## 20260425-环境变量收敛更新
+
+Vercel Integration OAuth 已完成环境变量收敛：
+
+1. 当前只使用 `VERCEL_INTEGRATION_SLUG`、`VERCEL_INTEGRATION_CLIENT_ID`、`VERCEL_INTEGRATION_CLIENT_SECRET`、`VERCEL_INTEGRATION_REDIRECT_URI`。
+2. 旧兼容变量 `VERCEL_CONNECTOR_MODE`、`VERCEL_CONNECTOR_CLIENT_ID`、`VERCEL_CONNECTOR_CLIENT_SECRET`、`VERCEL_CONNECTOR_REDIRECT_URI` 已移除，不再作为 fallback。
+3. `VERCEL_INTEGRATION_REDIRECT_URI` 必须与 Vercel Integration Console 配置的 Redirect URL 完全一致。
+
 ## 20260424-清理更新
 
 本方案现在作为 Vercel MCP 授权链路的唯一当前方案。代码侧已收口为：

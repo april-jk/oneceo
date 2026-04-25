@@ -237,15 +237,31 @@ test('GET /api/altus-managed/sessions/:sessionId/context-debug returns recovery 
   sessionDaoAny.getSession = async () => ({ id: 'altus-session-debug', userId: 'altus-user-debug' });
   sessionDaoAny.getMessages = async () => [
     {
+      id: 'message-debug-question',
+      sessionId: 'altus-session-debug',
+      role: 'agent',
+      content: '网页应用还是完整业务系统？',
+      messageType: 'clarification_request',
+      messageKey: 'message-debug-question',
+      timelineCursor: 1,
+      metadata: {
+        runId: 'run-debug-1',
+        toolCallId: 'tool-debug-1',
+        clarificationType: 'artifact_type',
+      },
+      createdAt: '2026-04-26T03:29:59.000Z',
+    },
+    {
       id: 'message-debug-1',
       sessionId: 'altus-session-debug',
       role: 'user',
       content: '网页应用',
       messageType: 'clarification_answer',
       messageKey: 'message-debug-1',
-      timelineCursor: 1,
+      timelineCursor: 2,
       metadata: {
         clarificationAnswer: true,
+        clarificationToolCallId: 'tool-debug-1',
         attachments: [{ externalObjectKey: 'object-debug-1', name: 'brief.png', mimeType: 'image/png' }],
       },
       createdAt: '2026-04-26T03:30:00.000Z',
@@ -327,6 +343,11 @@ test('GET /api/altus-managed/sessions/:sessionId/context-debug returns recovery 
     assert.equal(payload.data.recovery.factsSource.redis, 'not_fact_source');
     assert.equal(payload.data.recovery.recoveryState, 'recoverable');
     assert.equal(payload.data.roundTrip.equivalent, true);
+    assert.equal(payload.data.summary.recoveryState, 'recoverable');
+    assert.equal(payload.data.summary.factsSource.redis, 'not_fact_source');
+    assert.deepEqual(payload.data.summary.clarification.pending, []);
+    assert.equal(payload.data.summary.clarification.answered[0]?.answer, '网页应用');
+    assert.deepEqual(payload.data.summary.recentIntent, ['网页应用']);
     assert.equal(payload.data.budgetProjection.replacementCount, 0);
     assert.ok(payload.data.cacheObservation.apiMessageHash);
     assert.ok(payload.data.manifest.includedContext.blocks.some((block: any) => block.type === 'attachment'));

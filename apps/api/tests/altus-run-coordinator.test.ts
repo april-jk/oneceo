@@ -467,6 +467,24 @@ test('plain text concrete-task prompts are treated as clarification instead of f
   );
 });
 
+test('plain text completed task summaries are not treated as clarification', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+
+  assert.equal(
+    (coordinator as any).isClarificationResponse(
+      [
+        '- 已为您创建一个基础的管理后台系统，包含仪表盘、用户管理和系统设置三个页面',
+        '- 系统采用 Express 作为后端服务器，前端使用原生 HTML/CSS/JavaScript 实现',
+        '- 已配置路由切换和健康检查端点 `/api/system/health`',
+        '- 应用已成功启动并可通过调试浏览器访问',
+        '',
+        '您可以点击上方调试链接查看运行效果。如需扩展功能，请告诉我具体需求。',
+      ].join('\n')
+    ),
+    false
+  );
+});
+
 test('deployment status evidence only unlocks completion after non-transient success state', () => {
   const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
   const intent = (coordinator as any).resolveDeploymentCompletionIntent('帮我部署当前项目');

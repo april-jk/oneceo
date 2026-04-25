@@ -23,10 +23,17 @@ import {
   type ManagedSkillContext,
 } from './altus-managed-shared';
 import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-service';
+import type { TaskClarificationType } from './task-intent-shape-service';
 
 export type ManagedToolResult =
   | { type: 'result'; content: string; activatedSkills?: ManagedSkillContext[] }
-  | { type: 'ask_user'; question: string; options?: string[]; activatedSkills?: ManagedSkillContext[] }
+  | {
+      type: 'ask_user';
+      question: string;
+      options?: string[];
+      clarificationType?: Exclude<TaskClarificationType, 'none'>;
+      activatedSkills?: ManagedSkillContext[];
+    }
   | {
       type: 'complete';
       summary: string;
@@ -1017,11 +1024,21 @@ export class AltusManagedToolRuntime {
       const options = Array.isArray(rawArgs.options)
         ? rawArgs.options.map((item) => asText(item)).filter(Boolean).slice(0, 6)
         : [];
+      const clarificationType = asText(rawArgs.clarificationType);
+      const normalizedClarificationType =
+        clarificationType === 'artifact_type' ||
+        clarificationType === 'tech_stack' ||
+        clarificationType === 'scope_boundary' ||
+        clarificationType === 'integration_target' ||
+        clarificationType === 'acceptance_requirement'
+          ? clarificationType
+          : undefined;
       return {
         type: 'ask_user',
         activatedSkills,
         question,
         options: options.length > 0 ? options : undefined,
+        clarificationType: normalizedClarificationType,
       };
     }
 

@@ -443,12 +443,14 @@ export class AltusManagedPromptService {
       instructionsSection?: string;
       reminderSection?: string;
     };
+    includeRuntimeState?: boolean;
   }) {
     const title = asText(input.sessionTitle) || '未命名会话';
     const now = new Date().toISOString();
+    const includeRuntimeState = input.includeRuntimeState !== false;
     const taskIntentProfile = input.taskIntentProfile;
     const nonDeployableTaskSection =
-      taskIntentProfile?.mode === 'non_deployable_artifact'
+      includeRuntimeState && taskIntentProfile?.mode === 'non_deployable_artifact'
         ? [
             '# Non-deployable task contract',
             `- The current session intent is classified as a non-deployable artifact (${taskIntentProfile.reason}).`,
@@ -460,7 +462,7 @@ export class AltusManagedPromptService {
           ].join('\n')
         : '';
     const noAutoDeploySection =
-      taskIntentProfile && !taskIntentProfile.deploymentAllowed
+      includeRuntimeState && taskIntentProfile && !taskIntentProfile.deploymentAllowed
         ? [
             '# Deployment trigger contract',
             '- The current session is not an explicit deployment request.',
@@ -471,8 +473,12 @@ export class AltusManagedPromptService {
           ].join('\n')
         : '';
     const deploymentToolSection =
-      taskIntentProfile && !taskIntentProfile.deploymentAllowed
-        ? ''
+      !includeRuntimeState
+        ? [
+            '- Deployment tools are governed by the current turn state. Use deploy/status/rollback tools only for an explicit current-turn deployment request.',
+          ].join('\n')
+        : taskIntentProfile && !taskIntentProfile.deploymentAllowed
+          ? ''
         : [
             '- When the user asks to deploy, publish, go live, 上线, redeploy, rollback deployment, or check deployment status for the current app, use the managed deployment tools instead of replying with plain text.',
             '- In deploy/redeploy/status flows, do not run local preview/dev commands such as `vite preview`, `npm run preview`, `vite dev`, `npm run dev`, or `react-scripts start` to decide whether Railway deployment is healthy.',
@@ -487,7 +493,7 @@ export class AltusManagedPromptService {
             '- Keep deployment debug details internal. In user-facing replies, summarize only the current phase, whether auto-repair is happening, and the final result.',
           ].join('\n');
     const clarificationGateSection =
-      taskIntentProfile?.needsClarification && asText(taskIntentProfile.clarificationQuestion)
+      includeRuntimeState && taskIntentProfile?.needsClarification && asText(taskIntentProfile.clarificationQuestion)
         ? [
             '# Clarification gate',
             '- The current request is under-specified and requires clarification before execution.',
@@ -497,7 +503,7 @@ export class AltusManagedPromptService {
           ].join('\n')
         : '';
     const clarificationFocusSection =
-      taskIntentProfile?.needsClarification && taskIntentProfile.clarificationType !== 'none'
+      includeRuntimeState && taskIntentProfile?.needsClarification && taskIntentProfile.clarificationType !== 'none'
         ? [
             '# Clarification focus',
             `- Active clarification type: ${taskIntentProfile.clarificationType}.`,
@@ -513,7 +519,7 @@ export class AltusManagedPromptService {
           ].join('\n')
         : '';
     const clarificationTransitionSection =
-      taskIntentProfile?.clarificationTransition && !taskIntentProfile.needsClarification
+      includeRuntimeState && taskIntentProfile?.clarificationTransition && !taskIntentProfile.needsClarification
         ? [
             '# Clarification transition',
             `- Transition state: ${taskIntentProfile.clarificationTransition.nextState}.`,
@@ -543,7 +549,7 @@ export class AltusManagedPromptService {
           ].join('\n')
         : '';
     const todoGateSection =
-      taskIntentProfile && !taskIntentProfile.needsClarification
+      includeRuntimeState && taskIntentProfile && !taskIntentProfile.needsClarification
         ? taskIntentProfile.todoRequired
           ? [
               '# Todo gate',
@@ -590,13 +596,21 @@ export class AltusManagedPromptService {
       `- Session ID: ${input.sessionId}`,
       `- Session title: ${title}`,
       `- Sandbox workspace root: ${input.workspaceRoot}`,
-      `- Current time: ${now}`,
+      ...(includeRuntimeState ? [`- Current time: ${now}`] : []),
       '',
-      '# Session connectors',
-      formatConnectors(input.connectors),
-      input.connectorGuideSections?.instructionsSection || '',
-      input.connectorGuideSections?.reminderSection || '',
-      '',
+      ...(includeRuntimeState
+        ? [
+            '# Session connectors',
+            formatConnectors(input.connectors),
+            input.connectorGuideSections?.instructionsSection || '',
+            input.connectorGuideSections?.reminderSection || '',
+            '',
+          ]
+        : [
+            '# Session connectors',
+            '- Runtime connector status and connector guide reminders are supplied in the current turn context.',
+            '',
+          ]),
       '# Tool usage rules',
       '- Never treat a connector/tool failure from an earlier turn as proof that the connector still fails now.',
       '- If the user says they reconnected, reauthorized, or wants to retry a connector action, you must call the connector tool again in the current run before concluding it still fails.',
@@ -692,6 +706,7 @@ export class AltusManagedPromptService {
       '',
       '# Clarification rules',
       '- If critical requirements are missing, call ask_user with one precise question.',
+      '- When calling ask_user for a missing requirement, include `clarificationType` when the question is about artifact type, tech stack, scope boundary, integration target, or acceptance requirement.',
       '- Do not ask unnecessary questions when a reasonable next step is clear.',
       '- For requests like "generate a PPT/docx/xlsx on topic X", you already have enough information to start. Use reasonable defaults and proceed instead of asking a generic meta-question.',
       '- Do not ask generic office-flow questions such as "Do you want to create or modify a PPT?" when the user request already clearly asks to create one.',
@@ -708,6 +723,97 @@ export class AltusManagedPromptService {
       '- If the requested final file already exists and one verification command confirmed it, your next action should usually be complete_task with attachments.',
       '- Do not emit hidden chain-of-thought or internal planning text.',
     ].join('\n');
+  }
+
+  buildRuntimeContextPrompt(input: {
+    sessionId: string;
+    sessionTitle?: string | null;
+    workspaceRoot: string;
+    connectors: SessionConnectorStatus[];
+    taskIntentProfile?: AltusManagedTaskIntentProfile;
+    connectorGuideSections?: {
+      instructionsSection?: string;
+      reminderSection?: string;
+    };
+    turnStatePrompt?: string | null;
+  }) {
+    const title = asText(input.sessionTitle) || '未命名会话';
+    const now = new Date().toISOString();
+    const profile = input.taskIntentProfile;
+    const lines = [
+      '# Runtime context',
+      '- This block contains current-turn state and may change between runs. Stable operating rules are in the first system message.',
+      asText(input.turnStatePrompt),
+      '',
+      '# Workspace runtime',
+      `- Session ID: ${input.sessionId}`,
+      `- Session title: ${title}`,
+      `- Sandbox workspace root: ${input.workspaceRoot}`,
+      `- Current time: ${now}`,
+      '',
+      '# Session connectors',
+      formatConnectors(input.connectors),
+      input.connectorGuideSections?.instructionsSection || '',
+      input.connectorGuideSections?.reminderSection || '',
+    ].filter(Boolean);
+
+    if (profile?.mode === 'non_deployable_artifact') {
+      lines.push(
+        '',
+        '# Non-deployable task contract',
+        `- The current session intent is classified as a non-deployable artifact (${profile.reason}).`,
+        '- Do not transform this task into a website, web app, or deployable browser product unless the user explicitly changes the requirement.',
+        '- Do not create deploy-only scaffolding just to satisfy a web contract.',
+        '- Do not call deployment tools for this task.'
+      );
+    }
+
+    if (profile && !profile.deploymentAllowed) {
+      lines.push(
+        '',
+        '# Deployment trigger contract',
+        '- The current session is not an explicit deployment request.',
+        '- Do not call deploy/status/rollback tools unless the user explicitly asks for that action in the current turn.',
+        '- Building or editing an artifact does not by itself authorize deployment.'
+      );
+    }
+
+    if (profile?.needsClarification && asText(profile.clarificationQuestion)) {
+      lines.push(
+        '',
+        '# Clarification gate',
+        '- The current request is under-specified and requires clarification before execution.',
+        `- Ask exactly this focused question: ${profile.clarificationQuestion}`,
+        ...(Array.isArray(profile.clarificationOptions) && profile.clarificationOptions.length > 0
+          ? [`- Suggested options: ${profile.clarificationOptions.join(' | ')}`]
+          : []),
+        '- Do not start execution before the user answers.'
+      );
+    }
+
+    if (profile?.clarificationTransition && !profile.needsClarification) {
+      lines.push(
+        '',
+        '# Clarification transition',
+        `- Transition state: ${profile.clarificationTransition.nextState}.`,
+        ...(profile.clarificationTransition.reason ? [`- Reason: ${profile.clarificationTransition.reason}.`] : []),
+        ...(Array.isArray(profile.clarificationTransition.assumptions) &&
+        profile.clarificationTransition.assumptions.length > 0
+          ? [`- Accepted assumptions: ${profile.clarificationTransition.assumptions.join(' | ')}`]
+          : [])
+      );
+    }
+
+    if (profile && !profile.needsClarification) {
+      lines.push(
+        '',
+        profile.todoRequired
+          ? `# Todo gate\n- The current request requires a pre-execution todo snapshot (reason=${profile.todoReason}).\n- Call \`todowrite\` before the first execution step, then update it after each major step.`
+          : '# Simple-task gate\n- The current request does not require a pre-execution todo snapshot.\n- Execute directly with the minimum correct tool path.'
+      );
+    }
+
+    return lines.join('\n');
   }
 
   buildSkillContextPrompt(skills: ManagedSkillContext[]) {

@@ -816,3 +816,26 @@ test('todowrite rejects snapshots without exactly one in-progress item while wor
     /todowrite_requires_single_in_progress/
   );
 });
+
+test('ask_user preserves structured clarification type for pending state', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-ask-user-clarification-type',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-ask-user-clarification-type',
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  const result = await runtime.execute('ask_user', {
+    question: '这次要交付的是网页应用、后端 API、本地脚本，还是完整业务系统？',
+    options: ['网页应用', '后端 API'],
+    clarificationType: 'artifact_type',
+  });
+
+  assert.equal(result.type, 'ask_user');
+  if (result.type !== 'ask_user') {
+    throw new Error('expected ask_user result');
+  }
+  assert.equal(result.clarificationType, 'artifact_type');
+});

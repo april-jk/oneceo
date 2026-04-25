@@ -12,6 +12,7 @@ import { altusClarificationTransitionAgent } from '../src/services/altus-clarifi
 import { sandboxAgentProvisionService } from '../src/services/sandbox-agent-provision-service';
 import { sessionMcpRecoveryService } from '../src/services/session-mcp-recovery-service';
 import { resolveOpencodeWorkspacePath } from '../src/utils/opencode-workspace';
+import { sessionConnectorService } from '../src/services/session-connector-service';
 
 process.env.ALTUS_CLARIFICATION_TRANSITION_DISABLED = 'true';
 
@@ -693,4 +694,37 @@ test('buildTaskIntentProfile routes protected capability delegation to user conf
   assert.equal(profile.clarificationType, 'acceptance_requirement');
   assert.match(profile.clarificationQuestion, /生产环境/);
   assert.equal(profile.clarificationTransition?.nextState, 'risk_confirmation');
+});
+
+test('captureConnectorSnapshot forces recovery before reading connector statuses', async () => {
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    id: 'session-1',
+    runtime: {
+      orchestratorSessionId: 'orch-1',
+    },
+  }) as any);
+  const recoverMock = mock.method(sessionMcpRecoveryService, 'ensureSessionRecovered', async () => true);
+  const listMock = mock.method(sessionConnectorService, 'listSessionConnectors', async () => [
+    {
+      connectorKey: 'vercel',
+      attached: true,
+      attachedProfileName: 'Vercel Default',
+      selectedProfileName: 'Vercel Default',
+      authorizedRepositories: [],
+      runtimeStatus: 'connected',
+    },
+  ] as any);
+  const snapshotMock = mock.method(taskSessionRunDAO, 'createConnectorSnapshot', async (input: any) => ({
+    id: 'snapshot-connector-1',
+    snapshotJson: input.snapshotJson,
+  }));
+
+  const service = new AltusManagedSetupService();
+  const result = await service.captureConnectorSnapshot('session-1', 'user-1');
+
+  assert.equal(recoverMock.mock.callCount(), 1);
+  assert.deepEqual(recoverMock.mock.calls[0]?.arguments, ['session-1', 'orch-1']);
+  assert.equal(listMock.mock.callCount(), 1);
+  assert.equal(snapshotMock.mock.callCount(), 1);
+  assert.equal(result.statuses[0]?.runtimeStatus, 'connected');
 });

@@ -20,7 +20,18 @@ test('platform skill governance options expose all managed tool names and known 
   }
 
   assert.equal(roleNames.has('deployment_orchestrator'), true);
+  assert.equal(roleNames.has('vercel_mcp_project_operator'), true);
+  assert.equal(roleNames.has('vercel_mcp_release_operator'), true);
   assert.equal(roleNames.has('ppt_builder'), true);
   assert.equal(roleNames.has('docx_builder'), true);
   assert.equal(roleNames.has('xlsx_builder'), true);
+
+  assert.equal(toolNames.has('vercel_update_project'), true);
+  assert.equal(toolNames.has('vercel_create_deployment'), true);
+  assert.equal(toolNames.has('vercel_create_project_from_git'), true);
+  assert.equal(toolNames.has('vercel_update_project_git_repository'), true);
+  assert.equal(toolNames.has('vercel_get_project_git_repository'), true);
+  assert.equal(toolNames.has('vercel_list_teams'), false);
+  assert.equal(toolNames.has('vercel_upsert_env_var'), true);
+  assert.equal(toolNames.has('vercel_redeploy_deployment'), true);
 });

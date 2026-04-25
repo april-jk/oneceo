@@ -16,6 +16,131 @@ function pickStringArray(value: unknown): string[] {
   return value.map((item) => asText(item)).filter(Boolean);
 }
 
+function setStringOrNull(
+  target: Record<string, unknown>,
+  source: Record<string, unknown>,
+  key: string
+) {
+  if (!Object.prototype.hasOwnProperty.call(source, key)) return;
+  if (source[key] === null) {
+    target[key] = null;
+    return;
+  }
+  const value = asText(source[key]);
+  if (value) {
+    target[key] = value;
+  }
+}
+
+function setBoolean(
+  target: Record<string, unknown>,
+  source: Record<string, unknown>,
+  key: string
+) {
+  if (typeof source[key] === 'boolean') {
+    target[key] = source[key];
+  }
+}
+
+function buildProjectMutationBody(
+  args: Record<string, unknown>,
+  options: { requireName?: boolean } = {}
+) {
+  const body: Record<string, unknown> = {};
+  for (const key of [
+    'name',
+    'framework',
+    'buildCommand',
+    'devCommand',
+    'installCommand',
+    'outputDirectory',
+    'rootDirectory',
+    'nodeVersion',
+  ]) {
+    setStringOrNull(body, args, key);
+  }
+  for (const key of ['directoryListing', 'publicSource']) {
+    setBoolean(body, args, key);
+  }
+  if (options.requireName && !asText(body.name)) {
+    throw new Error('缺少 Vercel 项目 name');
+  }
+  return body;
+}
+
+function buildGitRepositoryBody(args: Record<string, unknown>) {
+  const gitRepository = pickObject(args.gitRepository);
+  const type = asText(gitRepository.type);
+  const repo = asText(gitRepository.repo);
+  const repoId = asText(gitRepository.repoId);
+  if (!type || (!repo && !repoId)) {
+    throw new Error('缺少明确的 gitRepository.type 以及 repo 或 repoId');
+  }
+  const body: Record<string, unknown> = {
+    gitRepository: {
+      type,
+      ...(repo ? { repo } : {}),
+      ...(repoId ? { repoId } : {}),
+    },
+  };
+  for (const key of ['gitLFS', 'gitForkProtection']) {
+    setBoolean(body, args, key);
+  }
+  const gitProviderOptions = pickObject(args.gitProviderOptions);
+  if (Object.keys(gitProviderOptions).length > 0) {
+    body.gitProviderOptions = gitProviderOptions;
+  }
+  return body;
+}
+
+function buildProjectFromGitBody(args: Record<string, unknown>) {
+  return {
+    ...buildProjectMutationBody(args, { requireName: true }),
+    ...buildGitRepositoryBody(args),
+  };
+}
+
+function buildDeploymentBody(args: Record<string, unknown>) {
+  if (Object.prototype.hasOwnProperty.call(args, 'files')) {
+    throw new Error('vercel_create_deployment 首版只支持 Git deployment，不支持 files 上传');
+  }
+  const gitSource = pickObject(args.gitSource);
+  if (Object.keys(gitSource).length === 0) {
+    throw new Error('vercel_create_deployment 缺少 gitSource');
+  }
+  const body: Record<string, unknown> = {
+    gitSource,
+  };
+  for (const key of ['name', 'project', 'target']) {
+    setStringOrNull(body, args, key);
+  }
+  for (const key of ['skipAutoDetectionConfirmation']) {
+    setBoolean(body, args, key);
+  }
+  const gitMetadata = pickObject(args.gitMetadata);
+  if (Object.keys(gitMetadata).length > 0) {
+    body.gitMetadata = gitMetadata;
+  }
+  const projectSettings = pickObject(args.projectSettings);
+  if (Object.keys(projectSettings).length > 0) {
+    body.projectSettings = projectSettings;
+  }
+  return body;
+}
+
+function extractProjectGitRepositoryContext(project: Record<string, unknown>) {
+  return {
+    id: asText(project.id) || null,
+    name: asText(project.name) || null,
+    link: pickObject(project.link),
+    gitRepository: pickObject(project.gitRepository),
+    gitProviderOptions: pickObject(project.gitProviderOptions),
+    gitLFS: typeof project.gitLFS === 'boolean' ? project.gitLFS : null,
+    gitForkProtection:
+      typeof project.gitForkProtection === 'boolean' ? project.gitForkProtection : null,
+  };
+}
+
 function buildTextContent(value: unknown) {
   return [
     {
@@ -26,6 +151,16 @@ function buildTextContent(value: unknown) {
 }
 
 const TOOL_DEFINITIONS = [
+  {
+    name: 'vercel_get_auth_context',
+    title: 'Get Vercel Auth Context',
+    description: 'Return non-sensitive Vercel connector authorization context.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+  },
   {
     name: 'vercel_list_projects',
     title: 'List Vercel Projects',
@@ -38,6 +173,43 @@ const TOOL_DEFINITIONS = [
         until: { type: 'number' },
         repoUrl: { type: 'string' },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'vercel_list_teams',
+    title: 'List Vercel Teams',
+    description: 'List teams available to the authorized Vercel user.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number' },
+        since: { type: 'number' },
+        until: { type: 'number' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'vercel_create_project',
+    title: 'Create Vercel Project',
+    description: 'Create a Vercel project for the authorized user or team.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        teamId: { type: 'string' },
+        framework: { type: 'string' },
+        buildCommand: { type: ['string', 'null'] },
+        devCommand: { type: ['string', 'null'] },
+        installCommand: { type: ['string', 'null'] },
+        outputDirectory: { type: ['string', 'null'] },
+        rootDirectory: { type: ['string', 'null'] },
+        directoryListing: { type: 'boolean' },
+        publicSource: { type: 'boolean' },
+        nodeVersion: { type: 'string' },
+      },
+      required: ['name'],
       additionalProperties: false,
     },
   },
@@ -56,6 +228,49 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'vercel_update_project',
+    title: 'Update Vercel Project',
+    description: 'Update Vercel project settings by project ID or project slug.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectId: { type: 'string' },
+        projectSlug: { type: 'string' },
+        projectIdOrName: { type: 'string' },
+        teamId: { type: 'string' },
+        name: { type: 'string' },
+        framework: { type: 'string' },
+        buildCommand: { type: ['string', 'null'] },
+        devCommand: { type: ['string', 'null'] },
+        installCommand: { type: ['string', 'null'] },
+        outputDirectory: { type: ['string', 'null'] },
+        rootDirectory: { type: ['string', 'null'] },
+        directoryListing: { type: 'boolean' },
+        publicSource: { type: 'boolean' },
+        nodeVersion: { type: 'string' },
+      },
+      required: ['projectIdOrName'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'vercel_delete_project',
+    title: 'Delete Vercel Project',
+    description: 'Delete a Vercel project by project ID or project slug. Requires confirm=true.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectId: { type: 'string' },
+        projectSlug: { type: 'string' },
+        projectIdOrName: { type: 'string' },
+        teamId: { type: 'string' },
+        confirm: { type: 'boolean' },
+      },
+      required: ['projectIdOrName', 'confirm'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'vercel_list_deployments',
     title: 'List Vercel Deployments',
     description: 'List deployments, optionally scoped to a project.',
@@ -69,6 +284,27 @@ const TOOL_DEFINITIONS = [
         target: { type: 'string' },
         state: { type: 'string' },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'vercel_create_deployment',
+    title: 'Create Vercel Deployment',
+    description: 'Create a Vercel Git deployment. Workspace file upload is not supported.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        project: { type: 'string' },
+        teamId: { type: 'string' },
+        target: { type: 'string' },
+        gitSource: { type: 'object' },
+        gitMetadata: { type: 'object' },
+        projectSettings: { type: 'object' },
+        skipAutoDetectionConfirmation: { type: 'boolean' },
+        forceNew: { type: 'boolean' },
+      },
+      required: ['gitSource'],
       additionalProperties: false,
     },
   },
@@ -211,6 +447,64 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'vercel_create_project_from_git',
+    title: 'Create Vercel Project From Git',
+    description: 'Create a Vercel project bound to an explicit Git repository.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        teamId: { type: 'string' },
+        gitRepository: { type: 'object' },
+        framework: { type: 'string' },
+        buildCommand: { type: ['string', 'null'] },
+        devCommand: { type: ['string', 'null'] },
+        installCommand: { type: ['string', 'null'] },
+        outputDirectory: { type: ['string', 'null'] },
+        rootDirectory: { type: ['string', 'null'] },
+        nodeVersion: { type: 'string' },
+      },
+      required: ['name', 'gitRepository'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'vercel_update_project_git_repository',
+    title: 'Update Vercel Project Git Repository',
+    description: 'Update only Git repository related fields for a Vercel project.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectId: { type: 'string' },
+        projectSlug: { type: 'string' },
+        projectIdOrName: { type: 'string' },
+        teamId: { type: 'string' },
+        gitRepository: { type: 'object' },
+        gitLFS: { type: 'boolean' },
+        gitForkProtection: { type: 'boolean' },
+        gitProviderOptions: { type: 'object' },
+      },
+      required: ['projectIdOrName', 'gitRepository'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'vercel_get_project_git_repository',
+    title: 'Get Vercel Project Git Repository',
+    description: 'Extract Git repository binding context from a Vercel project.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectId: { type: 'string' },
+        projectSlug: { type: 'string' },
+        projectIdOrName: { type: 'string' },
+        teamId: { type: 'string' },
+      },
+      required: ['projectIdOrName'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'vercel_redeploy_deployment',
     title: 'Redeploy Vercel Deployment',
     description: 'Create a new deployment from an existing deployment ID.',
@@ -249,6 +543,17 @@ function resolveProjectIdOrName(
     asText(profileConfig.projectSlug);
   if (required && !projectIdOrName) {
     throw new Error('Vercel 写操作缺少明确 projectId 或 projectSlug');
+  }
+  return projectIdOrName;
+}
+
+function resolveExplicitProjectIdOrName(args: Record<string, unknown>) {
+  const projectIdOrName =
+    asText(args.projectIdOrName) ||
+    asText(args.projectId) ||
+    asText(args.projectSlug);
+  if (!projectIdOrName) {
+    throw new Error('缺少明确的 projectId 或 projectSlug');
   }
   return projectIdOrName;
 }
@@ -314,6 +619,15 @@ export class VercelMcpService {
     };
 
     switch (toolName) {
+      case 'vercel_get_auth_context':
+        return {
+          authMode: asText(profileConfig.vercelAuthMode) || 'oauth',
+          hasAccessToken: Boolean(asText(profile.secret?.accessToken)),
+          teamId: asText(profileConfig.teamId) || null,
+          configurationId: asText(profileConfig.configurationId) || null,
+          installationSource: asText(profileConfig.installationSource) || null,
+          integrationSlug: asText(process.env.VERCEL_INTEGRATION_SLUG) || null,
+        };
       case 'vercel_list_projects':
         return vercelRestClient.listProjects(requestContext, {
           limit: args.limit,
@@ -321,9 +635,76 @@ export class VercelMcpService {
           until: args.until,
           repoUrl: args.repoUrl,
         });
+      case 'vercel_list_teams':
+        return vercelRestClient.listTeams(requestContext, {
+          limit: args.limit,
+          since: args.since,
+          until: args.until,
+        });
+      case 'vercel_create_project': {
+        const body = buildProjectMutationBody(args, { requireName: true });
+        console.info('[VERCEL_MCP_WRITE:create_project]', {
+          taskSessionId: context.taskSessionId,
+          profileId: context.profileId,
+          name: body.name,
+        });
+        return vercelRestClient.createProject(requestContext, body);
+      }
+      case 'vercel_create_project_from_git': {
+        const body = buildProjectFromGitBody(args);
+        console.info('[VERCEL_MCP_WRITE:create_project_from_git]', {
+          taskSessionId: context.taskSessionId,
+          profileId: context.profileId,
+          name: body.name,
+          gitRepository: body.gitRepository,
+        });
+        return vercelRestClient.createProject(requestContext, body);
+      }
       case 'vercel_get_project': {
         const projectIdOrName = resolveProjectIdOrName(args, profileConfig, true);
         return vercelRestClient.getProject(requestContext, projectIdOrName);
+      }
+      case 'vercel_update_project': {
+        const projectIdOrName = resolveExplicitProjectIdOrName(args);
+        const body = buildProjectMutationBody(args);
+        if (Object.keys(body).length === 0) {
+          throw new Error('更新 Vercel 项目时至少需要提供一个配置字段');
+        }
+        console.info('[VERCEL_MCP_WRITE:update_project]', {
+          taskSessionId: context.taskSessionId,
+          profileId: context.profileId,
+          projectIdOrName,
+          fields: Object.keys(body),
+        });
+        return vercelRestClient.updateProject(requestContext, projectIdOrName, body);
+      }
+      case 'vercel_update_project_git_repository': {
+        const projectIdOrName = resolveExplicitProjectIdOrName(args);
+        const body = buildGitRepositoryBody(args);
+        console.info('[VERCEL_MCP_WRITE:update_project_git_repository]', {
+          taskSessionId: context.taskSessionId,
+          profileId: context.profileId,
+          projectIdOrName,
+          fields: Object.keys(body),
+        });
+        return vercelRestClient.updateProject(requestContext, projectIdOrName, body);
+      }
+      case 'vercel_get_project_git_repository': {
+        const projectIdOrName = resolveExplicitProjectIdOrName(args);
+        const project = await vercelRestClient.getProject(requestContext, projectIdOrName);
+        return extractProjectGitRepositoryContext(project);
+      }
+      case 'vercel_delete_project': {
+        const projectIdOrName = resolveExplicitProjectIdOrName(args);
+        if (args.confirm !== true) {
+          throw new Error('删除 Vercel 项目前必须显式传入 confirm: true');
+        }
+        console.info('[VERCEL_MCP_WRITE:delete_project]', {
+          taskSessionId: context.taskSessionId,
+          profileId: context.profileId,
+          projectIdOrName,
+        });
+        return vercelRestClient.deleteProject(requestContext, projectIdOrName);
       }
       case 'vercel_list_deployments': {
         const projectIdOrName = resolveProjectIdOrName(args, profileConfig, false);
@@ -332,6 +713,18 @@ export class VercelMcpService {
           target: args.target,
           state: args.state,
           projectId: projectIdOrName || undefined,
+        });
+      }
+      case 'vercel_create_deployment': {
+        const body = buildDeploymentBody(args);
+        console.info('[VERCEL_MCP_WRITE:create_deployment]', {
+          taskSessionId: context.taskSessionId,
+          profileId: context.profileId,
+          project: body.project,
+          target: body.target,
+        });
+        return vercelRestClient.createDeployment(requestContext, body, {
+          forceNew: args.forceNew === true ? '1' : undefined,
         });
       }
       case 'vercel_get_deployment': {

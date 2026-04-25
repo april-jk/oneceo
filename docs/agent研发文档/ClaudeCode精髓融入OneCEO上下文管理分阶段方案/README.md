@@ -26,6 +26,7 @@
 | 3 | [03_第三阶段_tool_result_envelope_[20260426-0317已采用].md](./03_第三阶段_tool_result_envelope_[20260426-0317已采用].md) | 统一工具结果 envelope 和失败 tool_result | 是，限工具结果上下文 |
 | 4 | [04_第四阶段_dynamic_context_blocks_[20260426-0321已采用].md](./04_第四阶段_dynamic_context_blocks_[20260426-0321已采用].md) | skills / MCP / memory / attachments typed context blocks | 是，限动态上下文 |
 | 5 | [05_第五阶段_recovery_cache_observability_[20260426-0326已采用].md](./05_第五阶段_recovery_cache_observability_[20260426-0326已采用].md) | 恢复、缓存稳定、manifest 观测闭环 | 是，限恢复与观测 |
+| 6 | [06_第二轮上下文行为验收测试计划_[20260426-0352已采用].md](./06_第二轮上下文行为验收测试计划_[20260426-0352已采用].md) | 行为回归、真实链路、debug 摘要、缓存稳定验收计划 | 否，测试计划 |
 
 ## 3. 全局执行顺序
 
@@ -36,6 +37,7 @@
   -> 阶段 3：tool result envelope
   -> 阶段 4：dynamic context blocks
   -> 阶段 5：recovery + cache observability
+  -> 阶段 6：第二轮上下文行为验收测试计划
 ```
 
 ## 4. 全局硬边界

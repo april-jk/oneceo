@@ -1,0 +1,240 @@
+{
+  "suite_id": "altus-context-continuity-v1",
+  "suite_version": "1.0.0",
+  "generated_at": "2026-04-26",
+  "smoke_case_ids": [
+    "ALTUS-CONTEXT-001",
+    "ALTUS-CONTEXT-002"
+  ],
+  "categories": [
+    "context_continuity",
+    "clarification_state",
+    "multi_turn_continuity",
+    "tool_context_recovery",
+    "dynamic_context_stability"
+  ],
+  "cases": [
+    {
+      "case_id": "ALTUS-CONTEXT-001",
+      "case_version": "1.0.0",
+      "category": "clarification_state",
+      "title": "Answered artifact boundary should not be asked again",
+      "prompt": "帮我做一个管理后台系统",
+      "prompt_sequence": [
+        {
+          "role": "user",
+          "content": "帮我做一个管理后台系统"
+        },
+        {
+          "role": "expected_agent",
+          "content_contains": "这次要交付的是网页应用、后端 API、本地脚本，还是完整业务系统？"
+        },
+        {
+          "role": "user",
+          "content": "网页应用"
+        }
+      ],
+      "required_evidence": [
+        "context-debug summary shows answered clarification with answer 网页应用",
+        "context-debug summary pending clarification is empty",
+        "The same artifact boundary question appears only once after the answer"
+      ],
+      "hard_fail_rules": [
+        "Agent repeats the same artifact boundary question after user answers 网页应用",
+        "User answer 网页应用 is treated as an unrelated new task",
+        "Pending clarification remains open after answer"
+      ],
+      "expected": [
+        "Close the artifact_type clarification after the user answer",
+        "Continue execution or ask only a new materially different clarification",
+        "Preserve the original request and answer in compiled context"
+      ],
+      "forbidden": [
+        "Repeat the same delivery type question",
+        "Block the next model call on stale pending clarification",
+        "Use UI projection or Redis as the fact source"
+      ],
+      "scoring_dimensions": [
+        "clarification_discipline",
+        "multi_turn_continuity",
+        "boundary_control",
+        "debuggability"
+      ]
+    },
+    {
+      "case_id": "ALTUS-CONTEXT-002",
+      "case_version": "1.0.0",
+      "category": "multi_turn_continuity",
+      "title": "Follow-up delegated plan should inherit previous project goal",
+      "prompt": "按你的想法，先帮我做个方案",
+      "prompt_sequence": [
+        {
+          "role": "precondition",
+          "content": "A prior turn completed or progressed a 管理后台系统 request after the user answered 网页应用"
+        },
+        {
+          "role": "user",
+          "content": "按你的想法，先帮我做个方案"
+        }
+      ],
+      "required_evidence": [
+        "context-debug summary recentIntent includes the original admin system request, 网页应用, and this follow-up",
+        "No new duplicate artifact_type clarification appears",
+        "Agent produces or starts producing a plan for the previous 管理后台系统"
+      ],
+      "hard_fail_rules": [
+        "Agent asks again whether the deliverable is 网页应用、后端 API、本地脚本 or 完整业务系统",
+        "Agent treats 方案 as a context-free task",
+        "Agent outputs only a generic clarification template and does not advance"
+      ],
+      "expected": [
+        "Inherit the 管理后台系统 + 网页应用 context",
+        "Produce a plan or plan document",
+        "Keep answered clarification closed"
+      ],
+      "forbidden": [
+        "Mechanical repeated clarification",
+        "Discard prior user answer",
+        "Change deliverable type without user request"
+      ],
+      "scoring_dimensions": [
+        "intent_understanding",
+        "multi_turn_continuity",
+        "clarification_discipline",
+        "output_quality"
+      ]
+    },
+    {
+      "case_id": "ALTUS-CONTEXT-003",
+      "case_version": "1.0.0",
+      "category": "multi_turn_continuity",
+      "title": "Low-information continuation should use prior context",
+      "prompt": "继续",
+      "prompt_sequence": [
+        {
+          "role": "precondition",
+          "content": "A prior turn has a clear active goal and no pending clarification"
+        },
+        {
+          "role": "user",
+          "content": "继续"
+        }
+      ],
+      "required_evidence": [
+        "No stale clarification is reopened",
+        "Agent continues the active goal"
+      ],
+      "hard_fail_rules": [
+        "Agent asks an already answered clarification again",
+        "Agent ignores prior context"
+      ],
+      "expected": [
+        "Continue from the latest active goal",
+        "Ask only if a real pending confirmation exists"
+      ],
+      "forbidden": [
+        "Treat 继续 as a new standalone task",
+        "Use a fixed clarification template without context"
+      ],
+      "scoring_dimensions": [
+        "multi_turn_continuity",
+        "clarification_discipline"
+      ]
+    },
+    {
+      "case_id": "ALTUS-CONTEXT-004",
+      "case_version": "1.0.0",
+      "category": "context_continuity",
+      "title": "Explicit target override should supersede prior delivery type",
+      "prompt": "不要网页了，改成本地脚本",
+      "prompt_sequence": [
+        {
+          "role": "precondition",
+          "content": "A prior turn established 网页应用 as the delivery type"
+        },
+        {
+          "role": "user",
+          "content": "不要网页了，改成本地脚本"
+        }
+      ],
+      "required_evidence": [
+        "context-debug summary recentIntent includes the override",
+        "Agent does not force the old 网页应用 target"
+      ],
+      "hard_fail_rules": [
+        "Agent continues webpage implementation after the explicit override",
+        "Agent loses the override from context-debug recent intent"
+      ],
+      "expected": [
+        "Treat 本地脚本 as the latest target",
+        "Ask a focused follow-up only if needed for script scope"
+      ],
+      "forbidden": [
+        "Old clarification answer locks the task forever",
+        "Discard explicit user override"
+      ],
+      "scoring_dimensions": [
+        "boundary_control",
+        "multi_turn_continuity",
+        "intent_understanding"
+      ]
+    },
+    {
+      "case_id": "ALTUS-CONTEXT-005",
+      "case_version": "1.0.0",
+      "category": "tool_context_recovery",
+      "title": "Tool failure should be visible to the next model turn",
+      "prompt": "生成一个网页应用并运行检查",
+      "required_evidence": [
+        "Failed tool result is present in tool result envelope",
+        "Agent retry or explanation references the failure"
+      ],
+      "hard_fail_rules": [
+        "Agent behaves as if the failed tool did not happen",
+        "Failed tool call has no tool_result equivalent"
+      ],
+      "expected": [
+        "Persist failed tool result into context",
+        "Continue with retry or explain the blocker"
+      ],
+      "forbidden": [
+        "Drop failed tool result",
+        "Reopen unrelated stale clarification"
+      ],
+      "scoring_dimensions": [
+        "tool_selection",
+        "repair_and_exception_handling",
+        "debuggability"
+      ]
+    },
+    {
+      "case_id": "ALTUS-CONTEXT-006",
+      "case_version": "1.0.0",
+      "category": "dynamic_context_stability",
+      "title": "Dynamic context should not mutate stable prompt state",
+      "prompt": "基于附件和已选 skill 继续处理",
+      "required_evidence": [
+        "Dynamic context is represented as typed context blocks",
+        "Stable system hash stays unchanged when only dynamic context changes",
+        "Relevant dynamic hash changes are visible"
+      ],
+      "hard_fail_rules": [
+        "Attachments, skills, or MCP state are flattened into unstable system prompt text",
+        "Redis or UI projection becomes the context fact source"
+      ],
+      "expected": [
+        "Use typed context blocks for attachments, skills, MCP, memory",
+        "Keep stable prompt hash isolated"
+      ],
+      "forbidden": [
+        "Dynamic context pollutes stable prompt",
+        "Reload loses selected dynamic context"
+      ],
+      "scoring_dimensions": [
+        "boundary_control",
+        "debuggability",
+        "multi_turn_continuity"
+      ]
+    }
+  ]
+}

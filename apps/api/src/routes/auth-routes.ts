@@ -320,12 +320,15 @@ router.post('/logout', async (req, res) => {
 router.get('/session', async (req, res) => {
   const current = (req as any).currentAppUser;
   if (!current?.id) {
-    const clearOptions = {
-      ...buildAppSessionClearCookieOptions(req),
-      httpOnly: false,
-    };
-    for (const cookieName of APP_SESSION_STATE_COOKIE_NAMES) {
+    const clearOptions = buildAppSessionClearCookieOptions(req);
+    for (const cookieName of APP_SESSION_COOKIE_NAMES) {
       clearCookie(res, cookieName, clearOptions);
+    }
+    for (const cookieName of APP_SESSION_STATE_COOKIE_NAMES) {
+      clearCookie(res, cookieName, {
+        ...clearOptions,
+        httpOnly: false,
+      });
     }
     applyAuthDebugHeaders(req, res, {
       currentUserId: null,

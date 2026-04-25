@@ -34,7 +34,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: 3000,
-      strictPort: false,
+      strictPort: true,
       host: true,
       allowedHosts: ["oneceo.ai", "www.oneceo.ai", "localhost", "127.0.0.1"],
       fs: {

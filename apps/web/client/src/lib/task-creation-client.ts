@@ -208,6 +208,29 @@ export type TaskCreationDeliverableArtifact = {
   downloadPath?: string;
 };
 
+export type TaskCreationWebsitePreviewSnapshot = {
+  kind: "website_screenshot";
+  status:
+    | "captured"
+    | "capture_unavailable"
+    | "capture_failed"
+    | "storage_failed";
+  storageKey?: string;
+  mimeType?: "image/png";
+  width?: number;
+  height?: number;
+  capturedAt?: string;
+  reasonCode?: string;
+  message?: string;
+  source?: {
+    sandboxId?: string;
+    port?: number;
+    url?: string;
+    command?: string;
+    logPath?: string;
+  };
+};
+
 export type RemoteAttachmentProvider = "website" | "google-drive" | "onedrive";
 
 export type TaskCreationDebugInfo = {
@@ -1541,6 +1564,33 @@ export async function headWorkspaceRawFile(
   }
 }
 
+export async function getWorkspaceRawTextFile(
+  sessionId: string,
+  filePath: string,
+): Promise<WorkspaceRawHeadResult & { text: string }> {
+  const url = getWorkspaceRawFileUrl(sessionId, filePath);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      headers: buildClientIdentityHeaders(),
+    });
+    return {
+      ok: response.ok,
+      status: response.status,
+      text: response.ok ? await response.text() : "",
+    };
+  } catch {
+    return {
+      ok: false,
+      status: 0,
+      networkError: true,
+      text: "",
+    };
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     globalThis.setTimeout(resolve, ms);
@@ -1581,6 +1631,12 @@ export function getTaskCreationDeliverableDownloadUrl(sessionId: string, artifac
   const safeSessionId = encodeURIComponent(sessionId);
   const safeArtifactId = encodeURIComponent(artifactId);
   return `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deliverables/${safeArtifactId}/download`;
+}
+
+export function getTaskCreationPreviewSnapshotUrl(sessionId: string, runId: string): string {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const safeRunId = encodeURIComponent(runId);
+  return `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/preview-snapshots/${safeRunId}/website.png`;
 }
 
 export async function listTaskCreationDeliverables(

@@ -8,6 +8,7 @@ function createManagedMessage(input: {
   sessionId?: string;
   runId?: string;
   deliverables?: Array<Record<string, unknown>>;
+  previewSnapshot?: Record<string, unknown> | null;
 }): AgentMessage {
   return {
     type: input.type,
@@ -19,6 +20,7 @@ function createManagedMessage(input: {
       eventType: input.eventType,
       runId: input.runId || 'run-1',
       deliverables: input.deliverables || [],
+      previewSnapshot: input.previewSnapshot || null,
     },
   };
 }
@@ -51,6 +53,106 @@ describe('managed deliverable card timing', () => {
       'dist/index.html'
     );
     expect(emittedRuns.has('run-web-1')).toBe(true);
+  });
+
+  it('passes captured website preview snapshot into website preview card', () => {
+    const emittedRuns = new Set<string>();
+    const artifactsByRun = new Map();
+    const item = buildManagedCompletionCardItem({
+      message: createManagedMessage({
+        type: 'agent_message',
+        runId: 'run-web-snapshot-1',
+        deliverables: [
+          {
+            id: 'artifact-web-snapshot-1',
+            runId: 'run-web-snapshot-1',
+            name: 'index.html',
+            path: 'dist/index.html',
+            mimeType: 'text/html',
+            sizeBytes: 1024,
+          },
+        ],
+        previewSnapshot: {
+          kind: 'website_screenshot',
+          status: 'captured',
+          storageKey: 'sessions/session-1/previews/run-web-snapshot-1/snapshot.png',
+          mimeType: 'image/png',
+          width: 1280,
+          height: 720,
+        },
+      }),
+      managedArtifactsByRun: artifactsByRun,
+      emittedManagedCompletionRuns: emittedRuns,
+    });
+
+    expect(item?.kind).toBe('managed_artifact_card');
+    expect(
+      (item as Extract<ChatItem, { kind: 'managed_artifact_card' }>)?.previewSnapshot?.status,
+    ).toBe('captured');
+    expect(emittedRuns.has('run-web-snapshot-1')).toBe(true);
+  });
+
+  it('emits a fresh website preview card when a modification run only has a new snapshot', () => {
+    const emittedRuns = new Set<string>();
+    const artifactsByRun = new Map();
+    const item = buildManagedCompletionCardItem({
+      message: createManagedMessage({
+        type: 'agent_message',
+        runId: 'run-web-edit-snapshot-1',
+        previewSnapshot: {
+          kind: 'website_screenshot',
+          status: 'captured',
+          storageKey: 'sessions/session-1/previews/run-web-edit-snapshot-1/snapshot.png',
+          mimeType: 'image/png',
+          width: 1280,
+          height: 720,
+        },
+      }),
+      managedArtifactsByRun: artifactsByRun,
+      emittedManagedCompletionRuns: emittedRuns,
+    });
+
+    expect(item?.kind).toBe('managed_artifact_card');
+    expect((item as Extract<ChatItem, { kind: 'managed_artifact_card' }>)?.artifacts).toEqual([]);
+    expect(
+      (item as Extract<ChatItem, { kind: 'managed_artifact_card' }>)?.previewSnapshot?.status,
+    ).toBe('captured');
+    expect(emittedRuns.has('run-web-edit-snapshot-1')).toBe(true);
+  });
+
+  it('passes failed website preview snapshot into website preview card', () => {
+    const emittedRuns = new Set<string>();
+    const artifactsByRun = new Map();
+    const item = buildManagedCompletionCardItem({
+      message: createManagedMessage({
+        type: 'agent_message',
+        runId: 'run-web-snapshot-failed-1',
+        deliverables: [
+          {
+            id: 'artifact-web-snapshot-failed-1',
+            runId: 'run-web-snapshot-failed-1',
+            name: 'index.html',
+            path: 'dist/index.html',
+            mimeType: 'text/html',
+            sizeBytes: 1024,
+          },
+        ],
+        previewSnapshot: {
+          kind: 'website_screenshot',
+          status: 'capture_failed',
+          reasonCode: 'preview_port_not_ready',
+          message: '网站预览服务端口未在限定时间内就绪',
+        },
+      }),
+      managedArtifactsByRun: artifactsByRun,
+      emittedManagedCompletionRuns: emittedRuns,
+    });
+
+    expect(item?.kind).toBe('managed_artifact_card');
+    expect(
+      (item as Extract<ChatItem, { kind: 'managed_artifact_card' }>)?.previewSnapshot?.status,
+    ).toBe('capture_failed');
+    expect(emittedRuns.has('run-web-snapshot-failed-1')).toBe(true);
   });
 
   it('keeps deliverable card for non-web deliverables', () => {

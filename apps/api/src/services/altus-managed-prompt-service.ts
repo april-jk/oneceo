@@ -267,6 +267,11 @@ export type AltusManagedTaskIntentProfile = {
   clarificationQuestion: string;
   clarificationType: TaskClarificationType;
   clarificationOptions?: string[];
+  clarificationTransition?: {
+    nextState: 'advisory' | 'ready_to_execute' | 'new_turn' | 'clarifying' | 'risk_confirmation';
+    reason?: string;
+    assumptions?: string[];
+  };
   todoRequired: boolean;
   todoReason:
     | 'multi_step'
@@ -507,6 +512,36 @@ export class AltusManagedPromptService {
             '',
           ].join('\n')
         : '';
+    const clarificationTransitionSection =
+      taskIntentProfile?.clarificationTransition && !taskIntentProfile.needsClarification
+        ? [
+            '# Clarification transition',
+            `- Transition state: ${taskIntentProfile.clarificationTransition.nextState}.`,
+            ...(asText(taskIntentProfile.clarificationTransition.reason)
+              ? [`- Transition reason: ${taskIntentProfile.clarificationTransition.reason}.`]
+              : []),
+            ...(Array.isArray(taskIntentProfile.clarificationTransition.assumptions) &&
+            taskIntentProfile.clarificationTransition.assumptions.length > 0
+              ? [
+                  `- Accepted assumptions: ${taskIntentProfile.clarificationTransition.assumptions
+                    .map((item) => `\`${item}\``)
+                    .join(', ')}.`,
+                ]
+              : []),
+            ...(taskIntentProfile.clarificationTransition.nextState === 'advisory'
+              ? [
+                  '- The user shifted to advisory, planning, discussion, or proposal mode. Answer naturally with useful analysis or a plan.',
+                  '- Do not ask the same clarification again, and do not start implementation unless the user explicitly asks to implement.',
+                ]
+              : []),
+            ...(taskIntentProfile.clarificationTransition.nextState === 'new_turn'
+              ? [
+                  '- The user started a new turn. Ignore stale pending clarification from earlier turns and respond to the current request.',
+                ]
+              : []),
+            '',
+          ].join('\n')
+        : '';
     const todoGateSection =
       taskIntentProfile && !taskIntentProfile.needsClarification
         ? taskIntentProfile.todoRequired
@@ -601,6 +636,7 @@ export class AltusManagedPromptService {
       noAutoDeploySection,
       clarificationGateSection,
       clarificationFocusSection,
+      clarificationTransitionSection,
       todoGateSection,
       '# OneCEO web app contract',
       '- When the user asks for a website, web app, dashboard, admin panel, SaaS UI, landing page with working product flow, or other deployable browser product, you must build it as a OneCEO deployable web app instead of an ad-hoc static artifact.',

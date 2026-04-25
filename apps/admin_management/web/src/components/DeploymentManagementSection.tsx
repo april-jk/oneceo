@@ -555,7 +555,14 @@ export function DeploymentManagementSection({
             ['users', '用户视图'],
             ['railway', 'Railway 视图'],
           ] as Array<[DeploymentManagementViewKey, string]>).map(([key, label]) => (
-            <button key={key} type="button" className={view === key ? 'active' : ''} onClick={() => setView(key)}>
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={view === key}
+              className={view === key ? 'active' : ''}
+              onClick={() => setView(key)}
+            >
               <strong>{label}</strong>
             </button>
           ))}
@@ -971,12 +978,12 @@ export function DeploymentManagementSection({
       </main>
 
       {railwayDialogMode ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeRailwayDialog}>
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="deployment-railway-dialog-title" onClick={closeRailwayDialog}>
           <div className="modal-card deployment-bulk-modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-header">
               <div>
                 <p className="section-tag">Railway 批量操作</p>
-                <h2>
+                <h2 id="deployment-railway-dialog-title">
                   {railwayDialogMode === 'configure'
                     ? '批量变更服务配置'
                     : railwayDialogMode === 'variables'
@@ -1081,12 +1088,12 @@ export function DeploymentManagementSection({
       ) : null}
 
       {detailDialogOpen ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setDetailDialogOpen(false)}>
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="deployment-detail-dialog-title" onClick={() => setDetailDialogOpen(false)}>
           <div className="modal-card deployment-detail-modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-header">
               <div>
                 <p className="section-tag">部署详情</p>
-                <h2>{detailTitle}</h2>
+                <h2 id="deployment-detail-dialog-title">{detailTitle}</h2>
                 <p className="panel-caption mono">{selectedTaskSessionId || '-'}</p>
               </div>
               <div className="section-actions">
@@ -1104,7 +1111,14 @@ export function DeploymentManagementSection({
                 ['relations', '关联'],
                 ['raw', '原始'],
               ] as Array<[DeploymentManagementDetailTab, string]>).map(([key, label]) => (
-                <button key={key} type="button" className={detailTab === key ? 'active' : ''} onClick={() => setDetailTab(key)}>
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  aria-selected={detailTab === key}
+                  className={detailTab === key ? 'active' : ''}
+                  onClick={() => setDetailTab(key)}
+                >
                   <strong>{label}</strong>
                 </button>
               ))}

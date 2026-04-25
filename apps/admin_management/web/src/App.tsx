@@ -107,6 +107,7 @@ type SandboxDangerAction =
   | { type: 'restart'; sandboxId: string; label: string }
   | { type: 'archive'; sandboxId: string; label: string }
   | { type: 'delete-file'; sandboxId: string; path: string; targetKind: SandboxFileItem['kind'] | 'dir' };
+type KvmDangerAction = { type: 'stop'; vm: VmItem };
 type SandboxProcessToolView = 'processes' | 'ports';
 type SandboxFileOperation = 'upload' | 'download' | 'delete';
 type SandboxFileTransferProgress = {
@@ -3708,6 +3709,7 @@ export default function App() {
   const [hosts, setHosts] = useState<HostListResponse['hosts']>([]);
   const [hostTrendMap, setHostTrendMap] = useState<Record<string, HostTrendPoint[]>>({});
   const [busyVmIds, setBusyVmIds] = useState<Record<string, boolean>>({});
+  const [kvmDangerAction, setKvmDangerAction] = useState<KvmDangerAction | null>(null);
 
   const [conversationSessions, setConversationSessions] = useState<ConversationSession[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(initialUrlState.conversation.selectedSessionId);
@@ -7735,6 +7737,12 @@ export default function App() {
     }
   };
 
+  const confirmKvmDangerAction = async () => {
+    if (!kvmDangerAction) return;
+    await handlePower(kvmDangerAction.vm, 'stop');
+    setKvmDangerAction(null);
+  };
+
   const renderKvmSection = () => (
     <main className="content-stack">
       <section className="page-intro-grid fade-in">
@@ -7749,21 +7757,12 @@ export default function App() {
             </span>
           </div>
           <p className="panel-copy">
-            展示宿主机资源、虚拟机数量和当前运行状态。
+            聚合宿主机资源、虚拟机运行态和 KVM 编排器连接状态。真实数量集中在下方 KPI 区，危险操作统一进入可复核确认。
           </p>
-          <div className="hero-metrics">
-            <div>
-              <span className="hero-metric-label">宿主机</span>
-              <strong>{hosts.length}</strong>
-            </div>
-            <div>
-              <span className="hero-metric-label">运行 VM</span>
-              <strong>{kvmOverview?.vmSummary.running ?? 0}</strong>
-            </div>
-            <div>
-              <span className="hero-metric-label">异常 VM</span>
-              <strong>{kvmOverview?.vmSummary.error ?? 0}</strong>
-            </div>
+          <div className="kvm-command-notes" aria-label="KVM 操作约束">
+            <span>数据源：KVM orchestrator</span>
+            <span>关机需确认 VM ID 与审计原因</span>
+            <span>操作后刷新资源与审计记录</span>
           </div>
         </article>
 
@@ -7775,9 +7774,9 @@ export default function App() {
             </div>
           </div>
           <ul className="signal-list">
-            <li>宿主机资源使用率</li>
-            <li>异常 VM 与停止 VM 数量</li>
-            <li>控制中心批量操作</li>
+            <li>先看宿主机资源趋势，再处理异常 VM。</li>
+            <li>运行中 VM 的关机会进入确认链路。</li>
+            <li>批量能力保留在控制中心，不混入列表行操作。</li>
           </ul>
         </article>
       </section>
@@ -7938,7 +7937,7 @@ export default function App() {
                         <button
                           type="button"
                           className="table-btn danger"
-                          onClick={() => handlePower(vm, 'stop')}
+                          onClick={() => setKvmDangerAction({ type: 'stop', vm })}
                           disabled={vm.state !== 'running' || vmBusy}
                         >
                           关机
@@ -7960,6 +7959,36 @@ export default function App() {
           await loadAuditSection();
         }}
         onError={(message) => setError(message)}
+      />
+
+      <DangerConfirmDialog
+        open={Boolean(kvmDangerAction)}
+        title="确认关闭 KVM 虚拟机"
+        objectLabel="KVM VM"
+        objectName={kvmDangerAction?.vm.vmId}
+        objectId={kvmDangerAction?.vm.vmId}
+        objectMeta={[
+          { label: '当前状态', value: kvmDangerAction?.vm.state || '-' },
+          { label: 'Session', value: kvmDangerAction?.vm.sessionId || '-' },
+          { label: '内存', value: kvmDangerAction?.vm.memoryMb ? `${Math.round(kvmDangerAction.vm.memoryMb / 1024)} GB` : '-' },
+        ]}
+        actionLabel="关闭 VM"
+        confirmText={kvmDangerAction?.vm.vmId}
+        reasonRequired
+        loading={Boolean(kvmDangerAction && busyVmIds[kvmDangerAction.vm.vmId])}
+        reversibility="partially_reversible"
+        impactItems={[
+          '目标 VM 会进入关机流程，当前运行中的任务或会话绑定可能中断',
+          '依赖该 VM 的实时调试、端口和后台进程会不可用',
+          '操作会刷新 KVM 列表并写入审计记录，便于后续追溯',
+        ]}
+        nonImpactItems={[
+          '不会删除会话记录或用户数据',
+          '不会删除 Sandbox 归档或部署记录',
+          '不会绕过 KVM 编排器的既有 power 接口',
+        ]}
+        onCancel={() => setKvmDangerAction(null)}
+        onConfirm={() => void confirmKvmDangerAction()}
       />
     </main>
   );
@@ -9258,6 +9287,7 @@ export default function App() {
                     type="button"
                     role="tab"
                     aria-selected={selectedAgentStage?.stageKey === item.stageKey}
+                    aria-controls="agent-stage-detail-panel"
                     className={`agent-stage-tab ${selectedAgentStage?.stageKey === item.stageKey ? 'active' : ''}`}
                     onClick={() => setSelectedAgentStageKey(item.stageKey)}
                   >
@@ -9268,7 +9298,7 @@ export default function App() {
               </div>
 
               {selectedAgentStage ? (
-                <div className="agent-stage-detail-surface" role="tabpanel">
+                <div id="agent-stage-detail-panel" className="agent-stage-detail-surface" role="tabpanel">
                   <div className="agent-stage-detail-head">
                     <div>
                       <p className="section-tag">当前阶段</p>
@@ -10717,7 +10747,7 @@ export default function App() {
                         >
                           <span
                             className="file-transfer-progress-bar"
-                            style={sandboxFileTransferPercent === null ? undefined : { width: `${sandboxFileTransferPercent}%` }}
+                            style={sandboxFileTransferPercent === null ? undefined : { '--file-transfer-progress': sandboxFileTransferPercent / 100 } as React.CSSProperties}
                           />
                         </div>
                         <span className="file-transfer-percent mono">
@@ -11001,7 +11031,7 @@ export default function App() {
         />
 
         {templateModalOpen ? (
-          <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeTemplateDetail}>
+          <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="template-workbench-title" onClick={closeTemplateDetail}>
             <div
               className="modal-card template-workbench-modal"
               onClick={(event) => {
@@ -11011,7 +11041,7 @@ export default function App() {
               <div className="modal-header">
                 <div>
                   <p className="section-tag">模板工作台</p>
-                  <h2>{templateWorkbenchTitle}</h2>
+                  <h2 id="template-workbench-title">{templateWorkbenchTitle}</h2>
                   <p className="panel-caption">{templateWorkbenchCaption}</p>
                 </div>
                 <button type="button" className="secondary-btn" onClick={closeTemplateDetail}>
@@ -12017,6 +12047,7 @@ export default function App() {
                       key={item.key}
                       type="button"
                       className={`nav-item ${activeSection === item.key ? 'active' : ''}`}
+                      aria-current={activeSection === item.key ? 'page' : undefined}
                       onClick={() => handleSidebarSectionOpen(item.key)}
                       title={sidebarCollapsed ? item.label : undefined}
                     >
@@ -12075,15 +12106,23 @@ export default function App() {
                     onClick={() => setSettingsMenuOpen((open) => !open)}
                   >
                     <svg className="topbar-settings-icon" viewBox="0 0 20 20" aria-hidden="true">
-                      <path d="M8.861 2.1a1.25 1.25 0 0 1 2.278 0l.41 1.008c.158.388.504.664.92.735l1.081.181a1.25 1.25 0 0 1 .904 1.813l-.516.968a1.19 1.19 0 0 0 0 1.12l.516.968a1.25 1.25 0 0 1-.904 1.813l-1.08.18a1.2 1.2 0 0 0-.922.736l-.41 1.008a1.25 1.25 0 0 1-2.277 0l-.41-1.008a1.2 1.2 0 0 0-.921-.735l-1.081-.181a1.25 1.25 0 0 1-.904-1.813l.516-.968a1.19 1.19 0 0 0 0-1.12l-.516-.968a1.25 1.25 0 0 1 .904-1.813l1.08-.18a1.2 1.2 0 0 0 .922-.736z" />
-                      <path d="M10 7.05A2.95 2.95 0 1 0 10 12.95A2.95 2.95 0 1 0 10 7.05Z" />
+                      <path d="M4.25 5.25h6.1a2.15 2.15 0 0 0 4.05 0h1.35a.95.95 0 0 0 0-1.9H14.4a2.15 2.15 0 0 0-4.05 0h-6.1a.95.95 0 1 0 0 1.9Z" />
+                      <path d="M4.25 10.95h1.35a2.15 2.15 0 0 0 4.05 0h6.1a.95.95 0 0 0 0-1.9h-6.1a2.15 2.15 0 0 0-4.05 0H4.25a.95.95 0 1 0 0 1.9Z" />
+                      <path d="M4.25 16.65h7.85a2.15 2.15 0 0 0 4.05 0h-.4a.95.95 0 0 0 0-1.9h.4a2.15 2.15 0 0 0-4.05 0H4.25a.95.95 0 1 0 0 1.9Z" />
                     </svg>
                   </button>
                   {settingsMenuOpen ? (
-                    <div className="topbar-settings-menu" role="dialog" aria-label="界面设置">
+                    <div
+                      className="topbar-settings-menu"
+                      role="region"
+                      aria-labelledby="topbar-settings-title"
+                      onKeyDown={(event) => {
+                        if (event.key === 'Escape') setSettingsMenuOpen(false);
+                      }}
+                    >
                       <div className="topbar-settings-head">
                         <div className="topbar-settings-copy">
-                          <strong>界面设置</strong>
+                          <strong id="topbar-settings-title">界面设置</strong>
                           <span>
                             {selectedThemeOption?.label} · {selectedThemeMode?.label}
                             {currentThemeMode === 'system' ? `（当前${resolvedThemeTone === 'dark' ? '暗色' : '亮色'}）` : ''}
@@ -12105,6 +12144,7 @@ export default function App() {
                                 key={theme.key}
                                 type="button"
                                 className={`theme-family-card ${theme.key === currentTheme ? 'active' : ''}`}
+                                aria-pressed={theme.key === currentTheme}
                                 onClick={() => void saveThemePreferences(theme.key, currentThemeMode)}
                                 disabled={themeSaving}
                               >
@@ -12128,11 +12168,13 @@ export default function App() {
                           <span>外观</span>
                           <small>亮色、暗色、跟随系统</small>
                         </div>
-                        <div className="theme-mode-strip" role="group" aria-label="外观模式">
+                        <div className="theme-mode-strip" role="radiogroup" aria-label="外观模式">
                           {themeModeOptions.map((mode) => (
                             <button
                               key={mode.key}
                               type="button"
+                              role="radio"
+                              aria-checked={mode.key === currentThemeMode}
                               className={`theme-mode-btn ${mode.key === currentThemeMode ? 'active' : ''}`}
                               onClick={() => void saveThemePreferences(currentTheme, mode.key)}
                               disabled={themeSaving}

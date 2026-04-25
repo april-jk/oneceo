@@ -415,6 +415,7 @@ export function OsacReleaseManagementSection({
           <div className="section-actions osac-release-toolbar">
             <input
               className="control-input"
+              aria-label="搜索 OSAC 版本号"
               placeholder="搜索版本号"
               value={query}
               onChange={(event) => setQuery(event.target.value)}

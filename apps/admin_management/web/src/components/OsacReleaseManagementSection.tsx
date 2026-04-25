@@ -3,6 +3,7 @@ import { api } from '../api';
 import type { OsacRelease, OsacReleaseDetailResponse } from '../types';
 import { DEFAULT_OSAC_RELEASE_MANAGEMENT_VIEW_STATE } from './adminViewState';
 import type { OsacReleaseManagementViewState, OsacReleaseTabKey } from './adminViewState';
+import { AdminButton, AdminDetailShell, AdminStickyInspector, AdminTabs, AuditTimeline, CodePanel, DangerConfirmDialog, DiffDrawer, StatusBadge, getAdminActionIcon, getAdminModuleIcon } from './admin-ui';
 
 type Props = {
   onError: (message: string | null) => void;
@@ -13,6 +14,15 @@ type Props = {
 };
 
 type TabKey = OsacReleaseTabKey;
+type OsacDangerAction = {
+  kind: 'publish' | 'rollback';
+  releaseId: string;
+  label: string;
+  status: string;
+  channel: string;
+  sha256?: string | null;
+  currentLatest: string;
+};
 
 function formatDateTime(value?: string | null) {
   if (!value) return '-';
@@ -95,6 +105,8 @@ export function OsacReleaseManagementSection({
   const [detail, setDetail] = useState<OsacReleaseDetailResponse | null>(null);
   const [detailDialogOpen, setDetailDialogOpen] = useState(initialState.detailDialogOpen);
   const [busy, setBusy] = useState(false);
+  const [dangerAction, setDangerAction] = useState<OsacDangerAction | null>(null);
+  const [diffOpen, setDiffOpen] = useState(false);
   const [query, setQuery] = useState(initialState.query);
   const [uploadForm, setUploadForm] = useState(DEFAULT_UPLOAD_FORM);
 
@@ -310,6 +322,7 @@ export function OsacReleaseManagementSection({
       onError(error instanceof Error ? error.message : '上传 OSAC release 失败');
     } finally {
       setBusy(false);
+      setDangerAction(null);
     }
   };
 
@@ -324,20 +337,21 @@ export function OsacReleaseManagementSection({
       onError(error instanceof Error ? error.message : '校验 OSAC release 失败');
     } finally {
       setBusy(false);
+      setDangerAction(null);
     }
   };
 
-  const publishRelease = async () => {
-    if (!detail?.release) return;
+  const publishRelease = async (payload: OsacDangerAction) => {
     setBusy(true);
     try {
-      const next = await api.publishOsacRelease(detail.release.id);
+      const next = await api.publishOsacRelease(payload.releaseId);
       setDetail(next);
       await loadList();
     } catch (error) {
       onError(error instanceof Error ? error.message : '发布 OSAC latest 失败');
     } finally {
       setBusy(false);
+      setDangerAction(null);
     }
   };
 
@@ -352,6 +366,7 @@ export function OsacReleaseManagementSection({
       onError(error instanceof Error ? error.message : '回滚 OSAC latest 失败');
     } finally {
       setBusy(false);
+      setDangerAction(null);
     }
   };
 
@@ -410,21 +425,7 @@ export function OsacReleaseManagementSection({
           </div>
         </div>
 
-        <div className="osac-release-tabs" role="tablist" aria-label="OSAC 视图切换">
-          {tabOptions.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              className={`osac-release-tab-btn ${tab === item.key ? 'active' : ''}`}
-              onClick={() => setTab(item.key)}
-              disabled={busy}
-            >
-              <span className="osac-release-tab-label">{item.label}</span>
-              {item.count !== null ? <strong className="osac-release-tab-count">{item.count}</strong> : null}
-              <small className="osac-release-tab-hint">{item.hint}</small>
-            </button>
-          ))}
-        </div>
+        <AdminTabs value={tab} onChange={setTab} ariaLabel="OSAC 视图切换" items={tabOptions.map((item) => ({ key: item.key, label: item.label, count: item.count }))} />
 
         {tab === 'upload' ? (
           <div className="osac-release-upload-layout">
@@ -563,65 +564,29 @@ export function OsacReleaseManagementSection({
       </section>
 
       {detailDialogOpen ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeDetailDialog}>
-          <article
-            className="modal-card osac-release-modal"
-            aria-labelledby="osac-release-detail-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="modal-header osac-release-modal-header">
-              <div>
-                <p className="section-tag">OSAC 版本详情</p>
-                <h2 id="osac-release-detail-title">{selectedRelease?.version || '版本详情'}</h2>
-                <p className="panel-caption">
-                  {selectedRelease
-                    ? `${selectedRelease.platform}/${selectedRelease.arch} · 上传于 ${formatDateTime(selectedRelease.uploadedAt)}`
-                    : '正在加载版本详情...'}
-                </p>
-              </div>
-              <div className="osac-release-modal-actions">
-                {selectedRelease ? (
-                  <span className={`status-pill osac-release-status-${selectedRelease.status}`}>
-                    {selectedRelease.id === currentPublishedReleaseId ? '当前已发布' : releaseStatusLabel(selectedRelease.status)}
-                  </span>
-                ) : null}
-                <button type="button" className="icon-btn" aria-label="关闭 OSAC 版本详情" onClick={closeDetailDialog}>
-                  <span aria-hidden="true">×</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="modal-body osac-release-modal-body">
+        <>
+        <AdminDetailShell
+          open={detailDialogOpen}
+          onClose={closeDetailDialog}
+          size="lg"
+          className="osac-release-modal"
+          eyebrow="OSAC 版本详情"
+          title={selectedRelease?.version || '版本详情'}
+          subtitle={selectedRelease ? `${selectedRelease.platform}/${selectedRelease.arch} · 上传于 ${formatDateTime(selectedRelease.uploadedAt)}` : '正在加载版本详情...'}
+          icon={getAdminModuleIcon('osac')}
+          entityType="OSAC Release"
+          lastUpdated={`上传 ${formatDateTime(selectedRelease?.uploadedAt)}`}
+          risk={selectedRelease?.status === 'failed' ? '风险：校验失败' : selectedRelease?.id === currentPublishedReleaseId ? '风险：当前 latest' : '风险：可切换版本'}
+          metrics={selectedRelease ? [{ label: '大小', value: formatBytes(selectedRelease.sizeBytes) }, { label: '渠道', value: selectedRelease.channel || '-' }, { label: '平台', value: `${selectedRelease.platform}/${selectedRelease.arch}` }, { label: 'SHA', value: shortSha(selectedRelease.sha256) }] : []}
+          status={selectedRelease ? <StatusBadge>{selectedRelease.id === currentPublishedReleaseId ? '当前已发布' : releaseStatusLabel(selectedRelease.status)}</StatusBadge> : null}
+          moreActions={selectedRelease ? <AdminButton variant="secondary" icon={getAdminActionIcon('logs')} onClick={() => setDiffOpen(true)}>查看 Diff</AdminButton> : null}
+          inspector={selectedRelease ? <AdminStickyInspector compact title="Actionable Inspector" sections={[{ key: 'risk', title: '当前风险', children: <div className="signal-list"><p>{selectedRelease.status === 'failed' ? '校验失败，需重新检查后再发布。' : selectedRelease.id === currentPublishedReleaseId ? '当前 latest，切换会影响后续 sandbox。' : '候选版本，发布后 sandbox 将跟随新 latest。'}</p></div> }, { key: 'impact', title: '影响范围', children: <div className="signal-list"><p>stable 渠道 latest 指针与后续 sandbox OSAC 版本。</p><p>历史 release 记录保留。</p></div> }, { key: 'recent', title: '最近操作', children: <AuditTimeline compact items={[{ id: 'uploaded', title: '已上传', time: formatDateTime(selectedRelease.uploadedAt), tone: 'info', meta: [{ label: '大小', value: formatBytes(selectedRelease.sizeBytes) }] }, { id: 'published', title: selectedRelease.publishedAt ? '已发布' : '尚未发布', time: formatDateTime(selectedRelease.publishedAt), tone: selectedRelease.publishedAt ? 'success' : 'neutral', meta: [{ label: 'latest', value: selectedRelease.id === currentPublishedReleaseId ? '是' : '否' }] }]} /> }, { key: 'blockers', title: '阻断原因', children: <div className="signal-list"><p>{selectedRelease.status === 'failed' ? '当前 release 状态为失败。' : selectedRelease.status === 'uploaded' ? '需要先校验文件。' : '当前无前端可见阻断。'}</p></div> }, { key: 'recommend', title: '推荐动作', children: <div className="signal-list"><p>{selectedRelease.status === 'uploaded' ? '先校验文件，再决定是否发布。' : '切换前查看发布 Diff 与 latest 影响。'}</p></div> }, { key: 'actions', title: '快捷动作', children: <AdminButton variant="secondary" size="sm" onClick={() => setDiffOpen(true)}>查看发布 Diff</AdminButton> }]} /> : null}
+          summary={selectedRelease ? <div className="osac-release-detail-summary"><div><span>版本号</span><strong>{selectedRelease.version}</strong></div><div><span>平台</span><strong>{selectedRelease.platform}/{selectedRelease.arch}</strong></div><div><span>当前 latest</span><strong>{detail?.currentPublishedVersion || publishedVersion || '-'}</strong></div><div><span>状态</span><strong>{selectedRelease.id === currentPublishedReleaseId ? '当前已发布' : releaseStatusLabel(selectedRelease.status)}</strong></div></div> : null}
+        >
+            <div className="admin-detail-section-stack osac-release-modal-body">
               {selectedRelease ? (
                 <>
-                  <div className="osac-release-detail-summary">
-                    <div>
-                      <span>版本号</span>
-                      <strong>{selectedRelease.version}</strong>
-                    </div>
-                    <div>
-                      <span>平台</span>
-                      <strong>{selectedRelease.platform}/{selectedRelease.arch}</strong>
-                    </div>
-                    <div>
-                      <span>上传人</span>
-                      <strong>{selectedRelease.uploadedBy || '-'}</strong>
-                    </div>
-                    <div>
-                      <span>当前 latest</span>
-                      <strong>{detail?.currentPublishedVersion || publishedVersion || '-'}</strong>
-                    </div>
-                    <div>
-                      <span>状态</span>
-                      <strong>{selectedRelease.id === currentPublishedReleaseId ? '当前已发布' : releaseStatusLabel(selectedRelease.status)}</strong>
-                    </div>
-                    <div>
-                      <span>发布时间</span>
-                      <strong>{formatDateTime(selectedRelease.publishedAt)}</strong>
-                    </div>
-                  </div>
-
-                  <div className="osac-release-detail-facts">
+                  <div className="admin-detail-section osac-release-detail-facts">
                     <article className="osac-release-fact-card">
                       <span>对象大小</span>
                       <strong>{formatBytes(selectedRelease.sizeBytes)}</strong>
@@ -648,13 +613,18 @@ export function OsacReleaseManagementSection({
                     </article>
                     <article className="osac-release-fact-card osac-release-fact-card-wide">
                       <span>SHA256</span>
-                      <strong className="mono">{selectedRelease.sha256 || '-'}</strong>
+                      <strong className="mono">{shortSha(selectedRelease.sha256)}</strong>
                     </article>
                   </div>
 
-                  <article className="osac-release-notes">
+                  <article className="admin-detail-section osac-release-notes">
                     <span>发布说明</span>
-                    <p>{selectedRelease.releaseNotes?.trim() || '暂无发布说明。'}</p>
+                    <CodePanel title="发布说明" value={selectedRelease.releaseNotes?.trim() || '暂无发布说明。'} language="markdown" maxHeight={180} />
+                  </article>
+
+                  <article className="admin-detail-section osac-release-notes">
+                    <span>Release Timeline</span>
+                    <AuditTimeline compact items={[{ id: 'uploaded', title: '已上传', time: formatDateTime(selectedRelease.uploadedAt), tone: 'info', meta: [{ label: '对象大小', value: formatBytes(selectedRelease.sizeBytes) }, { label: 'SHA256', value: shortSha(selectedRelease.sha256) }] }, { id: 'published', title: selectedRelease.publishedAt ? '已发布' : '尚未发布', time: formatDateTime(selectedRelease.publishedAt), tone: selectedRelease.publishedAt ? 'success' : 'neutral', meta: [{ label: 'latest', value: selectedRelease.id === currentPublishedReleaseId ? '是' : '否' }] }]} />
                   </article>
 
                   <div className="osac-release-action-row osac-release-modal-action-row">
@@ -671,7 +641,7 @@ export function OsacReleaseManagementSection({
                         type="button"
                         className="primary-btn"
                         disabled={busy}
-                        onClick={() => void rollbackRelease(selectedRelease.id)}
+                        onClick={() => setDangerAction({ kind: 'rollback', releaseId: selectedRelease.id, label: selectedRelease.version, status: selectedRelease.status, channel: selectedRelease.channel, sha256: selectedRelease.sha256, currentLatest: publishedVersion || '-' })}
                       >
                         切换为当前版本
                       </button>
@@ -680,7 +650,7 @@ export function OsacReleaseManagementSection({
                         type="button"
                         className="primary-btn"
                         disabled={busy || selectedRelease.id === currentPublishedReleaseId}
-                        onClick={() => void publishRelease()}
+                        onClick={() => setDangerAction({ kind: 'publish', releaseId: selectedRelease.id, label: selectedRelease.version, status: selectedRelease.status, channel: selectedRelease.channel, sha256: selectedRelease.sha256, currentLatest: publishedVersion || '-' })}
                       >
                         {selectedRelease.id === currentPublishedReleaseId ? '当前已发布版本' : '发布为 latest'}
                       </button>
@@ -691,8 +661,27 @@ export function OsacReleaseManagementSection({
                 <p className="empty osac-release-empty">正在加载版本详情...</p>
               )}
             </div>
-          </article>
-        </div>
+        </AdminDetailShell>
+        {selectedRelease ? <DiffDrawer open={diffOpen} onClose={() => setDiffOpen(false)} title="OSAC Release Diff" subtitle="无历史 before 内容时仅展示当前候选 release 元数据与发布说明，不称为历史内容对比。" objectLabel={selectedRelease.version} language="markdown" beforeText="当前前端没有可用的历史 before 文本。" afterText={selectedRelease.releaseNotes || ''} fields={[{ key: 'artifact', label: 'Artifact metadata', before: '-', after: JSON.stringify({ objectKey: selectedRelease.objectKey, manifestKey: selectedRelease.manifestKey, sha256: selectedRelease.sha256, sizeBytes: selectedRelease.sizeBytes }, null, 2), changeType: 'added' }]} impactItems={[`latest: ${detail?.currentPublishedVersion || publishedVersion || '-'}`, `候选版本: ${selectedRelease.version}`, '发布会更新 stable 渠道 latest 指针']} rollbackHint="可切换回已有已发布 release，但不会删除当前 release 记录。" syncHint="当前仅使用选中 release 的真实字段；无历史 before 时不展示伪造差异。" /> : null}
+        </>
+      ) : null}
+      {dangerAction ? (
+        <DangerConfirmDialog
+          open={Boolean(dangerAction)}
+          title={dangerAction.kind === 'publish' ? '确认发布 OSAC latest' : '确认切换当前 OSAC 版本'}
+          objectLabel="OSAC Release"
+          objectId={dangerAction.releaseId}
+          objectName={dangerAction.label}
+          objectMeta={[{ label: '渠道', value: dangerAction.channel }, { label: '当前 latest', value: dangerAction.currentLatest }, { label: 'SHA256', value: shortSha(dangerAction.sha256) }]}
+          actionLabel={dangerAction.kind === 'publish' ? '发布为 latest' : '切换为当前版本'}
+          impactItems={['stable 渠道当前版本指针会更新', '后续 sandbox 将跟随新的当前 OSAC 版本', '已存在历史 release 记录保留']}
+          nonImpactItems={['不修改业务 API', '审计原因仅前端收集，不随当前 API 提交']}
+          reversibility="partially_reversible"
+          confirmText={dangerAction.label}
+          loading={busy}
+          onCancel={() => setDangerAction(null)}
+          onConfirm={() => dangerAction.kind === 'publish' ? void publishRelease(dangerAction) : void rollbackRelease(dangerAction.releaseId)}
+        />
       ) : null}
     </main>
   );

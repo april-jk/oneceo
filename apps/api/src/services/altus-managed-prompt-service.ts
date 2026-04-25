@@ -1,6 +1,7 @@
 import type { ManagedSkillCatalogEntry, ManagedSkillContext } from './altus-managed-shared';
 import type { SessionConnectorStatus } from './session-connector-service';
 import { classifyTaskIntentShape, type TaskClarificationType } from './task-intent-shape-service';
+import { altusManagedDynamicContextBlockService } from './altus-managed-dynamic-context-blocks';
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -820,6 +821,9 @@ export class AltusManagedPromptService {
     if (!Array.isArray(skills) || skills.length === 0) {
       return '';
     }
+    const blockIndex = altusManagedDynamicContextBlockService.renderBlockIndex(
+      altusManagedDynamicContextBlockService.buildSkillBlocks({ activeSkills: skills })
+    );
 
     return [
       '# Active skills',
@@ -827,6 +831,9 @@ export class AltusManagedPromptService {
       '- They may be user-selected or auto-attached by platform governance.',
       '- These skills are already synced into the sandbox and must be followed when relevant.',
       '- Treat each skill body below as task-specific operating instructions unless it conflicts with higher-priority system rules.',
+      '- Skill identity is carried by sourceType, skillId, and revisionId. Do not rely on slug alone.',
+      '',
+      blockIndex,
       '',
       ...this.formatSkillSections(skills),
     ].join('\n');
@@ -836,11 +843,20 @@ export class AltusManagedPromptService {
     if (!Array.isArray(skills) || skills.length === 0) {
       return '';
     }
+    const blockIndex = altusManagedDynamicContextBlockService.renderBlockIndex(
+      altusManagedDynamicContextBlockService.buildSkillBlocks({
+        autoAttachedSkills: skills,
+        toolName,
+      })
+    );
 
     return [
       '# Newly auto-attached skills',
       `- These skills were automatically activated because tool \`${toolName}\` was used.`,
       '- They are now active for the rest of this run and must be followed when relevant.',
+      '- They become model-visible as a next-turn delta and are not part of the stable prompt.',
+      '',
+      blockIndex,
       '',
       ...this.formatSkillSections(skills),
     ].join('\n');
@@ -850,6 +866,9 @@ export class AltusManagedPromptService {
     if (!Array.isArray(skills) || skills.length === 0) {
       return '';
     }
+    const blockIndex = altusManagedDynamicContextBlockService.renderBlockIndex(
+      altusManagedDynamicContextBlockService.buildSkillBlocks({ catalog: skills })
+    );
 
     const lines = skills.map((skill) => {
       const resourceSummary = skill.resourceSummary;
@@ -866,6 +885,9 @@ export class AltusManagedPromptService {
       '- Do not assume the full skill body is loaded from this list alone.',
       '- If the user explicitly selected a skill, its full body appears in the Active skills section.',
       '- If an active skill lists extra resources and you need one, call `load_skill_resource` with the exact `skillId`, `revisionId`, and `resourcePath`.',
+      '- Catalog entries are diagnostic/index context only; do not treat them as loaded skill bodies.',
+      '',
+      blockIndex,
       '',
       ...lines,
     ].join('\n');

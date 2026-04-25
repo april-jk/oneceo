@@ -37,6 +37,9 @@ export class AltusRunState {
       residentSkillSelections: SkillSelectionInput[];
       sessionSkillState: SessionSkillState;
       taskIntentProfile: AltusManagedTaskIntentProfile;
+      clarificationAnswerKind?: string;
+      closedClarificationRunId?: string | null;
+      closedClarificationToolCallId?: string | null;
     }
   ) {
     this.status = 'queued';

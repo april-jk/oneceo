@@ -21,11 +21,11 @@
 | 阶段 | 文档 | 核心目标 | 是否允许改线上行为 |
 | --- | --- | --- | --- |
 | 0 | [00_总体边界与验收总表_[尚未采用].md](./00_总体边界与验收总表_[尚未采用].md) | 统一边界、术语、阶段门槛 | 否 |
-| 1 | [01_第一阶段_read_only_ledger_compiler_manifest_[尚未采用].md](./01_第一阶段_read_only_ledger_compiler_manifest_[尚未采用].md) | 只读 ledger adapter、compiler、manifest 诊断 | 否 |
-| 2 | [02_第二阶段_ask_user_tool_pairing_[尚未采用].md](./02_第二阶段_ask_user_tool_pairing_[尚未采用].md) | 接管 ask_user / clarification pairing | 是，限 clarification |
-| 3 | [03_第三阶段_tool_result_envelope_[尚未采用].md](./03_第三阶段_tool_result_envelope_[尚未采用].md) | 统一工具结果 envelope 和失败 tool_result | 是，限工具结果上下文 |
-| 4 | [04_第四阶段_dynamic_context_blocks_[尚未采用].md](./04_第四阶段_dynamic_context_blocks_[尚未采用].md) | skills / MCP / memory / attachments typed context blocks | 是，限动态上下文 |
-| 5 | [05_第五阶段_recovery_cache_observability_[尚未采用].md](./05_第五阶段_recovery_cache_observability_[尚未采用].md) | 恢复、缓存稳定、manifest 观测闭环 | 是，限恢复与观测 |
+| 1 | [01_第一阶段_read_only_ledger_compiler_manifest_[20260426-0307已采用].md](./01_第一阶段_read_only_ledger_compiler_manifest_[20260426-0307已采用].md) | 只读 ledger adapter、compiler、manifest 诊断 | 是 |
+| 2 | [02_第二阶段_ask_user_tool_pairing_[20260426-0311已采用].md](./02_第二阶段_ask_user_tool_pairing_[20260426-0311已采用].md) | 接管 ask_user / clarification pairing | 是，限 clarification |
+| 3 | [03_第三阶段_tool_result_envelope_[20260426-0317已采用].md](./03_第三阶段_tool_result_envelope_[20260426-0317已采用].md) | 统一工具结果 envelope 和失败 tool_result | 是，限工具结果上下文 |
+| 4 | [04_第四阶段_dynamic_context_blocks_[20260426-0321已采用].md](./04_第四阶段_dynamic_context_blocks_[20260426-0321已采用].md) | skills / MCP / memory / attachments typed context blocks | 是，限动态上下文 |
+| 5 | [05_第五阶段_recovery_cache_observability_[20260426-0326已采用].md](./05_第五阶段_recovery_cache_observability_[20260426-0326已采用].md) | 恢复、缓存稳定、manifest 观测闭环 | 是，限恢复与观测 |
 
 ## 3. 全局执行顺序
 
@@ -53,7 +53,7 @@
 
 ## 5. 阶段采用方式
 
-当前目录全部文档仍为 `[尚未采用]`。后续按阶段实现时：
+当前目录按阶段逐步采用。后续按阶段实现时：
 
 1. 用户确认某阶段进入开发后，只更新该阶段文档为 `[yyyymmdd-hhmm已采用]`；
 2. 未进入开发的阶段继续保持 `[尚未采用]`；

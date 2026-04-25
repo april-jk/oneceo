@@ -22,6 +22,11 @@ import {
 } from './altus-managed-context-budget-service';
 import { altusManagedContextService } from './altus-managed-context-service';
 import { AltusManagedToolExecutor } from './altus-managed-tool-executor';
+import {
+  buildManagedToolResultEnvelope,
+  stringifyManagedToolResultEnvelope,
+} from './altus-managed-tool-result-envelope';
+import { altusManagedDynamicContextBlockService } from './altus-managed-dynamic-context-blocks';
 import { AltusRunState } from './altus-run-state';
 import {
   type AltusRunRecoveryMode,
@@ -1036,6 +1041,7 @@ export class AltusRunCoordinator {
       question: string;
       options?: string[];
       clarificationType?: Exclude<AltusManagedTaskIntentProfile['clarificationType'], 'none'>;
+      toolCallId?: string;
     }
   ) {
     const clarificationMessageKey = `managed:${state.input.runId}:clarification`;
@@ -1043,7 +1049,14 @@ export class AltusRunCoordinator {
       state.input.sessionId,
       input.question,
       input.options,
-      input.clarificationType
+      input.clarificationType,
+      input.toolCallId
+        ? {
+            runId: state.input.runId,
+            toolCallId: input.toolCallId,
+            messageKey: clarificationMessageKey,
+          }
+        : undefined
     );
     await this.setupService.persistTimelineMessage({
       sessionId: state.input.sessionId,
@@ -1055,6 +1068,7 @@ export class AltusRunCoordinator {
         options: input.options,
         clarificationType: input.clarificationType,
         runId: state.input.runId,
+        toolCallId: input.toolCallId,
       },
       messageKey: clarificationMessageKey,
     });
@@ -1069,6 +1083,8 @@ export class AltusRunCoordinator {
       clarificationType: input.clarificationType,
       content: input.question,
       messageKey: clarificationMessageKey,
+      toolName: input.toolCallId ? 'ask_user' : undefined,
+      toolCallId: input.toolCallId,
       transitionReason: 'clarification_requested',
       }
     );
@@ -1077,6 +1093,58 @@ export class AltusRunCoordinator {
       question: input.question,
       options: input.options,
     };
+  }
+
+  private async completeDeferredSiblingToolCalls(input: {
+    state: AltusRunState;
+    toolCalls: ToolCall[];
+    currentToolCallId: string;
+    completedToolCallIds: Set<string>;
+  }) {
+    for (const sibling of input.toolCalls) {
+      const toolCallId = asText(sibling?.id);
+      const toolName = asText(sibling?.function?.name);
+      if (!toolCallId || toolCallId === input.currentToolCallId || input.completedToolCallIds.has(toolCallId)) {
+        continue;
+      }
+      const args = parseToolArguments(asText(sibling?.function?.arguments));
+      const toolResultEnvelope = buildManagedToolResultEnvelope({
+        status: 'deferred',
+        runId: input.state.input.runId,
+        toolUseId: toolCallId,
+        toolName,
+        modelRoundId: 'clarification_deferred',
+        args,
+        content: 'deferred_until_user_answer',
+        contentForUser: '补充信息确认前暂缓执行同批次工具',
+        result: {
+          status: 'deferred_until_user_answer',
+          reason: 'ask_user_in_same_tool_batch',
+          askUserToolCallId: input.currentToolCallId,
+        },
+      });
+      await this.eventWriter.appendRunEvent(
+        input.state.input.runId,
+        input.state.input.sessionId,
+        input.state.input.userId,
+        'tool_call_completed',
+        {
+          toolName,
+          content: '补充信息确认前暂缓执行同批次工具',
+          arguments: args,
+          toolCallId,
+          toolResultEnvelope,
+          result: {
+            status: 'deferred_until_user_answer',
+            reason: 'ask_user_in_same_tool_batch',
+            askUserToolCallId: input.currentToolCallId,
+          },
+          outputPreview: 'deferred_until_user_answer',
+          transitionReason: 'clarification_requested',
+        }
+      );
+      input.completedToolCallIds.add(toolCallId);
+    }
   }
 
   private async callModel(input: {
@@ -1430,6 +1498,22 @@ export class AltusRunCoordinator {
     });
     const skillCatalogPrompt = altusManagedPromptService.buildSkillCatalogPrompt(state.input.skillCatalog);
     const skillPrompt = altusManagedPromptService.buildSkillContextPrompt(state.input.skills);
+    const dynamicContextPrompt = altusManagedDynamicContextBlockService.renderBlockIndex([
+      ...altusManagedDynamicContextBlockService.buildSkillBlocks({
+        activeSkills: state.input.skills,
+        catalog: state.input.skillCatalog,
+      }),
+      ...altusManagedDynamicContextBlockService.buildMcpBlocks({
+        providers: state.input.mcpProviders,
+      }),
+      ...altusManagedDynamicContextBlockService.buildMemoryBlocks({
+        userMemory: state.input.userMemory,
+        projectMemory: state.input.projectMemory,
+        sessionMemory: state.input.sessionAltusMemory,
+        runtimeMemoryPrompt: state.input.memoryContextPrompt,
+        skillMemory: state.input.sessionSkillState?.fileMemorySnapshot,
+      }),
+    ]);
     const runtimeContextPrompt = altusManagedPromptService.buildRuntimeContextPrompt({
       sessionId: state.input.sessionId,
       sessionTitle: state.input.sessionTitle,
@@ -1444,6 +1528,7 @@ export class AltusRunCoordinator {
     });
     const turnStatePrompt = [
       runtimeContextPrompt,
+      dynamicContextPrompt,
       state.input.memoryContextPrompt || '',
       skillCatalogPrompt,
       skillPrompt,
@@ -1718,6 +1803,7 @@ export class AltusRunCoordinator {
         tool_calls: toolCalls,
       });
 
+      const completedToolCallIds = new Set<string>();
       for (const toolCall of toolCalls) {
         const toolName = asText(toolCall?.function?.name);
         if (!toolName) continue;
@@ -1734,6 +1820,18 @@ export class AltusRunCoordinator {
               content: this.buildToolEventContent(toolName, 'failed'),
               arguments: args,
               toolCallId: toolCall.id,
+              toolResultEnvelope: buildManagedToolResultEnvelope({
+                status: 'error',
+                runId: state.input.runId,
+                toolUseId: toolCall.id,
+                toolName,
+                modelRoundId: currentRound,
+                args,
+                errorCode: 'invalid_tool_arguments_json',
+                errorMessage: 'Tool arguments must be a JSON object string.',
+                content: errorContent,
+                contentForUser: errorContent,
+              }),
               error: errorContent,
               transitionReason: 'tool_failed_but_recoverable',
             }
@@ -1742,11 +1840,22 @@ export class AltusRunCoordinator {
             role: 'tool',
             tool_call_id: toolCall.id,
             name: toolName,
-            content: JSON.stringify({
-              error: 'invalid_tool_arguments_json',
-              detail: 'Tool arguments must be a JSON object string. Retry the tool call with valid JSON object arguments.',
-            }),
+            content: stringifyManagedToolResultEnvelope(
+              buildManagedToolResultEnvelope({
+                status: 'error',
+                runId: state.input.runId,
+                toolUseId: toolCall.id,
+                toolName,
+                modelRoundId: currentRound,
+                args,
+                errorCode: 'invalid_tool_arguments_json',
+                errorMessage: 'Tool arguments must be a JSON object string.',
+                content: errorContent,
+                contentForUser: errorContent,
+              })
+            ),
           });
+          completedToolCallIds.add(toolCall.id);
           nextRoundStatusContent = '模型生成的工具参数格式不合法，已要求重新生成';
           await this.syncLoopSnapshot(state, {
             lastTransitionReason: 'tool_failed_but_recoverable',
@@ -1763,6 +1872,7 @@ export class AltusRunCoordinator {
           toolCall,
           args,
           signal,
+          modelRoundId: currentRound,
           onResult: (result) => {
             let postToolTransitionReason: AltusRunTransitionReason = 'tool_result_continue';
             let postToolRecoveryMode: AltusRunRecoveryMode = 'none';
@@ -1825,6 +1935,12 @@ export class AltusRunCoordinator {
             executionResult.activatedSkills,
             toolName,
           );
+          const autoAttachedDeltaBlocks = altusManagedDynamicContextBlockService.buildIncludedContextManifest(
+            altusManagedDynamicContextBlockService.buildSkillBlocks({
+              autoAttachedSkills: executionResult.activatedSkills,
+              toolName,
+            })
+          );
           messages.push({
             role: 'system',
             content: autoAttachedPrompt,
@@ -1843,6 +1959,8 @@ export class AltusRunCoordinator {
               skillRevisionIds: executionResult.activatedSkills.map((item) => item.revisionId),
               skillSlugs: executionResult.activatedSkills.map((item) => item.slug),
               promptMarkdown: autoAttachedPrompt,
+              contextBlocks: autoAttachedDeltaBlocks.blocks,
+              contextBlocksHash: autoAttachedDeltaBlocks.hash,
             },
             messageKey: `managed:${state.input.runId}:auto_attached_skills:${toolName}:${toolCall.id}`,
           });
@@ -1859,12 +1977,20 @@ export class AltusRunCoordinator {
               skillRevisionIds: executionResult.activatedSkills.map((item) => item.revisionId),
               skillSlugs: executionResult.activatedSkills.map((item) => item.slug),
               promptMarkdown: autoAttachedPrompt,
+              contextBlocks: autoAttachedDeltaBlocks.blocks,
+              contextBlocksHash: autoAttachedDeltaBlocks.hash,
             }
           );
         }
 
         if (envelope.status === 'ask_user') {
           const result = envelope.result;
+            await this.completeDeferredSiblingToolCalls({
+              state,
+              toolCalls,
+              currentToolCallId: toolCall.id,
+              completedToolCallIds,
+            });
             await this.syncLoopSnapshot(state, {
               lastTransitionReason: 'clarification_requested',
               recoveryMode: 'awaiting_user',
@@ -1878,6 +2004,7 @@ export class AltusRunCoordinator {
               question: result.question,
               options: result.options,
               clarificationType: result.clarificationType,
+              toolCallId: toolCall.id,
             });
         }
 
@@ -1906,6 +2033,18 @@ export class AltusRunCoordinator {
                 content: this.buildToolEventContent(toolName, 'failed'),
                 arguments: args,
                 toolCallId: toolCall.id,
+                toolResultEnvelope: buildManagedToolResultEnvelope({
+                  status: 'error',
+                  runId: state.input.runId,
+                  toolUseId: toolCall.id,
+                  toolName,
+                  modelRoundId: currentRound,
+                  args,
+                  errorCode: 'completion_blocked',
+                  errorMessage: blockedMessage,
+                  content: blockedEventError,
+                  contentForUser: blockedEventError,
+                }),
                 error: blockedEventError,
                 transitionReason: 'deployment_completion_blocked',
                 userView: {
@@ -1931,10 +2070,22 @@ export class AltusRunCoordinator {
               role: 'tool',
               tool_call_id: toolCall.id,
               name: toolName,
-              content: JSON.stringify({
-                error: blockedMessage,
-              }),
+              content: stringifyManagedToolResultEnvelope(
+                buildManagedToolResultEnvelope({
+                  status: 'error',
+                  runId: state.input.runId,
+                  toolUseId: toolCall.id,
+                  toolName,
+                  modelRoundId: currentRound,
+                  args,
+                  errorCode: 'completion_blocked',
+                  errorMessage: blockedMessage,
+                  content: blockedEventError,
+                  contentForUser: blockedEventError,
+                })
+              ),
             });
+            completedToolCallIds.add(toolCall.id);
             continue;
           }
 
@@ -2003,6 +2154,29 @@ export class AltusRunCoordinator {
               content: this.buildToolEventContent(toolName, 'completed'),
               arguments: args,
               toolCallId: toolCall.id,
+              toolResultEnvelope: buildManagedToolResultEnvelope({
+                status: 'complete',
+                runId: state.input.runId,
+                toolUseId: toolCall.id,
+                toolName,
+                modelRoundId: currentRound,
+                args,
+                content: JSON.stringify({
+                  summary: result.summary,
+                  verification: result.verification,
+                  attachments: result.attachments,
+                  deliverables,
+                  previewSnapshot,
+                }),
+                contentForUser: completionMessage,
+                result: {
+                  summary: result.summary,
+                  verification: result.verification,
+                  attachments: result.attachments,
+                  deliverables,
+                  previewSnapshot,
+                },
+              }),
               transitionReason: deliverables.length > 0 ? 'completed_with_deliverables' : 'completed_without_deliverables',
               outputPreview: truncate(
                 JSON.stringify({
@@ -2055,8 +2229,9 @@ export class AltusRunCoordinator {
             role: 'tool',
             tool_call_id: toolCall.id,
             name: toolName,
-            content: result.content,
+            content: stringifyManagedToolResultEnvelope(envelope.toolResultEnvelope),
           });
+          completedToolCallIds.add(toolCall.id);
           nextRoundStatusContent = this.buildPostToolRunStatusContent({
             toolName,
             args,
@@ -2096,10 +2271,9 @@ export class AltusRunCoordinator {
             role: 'tool',
             tool_call_id: toolCall.id,
             name: toolName,
-            content: JSON.stringify({
-              error: envelope.rawError,
-            }),
+            content: stringifyManagedToolResultEnvelope(envelope.toolResultEnvelope),
           });
+          completedToolCallIds.add(toolCall.id);
         }
       }
     }

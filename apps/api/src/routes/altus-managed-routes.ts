@@ -6,6 +6,12 @@ import { altusManagedRunService } from '../services/altus-managed-run-service';
 import { altusManagedInputService } from '../services/altus-managed-input-service';
 import { getPublicErrorMessage } from '../utils/error-response';
 import { taskCreationSessionDAO, taskSessionRunDAO } from '../db/dao';
+import { altusManagedTurnSnapshotService } from '../services/altus-managed-turn-snapshot-service';
+import type { ManagedMcpProvider } from '../services/altus-managed-shared';
+import { altusManagedDynamicContextBlockService } from '../services/altus-managed-dynamic-context-blocks';
+import { altusManagedContextCacheObserver } from '../services/altus-managed-context-cache-observer';
+import { altusManagedContextRecoveryService } from '../services/altus-managed-context-recovery-service';
+import { altusManagedContextBudgetService } from '../services/altus-managed-context-budget-service';
 import {
   TASK_ATTACHMENT_MAX_BYTES,
   TASK_ATTACHMENT_MAX_COUNT,
@@ -41,6 +47,13 @@ function parseMetadata(value: unknown): Record<string, unknown> | undefined {
     return value as Record<string, unknown>;
   }
   return undefined;
+}
+
+function readMcpProvidersFromSnapshot(value: unknown): ManagedMcpProvider[] {
+  const snapshot = value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+  return Array.isArray(snapshot.providers) ? (snapshot.providers as ManagedMcpProvider[]) : [];
 }
 
 function resolveCurrentUserError(error: unknown): { status: number; message: string } | null {
@@ -158,6 +171,90 @@ router.get('/sessions/:sessionId/runs/latest', async (req, res) => {
     return res.status(authError?.status || 400).json({
       success: false,
       error: getPublicErrorMessage(authError?.message || error?.message || '获取 Altus managed run 失败'),
+    });
+  }
+});
+
+router.get('/sessions/:sessionId/context-debug', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const sessionId = asText(req.params.sessionId);
+    const session = await taskCreationSessionDAO.getSession(sessionId);
+    const sessionUserId = asText(session?.userId);
+    if (!session || !sessionUserId) {
+      return res.status(404).json({
+        success: false,
+        error: '会话不存在或缺少用户归属',
+      });
+    }
+    if (!isSameUserId(currentUser.userId, sessionUserId)) {
+      return res.status(403).json({
+        success: false,
+        error: '当前用户无权查看该会话上下文诊断',
+      });
+    }
+
+    const runId = asText(req.query.runId) || null;
+    const run = runId ? await taskSessionRunDAO.getRun(runId) : null;
+    if (runId && (!run || run.sessionId !== sessionId)) {
+      return res.status(404).json({
+        success: false,
+        error: 'managed run 不存在或不属于当前会话',
+      });
+    }
+
+    const mcpSnapshot = run?.mcpToolSnapshotId
+      ? await taskSessionRunDAO.getMcpToolSnapshot(run.mcpToolSnapshotId)
+      : null;
+    const mcpProviders = readMcpProvidersFromSnapshot(mcpSnapshot?.snapshotJson);
+    const messages = await taskCreationSessionDAO.getMessages(sessionId);
+    const dynamicContextBlocks = [
+      ...altusManagedDynamicContextBlockService.buildAttachmentBlocks(messages as any),
+      ...altusManagedDynamicContextBlockService.buildMcpBlocks({
+        providers: mcpProviders,
+        snapshotId: run?.mcpToolSnapshotId || null,
+      }),
+    ];
+    const recovery = await altusManagedContextRecoveryService.rebuildFromDbFacts({
+      sessionId,
+      runId,
+      dynamicContextBlocks,
+    });
+    const snapshot = altusManagedTurnSnapshotService.createReadOnlySnapshot({
+      sessionId,
+      runId,
+      model: run?.model || null,
+      mcpProviders,
+    });
+    const budgetProjection = altusManagedContextBudgetService.projectMessagesForModelWithReport(recovery.compiled.messages);
+    const cacheObservation = altusManagedContextCacheObserver.buildObservation({
+      ledger: recovery.ledger,
+      manifest: recovery.manifest,
+      snapshot,
+      apiMessages: budgetProjection.messages,
+      budgetReplacementSummary: budgetProjection.replacementSummary,
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        snapshot,
+        manifest: recovery.manifest,
+        reconciliation: recovery.reconciliation,
+        cacheObservation,
+        roundTrip: recovery.roundTrip,
+        recovery,
+        budgetProjection: budgetProjection.replacementSummary,
+        ledger: recovery.ledger,
+        compiled: recovery.compiled,
+      },
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    console.error('[ALTUS_MANAGED_CONTEXT_DEBUG_FAILED]', error);
+    return res.status(authError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '获取 Altus managed 上下文诊断失败'),
     });
   }
 });

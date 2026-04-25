@@ -265,12 +265,21 @@ export class AltusRunCoordinator {
     await new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  private readUsageNumber(value: unknown): number | undefined {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    }
+    return undefined;
+  }
+
   /**
    * 计费：根据模型调用估算并扣减积分
    */
   private async chargeForModelCall(state: AltusRunState, input: {
     messages: ChatMessage[];
-    assistant: { content?: string | null; tool_calls?: ToolCall[]; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } };
+    assistant: { content?: string | null; tool_calls?: ToolCall[]; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens?: number; cache_creation_input_tokens?: number }; cached_tokens?: number; cache_creation_input_tokens?: number } };
     model: string;
   }) {
     try {
@@ -285,11 +294,15 @@ export class AltusRunCoordinator {
 
       let promptTokens: number;
       let completionTokens: number;
+      let cachedPromptTokens = 0;
+      let cacheCreationTokens = 0;
 
       const usage = input.assistant?.usage;
       if (usage && typeof usage.prompt_tokens === 'number' && typeof usage.completion_tokens === 'number') {
         promptTokens = usage.prompt_tokens;
         completionTokens = usage.completion_tokens;
+        cachedPromptTokens = this.readUsageNumber(usage.prompt_tokens_details?.cached_tokens) || this.readUsageNumber(usage.cached_tokens) || 0;
+        cacheCreationTokens = this.readUsageNumber(usage.prompt_tokens_details?.cache_creation_input_tokens) || this.readUsageNumber(usage.cache_creation_input_tokens) || 0;
       } else {
         // 无真实 usage 时回退到字符估算（每 4 字符 ≈ 1 token）
         const promptText = JSON.stringify(input.messages);
@@ -298,6 +311,8 @@ export class AltusRunCoordinator {
         completionTokens = Math.ceil(completionText.length / 4);
       }
 
+      const nonCachedPromptTokens = Math.max(0, promptTokens - cachedPromptTokens - cacheCreationTokens);
+
       // 获取定价
       const pricing = await pricingService.getActivePricing(input.model);
       if (!pricing) {
@@ -305,10 +320,13 @@ export class AltusRunCoordinator {
         return;
       }
 
-      // 计算积分消耗（无缓存估算）
+      // 计算积分消耗（含缓存）
       const creditsConsumed = pricingService.calculateCredits(
         {
           promptTokens,
+          cachedPromptTokens,
+          nonCachedPromptTokens,
+          cacheCreationTokens,
           completionTokens,
         },
         pricing
@@ -324,7 +342,7 @@ export class AltusRunCoordinator {
 
       if (result.success) {
         console.log(`[Billing] 扣费成功: ${creditsConsumed} 积分, 余额: ${result.balanceAfter}, run: ${runId}`);
-        
+
         // 记录 token 使用日志
         await billingService.logTokenUsage({
           userId,
@@ -332,9 +350,9 @@ export class AltusRunCoordinator {
           runId,
           model: input.model,
           promptTokens,
-          cachedPromptTokens: 0,
-          nonCachedPromptTokens: promptTokens,
-          cacheCreationTokens: 0,
+          cachedPromptTokens,
+          nonCachedPromptTokens,
+          cacheCreationTokens,
           completionTokens,
           totalTokens: promptTokens + completionTokens,
           creditsConsumed,
@@ -1036,7 +1054,7 @@ export class AltusRunCoordinator {
   }): Promise<{
     content?: string | null;
     tool_calls?: ToolCall[];
-    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens?: number; cache_creation_input_tokens?: number }; cached_tokens?: number; cache_creation_input_tokens?: number };
   }> {
     const baseUrl = `http://127.0.0.1:${process.env.PORT || '4000'}/api/llm-proxy/v1/chat/completions`;
     const projectedMessages = this.budgetService.projectMessagesForModel(input.messages);
@@ -1096,7 +1114,7 @@ export class AltusRunCoordinator {
   }): Promise<{
     content?: string | null;
     tool_calls?: ToolCall[];
-    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens?: number; cache_creation_input_tokens?: number }; cached_tokens?: number; cache_creation_input_tokens?: number };
   }> {
     const maxAttempts = Math.max(1, this.getModelRetryLimit() + 1);
     let lastError: unknown = null;
@@ -1230,13 +1248,13 @@ export class AltusRunCoordinator {
   }): Promise<{
     content?: string | null;
     tool_calls?: ToolCall[];
-    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens?: number; cache_creation_input_tokens?: number }; cached_tokens?: number; cache_creation_input_tokens?: number };
   }> {
     const decoder = new TextDecoder();
     let buffer = '';
     let assistantContent = '';
     const toolCallsByIndex = new Map<number, StreamedToolCallState>();
-    let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
+    let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens?: number; cache_creation_input_tokens?: number }; cached_tokens?: number; cache_creation_input_tokens?: number } | undefined;
 
     const flushBlock = async (rawBlock: string) => {
       const parsed = this.parseSseBlock(rawBlock);
@@ -1257,6 +1275,17 @@ export class AltusRunCoordinator {
             completion_tokens: u.completion_tokens,
             total_tokens: u.total_tokens ?? u.prompt_tokens + u.completion_tokens,
           };
+          const cachedTokens = this.readUsageNumber(u.prompt_tokens_details?.cached_tokens) || this.readUsageNumber(u.cached_tokens) || 0;
+          const cacheCreationTokens = this.readUsageNumber(u.prompt_tokens_details?.cache_creation_input_tokens) || this.readUsageNumber(u.cache_creation_input_tokens) || 0;
+          if (cachedTokens > 0 || cacheCreationTokens > 0) {
+            usage.prompt_tokens_details = {
+              ...(cachedTokens > 0 ? { cached_tokens: cachedTokens } : {}),
+              ...(cacheCreationTokens > 0 ? { cache_creation_input_tokens: cacheCreationTokens } : {}),
+            };
+          }
+          if (cacheCreationTokens > 0) {
+            usage.cache_creation_input_tokens = cacheCreationTokens;
+          }
         }
       }
 

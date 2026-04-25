@@ -21,6 +21,7 @@ export class BillingService {
       balance: initialBalance,
       totalEarned: initialBalance,
       totalConsumed: 0,
+      lastRechargeAt: new Date(),
     }).returning();
     
     // 记录初始赠送交易
@@ -108,6 +109,7 @@ export class BillingService {
         .set({
           balance: sql`balance + ${amount}`,
           totalEarned: sql`total_earned + ${amount}`,
+          lastRechargeAt: new Date(),
           updatedAt: new Date(),
         })
         .where(eq(userCredits.userId, userId as any))
@@ -187,7 +189,105 @@ export class BillingService {
     const countResult = await db
       .select({ count: count() })
       .from(creditTransactions)
-      .where(eq(creditTransactions.userId, userId as any));
+      .where(and(...conditions));
+
+    return {
+      items,
+      total: Number(countResult[0].count),
+    };
+  }
+
+  /**
+   * 查询用户可见的 session 聚合消费记录。
+   * 用户端不暴露模型名、provider 或 token，只展示会话维度的积分消耗。
+   */
+  async getSessionConsumptionRecords(
+    userId: string,
+    options: { page?: number; limit?: number } = {}
+  ): Promise<{
+    items: Array<{
+      id: string;
+      sessionId: string;
+      sessionTitle: string;
+      totalCredits: number;
+      callCount: number;
+      startedAt: string;
+      lastUsedAt: string;
+    }>;
+    total: number;
+  }> {
+    const { page = 1, limit = 20 } = options;
+    const offset = (page - 1) * limit;
+
+    const rowsResult = await db.execute(sql`
+      SELECT
+        tul.session_id::text AS session_id,
+        COALESCE(
+          NULLIF(tcs.metadata_json->>'title', ''),
+          NULLIF(tcs.metadata_json->>'sessionTitle', ''),
+          '未命名会话'
+        ) AS session_title,
+        COALESCE(SUM(tul.credits_consumed), 0)::int AS total_credits,
+        COUNT(*)::int AS call_count,
+        MIN(tul.created_at) AS started_at,
+        MAX(tul.created_at) AS last_used_at
+      FROM token_usage_logs tul
+      LEFT JOIN task_creation_sessions tcs ON tcs.id = tul.session_id
+      WHERE tul.user_id = ${userId}::uuid
+        AND tul.session_id IS NOT NULL
+      GROUP BY tul.session_id, session_title
+      ORDER BY last_used_at DESC
+      LIMIT ${limit}
+      OFFSET ${offset}
+    `);
+
+    const countResult = await db.execute(sql`
+      SELECT COUNT(*)::int AS count
+      FROM (
+        SELECT session_id
+        FROM token_usage_logs
+        WHERE user_id = ${userId}::uuid
+          AND session_id IS NOT NULL
+        GROUP BY session_id
+      ) grouped_sessions
+    `);
+
+    const rows = Array.isArray((rowsResult as any)?.rows) ? (rowsResult as any).rows : [];
+    const countRow = Array.isArray((countResult as any)?.rows) ? (countResult as any).rows[0] : null;
+
+    return {
+      items: rows.map((row: any) => ({
+        id: String(row.session_id),
+        sessionId: String(row.session_id),
+        sessionTitle: String(row.session_title || '未命名会话'),
+        totalCredits: Number(row.total_credits || 0),
+        callCount: Number(row.call_count || 0),
+        startedAt: row.started_at instanceof Date ? row.started_at.toISOString() : String(row.started_at || ''),
+        lastUsedAt: row.last_used_at instanceof Date ? row.last_used_at.toISOString() : String(row.last_used_at || ''),
+      })),
+      total: Number(countRow?.count || 0),
+    };
+  }
+
+  async getCreditAcquisitionHistory(
+    userId: string,
+    options: { page?: number; limit?: number } = {}
+  ): Promise<{ items: CreditTransaction[]; total: number }> {
+    const { page = 1, limit = 20 } = options;
+    const offset = (page - 1) * limit;
+
+    const items = await db
+      .select()
+      .from(creditTransactions)
+      .where(and(eq(creditTransactions.userId, userId as any), sql`${creditTransactions.amount} > 0`))
+      .orderBy(desc(creditTransactions.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    const countResult = await db
+      .select({ count: count() })
+      .from(creditTransactions)
+      .where(and(eq(creditTransactions.userId, userId as any), sql`${creditTransactions.amount} > 0`));
 
     return {
       items,

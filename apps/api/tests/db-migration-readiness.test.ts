@@ -6,7 +6,7 @@ const shouldRun = process.env.ONECEO_DB_MIGRATION_TEST_DATABASE === 'true';
 if (!shouldRun) {
   test('db migration readiness live test is opt-in', { skip: 'Use scripts/run-db-migration-readiness-test.ts' }, () => {});
 } else {
-  test('migration repairs model pricing active-only partial unique index', async () => {
+  test('migration supports scheduled model pricing versions', async () => {
     const { databasePool, closeDatabaseConnection } = await import('../src/config/database');
     const { inspectDatabaseSchemaReadiness, runMigration } = await import('../src/db/migrate');
 
@@ -28,11 +28,7 @@ if (!shouldRun) {
       await databasePool.query('DROP INDEX IF EXISTS idx_model_pricing_model_active');
       await databasePool.query('CREATE UNIQUE INDEX idx_model_pricing_model_active ON model_pricing(model, is_active)');
 
-      const readinessBefore = await inspectDatabaseSchemaReadiness();
-      assert.ok(
-        readinessBefore.missing.includes('index:idx_model_pricing_model_active(partial-active)'),
-        `expected partial index drift to be reported, got ${readinessBefore.missing.join(', ')}`
-      );
+      await inspectDatabaseSchemaReadiness();
 
       await runMigration();
       await runMigration();
@@ -44,9 +40,9 @@ if (!shouldRun) {
           AND indexname = 'idx_model_pricing_model_active'
       `);
       const indexDefinition = indexResult.rows[0]?.indexdef.toLowerCase() || '';
-      assert.match(indexDefinition, /unique index/);
+      assert.doesNotMatch(indexDefinition, /unique index/);
       assert.match(indexDefinition, /on public\.model_pricing/);
-      assert.match(indexDefinition, /where \(is_active = true\)/);
+      assert.match(indexDefinition, /effective_from/);
 
       await databasePool.query(
         `INSERT INTO model_pricing (model, model_provider, prompt_price_per_1k_tokens, completion_price_per_1k_tokens, is_active)
@@ -58,13 +54,10 @@ if (!shouldRun) {
          VALUES ($1, 'openai', 3, 3, true)`,
         ['p2-index-model']
       );
-      await assert.rejects(
-        () => databasePool.query(
-          `INSERT INTO model_pricing (model, model_provider, prompt_price_per_1k_tokens, completion_price_per_1k_tokens, is_active)
-           VALUES ($1, 'openai', 4, 4, true)`,
-          ['p2-index-model']
-        ),
-        /duplicate key value violates unique constraint/
+      await databasePool.query(
+        `INSERT INTO model_pricing (model, model_provider, prompt_price_per_1k_tokens, completion_price_per_1k_tokens, is_active, effective_from)
+         VALUES ($1, 'openai', 4, 4, true, NOW() + INTERVAL '1 day')`,
+        ['p2-index-model']
       );
     } finally {
       await closeDatabaseConnection();

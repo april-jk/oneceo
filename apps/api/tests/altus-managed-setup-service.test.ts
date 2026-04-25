@@ -66,6 +66,39 @@ test('buildConversationMessages injects attachment context and avoids duplicatin
   assert.equal(userMessages[0]?.content, '请查看附件');
 });
 
+test('buildConversationMessages keeps runtime state before the latest user message', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我做一个管理后台系统',
+      metadata: {},
+    },
+    {
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这次要交付的是网页应用、后端 API、本地脚本，还是完整业务系统？',
+      metadata: {},
+    },
+    {
+      role: 'user',
+      messageType: 'user_response',
+      content: '网页应用',
+      metadata: {},
+    },
+  ] as any);
+
+  const service = new AltusManagedSetupService();
+  const messages = await service.buildConversationMessages('session-context-order', '网页应用', 'SYSTEM PROMPT', {
+    turnStatePrompt: '# Current turn state\n- latest_user_message_type: user_response',
+  });
+
+  assert.equal(messages.at(-2)?.role, 'system');
+  assert.match(String(messages.at(-2)?.content), /latest_user_message_type: user_response/);
+  assert.equal(messages.at(-1)?.role, 'user');
+  assert.equal(messages.at(-1)?.content, '网页应用');
+});
+
 test('buildConversationMessages converts image attachments into multimodal user content', async () => {
   mock.method(taskCreationSessionDAO, 'getMessages', async () => [
     {
@@ -307,6 +340,46 @@ test('buildTaskIntentProfile keeps clarifying the same field when a user respons
   assert.equal(profile.needsClarification, true);
   assert.equal(profile.clarificationType, 'artifact_type');
   assert.match(profile.clarificationQuestion, /我还需要先确认这一点/);
+});
+
+test('buildTaskIntentProfile accepts a direct answer to pending artifact clarification without chaining another question', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我做一个管理后台系统',
+      metadata: {},
+    },
+    {
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这次要交付的是网页应用、后端 API、本地脚本，还是完整业务系统？',
+      metadata: {},
+    },
+    {
+      role: 'user',
+      messageType: 'user_response',
+      content: '网页应用',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    pendingQuestion: '这次要交付的是网页应用、后端 API、本地脚本，还是完整业务系统？',
+    pendingOptions: ['网页应用', '后端 API', '本地脚本', '完整业务系统'],
+    pendingClarificationType: 'artifact_type',
+  }) as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-direct-artifact-answer',
+    '网页应用',
+    'user_response'
+  );
+
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.clarificationType, 'none');
+  assert.equal(profile.clarificationTransition?.nextState, 'ready_to_execute');
+  assert.deepEqual(profile.clarificationTransition?.assumptions, ['网页应用']);
 });
 
 test('buildTaskIntentProfile treats unrelated user_response as a new turn instead of reusing stale clarification', async () => {

@@ -27,6 +27,10 @@ import {
   type ClarificationReducerResult,
 } from './altus-clarification-policy-reducer';
 import { altusClarificationTransitionAgent } from './altus-clarification-transition-agent';
+import {
+  altusManagedContextService,
+  buildManagedConversationEntries,
+} from './altus-managed-context-service';
 
 const INLINE_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const INLINE_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
@@ -656,26 +660,6 @@ function buildProfileFromTransition(input: TransitionResolvedProfileInput): Altu
   };
 }
 
-function normalizeHistoryRole(role: unknown): 'system' | 'user' | 'assistant' | null {
-  const normalized = asText(role).toLowerCase();
-  if (normalized === 'system') return 'system';
-  if (normalized === 'user') return 'user';
-  if (normalized === 'assistant' || normalized === 'agent') return 'assistant';
-  return null;
-}
-
-function isHistoryMessageRelevant(input: { role: unknown; messageType: unknown }) {
-  const role = normalizeHistoryRole(input.role);
-  const messageType = asText(input.messageType);
-  if (!role) return false;
-  if (messageType === 'session_started') return false;
-  if (messageType === 'status_update') return false;
-  if (messageType === 'executor_event') return false;
-  if (messageType === 'opencode_event') return false;
-  if (messageType === 'error' || messageType === 'opencode_error') return false;
-  return true;
-}
-
 function collectAttachmentContextPrompt(history: Array<{ metadata?: unknown }>): string {
   const seenPaths = new Set<string>();
   const contexts: Array<{
@@ -1076,21 +1060,22 @@ export class AltusManagedSetupService {
   async buildConversationMessages(
     sessionId: string,
     currentInput: string,
-    systemPrompt: string
+    systemPrompt: string,
+    options: {
+      turnStatePrompt?: string | null;
+    } = {}
   ): Promise<ChatMessage[]> {
     const history = await taskCreationSessionDAO.getMessages(sessionId);
     const attachmentContextPrompt = collectAttachmentContextPrompt(history);
     const todoContextPrompt = buildTodoContextPrompt(history);
     const inlineImageCache = new Map<string, ChatMessageContentPart>();
-    const relevantHistory = history
-      .filter((item) => isHistoryMessageRelevant({ role: item.role, messageType: item.messageType }))
-      .slice(-24);
+    const relevantHistory = buildManagedConversationEntries(history, { limit: 24 });
     const relevant: ChatMessage[] = [];
 
     for (const item of relevantHistory) {
-      const role = normalizeHistoryRole(item.role);
+      const role = item.role;
       if (!role) continue;
-      const textContent = asText(item.content);
+      const textContent = item.content;
       if (role !== 'user') {
         if (!textContent) continue;
         relevant.push({
@@ -1133,7 +1118,13 @@ export class AltusManagedSetupService {
     const shouldAppendCurrentInput =
       latestHistory?.role !== 'user' || extractMessageTextContent(latestHistory.content) !== asText(currentInput);
 
-    return [
+    const turnStateMessage = asText(options.turnStatePrompt)
+      ? {
+          role: 'system' as const,
+          content: asText(options.turnStatePrompt),
+        }
+      : null;
+    const baseMessages: ChatMessage[] = [
       {
         role: 'system' as const,
         content: systemPrompt,
@@ -1155,14 +1146,23 @@ export class AltusManagedSetupService {
           ]
         : []),
       ...relevant,
-      ...(shouldAppendCurrentInput
-        ? [
-            {
-              role: 'user' as const,
-              content: currentInput,
-            },
-      ]
-        : []),
+    ];
+    const currentUserMessage: ChatMessage | null = shouldAppendCurrentInput
+      ? {
+          role: 'user' as const,
+          content: currentInput,
+        }
+      : null;
+
+    if (turnStateMessage && !currentUserMessage && baseMessages[baseMessages.length - 1]?.role === 'user') {
+      const lastMessage = baseMessages[baseMessages.length - 1];
+      return [...baseMessages.slice(0, -1), turnStateMessage, lastMessage];
+    }
+
+    return [
+      ...baseMessages,
+      ...(turnStateMessage ? [turnStateMessage] : []),
+      ...(currentUserMessage ? [currentUserMessage] : []),
     ];
   }
 
@@ -1172,46 +1172,24 @@ export class AltusManagedSetupService {
     messageType: 'user_input' | 'user_response' = 'user_input'
   ): Promise<AltusManagedTaskIntentProfile> {
     const history = await taskCreationSessionDAO.getMessages(sessionId);
-    const recentTransitionMessages = history
-      .filter((item) => isHistoryMessageRelevant({ role: item.role, messageType: item.messageType }))
-      .map((item) => {
-        const role = normalizeHistoryRole(item.role);
-        const content = asText(item.content);
-        if (!role || !content) return null;
-        return {
-          role,
-          messageType: asText(item.messageType),
-          content,
-        };
-      })
-      .filter(
-        (item): item is {
-          role: 'user' | 'assistant' | 'system';
-          messageType: string;
-          content: string;
-        } => Boolean(item)
-      )
-      .slice(-10);
-    const relevantUserTexts = history
-      .filter(
-        (item) =>
-          normalizeHistoryRole(item.role) === 'user' &&
-          isHistoryMessageRelevant({ role: item.role, messageType: item.messageType })
-      )
-      .map((item) => asText(item.content))
-      .filter(Boolean)
-      .slice(-8);
     const currentText = asText(currentInput);
-    const latestHistoryText = relevantUserTexts[relevantUserTexts.length - 1] || '';
-    const texts =
-      currentText && currentText !== latestHistoryText
-        ? [...relevantUserTexts, currentText]
-        : relevantUserTexts;
+    const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId).catch(() => null);
+    const pendingClarificationType = sessionMemory?.pendingClarificationType || null;
+    const contextProjection = altusManagedContextService.buildProjection(history, {
+      currentInput: currentText,
+      currentMessageType: messageType,
+      pendingClarificationType,
+      pendingQuestion: sessionMemory?.pendingQuestion || null,
+      pendingOptions: Array.isArray(sessionMemory?.pendingOptions) ? sessionMemory.pendingOptions : null,
+      clarificationTranscriptLimit: 10,
+      userTextLimit: 8,
+    });
+    const recentTransitionMessages = contextProjection.clarificationTranscript;
+    const texts = contextProjection.userTexts;
+    const latestHistoryText = contextProjection.latestUserText;
     const baseProfile = deriveManagedTaskIntentProfile(texts);
     const shape = classifyTaskIntentShape(texts);
     const workspaceHints = await deriveWorkspaceTechStackHints(resolveOpencodeWorkspacePath(sessionId));
-    const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId).catch(() => null);
-    const pendingClarificationType = sessionMemory?.pendingClarificationType || null;
     if (shouldUseClarificationTransitionAgent({ baseProfile, shape, pendingClarificationType })) {
       try {
         const proposal = await altusClarificationTransitionAgent.propose({
@@ -1244,6 +1222,27 @@ export class AltusManagedSetupService {
       } catch (error) {
         console.warn('[altus] clarification transition agent failed; falling back to deterministic gate', error);
       }
+    }
+    if (
+      messageType === 'user_response' &&
+      pendingClarificationType &&
+      currentText &&
+      coversClarificationType(pendingClarificationType, normalizeText(currentText), workspaceHints)
+    ) {
+      return buildProfileFromTransition({
+        baseProfile,
+        shape,
+        todoDecision: resolveTodoDecision(shape),
+        reduced: {
+          accepted: true,
+          nextState: 'ready_to_execute',
+          clearedPending: true,
+          assumptions: [currentText],
+          reason: 'answered_pending_clarification',
+        },
+        currentText,
+        texts,
+      });
     }
     const treatAsNewTurn = Boolean(
       messageType === 'user_response' &&

@@ -51,5 +51,16 @@ export default defineConfig({
     // 构建产物固定输出到 web/dist，发布前会先清空旧文件。
     outDir: path.resolve(__dirname, "dist"),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("react") || id.includes("react-dom")) return "vendor-react";
+          if (id.includes("recharts") || id.includes("d3-")) return "vendor-charts";
+          if (id.includes("@radix-ui") || id.includes("lucide-react")) return "vendor-ui";
+          return undefined;
+        },
+      },
+    },
   },
 });

@@ -40,7 +40,7 @@ type UserBillingDetail = {
       sessionId: string;
       sessionTitle: string;
       totalCredits: number;
-      totalTokens: number;
+      totalTokens?: number | null;
       callCount: number;
       lastUsedAt: string;
     }>;
@@ -374,6 +374,10 @@ export function UserManagementSection({
   const [deploymentLoading, setDeploymentLoading] = useState(false);
   const [billingDetail, setBillingDetail] = useState<UserBillingDetail | null>(null);
   const [billingLoading, setBillingLoading] = useState(false);
+  const [adjustAmount, setAdjustAmount] = useState('');
+  const [adjustReason, setAdjustReason] = useState('');
+  const [adjustLoading, setAdjustLoading] = useState(false);
+  const [adjustMessage, setAdjustMessage] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
   const [actionBusy, setActionBusy] = useState<'status' | null>(null);
   const [summaryRefreshing, setSummaryRefreshing] = useState(false);
   const [summaryFetchedAt, setSummaryFetchedAt] = useState<string | null>(null);
@@ -446,21 +450,33 @@ export function UserManagementSection({
   }, [detailTab, drawerOpen, filters, onStateChange, selectedUserId, selectedUserLabel, sort]);
 
   useEffect(() => {
-    if (!selectedUserId) return;
-    if (!response || loading) return;
-    if (!users.some((item) => item.id === selectedUserId)) {
-      setSelectedUserId(null);
-      setSelectedUserLabel(null);
-      setDetail(null);
-      setDrawerOpen(false);
-    }
-  }, [loading, response, selectedUserId, users]);
-
-  useEffect(() => {
     if (!drawerOpen || !selectedUserId) return;
     if (detail?.user?.id === selectedUserId) return;
     void loadDetail(selectedUserId);
   }, [detail?.user?.id, drawerOpen, loadDetail, selectedUserId]);
+
+  const loadBillingDetail = useCallback(async (userId: string) => {
+    setBillingLoading(true);
+    try {
+      const response = await fetch(`/api/internal/billing/users/${encodeURIComponent(userId)}/billing-detail`, {
+        credentials: 'include',
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error || '用户计费详情加载失败');
+      }
+      const next = await response.json() as UserBillingDetail;
+      setBillingDetail(next);
+      onError(null);
+      return next;
+    } catch (error) {
+      setBillingDetail(null);
+      onError(error instanceof Error ? error.message : '用户计费详情加载失败');
+      return null;
+    } finally {
+      setBillingLoading(false);
+    }
+  }, [onError]);
 
   useEffect(() => {
     if (!drawerOpen || detailTab !== 'deployments' || !selectedUserId) return;
@@ -490,34 +506,19 @@ export function UserManagementSection({
   useEffect(() => {
     if (!drawerOpen || detailTab !== 'billing' || !selectedUserId) return;
     let cancelled = false;
-    setBillingLoading(true);
-    void fetch(`/api/internal/billing/users/${encodeURIComponent(selectedUserId)}/billing-detail`, {
-      credentials: 'include',
-    })
-      .then(async (response) => {
-        if (!response.ok) {
-          const payload = await response.json().catch(() => null);
-          throw new Error(payload?.error || '用户计费详情加载失败');
-        }
-        return response.json() as Promise<UserBillingDetail>;
-      })
-      .then((next) => {
-        if (cancelled) return;
-        setBillingDetail(next);
-        onError(null);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        setBillingDetail(null);
-        onError(error instanceof Error ? error.message : '用户计费详情加载失败');
-      })
-      .finally(() => {
-        if (!cancelled) setBillingLoading(false);
-      });
+    void loadBillingDetail(selectedUserId).then(() => {
+      if (cancelled) return;
+    });
     return () => {
       cancelled = true;
     };
-  }, [detailTab, drawerOpen, onError, selectedUserId]);
+  }, [detailTab, drawerOpen, loadBillingDetail, selectedUserId]);
+
+  useEffect(() => {
+    setAdjustAmount('');
+    setAdjustReason('');
+    setAdjustMessage(null);
+  }, [selectedUserId]);
 
   useEffect(() => {
     if (detail?.user?.id === selectedUserId) {
@@ -550,8 +551,11 @@ export function UserManagementSection({
         });
         setDeploymentRecords(next.records);
       }
+      if (detailTab === 'billing') {
+        await loadBillingDetail(selectedUserId);
+      }
     }
-  }, [detailTab, drawerOpen, filters, loadDetail, loadUsers, selectedUserId, sort]);
+  }, [detailTab, drawerOpen, filters, loadBillingDetail, loadDetail, loadUsers, selectedUserId, sort]);
 
   useEffect(() => {
     onRegisterRefresh?.(handleExternalRefresh);
@@ -620,12 +624,54 @@ export function UserManagementSection({
     }
   }, [detail?.user?.id, detail?.user?.status, filters, loadUsers, onError, selectedUserId]);
 
+  const handleAdjustCredits = useCallback(async () => {
+    const userId = detail?.user?.id || selectedUserId;
+    const amount = Number(adjustAmount);
+    if (!userId) return;
+    if (!Number.isInteger(amount) || amount <= 0) {
+      setAdjustMessage({ tone: 'error', text: '调整金额必须是大于 0 的整数' });
+      return;
+    }
+
+    setAdjustLoading(true);
+    setAdjustMessage(null);
+    try {
+      const response = await fetch(`/api/internal/billing/users/${encodeURIComponent(userId)}/adjust`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          amount,
+          reason: adjustReason.trim() || '人工调整',
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(payload?.error || payload?.message || '调整积分失败');
+      }
+
+      setAdjustAmount('');
+      setAdjustReason('');
+      setAdjustMessage({ tone: 'success', text: `已增加 ${amount.toLocaleString()} credits，调整后余额 ${Number(payload?.balanceAfter ?? 0).toLocaleString()} credits` });
+      await loadBillingDetail(userId);
+      await loadUsers(filters, sort);
+      onError(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '调整积分失败';
+      setAdjustMessage({ tone: 'error', text: message });
+      onError(message);
+    } finally {
+      setAdjustLoading(false);
+    }
+  }, [adjustAmount, adjustReason, detail?.user?.id, filters, loadBillingDetail, loadUsers, onError, selectedUserId, sort]);
+
   const summary = response?.summary;
   const summaryAge = formatCompactRelativeTime(summaryFetchedAt, summaryClock);
   const detailUser = detail?.user || selectedListItem;
   const currentSortLabel = SORT_LABEL_MAP[sort.key] || '上次登录';
   const latestSessionRecord = detail?.recentSessions[0] || null;
   const recentSessions = detail?.recentSessions || [];
+  const canSubmitAdjust = Boolean(selectedUserId || detail?.user?.id) && Boolean(adjustAmount.trim()) && !adjustLoading;
   const detailJumpOrigin = detailUser
     ? {
         section: 'user' as const,
@@ -960,14 +1006,6 @@ export function UserManagementSection({
                         <dt>最近来源 IP</dt>
                         <dd className="mono">{latestSessionRecord?.ipAddress || '-'}</dd>
                       </div>
-                      <div>
-                        <dt>账号状态</dt>
-                        <dd>{userStatusLabel(detail.user?.status)}</dd>
-                      </div>
-                      <div>
-                        <dt>登录状态</dt>
-                        <dd>{loginStatusLabel({ activeSessionCount: detail.stats.activeSessionCount, lastLoginAt: detail.user?.lastLoginAt })}</dd>
-                      </div>
                     </dl>
                     {detail.revokedSessionCount ? (
                       <p className="panel-caption user-management-overview-note">最近一次操作已让 {detail.revokedSessionCount} 个登录失效。</p>
@@ -980,8 +1018,7 @@ export function UserManagementSection({
                     <div className="user-management-overview-login-compact">
                       <div className="user-management-overview-login-head">
                         <div>
-                          <p className="section-tag">登录摘要</p>
-                          <p className="panel-caption">最近登录与访问信息已合并到账号摘要。</p>
+                          <p className="panel-caption user-management-overview-copy">最近登录记录</p>
                         </div>
                         <span className="user-management-overview-record-count">最近 {detail.recentSessions.length} 条</span>
                       </div>
@@ -1039,46 +1076,97 @@ export function UserManagementSection({
                 billingLoading ? (
                   <DetailListEmpty title="正在加载计费详情..." />
                 ) : billingDetail ? (
-                  <div className="user-management-overview-layout">
-                    <article className="sub-panel user-management-detail-card user-management-overview-summary">
-                      <div className="user-management-overview-top">
+                  <div className="user-billing-ledger">
+                    <section className="user-billing-ledger-head">
+                      <div>
+                        <p className="section-tag">积分账本</p>
+                        <h3 className="user-billing-ledger-title">{detail.user?.displayName || detail.user?.email || '用户积分账户'}</h3>
+                        <p className="panel-caption user-management-overview-copy">余额、调整操作、使用明细与获取历史集中展示。</p>
+                      </div>
+                      <div className="user-billing-balance-card">
+                        <span>当前余额</span>
+                        <strong>{billingDetail.credits.balance.toLocaleString()}</strong>
+                        <small>credits</small>
+                      </div>
+                    </section>
+
+                    <section className="user-billing-summary-strip">
+                      <div>
+                        <span>累计获得</span>
+                        <strong>+{billingDetail.credits.totalEarned.toLocaleString()}</strong>
+                        <small>历史累计入账</small>
+                      </div>
+                      <div>
+                        <span>累计消费</span>
+                        <strong>-{billingDetail.credits.totalConsumed.toLocaleString()}</strong>
+                        <small>{billingDetail.usageRecords.total} 个消费会话</small>
+                      </div>
+                      <div>
+                        <span>最后充值</span>
+                        <strong title={formatDateTime(billingDetail.credits.lastRechargeAt)}>{formatCompactRelativeTime(billingDetail.credits.lastRechargeAt, summaryClock)}</strong>
+                        <small>最近入账参考</small>
+                      </div>
+                    </section>
+
+                    <section className="user-billing-section user-billing-adjust-section">
+                      <div className="user-billing-section-head">
                         <div>
-                          <p className="section-tag">积分摘要</p>
-                          <p className="panel-caption user-management-overview-copy">用户余额、session 使用明细与积分获取历史。</p>
+                          <h3>人工调整</h3>
+                          <p className="panel-caption">为当前用户人工增加积分，并记录调整原因。</p>
                         </div>
                       </div>
-                      <div className="user-management-overview-stat-strip">
-                        <article className="user-management-overview-stat">
-                          <span>当前余额</span>
-                          <strong>{billingDetail.credits.balance.toLocaleString()}</strong>
-                          <small>credits</small>
-                        </article>
-                        <article className="user-management-overview-stat">
-                          <span>累计获得</span>
-                          <strong>{billingDetail.credits.totalEarned.toLocaleString()}</strong>
-                          <small>{formatDateTime(billingDetail.credits.lastRechargeAt)}</small>
-                        </article>
-                        <article className="user-management-overview-stat">
-                          <span>累计消费</span>
-                          <strong>{billingDetail.credits.totalConsumed.toLocaleString()}</strong>
-                          <small>{billingDetail.usageRecords.total} 个消费会话</small>
-                        </article>
+                      <div className="user-billing-adjust-form">
+                        <label>
+                          <span>增加积分</span>
+                          <input
+                            type="number"
+                            min={1}
+                            step={1}
+                            value={adjustAmount}
+                            onChange={(event) => setAdjustAmount(event.target.value)}
+                            placeholder="输入正整数"
+                          />
+                        </label>
+                        <label>
+                          <span>调整原因</span>
+                          <input
+                            type="text"
+                            value={adjustReason}
+                            onChange={(event) => setAdjustReason(event.target.value)}
+                            placeholder="例如：人工充值 / 测试补偿"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className="secondary-btn user-billing-adjust-submit"
+                          onClick={() => void handleAdjustCredits()}
+                          disabled={!canSubmitAdjust}
+                        >
+                          {adjustLoading ? '调整中...' : '确认调整'}
+                        </button>
                       </div>
-                    </article>
+                      {adjustMessage ? (
+                        <p
+                          className={`user-billing-adjust-message ${adjustMessage.tone === 'error' ? 'error' : 'success'}`}
+                        >
+                          {adjustMessage.text}
+                        </p>
+                      ) : null}
+                    </section>
 
-                    <article className="sub-panel user-management-detail-card">
-                      <div className="user-management-overview-login-head">
+                    <section className="user-billing-section">
+                      <div className="user-billing-section-head">
                         <div>
-                          <p className="section-tag">使用明细</p>
+                          <h3>使用明细</h3>
                           <p className="panel-caption">按 session 聚合展示，不在用户侧暴露模型信息。</p>
                         </div>
                         <span className="user-management-overview-record-count">共 {billingDetail.usageRecords.total} 个 session</span>
                       </div>
                       {billingDetail.usageRecords.items.length > 0 ? (
-                        <div className="user-management-overview-login-list">
+                        <div className="user-billing-table user-billing-usage-table">
                           {billingDetail.usageRecords.items.map((item) => (
-                            <article key={item.id} className="user-management-overview-login-item">
-                              <div className="user-management-overview-login-row">
+                            <div key={item.id} className="user-billing-row user-billing-usage-row">
+                              <div className="user-billing-row-main">
                                 <button
                                   type="button"
                                   className="record-title-link"
@@ -1088,50 +1176,46 @@ export function UserManagementSection({
                                 >
                                   {item.sessionTitle || '未命名会话'}
                                 </button>
-                                <span className="state-chip status-paused">-{item.totalCredits.toLocaleString()} credits</span>
-                              </div>
-                              <div className="user-management-overview-login-meta">
                                 <span className="mono">{truncateMiddle(item.sessionId, 10, 8)}</span>
-                                <span>{item.totalTokens.toLocaleString()} tokens</span>
-                                <span>{item.callCount} 次调用</span>
-                                <span>{formatDateTime(item.lastUsedAt)}</span>
                               </div>
-                            </article>
+                              <strong className="user-billing-amount negative">-{item.totalCredits.toLocaleString()}</strong>
+                              <span>{Number(item.totalTokens || 0).toLocaleString()} tokens</span>
+                              <span>{item.callCount} 次调用</span>
+                              <span title={formatDateTime(item.lastUsedAt)}>{formatCompactRelativeTime(item.lastUsedAt, summaryClock)}</span>
+                            </div>
                           ))}
                         </div>
                       ) : (
                         <DetailListEmpty title="当前用户暂无积分使用记录" />
                       )}
-                    </article>
+                    </section>
 
-                    <article className="sub-panel user-management-detail-card">
-                      <div className="user-management-overview-login-head">
+                    <section className="user-billing-section">
+                      <div className="user-billing-section-head">
                         <div>
-                          <p className="section-tag">获取历史</p>
+                          <h3>获取历史</h3>
                           <p className="panel-caption">充值、活动赠送、后台调整等积分入账记录。</p>
                         </div>
                         <span className="user-management-overview-record-count">共 {billingDetail.acquisitionHistory.total} 条</span>
                       </div>
                       {billingDetail.acquisitionHistory.items.length > 0 ? (
-                        <div className="user-management-overview-login-list">
+                        <div className="user-billing-table user-billing-acquisition-table">
                           {billingDetail.acquisitionHistory.items.map((item) => (
-                            <article key={item.id} className="user-management-overview-login-item">
-                              <div className="user-management-overview-login-row">
+                            <div key={item.id} className="user-billing-row user-billing-acquisition-row">
+                              <div className="user-billing-row-main">
                                 <strong>{item.description || (item.type === 'recharge' ? '积分充值' : '积分入账')}</strong>
-                                <span className="state-chip status-running">+{item.amount.toLocaleString()} credits</span>
-                              </div>
-                              <div className="user-management-overview-login-meta">
-                                <span>{formatDateTime(item.createdAt)}</span>
-                                <span>入账后余额 {item.balanceAfter.toLocaleString()}</span>
                                 <span>{item.type}</span>
                               </div>
-                            </article>
+                              <strong className="user-billing-amount positive">+{item.amount.toLocaleString()}</strong>
+                              <span>余额 {item.balanceAfter.toLocaleString()}</span>
+                              <span title={formatDateTime(item.createdAt)}>{formatCompactRelativeTime(item.createdAt, summaryClock)}</span>
+                            </div>
                           ))}
                         </div>
                       ) : (
                         <DetailListEmpty title="当前用户暂无积分获取记录" />
                       )}
-                    </article>
+                    </section>
                   </div>
                 ) : (
                   <DetailListEmpty title="用户计费详情加载失败" />

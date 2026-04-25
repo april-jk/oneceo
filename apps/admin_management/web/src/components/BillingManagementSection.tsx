@@ -81,6 +81,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
     cacheCreationRatio: '',
   });
   const [pricingFormLoading, setPricingFormLoading] = useState(false);
+  const [pricingFormTouched, setPricingFormTouched] = useState<Record<string, boolean>>({});
 
   // Cache config state
   const [cacheConfigs, setCacheConfigs] = useState<CacheConfig[]>([]);
@@ -190,6 +191,37 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
     cacheCreationPercent >= 0 &&
     cacheCreationPercent <= MAX_CACHE_CREATION_PERCENT;
 
+  const pricingFieldErrors = (() => {
+    const errors: Record<string, string> = {};
+    const promptPrice = Number(pricingForm.promptPricePer1kTokens);
+    const completionPrice = Number(pricingForm.completionPricePer1kTokens);
+    const cacheHit = Number(pricingForm.cacheHitRatio);
+    const cacheCreation = Number(pricingForm.cacheCreationRatio);
+
+    if (pricingForm.promptPricePer1kTokens !== '' && (!Number.isInteger(promptPrice) || promptPrice <= 0)) {
+      errors.promptPricePer1kTokens = '请输入大于 0 的正整数';
+    }
+    if (pricingForm.completionPricePer1kTokens !== '' && (!Number.isInteger(completionPrice) || completionPrice <= 0)) {
+      errors.completionPricePer1kTokens = '请输入大于 0 的正整数';
+    }
+    if (pricingForm.cacheHitRatio !== '' && (!Number.isFinite(cacheHit) || cacheHit < 0 || cacheHit > MAX_CACHE_HIT_PERCENT)) {
+      errors.cacheHitRatio = `请输入 0 ~ ${MAX_CACHE_HIT_PERCENT} 之间的数值`;
+    }
+    if (pricingForm.cacheCreationRatio !== '' && (!Number.isFinite(cacheCreation) || cacheCreation < 0 || cacheCreation > MAX_CACHE_CREATION_PERCENT)) {
+      errors.cacheCreationRatio = `请输入 0 ~ ${MAX_CACHE_CREATION_PERCENT} 之间的数值`;
+    }
+    if (pricingFormMode === 'create' && !pricingForm.model.trim()) {
+      errors.model = '请选择或输入模型名称';
+    }
+    return errors;
+  })();
+
+  const shouldShowPricingFieldError = (field: string) => Boolean(pricingFormTouched[field] && pricingFieldErrors[field]);
+
+  const markPricingFieldTouched = (field: string) => {
+    setPricingFormTouched((current) => ({ ...current, [field]: true }));
+  };
+
   const getCacheFormForProvider = useCallback((provider: string) => {
     const current = cacheConfigForm[provider];
     if (current) return current;
@@ -216,6 +248,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
       cacheHitRatio: initial?.cacheHitRatio || cacheForm.hitRatio,
       cacheCreationRatio: initial?.cacheCreationRatio || cacheForm.creationRatio,
     });
+    setPricingFormTouched({});
     setPricingFormOpen(true);
   }, [getCacheFormForProvider]);
 
@@ -463,199 +496,232 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
           {pricingFormOpen && (
             <div className="modal-backdrop" onClick={() => setPricingFormOpen(false)}>
               <aside
-                className="modal-card user-management-modal"
+                className="pricing-form-modal"
                 role="dialog"
                 aria-modal="true"
-                style={{ maxHeight: 'calc(100vh - 40px)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
                 onClick={(event) => event.stopPropagation()}
               >
-                <div className="modal-header user-management-modal-header">
-                  <div className="user-management-modal-heading">
+                <div className="pricing-form-modal-header">
+                  <div className="pricing-form-modal-heading">
                     <p className="section-tag">定价配置</p>
                     <h2>{pricingFormMode === 'update' ? '更新定价配置（创建新版本）' : '新建定价配置'}</h2>
                     <p className="panel-caption">
                       {pricingFormMode === 'update'
-                        ? '保存后会按生效时间创建新版本，历史 usage 不回写。缓存比例按 provider 生效。'
+                        ? '保存后会按生效时间创建新版本，历史 usage 不回写。'
                         : '配置模型单价，并为该 provider 设置缓存命中与缓存创建计费比例。'}
                     </p>
                   </div>
-                  <div className="user-management-modal-actions">
-                    <button type="button" className="secondary-btn" onClick={() => setPricingFormOpen(false)}>
-                      关闭
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    className="pricing-form-modal-close"
+                    onClick={() => setPricingFormOpen(false)}
+                    aria-label="关闭"
+                  >
+                    ×
+                  </button>
                 </div>
-                <div className="user-management-modal-body" style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', paddingBottom: '12px' }}>
-                  <div style={{ display: 'grid', gap: '10px' }}>
-                    <section className="sub-panel" style={{ padding: '10px 14px' }}>
-                      <p className="section-tag" style={{ marginBottom: '10px' }}>模型范围</p>
-                      <div className="user-management-filter-grid">
-                        {pricingFormMode === 'create' ? (
-                          <label>
-                            <span>候选模型</span>
-                            <select
-                              value=""
-                              onChange={(e) => {
-                                const candidate = modelCandidates.find((item) => item.model === e.target.value);
-                                if (!candidate) return;
-                                const normalizedProvider = normalizePricingProvider(candidate.model, candidate.provider);
-                                const existingPricing = pricing.find((item) => item.model === candidate.model && item.isActive);
-                                const nextCache = getCacheFormForProvider(normalizedProvider);
-                                setPricingForm({
-                                  ...pricingForm,
-                                  model: candidate.model,
-                                  modelProvider: normalizedProvider,
-                                  promptPricePer1kTokens: existingPricing ? String(existingPricing.promptPricePer1kTokens) : pricingForm.promptPricePer1kTokens,
-                                  completionPricePer1kTokens: existingPricing ? String(existingPricing.completionPricePer1kTokens) : pricingForm.completionPricePer1kTokens,
-                                  cacheHitRatio: existingPricing ? formatPercentInput((existingPricing.cacheHitRatio || 0) * 100) : nextCache.hitRatio,
-                                  cacheCreationRatio: existingPricing ? formatPercentInput((existingPricing.cacheCreationRatio || 0) * 100) : nextCache.creationRatio,
-                                });
-                              }}
-                            >
-                              <option value="">从当前使用模型选择</option>
-                              {modelCandidates.map((candidate) => {
-                                const normalizedProvider = normalizePricingProvider(candidate.model, candidate.provider);
-                                return (
-                                  <option key={candidate.model} value={candidate.model}>
-                                    {candidate.model} · {providerLabel(normalizedProvider)}{candidate.hasActivePricing ? ' · 已有定价' : ' · 待配置'}
-                                  </option>
-                                );
-                              })}
-                            </select>
-                          </label>
-                        ) : null}
-                    <label>
-                      <span>模型名称</span>
-                      <input
-                        type="text"
-                        placeholder="如 gpt-4o"
-                        list="billing-model-candidates"
-                        value={pricingForm.model}
-                        readOnly={pricingFormMode === 'update'}
-                        onChange={(e) => setPricingForm({ ...pricingForm, model: e.target.value })}
-                      />
-                      <datalist id="billing-model-candidates">
-                        {modelCandidates.map((candidate) => (
-                          <option key={candidate.model} value={candidate.model} />
-                        ))}
-                      </datalist>
-                    </label>
-                    <label>
-                      <span>提供商</span>
-                      <select
-                        value={pricingForm.modelProvider}
-                        disabled={pricingFormMode === 'update'}
-                        onChange={(e) => {
-                          const nextProvider = e.target.value;
-                          const nextCache = getCacheFormForProvider(nextProvider);
-                          setPricingForm({
-                            ...pricingForm,
-                            modelProvider: nextProvider,
-                            cacheHitRatio: nextCache.hitRatio,
-                            cacheCreationRatio: nextCache.creationRatio,
-                          });
-                        }}
-                      >
-                        <option value="openai">OpenAI</option>
-                        <option value="anthropic">Anthropic</option>
-                        <option value="qwen">Qwen / 通义千问</option>
-                        <option value="deepseek">DeepSeek</option>
-                        <option value="google">Google</option>
-                        <option value="xai">xAI</option>
-                      </select>
-                    </label>
-                      </div>
-                    </section>
+                <div className="pricing-form-modal-body">
+                  {pricingFormMode === 'update' && (
+                    <div className="pricing-form-tip warning">
+                      <span className="pricing-form-tip-icon">⚠</span>
+                      <span>当前模型与提供商不可编辑。新保存会创建新版本，历史 usage 不回写。</span>
+                    </div>
+                  )}
 
-                    <section className="sub-panel" style={{ padding: '10px 14px' }}>
-                      <p className="section-tag" style={{ marginBottom: '10px' }}>基础定价</p>
-                      <div className="user-management-filter-grid">
-                    <label>
-                      <span>输入单价（正整数 credits / 1k tokens）</span>
-                      <input
-                        type="number"
-                        min={1}
-                        step={1}
-                        placeholder="如 25"
-                        value={pricingForm.promptPricePer1kTokens}
-                        onChange={(e) => setPricingForm({ ...pricingForm, promptPricePer1kTokens: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      <span>输出单价（正整数 credits / 1k tokens）</span>
-                      <input
-                        type="number"
-                        min={1}
-                        step={1}
-                        placeholder="如 50"
-                        value={pricingForm.completionPricePer1kTokens}
-                        onChange={(e) => setPricingForm({ ...pricingForm, completionPricePer1kTokens: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      <span>生效时间（本地时间，留空立即生效）</span>
-                      <input
-                        type="datetime-local"
-                        value={pricingForm.effectiveFrom}
-                        onChange={(e) => setPricingForm({ ...pricingForm, effectiveFrom: e.target.value })}
-                      />
-                    </label>
+                  <section className="pricing-form-section">
+                    <h3 className="pricing-form-section-title">模型范围</h3>
+                    <div className="pricing-form-grid">
+                      {pricingFormMode === 'create' ? (
+                        <div className="pricing-form-field pricing-form-field-wide">
+                          <span className="pricing-form-field-label">候选模型</span>
+                          <select
+                            value=""
+                            onChange={(e) => {
+                              const candidate = modelCandidates.find((item) => item.model === e.target.value);
+                              if (!candidate) return;
+                              const normalizedProvider = normalizePricingProvider(candidate.model, candidate.provider);
+                              const existingPricing = pricing.find((item) => item.model === candidate.model && item.isActive);
+                              const nextCache = getCacheFormForProvider(normalizedProvider);
+                              setPricingForm({
+                                ...pricingForm,
+                                model: candidate.model,
+                                modelProvider: normalizedProvider,
+                                promptPricePer1kTokens: existingPricing ? String(existingPricing.promptPricePer1kTokens) : pricingForm.promptPricePer1kTokens,
+                                completionPricePer1kTokens: existingPricing ? String(existingPricing.completionPricePer1kTokens) : pricingForm.completionPricePer1kTokens,
+                                cacheHitRatio: existingPricing ? formatPercentInput((existingPricing.cacheHitRatio || 0) * 100) : nextCache.hitRatio,
+                                cacheCreationRatio: existingPricing ? formatPercentInput((existingPricing.cacheCreationRatio || 0) * 100) : nextCache.creationRatio,
+                              });
+                              markPricingFieldTouched('model');
+                            }}
+                          >
+                            <option value="">从当前使用模型选择</option>
+                            {modelCandidates.map((candidate) => {
+                              const normalizedProvider = normalizePricingProvider(candidate.model, candidate.provider);
+                              return (
+                                <option key={candidate.model} value={candidate.model}>
+                                  {candidate.model} · {providerLabel(normalizedProvider)}{candidate.hasActivePricing ? ' · 已有定价' : ' · 待配置'}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </div>
+                      ) : null}
+                      <div className={`pricing-form-field ${shouldShowPricingFieldError('model') ? 'has-error' : ''}`}>
+                        <span className="pricing-form-field-label">模型名称</span>
+                        <input
+                          type="text"
+                          placeholder="如 gpt-4o"
+                          list="billing-model-candidates"
+                          value={pricingForm.model}
+                          readOnly={pricingFormMode === 'update'}
+                          onChange={(e) => {
+                            markPricingFieldTouched('model');
+                            setPricingForm({ ...pricingForm, model: e.target.value });
+                          }}
+                          onBlur={() => markPricingFieldTouched('model')}
+                        />
+                        <datalist id="billing-model-candidates">
+                          {modelCandidates.map((candidate) => (
+                            <option key={candidate.model} value={candidate.model} />
+                          ))}
+                        </datalist>
+                        {pricingFormMode === 'create' && shouldShowPricingFieldError('model') && <span className="pricing-form-field-error">{pricingFieldErrors.model}</span>}
                       </div>
-                    </section>
-
-                    <section className="sub-panel" style={{ padding: '10px 14px' }}>
-                      <p className="section-tag" style={{ marginBottom: '6px' }}>缓存计费</p>
-                      <p className="panel-caption" style={{ marginBottom: '10px' }}>
-                        缓存比例按 provider 生效，将影响 {providerLabel(pricingForm.modelProvider)} 下所有模型。Qwen 隐式缓存命中填 20，缓存创建填 125；无缓存创建费用填 0。
-                      </p>
-                      <div className="user-management-filter-grid">
-                    <label>
-                      <span>缓存命中计费比例（%）</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={MAX_CACHE_HIT_PERCENT}
-                        step="0.1"
-                        placeholder="如 20 表示 20%"
-                        value={pricingForm.cacheHitRatio}
-                        onChange={(e) => setPricingForm({ ...pricingForm, cacheHitRatio: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      <span>缓存创建计费比例（%）</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={MAX_CACHE_CREATION_PERCENT}
-                        step="0.1"
-                        placeholder="如 125 表示 125%"
-                        value={pricingForm.cacheCreationRatio}
-                        onChange={(e) => setPricingForm({ ...pricingForm, cacheCreationRatio: e.target.value })}
-                      />
-                    </label>
+                      <div className="pricing-form-field">
+                        <span className="pricing-form-field-label">提供商</span>
+                        <select
+                          value={pricingForm.modelProvider}
+                          disabled={pricingFormMode === 'update'}
+                          onChange={(e) => {
+                            const nextProvider = e.target.value;
+                            const nextCache = getCacheFormForProvider(nextProvider);
+                            setPricingForm({
+                              ...pricingForm,
+                              modelProvider: nextProvider,
+                              cacheHitRatio: nextCache.hitRatio,
+                              cacheCreationRatio: nextCache.creationRatio,
+                            });
+                          }}
+                        >
+                          <option value="openai">OpenAI</option>
+                          <option value="anthropic">Anthropic</option>
+                          <option value="qwen">Qwen / 通义千问</option>
+                          <option value="deepseek">DeepSeek</option>
+                          <option value="google">Google</option>
+                          <option value="xai">xAI</option>
+                        </select>
                       </div>
-                    </section>
+                    </div>
+                  </section>
 
-                  </div>
+                  <section className="pricing-form-section">
+                    <h3 className="pricing-form-section-title">基础定价</h3>
+                    <div className="pricing-form-grid">
+                      <div className={`pricing-form-field ${shouldShowPricingFieldError('promptPricePer1kTokens') ? 'has-error' : ''}`}>
+                        <span className="pricing-form-field-label">输入单价 <small>credits / 1k tokens</small></span>
+                        <input
+                          type="number"
+                          min={1}
+                          step={1}
+                          placeholder="如 25"
+                          value={pricingForm.promptPricePer1kTokens}
+                          onChange={(e) => {
+                            markPricingFieldTouched('promptPricePer1kTokens');
+                            setPricingForm({ ...pricingForm, promptPricePer1kTokens: e.target.value });
+                          }}
+                          onBlur={() => markPricingFieldTouched('promptPricePer1kTokens')}
+                        />
+                        {shouldShowPricingFieldError('promptPricePer1kTokens') && <span className="pricing-form-field-error">{pricingFieldErrors.promptPricePer1kTokens}</span>}
+                      </div>
+                      <div className={`pricing-form-field ${shouldShowPricingFieldError('completionPricePer1kTokens') ? 'has-error' : ''}`}>
+                        <span className="pricing-form-field-label">输出单价 <small>credits / 1k tokens</small></span>
+                        <input
+                          type="number"
+                          min={1}
+                          step={1}
+                          placeholder="如 50"
+                          value={pricingForm.completionPricePer1kTokens}
+                          onChange={(e) => {
+                            markPricingFieldTouched('completionPricePer1kTokens');
+                            setPricingForm({ ...pricingForm, completionPricePer1kTokens: e.target.value });
+                          }}
+                          onBlur={() => markPricingFieldTouched('completionPricePer1kTokens')}
+                        />
+                        {shouldShowPricingFieldError('completionPricePer1kTokens') && <span className="pricing-form-field-error">{pricingFieldErrors.completionPricePer1kTokens}</span>}
+                      </div>
+                      <div className="pricing-form-field pricing-form-field-wide">
+                        <span className="pricing-form-field-label">生效时间 <small>留空立即生效</small></span>
+                        <input
+                          type="datetime-local"
+                          value={pricingForm.effectiveFrom}
+                          onChange={(e) => setPricingForm({ ...pricingForm, effectiveFrom: e.target.value })}
+                        />
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="pricing-form-section">
+                    <h3 className="pricing-form-section-title">缓存计费</h3>
+                    <div className="pricing-form-tip">
+                      <span className="pricing-form-tip-icon">ℹ</span>
+                      <span>缓存比例按 provider 生效，将影响 {providerLabel(pricingForm.modelProvider)} 下所有模型。Qwen 隐式缓存命中填 20，缓存创建填 125；无缓存创建费用填 0。</span>
+                    </div>
+                    <div className="pricing-form-grid">
+                      <div className={`pricing-form-field ${shouldShowPricingFieldError('cacheHitRatio') ? 'has-error' : ''}`}>
+                        <span className="pricing-form-field-label">缓存命中比例 <small>%</small></span>
+                        <input
+                          type="number"
+                          min={0}
+                          max={MAX_CACHE_HIT_PERCENT}
+                          step="0.1"
+                          placeholder="如 20"
+                          value={pricingForm.cacheHitRatio}
+                          onChange={(e) => {
+                            markPricingFieldTouched('cacheHitRatio');
+                            setPricingForm({ ...pricingForm, cacheHitRatio: e.target.value });
+                          }}
+                          onBlur={() => markPricingFieldTouched('cacheHitRatio')}
+                        />
+                        {shouldShowPricingFieldError('cacheHitRatio') && <span className="pricing-form-field-error">{pricingFieldErrors.cacheHitRatio}</span>}
+                      </div>
+                      <div className={`pricing-form-field ${shouldShowPricingFieldError('cacheCreationRatio') ? 'has-error' : ''}`}>
+                        <span className="pricing-form-field-label">缓存创建比例 <small>%</small></span>
+                        <input
+                          type="number"
+                          min={0}
+                          max={MAX_CACHE_CREATION_PERCENT}
+                          step="0.1"
+                          placeholder="如 125"
+                          value={pricingForm.cacheCreationRatio}
+                          onChange={(e) => {
+                            markPricingFieldTouched('cacheCreationRatio');
+                            setPricingForm({ ...pricingForm, cacheCreationRatio: e.target.value });
+                          }}
+                          onBlur={() => markPricingFieldTouched('cacheCreationRatio')}
+                        />
+                        {shouldShowPricingFieldError('cacheCreationRatio') && <span className="pricing-form-field-error">{pricingFieldErrors.cacheCreationRatio}</span>}
+                      </div>
+                    </div>
+                  </section>
                 </div>
-                <div className="user-management-filter-actions" style={{ flex: '0 0 auto', justifyContent: 'flex-end', paddingTop: '12px', borderTop: '1px solid color-mix(in srgb, var(--border) 76%, transparent)' }}>
-                    <button
-                      type="button"
-                      className="secondary-btn"
-                      onClick={() => setPricingFormOpen(false)}
-                      disabled={pricingFormLoading}
-                    >
-                      取消
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary-btn"
-                      onClick={handleCreatePricing}
-                      disabled={pricingFormLoading || !canSubmitPricing}
-                    >
-                      {pricingFormLoading ? '保存中...' : pricingFormMode === 'update' ? '保存新版本' : '创建定价'}
-                    </button>
-                  </div>
+                <div className="pricing-form-actions">
+                  <button
+                    type="button"
+                    className="secondary-btn"
+                    onClick={() => setPricingFormOpen(false)}
+                    disabled={pricingFormLoading}
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    className="primary-btn"
+                    onClick={handleCreatePricing}
+                    disabled={pricingFormLoading || !canSubmitPricing}
+                  >
+                    {pricingFormLoading ? '保存中...' : pricingFormMode === 'update' ? '保存新版本' : '创建定价'}
+                  </button>
+                </div>
               </aside>
             </div>
           )}
@@ -663,72 +729,86 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
           {pricingDetailOpen && selectedPricing && (
             <div className="modal-backdrop" onClick={() => setPricingDetailOpen(false)}>
               <aside
-                className="modal-card user-management-modal"
+                className="pricing-form-modal pricing-detail-modal"
                 role="dialog"
                 aria-modal="true"
-                style={{ maxHeight: 'calc(100vh - 40px)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
                 onClick={(event) => event.stopPropagation()}
               >
-                <div className="modal-header user-management-modal-header">
-                  <div className="user-management-modal-heading">
+                <div className="pricing-form-modal-header">
+                  <div className="pricing-form-modal-heading">
                     <p className="section-tag">定价详情</p>
                     <h2>{selectedPricing.model}</h2>
                     <p className="panel-caption">查看当前定价快照，并在此更新或删除该规则。</p>
                   </div>
-                  <div className="user-management-modal-actions">
-                    <button type="button" className="secondary-btn" onClick={() => setPricingDetailOpen(false)}>
-                      关闭
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    className="pricing-form-modal-close"
+                    onClick={() => setPricingDetailOpen(false)}
+                    aria-label="关闭"
+                  >
+                    ×
+                  </button>
                 </div>
 
-                <div className="user-management-modal-body" style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', paddingBottom: '12px' }}>
-                  <section className="sub-panel" style={{ padding: '10px 14px' }}>
-                    <p className="section-tag" style={{ marginBottom: '10px' }}>基础信息</p>
-                    <dl className="user-management-record-grid">
-                      <div>
-                        <dt>模型</dt>
-                        <dd>{selectedPricing.model}</dd>
+                <div className="pricing-form-modal-body">
+                  <section className="pricing-detail-section">
+                    <h3 className="pricing-detail-section-title">审计摘要</h3>
+                    <div className="pricing-detail-grid">
+                      <div className="pricing-detail-item">
+                        <span className="pricing-detail-label">模型</span>
+                        <span className="pricing-detail-value">{selectedPricing.model}</span>
                       </div>
-                      <div>
-                        <dt>提供商</dt>
-                        <dd>{providerLabel(normalizePricingProvider(selectedPricing.model, selectedPricing.modelProvider))}</dd>
+                      <div className="pricing-detail-item">
+                        <span className="pricing-detail-label">提供商</span>
+                        <span className="pricing-detail-value">{providerLabel(normalizePricingProvider(selectedPricing.model, selectedPricing.modelProvider))}</span>
                       </div>
-                      <div>
-                        <dt>状态</dt>
-                        <dd>{selectedPricing.isActive ? '生效中' : '已删除'}</dd>
+                      <div className="pricing-detail-item">
+                        <span className="pricing-detail-label">状态</span>
+                        <span className={`pricing-detail-value ${selectedPricing.isActive ? 'status-active' : 'status-inactive'}`}>{selectedPricing.isActive ? '生效中' : '已删除'}</span>
                       </div>
-                      <div>
-                        <dt>生效时间</dt>
-                        <dd>{selectedPricing.effectiveFrom ? new Date(selectedPricing.effectiveFrom).toLocaleString('zh-CN', { hour12: false }) : '立即生效'}</dd>
+                      <div className="pricing-detail-item">
+                        <span className="pricing-detail-label">生效时间</span>
+                        <span className="pricing-detail-value">{selectedPricing.effectiveFrom ? new Date(selectedPricing.effectiveFrom).toLocaleString('zh-CN', { hour12: false }) : '立即生效'}</span>
                       </div>
-                    </dl>
+                    </div>
                   </section>
 
-                  <section className="sub-panel" style={{ padding: '10px 14px', marginTop: '10px' }}>
-                    <p className="section-tag" style={{ marginBottom: '10px' }}>计费规则</p>
-                    <dl className="user-management-record-grid">
-                      <div>
-                        <dt>输入单价</dt>
-                        <dd>{selectedPricing.promptPricePer1kTokens} credits / 1k tokens</dd>
+                  <section className="pricing-detail-section">
+                    <h3 className="pricing-detail-section-title">计费规则</h3>
+                    <div className="pricing-detail-grid pricing-detail-grid-metrics">
+                      <div className="pricing-detail-metric">
+                        <span className="pricing-detail-label">输入单价</span>
+                        <div className="pricing-detail-metric-body">
+                          <span className="pricing-detail-number">{selectedPricing.promptPricePer1kTokens}</span>
+                          <span className="pricing-detail-unit">credits / 1k tokens</span>
+                        </div>
                       </div>
-                      <div>
-                        <dt>输出单价</dt>
-                        <dd>{selectedPricing.completionPricePer1kTokens} credits / 1k tokens</dd>
+                      <div className="pricing-detail-metric">
+                        <span className="pricing-detail-label">输出单价</span>
+                        <div className="pricing-detail-metric-body">
+                          <span className="pricing-detail-number">{selectedPricing.completionPricePer1kTokens}</span>
+                          <span className="pricing-detail-unit">credits / 1k tokens</span>
+                        </div>
                       </div>
-                      <div>
-                        <dt>缓存命中</dt>
-                        <dd>{(selectedPricing.cacheHitRatio * 100).toFixed(0)}%</dd>
+                      <div className="pricing-detail-metric">
+                        <span className="pricing-detail-label">缓存命中</span>
+                        <div className="pricing-detail-metric-body">
+                          <span className="pricing-detail-number">{(selectedPricing.cacheHitRatio * 100).toFixed(0)}</span>
+                          <span className="pricing-detail-unit">%</span>
+                        </div>
                       </div>
-                      <div>
-                        <dt>缓存创建</dt>
-                        <dd>{(selectedPricing.cacheCreationRatio * 100).toFixed(0)}%</dd>
+                      <div className="pricing-detail-metric">
+                        <span className="pricing-detail-label">缓存创建</span>
+                        <div className="pricing-detail-metric-body">
+                          <span className="pricing-detail-number">{(selectedPricing.cacheCreationRatio * 100).toFixed(0)}</span>
+                          <span className="pricing-detail-unit">%</span>
+                        </div>
                       </div>
-                    </dl>
+                    </div>
                   </section>
                 </div>
 
-                <div className="user-management-filter-actions" style={{ flex: '0 0 auto', justifyContent: 'space-between', paddingTop: '12px', borderTop: '1px solid color-mix(in srgb, var(--border) 76%, transparent)' }}>
+                <div className="pricing-detail-actions">
                   <button
                     type="button"
                     className="secondary-btn danger-btn"
@@ -737,13 +817,17 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                   >
                     删除
                   </button>
-                  <div className="user-management-filter-actions" style={{ justifyContent: 'flex-end' }}>
-                    <button type="button" className="secondary-btn" onClick={() => setPricingDetailOpen(false)}>
-                      取消
-                    </button>
+                  <div className="pricing-detail-actions-group">
                     <button
                       type="button"
                       className="secondary-btn"
+                      onClick={() => setPricingDetailOpen(false)}
+                    >
+                      关闭
+                    </button>
+                    <button
+                      type="button"
+                      className="primary-btn"
                       onClick={() => openPricingUpdate(selectedPricing)}
                       disabled={!selectedPricing.isActive}
                     >

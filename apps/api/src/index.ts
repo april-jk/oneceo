@@ -20,11 +20,11 @@ import internalAdminAuthRoutes from './routes/internal-admin-auth-routes';
 import internalAdminAppUserRoutes from './routes/internal-admin-app-user-routes';
 import internalAdminDeploymentRoutes from './routes/internal-admin-deployment-routes';
 import internalTaskCreationRoutes from './routes/internal-task-creation-routes';
-import internalVercelMcpRoutes from './routes/internal-vercel-mcp-routes';
 import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
 import { closeDatabaseConnection, testDatabaseConnection } from './config/database';
 import { getPublicErrorMessage } from './utils/error-response';
 import { osacLlmProxyBridgeService } from './services/osac-llm-proxy-bridge';
+import { hostedProviderHostService } from './services/hosted-provider-host-service';
 import { osacPersistentRecoveryService } from './services/osac-persistent-recovery-service';
 import { sessionMcpRecoveryService } from './services/session-mcp-recovery-service';
 import { startSandboxArchiveJob, stopSandboxArchiveJob } from './services/sandbox-archive-job';
@@ -171,7 +171,6 @@ app.use('/api/internal', internalAdminAuthRoutes);
 app.use('/api/internal', internalAdminAppUserRoutes);
 app.use('/api/internal', internalAdminDeploymentRoutes);
 app.use('/api/internal', internalTaskCreationRoutes);
-app.use('/api/internal', internalVercelMcpRoutes);
 
 // 任务相关 API
 app.get('/api/tasks', (req, res) => {
@@ -354,6 +353,7 @@ httpServer.on('error', (error: any) => {
 // 初始化任务创建 WebSocket 服务
 taskCreationWebSocketService.initialize(httpServer);
 osacLlmProxyBridgeService.initialize();
+hostedProviderHostService.initialize();
 
 async function startServer() {
   await connectorStorageBootstrap.ensureReady();

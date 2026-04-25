@@ -51,7 +51,13 @@ type OpenAiChatCompletionRequest = {
 
 type AnthropicMessageRequest = {
   model: string;
-  system?: string;
+  system?:
+    | string
+    | Array<{
+        type: 'text';
+        text: string;
+        cache_control?: { type: 'ephemeral' };
+      }>;
   messages: Array<{
     role: 'user' | 'assistant';
     content:
@@ -98,6 +104,13 @@ type AnthropicMessageResponse = {
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cached_tokens?: number;
+    prompt_tokens_details?: {
+      cached_tokens?: number;
+      cache_creation_input_tokens?: number;
+    };
   };
   stop_reason?: string | null;
   error?: {
@@ -106,6 +119,45 @@ type AnthropicMessageResponse = {
     code?: string;
   };
 };
+
+function readNumericField(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function extractCachedPromptTokens(usage: Record<string, unknown> | undefined | null): number {
+  if (!usage || typeof usage !== 'object') return 0;
+  const details = usage.prompt_tokens_details && typeof usage.prompt_tokens_details === 'object'
+    ? usage.prompt_tokens_details as Record<string, unknown>
+    : null;
+  return (
+    readNumericField(details?.cached_tokens) ??
+    readNumericField(usage.cached_tokens) ??
+    readNumericField(usage.cache_read_input_tokens) ??
+    0
+  );
+}
+
+function extractCacheCreationTokens(usage: Record<string, unknown> | undefined | null): number {
+  if (!usage || typeof usage !== 'object') return 0;
+  const details = usage.prompt_tokens_details && typeof usage.prompt_tokens_details === 'object'
+    ? usage.prompt_tokens_details as Record<string, unknown>
+    : null;
+  const cacheCreation = details?.cache_creation && typeof details.cache_creation === 'object'
+    ? details.cache_creation as Record<string, unknown>
+    : null;
+  return (
+    readNumericField(details?.cache_creation_input_tokens) ??
+    readNumericField(cacheCreation?.cache_creation_input_tokens) ??
+    readNumericField(cacheCreation?.ephemeral_5m_input_tokens) ??
+    readNumericField(usage.cache_creation_input_tokens) ??
+    0
+  );
+}
 
 type AnthropicStreamEvent = {
   event: string;
@@ -122,6 +174,20 @@ type OpenAiStreamChunk = {
     delta: Record<string, unknown>;
     finish_reason: string | null;
   }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    prompt_tokens_details?: {
+      cached_tokens?: number;
+      cache_creation_input_tokens?: number;
+      cache_creation?: {
+        cache_creation_input_tokens?: number;
+        ephemeral_5m_input_tokens?: number;
+      };
+    };
+    cache_creation_input_tokens?: number;
+  };
 };
 
 type AnthropicStreamState = {
@@ -241,7 +307,8 @@ function toSseData(value: unknown) {
 function createChunk(
   state: AnthropicStreamState,
   delta: Record<string, unknown>,
-  finishReason: string | null = null
+  finishReason: string | null = null,
+  usage?: OpenAiStreamChunk['usage']
 ): OpenAiStreamChunk {
   return {
     id: state.id,
@@ -255,6 +322,7 @@ function createChunk(
         finish_reason: finishReason,
       },
     ],
+    ...(usage ? { usage } : {}),
   };
 }
 
@@ -566,7 +634,9 @@ export function toAnthropicRequest(payload: OpenAiChatCompletionRequest): Anthro
 
   return {
     model,
-    ...(system ? { system } : {}),
+    ...(system
+      ? { system: [{ type: 'text' as const, text: system, cache_control: { type: 'ephemeral' as const } }] }
+      : {}),
     messages: normalizedMessages,
     ...(normalizeOpenAiTools(payload) ? { tools: normalizeOpenAiTools(payload) } : {}),
     ...(normalizeOpenAiTools(payload) ? { tool_choice: normalizeToolChoice(payload.tool_choice) } : {}),
@@ -599,6 +669,8 @@ export function toOpenAiChatCompletion(response: AnthropicMessageResponse) {
     }));
   const promptTokens = Number(response.usage?.input_tokens || 0);
   const completionTokens = Number(response.usage?.output_tokens || 0);
+  const cachedPromptTokens = extractCachedPromptTokens(response.usage as Record<string, unknown> | undefined);
+  const cacheCreationTokens = extractCacheCreationTokens(response.usage as Record<string, unknown> | undefined);
   return {
     id: response.id || `chatcmpl_${Date.now()}`,
     object: 'chat.completion',
@@ -618,6 +690,15 @@ export function toOpenAiChatCompletion(response: AnthropicMessageResponse) {
       prompt_tokens: promptTokens,
       completion_tokens: completionTokens,
       total_tokens: promptTokens + completionTokens,
+      ...(cachedPromptTokens > 0 || cacheCreationTokens > 0
+        ? {
+            prompt_tokens_details: {
+              ...(cachedPromptTokens > 0 ? { cached_tokens: cachedPromptTokens } : {}),
+              ...(cacheCreationTokens > 0 ? { cache_creation_input_tokens: cacheCreationTokens } : {}),
+            },
+          }
+        : {}),
+      ...(cacheCreationTokens > 0 ? { cache_creation_input_tokens: cacheCreationTokens } : {}),
     },
   };
 }
@@ -749,7 +830,32 @@ export function transformAnthropicStreamEvent(
 
   if (streamEvent.event === 'message_delta') {
     const stopReason = normalizeFinishReason(String(payload.delta?.stop_reason || ''));
-    outputs.push(toSseData(createChunk(state, {}, stopReason)));
+    const anthropicUsage = payload.delta?.usage || payload.usage;
+    let usage: OpenAiStreamChunk['usage'] | undefined;
+    if (anthropicUsage && typeof anthropicUsage === 'object') {
+      const u = anthropicUsage as Record<string, unknown>;
+      const promptTokens = typeof u.input_tokens === 'number' ? u.input_tokens : undefined;
+      const completionTokens = typeof u.output_tokens === 'number' ? u.output_tokens : undefined;
+      if (promptTokens !== undefined && completionTokens !== undefined) {
+        usage = {
+          prompt_tokens: promptTokens,
+          completion_tokens: completionTokens,
+          total_tokens: (promptTokens || 0) + (completionTokens || 0),
+        };
+        const cacheRead = extractCachedPromptTokens(u);
+        const cacheCreation = extractCacheCreationTokens(u);
+        if (cacheRead > 0 || cacheCreation > 0) {
+          usage.prompt_tokens_details = {
+            ...(cacheRead > 0 ? { cached_tokens: cacheRead } : {}),
+            ...(cacheCreation > 0 ? { cache_creation_input_tokens: cacheCreation } : {}),
+          };
+        }
+        if (cacheCreation > 0) {
+          usage.cache_creation_input_tokens = cacheCreation;
+        }
+      }
+    }
+    outputs.push(toSseData(createChunk(state, {}, stopReason, usage)));
     return outputs;
   }
 

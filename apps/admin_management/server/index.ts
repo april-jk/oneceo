@@ -21,6 +21,7 @@ import { createSkillManagementRoutes } from './routes/skill-management-routes';
 import { createOsacReleaseRoutes } from './routes/osac-release-routes';
 import { createOperationsAnalyticsRoutes } from './routes/operations-analytics-routes';
 import { createUserManagementRoutes } from './routes/user-management-routes';
+import { createBillingManagementRoutes } from './routes/billing-management-routes';
 import { AgentManagementService } from './services/agent-management-service';
 import { AdminThemeService } from './services/admin-theme-service';
 import { AuditService } from './services/audit-service';
@@ -125,6 +126,7 @@ app.use('/api/skill-management', createSkillManagementRoutes(skillManagementServ
 app.use('/api/connector-guides', createConnectorGuideRoutes(connectorGuideManagementService));
 app.use('/api/osac-releases', createOsacReleaseRoutes(osacReleaseManagementService));
 app.use('/api/operations-analytics', createOperationsAnalyticsRoutes(operationsAnalyticsService));
+app.use('/api/internal/billing', createBillingManagementRoutes());
 
 if (hasBuiltAdminWeb) {
   app.get('*', (req, res, next) => {

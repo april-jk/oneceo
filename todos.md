@@ -114,6 +114,14 @@
 
 - 管理文档：
   - [20260422_登录接口网络安全测试TODO_[20260422-1307已采用].md](/Users/watson/codingProj/oneceo/docs/网络安全/20260422_登录接口网络安全测试TODO_[20260422-1307已采用].md)
+  - [20260422_积分计费系统设计](/home/thweki/Project/oneceo/docs/agent研发文档/20260422_积分计费系统设计/) [尚未采用]
+
+### TODO 列表
+
+1. 积分计费系统开发
+   - 状态：待评审
+   - 文档已写入 Obsidian（Notes vault）和项目目录
+   - 待确认后进入 P0-P5 实施阶段
 
 ### TODO 列表
 

@@ -27,6 +27,38 @@ type UserDetailJumpOrigin = {
   trail: string;
 };
 
+type UserBillingDetail = {
+  credits: {
+    balance: number;
+    totalEarned: number;
+    totalConsumed: number;
+    lastRechargeAt?: string | null;
+  };
+  usageRecords: {
+    items: Array<{
+      id: string;
+      sessionId: string;
+      sessionTitle: string;
+      totalCredits: number;
+      totalTokens: number;
+      callCount: number;
+      lastUsedAt: string;
+    }>;
+    total: number;
+  };
+  acquisitionHistory: {
+    items: Array<{
+      id: string;
+      type: string;
+      amount: number;
+      balanceAfter: number;
+      description?: string | null;
+      createdAt: string;
+    }>;
+    total: number;
+  };
+};
+
 type Props = {
   onError: (message: string | null) => void;
   onUpdatedAtChange?: (value: string | null) => void;
@@ -340,6 +372,8 @@ export function UserManagementSection({
   const [detailLoading, setDetailLoading] = useState(false);
   const [deploymentRecords, setDeploymentRecords] = useState<DeploymentRecord[]>([]);
   const [deploymentLoading, setDeploymentLoading] = useState(false);
+  const [billingDetail, setBillingDetail] = useState<UserBillingDetail | null>(null);
+  const [billingLoading, setBillingLoading] = useState(false);
   const [actionBusy, setActionBusy] = useState<'status' | null>(null);
   const [summaryRefreshing, setSummaryRefreshing] = useState(false);
   const [summaryFetchedAt, setSummaryFetchedAt] = useState<string | null>(null);
@@ -454,6 +488,38 @@ export function UserManagementSection({
   }, [detailTab, drawerOpen, onError, selectedUserId]);
 
   useEffect(() => {
+    if (!drawerOpen || detailTab !== 'billing' || !selectedUserId) return;
+    let cancelled = false;
+    setBillingLoading(true);
+    void fetch(`/api/internal/billing/users/${encodeURIComponent(selectedUserId)}/billing-detail`, {
+      credentials: 'include',
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null);
+          throw new Error(payload?.error || '用户计费详情加载失败');
+        }
+        return response.json() as Promise<UserBillingDetail>;
+      })
+      .then((next) => {
+        if (cancelled) return;
+        setBillingDetail(next);
+        onError(null);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setBillingDetail(null);
+        onError(error instanceof Error ? error.message : '用户计费详情加载失败');
+      })
+      .finally(() => {
+        if (!cancelled) setBillingLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [detailTab, drawerOpen, onError, selectedUserId]);
+
+  useEffect(() => {
     if (detail?.user?.id === selectedUserId) {
       setSelectedUserLabel(detail.user.displayName || detail.user.email || detail.user.id);
       return;
@@ -501,6 +567,7 @@ export function UserManagementSection({
       setSelectedUserLabel(listItem?.displayName || listItem?.email || userId);
       setDetail(null);
       setDeploymentRecords([]);
+      setBillingDetail(null);
       setDrawerOpen(true);
       setDetailTab('overview');
     },
@@ -828,6 +895,7 @@ export function UserManagementSection({
             <div className="user-management-tab-strip">
               {([
                 ['overview', '概览'],
+                ['billing', '积分'],
                 ['conversations', '对话'],
                 ['sandboxes', 'Sandbox'],
                 ['deployments', '部署'],
@@ -966,6 +1034,109 @@ export function UserManagementSection({
                       ))
                     : <DetailListEmpty title="当前用户暂无对话记录" />)
                 : null}
+
+              {!detailLoading && detail && detailTab === 'billing' ? (
+                billingLoading ? (
+                  <DetailListEmpty title="正在加载计费详情..." />
+                ) : billingDetail ? (
+                  <div className="user-management-overview-layout">
+                    <article className="sub-panel user-management-detail-card user-management-overview-summary">
+                      <div className="user-management-overview-top">
+                        <div>
+                          <p className="section-tag">积分摘要</p>
+                          <p className="panel-caption user-management-overview-copy">用户余额、session 使用明细与积分获取历史。</p>
+                        </div>
+                      </div>
+                      <div className="user-management-overview-stat-strip">
+                        <article className="user-management-overview-stat">
+                          <span>当前余额</span>
+                          <strong>{billingDetail.credits.balance.toLocaleString()}</strong>
+                          <small>credits</small>
+                        </article>
+                        <article className="user-management-overview-stat">
+                          <span>累计获得</span>
+                          <strong>{billingDetail.credits.totalEarned.toLocaleString()}</strong>
+                          <small>{formatDateTime(billingDetail.credits.lastRechargeAt)}</small>
+                        </article>
+                        <article className="user-management-overview-stat">
+                          <span>累计消费</span>
+                          <strong>{billingDetail.credits.totalConsumed.toLocaleString()}</strong>
+                          <small>{billingDetail.usageRecords.total} 个消费会话</small>
+                        </article>
+                      </div>
+                    </article>
+
+                    <article className="sub-panel user-management-detail-card">
+                      <div className="user-management-overview-login-head">
+                        <div>
+                          <p className="section-tag">使用明细</p>
+                          <p className="panel-caption">按 session 聚合展示，不在用户侧暴露模型信息。</p>
+                        </div>
+                        <span className="user-management-overview-record-count">共 {billingDetail.usageRecords.total} 个 session</span>
+                      </div>
+                      {billingDetail.usageRecords.items.length > 0 ? (
+                        <div className="user-management-overview-login-list">
+                          {billingDetail.usageRecords.items.map((item) => (
+                            <article key={item.id} className="user-management-overview-login-item">
+                              <div className="user-management-overview-login-row">
+                                <button
+                                  type="button"
+                                  className="record-title-link"
+                                  onClick={() => {
+                                    if (onOpenConversation && detailJumpOrigin) onOpenConversation(item.sessionId, detailJumpOrigin);
+                                  }}
+                                >
+                                  {item.sessionTitle || '未命名会话'}
+                                </button>
+                                <span className="state-chip status-paused">-{item.totalCredits.toLocaleString()} credits</span>
+                              </div>
+                              <div className="user-management-overview-login-meta">
+                                <span className="mono">{truncateMiddle(item.sessionId, 10, 8)}</span>
+                                <span>{item.totalTokens.toLocaleString()} tokens</span>
+                                <span>{item.callCount} 次调用</span>
+                                <span>{formatDateTime(item.lastUsedAt)}</span>
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                      ) : (
+                        <DetailListEmpty title="当前用户暂无积分使用记录" />
+                      )}
+                    </article>
+
+                    <article className="sub-panel user-management-detail-card">
+                      <div className="user-management-overview-login-head">
+                        <div>
+                          <p className="section-tag">获取历史</p>
+                          <p className="panel-caption">充值、活动赠送、后台调整等积分入账记录。</p>
+                        </div>
+                        <span className="user-management-overview-record-count">共 {billingDetail.acquisitionHistory.total} 条</span>
+                      </div>
+                      {billingDetail.acquisitionHistory.items.length > 0 ? (
+                        <div className="user-management-overview-login-list">
+                          {billingDetail.acquisitionHistory.items.map((item) => (
+                            <article key={item.id} className="user-management-overview-login-item">
+                              <div className="user-management-overview-login-row">
+                                <strong>{item.description || (item.type === 'recharge' ? '积分充值' : '积分入账')}</strong>
+                                <span className="state-chip status-running">+{item.amount.toLocaleString()} credits</span>
+                              </div>
+                              <div className="user-management-overview-login-meta">
+                                <span>{formatDateTime(item.createdAt)}</span>
+                                <span>入账后余额 {item.balanceAfter.toLocaleString()}</span>
+                                <span>{item.type}</span>
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                      ) : (
+                        <DetailListEmpty title="当前用户暂无积分获取记录" />
+                      )}
+                    </article>
+                  </div>
+                ) : (
+                  <DetailListEmpty title="用户计费详情加载失败" />
+                )
+              ) : null}
 
               {!detailLoading && detail && detailTab === 'sandboxes'
                 ? (detail.recentSandboxes.length > 0

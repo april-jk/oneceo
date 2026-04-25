@@ -10,6 +10,7 @@ import { altusManagedTurnSnapshotService } from '../services/altus-managed-turn-
 import type { ManagedMcpProvider } from '../services/altus-managed-shared';
 import { altusManagedDynamicContextBlockService } from '../services/altus-managed-dynamic-context-blocks';
 import { altusManagedContextCacheObserver } from '../services/altus-managed-context-cache-observer';
+import { altusManagedContextDebugSummaryService } from '../services/altus-managed-context-debug-summary-service';
 import { altusManagedContextRecoveryService } from '../services/altus-managed-context-recovery-service';
 import { altusManagedContextBudgetService } from '../services/altus-managed-context-budget-service';
 import {
@@ -234,10 +235,15 @@ router.get('/sessions/:sessionId/context-debug', async (req, res) => {
       apiMessages: budgetProjection.messages,
       budgetReplacementSummary: budgetProjection.replacementSummary,
     });
+    const summary = altusManagedContextDebugSummaryService.buildSummary({
+      recovery,
+      cacheObservation,
+    });
 
     return res.json({
       success: true,
       data: {
+        summary,
         snapshot,
         manifest: recovery.manifest,
         reconciliation: recovery.reconciliation,

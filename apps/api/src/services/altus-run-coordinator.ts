@@ -449,6 +449,7 @@ export class AltusRunCoordinator {
     const normalized = asText(content);
     if (!normalized) return false;
     if (/[?？]/.test(normalized)) return true;
+    if (this.looksLikeCompletedTaskSummary(normalized)) return false;
     const keywords = [
       'please clarify',
       'please confirm',
@@ -478,6 +479,44 @@ export class AltusRunCoordinator {
     ];
     const lower = normalized.toLowerCase();
     return keywords.some((keyword) => lower.includes(keyword.toLowerCase()));
+  }
+
+  private looksLikeCompletedTaskSummary(content: string) {
+    const normalized = asText(content);
+    if (!normalized) return false;
+    const lower = normalized.toLowerCase();
+    const completionSignals = [
+      '已为您',
+      '已为你',
+      '已完成',
+      '已经完成',
+      '已成功',
+      '成功启动',
+      '交付文件已生成',
+      '任务完成',
+      '可通过调试',
+      '调试浏览器访问',
+      'completed',
+      'successfully',
+    ];
+    const artifactSignals = [
+      '系统',
+      '应用',
+      '页面',
+      '文件',
+      '项目',
+      '功能',
+      '部署',
+      '健康检查',
+      'artifact',
+      'app',
+      'project',
+      'file',
+    ];
+    return (
+      completionSignals.some((signal) => lower.includes(signal.toLowerCase())) &&
+      artifactSignals.some((signal) => lower.includes(signal.toLowerCase()))
+    );
   }
 
   private isPlainTextCapabilityQuestion(userInput: string) {
@@ -1733,6 +1772,33 @@ export class AltusRunCoordinator {
             state,
             assistantContent,
             assistantStreamMessageKey,
+          );
+        }
+        if (assistantContent && currentRound > 1 && this.looksLikeCompletedTaskSummary(assistantContent)) {
+          await this.syncLoopSnapshot(state, {
+            lastTransitionReason: 'plain_text_conversation_completed',
+            recoveryMode: 'none',
+            currentRound,
+            maxRounds: maxToolRounds,
+            plainTextRecoveryUsed,
+          });
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            state.input.userId,
+            'run_status',
+            {
+              status: 'running',
+              content: '识别为纯文本完成总结，已完成当前任务',
+              transitionReason: 'plain_text_conversation_completed',
+              currentRound,
+              maxRounds: maxToolRounds,
+            }
+          );
+          return this.finalizePlainTextConversationCompletion(
+            state,
+            assistantContent,
+            finalAssistantMessageKey,
           );
         }
         if (assistantContent) {

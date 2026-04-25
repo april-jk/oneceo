@@ -21,6 +21,18 @@ const SYSTEM_ROLE_OPTIONS: SkillGovernanceOption[] = [
     category: 'deployment',
   },
   {
+    value: 'vercel_mcp_project_operator',
+    label: 'Vercel MCP 项目配置',
+    description: '治理 Vercel MCP 项目创建、更新和删除工具，避免把配置修改误当源码部署。',
+    category: 'deployment',
+  },
+  {
+    value: 'vercel_mcp_release_operator',
+    label: 'Vercel MCP 发布安全',
+    description: '治理 Vercel MCP 环境变量、域名、部署事件和重部署工具。',
+    category: 'deployment',
+  },
+  {
     value: 'ppt_builder',
     label: 'PPT 构建',
     description: 'PPT 多阶段生成链路中的最终构建阶段。',
@@ -45,6 +57,90 @@ const AUTO_ACTIVATION_TRIGGER_OPTIONS: SkillGovernanceOption[] = [
   { value: 'redeploy', label: '重部署', description: '用户要求重新发布最新代码。', category: 'deployment' },
   { value: 'rollback', label: '回滚', description: '用户要求回滚到历史版本。', category: 'deployment' },
   { value: 'status', label: '部署状态', description: '用户查询部署状态、URL 或健康情况。', category: 'deployment' },
+  { value: 'vercel', label: 'Vercel', description: '用户要求使用 Vercel 连接器或 Vercel MCP。', category: 'deployment' },
+  {
+    value: 'project-config',
+    label: '项目配置',
+    description: '用户要求创建、更新或删除 Vercel 项目配置。',
+    category: 'deployment',
+  },
+  { value: 'env', label: '环境变量', description: '用户要求管理 Vercel 项目环境变量。', category: 'deployment' },
+  { value: 'domain', label: '域名', description: '用户要求管理 Vercel 项目域名。', category: 'deployment' },
+];
+
+const VERCEL_MCP_TOOL_OPTIONS: SkillGovernanceOption[] = [
+  {
+    value: 'vercel_create_project',
+    label: 'Vercel 创建项目',
+    description: '创建 Vercel project，不等于上传当前工作区源码。',
+    category: 'vercel',
+  },
+  {
+    value: 'vercel_update_project',
+    label: 'Vercel 更新项目配置',
+    description: '更新 framework、buildCommand、outputDirectory 等项目配置，不等于部署。',
+    category: 'vercel',
+  },
+  {
+    value: 'vercel_delete_project',
+    label: 'Vercel 删除项目',
+    description: '删除 Vercel project，属于破坏性操作。',
+    category: 'vercel',
+  },
+  {
+    value: 'vercel_create_project_from_git',
+    label: 'Vercel 从 Git 创建项目',
+    description: '创建绑定 Git repository 的 Vercel project，不等于上传当前工作区源码。',
+    category: 'vercel',
+  },
+  {
+    value: 'vercel_update_project_git_repository',
+    label: 'Vercel 更新 Git 绑定',
+    description: '只更新项目 Git repository 相关字段，不混入普通项目配置。',
+    category: 'vercel',
+  },
+  {
+    value: 'vercel_get_project_git_repository',
+    label: 'Vercel 读取 Git 绑定',
+    description: '从项目详情提取 Git repository 上下文，便于确认绑定关系。',
+    category: 'vercel',
+  },
+  {
+    value: 'vercel_create_deployment',
+    label: 'Vercel 创建 Git 部署',
+    description: '通过 Git source 创建部署，首版不支持 workspace 文件上传。',
+    category: 'vercel',
+  },
+  {
+    value: 'vercel_get_deployment_events',
+    label: 'Vercel 部署事件',
+    description: '读取部署事件，用于诊断构建和部署失败。',
+    category: 'vercel',
+  },
+  {
+    value: 'vercel_add_project_domain',
+    label: 'Vercel 添加项目域名',
+    description: '为项目添加域名，需要确认项目和域名归属。',
+    category: 'vercel',
+  },
+  {
+    value: 'vercel_upsert_env_var',
+    label: 'Vercel 写入环境变量',
+    description: '新增或更新项目环境变量，需要明确 target。',
+    category: 'vercel',
+  },
+  {
+    value: 'vercel_remove_env_var',
+    label: 'Vercel 删除环境变量',
+    description: '删除项目环境变量，需要明确 key 和 target。',
+    category: 'vercel',
+  },
+  {
+    value: 'vercel_redeploy_deployment',
+    label: 'Vercel 重部署已有部署',
+    description: '基于已有 deploymentId 重部署，不是首次源码上传。',
+    category: 'vercel',
+  },
 ];
 
 const TOOL_OPTION_OVERRIDES: Record<string, Pick<SkillGovernanceOption, 'label' | 'category'>> = {
@@ -67,7 +163,12 @@ const TOOL_OPTION_OVERRIDES: Record<string, Pick<SkillGovernanceOption, 'label' 
 };
 
 function buildToolOptions(): SkillGovernanceOption[] {
-  const toolOptions: SkillGovernanceOption[] = [];
+  const toolOptionsByValue = new Map<string, SkillGovernanceOption>();
+  const addToolOption = (option: SkillGovernanceOption) => {
+    if (!option.value || toolOptionsByValue.has(option.value)) return;
+    toolOptionsByValue.set(option.value, option);
+  };
+
   for (const tool of buildManagedToolDefinitions()) {
     const functionRecord =
       tool && typeof tool === 'object' && !Array.isArray(tool) && tool.function && typeof tool.function === 'object'
@@ -76,14 +177,19 @@ function buildToolOptions(): SkillGovernanceOption[] {
     const value = asText(functionRecord?.name);
     if (!value) continue;
     const override = TOOL_OPTION_OVERRIDES[value];
-    toolOptions.push({
+    addToolOption({
       value,
       label: override?.label || value,
       description: asText(functionRecord?.description) || undefined,
       category: override?.category || 'general',
     });
   }
-  return toolOptions.sort((left, right) => {
+
+  for (const option of VERCEL_MCP_TOOL_OPTIONS) {
+    addToolOption(option);
+  }
+
+  return Array.from(toolOptionsByValue.values()).sort((left, right) => {
       const categoryCompare = (left.category || '').localeCompare(right.category || '', 'zh-Hans-CN');
       if (categoryCompare !== 0) return categoryCompare;
       return left.label.localeCompare(right.label, 'zh-Hans-CN');

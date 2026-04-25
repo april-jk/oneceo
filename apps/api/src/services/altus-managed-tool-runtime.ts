@@ -210,6 +210,40 @@ export class AltusManagedToolRuntime {
     );
   }
 
+  private buildRawMcpToolMap() {
+    const providers = Array.isArray(this.input.mcpProviders) ? this.input.mcpProviders : [];
+    const singletons = new Map<
+      string,
+      { providerId: string; toolName: string; displayName: string; connectorKey: string | null }
+    >();
+    const duplicates = new Set<string>();
+
+    for (const provider of providers) {
+      for (const tool of Array.isArray(provider.tools) ? provider.tools : []) {
+        const rawToolName = asText(tool.toolName);
+        if (!rawToolName) {
+          continue;
+        }
+        if (duplicates.has(rawToolName)) {
+          continue;
+        }
+        if (singletons.has(rawToolName)) {
+          singletons.delete(rawToolName);
+          duplicates.add(rawToolName);
+          continue;
+        }
+        singletons.set(rawToolName, {
+          providerId: provider.providerId,
+          toolName: rawToolName,
+          displayName: tool.title || rawToolName,
+          connectorKey: asText(provider.connectorKey) || null,
+        });
+      }
+    }
+
+    return singletons;
+  }
+
   private normalizeMcpFailureMessage(input: {
     connectorKey?: string | null;
     toolName: string;
@@ -392,6 +426,15 @@ export class AltusManagedToolRuntime {
   private findAutoAttachableSkillsForTool(toolName: string) {
     const normalizedToolName = asText(toolName).toLowerCase();
     if (!normalizedToolName) return [];
+    const toolNameCandidates = new Set([normalizedToolName]);
+    const managedMcpMatch = normalizedToolName.match(/^mcp__(.+)__[a-f0-9]{12}$/);
+    if (managedMcpMatch?.[1]) {
+      toolNameCandidates.add(managedMcpMatch[1]);
+    }
+    const managedMcpTool = this.buildMcpToolMap().get(normalizedToolName);
+    if (managedMcpTool?.toolName) {
+      toolNameCandidates.add(asText(managedMcpTool.toolName).toLowerCase());
+    }
     const activeKeys = new Set(
       this.input.activeSkills.map((item) => `${item.sourceType}:${item.skillId}:${item.revisionId}`)
     );
@@ -399,7 +442,9 @@ export class AltusManagedToolRuntime {
     return availableSkills.filter((skill) => {
       const governance = skill.governance;
       if (!governance?.autoActivation?.enabled) return false;
-      if (!governance.autoActivation.toolNames.includes(normalizedToolName)) return false;
+      if (!governance.autoActivation.toolNames.some((name) => toolNameCandidates.has(asText(name).toLowerCase()))) {
+        return false;
+      }
       const key = `${skill.sourceType}:${skill.skillId}:${skill.revisionId}`;
       return !activeKeys.has(key);
     });
@@ -546,7 +591,8 @@ export class AltusManagedToolRuntime {
       };
     }
 
-    const mcpTool = this.buildMcpToolMap().get(toolName);
+    const mcpTool =
+      this.buildMcpToolMap().get(toolName) || this.buildRawMcpToolMap().get(toolName);
     if (mcpTool) {
       if (mcpTool.connectorKey) {
         const activeGuide = await connectorGuideService.getActiveGuideForConnector(

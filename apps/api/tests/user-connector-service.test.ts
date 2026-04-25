@@ -208,7 +208,9 @@ test('createProfile allows Supabase token-only save with empty profile/display n
   );
 });
 
-test('startOAuthForProfile generates PKCE challenge for vercel oauth', async () => {
+test('startOAuthForProfile starts vercel integration install without PKCE', async () => {
+  process.env.VERCEL_CONNECTOR_MODE = 'integration';
+  process.env.VERCEL_INTEGRATION_SLUG = 'oneceo';
   process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
   process.env.VERCEL_CONNECTOR_CLIENT_ID = 'vercel-client';
   process.env.VERCEL_CONNECTOR_CLIENT_SECRET = 'vercel-secret';
@@ -233,18 +235,20 @@ test('startOAuthForProfile generates PKCE challenge for vercel oauth', async () 
     redirectUri: 'http://oneceo.ai:3000/callback',
   });
 
-  assert.ok(result.authUrl.startsWith('https://vercel.com/oauth/authorize?'));
+  assert.ok(result.authUrl.startsWith('https://vercel.com/integrations/oneceo/new?'));
   const authUrl = new URL(result.authUrl);
-  assert.equal(authUrl.searchParams.get('client_id'), 'vercel-client');
-  assert.equal(authUrl.searchParams.get('redirect_uri'), 'https://dev.oneceo.ai/vercel/callback');
-  assert.equal(authUrl.searchParams.get('response_type'), 'code');
-  assert.equal(authUrl.searchParams.get('code_challenge_method'), 'S256');
-  assert.ok(authUrl.searchParams.get('code_challenge'));
+  assert.equal(authUrl.searchParams.get('state'), result.state);
+  assert.equal(authUrl.searchParams.get('client_id'), null);
+  assert.equal(authUrl.searchParams.get('redirect_uri'), null);
+  assert.equal(authUrl.searchParams.get('response_type'), null);
+  assert.equal(authUrl.searchParams.get('code_challenge_method'), null);
   assert.equal(String(capturedCreate?.provider || ''), 'vercel');
-  assert.ok(String(capturedCreate?.codeVerifier || '').length > 20);
+  assert.equal(capturedCreate?.codeVerifier, null);
 });
 
-test('completeOAuthByProfile uses stored PKCE verifier for vercel oauth token exchange', async () => {
+test('completeOAuthByProfile stores vercel integration installation context', async () => {
+  process.env.VERCEL_CONNECTOR_MODE = 'integration';
+  process.env.VERCEL_INTEGRATION_SLUG = 'oneceo';
   process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
   process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
   process.env.VERCEL_CONNECTOR_CLIENT_ID = 'vercel-client';
@@ -293,28 +297,17 @@ test('completeOAuthByProfile uses stored PKCE verifier for vercel oauth token ex
   let fetchCount = 0;
   global.fetch = mock.fn(async (input: string | URL | Request, init?: RequestInit) => {
     fetchCount += 1;
-    if (fetchCount === 1) {
-      assert.equal(String(input), 'https://api.vercel.com/login/oauth/token');
-      assert.match(String(init?.body || ''), /code_verifier=pkce-verifier-123/);
-      assert.match(
-        String(init?.body || ''),
-        /redirect_uri=https%3A%2F%2Fdev.oneceo.ai%2Fvercel%2Fcallback/
-      );
-      return new Response(
-        JSON.stringify({
-          access_token: 'vercel-access-token',
-          refresh_token: 'vercel-refresh-token',
-          token_type: 'Bearer',
-          expires_in: 3600,
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-
-    assert.equal(String(input), 'https://api.vercel.com/login/oauth/userinfo');
+    assert.equal(String(input), 'https://api.vercel.com/v2/oauth/access_token');
+    assert.doesNotMatch(String(init?.body || ''), /code_verifier=/);
+    assert.match(String(init?.body || ''), /code=auth-code-1/);
+    assert.match(
+      String(init?.body || ''),
+      /redirect_uri=https%3A%2F%2Fdev.oneceo.ai%2Fvercel%2Fcallback/
+    );
     return new Response(
       JSON.stringify({
-        preferred_username: 'vercel-user',
+        access_token: 'vercel-access-token',
+        token_type: 'Bearer',
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     );
@@ -324,11 +317,24 @@ test('completeOAuthByProfile uses stored PKCE verifier for vercel oauth token ex
     state: 'state-1',
     code: 'auth-code-1',
     redirectUri: 'http://oneceo.ai:3000/callback',
+    teamId: 'team_123',
+    configurationId: 'icfg_123',
+    source: 'marketplace',
+    next: '/dashboard',
   });
 
   assert.equal(result.profile.authStatus, 'authorized');
-  assert.equal(result.profile.displayName, 'vercel-user');
-  assert.equal(capturedUpdate?.profileName, 'vercel-user');
+  assert.equal(result.profile.displayName, 'team_123');
+  assert.equal(capturedUpdate?.profileName, 'team_123');
+  assert.equal(fetchCount, 1);
+  assert.deepEqual(capturedUpdate?.configJson, {
+    vercelAuthMode: 'integration',
+    teamId: 'team_123',
+    configurationId: 'icfg_123',
+    installationSource: 'marketplace',
+  });
+  assert.equal((capturedUpdate?.metadataJson as any)?.vercelIntegrationSlug, 'oneceo');
+  assert.equal((capturedUpdate?.metadataJson as any)?.next, '/dashboard');
   assert.equal(
     connectorSecretService.decryptJson<{ accessToken?: string }>(
       String(capturedUpdate?.secretCiphertext || '')
@@ -336,16 +342,62 @@ test('completeOAuthByProfile uses stored PKCE verifier for vercel oauth token ex
     'vercel-access-token'
   );
   assert.equal(
-    connectorSecretService.decryptJson<{ refreshToken?: string }>(
+    connectorSecretService.decryptJson<{ source?: string }>(
       String(capturedUpdate?.secretCiphertext || '')
-    )?.refreshToken,
-    'vercel-refresh-token'
+    )?.source,
+    'vercel_integration'
   );
-  assert.ok(
-    connectorSecretService.decryptJson<{ expiresAt?: string }>(
-      String(capturedUpdate?.secretCiphertext || '')
-    )?.expiresAt
-  );
+});
+
+test('clearProfileAuth clears local vercel integration auth without remote revoke', async () => {
+  process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
+  process.env.VERCEL_CONNECTOR_CLIENT_ID = 'vercel-client';
+  process.env.VERCEL_CONNECTOR_CLIENT_SECRET = 'vercel-secret';
+
+  mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
+  mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
+    id: 'profile-vercel',
+    userId: 'user-1',
+    connectorKey: 'vercel',
+    profileName: 'Vercel Default',
+    authMode: 'oauth',
+    authStatus: 'authorized',
+    secretCiphertext: connectorSecretService.encrypt({ accessToken: 'vercel-access-token' }, 'vercel'),
+  }) as any);
+
+  let capturedUpdate: Record<string, unknown> | null = null;
+  mock.method(userConnectorProfileDAO, 'update', async (_profileId: string, _userId: string, input: any) => {
+    capturedUpdate = input;
+    return {
+      id: 'profile-vercel',
+      userId: 'user-1',
+      connectorKey: 'vercel',
+      profileName: 'Vercel Default',
+      authMode: input.authMode,
+      authStatus: input.authStatus,
+      displayName: null,
+      configJson: {},
+      metadataJson: {},
+      secretCiphertext: input.secretCiphertext,
+      isDefault: true,
+      lastAuthAt: input.lastAuthAt,
+      updatedAt: new Date('2026-04-03T00:00:00.000Z'),
+      lastError: input.lastError,
+    } as any;
+  });
+
+  const fetchMock = mock.fn(async () => {
+    throw new Error('Vercel Integration disconnect should not call remote revoke');
+  });
+  global.fetch = fetchMock as typeof fetch;
+
+  const result = await userConnectorService.clearProfileAuth('user-1', 'profile-vercel');
+
+  assert.equal(result.remoteGrantRevoked, true);
+  assert.equal(result.remoteGrantError, null);
+  assert.equal(result.profile.authStatus, 'not_configured');
+  assert.equal(capturedUpdate?.secretCiphertext, null);
+  assert.equal(fetchMock.mock.callCount(), 0);
 });
 
 test('getMeSnapshot returns redis payload when cache hit', async () => {

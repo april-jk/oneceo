@@ -63,8 +63,6 @@ import {
   getTaskCreationDeploymentInfo,
   getTaskCreationDeploymentTemplateBaseline,
   getTaskCreationDebugInfo,
-  headWorkspaceRawFile,
-  waitWorkspaceRawFileReady,
   insertTaskCreationDatabaseRow,
   rotateTaskCreationDeploymentToken,
   startTaskCreationRuntime,
@@ -91,7 +89,8 @@ import {
 } from "@/components/ui/resizable";
 import {
   appendPreviewCacheBust,
-  mapWorkspaceRawPreviewHeadResult,
+  checkWorkspaceHtmlPreviewReady,
+  waitWorkspaceHtmlPreviewReady,
   type WorkspaceHtmlPreviewState,
 } from "@/lib/workspace-preview";
 import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
@@ -1919,9 +1918,8 @@ export function FilePreview({
     let cancelled = false;
     setHtmlPreviewState("checking");
     setHtmlPreviewMessage("");
-    void headWorkspaceRawFile(sessionId, selectedPath).then((result) => {
+    void checkWorkspaceHtmlPreviewReady(sessionId, selectedPath).then((mapped) => {
       if (cancelled) return;
-      const mapped = mapWorkspaceRawPreviewHeadResult(result);
       setHtmlPreviewState(mapped.state);
       setHtmlPreviewMessage(mapped.message);
     });
@@ -1942,11 +1940,10 @@ export function FilePreview({
     setHtmlPreviewMessage("");
     try {
       await startTaskCreationRuntime(sessionId);
-      const result = await waitWorkspaceRawFileReady(sessionId, selectedPath, {
+      const mapped = await waitWorkspaceHtmlPreviewReady(sessionId, selectedPath, {
         attempts: 8,
         intervalMs: 600,
       });
-      const mapped = mapWorkspaceRawPreviewHeadResult(result);
       setHtmlPreviewState(mapped.state);
       setHtmlPreviewMessage(mapped.message);
       if (mapped.state === "ready") {

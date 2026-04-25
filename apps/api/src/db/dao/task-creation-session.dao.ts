@@ -241,6 +241,8 @@ export class TaskCreationSessionDAO {
       'approvalText',
       'approvalOptions',
       'attachments',
+      'deliverables',
+      'previewSnapshot',
       'skills',
       'attachmentContext',
       'attachmentContextIncluded',

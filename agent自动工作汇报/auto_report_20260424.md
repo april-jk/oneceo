@@ -42,3 +42,10 @@
 - 对 `complete_task` 单独接入 `Streamdown` Markdown 渲染，列表行和已选动作详情都能正确显示加粗、列表和代码片段。
 - 将 `complete_task` 详情生成改为直接输出 Markdown 内容，并把 `verification` 数组转成标准 bullet 列表；渲染层兼容旧数据中的 `• item • item`，展示前转成标准 Markdown 列表。
 - 补充 replay drawer 单元测试，锁定 `complete_task` 与普通工具的渲染分支差异。
+
+## 网站交付物重新加载预览 CSS 丢失修复
+
+- 排查网站交付卡片点击“重新加载预览”后 CSS 偶发丢失问题，定位为前端只等待 HTML raw 文件 ready，未等待 HTML 引用的本地 CSS/JS 资源恢复。
+- 在共享 workspace preview 工具中增加 HTML 本地资源提取与 ready 检查：读取 HTML 后提取 `stylesheet` 和 `script` 本地路径，并逐个执行 raw `HEAD`，触发后端按需重建缺失资源。
+- 将 `AltusArtifactPreviewCard` 和右侧文件 HTML 预览统一切到新的 HTML ready / wait 逻辑，避免两个预览入口行为不一致。
+- 补充回归测试，覆盖相对路径 CSS/JS、外部 CDN 和 favicon 不阻塞预览恢复的路径提取规则。

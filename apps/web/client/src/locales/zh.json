@@ -1399,6 +1399,9 @@
       "sourceCode": "源码",
       "open": "打开",
       "noHtmlArtifact": "当前产物里没有可直接预览的 HTML 页面，请切换到 Code 查看文件内容。",
+      "websiteSnapshotAlt": "网站预览截图",
+      "websiteSnapshotTitle": "网站预览",
+      "websiteSnapshotUnavailable": "网站截图暂不可用。需要交互查看时，请进入调试页面或发布后打开线上地址。",
       "loadingFileContent": "正在加载文件内容",
       "noContent": "暂无内容"
     }

@@ -8,10 +8,7 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  PieChart,
-  Pie,
   Cell,
-  Legend,
 } from 'recharts';
 
 interface StatsData {
@@ -27,6 +24,8 @@ interface StatsData {
   };
   topUsers: Array<{
     userId: string;
+    email?: string;
+    displayName?: string;
     totalConsumed: number;
   }>;
   topModels: Array<{
@@ -39,10 +38,10 @@ interface StatsData {
     range: string;
     count: number;
   }>;
+  updatedAt?: string;
 }
 
 const COLORS = ['#0f766e', '#0d9488', '#14b8a6', '#5eead4', '#99f6e4', '#ccfbf1'];
-const PIE_COLORS = ['#ef4444', '#f97316', '#eab308', '#22c55e'];
 
 interface BillingStatsDashboardProps {
   onNotify?: BillingNotify;
@@ -52,6 +51,7 @@ export function BillingStatsDashboard({ onNotify }: BillingStatsDashboardProps) 
   const [period, setPeriod] = useState<'today' | 'week' | 'month'>('today');
   const [stats, setStats] = useState<StatsData | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchStats = useCallback(async () => {
     setLoading(true);
@@ -62,12 +62,17 @@ export function BillingStatsDashboard({ onNotify }: BillingStatsDashboardProps) 
       if (response.ok) {
         const data = await response.json();
         setStats(data);
+        setError(null);
       } else {
-        onNotify?.('error', '加载失败', await readBillingResponseError(response, '无法获取平台统计'));
+        const message = await readBillingResponseError(response, '无法获取平台统计');
+        setError(message);
+        onNotify?.('error', '加载失败', message);
       }
     } catch (error) {
       console.error('获取平台统计失败:', error);
-      onNotify?.('error', '加载失败', getBillingErrorMessage(error, '无法获取平台统计'));
+      const message = getBillingErrorMessage(error, '无法获取平台统计');
+      setError(message);
+      onNotify?.('error', '加载失败', message);
     } finally {
       setLoading(false);
     }
@@ -82,6 +87,8 @@ export function BillingStatsDashboard({ onNotify }: BillingStatsDashboardProps) 
     if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
     return num.toLocaleString();
   };
+
+  const updatedAt = stats?.updatedAt ? new Date(stats.updatedAt).toLocaleString('zh-CN', { hour12: false }) : '尚未刷新';
 
   return (
     <>
@@ -102,18 +109,39 @@ export function BillingStatsDashboard({ onNotify }: BillingStatsDashboardProps) 
               {p.label}
             </button>
           ))}
+          <button type="button" className="secondary-btn" onClick={() => void fetchStats()} disabled={loading}>
+            {loading ? '刷新中...' : '刷新'}
+          </button>
+          <span className="panel-caption" style={{ alignSelf: 'center' }}>更新于 {updatedAt}</span>
         </div>
       </section>
 
       {loading && (
         <section className="sub-panel user-management-list-panel">
-          <div className="user-management-empty">正在加载统计数据...</div>
+          <div className="user-management-summary-strip">
+            {Array.from({ length: 4 }).map((_, index) => (
+              <article key={index} className="user-management-summary-card">
+                <div className="user-management-summary-head"><span>加载中</span></div>
+                <strong>—</strong>
+                <small>正在刷新统计</small>
+              </article>
+            ))}
+          </div>
         </section>
       )}
 
+      {error && !loading ? (
+        <section className="sub-panel user-management-list-panel">
+          <div className="user-management-empty">
+            <p>{error}</p>
+            <button type="button" className="secondary-btn" onClick={() => void fetchStats()}>重试</button>
+          </div>
+        </section>
+      ) : null}
+
       {stats && (
         <>
-          {/* Summary Cards */}
+          {/* Core KPI Cards */}
           <section className="user-management-summary-strip">
             <article className="user-management-summary-card">
               <div className="user-management-summary-head">
@@ -147,21 +175,6 @@ export function BillingStatsDashboard({ onNotify }: BillingStatsDashboardProps) 
               <small>{stats.cacheStats.cacheHitRate}</small>
             </article>
 
-            <article className="user-management-summary-card">
-              <div className="user-management-summary-head">
-                <span>缓存节省</span>
-              </div>
-              <strong>{formatNumber(stats.cacheStats.totalCacheSavings)}</strong>
-              <small>credits</small>
-            </article>
-
-            <article className="user-management-summary-card">
-              <div className="user-management-summary-head">
-                <span>缓存创建</span>
-              </div>
-              <strong>{formatNumber(stats.cacheStats.totalCacheCreationTokens)}</strong>
-              <small>tokens</small>
-            </article>
           </section>
 
           {/* Charts Grid */}
@@ -178,21 +191,21 @@ export function BillingStatsDashboard({ onNotify }: BillingStatsDashboardProps) 
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart
                       data={stats.topUsers.map((u, i) => ({
-                        name: `用户${i + 1}`,
+                        name: u.displayName || u.email || `用户${i + 1}`,
                         credits: Number(u.totalConsumed),
-                        userId: u.userId.slice(0, 8),
+                        userId: u.userId,
                       }))}
                       layout="vertical"
                       margin={{ left: 20, right: 20, top: 10, bottom: 10 }}
                     >
                       <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                       <XAxis type="number" />
-                      <YAxis dataKey="name" type="category" width={60} />
+                      <YAxis dataKey="name" type="category" width={120} />
                       <Tooltip
                         formatter={(value: number) => [value.toLocaleString(), '积分']}
                         labelFormatter={(_, payload: any) => {
                           if (payload && payload[0]) {
-                            return `用户ID: ${payload[0].payload.userId}...`;
+                            return `用户ID: ${payload[0].payload.userId}`;
                           }
                           return '';
                         }}
@@ -222,15 +235,14 @@ export function BillingStatsDashboard({ onNotify }: BillingStatsDashboardProps) 
                         credits: Number(m.creditsConsumed),
                         tokens: Number(m.tokensUsed),
                       }))}
-                      margin={{ left: 20, right: 20, top: 10, bottom: 40 }}
+                      layout="vertical"
+                      margin={{ left: 20, right: 20, top: 10, bottom: 10 }}
                     >
                       <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                      <XAxis dataKey="name" angle={-30} textAnchor="end" height={60} />
-                      <YAxis />
+                      <XAxis type="number" />
+                      <YAxis dataKey="name" type="category" width={140} />
                       <Tooltip />
-                      <Legend />
-                      <Bar dataKey="credits" fill="#0f766e" name="积分消耗" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="tokens" fill="#14b8a6" name="Token 数" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="credits" fill="#0f766e" name="积分消耗" radius={[0, 4, 4, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -239,7 +251,7 @@ export function BillingStatsDashboard({ onNotify }: BillingStatsDashboardProps) 
               )}
             </article>
 
-            {/* Balance Distribution Pie Chart */}
+            {/* Balance Distribution Bar Chart */}
             <article className="sub-panel user-management-detail-card">
               <div className="user-management-list-head">
                 <div>
@@ -249,26 +261,25 @@ export function BillingStatsDashboard({ onNotify }: BillingStatsDashboardProps) 
               {stats.balanceDistribution.length > 0 ? (
                 <div style={{ width: '100%', height: 280, padding: '16px' }}>
                   <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={stats.balanceDistribution.map((d) => ({
-                          name: d.range === '0' ? '0积分' : `${d.range}积分`,
-                          value: Number(d.count),
-                        }))}
-                        cx="50%"
-                        cy="50%"
-                        labelLine={false}
-                        label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                        outerRadius={80}
-                        fill="#8884d8"
-                        dataKey="value"
-                      >
-                        {stats.balanceDistribution.map((_, index) => (
-                          <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                        ))}
-                      </Pie>
+                    <BarChart
+                      data={stats.balanceDistribution.map((d, index) => ({
+                        name: d.range === '0' ? '0 积分' : `${d.range} 积分`,
+                        count: Number(d.count),
+                        fill: COLORS[index % COLORS.length],
+                      }))}
+                      layout="vertical"
+                      margin={{ left: 20, right: 20, top: 10, bottom: 10 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                      <XAxis type="number" />
+                      <YAxis dataKey="name" type="category" width={100} />
                       <Tooltip />
-                    </PieChart>
+                      <Bar dataKey="count" name="用户数" radius={[0, 4, 4, 0]}>
+                        {stats.balanceDistribution.map((_, index) => (
+                          <Cell key={`balance-${index}`} fill={COLORS[index % COLORS.length]} />
+                        ))}
+                      </Bar>
+                    </BarChart>
                   </ResponsiveContainer>
                 </div>
               ) : (
@@ -302,7 +313,7 @@ export function BillingStatsDashboard({ onNotify }: BillingStatsDashboardProps) 
                   </div>
                 </div>
                 <div className="user-management-overview-note" style={{ marginTop: '12px' }}>
-                  * OpenAI 缓存命中按 50% 计费，Anthropic 按 10% 计费
+                  * OpenAI 缓存命中按 50% 计费，Anthropic 显式缓存命中按 10% / 创建按 125%，Qwen 隐式缓存命中按 20%。
                 </div>
               </div>
             </article>

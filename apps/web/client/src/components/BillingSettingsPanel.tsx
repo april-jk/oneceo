@@ -1,25 +1,27 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { useLocation } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
-import { Diamond, ArrowDown, ArrowUp, Settings } from "lucide-react";
+import { Diamond, ArrowDown, MessageSquare, RefreshCw } from "lucide-react";
 
-interface Transaction {
+interface SessionConsumptionRecord {
   id: string;
-  type: string;
-  amount: number;
-  balanceAfter: number;
-  description: string;
-  createdAt: string;
+  sessionId: string;
+  sessionTitle: string;
+  totalCredits: number;
+  callCount: number;
+  lastUsedAt: string;
 }
 
-export function BillingSettingsPanel() {
-  const { credits } = useAuth();
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
+export function BillingSettingsPanel({ onClose }: { onClose?: () => void }) {
+  const { credits, refreshCredits } = useAuth();
+  const [, setLocation] = useLocation();
+  const [records, setRecords] = useState<SessionConsumptionRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [page, setPage] = useState(1);
 
-  const fetchTransactions = async (pageNum: number) => {
+  const fetchTransactions = useCallback(async (pageNum: number) => {
     setLoading(true);
     try {
       const response = await fetch(`/api/billing/transactions?page=${pageNum}&limit=20`, {
@@ -28,9 +30,9 @@ export function BillingSettingsPanel() {
       if (response.ok) {
         const data = await response.json();
         if (pageNum === 1) {
-          setTransactions(data.items);
+          setRecords(data.items);
         } else {
-          setTransactions((prev) => [...prev, ...data.items]);
+          setRecords((prev) => [...prev, ...data.items]);
         }
         setHasMore(data.items.length === 20 && data.total > pageNum * 20);
       }
@@ -39,11 +41,12 @@ export function BillingSettingsPanel() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
+    void refreshCredits();
     fetchTransactions(1);
-  }, []);
+  }, [fetchTransactions, refreshCredits]);
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
@@ -54,6 +57,12 @@ export function BillingSettingsPanel() {
       minute: '2-digit',
     });
   };
+
+  const openSession = useCallback((sessionId: string) => {
+    if (!sessionId) return;
+    setLocation(`/session/${encodeURIComponent(sessionId)}?view=history`);
+    onClose?.();
+  }, [onClose, setLocation]);
 
   return (
     <div className="space-y-6">
@@ -81,50 +90,53 @@ export function BillingSettingsPanel() {
 
       {/* 消费记录列表 */}
       <div>
-        <h3 className="text-lg font-semibold mb-4">消费记录</h3>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h3 className="text-lg font-semibold">消费记录</h3>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setPage(1);
+              void refreshCredits();
+              void fetchTransactions(1);
+            }}
+            disabled={loading}
+          >
+            <RefreshCw className="mr-2 h-4 w-4" />
+            刷新
+          </Button>
+        </div>
         <div className="space-y-2">
-          {transactions.length === 0 && !loading && (
+          {records.length === 0 && !loading && (
             <div className="text-center text-muted-foreground py-8">
               暂无消费记录
             </div>
           )}
-          {transactions.map((tx) => (
+          {records.map((record) => (
             <div
-              key={tx.id}
+              key={record.id}
               className="flex items-center justify-between p-3 rounded-lg border hover:bg-muted/50 transition-colors"
             >
               <div className="flex items-center gap-3">
-                <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                    tx.type === "consume"
-                      ? "bg-red-100 text-red-600"
-                      : tx.type === "recharge"
-                      ? "bg-green-100 text-green-600"
-                      : "bg-blue-100 text-blue-600"
-                  }`}
-                >
-                  {tx.type === "consume" ? (
-                    <ArrowDown className="w-4 h-4" />
-                  ) : tx.type === "recharge" ? (
-                    <ArrowUp className="w-4 h-4" />
-                  ) : (
-                    <Settings className="w-4 h-4" />
-                  )}
+                <div className="w-8 h-8 rounded-full flex items-center justify-center bg-red-100 text-red-600">
+                  <ArrowDown className="w-4 h-4" />
                 </div>
                 <div>
-                  <div className="font-medium">{tx.description}</div>
+                  <button
+                    type="button"
+                    className="text-left font-medium hover:text-primary hover:underline underline-offset-4 transition-colors"
+                    onClick={() => openSession(record.sessionId)}
+                  >
+                    {record.sessionTitle || "未命名会话"}
+                  </button>
                   <div className="text-xs text-muted-foreground">
-                    {formatDate(tx.createdAt)}
+                    {formatDate(record.lastUsedAt)} · 点击查看会话
                   </div>
                 </div>
               </div>
-              <div
-                className={`font-mono font-medium ${
-                  tx.amount < 0 ? "text-red-600" : "text-green-600"
-                }`}
-              >
-                {tx.amount > 0 ? "+" : ""}
-                {tx.amount}
+              <div className="flex items-center gap-2 font-mono font-medium text-red-600">
+                <MessageSquare className="h-4 w-4" />
+                -{record.totalCredits}
               </div>
             </div>
           ))}

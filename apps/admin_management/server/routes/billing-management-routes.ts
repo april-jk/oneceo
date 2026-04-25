@@ -53,6 +53,7 @@ export function createBillingManagementRoutes() {
   router.get('/meta', proxyToApi);
 
   // 用户交易记录
+  router.get('/users/:userId/billing-detail', proxyToApi);
   router.get('/users/:userId/transactions', proxyToApi);
 
   // 用户会话用量
@@ -62,20 +63,27 @@ export function createBillingManagementRoutes() {
   router.post('/users/:userId/adjust', proxyToApi);
 
   // 定价配置列表
+  router.get('/pricing/model-candidates', proxyToApi);
   router.get('/pricing', proxyToApi);
 
   // 创建定价
   router.post('/pricing', proxyToApi);
 
-  // 停用定价
+  // 删除定价
   router.delete('/pricing/:pricingId', proxyToApi);
-  router.post('/pricing/:pricingId/deactivate', proxyToApi);
 
   // 平台统计
   router.get('/stats', proxyToApi);
 
   // 使用明细
   router.get('/usage-logs', proxyToApi);
+
+  // 缓存比例配置
+  router.get('/cache-config', proxyToApi);
+  router.post('/cache-config', proxyToApi);
+
+  // 计费调试工具
+  router.post('/debug/llm-request', proxyToApi);
 
   return router;
 }

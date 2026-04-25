@@ -9,6 +9,41 @@ afterEach(() => {
   (platformSkillService as any).seeded = false;
 });
 
+test('ensureSeeded does not overwrite existing admin-managed skill governance', async () => {
+  const updateMetadataMock = mock.method(platformSkillDAO, 'updateSkillMetadata', async () => {
+    throw new Error('should_not_overwrite_admin_managed_governance');
+  });
+  const createMock = mock.method(platformSkillDAO, 'createSkillWithRevision', async () => {
+    throw new Error('all_seed_skills_should_exist_in_this_test');
+  });
+  mock.method(platformSkillDAO, 'getSkillBySlug', async (slug: string) => ({
+    id: `skill-${slug}`,
+    slug,
+    name: slug,
+    description: slug,
+    category: 'deployment',
+    status: 'active',
+    metadataJson: {
+      systemRole: 'admin_custom_role',
+      adminManaged: true,
+      required: false,
+      autoActivation: {
+        enabled: false,
+        triggers: ['admin-custom'],
+        toolNames: ['admin_custom_tool'],
+      },
+    },
+    publishedRevisionId: `rev-${slug}`,
+    createdAt: new Date('2026-04-24T00:00:00.000Z'),
+    updatedAt: new Date('2026-04-24T00:00:00.000Z'),
+  }) as any);
+
+  await platformSkillService.ensureSeeded();
+
+  assert.equal(updateMetadataMock.mock.callCount(), 0);
+  assert.equal(createMock.mock.callCount(), 0);
+});
+
 test('listPublicSkills returns resourceSummary without exposing resource bodies', async () => {
   (platformSkillService as any).seeded = true;
   mock.method(platformSkillDAO, 'countSkills', async () => 1);

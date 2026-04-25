@@ -753,11 +753,12 @@ test('execute completes after tool round and final assistant response', async ()
       workspaceRoot: '/workspace/session-coordinator-complete',
       reused: false,
     })),
-    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => {
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string, options?: any) => {
       assert.match(systemPrompt, /You are Altus/);
-      assert.match(systemPrompt, /Altus Memory Context/);
+      assert.match(String(options?.turnStatePrompt || ''), /Altus Memory Context/);
       return [
         { role: 'system', content: systemPrompt },
+        { role: 'system', content: options?.turnStatePrompt || '' },
         { role: 'user', content: input },
       ];
     }),
@@ -1456,13 +1457,15 @@ test('execute injects skill catalog prompt before active skill body', async () =
       workspaceRoot: '/workspace/session-coordinator-skills',
       reused: false,
     })),
-    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => {
-      assert.match(systemPrompt, /# Available skills catalog/);
-      assert.match(systemPrompt, /office-ppt: 创建专业演示文稿/);
-      assert.match(systemPrompt, /# Active skills/);
-      assert.match(systemPrompt, /# Skill Brief/);
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string, options?: any) => {
+      const turnStatePrompt = String(options?.turnStatePrompt || '');
+      assert.match(turnStatePrompt, /# Available skills catalog/);
+      assert.match(turnStatePrompt, /office-ppt: 创建专业演示文稿/);
+      assert.match(turnStatePrompt, /# Active skills/);
+      assert.match(turnStatePrompt, /# Skill Brief/);
       return [
         { role: 'system', content: systemPrompt },
+        { role: 'system', content: turnStatePrompt },
         { role: 'user', content: input },
       ];
     }),
@@ -2531,11 +2534,13 @@ test('execute recovers from connector guide block by loading the guide and retry
       workspaceRoot: '/workspace/session-coordinator-connector-guide-retry',
       reused: false,
     })),
-    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => {
-      assert.match(systemPrompt, /# Connector MCP Instructions/);
-      assert.match(systemPrompt, /# Relevant Connector Guides/);
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string, options?: any) => {
+      const turnStatePrompt = String(options?.turnStatePrompt || '');
+      assert.match(turnStatePrompt, /# Connector MCP Instructions/);
+      assert.match(turnStatePrompt, /# Relevant Connector Guides/);
       return [
         { role: 'system', content: systemPrompt },
+        { role: 'system', content: turnStatePrompt },
         { role: 'user', content: input },
       ];
     }),
@@ -2806,11 +2811,13 @@ test('execute recovers from connector guide block by loading the guide and retry
       workspaceRoot: '/workspace/session-coordinator-vercel-guide-retry',
       reused: false,
     })),
-    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => {
-      assert.match(systemPrompt, /# Connector MCP Instructions/);
-      assert.match(systemPrompt, /## vercel/);
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string, options?: any) => {
+      const turnStatePrompt = String(options?.turnStatePrompt || '');
+      assert.match(turnStatePrompt, /# Connector MCP Instructions/);
+      assert.match(turnStatePrompt, /## vercel/);
       return [
         { role: 'system', content: systemPrompt },
+        { role: 'system', content: turnStatePrompt },
         { role: 'user', content: input },
       ];
     }),

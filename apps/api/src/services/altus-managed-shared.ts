@@ -527,6 +527,11 @@ export function buildManagedToolDefinitions() {
               items: { type: 'string' },
               description: 'Optional suggested answer options.',
             },
+            clarificationType: {
+              type: 'string',
+              description:
+                'Optional structured missing-requirement field: artifact_type, tech_stack, scope_boundary, integration_target, or acceptance_requirement.',
+            },
           },
           ['question']
         ),

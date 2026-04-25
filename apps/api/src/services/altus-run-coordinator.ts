@@ -20,6 +20,7 @@ import {
   AltusManagedContextBudgetService,
   altusManagedContextBudgetService,
 } from './altus-managed-context-budget-service';
+import { altusManagedContextService } from './altus-managed-context-service';
 import { AltusManagedToolExecutor } from './altus-managed-tool-executor';
 import { AltusRunState } from './altus-run-state';
 import {
@@ -1418,6 +1419,7 @@ export class AltusRunCoordinator {
       connectors: state.input.connectors as any,
       taskIntentProfile: state.input.taskIntentProfile,
       connectorGuideSections,
+      includeRuntimeState: false,
     });
     writeConnectorDebugLog('[ALTUS_RUN_PROMPT_READY]', {
       taskSessionId: state.input.sessionId,
@@ -1428,8 +1430,20 @@ export class AltusRunCoordinator {
     });
     const skillCatalogPrompt = altusManagedPromptService.buildSkillCatalogPrompt(state.input.skillCatalog);
     const skillPrompt = altusManagedPromptService.buildSkillContextPrompt(state.input.skills);
-    const compositeSystemPrompt = [
-      systemPrompt,
+    const runtimeContextPrompt = altusManagedPromptService.buildRuntimeContextPrompt({
+      sessionId: state.input.sessionId,
+      sessionTitle: state.input.sessionTitle,
+      workspaceRoot: state.workspaceRoot,
+      connectors: state.input.connectors as any,
+      taskIntentProfile: state.input.taskIntentProfile,
+      connectorGuideSections,
+      turnStatePrompt: altusManagedContextService.buildTurnStatePrompt({
+        currentMessageType: state.input.messageType || 'user_input',
+        taskIntentProfile: state.input.taskIntentProfile,
+      }),
+    });
+    const turnStatePrompt = [
+      runtimeContextPrompt,
       state.input.memoryContextPrompt || '',
       skillCatalogPrompt,
       skillPrompt,
@@ -1439,7 +1453,10 @@ export class AltusRunCoordinator {
     const messages = await this.setupService.buildConversationMessages(
       state.input.sessionId,
       state.input.userInput,
-      compositeSystemPrompt
+      systemPrompt,
+      {
+        turnStatePrompt,
+      }
     );
     let plainTextRecoveryUsed = false;
     const assistantStreamMessageKey = `managed:${state.input.runId}:assistant`;
@@ -1860,6 +1877,7 @@ export class AltusRunCoordinator {
             return this.requestClarification(state, {
               question: result.question,
               options: result.options,
+              clarificationType: result.clarificationType,
             });
         }
 

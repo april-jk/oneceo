@@ -1,0 +1,1259 @@
+# 20260426 ClaudeCode 精髓融入 OneCEO 上下文与工具调用上下文管理方案 [尚未采用]
+
+## 1. 文档定位
+
+本文是一份新的项目落地设计文档，目标是把 ClaudeCode 的上下文管理哲学吸收到 OneCEO Altus managed 链路中，重点覆盖两件事：
+
+1. **上下文管理**：用户对话、历史消息、附件、skills、MCP、memory、运行状态如何组织成稳定的模型上下文。
+2. **工具调用上下文管理**：tool_use、tool_result、工具执行状态、MCP 工具、connector guide、ask_user、complete_task 如何形成协议闭环。
+
+本文不是对 ClaudeCode 的源码复述，也不是继续修补某个澄清问题。它要回答的是：
+
+> 在 OneCEO 当前的 E2B + OSAC + Altus managed run + connector guide + skills + history replay 架构下，如何建立一套像 ClaudeCode 一样可恢复、可验证、可缓存的上下文系统？
+
+## 2. 参考范围
+
+### 2.1 ClaudeCode 参考点
+
+本方案吸收 ClaudeCode 的核心思想，而不是照搬实现：
+
+1. transcript 是 typed event graph，不是普通聊天数组；
+2. API messages 是读时 projection / compile 产物，不是数据库原文；
+3. tool_use / tool_result 是多轮连续性的协议主轴；
+4. 工具执行产物最终必须生成 tool_result，包括失败、中断、权限拒绝、未知工具；`ask_user` 等待用户期间是受 lifecycle 约束的 pending 状态，期间禁止发起下一轮模型调用；
+5. 每轮执行冻结 ToolUseContext，避免工具、MCP、skills、权限状态在同一轮内漂移；
+6. resume / compact / fork / sidechain 是一等路径，不是兜底；
+7. stable prefix、tool schema、MCP delta、skills delta、budget replacement 都是缓存稳定机制；
+8. UI / transcript / API 三种视图来自同一事实源，但形态不同。
+
+### 2.2 OneCEO 当前工程参考点
+
+当前 OneCEO 相关代码主要分布在：
+
+1. `apps/api/src/services/altus-run-coordinator.ts`
+   - managed run 主循环；
+   - 模型调用；
+   - tool_calls 流式聚合；
+   - tool 执行调度；
+   - run event 写入；
+   - waiting_user / completed / failed 状态处理。
+
+2. `apps/api/src/services/altus-managed-context-service.ts`
+   - 当前历史上下文提取；
+   - text transcript；
+   - clarification transcript；
+   - pending clarification runtime prompt。
+
+3. `apps/api/src/services/altus-managed-tool-runtime.ts`
+   - shell、write/read、web search、debug、deployment、MCP、ask_user、complete_task 等工具执行；
+   - connector guide runtime gating；
+   - skills 自动挂载；
+   - OSAC MCP tool bridge；
+   - sandbox dirty / activity 标记。
+
+4. `apps/api/src/services/altus-managed-setup-service.ts`
+   - sandbox 准备；
+   - task intent profile；
+   - clarification 决策；
+   - 附件和图片上下文；
+   - MCP 恢复；
+   - workspace hints。
+
+5. `apps/api/src/services/altus-managed-shared.ts`
+   - ChatMessage / ToolCall 类型；
+   - managed tool definitions；
+   - MCP tool name 组装；
+   - ask_user / complete_task 等工具 schema。
+
+6. `apps/api/src/services/altus-run-event-writer.ts`
+   - run event 持久化；
+   - Redis/SSE 投递；
+   - 部分 tool event 到 conversation history 的投影。
+
+7. `apps/api/src/services/altus-managed-context-budget-service.ts`
+   - 当前上下文预算和 tool result 压缩路径。
+
+8. `apps/api/src/services/sandbox-skill-sync-service.ts`
+   - selected / auto-attached skills 同步到 sandbox。
+
+9. `apps/api/src/services/osac-agent-service.ts`
+   - OSAC 控制与 session MCP tool 调用。
+
+## 3. OneCEO 的项目特征
+
+ClaudeCode 的哲学不能原样搬到 OneCEO，因为 OneCEO 有自己的系统形态。
+
+### 3.1 Altus 不是本地 CLI，而是平台 managed run
+
+ClaudeCode 的主语是本地交互式 CLI / SDK loop。OneCEO 的主语是平台内的 managed run：
+
+1. 用户在 Web 端输入；
+2. API 创建或继续 task session；
+3. Altus managed run 可能创建 sandbox；
+4. OSAC 连接 sandbox；
+5. tools 在 API、E2B、OSAC、外部 connector 之间分布执行；
+6. 前端通过 SSE 和 history reload 看到过程。
+
+因此上下文系统必须同时服务：
+
+1. 模型 API；
+2. 工具 runtime；
+3. sandbox 恢复；
+4. SSE 实时展示；
+5. history replay；
+6. 成本和缓存观测。
+
+### 3.2 工具不是单一进程内函数
+
+OneCEO managed tools 包含多类执行面：
+
+1. API 内部工具：状态迁移、complete_task、ask_user；
+2. E2B 工具：shell_execute、file read/write、构建、检查；
+3. OSAC 工具：MCP provider tool bridge、sandbox runtime 控制；
+4. Connector guide 工具：load_connector_guide；
+5. 外部服务工具：deployment、web search、debug；
+6. 运行期能力工具：skills 自动挂载、memory flush、artifact extraction。
+
+所以工具调用上下文不能只记录“模型调用了某个函数”。它必须记录：
+
+1. 谁发起；
+2. 哪个 tool_use_id；
+3. 属于哪个 run / turn / model round；
+4. 使用了哪个 tool snapshot；
+5. 执行前上下文是什么；
+6. 执行中激活了哪些 skills / connector guide；
+7. 执行结果如何进入下一轮模型上下文；
+8. 哪些结果只给 UI，哪些进入 API。
+
+### 3.3 用户体验目标是像人，不是少追问
+
+本次问题不是“追问次数太多”这么简单。真正的问题是：
+
+1. 用户已经回答了，Altus 没有把回答理解成上一轮问题的答案；
+2. 状态没有闭合，导致重复问；
+3. prompt 里补充了自然语言提醒，但协议层仍把回答当普通 user text；
+4. 前端显示、history replay、模型 API 上下文不是同一个事实源。
+
+所以目标不是禁止 clarification，而是让 clarification 变成正常的人类对话：
+
+1. 该问时问；
+2. 用户回答后自然继续；
+3. 用户让 agent 自行决定时接受委托；
+4. 用户改变方向时关闭旧问题并开启新意图；
+5. 不把平台能力边界伪装成僵硬的业务追问。
+
+### 3.4 成本问题来自上下文不稳定
+
+当前 memory、skills、MCP guide、附件、runtime state、澄清状态可能分散拼入 prompt。这样会导致：
+
+1. stable prefix 每轮变化；
+2. tool schema 和 MCP guide 变化不可解释；
+3. prompt cache 命中不稳定；
+4. retry / resume 后上下文 hash 不一致；
+5. 同类任务计费波动大。
+
+因此缓存稳定必须是架构目标，不是后期优化。
+
+## 4. 总体设计哲学
+
+### 4.1 一句话
+
+OneCEO 不应该让 Altus 每轮重新阅读一段拼出来的聊天历史，而应该让 Altus 每轮进入一个由系统编译出来的、协议闭合的、连续的上下文世界。
+
+### 4.2 核心抽象
+
+```text
+Managed Context Ledger
+  -> Context Reconciliation
+  -> Turn Context Snapshot
+  -> Altus Context Compiler
+  -> Protocol-safe API Messages + ContextBuildManifest
+  -> LLM API
+  -> Tool Execution Context
+  -> Tool Result Ledger Entries
+  -> Next Turn
+```
+
+对应关系：
+
+| ClaudeCode 精髓 | OneCEO 落地抽象 |
+| --- | --- |
+| typed transcript | Managed Context Ledger |
+| ToolUseContext | Altus Turn Context Snapshot + Tool Execution Context |
+| normalizeMessagesForAPI | Altus Context Compiler |
+| ensureToolResultPairing | Protocol Validator |
+| sourceToolAssistantUUID | tool_result.parentEntryId + toolUseId |
+| sidechain transcript | sub-run / subagent sidechain ledger |
+| MCP instructions delta | Connector / MCP Context Delta |
+| invoked skills restore | Skill Context Snapshot |
+| content replacement state | Tool Result Budget Replacement State |
+| resume consistency check | Context Round-trip Manifest Check |
+
+### 4.3 三条不可妥协的原则
+
+1. **事实源唯一**：UI、history、API projection、tool runtime 都从 ledger 派生，不能各自拼上下文。
+2. **工具协议闭合**：assistant tool_use 必须最终闭合到对应 tool_result。失败、中断、拒绝、等待用户后的回答或取消，也必须产生结构化结果。
+3. **动态状态先冻结**：模型调用前冻结 tools、MCP、skills、memory、权限、预算策略。同一轮不能各自读取实时状态。
+
+### 4.4 协议中立，再按 provider 降级
+
+ClaudeCode 的源码语境主要是 Anthropic content block，`tool_result` 表现为 user message content block。OneCEO 当前 managed 模型调用走 OpenAI-compatible ChatMessage，工具结果表现为 `role: "tool"` + `tool_call_id`。
+
+因此 OneCEO 的 ledger 不能直接保存某个 provider 的 wire format。正确分层是：
+
+```text
+assistant_tool_use / tool_result / attachment_ref / skill_delta
+  -> provider-neutral context graph
+  -> OpenAI Chat lowering 或 Anthropic content-block lowering
+```
+
+规则：
+
+1. ledger 保存协议中立事实，不保存最终 API wire message；
+2. compiler 最后一层才根据 provider 生成 `role: "tool"` 或 `user.tool_result`；
+3. Protocol Validator 先校验中立图，再校验 provider-specific 输出；
+4. 文档中提到 `tool_result` 时，默认指中立事实，不限定 OpenAI 或 Anthropic 形态；
+5. 这样未来切换模型供应商时，不需要重写事实源和恢复链路。
+
+## 5. 目标架构
+
+### 5.1 分层图
+
+```text
+Web input / API route
+  |
+  v
+Input Acceptance Layer
+  |
+  v
+Managed Context Ledger  <--------- Run Events / Attachments / Skills / MCP / Memory
+  |
+  v
+Context Reconciliation
+  |
+  v
+Turn Context Snapshot
+  |
+  v
+Altus Context Compiler
+  |
+  +--> UI Projection
+  +--> Transcript Projection
+  +--> API Messages
+  +--> ContextBuildManifest
+  |
+  v
+LLM API
+  |
+  v
+Assistant tool_use / text
+  |
+  v
+Tool Execution Context
+  |
+  v
+Tool Runtime / OSAC / E2B / Connectors
+  |
+  v
+Tool Result Ledger Entry
+  |
+  v
+Next Turn
+```
+
+### 5.2 模块列表
+
+| 模块 | 作用 |
+| --- | --- |
+| `altus-managed-context-ledger-service` | managed session 的事实源写入和读取 |
+| `altus-managed-context-reconciliation-service` | 在编译前闭合 clarification / cancellation / derived tool_result |
+| `altus-managed-turn-snapshot-service` | 冻结每轮模型和工具上下文 |
+| `altus-managed-context-compiler` | 从 ledger + snapshot 编译 API messages |
+| `altus-managed-protocol-validator` | 校验中立 tool_use/tool_result、provider lowering 约束、能力边界 |
+| `altus-managed-tool-context-service` | 构建工具执行上下文 |
+| `altus-managed-tool-result-service` | 标准化工具结果、失败、等待用户、附件、预算引用 |
+| `altus-managed-context-manifest-service` | 记录上下文构建清单和 hash |
+| `altus-managed-context-recovery-service` | resume / history reload / failed run recovery 后重新编译 |
+| `altus-managed-cache-observer` | 记录 stable hash、cache break、budget replacement |
+
+这些模块可以渐进落地，不需要一次性替换全部 runner。
+
+## 6. Managed Context Ledger
+
+### 6.1 职责
+
+Ledger 是唯一事实源。它保存发生过的事实，而不是保存拼好的 prompt。
+
+需要覆盖的 entry 类型：
+
+| entry type | 来源 | 说明 |
+| --- | --- | --- |
+| `user_message` | Web/API | 用户原始输入 |
+| `assistant_message` | LLM | assistant 自然语言输出 |
+| `assistant_tool_use` | LLM tool_call | 模型请求调用工具 |
+| `tool_result` | tool runtime / context reconciliation | 工具结果，含失败/中断/拒绝/补充信息回答 |
+| `clarification_request` | ask_user tool | 等待用户补充 |
+| `clarification_answer` | 用户输入 | 用户对 ask_user 的回答 |
+| `attachment_ref` | 上传/消息 metadata | 文件、图片、对象存储引用 |
+| `skill_selection` | UI / auto attach | selected / auto-attached skills |
+| `mcp_provider_snapshot` | setup / recovery | 当前 session MCP provider 和 tools |
+| `connector_guide_loaded` | tool runtime | connector guide 已加载 |
+| `memory_block` | memory service | project/session/user memory |
+| `compact_boundary` | budget/recovery | 上下文压缩边界 |
+| `state_transition` | lifecycle | run 状态变化 |
+
+### 6.2 最小字段
+
+```ts
+type ManagedContextLedgerEntry = {
+  id: string;
+  sessionId: string;
+  runId?: string | null;
+  turnId?: string | null;
+  modelRoundId?: string | null;
+  toolUseId?: string | null;
+  parentEntryId?: string | null;
+  source: 'user' | 'assistant' | 'tool_runtime' | 'system' | 'recovery' | 'reconciler';
+  type: string;
+  semanticRole?:
+    | 'user_input'
+    | 'assistant_text'
+    | 'assistant_tool_use'
+    | 'tool_result'
+    | 'system_context'
+    | 'context_delta'
+    | 'state_event';
+  contentRef?: string | null;
+  contentPreview?: string | null;
+  payload: Record<string, unknown>;
+  uiVisibility: 'visible' | 'hidden' | 'summary';
+  transcriptVisibility: 'visible' | 'hidden' | 'debug';
+  apiVisibility: 'included' | 'excluded' | 'summary' | 'ref';
+  createdAt: string;
+};
+```
+
+注意：这里故意不保存 `roleForApi`、`tool_call_id` wire placement、Anthropic content block 等 provider-specific 字段。它们属于 compiler lowering 阶段的输出，不属于 ledger 事实源。`clarification_request` 也不是独立于 `assistant_tool_use` 的第二个事实源，它必须通过 `parentEntryId` 或 `toolUseId` 绑定到对应 `ask_user`。
+
+### 6.3 OneCEO 现有数据的迁移关系
+
+| 现有来源 | Ledger 化方式 |
+| --- | --- |
+| `conversation_messages` | 转为 user/assistant/system/message entry |
+| `task_session_run_events` | 转为 tool/state/lifecycle entry |
+| `metadata.attachments` | 转为 attachment_ref |
+| `metadata.skills` | 转为 skill_selection |
+| `input.mcpProviders` | 转为 mcp_provider_snapshot |
+| `pendingClarification*` | 转为 clarification_request / answer relation |
+| skill memory / Altus memory | 转为 memory_block |
+
+第一阶段不需要迁移表结构，可以先做 read-only adapter，从现有表生成 ledger view。
+
+### 6.4 Context Reconciliation 不属于 compiler
+
+需要写入新事实的补齐动作，必须发生在 compiler 之前。
+
+典型动作：
+
+1. 用户回答 pending `ask_user` 后，写入 `clarification_answer`；
+2. 根据 `clarification_answer` 生成对应 `tool_result`；
+3. 用户取消、跳转新任务、委托 agent 自行决定时，生成对应 `tool_result`；
+4. run 被取消时，为未闭合 tool_use 写入 cancellation tool_result；
+5. 同批次 sibling tool_call 因 `ask_user` 挂起而未执行时，写入 deferred / cancelled tool_result。
+
+这些动作由 `altus-managed-context-reconciliation-service` 执行。compiler 只读取已经完成 reconciliation 的 ledger；如果发现仍有缺口，只能在 manifest 中报告或拒绝 lowering，不能偷偷写 ledger。
+
+## 7. Turn Context Snapshot
+
+### 7.1 为什么需要 snapshot
+
+当前 `AltusRunCoordinator` 和 `AltusManagedToolRuntime` 在不同时间点读取：
+
+1. active skills；
+2. MCP providers；
+3. connector guide；
+4. task intent profile；
+5. memory；
+6. tool definitions；
+7. budget policy；
+8. model env。
+
+如果这些内容在同一轮内各自读取，就会出现上下文漂移。ClaudeCode 的做法是每轮构造 ToolUseContext。OneCEO 应建立自己的 Turn Context Snapshot。
+
+### 7.2 Snapshot 字段
+
+```ts
+type AltusTurnContextSnapshot = {
+  id: string;
+  sessionId: string;
+  runId: string;
+  ledgerCursor: string;
+  model: string;
+  provider: string;
+  systemPromptVersion: string;
+  toolSchemaSnapshotId: string;
+  mcpSnapshotId?: string | null;
+  skillSnapshotId?: string | null;
+  memorySnapshotId?: string | null;
+  permissionMode: 'managed' | 'review_required';
+  budgetPolicyVersion: string;
+  createdAt: string;
+};
+```
+
+### 7.3 规则
+
+1. 模型调用前必须创建 snapshot；
+2. compiler、tool runtime、cache observer 共享同一个 snapshot；
+3. 同一轮内不重新读取未冻结的 tools / MCP / skills；
+4. 中途 auto-attach skill 或 load_connector_guide 只能产生新 ledger entry，影响下一轮；
+5. 如果工具执行必须动态发现能力，结果必须作为 tool_result 或 capability_delta 写入 ledger。
+
+### 7.4 动态能力的可见性边界
+
+这一点需要严格区分“工具 runtime 当前可用”和“模型上下文当前可见”。
+
+1. **当前工具执行可用**：`AltusManagedToolRuntime` 在执行某个工具时，可以同步使用 sandbox、OSAC、activeSkills、MCP providers 等 runtime 能力。
+2. **当前模型 round 不可回写**：工具执行中自动挂载的 skill、加载的 connector guide、恢复的 MCP provider，不能 retroactively 修改已经发送给模型的 API messages。
+3. **下一轮模型可见**：这些动态变化必须先写 ledger，再由下一轮 compiler 通过 skill / MCP / connector delta 注入。
+4. **同一轮多工具批次要有明确边界**：如果同一 assistant message 中出现多个 tool_call，后一个工具不能隐式依赖前一个工具对模型上下文的修改；只能依赖 runtime 明确共享的执行上下文。
+5. **可见性写入 manifest**：ContextBuildManifest 需要记录本轮纳入了哪些动态能力，以及哪些能力是本轮执行后才产生、等待下一轮可见。
+
+这样既允许工具 runtime 做必要的即时动作，又避免模型上下文在同一轮中被偷偷改写。
+
+## 8. Altus Context Compiler
+
+### 8.1 定位
+
+Context Compiler 替代当前“各处拼 prompt”的方式。它输入 ledger + turn snapshot，输出：
+
+1. API messages；
+2. UI projection；
+3. transcript projection；
+4. ContextBuildManifest。
+
+它不执行业务工具，不做语义裁决，不写状态。
+
+### 8.2 Compiler passes
+
+```text
+LoadLedgerPass
+  -> NormalizeGraphPass
+  -> ApiRoundGroupingPass
+  -> ToolPairingPass
+  -> AttachmentPass
+  -> SkillContextPass
+  -> McpContextPass
+  -> MemoryContextPass
+  -> BudgetReplacementPass
+  -> CacheBoundaryPass
+  -> ManifestPass
+```
+
+### 8.3 每个 pass 的职责
+
+| pass | 职责 |
+| --- | --- |
+| `LoadLedgerPass` | 按 cursor 读取事实 |
+| `NormalizeGraphPass` | 将现有 message/run_event/metadata 规范为 canonical graph |
+| `ApiRoundGroupingPass` | 按模型 round 和 tool round 分组 |
+| `ToolPairingPass` | 校验和组织 tool_use/tool_result |
+| `AttachmentPass` | 稳定附件顺序，避免跨越工具边界 |
+| `SkillContextPass` | 注入 selected/active/auto-attached skills delta |
+| `McpContextPass` | 注入 MCP tool snapshot 和 connector guide delta |
+| `MemoryContextPass` | 注入 user/project/session memory block |
+| `BudgetReplacementPass` | 应用已冻结的 replacement 决策，替换大工具结果 |
+| `CacheBoundaryPass` | 分离 stable prefix 和 volatile blocks |
+| `ManifestPass` | 输出 hash、summary、debug 信息 |
+
+注意：`BudgetReplacementPass` 不能在 compiler 内创建或持久化新的 replacement 决策。replacement 决策应由 context budget service 在 turn snapshot 前冻结；compiler 只应用该决策并把摘要写入 manifest。
+
+### 8.4 与当前 `altus-managed-context-service` 的关系
+
+当前 `altus-managed-context-service.ts` 可以成为第一阶段 adapter：
+
+1. 保留当前 text transcript 方法，作为 UI/history 兼容路径；
+2. 新增 ledger view builder；
+3. 不再把 pending clarification 注入普通文本 transcript 作为主要修复手段；
+4. clarification 的主路径改为 tool_result reconciliation。
+
+## 9. 工具调用上下文管理
+
+这是本文最关键的部分。OneCEO 要学习 ClaudeCode 的不是“工具多”，而是工具调用上下文始终闭环。
+
+### 9.1 工具调用生命周期
+
+```text
+assistant_tool_use
+  -> persist tool_use ledger entry
+  -> build Tool Execution Context
+  -> emit tool_call_started
+  -> execute runtime
+  -> normalize result / error / ask_user / complete
+  -> persist tool_result ledger entry
+  -> emit tool_call_completed / failed / waiting_user
+  -> next compiler pass sees paired tool_result
+```
+
+`ask_user` 是生命周期里的特殊挂起点：它会先持久化 `assistant_tool_use` 和 `clarification_request`，但不会立刻生成最终 `tool_result`。系统在等待用户期间不能发起下一次 LLM API 请求；用户回答、委托、取消或转向新任务后，才生成对应 `tool_result`，然后进入下一轮 compiler。
+
+因此 `ask_user` 的规则不是“可以缺 tool_result”，而是：
+
+```text
+pending ask_user tool_use
+  -> no next model call
+  -> wait for user answer or system cancellation
+  -> generate tool_result
+  -> resume model call
+```
+
+这个挂起协议必须由 Protocol Validator 和 run lifecycle 共同保证。
+
+### 9.1.1 多工具批次闭合规则
+
+OpenAI-compatible 模型可能在同一个 assistant message 中返回多个 `tool_calls`。ClaudeCode 对并发或 sibling 工具调用的核心原则是：不能让任何 sibling tool_use 在 transcript / API projection 中悬空。
+
+OneCEO 必须采用同样原则：
+
+1. 同一 assistant message 的所有 tool_call 共享一个 `modelRoundId`；
+2. 下一次模型调用前，这个 model round 内的每个 tool_call 都必须有对应 `tool_result`；
+3. 如果某个 tool_call 是 `ask_user` 并使 run 进入 waiting_user，则同一批次中尚未执行的 sibling tool_call 必须生成结构化 `tool_result`，例如 `status=cancelled_due_to_user_clarification` 或 `status=deferred_until_user_answer`；
+4. 如果某个工具失败但可恢复，也要生成 error tool_result，而不是只写 `tool_call_failed`；
+5. Protocol Validator 可以允许 `ask_user` 处于 pending 状态，但前提是 run lifecycle 已经进入 `waiting_user`，并且系统不会发起下一次 LLM API 请求。
+
+因此，等待用户不是工具协议缺口，而是受 lifecycle 约束的暂停点。只要要继续调用模型，就必须先把 pending ask_user 转成 tool_result。
+
+### 9.2 Tool Execution Context
+
+工具执行时不能只拿 `toolName + rawArgs`。需要一个冻结上下文：
+
+```ts
+type AltusToolExecutionContext = {
+  sessionId: string;
+  runId: string;
+  turnSnapshotId: string;
+  modelRoundId: string;
+  toolUseEntryId: string;
+  toolUseId: string;
+  toolName: string;
+  rawArgs: Record<string, unknown>;
+  sandboxId?: string | null;
+  workspaceRoot?: string | null;
+  userId: string;
+  activeSkills: ManagedSkillContext[];
+  mcpProviders: ManagedMcpProvider[];
+  loadedConnectorGuides: string[];
+  taskIntentProfile: AltusManagedTaskIntentProfile;
+  permissionMode: 'managed' | 'review_required';
+  signal?: AbortSignal;
+};
+```
+
+### 9.3 Tool Result Envelope
+
+所有工具结果统一成 envelope：
+
+```ts
+type AltusToolResultEnvelope =
+  | {
+      status: 'ok';
+      toolUseId: string;
+      contentForModel: unknown;
+      contentForUser?: unknown;
+      contentRef?: string;
+      activatedSkills?: ManagedSkillContext[];
+      sideEffects?: string[];
+    }
+  | {
+      status: 'error';
+      toolUseId: string;
+      errorCode: string;
+      errorMessageForModel: string;
+      errorMessageForUser?: string;
+      retryable: boolean;
+      activatedSkills?: ManagedSkillContext[];
+    }
+  | {
+      status: 'ask_user';
+      toolUseId: string;
+      question: string;
+      options?: string[];
+      clarificationType?: string;
+      reasonForModel?: string;
+    }
+  | {
+      status: 'complete';
+      toolUseId: string;
+      summary: string;
+      verification?: string[];
+      attachments?: ManagedCompletionAttachment[];
+    };
+```
+
+`complete` 也是 terminal tool result。即使 run 会立即结束，也要写入 `tool_result` ledger entry，内容包含 summary、verification、attachments / deliverables 引用。这样 resume、history replay、manifest 检查时不会看到一个没有结果的 `complete_task` tool_use。
+
+### 9.4 失败也必须是 tool_result
+
+当前 run event 里有 `tool_call_failed`，但下一轮模型上下文不能只靠日志。必须把失败作为中立 tool_result，再由 compiler lowering 成目标 provider 的 API messages：
+
+```text
+neutral:
+  assistant_tool_use(id=call_x, name=shell_execute, input={...})
+  tool_result(tool_use_id=call_x, is_error=true, content="shell_execute_missing_command")
+
+openai_chat lowering:
+  assistant.tool_calls=[{ id: call_x, function: { name: "shell_execute", arguments: "..." } }]
+  tool(tool_call_id=call_x, content="shell_execute_missing_command")
+
+anthropic_messages lowering:
+  assistant.content=[tool_use(id=call_x, name=shell_execute, input={...})]
+  user.content=[tool_result(tool_use_id=call_x, content="shell_execute_missing_command")]
+```
+
+适用场景：
+
+1. 工具不存在；
+2. 参数解析失败；
+3. Zod/schema 校验失败；
+4. sandbox 未准备好；
+5. OSAC MCP provider 丢失；
+6. connector guide 未加载；
+7. 权限不允许；
+8. 用户中断；
+9. timeout；
+10. deployment 前置条件不满足。
+
+### 9.5 `ask_user` 的正确语义
+
+`ask_user` 不是普通 assistant 文案。它是一个工具调用：
+
+```text
+assistant_tool_use(name=ask_user, id=call_ask_1)
+```
+
+用户回答后必须生成：
+
+```text
+tool_result(tool_use_id=call_ask_1, content={
+  answer: "网页应用",
+  answer_kind: "direct_answer"
+})
+```
+
+如果用户说“你来决定”，也不能重新追问，而应生成：
+
+```text
+tool_result(tool_use_id=call_ask_1, content={
+  answer_kind: "delegated_to_agent",
+  answer: "用户委托 Altus 基于上下文自行选择"
+})
+```
+
+如果用户明显改了新任务：
+
+```text
+tool_result(tool_use_id=call_ask_1, content={
+  answer_kind: "redirect",
+  answer: "用户没有回答旧问题，而是开启新任务"
+})
+user_message(new_intent)
+```
+
+这样旧工具调用仍然闭合，新意图也不会丢。
+
+### 9.6 Connector guide 与 MCP 工具上下文
+
+当前 `AltusManagedToolRuntime` 会在 MCP tool 调用前检查 connector guide 是否已加载，未加载时抛错。新方案中，这个错误要成为结构化 tool_result：
+
+```json
+{
+  "status": "error",
+  "errorCode": "connector_guide_required",
+  "requiredTool": "load_connector_guide",
+  "connectorKey": "github",
+  "message": "Call load_connector_guide before using github tool"
+}
+```
+
+下一轮模型看到的是工具协议结果，而不是日志或自然语言提醒。
+
+MCP 上下文分三层：
+
+1. `mcp_provider_snapshot`：本轮有哪些 provider/tools；
+2. `connector_guide_delta`：哪些 guide 新加载或变化；
+3. `mcp_tool_result`：真实工具返回。
+
+不允许每轮把全部 connector guide 全量塞入 stable prompt。
+
+### 9.7 Skills 自动挂载上下文
+
+当前 `autoAttachSkillsForTool()` 会在工具执行时动态激活 skills，并写入 skill state。新方案要求：
+
+1. 自动挂载动作写入 ledger：`skill_auto_attached`；
+2. 本次工具结果 envelope 记录 `activatedSkills`；
+3. 当前工具执行可以使用这些 skills；
+4. 下一轮 compiler 通过 `SkillContextPass` 注入 skill delta；
+5. history replay 显示“已自动启用某 skill”，但不把完整 skill 内容展示成聊天消息。
+
+### 9.8 Deployment / Debug / Shell 等高风险工具
+
+高风险工具不应该用死规则拦截普通对话，但必须有能力边界：
+
+| 工具族 | 硬边界 | LLM 裁决 |
+| --- | --- | --- |
+| deployment | 没有部署意图时禁止 deploy/redeploy/rollback | 用户是否已明确授权部署 |
+| shell_execute | 禁止长期常驻 dev server；限制 workspace path | 是否需要执行命令 |
+| MCP 写操作 | connector 权限、guide、provider 状态 | 是否需要调用该 connector |
+| debug_open_page | URL 协议和 debug runtime readiness | 是否需要打开页面检查 |
+| complete_task | 必须有交付证据 | 是否可以结束任务 |
+
+后端守能力边界，LLM 负责语义判断。失败时返回 tool_result，让模型解释或换路径。
+
+### 9.9 普通文本回复不是协议错误
+
+工具协议闭合不等于“每轮必须调用工具”。如果本轮本来就是方案讨论、解释、纯问答、能力说明，assistant 可以只输出普通文本。
+
+规则：
+
+1. 没有 tool_use 时，不要求 tool_result；
+2. 有 tool_use 时，必须闭合 tool_result；
+3. 如果任务已经进入执行型 managed run，模型长时间只输出普通文本，可以由 lifecycle 判断是否需要提醒或转人工确认；
+4. 但不能把普通文本回复一律视为错误，否则会破坏“像人”的目标。
+
+这条规则可以避免把 ClaudeCode 的工具闭环误解成“所有对话都工具化”。
+
+## 10. UI / Transcript / API 三视图
+
+### 10.1 三者分工
+
+| 视图 | 面向谁 | 由谁生成 |
+| --- | --- | --- |
+| UI projection | 用户 | ledger -> UI projector |
+| Transcript projection | history/replay | ledger -> transcript projector |
+| API messages | LLM | ledger + snapshot -> compiler |
+
+### 10.2 示例：补充信息
+
+事实源：
+
+```text
+assistant_tool_use ask_user(call_1)
+clarification_request(call_1)
+user_message("网页应用")
+clarification_answer(parent=call_1, answer="网页应用")
+tool_result(call_1, answer="网页应用")
+```
+
+UI：
+
+```text
+Altus: 这次要交付的是网页应用、后端 API、本地脚本，还是完整业务系统？
+User: 网页应用
+Altus: 好，我按网页应用方向继续...
+```
+
+Transcript：
+
+```text
+assistant clarification_request
+user clarification_answer
+assistant continuation
+```
+
+Neutral API graph：
+
+```text
+assistant tool_use ask_user(call_1)
+tool_result(call_1, {"answer":"网页应用"})
+```
+
+Provider lowering：
+
+```text
+OpenAI-compatible:
+assistant.tool_calls=[ask_user(call_1)]
+tool.tool_call_id=call_1, content={"answer":"网页应用"}
+
+Anthropic-compatible:
+assistant.content=[tool_use ask_user(call_1)]
+user.content=[tool_result(call_1, {"answer":"网页应用"})]
+```
+
+## 11. ContextBuildManifest
+
+每次 compiler 输出必须生成 manifest。
+
+```ts
+type ContextBuildManifest = {
+  id: string;
+  sessionId: string;
+  runId: string;
+  turnSnapshotId: string;
+  ledgerCursor: string;
+  provider: string;
+  loweringTarget: 'openai_chat' | 'anthropic_messages';
+  neutralGraphHash: string;
+  apiMessageHash: string;
+  stableSystemHash: string;
+  toolSchemaHash: string;
+  volatileContextHash: string;
+  toolUseCount: number;
+  toolResultCount: number;
+  missingToolResultCount: number;
+  orphanToolResultCount: number;
+  repairedToolPairingCount: number;
+  includedAttachmentIds: string[];
+  includedSkillIds: string[];
+  includedMcpProviderIds: string[];
+  budgetReplacementSummary: Record<string, unknown>;
+  cacheBreakReason?: string;
+  createdAt: string;
+};
+```
+
+用途：
+
+1. 判断模型是否真的看到了用户回答；
+2. 判断 reload 后 projection 是否一致；
+3. 判断 cache 为什么 miss；
+4. 判断 tool_result 是否缺失；
+5. 给测试和调试提供证据。
+
+## 12. 渐进实施计划
+
+### 12.1 第一阶段：只读 compiler 与 debug
+
+目标：不改变线上行为，先证明上下文断点。
+
+新增：
+
+1. `altus-managed-context-ledger-adapter`；
+2. `altus-managed-context-reconciliation-service` 的 dry-run 诊断模式；
+3. `altus-managed-turn-snapshot-service` 的只读构造；
+4. `altus-managed-context-compiler` 的只读版本；
+5. `ContextBuildManifest`；
+6. debug endpoint。
+
+验收：
+
+1. 对真实 session 生成 manifest；
+2. 能看到 `ask_user -> 用户回答 -> tool_result` 是否已闭合；未闭合时输出 dry-run reconciliation preview，但不写 ledger；
+3. 能对比当前实际 messages 和 compiler messages；
+4. 不改变 run 行为。
+
+### 12.2 第二阶段：接管 clarification 与 tool pairing
+
+目标：先修复人机感最明显的问题。
+
+改造：
+
+1. `ask_user` 写入 assistant_tool_use ledger；
+2. 用户补充写入 clarification_answer；
+3. `altus-managed-context-reconciliation-service` 生成 tool_result；
+4. `Protocol Validator` 阻止缺失 tool_result 的 API 请求；唯一例外是 run lifecycle 已进入 `waiting_user`，且系统不会发起下一次 LLM API 请求；
+5. 前端 UI 仍可沿用现有 notice 展示。
+
+验收：
+
+1. 用户回答“网页应用”后不重复问交付类型；
+2. 用户说“你决定”后继续推进；
+3. 用户开启新任务时旧 ask_user 被 redirect result 闭合；
+4. history reload 后继续对话不失忆。
+
+### 12.3 第三阶段：接管工具结果
+
+目标：所有工具结果进入统一 envelope。
+
+改造：
+
+1. `AltusManagedToolRuntime.execute()` 返回标准 `AltusToolResultEnvelope`；
+2. 工具异常统一转 error result；
+3. MCP guide blocked、deployment blocked、shell blocked 都生成 tool_result；
+4. tool_use / tool_result ledger-first 写入，run event 由 ledger 投影或同步派生，不能作为第二事实源；
+5. API projection 使用 ledger tool_result。
+
+验收：
+
+1. 工具失败后模型能自然解释和换路径；
+2. 不再靠日志或自然语言 reminder 修复工具上下文；
+3. orphan tool_result 检测生效；
+4. tool_call_failed 在 history 和 API projection 中一致。
+
+### 12.4 第四阶段：能力上下文化
+
+目标：skills、MCP、memory、attachments 都先成为 ledger / snapshot 中的 typed context block，再由 compiler 纳入 API projection。
+
+改造：
+
+1. `SkillContextPass`；
+2. `McpContextPass`；
+3. `MemoryContextPass`；
+4. `AttachmentPass`；
+5. connector guide delta；
+6. skill auto-attached delta。
+
+验收：
+
+1. slash-selected skill、auto-attached skill、MCP skill 不丢；
+2. MCP reconnect 不破坏 stable prompt；
+3. 附件 reload 后仍能进入模型上下文；
+4. memory 不覆盖当前 session 事实。
+
+### 12.5 第五阶段：恢复与缓存稳定
+
+目标：resume、history reload、budget replacement 后仍是同一个上下文世界。
+
+改造：
+
+1. `Context Round-trip Check`；
+2. context budget service 冻结 replacement 决策，`BudgetReplacementPass` 只应用；
+3. `Cache Observer`；
+4. history replay 同源化；
+5. compact boundary。
+
+验收：
+
+1. reload 后 manifest hash 可解释；
+2. cache miss 能定位到具体 pass；
+3. 大工具结果替换后语义不丢；
+4. run failed/retry 后不重复追问。
+
+### 12.6 迁移期写入所有权
+
+渐进迁移时最容易出问题的是双事实源。必须明确每个阶段的写入所有权：
+
+1. 第一阶段：ledger 是 read-only adapter，只从现有 `conversation_messages`、`task_session_run_events`、metadata 派生，不写新事实。
+2. 第二阶段：clarification 相关事实开始 ledger-first 写入，旧 history / run event 从 ledger 派生或同步投影。
+3. 第三阶段：tool_use / tool_result 开始 ledger-first 写入，`tool_call_started/completed/failed` 变成展示和回放 projection，而不是另一套事实源。
+4. 第四阶段：skills / MCP / memory / attachment context block 进入 ledger，旧 metadata 只作为兼容读取。
+5. 第五阶段：history replay、SSE、API projection 全部从 ledger + manifest 派生。
+
+禁止出现这种状态：
+
+```text
+conversation_messages 认为用户已回答
+run_events 认为工具已失败
+API messages 认为 ask_user 还没闭合
+UI history 认为已经继续执行
+```
+
+迁移期可以保留旧表，但不能允许旧表和 ledger 同时独立决定上下文事实。
+
+## 13. 回归测试矩阵
+
+| 场景 | 预期 |
+| --- | --- |
+| 用户要求“帮我做用户管理系统” | 只在必要边界追问，不机械重复 |
+| 用户回答“网页应用” | ask_user tool_result 闭合，继续执行 |
+| 用户回答“先做方案” | 关闭执行型澄清，进入方案输出 |
+| 用户回答“你决定” | 记录 delegated answer，继续推进 |
+| 用户发新任务 | 旧 ask_user redirect 闭合，新 user intent 开启 |
+| assistant 同批次返回 ask_user 和其他 tool_call | 未执行 sibling tool_call 生成 cancelled/deferred tool_result，不悬空 |
+| complete_task 结束 run | 写入 terminal tool_result，history/recovery 可重建闭环 |
+| shell_execute 参数错误 | 生成 error tool_result |
+| MCP tool 未加载 guide | 生成 connector_guide_required tool_result |
+| deployment 未授权 | 生成 deployment_not_allowed tool_result |
+| auto attach skill | 写入 skill_auto_attached，下一轮注入 delta |
+| history reload | manifest tool pairing summary 一致 |
+| retry after failure | 不丢用户输入，不重复旧问题 |
+| attachment image replay | attachment_ref 进入 compiler，不靠纯文本 |
+| cache observation | stable/tool/volatile hash 可见 |
+
+## 14. 实现边界
+
+### 14.1 不做的事
+
+1. 不复制 ClaudeCode 的 CLI UI；
+2. 不把 OneCEO 改成 ClaudeCode 架构；
+3. 不一次性替换全部 run loop；
+4. 不用关键词 reducer 决定业务语义；
+5. 不让 LLM 直接写内部状态；
+6. 不把 UI 展示当模型上下文源。
+
+### 14.2 必须坚持的事
+
+1. ledger 是事实源；
+2. snapshot 冻结本轮上下文；
+3. compiler 负责 API projection；
+4. tool_use/tool_result 必须闭合；
+5. 工具失败也是 tool_result；
+6. MCP/skills/memory/attachments 是 typed context block；
+7. manifest 是验收证据；
+8. 恢复链路必须重新编译上下文。
+
+## 15. 结论
+
+ClaudeCode 的精髓不是 prompt 写法，也不是工具数量，而是：
+
+```text
+事实稳定保存
+  -> 每轮冻结上下文
+  -> 读时编译 API messages
+  -> 工具协议闭合
+  -> 动态能力 delta 化
+  -> 恢复链路可验证
+  -> 缓存变化可解释
+```
+
+OneCEO 的正确吸收方式，是把 Altus managed run 从“prompt 拼接 + 工具日志 + 前端展示”升级为：
+
+```text
+Managed Context Ledger
+  + Turn Snapshot
+  + Context Compiler
+  + Tool Execution Context
+  + ContextBuildManifest
+```
+
+这样 Altus 在客户使用时才会像一个连续理解上下文的人，而不是每轮重新猜测历史的脚本。
+
+## 16. 自洽性复核结论
+
+本节是对本文方案的再次审查，检查它是否逻辑自洽、是否合理、是否真正理解 ClaudeCode 的设计哲学。
+
+### 16.1 自洽性判断
+
+结论：主线自洽。
+
+理由：
+
+1. 事实源从 `conversation_messages + run_events + metadata` 收敛到 Managed Context Ledger；
+2. 模型上下文从“临时拼 prompt”收敛到 compiler 输出；
+3. 工具结果从“日志事件 + messages 数组追加”收敛到中立 `tool_result` 事实；
+4. UI / transcript / API 三视图都从同一事实源派生；
+5. ask_user 不再是文案问题，而是挂起的工具调用协议；
+6. skills、MCP、memory、attachments 都被归入 typed context block；
+7. 恢复和缓存都有 manifest 作为验收证据。
+
+### 16.2 设计合理性判断
+
+结论：合理，但必须渐进落地。
+
+合理点：
+
+1. 第一阶段 read-only compiler 可以先验证上下文断点，不破坏现有 run；
+2. 第二阶段优先接管 clarification 和 tool pairing，直接解决用户体感最差的问题；
+3. 第三阶段再接管工具结果，避免一上来重写全部 tool runtime；
+4. 第四阶段处理 skills/MCP/memory/attachments，符合 OneCEO 当前能力逐步扩展的复杂度；
+5. 第五阶段处理恢复与缓存，避免把成本优化提前压过正确性。
+
+需要警惕的点：
+
+1. 不要把 ledger 设计成又一个大而全事件表，第一版只覆盖 managed context 必需事实；
+2. 不要让 Protocol Validator 退化成业务关键词 reducer；
+3. 不要在 compiler pass 里临时读取实时 DB 状态；
+4. 不要让 SSE/history replay 继续各自重组上下文；
+5. 不要让 `ask_user` 在等待用户时触发下一次模型调用。
+
+### 16.3 对 ClaudeCode 哲学的吸收程度
+
+结论：已经抓住核心，不是表层模仿。
+
+本文吸收的是这些哲学：
+
+1. **上下文是编译产物**：API messages 不是事实源，而是由 ledger + snapshot 编译出来。
+2. **工具协议是连续性的骨架**：tool_use / tool_result 比自然语言提醒更可靠。
+3. **恢复路径等同主路径**：resume、history reload、retry 都必须重新编译上下文。
+4. **动态能力要 delta 化**：skills、MCP、connector guide 不应每轮污染 stable prompt。
+5. **缓存稳定来自工程边界**：stable hash、tool schema hash、volatile hash 必须可观测。
+6. **UI 不是上下文事实源**：UI 可以更自然，但不能替代 transcript / API projection。
+
+OneCEO 与 ClaudeCode 的差异也已经被纳入：
+
+1. OneCEO 使用 OpenAI-compatible `role: "tool"`，所以需要 provider-neutral ledger；
+2. OneCEO 工具分布在 API、E2B、OSAC、connector、deployment 等多个执行面，所以需要 Tool Execution Context；
+3. OneCEO 有 SSE/history replay，所以需要三视图同源；
+4. OneCEO 有 sandbox skills/MCP 恢复，所以需要 dynamic capability visibility boundary；
+5. OneCEO 有平台级权限和部署边界，所以后端必须保留硬能力边界。
+
+### 16.4 最终审查结论
+
+这份方案现在可以作为后续实现的设计依据，但进入代码前必须先做第一阶段 read-only compiler / manifest / debug endpoint。
+
+如果第一阶段不能证明真实 session 中：
+
+1. `ask_user` 和用户回答能关联；
+2. tool_use / tool_result pairing 能重建；
+3. history reload 后 manifest 一致；
+4. 当前实际 messages 与 compiler messages 的差异可解释；
+
+就不应该直接替换 runner。
+
+换句话说：本文方案是合理的，但它的第一步不是“大改”，而是建立可观测的上下文编译证据。
+
+## 17. OneCEO 设计模式与 ClaudeCode 上下文哲学的综合检查
+
+本节把本文方案再次放回 OneCEO 现有架构中审查，避免把 ClaudeCode 的上下文哲学误解成“另起一套 transcript 系统”或“用新的状态机覆盖平台既有边界”。
+
+### 17.1 综合结论
+
+结论：方向成立，但实现时必须把 OneCEO 的既有设计模式写成硬约束。
+
+ClaudeCode 的精髓是 typed transcript、读时 API projection、tool_use/tool_result pairing、ToolUseContext 冻结、MCP/skills delta、resume/compact 可验证。OneCEO 吸收这些思想时，不能脱离自己的平台边界：
+
+1. DB 仍是 run / event / timeline / binding / context fact 的权威来源；
+2. Redis 仍只是热状态、SSE replay 和恢复辅助 projection；
+3. SSE / history replay 仍要保持既有事件和 messageKey / toolCallId 兼容；
+4. OSAC 仍是 sandbox 内 MCP Runtime Host；
+5. connector guide、deployment gate、权限、sandbox 生命周期仍是平台能力边界；
+6. context governance 只能作用于“下一轮模型输入投影”，不能改写用户历史；
+7. managed runtime 的改造不能误伤 direct mode。
+
+所以本文的 `Managed Context Ledger` 不是 Redis 状态，也不是 UI timeline，也不是 provider API messages。它应该是 DB-backed 的 managed context fact layer，旧表迁移期可以通过 adapter 派生，成熟后再逐步 ledger-first 写入。Redis、SSE、conversation timeline、API messages 都只能从它和 manifest 派生。
+
+### 17.2 与 OneCEO 既有设计模式的对齐表
+
+| OneCEO 既有设计模式 | 本方案必须如何吸收 |
+| --- | --- |
+| DB 是事实源，Redis 是热投影 | ledger fact 必须先落 DB；Redis run state / stream 只保存可重建 projection；Redis 丢失后必须能从 DB ledger / run events 重建上下文 |
+| run event / timeline 已有投影规则 | 新 ledger 不能绕过 `altus-run-event-writer` 的职责；迁移期保留 `tool_call_started/completed/failed`、`assistant_message`、`run_status` 等对外事件语义 |
+| SSE 与 history replay 依赖稳定 messageKey / toolCallId | toolUseId、messageKey、timeline cursor 必须成为 manifest 可检查字段；不能让 compiler 每次生成新 id |
+| OSAC 是 MCP Runtime Host | MCP provider snapshot 来自 OSAC/session registry；工具执行必须经 OSAC bridge；compiler 不直接 spawn MCP、不直连远端 MCP |
+| connector guide 是调用 connector MCP tool 的前置能力 | guide gating 仍在 tool runtime / capability boundary 层生效；未加载 guide 时生成结构化 tool_result，而不是绕过或自然语言提醒 |
+| skills 已有 selected / auto-attached / sandbox sync 链路 | `skill_selection`、`skill_auto_attached` 需要保留 `sourceType`、`skillId`、`revisionId`；sandbox 同步仍走 `sandbox-skill-sync-service` |
+| deployment / debug / shell 是高风险工具族 | LLM 可以裁决“是否需要做”，但后端 capability boundary 继续限制“是否允许做”；阻断结果进入 tool_result |
+| managed / direct mode 边界必须稳定 | 第一批 compiler / ledger / protocol validator 只接入 Altus managed runtime；direct mode 与 shared transport 不作为同步改造对象 |
+| context budget 目前是上下文治理能力 | budget replacement 只改下一轮 API projection；原始 tool result、run event、timeline 历史不被压缩改写 |
+| lifecycle 由 coordinator 掌握 | Protocol Validator 只验证能否继续发起模型调用；`waiting_user/completed/failed` 的状态归属仍由 run coordinator / lifecycle 层决定 |
+
+### 17.3 与 ClaudeCode 参考实现的对应关系
+
+| ClaudeCode 工程做法 | OneCEO 应用方式 |
+| --- | --- |
+| `normalizeMessagesForAPI()` 在 API 调用前重新组织消息、附件、tool block | `Altus Context Compiler` 读 ledger + snapshot 生成 provider-specific API messages |
+| `ensureToolResultPairing()` 防御性检查 tool_use/tool_result 缺口 | `altus-managed-protocol-validator` 先检查中立图，再检查 OpenAI / Anthropic lowering |
+| `getToolUseContext()` 每轮把 tools、MCP、permissions、state 组织成工具上下文 | `AltusTurnContextSnapshot` + `AltusToolExecutionContext` 冻结本轮模型和工具可见能力 |
+| `mcpInstructionsDelta` 只把新增/移除的 MCP instructions 作为 delta 注入 | `McpContextPass` / `ConnectorGuideDelta` 只注入本轮新增或变化的 MCP / guide 上下文 |
+| session restore 从 transcript 恢复 Todo、file history、attribution 等运行状态 | OneCEO resume 从 DB ledger / run events / manifest 重建 managed context，不依赖 UI 展示文本 |
+| compact / microcompact 处理的是模型上下文压力 | OneCEO budget replacement 只处理下一轮模型输入投影，不压缩 DB timeline 和用户历史 |
+| tool_use_summary / grouped tool use 让 UI 更可读，但不破坏协议主线 | OneCEO 可以在 UI projection 做阶段化和分组展示，但不能让 UI 分组成为 API 上下文事实 |
+
+这说明本文方案吸收的是 ClaudeCode 的工程分层，而不是照搬它的本地 CLI 存储形态。
+
+### 17.4 如果不遵守这些边界，会出现的问题
+
+1. 如果 ledger 事实先写 Redis，Redis trim、TTL、网络抖动会直接造成上下文失忆。
+2. 如果 compiler 写状态，重放同一段历史时可能生成不同事实，manifest hash 也会失去可信度。
+3. 如果直接新增 SSE 事件语义，前端 history replay、replay drawer、跨设备刷新会出现兼容断层。
+4. 如果绕过 OSAC 直接接 MCP，provider 生命周期、token/env 更新、sandbox 恢复会出现双控制面。
+5. 如果把 connector guide / deployment gate 交给 LLM 自由决定，就会把平台能力边界退化成 prompt 建议。
+6. 如果 budget replacement 改写历史，用户看到的 timeline 与模型看到的上下文会再次分裂。
+7. 如果 managed 改造顺手触碰 direct mode，会把问题从 Altus managed 上下文扩散到共享 transport。
+
+### 17.5 进入实现前新增验收门槛
+
+在原有测试矩阵之外，进入代码实现前还必须把以下门槛作为验收依据：
+
+1. 任意 ledger fact 写入必须有 DB 落点或 DB adapter 来源，Redis 只能作为 projection。
+2. 人为清空 Redis 后，同一 session 能从 DB ledger / run events 重新生成等价 manifest。
+3. `tool_call_started/completed/failed`、`assistant_message`、`run_status` 等既有 SSE 事件名保持兼容。
+4. `messageKey`、`toolCallId`、`toolUseId` 在 reload 后稳定，不因 compiler 重跑而变化。
+5. OSAC MCP provider 不可用时，模型下一轮看到的是结构化 error tool_result，而不是丢失工具或重复追问。
+6. connector guide 未加载时，返回 `connector_guide_required` tool_result，并提示下一步应加载 guide。
+7. skill auto-attach 在当前工具执行可用，但只在下一轮模型上下文中以 skill delta 形式可见。
+8. budget replacement 后，DB 中的原始工具结果和用户 timeline 不被改写。
+9. direct mode 的现有链路不进入 managed context compiler。
+10. Manifest 必须记录 `neutralGraphHash`、`apiMessageHash`、`stableSystemHash`、`toolSchemaHash`、`volatileContextHash`、`loweringTarget`，并能解释 cache miss。
+
+### 17.6 修订后的最终判断
+
+综合 OneCEO 设计模式和 ClaudeCode 上下文管理设计后，本文方案仍然成立，但它的落地顺序必须更明确：
+
+```text
+先建立 DB-backed read-only ledger adapter
+  -> 生成 manifest 证明真实上下文断点
+  -> 只接管 ask_user/tool pairing
+  -> 再接管 tool result envelope
+  -> 最后扩展 skills/MCP/memory/attachments/budget
+```
+
+这条路径符合 OneCEO 当前工程现实：先让上下文事实可观察、可重建、可校验，再逐步让 managed run 的 API projection 由 compiler 接管。它也符合 ClaudeCode 的核心哲学：事实和投影分离，工具协议闭合，动态能力 delta 化，恢复路径和主路径等价。
+
+## 18. 代码落地前最终适配检查
+
+本节是进入代码实现前的最后检查结论，用来约束第一批实现不要偏离 OneCEO 当前主链。
+
+### 18.1 适配结论
+
+结论：本文档适合作为 OneCEO 的后续实现依据，但第一批代码必须只做“可观测、可对比、可回滚”的上下文编译证据层，不能直接重写 run loop。
+
+它适合 OneCEO 的原因是：
+
+1. 它没有把 OneCEO 改成 ClaudeCode CLI，而是把 ClaudeCode 的 typed transcript / projection / pairing / snapshot 思想落到 Altus managed runtime；
+2. 它承认 OneCEO 的工具分布在 API、E2B、OSAC、connector、deployment 多个执行面；
+3. 它保留 DB 事实源、Redis 热投影、SSE/history replay 兼容、OSAC MCP Runtime Host、connector guide gating、deployment gate、managed/direct mode 边界；
+4. 它把“像人”落实为上下文连续性和 tool protocol 闭合，而不是靠更多 prompt 文案；
+5. 它把缓存稳定作为 manifest/hash 可观测问题，而不是后期性能补丁。
+
+### 18.2 第一批实现必须遵守的代码边界
+
+| 现有代码边界 | 第一批实现要求 |
+| --- | --- |
+| `AltusRunCoordinator` 负责主循环和 lifecycle | 第一批不替换主循环，只旁路生成 read-only ledger view、compiler messages、manifest |
+| `AltusManagedToolExecutor` 负责 tool started/completed/failed envelope | 不绕过 executor；后续 tool_result envelope 应先适配 executor 输出，而不是让 runtime 直接写 UI/SSE |
+| `AltusRunEventWriter.appendRunEvent(...)` 负责 DB run event、timeline projection、Redis event、SSE publish 顺序 | 不新增第二条 run event 发布链路；如果引入 ledger writer，必须与 event writer 串成一个 DB-backed outbox/projection pipeline |
+| `task_session_run_events.sequence` 当前是 run event 顺序来源 | 不允许 ledger、Redis、SSE 各自生成 sequence；同一事实只能有一个 DB sequence 或一个可映射的 canonical cursor |
+| `conversation_messages.messageKey` 支撑 history replay | compiler/manifest 可以读取和校验 messageKey，但不能在 read-only 阶段重写已有 messageKey |
+| `ask_user` 当前通过 `clarification_request` 可见，`tool_call_started` 不投影到用户 timeline | 新协议事实中可以有隐藏的 `assistant_tool_use ask_user`，但 UI projection 只能显示一个用户可见追问，不能恢复成双气泡 |
+| `altus-managed-context-service` 当前拼 text transcript / clarification transcript | 第一阶段作为 adapter 来源，而不是被直接删除；compiler 输出只做对比证据 |
+| `altus-managed-context-budget-service` 当前在模型调用前投影消息 | 新 budget pass 先只记录 manifest 差异，不改写 DB timeline 或原始工具结果 |
+| `sandbox-skill-sync-service` 和 `taskSessionSkillStateService` 管理 skill 物化 | skill ledger entry 必须保留 `sourceType/skillId/revisionId`，不能只保存 slug 或 prompt 文本 |
+| `osac-agent-service.callSessionMcpTool(...)` 是 MCP 工具桥 | MCP tool snapshot 和 tool_result 都要围绕 OSAC session tool handle，不允许 compiler 或 runtime 直接连接远端 MCP |
+
+### 18.3 “ledger-first” 的精确定义
+
+本文档中的 `ledger-first` 不能被理解成“新增一个表后绕过现有 run event writer”。在 OneCEO 里，它的精确定义是：
+
+1. 上下文事实必须有 DB-backed canonical record；
+2. run event、conversation timeline、Redis stream、SSE 都是 canonical record 的 projection 或同事务派生结果；
+3. 迁移期如果 canonical record 仍来自 `task_session_run_events` / `conversation_messages` / metadata，ledger 就只能是 read-only adapter；
+4. 只有当新的 ledger 写入路径能保证与 `AltusRunEventWriter` 的 sequence、messageKey、Redis/SSE 投影一致时，才允许进入 write path；
+5. 禁止出现 ledger 写成功但 run event 未写、run event 写成功但 ledger 缺失、Redis/SSE 自行生成事实这三类状态。
+
+可接受的落地方式只有两种：
+
+1. **adapter-first**：第一阶段从现有 DB 表构造 ledger view，不新增事实写入；
+2. **outbox/projection-first**：后续新增 ledger writer 时，把 run event / timeline / Redis / SSE 作为同一个 DB-backed outbox 的投影链路，保留单一 sequence/cursor。
+
+### 18.4 `ask_user` 的 OneCEO UI 适配要求
+
+`ask_user` 是协议事实，但用户不应该看到协议噪音。落地时必须保持：
+
+1. 中立图中存在 `assistant_tool_use ask_user`，用于模型协议闭合；
+2. ledger 中存在 `clarification_request`，用于 pending_user lifecycle 和 history replay；
+3. UI projection 只展示一个“需要补充信息”的用户可见单元；
+4. 用户回答后生成 `clarification_answer` 和对应 `tool_result`；
+5. 如果用户回答的是“方案”“你决定”“先想想”等委托/转向表达，reconciler 负责把旧 ask_user 闭合成 delegated 或 redirect result，不能再重复追问；
+6. 下一次模型调用前，pending ask_user 必须已经闭合，除非 run 仍处于 `waiting_user` 且不会发起模型调用。
+
+这条要求直接对应当前问题：不是把追问隐藏起来，而是让追问成为可闭合的对话协议。
+
+### 18.5 第一批实现的停止线
+
+第一批实现只允许做到：
+
+1. 从现有 DB 表构造 read-only ledger view；
+2. 生成 Turn Context Snapshot；
+3. 运行 Context Reconciliation 的 dry-run preview；
+4. 编译 provider-neutral graph 和 OpenAI-compatible messages；
+5. 生成 ContextBuildManifest；
+6. 提供 debug endpoint 或内部诊断日志；
+7. 对比当前实际 `messages` 与 compiler 输出；
+8. 增加单元测试和真实 session 诊断测试。
+
+第一批不允许做到：
+
+1. 不替换 `AltusRunCoordinator.runModelLoop`；
+2. 不改变现有 SSE 事件名；
+3. 不改变 `AltusRunEventWriter.appendRunEvent(...)` 的发布顺序；
+4. 不改变 `conversation_messages.messageKey` 生成规则；
+5. 不把 Redis 作为 ledger 存储；
+6. 不让 compiler 写状态；
+7. 不让 LLM 直接改内部 lifecycle；
+8. 不触碰 direct mode。
+
+### 18.6 最终判断
+
+文档现在适合 OneCEO，前提是严格按 `adapter-first -> evidence -> clarification pairing -> tool envelope -> dynamic context -> cache/recovery` 的顺序落地。
+
+真正要避免的不是“大方案”，而是第一步就把方案实现成另一个并行事实源。只要第一阶段坚持 read-only adapter 和 manifest 对比，这份设计可以安全进入代码实现评审。

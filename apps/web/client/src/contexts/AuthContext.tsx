@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import {
   type AppAuthUser,
@@ -47,7 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [credits, setCredits] = useState<UserCredits | null>(null);
 
-  const refreshCredits = async () => {
+  const refreshCredits = useCallback(async () => {
     try {
       const response = await fetch('/api/billing/credits', {
         credentials: 'include',
@@ -59,7 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('获取积分余额失败:', error);
     }
-  };
+  }, []);
 
   const refresh = async () => {
     try {

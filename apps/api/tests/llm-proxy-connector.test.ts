@@ -66,7 +66,7 @@ test('toAnthropicRequest maps OpenAI tools and tool results into Anthropic messa
     max_tokens: 1024,
   });
 
-  assert.equal(payload.system, 'You are Altus.');
+  assert.deepEqual(payload.system, [{ type: 'text', text: 'You are Altus.', cache_control: { type: 'ephemeral' } }]);
   assert.deepEqual(payload.tools, [
     {
       name: 'write_file',
@@ -157,6 +157,69 @@ test('toOpenAiChatCompletion maps Anthropic tool_use to OpenAI tool_calls', () =
       },
     },
   ]);
+});
+
+test('toOpenAiChatCompletion normalizes cached token usage fields', () => {
+  const completion = toOpenAiChatCompletion({
+    id: 'msg_cache_1',
+    model: 'qwen3-max-2026-01-23',
+    stop_reason: 'end_turn',
+    content: [{ type: 'text', text: 'ok' }],
+    usage: {
+      input_tokens: 1000,
+      output_tokens: 100,
+      prompt_tokens_details: {
+        cached_tokens: 240,
+        cache_creation_input_tokens: 80,
+      },
+    },
+  });
+
+  assert.equal(completion.usage.prompt_tokens, 1000);
+  assert.equal(completion.usage.completion_tokens, 100);
+  assert.equal(completion.usage.prompt_tokens_details?.cached_tokens, 240);
+  assert.equal(completion.usage.prompt_tokens_details?.cache_creation_input_tokens, 80);
+  assert.equal(completion.usage.cache_creation_input_tokens, 80);
+});
+
+test('toOpenAiChatCompletion accepts DashScope cached_tokens compatibility field', () => {
+  const completion = toOpenAiChatCompletion({
+    id: 'msg_cache_2',
+    model: 'qwen3-max-2026-01-23',
+    stop_reason: 'end_turn',
+    content: [{ type: 'text', text: 'ok' }],
+    usage: {
+      input_tokens: 1000,
+      output_tokens: 100,
+      cached_tokens: 320,
+    },
+  });
+
+  assert.equal(completion.usage.prompt_tokens_details?.cached_tokens, 320);
+});
+
+test('toOpenAiChatCompletion reads DashScope nested cache creation details', () => {
+  const completion = toOpenAiChatCompletion({
+    id: 'msg_cache_3',
+    model: 'qwen3-max-2026-01-23',
+    stop_reason: 'end_turn',
+    content: [{ type: 'text', text: 'ok' }],
+    usage: {
+      input_tokens: 1600,
+      output_tokens: 100,
+      prompt_tokens_details: {
+        cached_tokens: 0,
+        cache_creation: {
+          cache_type: 'ephemeral',
+          ephemeral_5m_input_tokens: 1536,
+          cache_creation_input_tokens: 1536,
+        },
+      },
+    },
+  });
+
+  assert.equal(completion.usage.prompt_tokens_details?.cache_creation_input_tokens, 1536);
+  assert.equal(completion.usage.cache_creation_input_tokens, 1536);
 });
 
 test('toAnthropicRequest maps explicit tool_choice and marks tool_result errors', () => {
@@ -391,6 +454,42 @@ test('transformAnthropicStreamEvent maps text and tool streaming events to OpenA
     state
   );
   assert.deepEqual(doneChunks, ['data: [DONE]\n\n']);
+});
+
+test('transformAnthropicStreamEvent normalizes cache usage in stream chunks', () => {
+  const state = {
+    id: 'chatcmpl_stream_cache',
+    model: 'qwen3-max-2026-01-23',
+    created: 1710000002,
+    roleSent: true,
+    toolIndexes: new Map<number, number>(),
+  };
+
+  const chunks = transformAnthropicStreamEvent(
+    {
+      event: 'message_delta',
+      data: {
+        delta: {
+          stop_reason: 'end_turn',
+          usage: {
+            input_tokens: 1000,
+            output_tokens: 100,
+            prompt_tokens_details: {
+              cached_tokens: 200,
+              cache_creation_input_tokens: 50,
+            },
+          },
+        },
+      },
+    },
+    state
+  );
+
+  assert.equal(chunks.length, 1);
+  const payload = JSON.parse(chunks[0]!.replace(/^data: /, '').trim());
+  assert.equal(payload.usage.prompt_tokens_details.cached_tokens, 200);
+  assert.equal(payload.usage.prompt_tokens_details.cache_creation_input_tokens, 50);
+  assert.equal(payload.usage.cache_creation_input_tokens, 50);
 });
 
 test('transformAnthropicStreamEvent maps error events to OpenAI error payload', () => {

@@ -77,6 +77,7 @@ interface SettingsDialogProps {
 type SettingsPanelProps = {
   activeTab: SettingsTab;
   onActiveTabChange: (tab: SettingsTab) => void;
+  onClose?: () => void;
   connectorTargetSessionId?: string | null;
   highlightedConnector?: ConnectorKey | null;
 };
@@ -265,6 +266,7 @@ function AppearancePreview({ theme }: { theme: ThemePreference }) {
 export function SettingsPanel({
   activeTab,
   onActiveTabChange,
+  onClose,
   connectorTargetSessionId,
   highlightedConnector,
 }: SettingsPanelProps) {
@@ -1598,7 +1600,7 @@ export function SettingsPanel({
               </TabsContent>
 
               <TabsContent value="billing" className="mt-0">
-                <BillingSettingsPanel />
+                <BillingSettingsPanel onClose={onClose} />
               </TabsContent>
             </div>
           </div>
@@ -1638,6 +1640,7 @@ export function SettingsDialog({
           <SettingsPanel
             activeTab={activeTab}
             onActiveTabChange={onActiveTabChange}
+            onClose={() => onOpenChange(false)}
             connectorTargetSessionId={connectorTargetSessionId}
             highlightedConnector={highlightedConnector}
           />

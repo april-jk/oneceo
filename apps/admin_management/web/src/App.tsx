@@ -126,7 +126,27 @@ type AuditFilterState = {
   to: string;
 };
 
-type ConversationDialogTab = 'overview' | 'interaction' | 'infra' | 'raw' | 'transitions';
+type ConversationDialogTab = 'overview' | 'billing' | 'interaction' | 'infra' | 'raw' | 'transitions';
+type ConversationBillingUsage = {
+  totalCredits: number;
+  totalTokens: number;
+  promptTokens: number;
+  completionTokens: number;
+  cachedPromptTokens: number;
+  cacheCreationTokens: number;
+  callCount: number;
+  items: Array<{
+    id: string;
+    model: string;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    cachedPromptTokens: number;
+    cacheCreationTokens: number;
+    creditsConsumed: number;
+    createdAt: string;
+  }>;
+};
 type AdminDetailOrigin = {
   section: SectionKey;
   trail: string;
@@ -3680,6 +3700,8 @@ export default function App() {
   const [conversationDialogTab, setConversationDialogTab] = useState<ConversationDialogTab>('overview');
   const [conversationDeploymentSummary, setConversationDeploymentSummary] = useState<DeploymentRecord | null>(null);
   const [conversationDeploymentLoading, setConversationDeploymentLoading] = useState(false);
+  const [conversationBillingUsage, setConversationBillingUsage] = useState<ConversationBillingUsage | null>(null);
+  const [conversationBillingLoading, setConversationBillingLoading] = useState(false);
   const [transitionView, setTransitionView] = useState<'timeline' | 'list'>('timeline');
   const [transitionQuery, setTransitionQuery] = useState('');
   const [transitionFilters, setTransitionFilters] = useState(DEFAULT_TRANSITION_FILTERS);
@@ -5781,6 +5803,49 @@ export default function App() {
   }, [activeSection, authStatus, conversationDialog, selectedSessionId]);
 
   useEffect(() => {
+    const sessionId = conversationDetail?.session.id || null;
+    if (!sessionId || conversationDialogTab !== 'billing') return;
+    let cancelled = false;
+    setConversationBillingLoading(true);
+    void fetch(`/api/internal/billing/usage-logs?sessionId=${encodeURIComponent(sessionId)}&limit=100`, {
+      credentials: 'include',
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null);
+          throw new Error(payload?.error || '会话计费信息加载失败');
+        }
+        return response.json();
+      })
+      .then((payload) => {
+        if (cancelled) return;
+        const items = Array.isArray(payload?.items) ? payload.items : [];
+        setConversationBillingUsage({
+          totalCredits: items.reduce((sum: number, item: any) => sum + Number(item.creditsConsumed || 0), 0),
+          totalTokens: items.reduce((sum: number, item: any) => sum + Number(item.totalTokens || 0), 0),
+          promptTokens: items.reduce((sum: number, item: any) => sum + Number(item.promptTokens || 0), 0),
+          completionTokens: items.reduce((sum: number, item: any) => sum + Number(item.completionTokens || 0), 0),
+          cachedPromptTokens: items.reduce((sum: number, item: any) => sum + Number(item.cachedPromptTokens || 0), 0),
+          cacheCreationTokens: items.reduce((sum: number, item: any) => sum + Number(item.cacheCreationTokens || 0), 0),
+          callCount: items.length,
+          items,
+        });
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setConversationBillingUsage(null);
+          setError(error instanceof Error ? error.message : '会话计费信息加载失败');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setConversationBillingLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationDetail?.session.id, conversationDialogTab]);
+
+  useEffect(() => {
     if (authStatus !== 'authenticated') {
       return;
     }
@@ -6844,6 +6909,80 @@ export default function App() {
               </div>
             </div>
           ) : null}
+        </article>
+      </div>
+    );
+  };
+
+  const renderConversationBillingPanel = () => {
+    if (conversationBillingLoading) {
+      return <p className="empty">正在加载会话计费信息...</p>;
+    }
+    if (!conversationBillingUsage) {
+      return <p className="empty">当前会话暂无计费记录</p>;
+    }
+    return (
+      <div className="conversation-dialog-overview conversation-dialog-overview-layout">
+        <article className="sub-panel conversation-dialog-overview-hero">
+          <div className="conversation-dialog-overview-top">
+            <div>
+              <p className="section-tag">计费摘要</p>
+              <h3 className="conversation-dialog-overview-title">{conversationDetail?.session.title || '未命名会话'}</h3>
+              <p className="conversation-dialog-overview-subtitle mono">{conversationDetail?.session.id || '-'}</p>
+            </div>
+          </div>
+          <div className="conversation-dialog-overview-stat-grid">
+            <div>
+              <span>积分消耗</span>
+              <strong>{conversationBillingUsage.totalCredits.toLocaleString()}</strong>
+            </div>
+            <div>
+              <span>Total tokens</span>
+              <strong>{conversationBillingUsage.totalTokens.toLocaleString()}</strong>
+            </div>
+            <div>
+              <span>缓存命中</span>
+              <strong>{conversationBillingUsage.cachedPromptTokens.toLocaleString()}</strong>
+            </div>
+            <div>
+              <span>调用次数</span>
+              <strong>{conversationBillingUsage.callCount.toLocaleString()}</strong>
+            </div>
+          </div>
+        </article>
+
+        <article className="sub-panel conversation-dialog-overview-card">
+          <div className="panel-subtitle">Token 构成</div>
+          <dl className="conversation-dialog-overview-facts">
+            <div><dt>输入 tokens</dt><dd>{conversationBillingUsage.promptTokens.toLocaleString()}</dd></div>
+            <div><dt>输出 tokens</dt><dd>{conversationBillingUsage.completionTokens.toLocaleString()}</dd></div>
+            <div><dt>缓存创建 tokens</dt><dd>{conversationBillingUsage.cacheCreationTokens.toLocaleString()}</dd></div>
+            <div><dt>缓存命中 tokens</dt><dd>{conversationBillingUsage.cachedPromptTokens.toLocaleString()}</dd></div>
+          </dl>
+        </article>
+
+        <article className="sub-panel conversation-dialog-overview-card">
+          <div className="panel-subtitle">调用明细</div>
+          {conversationBillingUsage.items.length > 0 ? (
+            <div className="compact-list conversation-infra-related-list">
+              {conversationBillingUsage.items.map((item) => (
+                <article key={item.id} className="compact-item conversation-infra-related-item">
+                  <div className="conversation-infra-related-head">
+                    <strong>{item.creditsConsumed.toLocaleString()} credits</strong>
+                    <span className="mono">{formatDateTime(item.createdAt)}</span>
+                  </div>
+                  <div className="conversation-infra-related-main">
+                    <span>{Number(item.totalTokens || item.promptTokens + item.completionTokens).toLocaleString()} tokens</span>
+                    <span>输入 {item.promptTokens.toLocaleString()}</span>
+                    <span>输出 {item.completionTokens.toLocaleString()}</span>
+                    <span>缓存命中 {item.cachedPromptTokens.toLocaleString()}</span>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="empty">当前会话暂无调用明细</p>
+          )}
         </article>
       </div>
     );
@@ -9008,10 +9147,11 @@ export default function App() {
                 <div className="button-grid modal-tab-grid conversation-dialog-tab-grid">
                   {[
                     { key: 'overview', label: '概览', tabKey: '01' },
-                    { key: 'interaction', label: '交互回放', tabKey: '02' },
-                    { key: 'infra', label: '关联', tabKey: '03' },
-                    { key: 'raw', label: `日志 (${conversationDetailedLogs.counts.total})`, tabKey: '04' },
-                    { key: 'transitions', label: `流转 (${conversationTabCounts.transitions})`, tabKey: '05' },
+                    { key: 'billing', label: '计费', tabKey: '02' },
+                    { key: 'interaction', label: '交互回放', tabKey: '03' },
+                    { key: 'infra', label: '关联', tabKey: '04' },
+                    { key: 'raw', label: `日志 (${conversationDetailedLogs.counts.total})`, tabKey: '05' },
+                    { key: 'transitions', label: `流转 (${conversationTabCounts.transitions})`, tabKey: '06' },
                   ].map((item) => (
                     <button
                       key={item.key}
@@ -9026,6 +9166,7 @@ export default function App() {
                 </div>
                 <div className="modal-body conversation-dialog-body">
                   {conversationDialogTab === 'overview' ? renderConversationContentOverview() : null}
+                  {conversationDialogTab === 'billing' ? renderConversationBillingPanel() : null}
                   {conversationDialogTab === 'interaction' ? (
                     <>
                       {renderConversationReplayPanel()}

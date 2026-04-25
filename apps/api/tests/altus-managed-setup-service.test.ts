@@ -8,13 +8,17 @@ import { taskCreationSessionDAO, taskSessionRunDAO } from '../src/db/dao';
 import { taskSessionConnectorBindingDAO } from '../src/db/dao/task-session-connector-binding.dao';
 import { managedImageObjectService } from '../src/services/managed-image-object-service';
 import { AltusManagedSetupService } from '../src/services/altus-managed-setup-service';
+import { altusClarificationTransitionAgent } from '../src/services/altus-clarification-transition-agent';
 import { sandboxAgentProvisionService } from '../src/services/sandbox-agent-provision-service';
 import { sessionMcpRecoveryService } from '../src/services/session-mcp-recovery-service';
 import { resolveOpencodeWorkspacePath } from '../src/utils/opencode-workspace';
 
+process.env.ALTUS_CLARIFICATION_TRANSITION_DISABLED = 'true';
+
 afterEach(() => {
   mock.reset();
   delete process.env.OPENCODE_TASK_WORKSPACE_ROOT;
+  process.env.ALTUS_CLARIFICATION_TRANSITION_DISABLED = 'true';
 });
 
 const tmpDirsToRemove = new Set<string>();
@@ -342,4 +346,170 @@ test('buildTaskIntentProfile treats unrelated user_response as a new turn instea
   assert.equal(profile.needsClarification, false);
   assert.equal(profile.clarificationType, 'none');
   assert.doesNotMatch(profile.clarificationQuestion, /开发语言或框架/);
+});
+
+test('buildTaskIntentProfile accepts LLM advisory transition instead of forcing artifact clarification', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我想想，我想做个用户管理系统，应该怎么做',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => null as any);
+  mock.method(altusClarificationTransitionAgent, 'propose', async () => ({
+    action: 'switch_to_advisory_mode',
+    reason: 'user asks for advice before implementation',
+  }) as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-advisory-transition',
+    '帮我想想，我想做个用户管理系统，应该怎么做',
+    'user_input'
+  );
+
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.clarificationType, 'none');
+  assert.equal(profile.clarificationTransition?.nextState, 'advisory');
+});
+
+test('buildTaskIntentProfile clears a pending clarification when LLM detects advisory mode', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我做一个用户管理系统',
+      metadata: {},
+    },
+    {
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这次要交付的是网页应用、后端 API、本地脚本，还是完整业务系统？',
+      metadata: {},
+    },
+    {
+      role: 'user',
+      messageType: 'user_response',
+      content: '先帮我做个方案',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    pendingQuestion: '这次要交付的是网页应用、后端 API、本地脚本，还是完整业务系统？',
+    pendingOptions: ['网页应用', '后端 API', '本地脚本', '完整业务系统'],
+    pendingClarificationType: 'artifact_type',
+  }) as any);
+  mock.method(altusClarificationTransitionAgent, 'propose', async () => ({
+    action: 'switch_to_advisory_mode',
+    reason: 'user asks for proposal instead of choosing delivery artifact',
+  }) as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-pending-advisory-transition',
+    '先帮我做个方案',
+    'user_response'
+  );
+
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.clarificationType, 'none');
+  assert.equal(profile.clarificationTransition?.nextState, 'advisory');
+});
+
+test('buildTaskIntentProfile accepts user delegation to Altus defaults through transition tool', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我做一个管理后台',
+      metadata: {},
+    },
+    {
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这次希望使用哪种开发语言或框架？如果没有指定，我将按仓库现有技术栈继续。',
+      metadata: {},
+    },
+    {
+      role: 'user',
+      messageType: 'user_response',
+      content: '你推荐就行',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    pendingQuestion: '这次希望使用哪种开发语言或框架？如果没有指定，我将按仓库现有技术栈继续。',
+    pendingOptions: undefined,
+    pendingClarificationType: 'tech_stack',
+  }) as any);
+  mock.method(altusClarificationTransitionAgent, 'propose', async () => ({
+    action: 'delegate_to_agent_default',
+    clarificationType: 'tech_stack',
+    assumedDefault: 'Use the repository default stack.',
+    confidence: 'high',
+    targetCapability: 'project.local_scaffold',
+    reason: 'user delegates the stack choice',
+  }) as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-default-delegation',
+    '你推荐就行',
+    'user_response'
+  );
+
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.clarificationType, 'none');
+  assert.equal(profile.clarificationTransition?.nextState, 'ready_to_execute');
+  assert.deepEqual(profile.clarificationTransition?.assumptions, ['Use the repository default stack.']);
+});
+
+test('buildTaskIntentProfile routes protected capability delegation to user confirmation', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我部署这个应用',
+      metadata: {},
+    },
+    {
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这次只需要源码，还是还需要本地可运行、测试通过，或可以直接部署？',
+      metadata: {},
+    },
+    {
+      role: 'user',
+      messageType: 'user_response',
+      content: '你决定',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    pendingQuestion: '这次只需要源码，还是还需要本地可运行、测试通过，或可以直接部署？',
+    pendingOptions: ['只要源码', '本地可运行', '测试通过', '可直接部署'],
+    pendingClarificationType: 'acceptance_requirement',
+  }) as any);
+  mock.method(altusClarificationTransitionAgent, 'propose', async () => ({
+    action: 'delegate_to_agent_default',
+    clarificationType: 'acceptance_requirement',
+    assumedDefault: 'Deploy to production.',
+    confidence: 'medium',
+    targetCapability: 'deploy.production',
+    reason: 'user delegates delivery choice',
+  }) as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-protected-capability-confirmation',
+    '你决定',
+    'user_response'
+  );
+
+  assert.equal(profile.needsClarification, true);
+  assert.equal(profile.clarificationType, 'acceptance_requirement');
+  assert.match(profile.clarificationQuestion, /生产环境/);
+  assert.equal(profile.clarificationTransition?.nextState, 'risk_confirmation');
 });

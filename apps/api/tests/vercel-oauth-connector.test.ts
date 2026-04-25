@@ -9,10 +9,6 @@ const originalFetch = global.fetch;
 const envBackup = {
   CONNECTOR_SECRET_KEY: process.env.CONNECTOR_SECRET_KEY,
   FRONTEND_URL: process.env.FRONTEND_URL,
-  VERCEL_CONNECTOR_CLIENT_ID: process.env.VERCEL_CONNECTOR_CLIENT_ID,
-  VERCEL_CONNECTOR_CLIENT_SECRET: process.env.VERCEL_CONNECTOR_CLIENT_SECRET,
-  VERCEL_CONNECTOR_REDIRECT_URI: process.env.VERCEL_CONNECTOR_REDIRECT_URI,
-  VERCEL_CONNECTOR_MODE: process.env.VERCEL_CONNECTOR_MODE,
   VERCEL_INTEGRATION_SLUG: process.env.VERCEL_INTEGRATION_SLUG,
   VERCEL_INTEGRATION_CLIENT_ID: process.env.VERCEL_INTEGRATION_CLIENT_ID,
   VERCEL_INTEGRATION_CLIENT_SECRET: process.env.VERCEL_INTEGRATION_CLIENT_SECRET,
@@ -33,11 +29,10 @@ afterEach(() => {
 
 test('vercel integration oauth start uses install url without PKCE', async () => {
   process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
-  process.env.VERCEL_CONNECTOR_MODE = 'integration';
   process.env.VERCEL_INTEGRATION_SLUG = 'oneceo';
   process.env.VERCEL_INTEGRATION_CLIENT_ID = 'vercel-client';
   process.env.VERCEL_INTEGRATION_CLIENT_SECRET = 'vercel-secret';
-  process.env.VERCEL_CONNECTOR_REDIRECT_URI = '/vercel/callback';
+  process.env.VERCEL_INTEGRATION_REDIRECT_URI = 'https://dev.oneceo.ai/vercel/callback';
 
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
@@ -72,11 +67,10 @@ test('vercel integration oauth start uses install url without PKCE', async () =>
 test('vercel integration oauth callback stores installation token and team context', async () => {
   process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
   process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
-  process.env.VERCEL_CONNECTOR_MODE = 'integration';
   process.env.VERCEL_INTEGRATION_SLUG = 'oneceo';
   process.env.VERCEL_INTEGRATION_CLIENT_ID = 'vercel-client';
   process.env.VERCEL_INTEGRATION_CLIENT_SECRET = 'vercel-secret';
-  process.env.VERCEL_CONNECTOR_REDIRECT_URI = '/vercel/callback';
+  process.env.VERCEL_INTEGRATION_REDIRECT_URI = 'https://dev.oneceo.ai/vercel/callback';
 
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({

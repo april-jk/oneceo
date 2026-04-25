@@ -518,6 +518,7 @@ export function ConnectorGuideManagementSection({
         <div className="skill-toolbar">
           <select
             className="control-input"
+            aria-label="连接器筛选"
             value={filters.connectorKey}
             onChange={(event) => setFilters((prev) => ({ ...prev, connectorKey: event.target.value }))}
           >
@@ -530,6 +531,7 @@ export function ConnectorGuideManagementSection({
           </select>
           <select
             className="control-input"
+            aria-label="连接器指南状态筛选"
             value={filters.status}
             onChange={(event) => setFilters((prev) => ({ ...prev, status: event.target.value }))}
           >
@@ -540,6 +542,7 @@ export function ConnectorGuideManagementSection({
           </select>
           <input
             className="control-input"
+            aria-label="按连接器搜索"
             placeholder="按连接器搜索"
             value={filters.query}
             onChange={(event) => setFilters((prev) => ({ ...prev, query: event.target.value }))}

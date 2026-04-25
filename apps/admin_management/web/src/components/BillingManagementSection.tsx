@@ -515,12 +515,13 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                 className="pricing-form-modal"
                 role="dialog"
                 aria-modal="true"
+                aria-labelledby="billing-pricing-form-title"
                 onClick={(event) => event.stopPropagation()}
               >
                 <div className="pricing-form-modal-header">
                   <div className="pricing-form-modal-heading">
                     <p className="section-tag">定价配置</p>
-                    <h2>{pricingFormMode === 'update' ? '更新定价配置（创建新版本）' : '新建定价配置'}</h2>
+                    <h2 id="billing-pricing-form-title">{pricingFormMode === 'update' ? '更新定价配置（创建新版本）' : '新建定价配置'}</h2>
                     <p className="panel-caption">
                       {pricingFormMode === 'update'
                         ? '保存后会按生效时间创建新版本，历史 usage 不回写。'
@@ -836,7 +837,9 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
 
       {/* Stats Tab */}
       {activeTab === 'stats' && (
-        <BillingStatsDashboard onNotify={onNotify} />
+        <div className="billing-stats-layout-rail billing-stats-layout-fill">
+          <BillingStatsDashboard onNotify={onNotify} />
+        </div>
       )}
 
       {/* Logs Tab */}

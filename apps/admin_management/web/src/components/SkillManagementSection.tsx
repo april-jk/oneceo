@@ -970,12 +970,14 @@ export function SkillManagementSection({
         <div className="skill-toolbar">
           <input
             className="control-input"
+            aria-label="按名称或 slug 搜索技能"
             placeholder="按名称或 slug 搜索"
             value={filters.query}
             onChange={(event) => setFilters((prev) => ({ ...prev, query: event.target.value }))}
           />
           <select
             className="control-input"
+            aria-label="技能状态筛选"
             value={filters.status}
             onChange={(event) => setFilters((prev) => ({ ...prev, status: event.target.value }))}
           >
@@ -985,6 +987,7 @@ export function SkillManagementSection({
           </select>
           <select
             className="control-input"
+            aria-label="技能分类筛选"
             value={filters.category}
             onChange={(event) => setFilters((prev) => ({ ...prev, category: event.target.value }))}
           >

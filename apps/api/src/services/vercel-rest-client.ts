@@ -70,11 +70,12 @@ export class VercelRestClient {
       path: string;
       query?: Record<string, unknown>;
       body?: Record<string, unknown>;
+      includeTeamId?: boolean;
     }
   ) {
     const url = new URL(`https://api.vercel.com${input.path}`);
     appendQuery(url, {
-      teamId: asText(context.teamId),
+      teamId: input.includeTeamId === false ? undefined : asText(context.teamId),
       ...(input.query || {}),
     });
 
@@ -113,6 +114,7 @@ export class VercelRestClient {
       path: string;
       query?: Record<string, unknown>;
       body?: Record<string, unknown>;
+      includeTeamId?: boolean;
     }
   ) {
     const accessToken = await vercelTokenRefreshService.getActiveAccessToken({
@@ -144,12 +146,57 @@ export class VercelRestClient {
     });
   }
 
+  listTeams(
+    context: VercelRuntimeRequestContext,
+    query?: Record<string, unknown>
+  ) {
+    return this.request(context, {
+      method: 'GET',
+      path: '/v2/teams',
+      query,
+      includeTeamId: false,
+    });
+  }
+
+  createProject(
+    context: VercelRuntimeRequestContext,
+    body: Record<string, unknown>
+  ) {
+    return this.request(context, {
+      method: 'POST',
+      path: '/v11/projects',
+      body,
+    });
+  }
+
   getProject(
     context: VercelRuntimeRequestContext,
     projectIdOrName: string
   ) {
     return this.request(context, {
       method: 'GET',
+      path: `/v9/projects/${encodePathSegment(projectIdOrName)}`,
+    });
+  }
+
+  updateProject(
+    context: VercelRuntimeRequestContext,
+    projectIdOrName: string,
+    body: Record<string, unknown>
+  ) {
+    return this.request(context, {
+      method: 'PATCH',
+      path: `/v9/projects/${encodePathSegment(projectIdOrName)}`,
+      body,
+    });
+  }
+
+  deleteProject(
+    context: VercelRuntimeRequestContext,
+    projectIdOrName: string
+  ) {
+    return this.request(context, {
+      method: 'DELETE',
       path: `/v9/projects/${encodePathSegment(projectIdOrName)}`,
     });
   }
@@ -162,6 +209,19 @@ export class VercelRestClient {
       method: 'GET',
       path: '/v6/deployments',
       query,
+    });
+  }
+
+  createDeployment(
+    context: VercelRuntimeRequestContext,
+    body: Record<string, unknown>,
+    query?: Record<string, unknown>
+  ) {
+    return this.request(context, {
+      method: 'POST',
+      path: '/v13/deployments',
+      query,
+      body,
     });
   }
 

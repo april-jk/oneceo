@@ -39,6 +39,24 @@ const XLSX_PHASE_SKILLS = [
   'xlsx_qa_reviewer',
 ] as const;
 
+const VERCEL_MCP_PROJECT_CONFIG_TOOLS = [
+  'vercel_create_project',
+  'vercel_create_project_from_git',
+  'vercel_update_project',
+  'vercel_update_project_git_repository',
+  'vercel_get_project_git_repository',
+  'vercel_delete_project',
+] as const;
+
+const VERCEL_MCP_RELEASE_SAFETY_TOOLS = [
+  'vercel_create_deployment',
+  'vercel_get_deployment_events',
+  'vercel_add_project_domain',
+  'vercel_upsert_env_var',
+  'vercel_remove_env_var',
+  'vercel_redeploy_deployment',
+] as const;
+
 function formatCodeList(values: readonly string[]) {
   return values.map((value) => `\`${value}\``).join(', ');
 }
@@ -223,6 +241,119 @@ export const PLATFORM_SKILL_SEEDS: PlatformSkillSeed[] = [
           '- 同一 repair category 和同一失败指纹反复出现时，先确认平台检查条件是否真的发生变化。',
           '- 不要在 `resource_binding` 错误下重复改 HTML、manifest 或启动脚本。',
           '- 每次重试前都应说明当前是在修模板、修配置，还是修平台资源绑定。',
+        ].join('\n'),
+      },
+    ],
+  },
+  {
+    slug: 'vercel-mcp-project-config-operator',
+    name: 'Vercel MCP Project Config',
+    description:
+      'Keeps Vercel MCP project create/update/delete calls focused on project configuration, not source deployment.',
+    category: 'deployment',
+    metadataJson: {
+      systemRole: 'vercel_mcp_project_operator',
+      adminManaged: true,
+      required: false,
+      autoActivation: {
+        enabled: true,
+        triggers: ['vercel', 'project-config'],
+        toolNames: [...VERCEL_MCP_PROJECT_CONFIG_TOOLS],
+      },
+    },
+    bodyMarkdown: [
+      '# Skill Brief: Vercel MCP Project Config',
+      '',
+      'Use this only when a Vercel MCP project configuration tool is being called.',
+      '',
+      '## Applies To',
+      `- ${formatCodeList(VERCEL_MCP_PROJECT_CONFIG_TOOLS)}`,
+      '',
+      '## Required Checks',
+      '- Confirm the Vercel auth context, team, and target project before writing configuration.',
+      '- For Git binding tools, confirm the team, project, and repo before writing repository linkage.',
+      '- Inspect the workspace files and package scripts before changing framework, buildCommand, installCommand, outputDirectory, or rootDirectory.',
+      '- Treat delete as destructive: only proceed when the user explicitly asked to delete the project and the tool confirmation fields are satisfied.',
+      '',
+      '## Hard Boundaries',
+      '- `vercel_update_project` changes project settings only. It does not upload the current workspace or create a new deployment.',
+      '- Git repository binding tools manage the project-to-repository relationship only; they do not upload source code.',
+      '- Do not change rootDirectory, framework, or outputDirectory to fix deployment failures unless repository evidence supports that specific change.',
+      '- Do not invent zip, tar, curl, or raw REST upload flows when the available MCP tools do not expose source deployment.',
+      '- If the user asks for first-time source deployment and no deployment-upload tool exists, say the current Vercel MCP can configure projects but cannot upload this workspace.',
+      '- For Vercel CLI source deployment, the official path is `vercel deploy`; for prebuilt output it is `vercel build` followed by `vercel deploy --prebuilt`.',
+      '',
+      '## Configuration Guardrails',
+      '- Vercel auto-detects frameworks, so only override `framework` when the repository evidence is clear.',
+      '- Vite and many static builds commonly output `dist`; Next.js should not be forced to `dist` unless the project is explicitly static export.',
+      '- Never mark local build success as a completed Vercel deployment unless a Vercel deployment tool returned a deployment id or URL.',
+    ].join('\n'),
+    resources: [
+      {
+        resourcePath: 'references/vercel-project-config.md',
+        resourceType: 'reference',
+        contentMarkdown: [
+          '# Vercel Project Config Notes',
+          '',
+          '- Official docs: https://vercel.com/docs/project-configuration',
+          '- Project config overrides defaults such as `framework`, `buildCommand`, `installCommand`, and `outputDirectory`.',
+          '- Build and deploy docs: https://vercel.com/docs/cli/deploy',
+          '- Prebuilt CLI deployments use `vercel build` then `vercel deploy --prebuilt`.',
+        ].join('\n'),
+      },
+    ],
+  },
+  {
+    slug: 'vercel-mcp-release-safety-operator',
+    name: 'Vercel MCP Release Safety',
+    description:
+      'Adds concise safety guidance for Vercel MCP deployment events, redeploy, domains, and environment variables.',
+    category: 'deployment',
+    metadataJson: {
+      systemRole: 'vercel_mcp_release_operator',
+      adminManaged: true,
+      required: false,
+      autoActivation: {
+        enabled: true,
+        triggers: ['vercel', 'deployment', 'env', 'domain'],
+        toolNames: [...VERCEL_MCP_RELEASE_SAFETY_TOOLS],
+      },
+    },
+    bodyMarkdown: [
+      '# Skill Brief: Vercel MCP Release Safety',
+      '',
+      'Use this only when a Vercel MCP release, domain, deployment event, or environment variable tool is being called.',
+      '',
+      '## Applies To',
+      `- ${formatCodeList(VERCEL_MCP_RELEASE_SAFETY_TOOLS)}`,
+      '',
+      '## Deployment Diagnosis',
+      '- `vercel_create_deployment` only supports Git deployments in this wrapper. It does not upload the current workspace files.',
+      '- Production deployments require explicit user intent for `target=production`.',
+      '- Use deployment events before guessing why a build or deployment failed.',
+      '- `vercel_redeploy_deployment` can only redeploy an existing deployment id. It is not a first source upload tool.',
+      '- Do not treat `vercel_create_project_from_git` or `vercel_update_project_git_repository` as a completed deployment.',
+      '- Do not replace a missing deployment-upload tool with ad hoc zip, tar, curl, or raw REST upload commands.',
+      '',
+      '## Environment Variables',
+      '- Confirm the project and explicit target before writing or deleting env vars.',
+      '- Do not guess `production`, `preview`, or `development`; use the user request or ask for clarification when the target is ambiguous.',
+      '- Never expose secret values in the final answer or diagnostic logs. Report only key names, targets, and operation status.',
+      '',
+      '## Domains',
+      '- Confirm the target project and domain ownership before adding a domain.',
+      '- For production domains or routing-sensitive changes, ensure the user intent is explicit before calling the write tool.',
+    ].join('\n'),
+    resources: [
+      {
+        resourcePath: 'references/vercel-release-safety.md',
+        resourceType: 'reference',
+        contentMarkdown: [
+          '# Vercel Release Safety Notes',
+          '',
+          '- Official MCP tools: https://vercel.com/docs/mcp/vercel-mcp/tools',
+          '- Vercel recommends human confirmation for MCP tool execution and caution with prompt injection.',
+          '- CLI source deployment docs: https://vercel.com/docs/cli/deploying-from-cli',
         ].join('\n'),
       },
     ],

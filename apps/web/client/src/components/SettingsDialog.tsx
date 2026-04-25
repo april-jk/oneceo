@@ -4,6 +4,7 @@ import { useLocation, useSearch } from "wouter";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -26,6 +27,7 @@ import { normalizeLanguage } from "@/i18n";
 import {
   ChevronLeft,
   Copy,
+  Diamond,
   KeyRound,
   LogOut,
   Mail,
@@ -41,6 +43,7 @@ import {
 } from "lucide-react";
 import { ConnectorCenterPanel } from "@/components/ConnectorCenterPanel";
 import { UserSkillSettingsPanel } from "@/components/UserSkillSettingsPanel";
+import { BillingSettingsPanel } from "@/components/BillingSettingsPanel";
 import {
   getCodexRuntimeConfig,
   updateCodexRuntimeConfig,
@@ -74,6 +77,7 @@ interface SettingsDialogProps {
 type SettingsPanelProps = {
   activeTab: SettingsTab;
   onActiveTabChange: (tab: SettingsTab) => void;
+  onClose?: () => void;
   connectorTargetSessionId?: string | null;
   highlightedConnector?: ConnectorKey | null;
 };
@@ -85,6 +89,7 @@ const SETTINGS_TABS: SettingsTab[] = [
   "settings",
   "skills",
   "connectors",
+  "billing",
 ];
 const DEFAULT_CODEX_BASE_URL = "https://llmapi.oneceo.ai";
 const DEFAULT_CODEX_MODEL = "gpt-5.3-codex";
@@ -261,6 +266,7 @@ function AppearancePreview({ theme }: { theme: ThemePreference }) {
 export function SettingsPanel({
   activeTab,
   onActiveTabChange,
+  onClose,
   connectorTargetSessionId,
   highlightedConnector,
 }: SettingsPanelProps) {
@@ -663,6 +669,15 @@ export function SettingsPanel({
                     <span className="truncate">
                       {t("settings.connectorsTab")}
                     </span>
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="billing"
+                    className="flex px-2 py-2.5 items-center text-[14px] leading-5 text-foreground max-md:whitespace-nowrap md:h-9 md:gap-2 md:self-stretch md:px-4 md:rounded-lg hover:bg-muted/60 data-[state=active]:bg-muted/60 data-[state=active]:font-medium max-md:border-b-2 max-md:border-foreground"
+                  >
+                    <span className="hidden md:block text-muted-foreground data-[state=active]:text-foreground">
+                      <Diamond className="h-4 w-4" />
+                    </span>
+                    <span className="truncate">积分与消费</span>
                   </TabsTrigger>
                 </div>
               </TabsList>
@@ -1583,6 +1598,10 @@ export function SettingsPanel({
                   highlightedConnector={highlightedConnector}
                 />
               </TabsContent>
+
+              <TabsContent value="billing" className="mt-0">
+                <BillingSettingsPanel onClose={onClose} />
+              </TabsContent>
             </div>
           </div>
         </div>
@@ -1609,6 +1628,7 @@ export function SettingsDialog({
       >
         <DialogHeader className="sr-only">
           <DialogTitle>{t("settings.title")}</DialogTitle>
+          <DialogDescription>{t("settings.description")}</DialogDescription>
         </DialogHeader>
         <button
           onClick={() => onOpenChange(false)}
@@ -1620,6 +1640,7 @@ export function SettingsDialog({
           <SettingsPanel
             activeTab={activeTab}
             onActiveTabChange={onActiveTabChange}
+            onClose={() => onOpenChange(false)}
             connectorTargetSessionId={connectorTargetSessionId}
             highlightedConnector={highlightedConnector}
           />

@@ -790,9 +790,9 @@
         }
       },
       "vercel": {
-        "intro": "The Vercel connector is now OAuth-only. After authorization completes, the platform calls the Vercel REST API through the oneceo internal MCP wrapper instead of exposing the official MCP endpoint or a personal token inside the sandbox.",
+        "intro": "The Vercel connector now uses Vercel Integration installation authorization. After authorization completes, the platform calls the Vercel REST API through the oneceo internal MCP wrapper instead of exposing the official MCP endpoint or a personal token inside the sandbox.",
         "steps": {
-          "0": "Click connect and finish the Vercel OAuth authorization flow.",
+          "0": "Click connect and finish the Vercel Integration installation flow.",
           "1": "If you want a default team or project scope, fill in teamId, projectId, or projectSlug on the profile.",
           "2": "After authorization, the platform mounts the profile as an internal MCP provider. The agent sees Vercel MCP tools, not a personal token."
         },
@@ -802,8 +802,8 @@
         },
         "links": {
           "oauthDocs": {
-            "label": "Vercel OAuth docs",
-            "description": "Read the authorization server and callback requirements"
+            "label": "Vercel Integration docs",
+            "description": "Read the Integration installation and callback requirements"
           },
           "restApi": {
             "label": "Vercel REST API",

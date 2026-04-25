@@ -216,6 +216,15 @@ function governanceToMetadataJson(value: PlatformSkillGovernance | Partial<Platf
   };
 }
 
+function shouldSyncSeedGovernance(seedMetadata: unknown, existingMetadata: unknown) {
+  const expected = governanceToMetadataJson(seedMetadata as any);
+  const current = governanceToMetadataJson(existingMetadata as any);
+  if (expected.adminManaged || current.adminManaged) {
+    return false;
+  }
+  return JSON.stringify(expected) !== JSON.stringify(current);
+}
+
 function isMissingPlatformSkillGovernanceColumnError(error: unknown) {
   if (!error || typeof error !== 'object') return false;
   const payload = error as {
@@ -282,10 +291,8 @@ export class PlatformSkillService {
         for (const seed of PLATFORM_SKILL_SEEDS) {
           const existed = await platformSkillDAO.getSkillBySlug(seed.slug);
           if (existed) {
-            const expected = governanceToMetadataJson(seed.metadataJson as any);
-            const current = governanceToMetadataJson(existed.metadataJson as any);
-            if (JSON.stringify(expected) !== JSON.stringify(current)) {
-              await platformSkillDAO.updateSkillMetadata(existed.id, expected);
+            if (shouldSyncSeedGovernance(seed.metadataJson, existed.metadataJson)) {
+              await platformSkillDAO.updateSkillMetadata(existed.id, governanceToMetadataJson(seed.metadataJson as any));
             }
             continue;
           }

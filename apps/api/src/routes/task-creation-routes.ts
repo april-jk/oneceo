@@ -53,6 +53,7 @@ import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registr
 import { resolveAttachConnectorError, sessionConnectorService } from '../services/session-connector-service';
 import { sessionConnectorDraftService } from '../services/session-connector-draft-service';
 import { connectorGuideService } from '../services/connector-guide-service';
+import { sessionMcpRecoveryService } from '../services/session-mcp-recovery-service';
 import { taskSessionCacheFacade } from '../services/task-session-cache-facade';
 import {
   inferFilenameFromResponse,
@@ -687,6 +688,28 @@ function parseConnectorKey(value: string): ConnectorKey {
     return value as ConnectorKey;
   }
   throw new Error(`未知连接器: ${value}`);
+}
+
+async function ensureSessionConnectorRecoveryIfNeeded(
+  taskSessionId: string,
+  orchestratorSessionId: string | undefined,
+  context: string
+) {
+  const runtimeSessionId = asText(orchestratorSessionId);
+  if (!runtimeSessionId) return;
+  try {
+    await sessionMcpRecoveryService.ensureSessionRecovered(taskSessionId, runtimeSessionId);
+  } catch (error) {
+    writeConnectorDebugLog(
+      `[${context}]`,
+      {
+        taskSessionId,
+        orchestratorSessionId: runtimeSessionId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      'warn'
+    );
+  }
 }
 
 function toIso(value: Date | string | null | undefined): string {
@@ -4499,6 +4522,11 @@ router.get('/sessions/:sessionId', async (req, res) => {
     }
 
     const runtimeStatus = await resolveRuntimeStatus(sessionData.runtime?.orchestratorSessionId);
+    await ensureSessionConnectorRecoveryIfNeeded(
+      sessionId,
+      asText(sessionData.runtime?.orchestratorSessionId) || undefined,
+      'TASK_SESSION_RECOVERY_ON_SESSION_GET_FAILED'
+    );
     let connectorsSummary: ReturnType<typeof sessionConnectorService.summarizeStatuses> | null = null;
     try {
       const statuses = await sessionConnectorService.listSessionConnectors(sessionId, currentUser.userId);
@@ -5198,6 +5226,12 @@ router.get('/sessions/:sessionId/connectors', async (req, res) => {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
     await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    await ensureSessionConnectorRecoveryIfNeeded(
+      sessionId,
+      asText(session?.runtime?.orchestratorSessionId) || undefined,
+      'TASK_SESSION_RECOVERY_ON_CONNECTORS_GET_FAILED'
+    );
     await connectorGuideService.ensureSessionGuidesUpToDate(sessionId).catch((error) => {
       writeConnectorDebugLog(
         '[CONNECTOR_GUIDE_ON_DEMAND_RECOMPUTE_FAILED]',
@@ -5266,10 +5300,22 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, 
       sessionConfig,
       runtimeOrchestratorSessionId
     );
+    let nextStatus = status;
+    if (status?.runtimeStatus === 'pending_recover') {
+      await ensureSessionConnectorRecoveryIfNeeded(
+        sessionId,
+        runtimeOrchestratorSessionId,
+        'TASK_SESSION_RECOVERY_ON_ATTACH_FAILED'
+      );
+      nextStatus =
+        (await sessionConnectorService.listSessionConnectors(sessionId, currentUser.userId)).find(
+          (item) => item.connectorKey === connectorKey
+        ) || status;
+    }
     return res.json({
       success: true,
       data: {
-        connector: status,
+        connector: nextStatus,
       },
     });
   } catch (error: any) {

@@ -11,6 +11,10 @@ import {
   buildSupabaseBridgeEnvironment,
   buildSupabaseStdioBridgeCommand,
 } from '../connectors/bridges/supabase-stdio-bridge';
+import {
+  buildVercelBridgeEnvironment,
+  buildVercelStdioBridgeCommand,
+} from '../connectors/bridges/vercel-stdio-bridge';
 import { createInternalConnectorRuntimeToken } from './internal-mcp-auth-service';
 
 export { CONNECTOR_KEYS, type ConnectorKey };
@@ -38,6 +42,7 @@ export type ConnectorConfigField = ConnectorDefinition['configFields'][number];
 export type ConnectorCatalogItem = ConnectorDefinition;
 
 export type ConnectorAccountSecret = {
+  source?: string;
   accessToken?: string;
   refreshToken?: string;
   tokenType?: string;
@@ -238,6 +243,37 @@ function buildGithubStdioWrapperCommand(): string {
   ].join('\n');
 }
 
+function buildInternalConnectorRuntimeAuth(input: {
+  connectorKey: ConnectorKey;
+  taskSessionId?: string;
+  userId?: string;
+  profileId?: string;
+}) {
+  const internalToken = asText(process.env.ONECEO_INTERNAL_TOKEN);
+  if (!internalToken) {
+    throw new Error(
+      `ONECEO_INTERNAL_TOKEN 未配置，无法构建 ${input.connectorKey} internal MCP 鉴权上下文`
+    );
+  }
+
+  const taskSessionId = asText(input.taskSessionId);
+  const userId = asText(input.userId);
+  const profileId = asText(input.profileId);
+  if (!taskSessionId || !userId || !profileId) {
+    throw new Error(`${input.connectorKey} internal MCP 缺少 session/profile 鉴权上下文`);
+  }
+
+  return {
+    internalToken,
+    runtimeAuth: createInternalConnectorRuntimeToken({
+      connectorKey: input.connectorKey,
+      taskSessionId,
+      userId,
+      profileId,
+    }),
+  };
+}
+
 function buildRemoteHeaders(
   connectorKey: ConnectorKey,
   item: ConnectorCatalogItem,
@@ -250,24 +286,15 @@ function buildRemoteHeaders(
   }
 ): Record<string, string> {
   if (connectorKey === 'vercel') {
-    const internalToken = asText(process.env.ONECEO_INTERNAL_TOKEN);
-    if (!internalToken) {
-      throw new Error('ONECEO_INTERNAL_TOKEN 未配置，无法构建 Vercel internal MCP 鉴权头');
-    }
-    const taskSessionId = asText(input.taskSessionId);
-    const userId = asText(input.userId);
-    const profileId = asText(input.profileId);
-    if (!taskSessionId || !userId || !profileId) {
-      throw new Error('Vercel internal MCP 缺少 session/profile 鉴权上下文');
-    }
+    const auth = buildInternalConnectorRuntimeAuth({
+      connectorKey,
+      taskSessionId: input.taskSessionId,
+      userId: input.userId,
+      profileId: input.profileId,
+    });
     return {
-      'x-oneceo-internal-token': internalToken,
-      'x-oneceo-connector-runtime-auth': createInternalConnectorRuntimeToken({
-        connectorKey,
-        taskSessionId,
-        userId,
-        profileId,
-      }),
+      'x-oneceo-internal-token': auth.internalToken,
+      'x-oneceo-connector-runtime-auth': auth.runtimeAuth,
     };
   }
 
@@ -420,6 +447,29 @@ export class ConnectorRegistry {
       if (!accessToken && !refreshToken) {
         throw new Error('Vercel 连接器缺少 access token 或 refresh token');
       }
+      const auth = buildInternalConnectorRuntimeAuth({
+        connectorKey,
+        taskSessionId: asText(input.runtimeContext?.taskSessionId),
+        userId: asText(input.runtimeContext?.userId),
+        profileId: asText(account.profileId),
+      });
+      const proxyEnabled = toBool(
+        process.env.ONECEO_PROXY_ENABLED ?? process.env.E2B_PROXY_ENABLED ?? 'true',
+        true
+      );
+      return {
+        type: 'local',
+        enabled: true,
+        command: ['node', '-e', buildVercelStdioBridgeCommand()],
+        environment: buildVercelBridgeEnvironment({
+          mcpUrl: buildRemoteUrl(item, {
+            connectorKey,
+          }),
+          internalToken: auth.internalToken,
+          runtimeAuth: auth.runtimeAuth,
+          proxyEnabled,
+        }),
+      };
     } else if (!accessToken) {
       throw new Error(`${item.name} 连接器缺少 access token`);
     }

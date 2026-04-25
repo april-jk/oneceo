@@ -790,9 +790,9 @@
         }
       },
       "vercel": {
-        "intro": "Vercel 连接器现在只保留 OAuth 授权路径。完成授权后，平台会通过 oneceo 内部 MCP 包装层在服务端代调 Vercel REST API，不再把官方 MCP 或个人 Token 直接暴露到 sandbox。",
+        "intro": "Vercel 连接器现在使用 Vercel Integration 安装授权。完成授权后，平台会通过 oneceo 内部 MCP 包装层在服务端代调 Vercel REST API，不再把官方 MCP 或个人 Token 直接暴露到 sandbox。",
         "steps": {
-          "0": "点击连接并完成 Vercel OAuth 授权。",
+          "0": "点击连接并完成 Vercel Integration 安装授权。",
           "1": "如果你希望默认锁定团队或项目，请在 profile 中填写 teamId、projectId 或 projectSlug。",
           "2": "授权完成后，平台会把当前 profile 挂载为内部 MCP provider，Agent 看到的是 Vercel MCP 工具，不是个人 Token。"
         },
@@ -802,8 +802,8 @@
         },
         "links": {
           "oauthDocs": {
-            "label": "Vercel OAuth 文档",
-            "description": "查看 Authorization Server API 与回调要求"
+            "label": "Vercel Integration 文档",
+            "description": "查看 Integration 安装与回调要求"
           },
           "restApi": {
             "label": "Vercel REST API",

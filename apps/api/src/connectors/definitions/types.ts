@@ -25,6 +25,8 @@ export type ConnectorConfigField = {
 
 export type ConnectorOauthProvider = {
   provider: 'github' | 'slack' | 'notion' | 'supabase' | 'figma' | 'vercel';
+  authorizationMode?: 'oauth' | 'vercel_integration';
+  integrationSlug?: string;
   clientId: string;
   clientSecret: string;
   redirectUri?: string;

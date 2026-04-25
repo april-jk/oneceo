@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Bell, Settings } from "lucide-react";
 import UserMenu from "@/components/UserMenu";
 import { openSettingsDialog } from "@/lib/settings-dialog-events";
+import { CreditBadge } from "./CreditBadge";
 
 interface HeaderProps {
   className?: string;
@@ -19,6 +20,7 @@ interface HeaderProps {
 export function HeaderActions({ className = "" }: { className?: string }) {
   return (
     <div className={`flex items-center gap-3 ${className}`}>
+      <CreditBadge />
       <Button variant="ghost" size="icon" className="h-9 w-9">
         <Bell className="w-4 h-4" />
       </Button>

@@ -3249,7 +3249,7 @@ const ADMIN_URL_QUERY_KEYS = [
   'audit_to',
 ] as const;
 
-const USER_DETAIL_TAB_VALUES = new Set(['overview', 'conversations', 'sandboxes', 'deployments']);
+const USER_DETAIL_TAB_VALUES = new Set(['overview', 'billing', 'conversations', 'sandboxes', 'deployments']);
 const DEPLOYMENT_VIEW_VALUES = new Set(['records', 'conversations', 'users', 'railway']);
 const DEPLOYMENT_DETAIL_TAB_VALUES = new Set(['overview', 'history', 'logs', 'relations', 'raw']);
 const SANDBOX_TAB_VALUES = new Set(['runtime']);
@@ -4464,7 +4464,11 @@ export default function App() {
       selectedUserId: userId,
       selectedUserLabel: current.selectedUserLabel,
       drawerOpen: true,
-      detailTab: origin?.section === 'deployment' ? 'deployments' : 'overview',
+      detailTab: origin?.section === 'billing'
+        ? 'billing'
+        : origin?.section === 'deployment'
+          ? 'deployments'
+          : 'overview',
     }));
     setActiveSection('user');
     setError(null);
@@ -6756,160 +6760,129 @@ export default function App() {
     }
 
     const sourceUser = conversationDetail.session.user;
+    const sourceUserId = sourceUser?.source === 'app_user' ? sourceUser.id : null;
+    const canOpenSourceUser = Boolean(sourceUserId);
 
     return (
-      <div className="conversation-inspector-content conversation-dialog-infra conversation-dialog-infra-compact conversation-infra-layout">
+      <div className="conversation-billing-ledger conversation-workbench conversation-infra-workbench">
+        <section className="conversation-billing-ledger-head conversation-workbench-head">
+          <div>
+            <p className="section-tag">运行绑定</p>
+            <h3 className="conversation-dialog-overview-title">{primaryEnvironmentSandboxId || '当前还没有主 Sandbox'}</h3>
+            <p className="conversation-dialog-overview-subtitle">
+              {primaryEnvironmentSandboxId ? '主 Sandbox、编排会话和最近关联实例。' : '当前会话尚未绑定可排查的主 Sandbox。'}
+            </p>
+          </div>
+          <div className="conversation-dialog-overview-badges">
+            <span className="session-status">{executorLabel(primaryEnvironmentExecutor)}</span>
+            <span className="session-status">{archiveStatusLabel(primaryEnvironmentArchiveStatus)}</span>
+          </div>
+        </section>
+
         {conversationInfraError ? (
-          <p className="panel-caption">关联信息加载异常：{conversationInfraError}</p>
+          <section className="conversation-workbench-section">
+            <p className="panel-caption">关联信息加载异常：{conversationInfraError}</p>
+          </section>
         ) : null}
-        <article className="sub-panel conversation-infra-panel conversation-infra-panel-identity">
-          <div className="conversation-infra-panel-top">
+
+        <section className="conversation-billing-metric-row conversation-workbench-metric-row conversation-infra-metric-row" aria-label="运行绑定指标">
+          <div>
+            <span>编排会话 ID</span>
+            {conversationDetail.runtime?.orchestratorSessionId ? (
+              <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(conversationDetail.runtime?.orchestratorSessionId)}>
+                {conversationDetail.runtime.orchestratorSessionId}
+              </button>
+            ) : (
+              <strong className="mono">-</strong>
+            )}
+          </div>
+          <div>
+            <span>主 Sandbox</span>
+            {primaryEnvironmentSandboxId ? (
+              <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(primaryEnvironmentSandboxId)}>
+                {primaryEnvironmentSandboxId}
+              </button>
+            ) : (
+              <strong className="mono">-</strong>
+            )}
+          </div>
+          <div><span>处理方式</span><strong>{executorLabel(primaryEnvironmentExecutor)}</strong></div>
+          <div><span>归档状态</span><strong>{archiveStatusLabel(primaryEnvironmentArchiveStatus)}</strong></div>
+          <div><span>关联记录数</span><strong>{relatedEnvironments.length}</strong></div>
+          <div><span>最近绑定变更</span><strong>{formatDateTime(latestRelatedEnvironmentUpdatedAt)}</strong></div>
+        </section>
+
+        {primaryEnvironmentReplacementId ? (
+          <section className="conversation-workbench-section conversation-workbench-inline-note">
+            <span className="conversation-infra-note-label">接管 Sandbox</span>
+            <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(primaryEnvironmentReplacementId)}>
+              {primaryEnvironmentReplacementId}
+            </button>
+          </section>
+        ) : null}
+
+        <section className="conversation-workbench-section">
+          <div className="conversation-billing-section-head">
             <div>
-              <p className="section-tag">会话身份</p>
-              <h3 className="conversation-infra-panel-title">{conversationUserLabel(sourceUser)}</h3>
-              <p className="panel-caption conversation-infra-caption">
-                {sourceUser?.email || '当前没有可识别邮箱'}{sourceUser?.source ? ` · ${conversationUserSourceLabel(sourceUser.source)}` : ''}
-              </p>
+              <h3>会话身份</h3>
+              <p className="panel-caption">来源账号、访问来源与会话状态。</p>
             </div>
-            <div className="conversation-infra-pill-row">
+            <div className="conversation-dialog-overview-badges">
               <span className={stateClassName(conversationDetail.session.status)}>{statusLabel(conversationDetail.session.status)}</span>
               <span className="session-status">{conversationStageLabel(conversationDetail.session.stage)}</span>
             </div>
           </div>
-          <div className="conversation-infra-kv-grid">
+          <div className="conversation-billing-token-strip conversation-workbench-identity-row">
             <div>
               <span>来源用户</span>
-              <strong>{conversationUserLabel(sourceUser)}</strong>
+              <strong>
+                {canOpenSourceUser ? (
+                  <button type="button" className="link-btn sandbox-jump-btn" onClick={() => sourceUserId ? openUserManagementView(sourceUserId, currentConversationOrigin()) : undefined}>
+                    {conversationUserLabel(sourceUser)}
+                  </button>
+                ) : conversationUserLabel(sourceUser)}
+              </strong>
             </div>
-            <div>
-              <span>来源 IP</span>
-              <strong className="mono">{sourceUser?.ipAddress || '-'}</strong>
-            </div>
-            <div>
-              <span>最近活跃</span>
-              <strong>{formatDateTime(conversationDetail.session.updatedAt)}</strong>
-            </div>
-            <div>
-              <span>最近访问来源</span>
-              <strong>{conversationUserSourceLabel(sourceUser?.source)}</strong>
-            </div>
+            <div><span>来源 IP</span><strong className="mono">{sourceUser?.ipAddress || '-'}</strong></div>
+            <div><span>最近活跃</span><strong>{formatDateTime(conversationDetail.session.updatedAt)}</strong></div>
+            <div><span>最近访问来源</span><strong>{conversationUserSourceLabel(sourceUser?.source)}</strong></div>
           </div>
           {sourceUser?.userAgent ? (
-            <p className="conversation-infra-footnote">{conversationUserAgentLabel(sourceUser.userAgent)}</p>
+            <p className="conversation-infra-footnote conversation-workbench-footnote">{conversationUserAgentLabel(sourceUser.userAgent)}</p>
           ) : null}
-        </article>
+        </section>
 
-        <article className="sub-panel conversation-infra-panel conversation-infra-panel-runtime">
-          <div className="conversation-infra-panel-top">
+        <section className="conversation-billing-call-section">
+          <div className="conversation-billing-section-head">
             <div>
-              <p className="section-tag">运行绑定</p>
-              <h3 className="conversation-infra-panel-title">{primaryEnvironmentSandboxId || '当前还没有主 Sandbox'}</h3>
-              <p className="panel-caption conversation-infra-caption">
-                {primaryEnvironmentSandboxId ? '主 Sandbox、编排会话和最近关联实例都收在这里。' : '当前会话尚未绑定可排查的主 Sandbox。'}
-              </p>
+              <h3>最近关联的 Sandbox</h3>
+              <p className="panel-caption">保留最近 {recentRelatedEnvironments.length} 条，用于回溯接管、归档与恢复链路。</p>
             </div>
-            <div className="conversation-infra-pill-row">
-              <span className="session-status">{executorLabel(primaryEnvironmentExecutor)}</span>
-              <span className="session-status">{archiveStatusLabel(primaryEnvironmentArchiveStatus)}</span>
-            </div>
+            <span className="session-status">{recentRelatedEnvironments.length} 条</span>
           </div>
-          {primaryEnvironmentSandboxId ? (
-            <div className="conversation-infra-binding-hero">
-              <div className="conversation-infra-binding-copy">
-                <span className="conversation-infra-binding-label">主 Sandbox</span>
-                <button type="button" className="link-btn sandbox-jump-btn mono conversation-infra-binding-id" onClick={() => openSandboxFromConversation(primaryEnvironmentSandboxId)}>
-                  {primaryEnvironmentSandboxId}
-                </button>
-              </div>
-              <div className="conversation-infra-binding-summary">
-                <span>{executorLabel(primaryEnvironmentExecutor)}</span>
-                <span>{archiveStatusLabel(primaryEnvironmentArchiveStatus)}</span>
-                <span>{relatedEnvironments.length} 条关联记录</span>
-              </div>
+          {recentRelatedEnvironments.length ? (
+            <div className="conversation-billing-call-table conversation-infra-related-compact-table">
+              {recentRelatedEnvironments.map((environment) => {
+                const sandboxId = environmentSandboxId(environment);
+                return (
+                  <div key={environment.id} className="conversation-billing-call-row conversation-infra-related-row">
+                    {sandboxId ? (
+                      <button type="button" className="link-btn sandbox-jump-btn mono conversation-infra-related-id-link" onClick={() => openSandboxFromConversation(sandboxId)}>
+                        {sandboxId}
+                      </button>
+                    ) : <strong>-</strong>}
+                    <span>{sandboxRuntimeStateLabel(environment.status)}</span>
+                    <span>{executorLabel(environmentExecutor(environment))}</span>
+                    <span>{archiveStatusLabel(environmentArchiveStatus(environment))}</span>
+                    <span className="mono">{formatDateTime(environment.updatedAt)}</span>
+                  </div>
+                );
+              })}
             </div>
           ) : (
-            <div className="conversation-infra-binding-hero conversation-infra-binding-hero-empty">
-              <p className="conversation-infra-empty">当前还没有主 Sandbox 关联。</p>
-            </div>
+            <p className="empty">当前没有最近关联实例</p>
           )}
-          <div className="conversation-infra-kv-grid">
-            <div>
-              <span>编排会话 ID</span>
-              {conversationDetail.runtime?.orchestratorSessionId ? (
-                <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(conversationDetail.runtime?.orchestratorSessionId)}>
-                  {conversationDetail.runtime.orchestratorSessionId}
-                </button>
-              ) : (
-                <strong className="mono">-</strong>
-              )}
-            </div>
-            <div>
-              <span>主 Sandbox</span>
-              {primaryEnvironmentSandboxId ? (
-                <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(primaryEnvironmentSandboxId)}>
-                  {primaryEnvironmentSandboxId}
-                </button>
-              ) : (
-                <strong className="mono">-</strong>
-              )}
-            </div>
-            <div>
-              <span>处理方式</span>
-              <strong>{executorLabel(primaryEnvironmentExecutor)}</strong>
-            </div>
-            <div>
-              <span>归档状态</span>
-              <strong>{archiveStatusLabel(primaryEnvironmentArchiveStatus)}</strong>
-            </div>
-            <div>
-              <span>关联记录数</span>
-              <strong>{relatedEnvironments.length}</strong>
-            </div>
-            <div>
-              <span>最近绑定变更</span>
-              <strong>{formatDateTime(latestRelatedEnvironmentUpdatedAt)}</strong>
-            </div>
-          </div>
-          {primaryEnvironmentReplacementId ? (
-            <div className="conversation-infra-note">
-              <span className="conversation-infra-note-label">接管 Sandbox</span>
-              <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(primaryEnvironmentReplacementId)}>
-                {primaryEnvironmentReplacementId}
-              </button>
-            </div>
-          ) : null}
-          {recentRelatedEnvironments.length ? (
-            <div className="conversation-infra-related-section">
-              <div className="panel-subtitle panel-subtitle-row">
-                <span>最近关联的 Sandbox</span>
-                <span className="panel-caption">最近 {recentRelatedEnvironments.length} 条</span>
-              </div>
-              <div className="compact-list conversation-infra-related-list">
-                {recentRelatedEnvironments.map((environment) => {
-                  const sandboxId = environmentSandboxId(environment);
-                  return (
-                    <article key={environment.id} className="compact-item conversation-infra-related-item">
-                      <div className="conversation-infra-related-head">
-                        <strong>{sandboxId || '-'}</strong>
-                        <span className="mono">{formatDateTime(environment.updatedAt)}</span>
-                      </div>
-                      <div className="conversation-infra-related-main">
-                        <span>{sandboxRuntimeStateLabel(environment.status)}</span>
-                        <span>{executorLabel(environmentExecutor(environment))}</span>
-                        <span>{archiveStatusLabel(environmentArchiveStatus(environment))}</span>
-                      </div>
-                      {sandboxId ? (
-                        <button type="button" className="link-btn sandbox-jump-btn mono conversation-infra-related-link" onClick={() => openSandboxFromConversation(sandboxId)}>
-                          打开 {sandboxId}
-                        </button>
-                      ) : null}
-                    </article>
-                  );
-                })}
-              </div>
-            </div>
-          ) : null}
-        </article>
+        </section>
       </div>
     );
   };
@@ -6922,261 +6895,225 @@ export default function App() {
       return <p className="empty">当前会话暂无计费记录</p>;
     }
     return (
-      <div className="conversation-dialog-overview conversation-dialog-overview-layout">
-        <article className="sub-panel conversation-dialog-overview-hero">
-          <div className="conversation-dialog-overview-top">
-            <div>
-              <p className="section-tag">计费摘要</p>
-              <h3 className="conversation-dialog-overview-title">{conversationDetail?.session.title || '未命名会话'}</h3>
-              <p className="conversation-dialog-overview-subtitle mono">{conversationDetail?.session.id || '-'}</p>
-            </div>
+      <div className="conversation-billing-ledger">
+        <section className="conversation-billing-ledger-head">
+          <div>
+            <p className="section-tag">计费摘要</p>
+            <h3 className="conversation-dialog-overview-title">{conversationDetail?.session.title || '未命名会话'}</h3>
+            <p className="conversation-dialog-overview-subtitle mono">{conversationDetail?.session.id || '-'}</p>
           </div>
-          <div className="conversation-dialog-overview-stat-grid">
-            <div>
-              <span>积分消耗</span>
-              <strong>{conversationBillingUsage.totalCredits.toLocaleString()}</strong>
-            </div>
-            <div>
-              <span>Total tokens</span>
-              <strong>{conversationBillingUsage.totalTokens.toLocaleString()}</strong>
-            </div>
-            <div>
-              <span>缓存命中</span>
-              <strong>{conversationBillingUsage.cachedPromptTokens.toLocaleString()}</strong>
-            </div>
-            <div>
-              <span>调用次数</span>
-              <strong>{conversationBillingUsage.callCount.toLocaleString()}</strong>
-            </div>
+          <div className="conversation-billing-ledger-total">
+            <span>积分消耗</span>
+            <strong>{conversationBillingUsage.totalCredits.toLocaleString()}</strong>
+            <small>credits</small>
           </div>
-        </article>
+        </section>
 
-        <article className="sub-panel conversation-dialog-overview-card">
-          <div className="panel-subtitle">Token 构成</div>
-          <dl className="conversation-dialog-overview-facts">
-            <div><dt>输入 tokens</dt><dd>{conversationBillingUsage.promptTokens.toLocaleString()}</dd></div>
-            <div><dt>输出 tokens</dt><dd>{conversationBillingUsage.completionTokens.toLocaleString()}</dd></div>
-            <div><dt>缓存创建 tokens</dt><dd>{conversationBillingUsage.cacheCreationTokens.toLocaleString()}</dd></div>
-            <div><dt>缓存命中 tokens</dt><dd>{conversationBillingUsage.cachedPromptTokens.toLocaleString()}</dd></div>
-          </dl>
-        </article>
+        <section className="conversation-billing-metric-row" aria-label="计费关键指标">
+          <div>
+            <span>Total tokens</span>
+            <strong>{conversationBillingUsage.totalTokens.toLocaleString()}</strong>
+          </div>
+          <div>
+            <span>输入 tokens</span>
+            <strong>{conversationBillingUsage.promptTokens.toLocaleString()}</strong>
+          </div>
+          <div>
+            <span>输出 tokens</span>
+            <strong>{conversationBillingUsage.completionTokens.toLocaleString()}</strong>
+          </div>
+          <div>
+            <span>调用次数</span>
+            <strong>{conversationBillingUsage.callCount.toLocaleString()}</strong>
+          </div>
+        </section>
 
-        <article className="sub-panel conversation-dialog-overview-card">
-          <div className="panel-subtitle">调用明细</div>
+        <section className="conversation-billing-token-strip">
+          <div>
+            <span>缓存创建</span>
+            <strong>{conversationBillingUsage.cacheCreationTokens.toLocaleString()}</strong>
+          </div>
+          <div>
+            <span>缓存命中</span>
+            <strong>{conversationBillingUsage.cachedPromptTokens.toLocaleString()}</strong>
+          </div>
+        </section>
+
+        <section className="conversation-billing-call-section">
+          <div className="conversation-billing-section-head">
+            <div>
+              <h3>调用明细</h3>
+              <p className="panel-caption">按计费记录展示 credits、tokens 与创建时间。</p>
+            </div>
+            <span className="session-status">{conversationBillingUsage.items.length} 条</span>
+          </div>
           {conversationBillingUsage.items.length > 0 ? (
-            <div className="compact-list conversation-infra-related-list">
+            <div className="conversation-billing-call-table">
               {conversationBillingUsage.items.map((item) => (
-                <article key={item.id} className="compact-item conversation-infra-related-item">
-                  <div className="conversation-infra-related-head">
-                    <strong>{item.creditsConsumed.toLocaleString()} credits</strong>
-                    <span className="mono">{formatDateTime(item.createdAt)}</span>
-                  </div>
-                  <div className="conversation-infra-related-main">
-                    <span>{Number(item.totalTokens || item.promptTokens + item.completionTokens).toLocaleString()} tokens</span>
-                    <span>输入 {item.promptTokens.toLocaleString()}</span>
-                    <span>输出 {item.completionTokens.toLocaleString()}</span>
-                    <span>缓存命中 {item.cachedPromptTokens.toLocaleString()}</span>
-                  </div>
-                </article>
+                <div key={item.id} className="conversation-billing-call-row">
+                  <strong>{item.creditsConsumed.toLocaleString()} credits</strong>
+                  <span>{Number(item.totalTokens || item.promptTokens + item.completionTokens).toLocaleString()} tokens</span>
+                  <span>输入 {item.promptTokens.toLocaleString()}</span>
+                  <span>输出 {item.completionTokens.toLocaleString()}</span>
+                  <span>缓存命中 {item.cachedPromptTokens.toLocaleString()}</span>
+                  <span className="mono">{formatDateTime(item.createdAt)}</span>
+                </div>
               ))}
             </div>
           ) : (
             <p className="empty">当前会话暂无调用明细</p>
           )}
-        </article>
+        </section>
       </div>
     );
   };
 
   const renderConversationContentOverview = () => {
     const sourceUser = conversationDetail?.session.user || null;
+    const sourceUserId = sourceUser?.source === 'app_user' ? sourceUser.id : null;
+    const canOpenSourceUser = Boolean(sourceUserId);
     const latestPendingQuestion = conversationDetail?.runtime?.pendingQuestion || conversationMessageSummary.latestClarificationSummary;
     const conversationStatusText = conversationDetail ? statusLabel(conversationDetail.session.status) : '-';
     const conversationStageText = conversationDetail ? conversationStageLabel(conversationDetail.session.stage) : '-';
     return (
-      <div className="conversation-dialog-overview conversation-dialog-overview-layout">
-        <article className="sub-panel conversation-dialog-overview-hero">
-          <div className="conversation-dialog-overview-top">
+      <div className="conversation-billing-ledger conversation-workbench conversation-overview-workbench">
+        <section className="conversation-billing-ledger-head conversation-workbench-head">
+          <div>
+            <p className="section-tag">会话总览</p>
+            <h3 className="conversation-dialog-overview-title">{conversationDetail?.session.title || '未命名会话'}</h3>
+            <p className="conversation-dialog-overview-subtitle mono">{conversationDetail?.session.id || '-'}</p>
+          </div>
+          <div className="conversation-dialog-overview-badges">
+            <span className={stateClassName(conversationDetail?.session.status || 'unknown')}>{conversationStatusText}</span>
+            {conversationStageText !== conversationStatusText ? <span className="session-status">{conversationStageText}</span> : null}
+            <span className="session-status">{conversationUserSourceLabel(sourceUser?.source)}</span>
+          </div>
+        </section>
+
+        <section className="conversation-billing-metric-row conversation-workbench-metric-row" aria-label="会话关键指标">
+          <div><span>最近更新</span><strong>{formatDateTime(conversationDetail?.session.updatedAt || conversationDetail?.runtime?.bindingUpdatedAt)}</strong></div>
+          <div><span>对话消息</span><strong>{conversationTabCounts.messages}</strong></div>
+          <div><span>执行事件</span><strong>{conversationMessageSummary.executionCount}</strong></div>
+          <div><span>状态流转</span><strong>{conversationTabCounts.transitions}</strong></div>
+        </section>
+
+        <section className="conversation-workbench-section">
+          <div className="conversation-billing-section-head">
             <div>
-              <p className="section-tag">会话总览</p>
-              <h3 className="conversation-dialog-overview-title">{conversationDetail?.session.title || '未命名会话'}</h3>
-              <p className="conversation-dialog-overview-subtitle mono">{conversationDetail?.session.id || '-'}</p>
-            </div>
-            <div className="conversation-dialog-overview-badges">
-              <span className={stateClassName(conversationDetail?.session.status || 'unknown')}>
-                {conversationStatusText}
-              </span>
-              {conversationStageText !== conversationStatusText ? (
-                <span className="session-status">{conversationStageText}</span>
-              ) : null}
-              <span className="session-status">{conversationUserSourceLabel(sourceUser?.source)}</span>
+              <h3>会话与来源</h3>
+              <p className="panel-caption">运行会话、来源用户与最近访问合并展示。</p>
             </div>
           </div>
-
-          <div className="conversation-dialog-overview-stats">
-            <article className="conversation-dialog-overview-stat">
-              <span>最近更新</span>
-              <strong>{formatDateTime(conversationDetail?.session.updatedAt || conversationDetail?.runtime?.bindingUpdatedAt)}</strong>
-              <small>当前会话的最近更新时间</small>
-            </article>
-            <article className="conversation-dialog-overview-stat">
-              <span>对话消息</span>
-              <strong>{conversationTabCounts.messages}</strong>
-              <small>用户与智能体消息总数</small>
-            </article>
-            <article className="conversation-dialog-overview-stat">
-              <span>执行事件</span>
-              <strong>{conversationMessageSummary.executionCount}</strong>
-              <small>工具与执行节点记录</small>
-            </article>
-            <article className="conversation-dialog-overview-stat">
-              <span>状态流转</span>
-              <strong>{conversationTabCounts.transitions}</strong>
-              <small>{transitionStats.stages.length ? `覆盖 ${transitionStats.stages.length} 个阶段` : '当前无流转记录'}</small>
-            </article>
-          </div>
-
-          <dl className="conversation-dialog-overview-facts">
-            <div>
-              <dt>OpenCode 会话</dt>
-              <dd className="mono">{conversationDetail?.runtime?.opencodeSessionId || '-'}</dd>
-            </div>
+          <dl className="conversation-workbench-fact-grid">
+            <div><dt>OpenCode 会话</dt><dd className="mono">{conversationDetail?.runtime?.opencodeSessionId || '-'}</dd></div>
             <div>
               <dt>编排会话</dt>
               <dd>
                 {conversationDetail?.runtime?.orchestratorSessionId ? (
-                  <button
-                    type="button"
-                    className="link-btn sandbox-jump-btn mono"
-                    onClick={() => openSandboxFromConversation(conversationDetail.runtime?.orchestratorSessionId)}
-                  >
+                  <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(conversationDetail.runtime?.orchestratorSessionId)}>
                     {conversationDetail.runtime.orchestratorSessionId}
                   </button>
-                ) : (
-                  <span className="mono">-</span>
-                )}
+                ) : <span className="mono">-</span>}
               </dd>
             </div>
+            <div><dt>挂起原因</dt><dd>{conversationDetail?.runtime?.pendingResume?.reason || '-'}</dd></div>
+            <div><dt>最近阶段</dt><dd>{conversationStageLabel(conversationMessageSummary.latestStatusStage || conversationDetail?.session.stage)}</dd></div>
             <div>
-              <dt>挂起原因</dt>
-              <dd>{conversationDetail?.runtime?.pendingResume?.reason || '-'}</dd>
+              <dt>来源用户</dt>
+              <dd>
+                {canOpenSourceUser ? (
+                  <button type="button" className="link-btn sandbox-jump-btn" onClick={() => sourceUserId ? openUserManagementView(sourceUserId, currentConversationOrigin()) : undefined}>
+                    {conversationUserLabel(sourceUser)}
+                  </button>
+                ) : conversationUserLabel(sourceUser)}
+              </dd>
             </div>
-            <div>
-              <dt>待确认问题</dt>
-              <dd>{latestPendingQuestion ? summarizeText(latestPendingQuestion, 120) : '当前无需补充信息'}</dd>
-            </div>
+            <div><dt>来源邮箱</dt><dd>{sourceUser?.email || '-'}</dd></div>
+            <div><dt>来源 IP</dt><dd className="mono">{sourceUser?.ipAddress || '-'}</dd></div>
+            <div><dt>最近访问</dt><dd>{formatDateTime(sourceUser?.lastSeenAt || sourceUser?.sessionCreatedAt)}</dd></div>
           </dl>
-        </article>
+          {sourceUser?.userAgent ? (
+            <p className="conversation-user-agent conversation-workbench-footnote">{conversationUserAgentLabel(sourceUser.userAgent)}</p>
+          ) : null}
+        </section>
 
-        <div className="conversation-dialog-overview-side">
-          <section className="sub-panel conversation-user-panel conversation-dialog-side-panel">
-          <div className="panel-header">
+        <section className="conversation-workbench-section">
+          <div className="conversation-billing-section-head">
             <div>
-              <h3>来源用户</h3>
-              <p className="panel-caption">对话归属与最近访问来源。</p>
-            </div>
-            <span className="session-status">{conversationUserSourceLabel(sourceUser?.source)}</span>
-          </div>
-          <div className="detail-grid conversation-user-grid">
-            <div>
-              <p className="kpi-title">用户</p>
-              <p>{conversationUserLabel(sourceUser)}</p>
-            </div>
-            <div>
-              <p className="kpi-title">邮箱</p>
-              <p>{sourceUser?.email || '-'}</p>
-            </div>
-            <div>
-              <p className="kpi-title">来源 IP</p>
-              <p className="mono">{sourceUser?.ipAddress || '-'}</p>
-            </div>
-            <div>
-              <p className="kpi-title">最近访问</p>
-              <p>{formatDateTime(sourceUser?.lastSeenAt || sourceUser?.sessionCreatedAt)}</p>
+              <h3>消息摘要</h3>
+              <p className="panel-caption">按对话阅读顺序展示最近输入、主回复与关键状态。</p>
             </div>
           </div>
-          <p className="conversation-user-agent">{conversationUserAgentLabel(sourceUser?.userAgent)}</p>
-          </section>
+          {conversationMessageSummary.latestFailureSummary ? (
+            <div className="conversation-message-summary-alert conversation-message-summary-alert-error">
+              <span>最近阻塞</span>
+              <strong>{conversationMessageSummary.latestFailureSummary}</strong>
+              {conversationMessageSummary.latestFailureAt ? <small>{formatDateTime(conversationMessageSummary.latestFailureAt)}</small> : null}
+            </div>
+          ) : latestPendingQuestion ? (
+            <div className="conversation-message-summary-alert conversation-message-summary-alert-warning">
+              <span>当前待确认问题</span>
+              <strong>{latestPendingQuestion}</strong>
+            </div>
+          ) : null}
+          <div className="conversation-message-summary-flow">
+            <article className="conversation-message-summary-line conversation-message-summary-line-user">
+              <span>用户输入</span>
+              <p>{conversationMessageSummary.latestUserSummary}</p>
+            </article>
+            <article className="conversation-message-summary-line conversation-message-summary-line-agent">
+              <span>主回复</span>
+              <p>{conversationMessageSummary.latestAssistantSummary}</p>
+            </article>
+          </div>
+          <div className="conversation-message-summary-mini-stats">
+            <span className="session-status">轮次结果 {conversationInteractionGroups[conversationInteractionGroups.length - 1]?.outcome || '暂无'}</span>
+            <span className="session-status">用户消息 {conversationMessageSummary.userCount}</span>
+            <span className="session-status">主回复 {conversationMessageSummary.assistantCount}</span>
+            <span className="session-status">执行事件 {conversationMessageSummary.executionCount}</span>
+            <span className={`session-status ${conversationMessageSummary.failureCount > 0 ? 'state-error' : ''}`}>失败事件 {conversationMessageSummary.failureCount}</span>
+          </div>
+        </section>
 
-          <section className="sub-panel conversation-dialog-side-panel">
-            <div className="panel-header">
-              <div>
-                <h3>部署摘要</h3>
-                <p className="panel-caption">当前会话的部署状态与访问入口。</p>
+        <section className="conversation-workbench-section">
+          <div className="conversation-billing-section-head">
+            <div>
+              <h3>部署摘要</h3>
+              <p className="panel-caption">当前会话的部署状态与访问入口。</p>
+            </div>
+            {conversationDeploymentSummary ? (
+              <span className={`state-chip ${deploymentStatusTone(conversationDeploymentSummary.statusCategory)}`}>
+                {deploymentStatusLabel(conversationDeploymentSummary.statusCategory)}
+              </span>
+            ) : null}
+          </div>
+          {conversationDeploymentLoading ? (
+            <p className="panel-caption">正在加载部署状态...</p>
+          ) : conversationDeploymentSummary ? (
+            <>
+              <div className="conversation-billing-token-strip conversation-workbench-identity-row">
+                <div><span>项目 / 服务</span><strong>{conversationDeploymentSummary.projectName || '-'} / {conversationDeploymentSummary.serviceName || '-'}</strong></div>
+                <div><span>最新状态</span><strong>{conversationDeploymentSummary.latestStatus || conversationDeploymentSummary.bindingState}</strong></div>
+                <div><span>访问地址</span><strong>{conversationDeploymentSummary.latestUrl || conversationDeploymentSummary.latestStaticUrl || '-'}</strong></div>
+                <div><span>最近验证</span><strong>{formatDateTime(conversationDeploymentSummary.lastVerifiedAt)}</strong></div>
               </div>
-              {conversationDeploymentSummary ? (
-                <span className={`state-chip ${deploymentStatusTone(conversationDeploymentSummary.statusCategory)}`}>
-                  {deploymentStatusLabel(conversationDeploymentSummary.statusCategory)}
-                </span>
+              <div className="section-actions conversation-workbench-actions">
+                <button type="button" className="table-btn" onClick={() => openDeploymentFromConversation(conversationDeploymentSummary.taskSessionId)}>
+                  打开部署管理
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="section-actions conversation-workbench-actions">
+              <p className="panel-caption">当前会话暂无部署记录。</p>
+              {conversationDetail?.session.id ? (
+                <button type="button" className="table-btn" onClick={() => openDeploymentFromConversation(conversationDetail.session.id)}>
+                  前往部署管理
+                </button>
               ) : null}
             </div>
-            {conversationDeploymentLoading ? (
-              <p className="panel-caption">正在加载部署状态...</p>
-            ) : conversationDeploymentSummary ? (
-              <>
-                <div className="detail-grid conversation-message-summary-grid">
-                  <div>
-                    <p className="kpi-title">项目 / 服务</p>
-                    <p>{conversationDeploymentSummary.projectName || '-'} / {conversationDeploymentSummary.serviceName || '-'}</p>
-                  </div>
-                  <div>
-                    <p className="kpi-title">最新状态</p>
-                    <p>{conversationDeploymentSummary.latestStatus || conversationDeploymentSummary.bindingState}</p>
-                  </div>
-                  <div>
-                    <p className="kpi-title">访问地址</p>
-                    <p>{conversationDeploymentSummary.latestUrl || conversationDeploymentSummary.latestStaticUrl || '-'}</p>
-                  </div>
-                  <div>
-                    <p className="kpi-title">最近验证</p>
-                    <p>{formatDateTime(conversationDeploymentSummary.lastVerifiedAt)}</p>
-                  </div>
-                </div>
-                <div className="section-actions">
-                  <button type="button" className="table-btn" onClick={() => openDeploymentFromConversation(conversationDeploymentSummary.taskSessionId)}>
-                    打开部署管理
-                  </button>
-                </div>
-              </>
-            ) : (
-              <div className="section-actions">
-                <p className="panel-caption">当前会话暂无部署记录。</p>
-                {conversationDetail?.session.id ? (
-                  <button type="button" className="table-btn" onClick={() => openDeploymentFromConversation(conversationDetail.session.id)}>
-                    前往部署管理
-                  </button>
-                ) : null}
-              </div>
-            )}
-          </section>
-
-          <section className="sub-panel conversation-message-summary conversation-dialog-message-summary conversation-dialog-side-panel">
-            <div className="detail-grid conversation-message-summary-grid">
-              <div>
-                <p className="kpi-title">最近用户输入</p>
-                <p>{conversationMessageSummary.latestUserSummary}</p>
-              </div>
-              <div>
-                <p className="kpi-title">最近主回复</p>
-                <p>{conversationMessageSummary.latestAssistantSummary}</p>
-              </div>
-              <div>
-                <p className="kpi-title">最近轮次结果</p>
-                <p>{conversationInteractionGroups[conversationInteractionGroups.length - 1]?.outcome || '暂无'}</p>
-              </div>
-              <div>
-                <p className="kpi-title">最近阶段</p>
-                <p>{conversationStageLabel(conversationMessageSummary.latestStatusStage || conversationDetail?.session.stage)}</p>
-              </div>
-            </div>
-            {latestPendingQuestion ? (
-              <div className="conversation-message-inline-card">
-                <p className="kpi-title">当前待确认问题</p>
-                <p className="message-content">{latestPendingQuestion}</p>
-              </div>
-            ) : null}
-          </section>
-        </div>
+          )}
+        </section>
       </div>
     );
   };
@@ -9164,7 +9101,7 @@ export default function App() {
                     </button>
                   ))}
                 </div>
-                <div className="modal-body conversation-dialog-body">
+                <div className={`modal-body conversation-dialog-body ${conversationDialogTab === 'overview' ? 'conversation-dialog-body-overview' : ''}`}>
                   {conversationDialogTab === 'overview' ? renderConversationContentOverview() : null}
                   {conversationDialogTab === 'billing' ? renderConversationBillingPanel() : null}
                   {conversationDialogTab === 'interaction' ? (
@@ -11795,6 +11732,7 @@ export default function App() {
     if (activeSection === 'user') {
       return (
         <UserManagementSection
+          key={`${userManagementViewState.selectedUserId || 'list'}:${userManagementViewState.detailTab}:${userManagementViewState.drawerOpen ? 'open' : 'closed'}`}
           onError={setError}
           onUpdatedAtChange={setUserManagementUpdatedAt}
           onRegisterRefresh={registerSectionRefresh}

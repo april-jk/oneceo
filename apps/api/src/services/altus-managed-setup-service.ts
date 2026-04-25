@@ -22,6 +22,11 @@ import { classifyTaskIntentShape, type TaskClarificationType, type TaskIntentSha
 import { buildAttachmentContextPrompt } from './task-attachment-service';
 import { managedImageObjectService, type ManagedImageObjectService } from './managed-image-object-service';
 import { isSameUserId } from '../utils/user-id';
+import {
+  altusClarificationPolicyReducer,
+  type ClarificationReducerResult,
+} from './altus-clarification-policy-reducer';
+import { altusClarificationTransitionAgent } from './altus-clarification-transition-agent';
 
 const INLINE_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const INLINE_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
@@ -191,6 +196,15 @@ type FinalClarificationDecision = {
   clarificationType: TaskClarificationType;
   clarificationQuestion: string;
   clarificationOptions?: string[];
+};
+
+type TransitionResolvedProfileInput = {
+  baseProfile: AltusManagedTaskIntentProfile;
+  shape: TaskIntentShape;
+  todoDecision: Pick<AltusManagedTaskIntentProfile, 'todoRequired' | 'todoReason'>;
+  reduced: ClarificationReducerResult;
+  currentText: string;
+  texts: string[];
 };
 
 function includesAnyKeyword(text: string, keywords: readonly string[]) {
@@ -561,6 +575,84 @@ function resolveClarificationDecision(input: {
     clarificationType: 'none',
     clarificationQuestion: '',
     clarificationOptions: undefined,
+  };
+}
+
+function shouldUseClarificationTransitionAgent(input: {
+  baseProfile: AltusManagedTaskIntentProfile;
+  shape: TaskIntentShape;
+  pendingClarificationType?: TaskClarificationType | null;
+}) {
+  return Boolean(
+    (input.pendingClarificationType && input.pendingClarificationType !== 'none') ||
+      input.baseProfile.needsClarification ||
+      input.shape.needsClarification ||
+      input.shape.candidateClarificationType !== 'none'
+  );
+}
+
+function buildProfileFromTransition(input: TransitionResolvedProfileInput): AltusManagedTaskIntentProfile {
+  const fallbackQuestion = input.reduced.accepted
+    ? ''
+    : input.reduced.question;
+  if (!input.reduced.accepted) {
+    return {
+      ...input.baseProfile,
+      ...input.todoDecision,
+      needsClarification: true,
+      clarificationType: input.reduced.clarificationType || input.shape.candidateClarificationType || 'none',
+      clarificationQuestion: fallbackQuestion,
+      clarificationOptions: input.reduced.options,
+      clarificationTransition: {
+        nextState: input.reduced.nextState,
+        reason: input.reduced.reason,
+      },
+    };
+  }
+
+  if (input.reduced.nextState === 'clarifying') {
+    return {
+      ...input.baseProfile,
+      ...input.todoDecision,
+      needsClarification: true,
+      clarificationType: input.reduced.clarificationType || input.shape.candidateClarificationType || 'none',
+      clarificationQuestion: input.reduced.question || input.shape.candidateClarificationQuestion,
+      clarificationOptions: input.reduced.options,
+      clarificationTransition: {
+        nextState: 'clarifying',
+        reason: input.reduced.reason,
+        assumptions: input.reduced.assumptions,
+      },
+    };
+  }
+
+  const effectiveTexts =
+    input.reduced.nextState === 'new_turn' && input.currentText ? [input.currentText] : input.texts;
+  const effectiveBaseProfile =
+    input.reduced.nextState === 'new_turn'
+      ? deriveManagedTaskIntentProfile(effectiveTexts)
+      : input.baseProfile;
+  const effectiveShape =
+    input.reduced.nextState === 'new_turn'
+      ? classifyTaskIntentShape(effectiveTexts)
+      : input.shape;
+  const effectiveTodoDecision =
+    input.reduced.nextState === 'new_turn'
+      ? resolveTodoDecision(effectiveShape)
+      : input.todoDecision;
+
+  return {
+    ...effectiveBaseProfile,
+    ...effectiveTodoDecision,
+    needsClarification: false,
+    clarificationType: 'none',
+    clarificationQuestion: '',
+    clarificationOptions: undefined,
+    clarificationTransition: {
+      nextState: input.reduced.nextState,
+      reason: input.reduced.reason,
+      assumptions: input.reduced.assumptions,
+    },
   };
 }
 
@@ -1080,6 +1172,26 @@ export class AltusManagedSetupService {
     messageType: 'user_input' | 'user_response' = 'user_input'
   ): Promise<AltusManagedTaskIntentProfile> {
     const history = await taskCreationSessionDAO.getMessages(sessionId);
+    const recentTransitionMessages = history
+      .filter((item) => isHistoryMessageRelevant({ role: item.role, messageType: item.messageType }))
+      .map((item) => {
+        const role = normalizeHistoryRole(item.role);
+        const content = asText(item.content);
+        if (!role || !content) return null;
+        return {
+          role,
+          messageType: asText(item.messageType),
+          content,
+        };
+      })
+      .filter(
+        (item): item is {
+          role: 'user' | 'assistant' | 'system';
+          messageType: string;
+          content: string;
+        } => Boolean(item)
+      )
+      .slice(-10);
     const relevantUserTexts = history
       .filter(
         (item) =>
@@ -1100,6 +1212,39 @@ export class AltusManagedSetupService {
     const workspaceHints = await deriveWorkspaceTechStackHints(resolveOpencodeWorkspacePath(sessionId));
     const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId).catch(() => null);
     const pendingClarificationType = sessionMemory?.pendingClarificationType || null;
+    if (shouldUseClarificationTransitionAgent({ baseProfile, shape, pendingClarificationType })) {
+      try {
+        const proposal = await altusClarificationTransitionAgent.propose({
+          currentText: currentText || latestHistoryText,
+          recentUserTexts: texts,
+          recentMessages: recentTransitionMessages,
+          pendingClarificationType,
+          pendingQuestion: sessionMemory?.pendingQuestion || null,
+          pendingOptions: Array.isArray(sessionMemory?.pendingOptions) ? sessionMemory.pendingOptions : null,
+          shape,
+        });
+        if (proposal) {
+          const reduced = altusClarificationPolicyReducer.reduce(
+            {
+              status: pendingClarificationType ? 'clarifying' : 'none',
+              pendingClarificationType,
+              pendingQuestion: sessionMemory?.pendingQuestion || null,
+            },
+            proposal
+          );
+          return buildProfileFromTransition({
+            baseProfile,
+            shape,
+            todoDecision: resolveTodoDecision(shape),
+            reduced,
+            currentText,
+            texts,
+          });
+        }
+      } catch (error) {
+        console.warn('[altus] clarification transition agent failed; falling back to deterministic gate', error);
+      }
+    }
     const treatAsNewTurn = Boolean(
       messageType === 'user_response' &&
         pendingClarificationType &&

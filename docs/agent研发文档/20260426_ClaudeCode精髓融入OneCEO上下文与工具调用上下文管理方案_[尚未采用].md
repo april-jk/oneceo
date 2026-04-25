@@ -11,6 +11,19 @@
 
 > 在 OneCEO 当前的 E2B + OSAC + Altus managed run + connector guide + skills + history replay 架构下，如何建立一套像 ClaudeCode 一样可恢复、可验证、可缓存的上下文系统？
 
+### 1.1 分阶段实施文档
+
+本文是总纲。进入代码实现时，应按以下分阶段文档逐步采用和验收：
+
+1. [00 总体边界与验收总表](./ClaudeCode精髓融入OneCEO上下文管理分阶段方案/00_总体边界与验收总表_[尚未采用].md)
+2. [01 第一阶段：Read-only Ledger、Compiler 与 Manifest](./ClaudeCode精髓融入OneCEO上下文管理分阶段方案/01_第一阶段_read_only_ledger_compiler_manifest_[尚未采用].md)
+3. [02 第二阶段：Ask_user 与 Tool Pairing 接管](./ClaudeCode精髓融入OneCEO上下文管理分阶段方案/02_第二阶段_ask_user_tool_pairing_[尚未采用].md)
+4. [03 第三阶段：Tool Result Envelope 与失败闭环](./ClaudeCode精髓融入OneCEO上下文管理分阶段方案/03_第三阶段_tool_result_envelope_[尚未采用].md)
+5. [04 第四阶段：动态能力上下文化](./ClaudeCode精髓融入OneCEO上下文管理分阶段方案/04_第四阶段_dynamic_context_blocks_[尚未采用].md)
+6. [05 第五阶段：恢复、缓存稳定与可观测闭环](./ClaudeCode精髓融入OneCEO上下文管理分阶段方案/05_第五阶段_recovery_cache_observability_[尚未采用].md)
+
+这些阶段文档是后续逐步实现和验收的执行入口；本文保留为背景、总体架构和边界说明。
+
 ## 2. 参考范围
 
 ### 2.1 ClaudeCode 参考点

@@ -5,6 +5,7 @@ import altusManagedRoutes from '../src/routes/altus-managed-routes';
 import { mockAuthContextMiddleware } from './helpers/mock-auth-context';
 import { altusManagedInputService } from '../src/services/altus-managed-input-service';
 import { altusManagedRunService } from '../src/services/altus-managed-run-service';
+import { altusMemoryContextService } from '../src/services/altus-memory-context-service';
 import { taskCreationSessionDAO, taskSessionRunDAO } from '../src/db/dao';
 
 type TestServer = {
@@ -14,6 +15,7 @@ type TestServer = {
 
 const inputServiceAny = altusManagedInputService as any;
 const runServiceAny = altusManagedRunService as any;
+const memoryContextServiceAny = altusMemoryContextService as any;
 const sessionDaoAny = taskCreationSessionDAO as any;
 const runDaoAny = taskSessionRunDAO as any;
 
@@ -22,6 +24,7 @@ const originalStartRun = runServiceAny.startRun;
 const originalGetLatestRun = runServiceAny.getLatestRun;
 const originalStreamRun = runServiceAny.streamRun;
 const originalStopRun = runServiceAny.stopRun;
+const originalBuildPromptSectionForRun = memoryContextServiceAny.buildPromptSectionForRun;
 const originalGetSession = sessionDaoAny.getSession;
 const originalGetMessages = sessionDaoAny.getMessages;
 const originalGetRun = runDaoAny.getRun;
@@ -34,6 +37,7 @@ after(() => {
   runServiceAny.getLatestRun = originalGetLatestRun;
   runServiceAny.streamRun = originalStreamRun;
   runServiceAny.stopRun = originalStopRun;
+  memoryContextServiceAny.buildPromptSectionForRun = originalBuildPromptSectionForRun;
   sessionDaoAny.getSession = originalGetSession;
   sessionDaoAny.getMessages = originalGetMessages;
   runDaoAny.getRun = originalGetRun;
@@ -287,6 +291,52 @@ test('GET /api/altus-managed/sessions/:sessionId/context-debug returns recovery 
       ],
     },
   });
+  memoryContextServiceAny.buildPromptSectionForRun = async (input: { sessionId: string; userId: string }) => {
+    assert.deepEqual(input, {
+      sessionId: 'altus-session-debug',
+      userId: 'altus-user-debug',
+    });
+    return {
+      userMemory: {
+        preferredName: 'Watson',
+        occupation: '',
+        identity: '',
+        location: '',
+        background: '',
+        preferences: '希望中文、直接、少废话',
+        responsePreferences: '先给结论',
+      },
+      projectMemory: {
+        instruction: '这是用户管理后台项目',
+      },
+      sessionMemory: {
+        version: 1,
+        summary: {
+          goal: '做用户管理系统方案',
+          latestOutcome: '用户已回答网页应用',
+          openQuestions: [],
+        },
+        constraints: ['不要重复问已回答的问题'],
+        decisions: ['交付网页应用'],
+        workingNotes: ['用户希望对话更像人'],
+        sandboxMaterialization: {
+          snapshotVersion: 0,
+          lastSandboxId: null,
+          lastSyncedAt: null,
+        },
+        fileMemorySnapshot: {
+          snapshotVersion: 0,
+          savedAt: null,
+          sourceSandboxId: null,
+          archiveId: null,
+          workspaceMemoryPath: '.oneceo/session-memory/altus-memory.json',
+        },
+        updatedAt: '2026-04-26T03:30:03.000Z',
+        lastWriterRunId: 'run-debug-1',
+      },
+      promptSection: '# Altus memory context\n\n## User memory\n- preferred_name: Watson',
+    };
+  };
   runDaoAny.listRunEvents = async () => [
     {
       id: 'event-debug-1',
@@ -350,8 +400,14 @@ test('GET /api/altus-managed/sessions/:sessionId/context-debug returns recovery 
     assert.deepEqual(payload.data.summary.recentIntent, ['网页应用']);
     assert.equal(payload.data.budgetProjection.replacementCount, 0);
     assert.ok(payload.data.cacheObservation.apiMessageHash);
+    assert.ok(payload.data.cacheObservation.memorySnapshotHash);
     assert.ok(payload.data.manifest.includedContext.blocks.some((block: any) => block.type === 'attachment'));
     assert.ok(payload.data.manifest.includedContext.blocks.some((block: any) => block.type === 'mcp'));
+    const includedBlockIds = payload.data.manifest.includedContext.blocks.map((block: any) => block.id);
+    assert.ok(includedBlockIds.includes('memory:user'));
+    assert.ok(includedBlockIds.includes('memory:project'));
+    assert.ok(includedBlockIds.includes('memory:session'));
+    assert.ok(includedBlockIds.includes('memory:runtime'));
   } finally {
     await server.close();
   }

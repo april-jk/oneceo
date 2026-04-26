@@ -13,6 +13,7 @@ import { altusManagedContextCacheObserver } from '../services/altus-managed-cont
 import { altusManagedContextDebugSummaryService } from '../services/altus-managed-context-debug-summary-service';
 import { altusManagedContextRecoveryService } from '../services/altus-managed-context-recovery-service';
 import { altusManagedContextBudgetService } from '../services/altus-managed-context-budget-service';
+import { altusMemoryContextService } from '../services/altus-memory-context-service';
 import {
   TASK_ATTACHMENT_MAX_BYTES,
   TASK_ATTACHMENT_MAX_COUNT,
@@ -209,11 +210,21 @@ router.get('/sessions/:sessionId/context-debug', async (req, res) => {
       : null;
     const mcpProviders = readMcpProvidersFromSnapshot(mcpSnapshot?.snapshotJson);
     const messages = await taskCreationSessionDAO.getMessages(sessionId);
+    const memoryContext = await altusMemoryContextService.buildPromptSectionForRun({
+      sessionId,
+      userId: currentUser.userId,
+    });
     const dynamicContextBlocks = [
       ...altusManagedDynamicContextBlockService.buildAttachmentBlocks(messages as any),
       ...altusManagedDynamicContextBlockService.buildMcpBlocks({
         providers: mcpProviders,
         snapshotId: run?.mcpToolSnapshotId || null,
+      }),
+      ...altusManagedDynamicContextBlockService.buildMemoryBlocks({
+        userMemory: memoryContext.userMemory,
+        projectMemory: memoryContext.projectMemory,
+        sessionMemory: memoryContext.sessionMemory,
+        runtimeMemoryPrompt: memoryContext.promptSection,
       }),
     ];
     const recovery = await altusManagedContextRecoveryService.rebuildFromDbFacts({

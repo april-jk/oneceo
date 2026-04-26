@@ -163,3 +163,12 @@ memory context block 必须区分：
 2. 动态能力不破坏 stable prompt；
 3. manifest 能解释每个 included context；
 4. reload 后 compiler projection 与运行时事实一致。
+
+## 9. 补充落实记录
+
+2026-04-26 补齐 memory blocks 的恢复诊断接入：
+
+1. 主执行链路已经把 user memory、project memory、session memory、runtime memory prompt、skill memory 作为 `memory:*` typed blocks 注入 dynamic context；
+2. `context-debug` 现在同步调用 `altusMemoryContextService.buildPromptSectionForRun`，把 user / project / session / runtime memory 纳入 recovery manifest 的 `includedContext`；
+3. Redis 仍然只是读缓存，memory block 的重建来源仍是 DB-backed user profile、project instruction 和 session metadata；
+4. 路由级测试已验证 `context-debug` 返回 `memory:user`、`memory:project`、`memory:session`、`memory:runtime`，并产生 `cacheObservation.memorySnapshotHash`。

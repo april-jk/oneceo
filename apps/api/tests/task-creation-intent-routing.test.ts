@@ -6,6 +6,7 @@ import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-me
 import { TaskCreationService } from '../src/agents/task-creation/task-creation-service';
 import { taskCreationSessionDAO, taskSessionRunDAO } from '../src/db/dao';
 import { altusManagedSetupService } from '../src/services/altus-managed-setup-service';
+import { altusMemoryContextService } from '../src/services/altus-memory-context-service';
 import { altusRunCoordinator } from '../src/services/altus-run-coordinator';
 import { opencodeRemoteService } from '../src/services/opencode-remote-service';
 
@@ -446,6 +447,44 @@ test('TaskCreationService execution handoff uses Altus coordinator and never cal
   mock.method(altusManagedSetupService, 'captureMcpToolSnapshot', async () => ({
     snapshotId: 'mcp-snapshot-1',
     providers: [],
+  }));
+  mock.method(altusMemoryContextService, 'buildPromptSectionForRun', async () => ({
+    userMemory: {
+      preferredName: '',
+      occupation: '',
+      identity: '',
+      location: '',
+      background: '',
+      preferences: '',
+      responsePreferences: '',
+    },
+    projectMemory: null,
+    sessionMemory: {
+      version: 0,
+      summary: {
+        goal: '',
+        latestOutcome: '',
+        openQuestions: [],
+      },
+      constraints: [],
+      decisions: [],
+      workingNotes: [],
+      sandboxMaterialization: {
+        snapshotVersion: 0,
+        lastSandboxId: null,
+        lastSyncedAt: null,
+      },
+      fileMemorySnapshot: {
+        snapshotVersion: 0,
+        savedAt: null,
+        sourceSandboxId: null,
+        archiveId: null,
+        workspaceMemoryPath: '.oneceo/session-memory/altus-memory.json',
+      },
+      updatedAt: null,
+      lastWriterRunId: null,
+    },
+    promptSection: '',
   }));
 
   let capturedState: any = null;

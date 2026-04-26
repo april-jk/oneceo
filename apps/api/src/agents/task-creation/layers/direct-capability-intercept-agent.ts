@@ -4,10 +4,16 @@ import {
   type DirectModeCapabilityId,
   type DirectModeEntryDecision,
 } from '../../../services/direct-mode-capability-types';
+import {
+  classifyPlatformCapabilityIntent,
+  isPlatformCapabilityTopic,
+  type PlatformCapabilityIntentKind,
+} from '../../../services/platform-capability-intent-service';
 
 type LlmDecisionPayload = {
   isExplicitPlatformRequest?: boolean;
   capabilityId?: string;
+  intentKind?: PlatformCapabilityIntentKind;
   confidence?: number;
   reason?: string;
 };
@@ -30,18 +36,6 @@ function normalizeContent(content: string): string {
   return content.trim().toLowerCase();
 }
 
-const DEPLOY_KEYWORDS = ['部署', '上线', '发布', 'deploy', 'ship', 'go live'];
-const REDEPLOY_KEYWORDS = ['重新部署', '重部署', '再部署', 'redeploy'];
-const ROLLBACK_KEYWORDS = ['回滚', '恢复上一个部署', 'rollback'];
-const STATUS_KEYWORDS = ['部署状态', '发布状态', '查看部署', '当前部署', '最新部署', 'deployment status'];
-const PLATFORM_HINT_KEYWORDS = [
-  ...DEPLOY_KEYWORDS,
-  ...REDEPLOY_KEYWORDS,
-  ...ROLLBACK_KEYWORDS,
-  ...STATUS_KEYWORDS,
-  'railway',
-  '域名',
-];
 const DEVELOPMENT_KEYWORDS = [
   '开发',
   '实现',
@@ -79,6 +73,7 @@ export class DirectCapabilityInterceptAgent extends BaseAgent {
 {
   "isExplicitPlatformRequest": true,
   "capabilityId": "deploy_session_website",
+  "intentKind": "explicit_action",
   "confidence": 0.98,
   "reason": "用户明确要求立即部署当前网站"
 }`,
@@ -123,12 +118,8 @@ export class DirectCapabilityInterceptAgent extends BaseAgent {
     return includesAny(text, DEVELOPMENT_KEYWORDS);
   }
 
-  private hasPlatformHint(text: string): boolean {
-    return includesAny(text, PLATFORM_HINT_KEYWORDS);
-  }
-
   private isMixedDevelopmentAndPlatformRequest(text: string): boolean {
-    return this.hasDevelopmentIntent(text) && this.hasPlatformHint(text);
+    return this.hasDevelopmentIntent(text) && isPlatformCapabilityTopic(text);
   }
 
   private pickCapabilityFromHeuristic(
@@ -139,47 +130,31 @@ export class DirectCapabilityInterceptAgent extends BaseAgent {
       return this.createPassthroughDecision('同时包含开发诉求与平台动作，按直通放行', 'heuristic', 0.9);
     }
 
-    if (includesAny(text, STATUS_KEYWORDS) && availableCapabilities.has('get_session_deployment_status')) {
-      return this.createCapabilityDecision(
-        'get_session_deployment_status',
-        '用户明确要求查看部署状态',
+    const capabilityIntent = classifyPlatformCapabilityIntent(text);
+    if (capabilityIntent.mode === 'execute' && capabilityIntent.directModeCapabilityId) {
+      if (availableCapabilities.has(capabilityIntent.directModeCapabilityId)) {
+        return this.createCapabilityDecision(
+          capabilityIntent.directModeCapabilityId,
+          capabilityIntent.reason,
+          'heuristic',
+          capabilityIntent.confidence
+        );
+      }
+      return this.createPassthroughDecision(
+        `平台能力未注册：${capabilityIntent.directModeCapabilityId}`,
         'heuristic',
-        0.99
+        0.85
       );
     }
-
-    if (includesAny(text, ROLLBACK_KEYWORDS) && availableCapabilities.has('rollback_session_deployment')) {
-      return this.createCapabilityDecision(
-        'rollback_session_deployment',
-        '用户明确要求回滚部署',
-        'heuristic',
-        0.99
-      );
-    }
-
-    if (includesAny(text, REDEPLOY_KEYWORDS) && availableCapabilities.has('redeploy_session_website')) {
-      return this.createCapabilityDecision(
-        'redeploy_session_website',
-        '用户明确要求重新部署当前项目',
-        'heuristic',
-        0.99
-      );
-    }
-
-    if (includesAny(text, DEPLOY_KEYWORDS) && availableCapabilities.has('deploy_session_website')) {
-      return this.createCapabilityDecision(
-        'deploy_session_website',
-        '用户明确要求部署当前网站或项目',
-        'heuristic',
-        0.98
-      );
+    if (capabilityIntent.intentKind !== 'not_related' && capabilityIntent.intentKind !== 'unclear') {
+      return this.createPassthroughDecision(capabilityIntent.reason, 'heuristic', capabilityIntent.confidence);
     }
 
     return null;
   }
 
   private shouldUseLlm(text: string): boolean {
-    return this.hasPlatformHint(text) && !this.hasDevelopmentIntent(text);
+    return isPlatformCapabilityTopic(text) && !this.hasDevelopmentIntent(text);
   }
 
   async decide(input: {
@@ -217,7 +192,18 @@ ${input.content}
 可用 capabilityId 列表：
 ${Array.from(availableCapabilities).join(', ')}
 
-请判断用户是否在明确要求平台立即执行某个已有能力，而不是要求执行器开发或修改代码。`;
+请判断用户是在要求立即执行平台能力，还是只是询问能力、咨询方案、讨论边界或解释概念。
+
+必须区分：
+- explicit_action: 直接执行能力，例如“帮我部署当前项目”“重新部署一下”“看下部署状态”
+- capability_question: 询问是否支持或具备能力，例如“你支持 Vercel 部署吗？”
+- how_to_advice: 询问如何做或方案步骤，例如“怎么部署到 Vercel？”
+- requirement_discussion: 讨论是否需要或是否适合，例如“这个项目要不要部署？”
+- concept_question: 询问概念含义，例如“部署状态是什么意思？”
+- not_related: 与平台能力无关
+
+只有 intentKind=explicit_action 时，isExplicitPlatformRequest 才能为 true。
+输出严格 JSON。`;
       const result = await this.execute(prompt);
       if (!result.success) {
         throw new Error(result.error || 'LLM 判定失败');
@@ -230,11 +216,13 @@ ${Array.from(availableCapabilities).join(', ')}
 
       const capabilityId = asText(payload.capabilityId) as DirectModeCapabilityId;
       const isExplicit = Boolean(payload.isExplicitPlatformRequest);
+      const intentKind = asText(payload.intentKind);
       const confidence = clampConfidence(payload.confidence, isExplicit ? 0.8 : 0.2);
       const reason = asText(payload.reason) || 'LLM 未提供判定理由';
 
       if (
         isExplicit &&
+        intentKind === 'explicit_action' &&
         confidence >= 0.8 &&
         capabilityId &&
         availableCapabilities.has(capabilityId)

@@ -1,4 +1,4 @@
-# ClaudeCode 精髓融入 OneCEO 上下文管理分阶段实施索引 [尚未采用]
+# ClaudeCode 精髓融入 OneCEO 上下文管理分阶段实施索引 [20260426-1457已采用]
 
 ## 1. 文档定位
 
@@ -6,7 +6,7 @@
 
 主方案：
 
-- [20260426_ClaudeCode精髓融入OneCEO上下文与工具调用上下文管理方案_[尚未采用].md](../20260426_ClaudeCode精髓融入OneCEO上下文与工具调用上下文管理方案_[尚未采用].md)
+- [20260426_ClaudeCode精髓融入OneCEO上下文与工具调用上下文管理方案_[20260426-1457已采用].md](../20260426_ClaudeCode精髓融入OneCEO上下文与工具调用上下文管理方案_[20260426-1457已采用].md)
 
 拆分原则：
 
@@ -20,7 +20,7 @@
 
 | 阶段 | 文档 | 核心目标 | 是否允许改线上行为 |
 | --- | --- | --- | --- |
-| 0 | [00_总体边界与验收总表_[尚未采用].md](./00_总体边界与验收总表_[尚未采用].md) | 统一边界、术语、阶段门槛 | 否 |
+| 0 | [00_总体边界与验收总表_[20260426-1457已采用].md](./00_总体边界与验收总表_[20260426-1457已采用].md) | 统一边界、术语、阶段门槛 | 否 |
 | 1 | [01_第一阶段_read_only_ledger_compiler_manifest_[20260426-0307已采用].md](./01_第一阶段_read_only_ledger_compiler_manifest_[20260426-0307已采用].md) | 只读 ledger adapter、compiler、manifest 诊断 | 是 |
 | 2 | [02_第二阶段_ask_user_tool_pairing_[20260426-0311已采用].md](./02_第二阶段_ask_user_tool_pairing_[20260426-0311已采用].md) | 接管 ask_user / clarification pairing | 是，限 clarification |
 | 3 | [03_第三阶段_tool_result_envelope_[20260426-0317已采用].md](./03_第三阶段_tool_result_envelope_[20260426-0317已采用].md) | 统一工具结果 envelope 和失败 tool_result | 是，限工具结果上下文 |
@@ -61,3 +61,14 @@
 2. 未进入开发的阶段继续保持 `[尚未采用]`；
 3. 如果阶段方案调整，先改对应阶段文档，再写代码；
 4. 每个阶段完成后必须把验收证据补回对应阶段文档或提交信息。
+
+## 6. 当前采用状态
+
+2026-04-26 已按阶段 1-6 完成主干实现与验收：
+
+1. 阶段 1-5 已完成上下文 ledger、compiler、tool result、dynamic context、recovery/cache observability 的结构建设；
+2. 阶段 6 已补充第二轮行为验收计划、长期能力题库和浏览器 UI e2e；
+3. 真实链路验收以浏览器页面可见行为为准，`context-debug` 只作为失败诊断辅助；
+4. 当前远程基线会话已证明：回答 `网页应用` 后不会重复追问交付形态，续聊 `按你的想法，先帮我做个方案` 会承接已有管理后台上下文；
+5. Redis clear 后的真实恢复链路已验证，删除 session 相关 Redis key 后仍能从 DB-backed ledger 恢复等价 context；
+6. attachment URL 重新签名已在真实 managed image object storage 链路验证，重新签名 URL 可正常下载对象。

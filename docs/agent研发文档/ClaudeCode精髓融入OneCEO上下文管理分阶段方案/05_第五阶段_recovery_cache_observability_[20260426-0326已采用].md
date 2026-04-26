@@ -197,5 +197,10 @@ budget replacement 必须遵守：
    - 间隔后第二次重新签名，`X-Amz-Date` 变化，URL 变化；
    - 第二次签名 URL 下载仍返回 `200`，字节数与原始对象一致；
    - 测试对象已从 bucket 删除。
+3. memory context 的恢复诊断链路已补齐：
+   - `context-debug` 不再只包含 attachment / MCP blocks；
+   - user memory、project memory、session memory、runtime memory prompt 会以 `memory:*` blocks 进入 recovery manifest；
+   - `cacheObservation.memorySnapshotHash` 由 manifest 内的 memory blocks 计算；
+   - Redis 仍标记为 `not_fact_source`，memory 事实来源仍为 DB-backed profile / project / session metadata。
 
 至此，第五阶段文档中保留的 recovery/cache/attachment 真实链路验收项已完成。

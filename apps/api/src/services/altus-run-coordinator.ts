@@ -49,6 +49,7 @@ import {
   isValidOpenAiToolCallArguments,
   normalizeOpenAiToolCallArguments,
 } from '../utils/openai-chat-sanitizer';
+import { classifyPlatformCapabilityIntent } from './platform-capability-intent-service';
 
 const DELIVERABLES_READY_TEXT = '交付文件已生成';
 const DEPLOYMENT_COMPLETION_BLOCKED_PREFIX = 'deployment_completion_blocked:';
@@ -703,23 +704,8 @@ export class AltusRunCoordinator {
       };
     }
 
-    const includesAny = (keywords: string[]) => keywords.some((keyword) => normalized.includes(keyword));
-    if (
-      includesAny([
-        '不要部署',
-        '不需要部署',
-        '无需部署',
-        '不要发布',
-        '不需要发布',
-        '无需发布',
-        '不要上线',
-        '无需上线',
-        'do not deploy',
-        "don't deploy",
-        'no deploy',
-        'do not publish',
-      ])
-    ) {
+    const capabilityIntent = classifyPlatformCapabilityIntent(userInput);
+    if (capabilityIntent.mode !== 'execute') {
       return {
         mode: 'none',
         acceptedToolNames: [],
@@ -727,15 +713,7 @@ export class AltusRunCoordinator {
       };
     }
 
-    if (
-      includesAny([
-        '回滚',
-        '回退部署',
-        '恢复上一个部署',
-        'rollback',
-        'revert deployment',
-      ])
-    ) {
+    if (capabilityIntent.capabilityKind === 'rollback') {
       return {
         mode: 'rollback',
         acceptedToolNames: ['rollback_application_deployment', 'get_application_deployment_status'],
@@ -743,16 +721,7 @@ export class AltusRunCoordinator {
       };
     }
 
-    if (
-      includesAny([
-        '重新部署',
-        '重部署',
-        '再部署',
-        '重新发布',
-        '再次发布',
-        'redeploy',
-      ])
-    ) {
+    if (capabilityIntent.capabilityKind === 'redeploy') {
       return {
         mode: 'redeploy',
         acceptedToolNames: ['redeploy_application', 'deploy_application', 'get_application_deployment_status'],
@@ -760,15 +729,7 @@ export class AltusRunCoordinator {
       };
     }
 
-    if (
-      includesAny([
-        '部署',
-        '发布',
-        '上线',
-        'deploy',
-        'go live',
-      ])
-    ) {
+    if (capabilityIntent.capabilityKind === 'deploy' || capabilityIntent.capabilityKind === 'deployment_status') {
       return {
         mode: 'deploy',
         acceptedToolNames: ['deploy_application', 'redeploy_application', 'get_application_deployment_status'],
@@ -1060,7 +1021,7 @@ export class AltusRunCoordinator {
       return '线上部署尚未完成，Altus 将继续修复并重试发布。';
     }
     if (errorMessage.startsWith('deployment_tool_not_allowed_without_explicit_request')) {
-      return '当前任务没有明确部署请求，Altus 已阻止误触发部署，并将继续按交付物生成处理。';
+      return '这次只是部署相关咨询，我不会在没有明确指令时触发部署工具。';
     }
     if (!this.isDeploymentTool(toolName)) {
       return errorMessage;

@@ -1,3 +1,5 @@
+import { classifyPlatformCapabilityIntent } from './platform-capability-intent-service';
+
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -116,15 +118,6 @@ const WEB_ARTIFACT_KEYWORDS = [
   'dashboard',
   'admin panel',
   'browser product',
-] as const;
-
-const DEPLOY_REQUEST_KEYWORDS = [
-  '部署',
-  '发布',
-  '上线',
-  'deploy',
-  'publish',
-  'go live',
 ] as const;
 
 const SCRIPT_ARTIFACT_KEYWORDS = [
@@ -436,7 +429,7 @@ export function classifyTaskIntentShape(input: string | string[]): TaskIntentSha
   const explicitNoWeb = includesAny(combinedText, EXPLICIT_NO_WEB_KEYWORDS);
   const sourceCodeOnly = includesAny(combinedText, SOURCE_CODE_ONLY_KEYWORDS);
   const explicitNoExternalAuth = includesAny(combinedText, NO_EXTERNAL_AUTH_KEYWORDS);
-  const deployRequested = includesAny(combinedText, DEPLOY_REQUEST_KEYWORDS);
+  const deployRequested = classifyPlatformCapabilityIntent(texts).mode === 'execute';
   const webArtifactRequested = includesAny(combinedText, WEB_ARTIFACT_KEYWORDS);
   const scriptArtifactRequested = includesAny(combinedText, SCRIPT_ARTIFACT_KEYWORDS);
   const broadSoftwareRequested = includesAny(combinedText, BUSINESS_SYSTEM_KEYWORDS);

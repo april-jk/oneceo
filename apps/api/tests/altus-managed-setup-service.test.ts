@@ -491,6 +491,57 @@ test('buildTaskIntentProfile clears a pending clarification when LLM detects adv
   assert.equal(profile.clarificationTransition?.nextState, 'advisory');
 });
 
+test('buildTaskIntentProfile treats platform capability questions as current-turn advisory without stale artifact context', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我做一个 HTML 官网',
+      metadata: {},
+    },
+    {
+      role: 'agent',
+      messageType: 'assistant_message',
+      content: '已准备 index.html、package.json 和 oneceo.manifest.json。',
+      metadata: {},
+    },
+    {
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这次要交付的是网页应用、后端 API、本地脚本，还是完整业务系统？',
+      metadata: {},
+    },
+    {
+      role: 'user',
+      messageType: 'user_response',
+      content: '能用vercel部署吗',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    pendingQuestion: '这次要交付的是网页应用、后端 API、本地脚本，还是完整业务系统？',
+    pendingOptions: ['网页应用', '后端 API', '本地脚本', '完整业务系统'],
+    pendingClarificationType: 'artifact_type',
+  }) as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-vercel-capability-advisory',
+    '能用vercel部署吗',
+    'user_response'
+  );
+
+  assert.equal(profile.mode, 'neutral');
+  assert.equal(profile.webArtifactRequested, false);
+  assert.equal(profile.deployRequested, false);
+  assert.equal(profile.deploymentAllowed, false);
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.clarificationType, 'none');
+  assert.equal(profile.platformCapabilityIntent?.mode, 'answer_capability');
+  assert.equal(profile.platformCapabilityIntent?.topic, 'vercel');
+  assert.equal(profile.clarificationTransition?.nextState, 'advisory');
+});
+
 test('buildTaskIntentProfile accepts user delegation to Altus defaults through transition tool', async () => {
   mock.method(taskCreationSessionDAO, 'getMessages', async () => [
     {

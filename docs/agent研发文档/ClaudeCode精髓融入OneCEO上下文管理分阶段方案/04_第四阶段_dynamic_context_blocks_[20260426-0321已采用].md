@@ -172,3 +172,26 @@ memory context block 必须区分：
 2. `context-debug` 现在同步调用 `altusMemoryContextService.buildPromptSectionForRun`，把 user / project / session / runtime memory 纳入 recovery manifest 的 `includedContext`；
 3. Redis 仍然只是读缓存，memory block 的重建来源仍是 DB-backed user profile、project instruction 和 session metadata；
 4. 路由级测试已验证 `context-debug` 返回 `memory:user`、`memory:project`、`memory:session`、`memory:runtime`，并产生 `cacheObservation.memorySnapshotHash`。
+
+2026-04-26 补齐平台能力意图裁决：
+
+1. 部署能力族不再由“包含部署/发布/上线”等单词直接触发平台能力；
+2. 新增 `PlatformCapabilityIntent` 裁决层，区分 `explicit_action`、`capability_question`、`how_to_advice`、`requirement_discussion`、`concept_question`；
+3. direct mode、managed task intent profile、task intent shape、deployment completion intent 统一复用该裁决结果；
+4. “你是否具有 Vercel 部署能力”“怎么部署到 Vercel”“部署状态是什么意思”进入普通对话或建议路径，不触发平台部署；
+5. “帮我部署当前项目”“重新部署一下”“看下部署状态”“回滚到上一个部署”仍可通过自然对话触发对应平台能力。
+
+2026-04-26 修正平台能力咨询的上下文表达：
+
+1. `PlatformCapabilityIntent` 从单一 `shouldExecute` 扩展为 `mode`：`execute`、`answer_capability`、`explain_how_to`、`discuss_requirement`、`explain_concept`、`normal_task`、`unclear`；
+2. `answer_capability` / `explain_how_to` / `discuss_requirement` / `explain_concept` 是正常对话成功态，不再被表达为“部署请求被阻止”；
+3. managed prompt 对平台能力咨询注入 `Platform capability advisory contract`，要求自然回答能力、方案或概念，不创建交付物、不调用部署工具；
+4. `Deployment trigger contract` 只用于普通交付任务的工具守卫，不再污染平台能力咨询上下文；
+5. 部署工具误调用的内部守卫错误不再展示“Altus 已阻止误触发部署”这类系统话术，避免用户感知到机械拦截。
+
+2026-04-26 补齐当前轮能力咨询优先级：
+
+1. `buildTaskIntentProfile` 在读取历史投影前先判断当前输入是否为平台能力咨询；
+2. 当前输入为 `answer_capability` / `explain_how_to` / `discuss_requirement` / `explain_concept` 时，只用当前输入构建 advisory profile；
+3. 该路径不继承历史 HTML / manifest / 可部署交付物上下文，也不继承 pending clarification；
+4. “能用vercel部署吗”即使发生在已有 HTML 交付会话或补充信息状态之后，也必须作为当前轮能力咨询自然回答。

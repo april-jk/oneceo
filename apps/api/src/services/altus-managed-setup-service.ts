@@ -18,6 +18,7 @@ import {
   deriveManagedTaskIntentProfile,
   type AltusManagedTaskIntentProfile,
 } from './altus-managed-prompt-service';
+import { classifyPlatformCapabilityIntent } from './platform-capability-intent-service';
 import { classifyTaskIntentShape, type TaskClarificationType, type TaskIntentShape } from './task-intent-shape-service';
 import { buildAttachmentContextPrompt } from './task-attachment-service';
 import { managedImageObjectService, type ManagedImageObjectService } from './managed-image-object-service';
@@ -217,6 +218,16 @@ function includesAnyKeyword(text: string, keywords: readonly string[]) {
 
 function normalizeText(value: unknown) {
   return asText(value).toLowerCase();
+}
+
+function isPlatformCapabilityAdvisoryText(text: string) {
+  const mode = classifyPlatformCapabilityIntent(text).mode;
+  return (
+    mode === 'answer_capability' ||
+    mode === 'explain_how_to' ||
+    mode === 'discuss_requirement' ||
+    mode === 'explain_concept'
+  );
 }
 
 function coversArtifactType(text: string) {
@@ -1175,6 +1186,26 @@ export class AltusManagedSetupService {
     const currentText = asText(currentInput);
     const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId).catch(() => null);
     const pendingClarificationType = sessionMemory?.pendingClarificationType || null;
+    if (currentText && isPlatformCapabilityAdvisoryText(currentText)) {
+      const currentTexts = [currentText];
+      const advisoryProfile = deriveManagedTaskIntentProfile(currentTexts);
+      const advisoryShape = classifyTaskIntentShape(currentTexts);
+      return {
+        ...advisoryProfile,
+        ...resolveTodoDecision(advisoryShape),
+        needsClarification: false,
+        clarificationType: 'none',
+        clarificationQuestion: '',
+        clarificationOptions: undefined,
+        clarificationTransition:
+          pendingClarificationType
+            ? {
+                nextState: 'advisory',
+                reason: 'platform_capability_advisory_current_turn',
+              }
+            : advisoryProfile.clarificationTransition,
+      };
+    }
     const contextProjection = altusManagedContextService.buildProjection(history, {
       currentInput: currentText,
       currentMessageType: messageType,

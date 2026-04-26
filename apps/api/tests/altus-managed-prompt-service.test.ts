@@ -238,6 +238,45 @@ test('managed prompt does not authorize deployment for website source tasks with
   assert.doesNotMatch(prompt, /use `deploy_application` for first publish or publishing the latest workspace changes/i);
 });
 
+test('managed prompt treats deployment capability questions as advisory, not deploy authorization', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '能用vercel部署吗',
+  ]);
+
+  assert.equal(profile.mode, 'neutral');
+  assert.equal(profile.deployRequested, false);
+  assert.equal(profile.deploymentAllowed, false);
+  assert.equal(profile.platformCapabilityIntent?.intentKind, 'capability_question');
+  assert.equal(profile.platformCapabilityIntent?.mode, 'answer_capability');
+  assert.equal(profile.platformCapabilityIntent?.topic, 'vercel');
+  assert.equal(profile.platformCapabilityIntent?.shouldExecute, false);
+
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-vercel-capability-question',
+    sessionTitle: 'vercel capability question',
+    workspaceRoot: '/workspace/session-vercel-capability-question',
+    connectors: [],
+    taskIntentProfile: profile,
+  });
+
+  assert.match(prompt, /# Platform capability advisory contract/);
+  assert.match(prompt, /Answer the user naturally and directly/i);
+  assert.doesNotMatch(prompt, /# Deployment trigger contract/);
+  assert.doesNotMatch(prompt, /is not an explicit deployment request/i);
+  assert.match(prompt, /Do not say deployment is blocked, disabled, not enabled, unauthorized, or prevented/i);
+});
+
+test('managed prompt authorizes deployment only for explicit action wording', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '帮我部署当前项目',
+  ]);
+
+  assert.equal(profile.deployRequested, true);
+  assert.equal(profile.deploymentAllowed, true);
+  assert.equal(profile.platformCapabilityIntent?.intentKind, 'explicit_action');
+  assert.equal(profile.platformCapabilityIntent?.capabilityKind, 'deploy');
+});
+
 test('managed prompt builds minimal skill catalog index without full body', () => {
   const prompt = altusManagedPromptService.buildSkillCatalogPrompt([
     {

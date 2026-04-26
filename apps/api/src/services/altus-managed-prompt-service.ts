@@ -2,6 +2,10 @@ import type { ManagedSkillCatalogEntry, ManagedSkillContext } from './altus-mana
 import type { SessionConnectorStatus } from './session-connector-service';
 import { classifyTaskIntentShape, type TaskClarificationType } from './task-intent-shape-service';
 import { altusManagedDynamicContextBlockService } from './altus-managed-dynamic-context-blocks';
+import {
+  classifyPlatformCapabilityIntent,
+  type PlatformCapabilityIntentDecision,
+} from './platform-capability-intent-service';
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -225,15 +229,6 @@ const WEB_ARTIFACT_KEYWORDS = [
   'browser product',
 ] as const;
 
-const DEPLOY_REQUEST_KEYWORDS = [
-  '部署',
-  '发布',
-  '上线',
-  'deploy',
-  'publish',
-  'go live',
-] as const;
-
 function includesAnyKeyword(text: string, keywords: readonly string[]) {
   return keywords.some((keyword) => text.includes(keyword));
 }
@@ -261,6 +256,7 @@ export type AltusManagedTaskIntentProfile = {
   explicitNoWeb: boolean;
   webArtifactRequested: boolean;
   deployRequested: boolean;
+  platformCapabilityIntent?: PlatformCapabilityIntentDecision;
   scriptArtifactRequested: boolean;
   emailTemplateRequested: boolean;
   deploymentAllowed: boolean;
@@ -292,16 +288,19 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
   const latestExplicitNoDeploy = includesAnyKeyword(latest, EXPLICIT_NO_DEPLOY_KEYWORDS);
   const latestExplicitNoWeb = includesAnyKeyword(latest, EXPLICIT_NO_WEB_KEYWORDS);
   const latestWebArtifact = includesAnyKeyword(latest, WEB_ARTIFACT_KEYWORDS);
-  const latestDeployRequest = includesAnyKeyword(latest, DEPLOY_REQUEST_KEYWORDS);
+  const latestCapabilityIntent = classifyPlatformCapabilityIntent(latest);
+  const latestDeployRequest = latestCapabilityIntent.mode === 'execute';
 
   const explicitNoDeploy = includesAnyKeyword(combined, EXPLICIT_NO_DEPLOY_KEYWORDS);
   const explicitNoWeb = includesAnyKeyword(combined, EXPLICIT_NO_WEB_KEYWORDS);
   const webArtifactRequested = includesAnyKeyword(combined, WEB_ARTIFACT_KEYWORDS);
-  const deployRequested = includesAnyKeyword(combined, DEPLOY_REQUEST_KEYWORDS);
+  const platformCapabilityIntent = classifyPlatformCapabilityIntent(texts);
+  const deployRequested = platformCapabilityIntent.mode === 'execute';
   const scriptArtifactRequested = includesAnyKeyword(combined, SCRIPT_ARTIFACT_KEYWORDS);
   const emailTemplateRequested = includesAnyKeyword(combined, EMAIL_TEMPLATE_KEYWORDS);
   const deploymentAllowed =
-    deployRequested &&
+    platformCapabilityIntent.mode === 'execute' &&
+    platformCapabilityIntent.intentKind === 'explicit_action' &&
     !explicitNoDeploy &&
     !explicitNoWeb &&
     !scriptArtifactRequested &&
@@ -341,6 +340,7 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
     explicitNoWeb,
     webArtifactRequested,
     deployRequested,
+    platformCapabilityIntent,
     scriptArtifactRequested,
     emailTemplateRequested,
     deploymentAllowed,
@@ -368,6 +368,16 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
             ? 'integration_chain'
             : 'none',
   };
+}
+
+function isPlatformCapabilityAdvisoryProfile(profile?: AltusManagedTaskIntentProfile) {
+  const mode = profile?.platformCapabilityIntent?.mode;
+  return (
+    mode === 'answer_capability' ||
+    mode === 'explain_how_to' ||
+    mode === 'discuss_requirement' ||
+    mode === 'explain_concept'
+  );
 }
 
 function describeConnectorToolAccess(runtimeStatus: string): string {
@@ -450,6 +460,7 @@ export class AltusManagedPromptService {
     const now = new Date().toISOString();
     const includeRuntimeState = input.includeRuntimeState !== false;
     const taskIntentProfile = input.taskIntentProfile;
+    const platformCapabilityAdvisory = isPlatformCapabilityAdvisoryProfile(taskIntentProfile);
     const nonDeployableTaskSection =
       includeRuntimeState && taskIntentProfile?.mode === 'non_deployable_artifact'
         ? [
@@ -463,13 +474,25 @@ export class AltusManagedPromptService {
           ].join('\n')
         : '';
     const noAutoDeploySection =
-      includeRuntimeState && taskIntentProfile && !taskIntentProfile.deploymentAllowed
+      includeRuntimeState && taskIntentProfile && !taskIntentProfile.deploymentAllowed && !platformCapabilityAdvisory
         ? [
             '# Deployment trigger contract',
             '- The current session is not an explicit deployment request.',
             '- Do not call `deploy_application`, `redeploy_application`, `rollback_application_deployment`, or `get_application_deployment_status` unless the user explicitly asks to deploy, redeploy, rollback, or check deployment status in the current turn.',
             '- Building a website, generating source code, creating documents, office files, scripts, reports, or templates does not by itself authorize deployment.',
             '- If the user only asked for implementation or source files, finish the artifact and call complete_task without entering the deployment flow.',
+            '',
+          ].join('\n')
+        : '';
+    const platformCapabilityAdvisorySection =
+      includeRuntimeState && platformCapabilityAdvisory
+        ? [
+            '# Platform capability advisory contract',
+            `- The latest user message is a platform capability conversation (${taskIntentProfile?.platformCapabilityIntent?.mode}; topic=${taskIntentProfile?.platformCapabilityIntent?.topic || 'deployment'}).`,
+            '- Answer the user naturally and directly about the capability, how-to, requirement tradeoff, or concept they asked about.',
+            '- Do not create deployable artifacts, do not start implementation, and do not call deployment tools unless the user explicitly asks you to execute deployment in a later turn.',
+            '- If the user asks whether Vercel deployment can be used, answer the capability question and offer guidance or next steps; do not infer that the current session lacks deployment permission.',
+            '- Do not say deployment is blocked, disabled, not enabled, unauthorized, or prevented by the platform just because this turn is advisory.',
             '',
           ].join('\n')
         : '';
@@ -649,6 +672,7 @@ export class AltusManagedPromptService {
       '',
       nonDeployableTaskSection,
       noAutoDeploySection,
+      platformCapabilityAdvisorySection,
       clarificationGateSection,
       clarificationFocusSection,
       clarificationTransitionSection,
@@ -769,13 +793,26 @@ export class AltusManagedPromptService {
       );
     }
 
-    if (profile && !profile.deploymentAllowed) {
+    const platformCapabilityAdvisory = isPlatformCapabilityAdvisoryProfile(profile);
+
+    if (profile && !profile.deploymentAllowed && !platformCapabilityAdvisory) {
       lines.push(
         '',
         '# Deployment trigger contract',
         '- The current session is not an explicit deployment request.',
         '- Do not call deploy/status/rollback tools unless the user explicitly asks for that action in the current turn.',
         '- Building or editing an artifact does not by itself authorize deployment.'
+      );
+    }
+
+    if (platformCapabilityAdvisory) {
+      lines.push(
+        '',
+        '# Platform capability advisory contract',
+        `- The latest user message is a platform capability conversation (${profile?.platformCapabilityIntent?.mode}; topic=${profile?.platformCapabilityIntent?.topic || 'deployment'}).`,
+        '- Answer naturally and directly. Do not create artifacts or call deployment tools for this advisory turn.',
+        '- If the user asks whether Vercel deployment can be used, answer the capability question and offer guidance or next steps; do not infer that the current session lacks deployment permission.',
+        '- Do not say deployment is blocked, disabled, not enabled, unauthorized, or prevented by the platform unless a real external provider error proves that.'
       );
     }
 

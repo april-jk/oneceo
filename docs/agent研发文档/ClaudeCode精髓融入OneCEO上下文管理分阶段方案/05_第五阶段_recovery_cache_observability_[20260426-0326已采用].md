@@ -174,8 +174,28 @@ budget replacement 必须遵守：
 2. `pnpm --filter api type-check`
 3. `pnpm --filter api exec tsx --test tests/altus-managed-routes.test.ts tests/altus-managed-context-stage5.test.ts`
 
-剩余验收项：
+后续阶段 6 已补充：
 
-1. 真实 managed run 链路回归仍需在本地浏览器或 E2E 中补充；
-2. Redis clear 后的真实恢复链路仍需接入运行环境验证；
-3. attachment URL 重新签名需在附件服务真实对象存储链路上验证。
+1. `ALTUS-CONTEXT-001/002` 的真实浏览器 UI 链路回归；
+2. `context-debug` 摘要视图，用于失败后定位 facts source、clarification、round trip 和 cache observation；
+3. 长期能力题库种子和远程浏览器 e2e 脚本。
+
+2026-04-26 已补充剩余验收：
+
+1. Redis clear 后的真实恢复链路已验证：
+   - sessionId: `79b9b10f-f8be-439c-a567-6cf8e91edb4b`
+   - 删除前扫描到 7 个该 session 相关 Redis key，包括 run state、stream、recovery；
+   - 删除后同一 session 相关 Redis key 数量为 0；
+   - 再次访问 `context-debug` 后，`contextHash` 与删除前一致；
+   - `roundTrip.equivalent = true`；
+   - `recovery.mode = db_backed_read_only`；
+   - `factsSource.redis = not_fact_source`；
+   - `recoveryState = recoverable`。
+2. attachment URL 重新签名已在真实 managed image object storage 链路验证：
+   - 上传测试图片对象到 `managed-images/.../context-validation.png`；
+   - 第一次签名 URL 下载返回 `200`，`content-type = image/png`，字节数与原始对象一致；
+   - 间隔后第二次重新签名，`X-Amz-Date` 变化，URL 变化；
+   - 第二次签名 URL 下载仍返回 `200`，字节数与原始对象一致；
+   - 测试对象已从 bucket 删除。
+
+至此，第五阶段文档中保留的 recovery/cache/attachment 真实链路验收项已完成。

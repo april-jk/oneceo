@@ -222,6 +222,18 @@ export function useWorkspaceFilePreviewState({
   const normalizeWorkspacePath = (value: string) =>
     normalizeWorkspaceRelativePath(value, sessionId);
 
+  const ensureRuntimeForWorkspaceRead = async () => {
+    if (runtimeReady !== false || !ensureRuntimeRef.current) {
+      return;
+    }
+    try {
+      await ensureRuntimeRef.current();
+    } catch {
+      // Historical file reads can still be served from archive/cache even when
+      // a runtime cannot be started for this session.
+    }
+  };
+
   const mergeWorkspaceItems = (
     currentItems: WorkspaceTreeItem[],
     incomingItems: WorkspaceTreeItem[],
@@ -350,11 +362,7 @@ export function useWorkspaceFilePreviewState({
     const normalizedPath = normalizeWorkspacePath(path);
     if (!normalizedPath) return;
     if (runtimeReady === false) {
-      if (ensureRuntimeRef.current) {
-        await ensureRuntimeRef.current();
-      } else {
-        return;
-      }
+      await ensureRuntimeForWorkspaceRead();
     }
     const requestSequence = fileRequestSequenceRef.current + 1;
     fileRequestSequenceRef.current = requestSequence;
@@ -426,7 +434,7 @@ export function useWorkspaceFilePreviewState({
     }
     if (runtimeReady === false) {
       if (mode === "manual" && ensureRuntimeRef.current) {
-        await ensureRuntimeRef.current();
+        await ensureRuntimeForWorkspaceRead();
       } else {
         setTree(null);
         setDirState({});
@@ -1864,10 +1872,19 @@ export function FilePreview({
           tree &&
           tree.items.length > 0 &&
           sessionId)),
-  );
+      );
   const effectiveHtmlPreviewUrl = appendPreviewCacheBust(
     htmlPreviewUrl,
     htmlPreviewNonce,
+  );
+  const hasWorkspacePreviewState = Boolean(
+    loading ||
+      contentLoading ||
+      selectedPath ||
+      file ||
+      contentError ||
+      error ||
+      (tree && tree.items.length > 0),
   );
 
   useEffect(() => {
@@ -1976,7 +1993,7 @@ export function FilePreview({
     }, 1200);
   };
 
-  if (!runtimeReady) {
+  if (!runtimeReady && !hasWorkspacePreviewState) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-2">
         <span>{i18n.t("previewPanel.filePreviewNotLoaded")}</span>
@@ -1986,13 +2003,20 @@ export function FilePreview({
           onClick={onRefresh}
           disabled={runtimeStarting}
         >
-          {runtimeStarting ? i18n.t("common.loading") : i18n.t("previewPanel.loadFiles")}
+          {runtimeStarting ? (
+            <>
+              <WorkspaceFileLoadGlyph className="mr-1.5 h-3.5 w-3.5" />
+              {i18n.t("common.loading")}
+            </>
+          ) : (
+            i18n.t("previewPanel.loadFiles")
+          )}
         </Button>
       </div>
     );
   }
   if (loading) {
-    return <EmptyState text={i18n.t("previewPanel.loadingFileTree")} />;
+    return <WorkspaceFileLoadingState text={i18n.t("previewPanel.loadingFileTree")} />;
   }
   if (error) {
     return (
@@ -2004,12 +2028,22 @@ export function FilePreview({
       </div>
     );
   }
-  if (!tree || tree.items.length === 0) {
+  const previewTree =
+    tree && tree.items.length > 0
+      ? tree
+      : selectedPath
+        ? {
+            root: tree?.root || "",
+            items: [{ path: selectedPath, type: "file" as const }],
+          }
+        : null;
+
+  if (!previewTree || previewTree.items.length === 0) {
     return <EmptyState text={i18n.t("previewPanel.noFiles")} />;
   }
 
-  const nodes = buildTree(tree.items);
-  const projectPrefix = detectProjectRootPrefix(tree.items);
+  const nodes = buildTree(previewTree.items);
+  const projectPrefix = detectProjectRootPrefix(previewTree.items);
   const projectNode =
     projectPrefix && nodes.length > 0
       ? nodes.find((node) => node.type === "dir" && node.path === projectPrefix) || null
@@ -2142,9 +2176,7 @@ export function FilePreview({
               </div>
               <div className="min-h-0 flex-1 overflow-hidden">
                 {contentLoading ? (
-                  <div className="px-3 py-3 text-xs text-muted-foreground">
-                    {i18n.t("common.loading")}
-                  </div>
+                  <WorkspaceFileLoadingState text={i18n.t("common.loading")} />
                 ) : previewType === "html" && !isBinary ? (
                   htmlView === "preview" ? (
                     <div className="h-full min-h-0 overflow-auto overscroll-contain p-3">
@@ -7346,5 +7378,94 @@ function EmptyState({ text }: { text: string }) {
     <div className="h-full flex items-center justify-center text-xs text-muted-foreground">
       {text}
     </div>
+  );
+}
+
+function WorkspaceFileLoadingState({ text }: { text: string }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex h-full min-h-[180px] flex-col items-center justify-center gap-3 px-6 text-center text-xs text-muted-foreground"
+    >
+      <WorkspaceFileLoadGlyph className="h-10 w-10" />
+      <span>{text}</span>
+    </div>
+  );
+}
+
+function WorkspaceFileLoadGlyph({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 48 48"
+      className={cn("shrink-0 text-[var(--brand-link)]", className)}
+      fill="none"
+      aria-hidden="true"
+    >
+      <path
+        d="M15 7.5h13.5L36 15v25.5H15z"
+        className="stroke-current"
+        strokeWidth="2"
+        strokeLinejoin="round"
+        opacity="0.72"
+      />
+      <path
+        d="M28.5 7.5V15H36"
+        className="stroke-current"
+        strokeWidth="2"
+        strokeLinejoin="round"
+        opacity="0.38"
+      />
+      <path
+        d="M19 23h16"
+        className="stroke-current"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeDasharray="16"
+      >
+        <animate
+          attributeName="stroke-dashoffset"
+          values="16;0;16"
+          dur="1.55s"
+          repeatCount="indefinite"
+        />
+        <animate
+          attributeName="opacity"
+          values="0.18;0.82;0.18"
+          dur="1.55s"
+          repeatCount="indefinite"
+        />
+      </path>
+      <path
+        d="M19 29h11"
+        className="stroke-current"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeDasharray="11"
+      >
+        <animate
+          attributeName="stroke-dashoffset"
+          values="11;0;11"
+          dur="1.55s"
+          begin="0.18s"
+          repeatCount="indefinite"
+        />
+        <animate
+          attributeName="opacity"
+          values="0.16;0.7;0.16"
+          dur="1.55s"
+          begin="0.18s"
+          repeatCount="indefinite"
+        />
+      </path>
+      <circle cx="34.5" cy="34.5" r="2.4" className="fill-current">
+        <animate
+          attributeName="opacity"
+          values="0.25;1;0.25"
+          dur="1.15s"
+          repeatCount="indefinite"
+        />
+      </circle>
+    </svg>
   );
 }

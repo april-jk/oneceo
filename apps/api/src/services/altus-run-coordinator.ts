@@ -1023,6 +1023,29 @@ export class AltusRunCoordinator {
     if (errorMessage.startsWith('deployment_tool_not_allowed_without_explicit_request')) {
       return '这次只是部署相关咨询，我不会在没有明确指令时触发部署工具。';
     }
+    if (toolName === 'debug_open_page') {
+      if (errorMessage.includes('__ONECEO_DEBUG_TARGET_UNREACHABLE__')) {
+        return '调试页面目标地址暂不可访问，Altus 将继续检查本地服务端口和启动命令。';
+      }
+      if (errorMessage.includes('__ONECEO_DEBUG_TARGET_FILE_MISSING__')) {
+        return '调试页面目标文件不存在，Altus 将继续检查交付文件路径。';
+      }
+      if (errorMessage.includes('__ONECEO_DEBUG_TARGET_BAD_STATUS__')) {
+        return '调试页面目标地址返回异常状态，Altus 将继续检查页面服务错误并修复。';
+      }
+      if (errorMessage.includes('__ONECEO_DEBUG_TARGET_TAB_NOT_READY__')) {
+        return '调试浏览器还没有打开正确页面，Altus 将继续检查调试浏览器连接并重试。';
+      }
+      if (errorMessage.includes('__ONECEO_DEBUG_OPEN_PAGE_FAILED__')) {
+        return '调试浏览器打开页面失败，Altus 将继续检查远程调试服务并重试。';
+      }
+      if (errorMessage.includes('debug_open_page_debug_not_ready')) {
+        return '远程调试服务尚未就绪，Altus 将继续恢复调试环境。';
+      }
+      if (/exit status\s+\d+/i.test(errorMessage)) {
+        return '调试页面校验未返回具体状态，Altus 将重新检查目标页面和调试服务。';
+      }
+    }
     if (!this.isDeploymentTool(toolName)) {
       return errorMessage;
     }

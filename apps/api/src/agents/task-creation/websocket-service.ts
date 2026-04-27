@@ -269,7 +269,7 @@ export class TaskCreationWebSocketService {
       case 'opencode_input' as any:
         // 直通模式入口：来自前端的“sandbox 直通”对话。
         // 该路径只做桥接 + 落盘 + 运行时绑定，不进入 Altus 三层编排。
-        // 后续 claudecode/codex 直通也应复用此语义，避免误触 Altus 接管流程。
+        // 后续直通执行器也应复用此语义，避免误触 Altus 接管流程。
         if (!message.content) {
           throw new Error('用户输入不能为空');
         }
@@ -869,7 +869,7 @@ export class TaskCreationWebSocketService {
   }
 
   private async handleOpencodeInput(clientId: string, message: WebSocketMessage): Promise<void> {
-    // 直通模式处理：为 OpenCode（未来可扩展 ClaudeCode/Codex）建立会话并转发。
+    // 直通模式处理：为 OpenCode/Codex 建立会话并转发。
     // 注意：此处不应写入 Altus 的澄清/规划阶段状态，避免干扰接管模式。
     let taskSessionId =
       message.sessionId ||

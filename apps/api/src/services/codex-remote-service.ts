@@ -12,7 +12,12 @@ import { resolveCodexArchiveDotCodexPath, resolveOpencodeWorkspacePath } from '.
 import { buildTimelineMessageKey, normalizeMessageTimelineMetadata } from '../utils/task-message-identity';
 import { codexAppServerService } from './codex-app-server-service';
 import { codexAppServerTurnService } from './codex-app-server-turn-service';
-import { codexRuntimeConfigService } from './codex-runtime-config-service';
+import {
+  buildCodexAuthJson,
+  buildCodexConfigToml,
+  DEFAULT_CODEX_MODEL,
+  DEFAULT_SANDBOX_OPENAI_BASE_URL,
+} from '../utils/codex-runtime-config';
 import {
   extractAppServerErrorMessage,
   extractAppServerTurnStatus,
@@ -1183,7 +1188,25 @@ fi
         },
       });
 
-      const runtimeConfig = await codexRuntimeConfigService.getByTaskSessionId(taskSessionId);
+      const codexModel =
+        process.env.SANDBOX_ENGINE_CODEX_MODEL ||
+        process.env.CODEX_MODEL ||
+        process.env.OPENAI_MODEL ||
+        DEFAULT_CODEX_MODEL;
+      const codexBaseUrl =
+        process.env.SANDBOX_ENGINE_CODEX_BASE_URL ||
+        process.env.CODEX_BASE_URL ||
+        process.env.OPENAI_BASE_URL ||
+        process.env.OPENAI_API_BASE ||
+        DEFAULT_SANDBOX_OPENAI_BASE_URL;
+      const codexApiKey =
+        process.env.SANDBOX_ENGINE_CODEX_API_KEY ||
+        process.env.CODEX_API_KEY ||
+        process.env.OPENAI_API_KEY ||
+        '';
+      if (!codexApiKey.trim()) {
+        throw new Error('Codex API Key 未配置');
+      }
       this.clearAppServerJob(taskSessionId);
       const turnJob = await codexAppServerTurnService.startBackgroundTurn({
         sessionId: runtime.orchestratorSessionId,
@@ -1191,10 +1214,10 @@ fi
         prompt: content,
         threadId: existingExecutorSessionId,
         waitTimeoutMs: resolveCodexAppServerWaitTimeoutMs(),
-        model: runtimeConfig.model || process.env.CODEX_MODEL || process.env.OPENAI_MODEL || undefined,
+        model: codexModel,
         codexBinaryPath: runtime.codexBinaryPath || undefined,
-        configToml: runtimeConfig.configToml,
-        authJson: runtimeConfig.authJson,
+        configToml: buildCodexConfigToml({ baseUrl: codexBaseUrl, model: codexModel }),
+        authJson: buildCodexAuthJson({ apiKey: codexApiKey }),
       });
       if (!turnJob.threadId) {
         throw new Error('Codex App Server 未返回 threadId');

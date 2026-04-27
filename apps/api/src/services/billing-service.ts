@@ -44,7 +44,7 @@ export class BillingService {
   async deductCredits(
     userId: string,
     amount: number,
-    source: { sessionId?: string; runId?: string; model?: string; description?: string }
+    source: { sessionId?: string; runId?: string; model?: string; description?: string; metadataJson?: Record<string, unknown> }
   ): Promise<{ success: boolean; balanceAfter: number; transactionId?: string }> {
     if (!amount || amount <= 0 || !Number.isFinite(amount)) {
       return { success: false, balanceAfter: 0 };
@@ -80,6 +80,7 @@ export class BillingService {
         sourceId: source.sessionId as any,
         sourceType: 'session',
         description: source.description || `LLM调用: ${source.model || 'unknown'}`,
+        metadataJson: source.metadataJson || {},
       }).returning();
 
       return {
@@ -359,6 +360,7 @@ export class BillingService {
     totalTokens: number;
     creditsConsumed: number;
     pricingSnapshot: any;
+    metadataJson?: Record<string, unknown>;
   }): Promise<TokenUsageLog> {
     const result = await db.insert(tokenUsageLogs).values({
       userId: data.userId as any,
@@ -373,6 +375,7 @@ export class BillingService {
       totalTokens: data.totalTokens,
       creditsConsumed: data.creditsConsumed,
       pricingSnapshot: data.pricingSnapshot,
+      metadataJson: data.metadataJson || {},
     }).returning();
 
     return result[0];

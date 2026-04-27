@@ -137,6 +137,7 @@ type JsonSchema =
   | {
       type: 'string' | 'number' | 'integer' | 'boolean';
       description?: string;
+      enum?: string[];
     }
   | {
       type: 'array';
@@ -228,12 +229,19 @@ export function buildManagedToolDefinitions() {
       type: 'function',
       function: {
         name: 'shell_execute',
-        description: 'Run a shell command inside the E2B sandbox workspace.',
+        description:
+          'Run a shell command inside the E2B sandbox workspace. Persistent local preview/dev server commands are automatically managed as background services in auto mode, with pid/log/url returned for debugging.',
         parameters: objectSchema(
           {
             command: { type: 'string', description: 'Shell command to execute.' },
             cwd: { type: 'string', description: 'Workspace-relative directory. Defaults to workspace root.' },
             timeoutMs: { type: 'integer', description: 'Timeout in milliseconds, max 120000.' },
+            runMode: {
+              type: 'string',
+              enum: ['auto', 'foreground', 'background_service'],
+              description:
+                'Execution mode. Default auto. Use background_service for long-running preview/dev servers; foreground rejects persistent service commands.',
+            },
           },
           ['command']
         ),
@@ -244,13 +252,13 @@ export function buildManagedToolDefinitions() {
       function: {
         name: 'debug_open_page',
         description:
-          'Start website debugging behavior by opening a target http/https URL in the sandbox Chromium debug session shown by n.eko. Use this when users ask to 启动网站调试功能 or open a page in the debug view.',
+          'Start website debugging behavior by opening a target http/https URL, or a file:// URL inside the workspace, in the sandbox Chromium debug session shown by n.eko. The tool verifies the target is reachable/readable and the CDP tab is ready before reporting success. After this, use Playwright/playwright-mcp against the same CDP 9222 browser to verify the visible page content. Use this when users ask to 启动网站调试功能 or open a page in the debug view.',
         parameters: objectSchema(
           {
             url: {
               type: 'string',
               description:
-                'Target URL to open in Chromium. Must start with http:// or https:// and may include path/query/hash, e.g. http://127.0.0.1:3000/folder1/?tab=debug#section-2.',
+                'Target URL to open in Chromium. Use http:// or https:// for running services. For standalone HTML deliverables, file:// URLs are allowed only when the file is inside the workspace.',
             },
             ensureDebug: {
               type: 'boolean',

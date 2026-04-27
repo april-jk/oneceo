@@ -6199,9 +6199,12 @@ export function DebugPreview({
   const [debugLocked, setDebugLocked] = useState(true);
   const [bridgeReady, setBridgeReady] = useState(false);
   const [bridgeWaitExpired, setBridgeWaitExpired] = useState(false);
+  const [startRequested, setStartRequested] = useState(false);
+  const [frameLoading, setFrameLoading] = useState(false);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
 
   const requestStartDebug = () => {
+    setStartRequested(true);
     if (onRequestStartDebugByMessage) {
       onRequestStartDebugByMessage();
       return;
@@ -6274,6 +6277,7 @@ export function DebugPreview({
     setDebugLocked(true);
     setBridgeReady(false);
     setBridgeWaitExpired(false);
+    setFrameLoading(Boolean(debugUrl));
     if (!debugUrl) return;
     const timer = window.setTimeout(() => {
       setBridgeWaitExpired(true);
@@ -6282,6 +6286,16 @@ export function DebugPreview({
       window.clearTimeout(timer);
     };
   }, [debugUrl]);
+
+  useEffect(() => {
+    if (info?.ready && info?.url) {
+      setStartRequested(false);
+      return;
+    }
+    if (info?.status === "failed" || error) {
+      setStartRequested(false);
+    }
+  }, [error, info?.ready, info?.status, info?.url]);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
@@ -6319,30 +6333,35 @@ export function DebugPreview({
 
   const isFailed = info?.status === "failed";
   const lockControlEnabled = bridgeReady;
+  const connectionPending = Boolean(starting || loading || startRequested);
 
   if (!runtimeReady) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-3">
-        <span>
-          {starting
-            ? i18n.t("previewPanel.debug.startingRuntime")
-            : i18n.t("previewPanel.debug.runtimeNotStarted")}
-        </span>
+        {connectionPending ? (
+          <DebugConnectionLoadingState
+            text={i18n.t("previewPanel.debug.startingRuntime")}
+          />
+        ) : (
+          <span>{i18n.t("previewPanel.debug.runtimeNotStarted")}</span>
+        )}
         <Button
           variant="outline"
           size="sm"
           onClick={() => {
             requestStartDebug();
           }}
-          disabled={starting}
+          disabled={connectionPending}
         >
-          {i18n.t("previewPanel.debug.startDebug")}
+          {connectionPending
+            ? i18n.t("previewPanel.debug.enabling")
+            : i18n.t("previewPanel.debug.startDebug")}
         </Button>
       </div>
     );
   }
   if (loading) {
-    return <EmptyState text={i18n.t("previewPanel.debug.loading")} />;
+    return <DebugConnectionLoadingState text={i18n.t("previewPanel.debug.loading")} />;
   }
   if (error && (!info?.ready || !info?.url)) {
     return (
@@ -6354,9 +6373,9 @@ export function DebugPreview({
           onClick={() => {
             requestStartDebug();
           }}
-          disabled={starting}
+          disabled={connectionPending}
         >
-          {starting
+          {connectionPending
             ? i18n.t("previewPanel.debug.retrying")
             : i18n.t("previewPanel.debug.reenable")}
         </Button>
@@ -6364,23 +6383,27 @@ export function DebugPreview({
     );
   }
   if (!info?.ready || !info.url) {
+    const pendingMessage =
+      info?.message ||
+      (isFailed
+        ? i18n.t("previewPanel.debug.connectionFailed")
+        : i18n.t("previewPanel.debug.serviceNotReady"));
     return (
       <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-3">
-        <span>
-          {info?.message ||
-            (isFailed
-              ? i18n.t("previewPanel.debug.connectionFailed")
-              : i18n.t("previewPanel.debug.serviceNotReady"))}
-        </span>
+        {connectionPending && !isFailed ? (
+          <DebugConnectionLoadingState text={pendingMessage} />
+        ) : (
+          <span>{pendingMessage}</span>
+        )}
         <Button
           variant="outline"
           size="sm"
           onClick={() => {
             requestStartDebug();
           }}
-          disabled={starting}
+          disabled={connectionPending}
         >
-          {starting
+          {connectionPending
             ? i18n.t("previewPanel.debug.enabling")
             : isFailed
               ? i18n.t("previewPanel.debug.retryEnable")
@@ -6456,11 +6479,20 @@ export function DebugPreview({
             className="h-full w-full"
             allow="autoplay; clipboard-read; clipboard-write; fullscreen; microphone; camera; display-capture"
             onLoad={() => {
+              setFrameLoading(false);
               if (lockControlEnabled) {
                 requestNekoLockState(debugLocked);
               }
             }}
           />
+          {frameLoading ? (
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/88 backdrop-blur-sm">
+              <DebugConnectionLoadingState
+                text={i18n.t("previewPanel.debug.loading")}
+                compact
+              />
+            </div>
+          ) : null}
           {debugLocked ? (
             <button
               type="button"
@@ -7466,6 +7498,104 @@ function WorkspaceFileLoadGlyph({ className }: { className?: string }) {
           repeatCount="indefinite"
         />
       </circle>
+    </svg>
+  );
+}
+
+function DebugConnectionLoadingState({
+  text,
+  compact = false,
+}: {
+  text: string;
+  compact?: boolean;
+}) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={cn(
+        "flex flex-col items-center justify-center text-center text-xs text-muted-foreground",
+        compact ? "gap-2 px-4 py-3" : "h-full min-h-[180px] gap-3 px-6",
+      )}
+    >
+      <DebugConnectionGlyph className={compact ? "h-9 w-9" : "h-12 w-12"} />
+      <span>{text}</span>
+    </div>
+  );
+}
+
+function DebugConnectionGlyph({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 56 56"
+      className={cn("shrink-0 text-[var(--brand-link)]", className)}
+      fill="none"
+      aria-hidden="true"
+    >
+      <rect
+        x="13"
+        y="16"
+        width="30"
+        height="20"
+        rx="3.5"
+        className="stroke-current"
+        strokeWidth="2"
+        opacity="0.74"
+      />
+      <path
+        d="M23 41h10M28 36v5"
+        className="stroke-current"
+        strokeWidth="2"
+        strokeLinecap="round"
+        opacity="0.42"
+      />
+      <path
+        d="M22 26h12"
+        className="stroke-current"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeDasharray="12"
+      >
+        <animate
+          attributeName="stroke-dashoffset"
+          values="12;0;12"
+          dur="1.45s"
+          repeatCount="indefinite"
+        />
+        <animate
+          attributeName="opacity"
+          values="0.22;0.85;0.22"
+          dur="1.45s"
+          repeatCount="indefinite"
+        />
+      </path>
+      <circle
+        cx="41"
+        cy="18"
+        r="3"
+        className="fill-current"
+      >
+        <animate
+          attributeName="opacity"
+          values="0.3;1;0.3"
+          dur="1.05s"
+          repeatCount="indefinite"
+        />
+      </circle>
+      <path
+        d="M44.5 14.5c2.2 2.2 2.2 5.8 0 8M48.5 10.5c4.4 4.4 4.4 11.6 0 16"
+        className="stroke-current"
+        strokeWidth="2"
+        strokeLinecap="round"
+        opacity="0.5"
+      >
+        <animate
+          attributeName="opacity"
+          values="0.15;0.65;0.15"
+          dur="1.45s"
+          repeatCount="indefinite"
+        />
+      </path>
     </svg>
   );
 }

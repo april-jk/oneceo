@@ -527,7 +527,57 @@ test('shell_execute blocks preview/dev commands while deployment-orchestrator is
   );
 });
 
-test('shell_execute blocks persistent local server commands to avoid long timeout stalls', async () => {
+test('shell_execute manages persistent local server commands as background services in auto mode', async () => {
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async () => ({
+    stdout: [
+      '__ONECEO_SERVICE_PID__=1234',
+      '__ONECEO_SERVICE_URL__=http://127.0.0.1:8080/',
+      '__ONECEO_SERVICE_ID__=managed-session-1-1',
+      '__ONECEO_SERVICE_STATUS__=ready',
+      '__ONECEO_SERVICE_PORT__=8080',
+      '__ONECEO_SERVICE_LOG__=/tmp/oneceo-managed-services/session-1/managed-session-1-1.log',
+      '__ONECEO_SERVICE_PID_FILE__=/tmp/oneceo-managed-services/session-1/managed-session-1-1.pid',
+    ].join('\n'),
+    stderr: '',
+    exitCode: 0,
+  }) as any);
+  const markSandboxDirtyMock = mock.fn(async () => undefined);
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: mock.fn(async () => undefined) as any,
+      markSandboxDirty: markSandboxDirtyMock as any,
+    }
+  );
+
+  const result = await runtime.execute('shell_execute', {
+    command: 'python3 -m http.server 8080 &',
+    cwd: '.',
+  });
+
+  assert.equal(result.type, 'result');
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.runMode, 'background_service');
+  assert.equal(payload.service.status, 'ready');
+  assert.equal(payload.service.port, 8080);
+  assert.equal(payload.service.url, 'http://127.0.0.1:8080/');
+  assert.equal(payload.nextSuggestedTool, 'debug_open_page');
+  assert.equal(runCommandMock.mock.callCount(), 1);
+  assert.match(runCommandMock.mock.calls[0]?.arguments[1] || '', /setsid sh -lc/);
+  assert.deepEqual(markSandboxDirtyMock.mock.calls[0]?.arguments, [
+    'sandbox-1',
+    'managed_shell_background_service',
+  ]);
+});
+
+test('shell_execute rejects persistent local server commands in explicit foreground mode', async () => {
   const runtime = new AltusManagedToolRuntime({
     sessionId: 'session-1',
     userId: 'user-1',
@@ -541,16 +591,9 @@ test('shell_execute blocks persistent local server commands to avoid long timeou
     runtime.execute('shell_execute', {
       command: 'python3 -m http.server 8080',
       cwd: '.',
+      runMode: 'foreground',
     }),
-    /shell_execute_persistent_local_server_blocked/
-  );
-
-  await assert.rejects(
-    runtime.execute('shell_execute', {
-      command: 'python3 -m http.server 8080 &',
-      cwd: '.',
-    }),
-    /shell_execute_persistent_local_server_blocked/
+    /shell_execute_persistent_local_server_foreground_blocked/
   );
 });
 
@@ -566,9 +609,27 @@ test('debug_open_page rejects non-http protocols', async () => {
 
   await assert.rejects(
     runtime.execute('debug_open_page', {
-      url: 'file:///tmp/index.html',
+      url: 'ftp://127.0.0.1/index.html',
     }),
     /debug_open_page_invalid_protocol/
+  );
+});
+
+test('debug_open_page rejects file targets outside workspace', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  await assert.rejects(
+    runtime.execute('debug_open_page', {
+      url: 'file:///tmp/index.html',
+    }),
+    /debug_open_page_file_outside_workspace/
   );
 });
 
@@ -587,7 +648,7 @@ test('debug_open_page ensures debug and opens URL via CDP', async () => {
       }) as any
   );
   mock.method(e2bConnector, 'runCommand', async () => ({
-    stdout: '{"id":"page-1","url":"http://127.0.0.1:3000/folder1/"}\n__OPENED_BY__=PUT',
+    stdout: '{"id":"page-1","url":"http://127.0.0.1:3000/folder1/"}\n__OPENED_BY__=PUT\n__ONECEO_DEBUG_TARGET_TAB_READY__=Folder 1\n__ONECEO_DEBUG_RESULT__=ok',
     stderr: '',
     exitCode: 0,
   }) as any);
@@ -628,6 +689,208 @@ test('debug_open_page ensures debug and opens URL via CDP', async () => {
   assert.equal(markSandboxDirtyMock.mock.callCount(), 1);
   assert.deepEqual(markSandboxDirtyMock.mock.calls[0]?.arguments, ['sandbox-1', 'managed_debug_open_page']);
   assert.equal(ensureDebugMock.mock.callCount(), 1);
+});
+
+test('debug_open_page normalizes local target URL without scheme', async () => {
+  const ensureDebugMock = mock.fn(
+    async () =>
+      ({
+        ready: true,
+        url: 'https://8081-sandbox-1.e2b.app?pwd=oneceo&usr=oneceo',
+        status: 'running',
+        updatedAt: new Date().toISOString(),
+        sandboxId: 'sandbox-1',
+        port: 8081,
+        display: ':0',
+        cdpPort: 9222,
+      }) as any
+  );
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async () => ({
+    stdout: '{"id":"page-1","url":"http://127.0.0.1:8080/"}\n__ONECEO_DEBUG_TARGET_TAB_READY__=Local\n__ONECEO_DEBUG_RESULT__=ok',
+    stderr: '',
+    exitCode: 0,
+  }) as any);
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: mock.fn(async () => undefined) as any,
+      markSandboxDirty: mock.fn(async () => undefined) as any,
+    },
+    {
+      ensureNekoDebug: ensureDebugMock as any,
+      issueIceServersForUser: mock.fn(async () => null) as any,
+    },
+  );
+
+  const result = await runtime.execute('debug_open_page', {
+    url: '127.0.0.1:8080',
+  });
+
+  assert.equal(result.type, 'result');
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.targetUrl, 'http://127.0.0.1:8080/');
+  assert.equal(runCommandMock.mock.callCount(), 1);
+});
+
+test('debug_open_page opens workspace file targets in debug browser', async () => {
+  const ensureDebugMock = mock.fn(
+    async () =>
+      ({
+        ready: true,
+        url: 'https://8081-sandbox-1.e2b.app?pwd=oneceo&usr=oneceo',
+        status: 'running',
+        updatedAt: new Date().toISOString(),
+        sandboxId: 'sandbox-1',
+        port: 8081,
+        display: ':0',
+        cdpPort: 9222,
+      }) as any
+  );
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async () => ({
+    stdout: '__ONECEO_DEBUG_TARGET_FILE_READY__=/workspace/session-1/index.html\n{\"id\":\"page-1\",\"url\":\"file:///workspace/session-1/index.html\"}\n__ONECEO_DEBUG_TARGET_TAB_READY__=2048\n__ONECEO_DEBUG_RESULT__=ok',
+    stderr: '',
+    exitCode: 0,
+  }) as any);
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: mock.fn(async () => undefined) as any,
+      markSandboxDirty: mock.fn(async () => undefined) as any,
+    },
+    {
+      ensureNekoDebug: ensureDebugMock as any,
+      issueIceServersForUser: mock.fn(async () => null) as any,
+    },
+  );
+
+  const result = await runtime.execute('debug_open_page', {
+    url: 'file:///workspace/session-1/index.html',
+  });
+
+  assert.equal(result.type, 'result');
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.targetUrl, 'file:///workspace/session-1/index.html');
+  assert.equal(payload.protocol, 'file');
+  assert.equal(payload.localFilePath, '/workspace/session-1/index.html');
+  assert.equal(runCommandMock.mock.callCount(), 1);
+});
+
+test('debug_open_page rejects unreachable target page before reporting success', async () => {
+  const ensureDebugMock = mock.fn(
+    async () =>
+      ({
+        ready: true,
+        url: 'https://8081-sandbox-1.e2b.app?pwd=oneceo&usr=oneceo',
+        status: 'running',
+        updatedAt: new Date().toISOString(),
+        sandboxId: 'sandbox-1',
+        port: 8081,
+        display: ':0',
+        cdpPort: 9222,
+      }) as any
+  );
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async () => ({
+    stdout: '__ONECEO_DEBUG_TARGET_UNREACHABLE__\ncurl: (7) Failed to connect to 127.0.0.1 port 8080\n__ONECEO_DEBUG_RESULT__=target_unreachable',
+    stderr: '',
+    exitCode: 0,
+  }) as any);
+  const touchSandboxMock = mock.fn(async () => undefined);
+  const markSandboxDirtyMock = mock.fn(async () => undefined);
+
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: touchSandboxMock as any,
+      markSandboxDirty: markSandboxDirtyMock as any,
+    },
+    {
+      ensureNekoDebug: ensureDebugMock as any,
+      issueIceServersForUser: mock.fn(async () => null) as any,
+    },
+  );
+
+  await assert.rejects(
+    runtime.execute('debug_open_page', {
+      url: 'http://127.0.0.1:8080/',
+    }),
+    /debug_open_page_failed:__ONECEO_DEBUG_TARGET_UNREACHABLE__/
+  );
+
+  assert.equal(runCommandMock.mock.callCount(), 1);
+  assert.equal(markSandboxDirtyMock.mock.callCount(), 0);
+});
+
+test('debug_open_page rejects target pages that return bad HTTP status', async () => {
+  const ensureDebugMock = mock.fn(
+    async () =>
+      ({
+        ready: true,
+        url: 'https://8081-sandbox-1.e2b.app?pwd=oneceo&usr=oneceo',
+        status: 'running',
+        updatedAt: new Date().toISOString(),
+        sandboxId: 'sandbox-1',
+        port: 8081,
+        display: ':0',
+        cdpPort: 9222,
+      }) as any
+  );
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async () => ({
+    stdout: '__ONECEO_DEBUG_TARGET_BAD_STATUS__=500\nInternal Server Error\n__ONECEO_DEBUG_RESULT__=target_bad_status',
+    stderr: '',
+    exitCode: 0,
+  }) as any);
+  const touchSandboxMock = mock.fn(async () => undefined);
+  const markSandboxDirtyMock = mock.fn(async () => undefined);
+
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: touchSandboxMock as any,
+      markSandboxDirty: markSandboxDirtyMock as any,
+    },
+    {
+      ensureNekoDebug: ensureDebugMock as any,
+      issueIceServersForUser: mock.fn(async () => null) as any,
+    },
+  );
+
+  await assert.rejects(
+    runtime.execute('debug_open_page', {
+      url: 'http://127.0.0.1:8080/',
+    }),
+    /debug_open_page_failed:__ONECEO_DEBUG_TARGET_BAD_STATUS__=500/
+  );
+
+  assert.equal(runCommandMock.mock.callCount(), 1);
+  assert.equal(markSandboxDirtyMock.mock.callCount(), 0);
 });
 
 test('debug_open_page fails fast when debug runtime reports failed status', async () => {

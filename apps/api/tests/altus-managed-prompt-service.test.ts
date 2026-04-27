@@ -72,6 +72,23 @@ test('managed prompt explicitly skips pre-execution todo for simple tasks when t
   assert.match(prompt, /do not call `todowrite` just because the request sounds non-trivial/i);
 });
 
+test('managed prompt defaults debug and testing to Playwright on the same n.eko browser', () => {
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-debug-tool-choice',
+    sessionTitle: 'debug tool choice',
+    workspaceRoot: '/workspace/session-debug-tool-choice',
+    connectors: [],
+  });
+
+  assert.match(prompt, /Browser Use CLI is preinstalled in the sandbox/i);
+  assert.match(prompt, /use Playwright \/ playwright-mcp by default to inspect or test the same n\.eko Chromium session through CDP 9222/i);
+  assert.match(prompt, /Do not launch a separate browser instance/i);
+  assert.match(prompt, /not about:blank, a Chrome error page, or an unexpected fallback route/i);
+  assert.match(prompt, /Use Browser Use for exploratory external-site access and interaction only/i);
+  assert.match(prompt, /Use Playwright \/ playwright-mcp by default for debugging, deterministic testing/i);
+  assert.match(prompt, /Do not install browser-use, Playwright, or @playwright\/mcp at task time/i);
+});
+
 test('managed task intent profile carries a hard clarification gate for broad business-system requests', () => {
   const profile = deriveManagedTaskIntentProfile([
     '帮我做一个企业管理系统。',

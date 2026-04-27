@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { tavilyConnector } from '../connectors/tavily-connector';
 import { ensureNekoDebug } from './sandbox-debug-service';
@@ -43,6 +44,7 @@ export type ManagedToolResult =
     };
 
 type ManagedTodoStatus = 'pending' | 'in_progress' | 'completed';
+type ShellRunMode = 'auto' | 'foreground' | 'background_service';
 
 type ManagedTodoItem = {
   content: string;
@@ -81,6 +83,12 @@ function asStringArray(value: unknown, maxItems: number) {
   return result;
 }
 
+function normalizeShellRunMode(value: unknown): ShellRunMode {
+  const text = asText(value).toLowerCase();
+  if (text === 'foreground' || text === 'background_service') return text;
+  return 'auto';
+}
+
 function isManagedTodoStatus(value: string): value is ManagedTodoStatus {
   return value === 'pending' || value === 'in_progress' || value === 'completed';
 }
@@ -95,22 +103,58 @@ function truncate(value: string, limit = 16000) {
   return `${value.slice(0, limit)}\n...[truncated]`;
 }
 
-function normalizeDebugTargetUrl(value: unknown) {
-  const raw = asText(value);
+type NormalizedDebugTarget = {
+  targetUrl: string;
+  protocol: 'http' | 'https' | 'file';
+  localFilePath?: string;
+};
+
+function isInsidePath(parent: string, child: string) {
+  const relative = path.posix.relative(parent, child);
+  return relative === '' || (!!relative && !relative.startsWith('..') && !path.posix.isAbsolute(relative));
+}
+
+function normalizeDebugTargetUrl(value: unknown, workspaceRoot: string): NormalizedDebugTarget {
+  const raw = asText(value).trim();
   if (!raw) {
     throw new Error('debug_open_page_missing_url');
   }
+  const hasScheme = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(raw);
+  const looksLikeLocalOrIp =
+    /^(localhost|(?:\d{1,3}\.){3}\d{1,3}|\[[0-9a-f:]+\])(?::\d+)?(?:[/?#].*)?$/i.test(raw);
+  const candidate = raw.startsWith('//')
+    ? `http:${raw}`
+    : looksLikeLocalOrIp
+      ? `http://${raw}`
+      : hasScheme
+        ? raw
+        : `https://${raw}`;
   let parsed: URL;
   try {
-    parsed = new URL(raw);
+    parsed = new URL(candidate);
   } catch {
     throw new Error(`debug_open_page_invalid_url:Please provide a full URL like http://127.0.0.1:3000/folder1/`);
   }
   const protocol = parsed.protocol.toLowerCase();
+  if (protocol === 'file:') {
+    const workspace = path.posix.resolve(workspaceRoot);
+    const localFilePath = path.posix.resolve(decodeURIComponent(parsed.pathname));
+    if (!isInsidePath(workspace, localFilePath)) {
+      throw new Error('debug_open_page_file_outside_workspace:Only workspace files can be opened in the debug browser');
+    }
+    return {
+      targetUrl: pathToFileURL(localFilePath).toString(),
+      protocol: 'file',
+      localFilePath,
+    };
+  }
   if (protocol !== 'http:' && protocol !== 'https:') {
     throw new Error('debug_open_page_invalid_protocol:Only http:// or https:// is allowed');
   }
-  return parsed.toString();
+  return {
+    targetUrl: parsed.toString(),
+    protocol: protocol === 'https:' ? 'https' : 'http',
+  };
 }
 
 function isManagedDeploymentToolName(value: string): value is AltusManagedDeploymentToolName {
@@ -170,6 +214,27 @@ function isPersistentLocalServerCommand(value: string) {
     normalized.includes('vite dev') ||
     normalized === 'vite'
   );
+}
+
+function sanitizeBackgroundServiceCommand(value: string) {
+  let command = asText(value).trim();
+  command = command.replace(/^\s*nohup\s+/i, '');
+  command = command.replace(/\s*&\s*$/g, '').trim();
+  return command;
+}
+
+function inferServicePort(command: string) {
+  const normalized = normalizeCommandForMatch(command);
+  const portEnv = command.match(/\bPORT=(\d{2,5})\b/);
+  if (portEnv) return Number(portEnv[1]);
+  const longPort = command.match(/(?:--port|-p)\s+(\d{2,5})\b/);
+  if (longPort) return Number(longPort[1]);
+  const httpServer = command.match(/python3?\s+-m\s+http\.server(?:\s+(\d{2,5}))?/i);
+  if (httpServer) return Number(httpServer[1] || 8000);
+  if (normalized.includes('vite') || normalized.includes('pnpm dev') || normalized.includes('npm run dev')) {
+    return 5173;
+  }
+  return 0;
 }
 
 function extractLeadingCdTarget(value: string) {
@@ -449,6 +514,120 @@ export class AltusManagedToolRuntime {
     await this.markWorkspaceDirty('managed_frontend_build_prepare');
   }
 
+  private parseShellFlag(stdout: string, key: string) {
+    const flags = this.parseInspectionFlags(stdout);
+    return flags.get(key) || '';
+  }
+
+  private async startControlledBackgroundService(
+    command: string,
+    cwd: string,
+    signal?: AbortSignal
+  ) {
+    const serviceCommand = sanitizeBackgroundServiceCommand(command);
+    if (!serviceCommand) {
+      throw new Error('shell_execute_background_service_missing_command');
+    }
+    const port = inferServicePort(serviceCommand);
+    const serviceId = `managed-${this.input.sessionId}-${Date.now()}`;
+    const serviceDir = `/tmp/oneceo-managed-services/${this.input.sessionId}`;
+    const logPath = `${serviceDir}/${serviceId}.log`;
+    const pidPath = `${serviceDir}/${serviceId}.pid`;
+    const serviceUrl = port > 0 ? `http://127.0.0.1:${port}/` : '';
+    const script = [
+      `service_id=${shellEscape(serviceId)}`,
+      `service_dir=${shellEscape(serviceDir)}`,
+      `log_path=${shellEscape(logPath)}`,
+      `pid_path=${shellEscape(pidPath)}`,
+      `service_command=${shellEscape(serviceCommand)}`,
+      `service_port=${port}`,
+      'mkdir -p "$service_dir"',
+      'service_status="starting"',
+      'if [ "$service_port" -gt 0 ] && (ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null || true) | grep -q ":${service_port} "; then',
+      '  service_status="already_running"',
+      '  echo "__ONECEO_SERVICE_ALREADY_RUNNING__=1"',
+      'else',
+      '  setsid sh -lc "$service_command" > "$log_path" 2>&1 < /dev/null &',
+      '  service_pid=$!',
+      '  echo "$service_pid" > "$pid_path"',
+      '  echo "__ONECEO_SERVICE_PID__=$service_pid"',
+      '  sleep 1',
+      '  if ! kill -0 "$service_pid" 2>/dev/null; then',
+      '    service_status="start_failed"',
+      '    echo "__ONECEO_SERVICE_START_FAILED__=1"',
+      '    tail -n 80 "$log_path" 2>/dev/null || true',
+      '  fi',
+      'fi',
+      'if [ "$service_status" != "start_failed" ] && [ "$service_port" -gt 0 ]; then',
+      '  service_url="http://127.0.0.1:${service_port}/"',
+      '  health_ready=0',
+      '  for i in 1 2 3 4 5 6 7 8; do',
+      '    if curl -k -L -sS --max-time 2 -o /tmp/oneceo_service_probe_${service_port}.html -w "%{http_code}" "$service_url" 2>/tmp/oneceo_service_probe_${service_port}.err | grep -Eq "^(2|3)[0-9][0-9]$"; then',
+      '      health_ready=1',
+      '      break',
+      '    fi',
+      '    sleep 1',
+      '  done',
+      '  if [ "$health_ready" = "1" ]; then',
+      '    service_status="ready"',
+      '    echo "__ONECEO_SERVICE_URL__=$service_url"',
+      '  else',
+      '    service_status="health_pending"',
+      '    echo "__ONECEO_SERVICE_HEALTH_PENDING__=$service_url"',
+      '    cat /tmp/oneceo_service_probe_${service_port}.err 2>/dev/null || true',
+      '    tail -n 80 "$log_path" 2>/dev/null || true',
+      '  fi',
+      'fi',
+      'echo "__ONECEO_SERVICE_ID__=$service_id"',
+      'echo "__ONECEO_SERVICE_STATUS__=$service_status"',
+      'echo "__ONECEO_SERVICE_PORT__=$service_port"',
+      'echo "__ONECEO_SERVICE_LOG__=$log_path"',
+      'echo "__ONECEO_SERVICE_PID_FILE__=$pid_path"',
+      'exit 0',
+    ].join('\n');
+    const result = await this.runShell(
+      script,
+      {
+        cwd,
+        timeoutMs: 20000,
+      },
+      signal
+    );
+    const stdout = truncate(asText((result as any)?.stdout), 6000);
+    const stderr = truncate(asText((result as any)?.stderr), 2000);
+    if (stdout.includes('__ONECEO_SERVICE_START_FAILED__')) {
+      throw new Error(`shell_execute_background_service_start_failed:${stderr || stdout || 'unknown error'}`);
+    }
+    const status = this.parseShellFlag(stdout, '__ONECEO_SERVICE_STATUS__') || 'unknown';
+    const pid = this.parseShellFlag(stdout, '__ONECEO_SERVICE_PID__');
+    const url =
+      this.parseShellFlag(stdout, '__ONECEO_SERVICE_URL__') ||
+      this.parseShellFlag(stdout, '__ONECEO_SERVICE_HEALTH_PENDING__') ||
+      serviceUrl;
+    await this.markWorkspaceDirty('managed_shell_background_service');
+    return {
+      type: 'result' as const,
+      content: JSON.stringify({
+        cwd: this.relativeForDisplay(this.resolveWorkspacePath(cwd, { allowWorkspaceRoot: true })),
+        exitCode: 0,
+        stdout,
+        stderr,
+        runMode: 'background_service',
+        service: {
+          id: serviceId,
+          status,
+          command: serviceCommand,
+          pid: pid ? Number(pid) : null,
+          port: port || null,
+          url: url || null,
+          logPath,
+          pidPath,
+        },
+        nextSuggestedTool: url ? 'debug_open_page' : undefined,
+      }),
+    };
+  }
+
   private compactSearchContent(value: string, limit = 1200) {
     return truncate(asText(value), limit);
   }
@@ -689,11 +868,7 @@ export class AltusManagedToolRuntime {
       if (!command) {
         throw new Error('shell_execute_missing_command');
       }
-      if (isPersistentLocalServerCommand(command)) {
-        throw new Error(
-          'shell_execute_persistent_local_server_blocked:检测到本地常驻服务启动命令。managed shell_execute 不适合直接拉起这类本地预览或开发服务，请改用专用调试工具，或继续执行不会常驻的检查命令。'
-        );
-      }
+      const runMode = normalizeShellRunMode(rawArgs.runMode);
       if (
         this.hasActiveSkill('deployment-orchestrator') &&
         isLocalPreviewOrDevCommand(command)
@@ -703,6 +878,17 @@ export class AltusManagedToolRuntime {
         );
       }
       const cwd = asText(rawArgs.cwd) || '.';
+      if (isPersistentLocalServerCommand(command)) {
+        if (runMode === 'foreground') {
+          throw new Error(
+            'shell_execute_persistent_local_server_foreground_blocked:检测到本地常驻服务启动命令。请使用 runMode=background_service 或保持 runMode=auto 交给平台托管。'
+          );
+        }
+        return {
+          activatedSkills,
+          ...(await this.startControlledBackgroundService(command, cwd, signal)),
+        };
+      }
       await this.prepareFrontendBuildWorkspace(command, cwd, signal);
       const result = await this.runShell(command, {
         cwd,
@@ -725,7 +911,8 @@ export class AltusManagedToolRuntime {
     }
 
     if (toolName === 'debug_open_page') {
-      const targetUrl = normalizeDebugTargetUrl(rawArgs.url);
+      const normalizedTarget = normalizeDebugTargetUrl(rawArgs.url, this.input.workspaceRoot);
+      const targetUrl = normalizedTarget.targetUrl;
       const ensureDebug = rawArgs.ensureDebug === undefined ? true : asBoolean(rawArgs.ensureDebug);
       const cdpPort = asPositiveInt(process.env.NEKO_CDP_PORT, 9222, 65535);
       let debugInfo: Awaited<ReturnType<typeof ensureNekoDebug>> | null = null;
@@ -753,18 +940,87 @@ export class AltusManagedToolRuntime {
       }
 
       const encodedUrl = encodeURIComponent(targetUrl);
+      const escapedTargetUrl = shellEscape(targetUrl);
       const command = [
         `cdp_port=${cdpPort}`,
+        `target_url=${escapedTargetUrl}`,
+        `target_protocol=${shellEscape(normalizedTarget.protocol)}`,
+        `target_file=${shellEscape(normalizedTarget.localFilePath || '')}`,
         `encoded_url=${shellEscape(encodedUrl)}`,
-        'endpoint="http://127.0.0.1:${cdp_port}/json/new?${encoded_url}"',
-        'if curl -fsS -X PUT "$endpoint"; then',
-        '  echo "\\n__OPENED_BY__=PUT"',
-        'elif curl -fsS "$endpoint"; then',
-        '  echo "\\n__OPENED_BY__=GET"',
+        'debug_status="ok"',
+        'probe_file="/tmp/oneceo_debug_target_probe_${cdp_port}.html"',
+        'if [ "$target_protocol" = "file" ]; then',
+        '  if [ -f "$target_file" ]; then',
+        '    probe_effective_url="$target_url"',
+        '    echo "__ONECEO_DEBUG_TARGET_FILE_READY__=$target_file"',
+        '  else',
+        '    debug_status="target_file_missing"',
+        '    echo "__ONECEO_DEBUG_TARGET_FILE_MISSING__=$target_file"',
+        '  fi',
         'else',
-        '  echo "__ONECEO_DEBUG_OPEN_PAGE_FAILED__"',
-        '  exit 1',
+        '  probe_result=$(curl -k -L -sS --max-time 8 -o "$probe_file" -w "%{http_code} %{url_effective}" "$target_url" 2>&1) || debug_status="target_unreachable"',
+        '  if [ "$debug_status" = "target_unreachable" ]; then',
+        '    echo "__ONECEO_DEBUG_TARGET_UNREACHABLE__"',
+        '    echo "$probe_result"',
+        '  else',
+        '    probe_status=$(printf "%s" "$probe_result" | awk \'{print $1}\')',
+        '    probe_effective_url=$(printf "%s" "$probe_result" | cut -d" " -f2-)',
+        '    case "$probe_status" in',
+        '      2*|3*) ;;',
+        '      *)',
+        '        debug_status="target_bad_status"',
+        '        echo "__ONECEO_DEBUG_TARGET_BAD_STATUS__=$probe_status"',
+        '        head -c 800 "$probe_file" 2>/dev/null || true',
+        '        ;;',
+        '    esac',
+        '  fi',
         'fi',
+        'endpoint="http://127.0.0.1:${cdp_port}/json/new?${encoded_url}"',
+        'if [ "$debug_status" = "ok" ]; then',
+        '  if curl -fsS -X PUT "$endpoint"; then',
+        '    echo "\\n__OPENED_BY__=PUT"',
+        '  elif curl -fsS "$endpoint"; then',
+        '    echo "\\n__OPENED_BY__=GET"',
+        '  else',
+        '    debug_status="open_failed"',
+        '    echo "__ONECEO_DEBUG_OPEN_PAGE_FAILED__"',
+        '  fi',
+        'fi',
+        'if [ "$debug_status" = "ok" ]; then',
+        '  tab_ready=0',
+        '  for i in 1 2 3 4 5; do',
+        '    curl -fsS --max-time 2 "http://127.0.0.1:${cdp_port}/json/list" > /tmp/oneceo_debug_tabs_${cdp_port}.json 2>/dev/null || true',
+        '    if python3 - "$target_url" "${probe_effective_url:-}" /tmp/oneceo_debug_tabs_${cdp_port}.json <<\'PY\'',
+        'import json, sys',
+        'target = sys.argv[1]',
+        'effective = sys.argv[2]',
+        'path = sys.argv[3]',
+        'try:',
+        '    tabs = json.load(open(path, "r", encoding="utf-8"))',
+        'except Exception:',
+        '    sys.exit(1)',
+        'for tab in tabs if isinstance(tabs, list) else []:',
+        '    url = str(tab.get("url") or "")',
+        '    title = str(tab.get("title") or "")',
+        '    if url == target or (effective and url == effective):',
+        '        print("__ONECEO_DEBUG_TARGET_TAB_READY__=" + title[:160])',
+        '        sys.exit(0)',
+        'sys.exit(1)',
+        'PY',
+        '    then',
+        '      tab_ready=1',
+        '      break',
+        '    fi',
+        '    sleep 1',
+        '  done',
+        '  if [ "$tab_ready" != "1" ]; then',
+        '    debug_status="tab_not_ready"',
+        '    echo "__ONECEO_DEBUG_TARGET_TAB_NOT_READY__"',
+        '    cat /tmp/oneceo_debug_tabs_${cdp_port}.json 2>/dev/null || true',
+        '  fi',
+        'fi',
+        'echo "__ONECEO_DEBUG_RESULT__=${debug_status}"',
+        'exit 0',
       ].join('\n');
 
       const result = await this.runShell(
@@ -778,7 +1034,15 @@ export class AltusManagedToolRuntime {
       const exitCode = Number((result as any)?.exitCode ?? -1);
       const stdout = truncate(asText((result as any)?.stdout), 4000);
       const stderr = truncate(asText((result as any)?.stderr), 2000);
-      if (exitCode !== 0 || stdout.includes('__ONECEO_DEBUG_OPEN_PAGE_FAILED__')) {
+      if (
+        exitCode !== 0 ||
+        !stdout.includes('__ONECEO_DEBUG_RESULT__=ok') ||
+        stdout.includes('__ONECEO_DEBUG_OPEN_PAGE_FAILED__') ||
+        stdout.includes('__ONECEO_DEBUG_TARGET_UNREACHABLE__') ||
+        stdout.includes('__ONECEO_DEBUG_TARGET_FILE_MISSING__') ||
+        stdout.includes('__ONECEO_DEBUG_TARGET_BAD_STATUS__') ||
+        stdout.includes('__ONECEO_DEBUG_TARGET_TAB_NOT_READY__')
+      ) {
         throw new Error(`debug_open_page_failed:${stderr || stdout || 'unknown error'}`);
       }
 
@@ -793,6 +1057,8 @@ export class AltusManagedToolRuntime {
           status: debugInfo?.status || 'unknown',
           sandboxId: this.input.sandboxId,
           cdpPort,
+          protocol: normalizedTarget.protocol,
+          localFilePath: normalizedTarget.localFilePath,
           output: stdout,
         }),
       };

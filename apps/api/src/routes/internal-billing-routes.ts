@@ -6,6 +6,8 @@ import { billingService } from '../services/billing-service';
 import { pricingService } from '../services/pricing-service';
 import { conversionService } from '../services/conversion-service';
 import { adminAuthMiddleware } from '../middleware/admin-auth-middleware';
+import { billingRuntimeConfigService } from '../services/billing-runtime-config-service';
+import { normalizeAgentModelTier, type AgentModelTier } from '../services/agent-runtime-profile-service';
 
 const router = express.Router();
 const POSTGRES_INTEGER_MAX = 2147483647;
@@ -15,6 +17,12 @@ const BILLING_DEBUG_MAX_PROMPT_CHARS = 24000;
 const BILLING_DEBUG_MAX_TOKENS = 512;
 
 type BillingDebugMode = 'request_only' | 'dry_run';
+
+function normalizeSandboxEngine(value: unknown): 'opencode' | 'codex' | null {
+  const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (text === 'opencode' || text === 'codex') return text;
+  return null;
+}
 
 function readNumericField(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -562,23 +570,143 @@ router.post('/debug/llm-request', async (req, res) => {
 });
 
 /**
+ * GET /api/internal/billing/runtime-config
+ * Agent/Sandbox 运行配置摘要（Token 不回显）
+ */
+router.get('/runtime-config', async (_req, res) => {
+  try {
+    res.json(billingRuntimeConfigService.listAllConfigs());
+  } catch (error) {
+    console.error('[Billing Admin] 获取运行配置失败:', error);
+    res.status(500).json({ error: '获取运行配置失败' });
+  }
+});
+
+router.put('/runtime-config/agent/:tier', async (req, res) => {
+  try {
+    const rawTier = String(req.params.tier || '').trim().toLowerCase();
+    if (!['lite', 'pro', 'max'].includes(rawTier)) {
+      return res.status(400).json({ error: 'Agent 档位不合法' });
+    }
+    const data = await billingRuntimeConfigService.updateAgentConfig(normalizeAgentModelTier(rawTier) as AgentModelTier, req.body || {});
+    return res.json({ data });
+  } catch (error: any) {
+    console.error('[Billing Admin] 保存 Agent 运行配置失败:', error);
+    return res.status(400).json({ error: error?.message || '保存 Agent 运行配置失败' });
+  }
+});
+
+router.put('/runtime-config/sandbox/:engine', async (req, res) => {
+  try {
+    const engine = normalizeSandboxEngine(req.params.engine);
+    if (!engine) {
+      return res.status(400).json({ error: 'Sandbox 引擎不合法' });
+    }
+    const data = await billingRuntimeConfigService.updateSandboxConfig(engine, req.body || {});
+    return res.json({ data });
+  } catch (error: any) {
+    console.error('[Billing Admin] 保存 Sandbox 运行配置失败:', error);
+    return res.status(400).json({ error: error?.message || '保存 Sandbox 运行配置失败' });
+  }
+});
+
+router.post('/runtime-config/test', async (req, res) => {
+  try {
+    const allowedKeys = new Set(['key']);
+    const bodyKeys = Object.keys(req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {});
+    const extraKeys = bodyKeys.filter((key) => !allowedKeys.has(key));
+    if (extraKeys.length > 0) {
+      return res.status(400).json({ error: '测试接口仅允许提交 key' });
+    }
+    const key = typeof req.body?.key === 'string' ? req.body.key.trim() : '';
+    if (!key) {
+      return res.status(400).json({ error: '缺少运行配置 key' });
+    }
+    const data = await billingRuntimeConfigService.testRuntimeConfig(key);
+    return res.json({ success: true, data });
+  } catch (error: any) {
+    console.error('[Billing Admin] 测试运行配置失败:', error);
+    return res.status(500).json({ error: error?.message || '测试运行配置失败' });
+  }
+});
+
+router.post('/runtime-config/models', async (req, res) => {
+  try {
+    const allowedKeys = new Set(['key', 'modelsUrl']);
+    const bodyKeys = Object.keys(req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {});
+    const extraKeys = bodyKeys.filter((key) => !allowedKeys.has(key));
+    if (extraKeys.length > 0) {
+      return res.status(400).json({ error: '获取模型列表接口仅允许提交 key 和 modelsUrl' });
+    }
+    const key = typeof req.body?.key === 'string' ? req.body.key.trim() : '';
+    if (!key) {
+      return res.status(400).json({ error: '缺少运行配置 key' });
+    }
+    const customModelsUrl = typeof req.body?.modelsUrl === 'string' ? req.body.modelsUrl.trim() : undefined;
+    const data = await billingRuntimeConfigService.fetchAvailableModels(key, customModelsUrl);
+    return res.json({ success: true, data });
+  } catch (error: any) {
+    console.error('[Billing Admin] 获取可用模型列表失败:', error);
+    return res.status(500).json({ error: error?.message || '获取可用模型列表失败' });
+  }
+});
+
+/**
  * GET /api/internal/billing/pricing
  * 模型定价列表
  */
 router.get('/pricing', async (req, res) => {
   try {
     const pricingList = await pricingService.listAllPricing();
+    const runtimeTargets = billingRuntimeConfigService.listBillingTargets();
+    const runtimeTargetKeys = new Set(runtimeTargets.map((item) => item.key));
 
     const pricingWithCache = await Promise.all(
-      pricingList.map(async (p) => {
+      pricingList
+        .filter((p) => runtimeTargetKeys.has(p.model))
+        .map(async (p) => {
         const ratios = await pricingService.getCacheRatiosForPricing(p);
+        const runtime = runtimeTargets.find((item) => item.key === p.model);
         return {
           ...p,
+          displayName: runtime?.displayName || p.model,
+          billingTargetKey: p.model,
+          actualModel: runtime?.model || null,
+          baseUrlHost: runtime?.baseUrlHost || null,
+          apiType: runtime?.apiType || null,
+          tokenState: runtime?.tokenState || 'missing',
+          runtimeConfigAnchor: runtime?.runtimeConfigAnchor || null,
           cacheHitRatio: ratios?.hit || 0,
           cacheCreationRatio: ratios?.creation || 0,
         };
       })
     );
+
+    const configuredKeys = new Set(pricingWithCache.map((item) => item.model));
+    for (const runtime of runtimeTargets) {
+      if (configuredKeys.has(runtime.key)) continue;
+      pricingWithCache.push({
+        id: `missing:${runtime.key}`,
+        model: runtime.key,
+        modelProvider: runtime.kind,
+        promptPricePer1kTokens: 0,
+        completionPricePer1kTokens: 0,
+        isActive: false,
+        effectiveFrom: null,
+        effectiveUntil: null,
+        createdAt: null,
+        updatedAt: null,
+        displayName: runtime.displayName,
+        billingTargetKey: runtime.key,
+        actualModel: runtime.model,
+        baseUrlHost: runtime.baseUrlHost,
+        apiType: runtime.apiType,
+        tokenState: runtime.tokenState,
+        runtimeConfigAnchor: runtime.runtimeConfigAnchor,
+        cacheHitRatio: 0,
+        cacheCreationRatio: 0,
+      } as any);
+    }
 
     res.json({ items: pricingWithCache });
   } catch (error) {
@@ -601,6 +729,7 @@ router.get('/pricing/model-candidates', async (_req, res) => {
         UNION ALL
         SELECT model, NULL::text AS provider, MAX(created_at) AS last_seen_at, false AS has_active_pricing
         FROM token_usage_logs
+        WHERE model NOT LIKE 'agent.%' AND model NOT LIKE 'sandbox.%'
         GROUP BY model
       )
       SELECT
@@ -615,6 +744,8 @@ router.get('/pricing/model-candidates', async (_req, res) => {
         BOOL_OR(has_active_pricing) AS has_active_pricing
       FROM candidates
       WHERE model IS NOT NULL AND model <> ''
+        AND model NOT LIKE 'agent.%'
+        AND model NOT LIKE 'sandbox.%'
       GROUP BY model
       ORDER BY has_active_pricing ASC, last_seen_at DESC NULLS LAST, model ASC
       LIMIT 100
@@ -652,6 +783,15 @@ router.post('/pricing', async (req, res) => {
 
     if (!model || !modelProvider) {
       return res.status(400).json({ error: '缺少必要参数' });
+    }
+    const allowedBillingTargets = new Map(
+      billingRuntimeConfigService.listBillingTargets().map((item) => [item.key, item.kind])
+    );
+    if (!allowedBillingTargets.has(String(model))) {
+      return res.status(400).json({ error: '定价配置仅允许 Agent 档位与 Sandbox 引擎业务对象' });
+    }
+    if (String(modelProvider) !== allowedBillingTargets.get(String(model))) {
+      return res.status(400).json({ error: '计费对象与 provider 不匹配' });
     }
     if (
       !isPositivePostgresInteger(promptPricePer1kTokens) ||

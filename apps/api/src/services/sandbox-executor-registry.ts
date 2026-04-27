@@ -1,7 +1,7 @@
 import { codexRemoteService } from './codex-remote-service';
 import { opencodeRemoteService } from './opencode-remote-service';
 
-export type SandboxExecutor = 'opencode' | 'codex' | 'claudecode';
+export type SandboxExecutor = 'opencode' | 'codex';
 
 export type SandboxExecutorInput = {
   taskSessionId: string;
@@ -23,7 +23,6 @@ export type SandboxExecutorAccepted = {
 function normalizeExecutor(value: unknown): SandboxExecutor {
   const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
   if (normalized === 'codex') return 'codex';
-  if (normalized === 'claudecode') return 'claudecode';
   return 'opencode';
 }
 
@@ -53,8 +52,6 @@ export class SandboxExecutorRegistry {
           opencodeSessionId: accepted.executorSessionId,
         };
       }
-      case 'claudecode':
-        throw new Error('ClaudeCode 直通链路尚未接入');
       default:
         throw new Error(`不支持的 executor: ${String(executorValue || '')}`);
     }

@@ -8,6 +8,8 @@ const DEFAULT_CACHE_RATIOS = {
   openai: { hit: 0.5, creation: 0 },
   anthropic: { hit: 0.1, creation: 1.25 },
   qwen: { hit: 0.2, creation: 1.25 },
+  agent: { hit: 0.5, creation: 0 },
+  sandbox: { hit: 0.5, creation: 0 },
 } as const;
 
 export class PricingService {
@@ -37,6 +39,7 @@ export class PricingService {
   resolveCacheProvider(input: { model: string; modelProvider: string }): string {
     const model = String(input.model || '').toLowerCase();
     const provider = String(input.modelProvider || '').toLowerCase();
+    if (model.startsWith('agent.') || model.startsWith('sandbox.')) return provider || model.split('.')[0];
     if (model.startsWith('qwen') || model.includes('/qwen')) return 'qwen';
     return provider;
   }

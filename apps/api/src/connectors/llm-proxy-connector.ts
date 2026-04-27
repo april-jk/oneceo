@@ -2,6 +2,10 @@ import { getPublicErrorMessage } from '../utils/error-response';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import type { IncomingHttpHeaders, IncomingMessage } from 'node:http';
+import {
+  LLM_PROXY_INTERNAL_OVERRIDE_HEADER,
+  isValidLlmProxyInternalOverrideToken,
+} from '../services/llm-proxy-internal-auth';
 
 type ProxyConfig = {
   upstreamBaseUrl: string;
@@ -226,6 +230,46 @@ function loadConfig(): ProxyConfig {
     upstreamBaseUrl: upstreamBaseUrl.replace(/\/+$/, ''),
     upstreamToken: process.env.LLM_PROXY_UPSTREAM_API_KEY || null,
     upstreamApiType,
+    timeoutMs: Number(process.env.LLM_PROXY_TIMEOUT_MS || 60000),
+    maxRetries: Math.max(0, Number(process.env.LLM_PROXY_RETRIES || 1)),
+    retryDelayMs: Math.max(0, Number(process.env.LLM_PROXY_RETRY_DELAY_MS || 250)),
+    retryJitterMs: Math.max(0, Number(process.env.LLM_PROXY_RETRY_JITTER_MS || 120)),
+  };
+}
+
+const INTERNAL_OVERRIDE_HEADER_PREFIX = 'x-oneceo-internal-llm-';
+
+function isTrustedLoopbackRequest(req: any): boolean {
+  const address = String(req?.socket?.remoteAddress || req?.ip || '').trim();
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+}
+
+function isSafeEnvName(value: string): boolean {
+  return /^[A-Z0-9_]+$/.test(value);
+}
+
+function loadConfigForRequest(req: any): ProxyConfig {
+  const overrideToken = getHeaderValue(req.headers || {}, LLM_PROXY_INTERNAL_OVERRIDE_HEADER);
+  if (!isTrustedLoopbackRequest(req) || !isValidLlmProxyInternalOverrideToken(overrideToken)) {
+    return loadConfig();
+  }
+
+  const upstreamBaseUrl = getHeaderValue(req.headers || {}, `${INTERNAL_OVERRIDE_HEADER_PREFIX}upstream-base-url`);
+  const upstreamApiType = getHeaderValue(req.headers || {}, `${INTERNAL_OVERRIDE_HEADER_PREFIX}upstream-api-type`);
+  const upstreamTokenSource = getHeaderValue(req.headers || {}, `${INTERNAL_OVERRIDE_HEADER_PREFIX}upstream-token-source`);
+  const nextApiType = String(upstreamApiType || process.env.LLM_PROXY_UPSTREAM_API_TYPE || 'openai').trim().toLowerCase() === 'anthropic' ? 'anthropic' : 'openai';
+  const nextTokenSource = String(upstreamTokenSource || '').trim();
+  const resolvedBaseUrl = String(upstreamBaseUrl || process.env.LLM_PROXY_UPSTREAM_BASE_URL || '').trim().replace(/\/+$/, '');
+  if (!resolvedBaseUrl) {
+    throw new Error('LLM proxy upstream base URL is not configured');
+  }
+
+  return {
+    upstreamBaseUrl: resolvedBaseUrl,
+    upstreamApiType: nextApiType,
+    upstreamToken: nextTokenSource && isSafeEnvName(nextTokenSource)
+      ? process.env[nextTokenSource] || null
+      : process.env.LLM_PROXY_UPSTREAM_API_KEY || null,
     timeoutMs: Number(process.env.LLM_PROXY_TIMEOUT_MS || 60000),
     maxRetries: Math.max(0, Number(process.env.LLM_PROXY_RETRIES || 1)),
     retryDelayMs: Math.max(0, Number(process.env.LLM_PROXY_RETRY_DELAY_MS || 250)),
@@ -1063,7 +1107,7 @@ export class LlmProxyConnector {
     let upstreamUrl = '';
     const debug = String(process.env.LLM_PROXY_DEBUG || '').toLowerCase() === 'true';
     try {
-      config = loadConfig();
+      config = loadConfigForRequest(req);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'LLM 代理未配置';
       res.status(500).json(toOpenAiError(getPublicErrorMessage(message), 'config_error', 'config_error'));
@@ -1097,6 +1141,8 @@ export class LlmProxyConnector {
         if (!value) continue;
         if (key.toLowerCase() === 'host') continue;
         if (key.toLowerCase() === 'content-length') continue;
+        if (key.toLowerCase().startsWith(INTERNAL_OVERRIDE_HEADER_PREFIX)) continue;
+        if (key.toLowerCase() === LLM_PROXY_INTERNAL_OVERRIDE_HEADER) continue;
         headers[key] = Array.isArray(value) ? value.join(',') : String(value);
       }
       // Keep upstream response body readable for downstream callers (curl/opencode).

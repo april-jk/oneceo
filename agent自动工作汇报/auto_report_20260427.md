@@ -34,3 +34,9 @@
 - 将 `shell_execute` 从硬拦截常驻本地服务，调整为 `runMode=auto` 下自动托管预览/dev 服务。
 - 常驻服务会以受控后台进程启动，返回 `service.url`、`pid`、`logPath`、`pidPath` 和 `nextSuggestedTool=debug_open_page`。
 - `runMode=foreground` 仍显式拒绝常驻服务，避免普通前台工具调用被长任务占住。
+
+## 2026-04-27 n.eko 匿名调试入口
+
+- 问题：n.eko 偶发显示登录页时，现有链路依赖调试 URL 拼接 `pwd` / `usr` 自动登录，调试入口仍有被登录流程阻断的风险。
+- 处理：调试服务改为生成 `member.provider: "noauth"` 配置，调试 URL 不再拼接用户名密码；n.eko client patch 隐藏登录表单并自动进入匿名会话。
+- 验证计划：补充单测覆盖匿名配置和无凭据 URL，并校验 n.eko UI patch 能应用到上游源码。

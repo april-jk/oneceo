@@ -182,6 +182,22 @@ function renderIceServersYaml(iceServers: NekoIceServer[]): string {
     .join('\n');
 }
 
+function renderNekoMemberYaml(): string {
+  return ['member:', '  provider: "noauth"'].join('\n');
+}
+
+function buildNekoClientUrl(baseUrl: string): string {
+  return baseUrl;
+}
+
+export function __renderNekoMemberYamlForTest(): string {
+  return renderNekoMemberYaml();
+}
+
+export function __buildNekoClientUrlForTest(baseUrl: string): string {
+  return buildNekoClientUrl(baseUrl);
+}
+
 export async function probeNekoIceHealth(sandboxId: string): Promise<{ failed: boolean; logTail?: string }> {
   try {
     const result = await e2bConnector.runCommand(sandboxId, 'tail -n 200 /tmp/neko.log || true', {
@@ -283,13 +299,10 @@ export async function ensureNekoDebug(
   const iceLite = toBoolean(process.env.NEKO_WEBRTC_ICELITE, false);
   const autoNat = toBoolean(process.env.NEKO_AUTO_NAT1TO1, false);
   const nat1to1Manual = asText(process.env.NEKO_NAT1TO1);
-  const nekoUsername = asText(process.env.NEKO_USER_NAME) || 'oneceo';
-  const nekoPassword = asText(process.env.NEKO_USER_PASSWORD) || 'oneceo';
-  const nekoAdminPassword = asText(process.env.NEKO_ADMIN_PASSWORD) || nekoPassword;
   const natConfigTag = nat1to1Manual ? `manual-${nat1to1Manual}` : autoNat ? 'auto' : 'none';
   const iceTag = requireTurn ? (turnConfigured ? 'turn-on' : 'turn-off') : 'turn-optional';
   const configVersion = [
-    'neko-multiuser-v4',
+    'neko-noauth-v1',
     `${screenWidth}x${screenHeight}`,
     `mode-${useMux ? 'mux' : 'epr'}`,
     `tcp-${tcpMuxPort}`,
@@ -432,11 +445,7 @@ desktop:
   input:
     enabled: false
   screen: "${screenWidth}x${screenHeight}@30"
-member:
-  provider: "multiuser"
-  multiuser:
-    admin_password: "${nekoAdminPassword}"
-    user_password: "${nekoPassword}"
+${renderNekoMemberYaml()}
 EOF_CFG
 
 pkill -x Xvfb || true
@@ -504,9 +513,7 @@ nohup neko serve --config "$NEKO_CONFIG" > /tmp/neko.log 2>&1 &
   const existingForceMux = asBoolean(nekoMeta.forceMux, false);
   const existingIceLite = asBoolean(nekoMeta.iceLite, false);
   const existingAutoNat = asBoolean(nekoMeta.autoNat, false);
-  const existingUser = asText(nekoMeta.username);
-  const existingPass = asText(nekoMeta.password);
-  const existingAdminPass = asText(nekoMeta.adminPassword);
+  const existingAuthProvider = asText(nekoMeta.authProvider);
   const existingStatus = asText(nekoMeta.status).toLowerCase();
   const shouldRefresh =
     existingVersion !== configVersion ||
@@ -518,9 +525,7 @@ nohup neko serve --config "$NEKO_CONFIG" > /tmp/neko.log 2>&1 &
     existingForceMux !== forceMux ||
     existingIceLite !== iceLite ||
     existingAutoNat !== autoNat ||
-    existingUser !== nekoUsername ||
-    existingPass !== nekoPassword ||
-    existingAdminPass !== nekoAdminPassword ||
+    existingAuthProvider !== 'noauth' ||
     existingStatus === 'failed';
 
   let ready = await probeNeko(orchestratorSessionId, nekoPort);
@@ -555,7 +560,7 @@ nohup neko serve --config "$NEKO_CONFIG" > /tmp/neko.log 2>&1 &
 
   const host = await e2bConnector.getSandboxHost(orchestratorSessionId, nekoPort);
   const baseUrl = `https://${host}`;
-  const clientUrl = `${baseUrl}?pwd=${encodeURIComponent(nekoPassword)}&usr=${encodeURIComponent(nekoUsername)}`;
+  const clientUrl = buildNekoClientUrl(baseUrl);
 
   await updateMetadata({
     baseUrl,
@@ -573,9 +578,10 @@ nohup neko serve --config "$NEKO_CONFIG" > /tmp/neko.log 2>&1 &
     forceMux,
     iceLite,
     autoNat,
-    username: nekoUsername,
-    password: nekoPassword,
-    adminPassword: nekoAdminPassword,
+    authProvider: 'noauth',
+    username: '',
+    password: '',
+    adminPassword: '',
     configVersion,
     turnConfigured,
     requireTurn,

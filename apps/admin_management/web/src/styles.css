@@ -14906,6 +14906,325 @@ tbody td,
   flex-shrink: 0;
 }
 
+.billing-management-page .pricing-live {
+  --pricing-live-density: 0.85;
+  display: grid;
+  gap: calc(var(--pricing-live-density) * 10px);
+  padding: calc(var(--pricing-live-density) * 12px);
+  background: oklch(97.5% 0.007 252);
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: 10px;
+}
+
+.billing-management-page .pricing-live-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--pricing-live-density) * 12px);
+}
+
+.billing-management-page .pricing-live-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: calc(var(--pricing-live-density) * 8px) calc(var(--pricing-live-density) * 12px);
+}
+
+.billing-management-page .pricing-live-title .panel-caption {
+  max-width: 82ch;
+  margin: 0;
+}
+
+.billing-management-page .pricing-live-notice {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--pricing-live-density) * 8px);
+  padding: calc(var(--pricing-live-density) * 8px) calc(var(--pricing-live-density) * 10px);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.billing-management-page .pricing-live-rack {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: calc(var(--pricing-live-density) * 8px);
+}
+
+.billing-management-page .pricing-live-runtime {
+  display: grid;
+  gap: calc(var(--pricing-live-density) * 7px);
+  padding: calc(var(--pricing-live-density) * 9px);
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: 8px;
+}
+
+.billing-management-page .pricing-live-runtime-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.billing-management-page .pricing-live-runtime strong {
+  font-size: 13px;
+  font-weight: 850;
+  color: var(--text);
+}
+
+.billing-management-page .pricing-live-runtime small {
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.billing-management-page .pricing-live-runtime .table-btn {
+  width: 100%;
+  justify-content: center;
+}
+
+.billing-management-page .runtime-config-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.billing-management-page .runtime-test-result {
+  display: grid;
+  gap: 4px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  color: var(--text-soft);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.billing-management-page .runtime-test-result > span:not(.status-badge) {
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.billing-management-page .runtime-test-result-success {
+  border-color: color-mix(in srgb, var(--success) 36%, var(--border));
+  background: color-mix(in srgb, var(--success) 8%, var(--surface));
+}
+
+.billing-management-page .runtime-test-result-failed {
+  border-color: color-mix(in srgb, var(--danger) 36%, var(--border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+
+.billing-management-page .pricing-form-modal-footnote {
+  margin: 0 18px 18px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.billing-management-page .runtime-test-modal {
+  max-width: 760px;
+}
+
+.billing-management-page .runtime-test-hero {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.billing-management-page .runtime-test-hero p {
+  margin: 0;
+  color: var(--text-soft);
+  line-height: 1.45;
+}
+
+.billing-management-page .runtime-test-hero-success {
+  border-color: color-mix(in srgb, var(--success) 34%, var(--border));
+  background: color-mix(in srgb, var(--success) 8%, var(--surface));
+}
+
+.billing-management-page .runtime-test-hero-failed {
+  border-color: color-mix(in srgb, var(--danger) 34%, var(--border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+
+.billing-management-page .runtime-test-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.billing-management-page .runtime-test-grid > div {
+  display: grid;
+  gap: 4px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  min-width: 0;
+}
+
+.billing-management-page .runtime-test-grid span {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.billing-management-page .runtime-test-grid strong,
+.billing-management-page .runtime-test-summary strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.billing-management-page .runtime-test-summary {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.billing-management-page .runtime-test-summary p,
+.billing-management-page .runtime-test-summary small {
+  margin: 0;
+  color: var(--text-soft);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.billing-management-page .runtime-test-detail-grid strong {
+  white-space: pre-wrap;
+  max-height: 120px;
+  overflow: auto;
+}
+
+.billing-management-page .runtime-test-raw-block {
+  display: grid;
+  gap: 8px;
+}
+
+.billing-management-page .runtime-test-raw-block small {
+  color: var(--warning);
+  font-weight: 800;
+}
+
+.billing-management-page .runtime-test-raw-block pre {
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.billing-management-page .runtime-model-input-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.billing-management-page .runtime-model-input-group input {
+  flex: 1;
+  min-width: 0;
+}
+
+.billing-management-page .runtime-model-input-group button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.billing-management-page .runtime-models-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 4px;
+}
+
+.billing-management-page .runtime-model-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+
+.billing-management-page .runtime-model-card:hover {
+  border-color: color-mix(in srgb, var(--primary) 40%, var(--border));
+  background: color-mix(in srgb, var(--primary) 6%, var(--surface));
+}
+
+.billing-management-page .runtime-model-card strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.billing-management-page .runtime-model-card small {
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.billing-management-page .pricing-live-table-wrap {
+  overflow: auto;
+  border-radius: 9px;
+}
+
+.billing-management-page .pricing-live-table {
+  min-width: 980px;
+}
+
+.billing-management-page .pricing-live .admin-mobile-card-list {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .billing-management-page .pricing-live-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .billing-management-page .pricing-live .table-wrap {
+    display: none;
+  }
+
+  .billing-management-page .pricing-live .admin-mobile-card-list {
+    display: grid;
+  }
+}
+
 @media (max-width: 640px) {
   .pricing-form-grid {
     grid-template-columns: 1fr;

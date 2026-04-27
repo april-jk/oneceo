@@ -1,13 +1,13 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 
-export type SessionDriver = 'altus' | 'opencode' | 'codex' | 'claudecode';
+export type SessionDriver = 'altus' | 'opencode' | 'codex';
 export type CodexExecutionMode = 'sdk' | 'ws';
 export type CodexTransportMode = 'sdk' | 'app_server';
 
 export function deriveSessionDriver(input: {
   mode?: 'altus' | 'sandbox' | string;
-  executor?: 'opencode' | 'claudecode' | 'codex' | string;
+  executor?: 'opencode' | 'codex' | string;
   fallbackDriver?: SessionDriver | string;
 }): SessionDriver | undefined {
   const mode = typeof input.mode === 'string' ? input.mode.trim() : '';
@@ -19,16 +19,16 @@ export function deriveSessionDriver(input: {
   }
 
   if (mode === 'sandbox') {
-    if (executor === 'opencode' || executor === 'codex' || executor === 'claudecode') {
+    if (executor === 'opencode' || executor === 'codex') {
       return executor;
     }
-    if (fallback === 'opencode' || fallback === 'codex' || fallback === 'claudecode') {
+    if (fallback === 'opencode' || fallback === 'codex') {
       return fallback;
     }
     return undefined;
   }
 
-  if (fallback === 'altus' || fallback === 'opencode' || fallback === 'codex' || fallback === 'claudecode') {
+  if (fallback === 'altus' || fallback === 'opencode' || fallback === 'codex') {
     return fallback;
   }
 
@@ -67,12 +67,12 @@ export interface FileSessionRecord {
   phaseCycle?: number;
   mode?: 'altus' | 'sandbox';
   driver?: SessionDriver;
-  executor?: 'opencode' | 'claudecode' | 'codex' | string;
+  executor?: 'opencode' | 'codex' | string;
   codexExecutionMode?: CodexExecutionMode;
   runtime?: {
     generation?: number;
     orchestratorSessionId?: string;
-    executor?: 'opencode' | 'claudecode' | 'codex' | string;
+    executor?: 'opencode' | 'codex' | string;
     workspaceRoot?: string;
     transport?: CodexTransportMode | string;
     executorSessionId?: string;
@@ -584,7 +584,7 @@ class TaskCreationFileMemoryStore {
   }
 
   async updateSessionDriver(sessionId: string, driver: FileSessionRecord['driver']): Promise<void> {
-    if (!driver) return;
+    if (driver !== 'altus' && driver !== 'opencode' && driver !== 'codex') return;
     await this.withLock(async () => {
       const memory = await this.readMemory();
       const session = memory.sessions.find((s) => s.id === sessionId);
@@ -768,7 +768,7 @@ class TaskCreationFileMemoryStore {
     runtime: {
       generation?: number;
       orchestratorSessionId?: string;
-      executor?: 'opencode' | 'claudecode' | 'codex' | string;
+      executor?: 'opencode' | 'codex' | string;
       workspaceRoot?: string;
       transport?: CodexTransportMode | string;
       executorSessionId?: string;

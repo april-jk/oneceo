@@ -36,6 +36,11 @@ import {
 } from './task-session-deliverable-service';
 import { billingService } from './billing-service';
 import { pricingService } from './pricing-service';
+import type { AgentRuntimeSnapshot } from './agent-runtime-profile-service';
+import {
+  LLM_PROXY_INTERNAL_OVERRIDE_HEADER,
+  getLlmProxyInternalOverrideToken,
+} from './llm-proxy-internal-auth';
 
 const DELIVERABLES_READY_TEXT = '交付文件已生成';
 const DEPLOYMENT_COMPLETION_BLOCKED_PREFIX = 'deployment_completion_blocked:';
@@ -223,6 +228,8 @@ export class AltusRunCoordinator {
   ) {}
 
   private getModelName(messages: ChatMessage[], fallbackModel?: string | null) {
+    const explicitModel = asText(fallbackModel);
+    if (explicitModel) return explicitModel;
     const needsVision = hasVisionInput(messages);
     if (needsVision) {
       return (
@@ -233,7 +240,6 @@ export class AltusRunCoordinator {
     }
     return (
       asText(process.env.ALTUS_MANAGED_MODEL) ||
-      asText(fallbackModel) ||
       asText(process.env.AGENT_OPENAI_MODEL) ||
       asText(process.env.OPENAI_MODEL) ||
       'claude-haiku-4-5-20251001'
@@ -313,12 +319,19 @@ export class AltusRunCoordinator {
 
       const nonCachedPromptTokens = Math.max(0, promptTokens - cachedPromptTokens - cacheCreationTokens);
 
-      // 获取定价
-      const pricing = await pricingService.getActivePricing(input.model);
+      const billingTargetKey = state.input.billingTargetKey || input.model;
+      // 获取定价：Agent managed run 按业务 SKU 查价，token 日志保留实际模型。
+      const pricing = await pricingService.getActivePricing(billingTargetKey);
       if (!pricing) {
-        console.warn(`[Billing] 模型 ${input.model} 无定价配置，跳过计费`);
-        return;
+        throw new Error(`billing_pricing_missing:${billingTargetKey}`);
       }
+      const cacheRatio = await pricingService.getCacheRatiosForPricing(pricing);
+      const pricingSnapshot = {
+        ...pricing,
+        billingTarget: billingTargetKey,
+        actualModel: input.model,
+        cacheRatio,
+      };
 
       // 计算积分消耗（含缓存）
       const creditsConsumed = pricingService.calculateCredits(
@@ -329,15 +342,22 @@ export class AltusRunCoordinator {
           cacheCreationTokens,
           completionTokens,
         },
-        pricing
+        pricing,
+        cacheRatio || undefined
       );
 
       // 扣减积分
       const result = await billingService.deductCredits(userId, creditsConsumed, {
         sessionId,
         runId,
-        model: input.model,
-        description: `Managed Run 调用: ${input.model}`,
+        model: billingTargetKey,
+        description: `Managed Run 调用: ${billingTargetKey}`,
+        metadataJson: {
+          billingTarget: billingTargetKey,
+          actualModel: input.model,
+          runtimeSnapshot: state.input.runtimeSnapshot || null,
+          pricingSnapshot,
+        },
       });
 
       if (result.success) {
@@ -356,13 +376,20 @@ export class AltusRunCoordinator {
           completionTokens,
           totalTokens: promptTokens + completionTokens,
           creditsConsumed,
-          pricingSnapshot: pricing,
+          pricingSnapshot,
+          metadataJson: {
+            billingTarget: billingTargetKey,
+            runtimeSnapshot: state.input.runtimeSnapshot || null,
+          },
         });
       } else {
         throw new Error(`insufficient_credits: 用户 ${userId} 余额不足，无法继续运行`);
       }
     } catch (error) {
       if (error instanceof Error && error.message.startsWith('insufficient_credits:')) {
+        throw error;
+      }
+      if (error instanceof Error && error.message.startsWith('billing_pricing_missing:')) {
         throw error;
       }
       console.error('[Billing] 计费失败:', error);
@@ -1086,18 +1113,33 @@ export class AltusRunCoordinator {
     onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
     onAssistantTextDelta?: (deltaText: string, fullText: string) => Promise<void> | void;
     fallbackModel?: string | null;
+    runtimeSnapshot?: AgentRuntimeSnapshot | null;
+    runtimeTokenSource?: string | null;
   }): Promise<{
     content?: string | null;
     tool_calls?: ToolCall[];
     usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens?: number; cache_creation_input_tokens?: number }; cached_tokens?: number; cache_creation_input_tokens?: number };
   }> {
+    const runtime = input.runtimeSnapshot;
     const baseUrl = `http://127.0.0.1:${process.env.PORT || '4000'}/api/llm-proxy/v1/chat/completions`;
     const projectedMessages = this.budgetService.projectMessagesForModel(input.messages);
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (runtime?.baseUrl) {
+      headers[LLM_PROXY_INTERNAL_OVERRIDE_HEADER] = getLlmProxyInternalOverrideToken();
+      headers['x-oneceo-internal-llm-upstream-base-url'] = runtime.baseUrl;
+    }
+    if (runtime?.apiType) {
+      headers['x-oneceo-internal-llm-upstream-api-type'] = runtime.apiType;
+    }
+    if (input.runtimeTokenSource) {
+      headers[LLM_PROXY_INTERNAL_OVERRIDE_HEADER] = getLlmProxyInternalOverrideToken();
+      headers['x-oneceo-internal-llm-upstream-token-source'] = input.runtimeTokenSource;
+    }
     const response = await fetch(baseUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({
         model: this.getModelName(projectedMessages, input.fallbackModel),
         messages: sanitizeMessagesForModel(projectedMessages),
@@ -1146,6 +1188,8 @@ export class AltusRunCoordinator {
     onAssistantTextDelta?: (deltaText: string, fullText: string) => Promise<void> | void;
     onRetryableError?: (error: unknown, attempt: number, delayMs: number) => Promise<void> | void;
     fallbackModel?: string | null;
+    runtimeSnapshot?: AgentRuntimeSnapshot | null;
+    runtimeTokenSource?: string | null;
   }): Promise<{
     content?: string | null;
     tool_calls?: ToolCall[];
@@ -1526,12 +1570,19 @@ export class AltusRunCoordinator {
 
       const toolProgressLengths = new Map<string, number>();
       const modelName = this.getModelName(messages, state.input.model);
+      const billingTargetKey = state.input.billingTargetKey || modelName;
+      const activePricing = await pricingService.getActivePricing(billingTargetKey);
+      if (!activePricing) {
+        throw new Error(`billing_pricing_missing:${billingTargetKey}`);
+      }
       
       const assistant = await this.callModelWithRetry({
         messages,
         signal,
         mcpProviders: state.input.mcpProviders,
         fallbackModel: state.input.model,
+        runtimeSnapshot: state.input.runtimeSnapshot || null,
+        runtimeTokenSource: state.input.runtimeTokenSource || null,
         onRetryableError: async (error, attempt, delayMs) => {
           const parsed = this.extractModelError(error);
           await this.syncLoopSnapshot(state, {

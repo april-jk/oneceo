@@ -35,6 +35,7 @@ describe("buildManagedTaskInputMetadata", () => {
       }),
     ).toEqual({
       skills: [skill],
+      modelTier: "pro",
       originalInput: "run with selected skill",
     });
   });
@@ -49,11 +50,12 @@ describe("buildManagedTaskInputMetadata", () => {
       }),
     ).toEqual({
       mcpReferences: [mcpReference],
+      modelTier: "pro",
       originalInput: "use github",
     });
   });
 
-  it("returns undefined when nothing should be attached", () => {
+  it("returns metadata with default model tier when nothing else should be attached", () => {
     expect(
       buildManagedTaskInputMetadata({
         originalInput: "plain text only",
@@ -61,6 +63,24 @@ describe("buildManagedTaskInputMetadata", () => {
         mcpReferences: [],
         fileCount: 0,
       }),
-    ).toBeUndefined();
+    ).toEqual({
+      modelTier: "pro",
+      originalInput: "plain text only",
+    });
+  });
+
+  it("keeps an explicit max model tier", () => {
+    expect(
+      buildManagedTaskInputMetadata({
+        originalInput: "run with max tier",
+        skills: [],
+        mcpReferences: [],
+        fileCount: 0,
+        modelTier: "max",
+      }),
+    ).toEqual({
+      modelTier: "max",
+      originalInput: "run with max tier",
+    });
   });
 });

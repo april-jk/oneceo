@@ -27,7 +27,7 @@ test('shouldCaptureWebsitePreview detects manifest-backed website outputs', () =
   );
 });
 
-test('shouldCaptureWebsitePreview requires package context for html-only outputs', () => {
+test('shouldCaptureWebsitePreview captures html outputs with package context or successful debug signal', () => {
   assert.equal(
     shouldCaptureWebsitePreview({
       deliverables: [{ path: 'dist/index.html' }],
@@ -41,6 +41,14 @@ test('shouldCaptureWebsitePreview requires package context for html-only outputs
       packageExists: false,
     }),
     false,
+  );
+  assert.equal(
+    shouldCaptureWebsitePreview({
+      deliverables: [{ path: 'dist/index.html' }],
+      packageExists: false,
+      debugOpenPageSucceeded: true,
+    }),
+    true,
   );
 });
 
@@ -129,4 +137,88 @@ test('resolveCommandCandidate prefers runnable start/dev scripts and Vite ports'
       appendVitePortArgs: false,
     },
   );
+});
+
+test('captureManagedRunPreview captures debug-opened html deliverables without a start command', async () => {
+  const capturedCommands: string[] = [];
+  let uploadedKey = '';
+  let uploadedBody: Buffer | null = null;
+  const service = new TaskSessionWebsitePreviewSnapshotService({
+    e2b: {
+      readFile: async (_sandboxId: string, filePath: string) => {
+        if (filePath.endsWith('oneceo.manifest.json') || filePath.endsWith('package.json')) {
+          return Buffer.from('');
+        }
+        if (filePath.endsWith('index.html')) {
+          return Buffer.from('<!doctype html><html><body>2048</body></html>');
+        }
+        if (filePath.endsWith('.png')) {
+          return Buffer.from('png-bytes');
+        }
+        throw new Error(`unexpected read: ${filePath}`);
+      },
+      runCommand: async (_sandboxId: string, command: string) => {
+        capturedCommands.push(command);
+        return { exitCode: 0 };
+      },
+    } as any,
+    uploadToR2: async (key: string, body: Buffer) => {
+      uploadedKey = key;
+      uploadedBody = body;
+    },
+    downloadFromR2: async () => Buffer.from(''),
+  });
+
+  const snapshot = await service.captureManagedRunPreview({
+    sessionId: 'session-html',
+    runId: 'run-html',
+    sandboxId: 'sandbox-html',
+    workspaceRoot: '/workspace/session html',
+    deliverables: [{ path: 'index.html' } as any],
+    debugOpenPageSucceeded: true,
+  });
+
+  assert.equal(snapshot?.status, 'captured');
+  assert.equal(snapshot?.source?.url, 'file:///workspace/session%20html/index.html');
+  assert.equal(snapshot?.source?.command, undefined);
+  assert.equal(snapshot?.source?.port, undefined);
+  assert.match(uploadedKey, /^sessions\/session-html\/previews\/run-html\//);
+  assert.deepEqual(uploadedBody, Buffer.from('png-bytes'));
+  assert.ok(capturedCommands.some((command) => /file:\/\/\/workspace\/session%20html\/index\.html/.test(command)));
+});
+
+test('captureManagedRunPreview falls back to workspace index.html after successful debug open', async () => {
+  const readPaths: string[] = [];
+  const service = new TaskSessionWebsitePreviewSnapshotService({
+    e2b: {
+      readFile: async (_sandboxId: string, filePath: string) => {
+        readPaths.push(filePath);
+        if (filePath.endsWith('oneceo.manifest.json') || filePath.endsWith('package.json')) {
+          return Buffer.from('');
+        }
+        if (filePath.endsWith('index.html')) {
+          return Buffer.from('<!doctype html><html><body>fallback</body></html>');
+        }
+        if (filePath.endsWith('.png')) {
+          return Buffer.from('png-bytes');
+        }
+        throw new Error(`unexpected read: ${filePath}`);
+      },
+      runCommand: async () => ({ exitCode: 0 }),
+    } as any,
+    uploadToR2: async () => undefined,
+    downloadFromR2: async () => Buffer.from(''),
+  });
+
+  const snapshot = await service.captureManagedRunPreview({
+    sessionId: 'session-fallback',
+    runId: 'run-fallback',
+    sandboxId: 'sandbox-fallback',
+    workspaceRoot: '/workspace/session',
+    debugOpenPageSucceeded: true,
+  });
+
+  assert.equal(snapshot?.status, 'captured');
+  assert.equal(snapshot?.source?.url, 'file:///workspace/session/index.html');
+  assert.ok(readPaths.includes('/workspace/session/index.html'));
 });

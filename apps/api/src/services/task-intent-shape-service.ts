@@ -347,6 +347,9 @@ const SCOPE_BOUNDARY_KEYWORDS = [
 
 const ACCEPTANCE_REQUIREMENT_KEYWORDS = [
   '源码',
+  '只要代码',
+  '完整代码',
+  '完成代码',
   '本地运行',
   '测试通过',
   '测试',

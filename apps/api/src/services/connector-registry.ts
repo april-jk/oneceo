@@ -7,11 +7,6 @@
   type ConnectorOauthProvider,
   type RemoteMcpTransport,
 } from '../connectors/definitions';
-import {
-  buildSupabaseBridgeEnvironment,
-  buildSupabaseStdioBridgeCommand,
-} from '../connectors/bridges/supabase-stdio-bridge';
-
 export { CONNECTOR_KEYS, type ConnectorKey };
 
 export type ConnectorAuthMode = 'oauth' | 'token' | 'dsn' | 'none';
@@ -84,14 +79,6 @@ export type ConnectorRuntimeConfig =
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
-}
-
-function toBool(value: string | undefined, fallback: boolean): boolean {
-  if (!value) return fallback;
-  const normalized = value.trim().toLowerCase();
-  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
-  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
-  return fallback;
 }
 
 function normalizeRepositoryFullName(value: unknown): string {
@@ -250,6 +237,7 @@ function buildRemoteHeaders(
   input: {
     accessToken?: string;
     teamId?: string;
+    projectUrl?: string;
     taskSessionId?: string;
     userId?: string;
     profileId?: string;
@@ -267,9 +255,14 @@ function buildRemoteHeaders(
     });
   }
   if (item.runtime.headerTemplate === 'supabase') {
-    return {
+    const headers: Record<string, string> = {
       Authorization: `Bearer ${accessToken}`,
     };
+    const projectUrl = asText(input.projectUrl);
+    if (projectUrl) {
+      headers['x-supabase-url'] = projectUrl;
+    }
+    return headers;
   }
   if (item.runtime.headerTemplate === 'figma') {
     return {
@@ -376,28 +369,6 @@ export class ConnectorRegistry {
       };
     }
 
-    if (connectorKey === 'supabase') {
-      const accessToken = asText(secret.accessToken);
-      if (!accessToken) {
-        throw new Error('Supabase 杩炴帴鍣ㄧ己灏?access token');
-      }
-      const proxyEnabled = toBool(
-        process.env.ONECEO_PROXY_ENABLED ?? process.env.E2B_PROXY_ENABLED ?? 'true',
-        true
-      );
-      return {
-        type: 'local',
-        enabled: true,
-        command: ['node', '-e', buildSupabaseStdioBridgeCommand()],
-        environment: buildSupabaseBridgeEnvironment({
-          accessToken,
-          projectUrl: asText(configJson.projectUrl) || asText(configJson.supabaseUrl),
-          mcpUrl: asText(configJson.mcpUrl),
-          proxyEnabled,
-        }),
-      };
-    }
-
     const accessToken = asText(secret.accessToken);
     const refreshToken = asText(secret.refreshToken);
     if (connectorKey === 'vercel') {
@@ -413,12 +384,16 @@ export class ConnectorRegistry {
     } else if (!accessToken) {
       throw new Error(`${item.name} 杩炴帴鍣ㄧ己灏?access token`);
     }
-    const url = buildRemoteUrl(item, {
-      connectorKey,
-    });
+    const url =
+      connectorKey === 'supabase' && asText(configJson.mcpUrl)
+        ? new URL(asText(configJson.mcpUrl)).toString()
+        : buildRemoteUrl(item, {
+            connectorKey,
+          });
     const headers = buildRemoteHeaders(connectorKey, item, {
       accessToken,
       teamId: asText(configJson.teamId),
+      projectUrl: asText(configJson.projectUrl) || asText(configJson.supabaseUrl),
       taskSessionId: asText(input.runtimeContext?.taskSessionId),
       userId: asText(input.runtimeContext?.userId),
       profileId: asText(account.profileId),

@@ -162,16 +162,16 @@ test('connector registry materializes local and remote MCP configs', () => {
 
   const supabaseConfig = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'supabase',
-    account: buildAccount('supabase', { accessToken: 'supabase-token' }),
+    account: {
+      ...buildAccount('supabase', { accessToken: 'supabase-token' }),
+      configJson: { projectUrl: 'https://abc.supabase.co' },
+    },
   });
-  assert.equal(supabaseConfig.type, 'local');
-  assert.equal(supabaseConfig.command[0], 'node');
-  assert.equal(supabaseConfig.command[1], '-e');
-  assert.match(supabaseConfig.command[2], /SUPABASE_MCP_URL/);
-  assert.equal(supabaseConfig.environment?.SUPABASE_ACCESS_TOKEN, 'supabase-token');
-  assert.equal(supabaseConfig.environment?.SUPABASE_MCP_URL, 'https://mcp.supabase.com/mcp');
-  assert.equal(supabaseConfig.environment?.HTTP_PROXY, 'http://127.0.0.1:7890');
-  assert.equal(supabaseConfig.environment?.NO_PROXY, 'localhost,127.0.0.1');
+  assert.equal(supabaseConfig.type, 'remote');
+  assert.equal(supabaseConfig.transport, 'streamable_http');
+  assert.equal(supabaseConfig.url, 'https://mcp.supabase.com/mcp');
+  assert.equal(supabaseConfig.headers?.Authorization, 'Bearer supabase-token');
+  assert.equal(supabaseConfig.headers?.['x-supabase-url'], 'https://abc.supabase.co');
 });
 
 test('connector registry falls back to official slack mcp url when remote url env is missing', () => {

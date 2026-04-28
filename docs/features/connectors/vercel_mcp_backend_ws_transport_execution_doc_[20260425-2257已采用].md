@@ -74,7 +74,7 @@ API CALL_SESSION_MCP_TOOL
    - `apps/api/src/connectors/bridges/vercel-stdio-bridge.ts`
    - `apps/api/src/routes/internal-vercel-mcp-routes.ts`
 4. OSAC 最新 `backend_rpc` transport 设计文档：
-   - `docs/features/connectors/osac_backend_mcp_rpc_provider_improvement_doc_[尚未采用].md`
+   - `apps/OSAC_client/docs/20260425_OSAC_backend_rpc_MCP_provider改进文档_[20260425-2240已采用].md`
 
 本轮实现后的目标事实：
 

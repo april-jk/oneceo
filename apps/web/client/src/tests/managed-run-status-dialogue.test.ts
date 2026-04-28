@@ -91,6 +91,7 @@ describe("managed run status dialogue", () => {
   it("routes managed tool clicks to the matching replay drawer view", () => {
     expect(resolveManagedToolReplayView("write_file")).toBe("actions");
     expect(resolveManagedToolReplayView("debug_open_page")).toBe("debug");
+    expect(resolveManagedToolReplayView("browser_interact")).toBe("debug");
     expect(resolveManagedToolReplayView("deploy_application")).toBe(
       "deployment",
     );
@@ -317,6 +318,37 @@ describe("managed run status dialogue", () => {
     expect(writePurpose).not.toContain("<!DOCTYPE");
     expect(shellPurpose).toBe("检查项目文件和运行日志");
     expect(shellPurpose).not.toContain("total 20");
+  });
+
+  it("shows concrete browser interaction actions in managed activity rows", () => {
+    expect(
+      getManagedToolPurposeSummary("browser_interact", {
+        arguments: {
+          action: "text_click",
+          text: "新游戏",
+          description: "点击“新游戏”按钮",
+        },
+      }),
+    ).toBe("点击“新游戏”按钮");
+
+    expect(
+      getManagedToolPurposeSummary("browser_interact", {
+        arguments: {
+          action: "keyboard_press",
+          key: "ArrowUp",
+        },
+      }),
+    ).toBe("按下 ArrowUp 键");
+
+    expect(
+      getManagedToolPurposeSummary("browser_interact", {
+        arguments: {
+          action: "mouse_wheel",
+          direction: "down",
+          pixels: 800,
+        },
+      }),
+    ).toBe("向下滚动 800 像素");
   });
 
   it("splits managed activity groups by active todowrite stages", () => {

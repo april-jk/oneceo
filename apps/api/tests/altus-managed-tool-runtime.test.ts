@@ -789,6 +789,59 @@ test('debug_open_page opens workspace file targets in debug browser', async () =
   assert.equal(runCommandMock.mock.callCount(), 1);
 });
 
+test('browser_interact executes an explicit Playwright action against the debug browser', async () => {
+  let capturedCommand = '';
+  mock.method(e2bConnector, 'runCommand', async (_sandboxId, command) => {
+    capturedCommand = String(command);
+    return {
+      stdout: '{"ok":true,"action":"keyboard_press","url":"file:///workspace/session-1/index.html","title":"2048"}',
+      stderr: '',
+      exitCode: 0,
+    };
+  });
+
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  const result = await runtime.execute('browser_interact', {
+    action: 'keyboard_press',
+    key: 'ArrowUp',
+    description: '按下 ArrowUp 键',
+  });
+
+  assert.equal(result.type, 'result');
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.action, 'keyboard_press');
+  assert.equal(payload.key, 'ArrowUp');
+  assert.equal(payload.description, '按下 ArrowUp 键');
+  assert.match(capturedCommand, /chromium\.connectOverCDP/);
+  assert.match(capturedCommand, /ArrowUp/);
+});
+
+test('browser_interact rejects unknown browser actions', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  await assert.rejects(
+    runtime.execute('browser_interact', {
+      action: 'hover',
+    }),
+    /browser_interact_invalid_action/
+  );
+});
+
 test('debug_open_page rejects unreachable target page before reporting success', async () => {
   const ensureDebugMock = mock.fn(
     async () =>

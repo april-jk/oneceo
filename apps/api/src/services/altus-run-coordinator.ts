@@ -165,6 +165,65 @@ function basenameLike(value: unknown) {
   return parts[parts.length - 1] || normalized;
 }
 
+function buildBrowserInteractionSummary(args: Record<string, unknown>) {
+  const action = asText(args.action).toLowerCase();
+  const description = asText(args.description);
+  if (description) return description;
+  const selector = asText(args.selector);
+  const text = asText(args.text);
+  const key = asText(args.key);
+  const direction = asText(args.direction).toLowerCase() || 'down';
+  const loadState = asText(args.loadState) || 'domcontentloaded';
+  const pixels = Number(args.pixels);
+  const target = text || selector;
+
+  if (action === 'locator_click') {
+    if (selector) return `点击 ${selector}`;
+    return '点击页面元素';
+  }
+  if (action === 'text_click') {
+    if (text) return `点击 ${text}`;
+    return '点击指定文本';
+  }
+  if (action === 'coordinate_click') {
+    return '点击页面指定位置';
+  }
+  if (action === 'locator_fill') {
+    if (selector && text) return `在 ${selector} 输入“${text}”`;
+    return selector ? `填写 ${selector}` : '填写表单输入框';
+  }
+  if (action === 'keyboard_type') {
+    return text ? `键盘输入“${text}”` : '键盘输入文本';
+  }
+  if (action === 'keyboard_press') {
+    return key ? `按下 ${key} 键` : '按下键盘按键';
+  }
+  if (action === 'mouse_wheel') {
+    const directionLabel =
+      direction === 'up'
+        ? '向上滚动'
+        : direction === 'left'
+          ? '向左滚动'
+          : direction === 'right'
+            ? '向右滚动'
+            : '向下滚动';
+    return Number.isFinite(pixels) && pixels > 0 ? `${directionLabel} ${Math.floor(pixels)} 像素` : directionLabel;
+  }
+  if (action === 'wait_for_locator') {
+    return selector ? `等待 ${selector} 可见` : '等待页面元素可见';
+  }
+  if (action === 'wait_for_text') {
+    return text ? `等待页面出现“${text}”` : '等待页面出现指定内容';
+  }
+  if (action === 'wait_for_load_state') {
+    return `等待页面进入 ${loadState} 状态`;
+  }
+  if (action === 'wait_for_timeout') {
+    return '等待页面稳定';
+  }
+  return target ? `执行 Playwright 操作：${target}` : '执行 Playwright 浏览器操作';
+}
+
 type ExtractedJsonStringField = {
   value: string;
   closed: boolean;
@@ -916,6 +975,11 @@ export class AltusRunCoordinator {
       if (status === 'completed') return '部署状态查询已完成';
       return '部署状态查询暂未完成';
     }
+    if (toolName === 'browser_interact') {
+      if (status === 'started' || status === 'progress') return '正在执行浏览器交互';
+      if (status === 'completed') return '浏览器交互已完成';
+      return '浏览器交互失败';
+    }
     if (status === 'started') return `调用工具 ${toolName}`;
     if (status === 'completed') return `工具 ${toolName} 已完成`;
     if (status === 'failed') return `工具 ${toolName} 失败`;
@@ -938,6 +1002,9 @@ export class AltusRunCoordinator {
     const lowerDisplayPath = displayPath.toLowerCase();
 
     if (input.outcome === 'failed') {
+      if (toolName === 'browser_interact') {
+        return `${buildBrowserInteractionSummary(args)} 没成功，我会检查页面状态后继续`;
+      }
       if (toolName === 'shell_execute') {
         return '刚才那一步执行没成功，我换个方式继续';
       }
@@ -1003,6 +1070,9 @@ export class AltusRunCoordinator {
     }
     if (toolName === 'debug_open_page') {
       return '页面已经打开，我正在按测试文档确认功能是否符合要求';
+    }
+    if (toolName === 'browser_interact') {
+      return `${buildBrowserInteractionSummary(args)}，页面已响应`;
     }
     if (toolName === 'get_application_deployment_status') {
       return '部署状态我已经拿到了，正在确认是否一切正常';

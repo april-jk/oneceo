@@ -257,6 +257,7 @@ const VERIFICATION_HINT_KEYWORDS = [
 ] as const;
 
 const DEBUG_CHAIN_KEYWORDS = [
+  '调试',
   '修复',
   '排查',
   'debug',

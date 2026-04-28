@@ -28,7 +28,7 @@ test('task intent shape classifier treats negated deployment-status language as 
   const shape = classifyTaskIntentShape('帮我整理一份需求文档，不要检查部署状态，也不要重新部署。');
 
   assert.equal(shape.explicitNoDeploy, true);
-  assert.equal(shape.deployRequested, true);
+  assert.equal(shape.deployRequested, false);
   assert.equal(shape.deliveryMode, 'non_deployable');
 });
 
@@ -54,6 +54,13 @@ test('task intent shape classifier keeps company website requests deployable whe
 
 test('task intent shape classifier emits todo candidate signals for debugging chains', () => {
   const shape = classifyTaskIntentShape('帮我排查这个登录 bug，修复后补测试并验证。');
+
+  assert.equal(shape.candidateTodoSignals.hasDebugChain, true);
+  assert.equal(shape.candidateTodoSignals.looksTrivial, false);
+});
+
+test('task intent shape classifier treats explicit debug trigger as a debug chain', () => {
+  const shape = classifyTaskIntentShape('启动网站调试功能');
 
   assert.equal(shape.candidateTodoSignals.hasDebugChain, true);
   assert.equal(shape.candidateTodoSignals.looksTrivial, false);

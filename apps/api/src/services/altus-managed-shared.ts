@@ -272,6 +272,81 @@ export function buildManagedToolDefinitions() {
     {
       type: 'function',
       function: {
+        name: 'browser_interact',
+        description:
+          'Perform one explicit Playwright-backed browser testing action in the same n.eko Chromium debug session after debug_open_page succeeds. Supported actions are direct projections of Playwright APIs: locator.click, getByText(...).click, mouse.click, locator.fill, keyboard.type, keyboard.press, mouse.wheel, locator.waitFor, getByText(...).waitFor, page.waitForLoadState, and page.waitForTimeout. Each call should describe exactly what user-visible action is being performed.',
+        parameters: objectSchema(
+          {
+            action: {
+              type: 'string',
+              enum: [
+                'locator_click',
+                'text_click',
+                'coordinate_click',
+                'locator_fill',
+                'keyboard_type',
+                'keyboard_press',
+                'mouse_wheel',
+                'wait_for_locator',
+                'wait_for_text',
+                'wait_for_load_state',
+                'wait_for_timeout',
+              ],
+              description: 'Playwright-backed browser action to perform.',
+            },
+            description: {
+              type: 'string',
+              description:
+                'Short user-facing action description, for example 打开网页后点击“新游戏”按钮, 按下 ArrowUp 键, 向下滚动页面.',
+            },
+            selector: {
+              type: 'string',
+              description:
+                'Playwright locator selector for locator_click, locator_fill, wait_for_locator, or optional scoped wait_for_text.',
+            },
+            text: {
+              type: 'string',
+              description:
+                'Text for text_click, locator_fill, keyboard_type, or wait_for_text.',
+            },
+            key: {
+              type: 'string',
+              description: 'Keyboard key for keyboard_press, for example ArrowUp, Enter, Escape, Tab.',
+            },
+            direction: {
+              type: 'string',
+              enum: ['up', 'down', 'left', 'right'],
+              description: 'Wheel direction for mouse_wheel.',
+            },
+            pixels: {
+              type: 'integer',
+              description: 'Wheel distance in pixels for mouse_wheel. Defaults to 600.',
+            },
+            x: {
+              type: 'number',
+              description: 'Optional viewport x coordinate for click.',
+            },
+            y: {
+              type: 'number',
+              description: 'Optional viewport y coordinate for click.',
+            },
+            loadState: {
+              type: 'string',
+              enum: ['domcontentloaded', 'load', 'networkidle'],
+              description: 'Load state for wait_for_load_state. Defaults to domcontentloaded.',
+            },
+            timeoutMs: {
+              type: 'integer',
+              description: 'Timeout for wait actions, max 30000.',
+            },
+          },
+          ['action']
+        ),
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'deploy_application',
         description:
           'Publish the current app workspace through the OneCEO managed deployment pipeline. Use this when the user asks to deploy, publish, go live, or上线 the current project.',

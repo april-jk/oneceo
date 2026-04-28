@@ -86,6 +86,8 @@ test('managed prompt defaults debug and testing to Playwright on the same n.eko 
   assert.match(prompt, /docs\/test-plan\.md/i);
   assert.match(prompt, /requirements, target flows, test cases, acceptance criteria, and a results section/i);
   assert.match(prompt, /explicitly enter the testing phase/i);
+  assert.match(prompt, /browser_interact/i);
+  assert.match(prompt, /locator_click, text_click, coordinate_click, locator_fill, keyboard_type, keyboard_press, mouse_wheel/i);
   assert.match(prompt, /cover the core user flows implied by the request/i);
   assert.match(prompt, /record the failure in the test document, return to repair/i);
   assert.match(prompt, /use Playwright \/ playwright-mcp by default to inspect or test the same n\.eko Chromium session through CDP 9222/i);

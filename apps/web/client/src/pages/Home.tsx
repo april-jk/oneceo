@@ -7824,7 +7824,7 @@ function inferManagedArtifactPreviewType(
 export function resolveManagedToolReplayView(
   toolName: string,
 ): AltusDrawerView {
-  if (toolName === "debug_open_page") {
+  if (toolName === "debug_open_page" || toolName === "browser_interact") {
     return "debug";
   }
   if (isManagedDeploymentTool(toolName)) {
@@ -7856,6 +7856,65 @@ function readManagedDeploymentToolOutput(metadataRaw: unknown) {
     deploymentId: asText(output.deploymentId),
     repairCategory: asText(repair.category),
   };
+}
+
+function buildManagedBrowserInteractPurpose(args: Record<string, unknown>) {
+  const action = asText(args.action).toLowerCase();
+  const description = asText(args.description);
+  if (description) return description;
+  const selector = asText(args.selector);
+  const text = asText(args.text);
+  const key = asText(args.key);
+  const direction = asText(args.direction).toLowerCase() || "down";
+  const loadState = asText(args.loadState) || "domcontentloaded";
+  const pixelsRaw = Number(args.pixels);
+  const target = text || selector;
+
+  if (action === "locator_click") {
+    return selector ? `点击 ${selector}` : "点击页面元素";
+  }
+  if (action === "text_click") {
+    return text ? `点击 ${text}` : "点击指定文本";
+  }
+  if (action === "coordinate_click") {
+    return "点击页面指定位置";
+  }
+  if (action === "locator_fill") {
+    if (selector && text) return `在 ${selector} 输入“${text}”`;
+    return selector ? `填写 ${selector}` : "填写表单输入框";
+  }
+  if (action === "keyboard_type") {
+    return text ? `键盘输入“${text}”` : "键盘输入文本";
+  }
+  if (action === "keyboard_press") {
+    return key ? `按下 ${key} 键` : "按下键盘按键";
+  }
+  if (action === "mouse_wheel") {
+    const directionLabel =
+      direction === "up"
+        ? "向上滚动"
+        : direction === "left"
+          ? "向左滚动"
+          : direction === "right"
+            ? "向右滚动"
+            : "向下滚动";
+    return Number.isFinite(pixelsRaw) && pixelsRaw > 0
+      ? `${directionLabel} ${Math.floor(pixelsRaw)} 像素`
+      : directionLabel;
+  }
+  if (action === "wait_for_locator") {
+    return selector ? `等待 ${selector} 可见` : "等待页面元素可见";
+  }
+  if (action === "wait_for_text") {
+    return text ? `等待页面出现“${text}”` : "等待页面出现指定内容";
+  }
+  if (action === "wait_for_load_state") {
+    return `等待页面进入 ${loadState} 状态`;
+  }
+  if (action === "wait_for_timeout") {
+    return "等待页面稳定";
+  }
+  return target ? `执行 Playwright 操作：${target}` : "执行 Playwright 浏览器操作";
 }
 
 export function getManagedToolPurposeSummary(
@@ -7912,6 +7971,10 @@ export function getManagedToolPurposeSummary(
     return "更新任务清单";
   }
 
+  if (toolName === "browser_interact") {
+    return buildManagedBrowserInteractPurpose(args);
+  }
+
   if (toolName === "ask_user") {
     return "请求补充必要信息";
   }
@@ -7963,6 +8026,8 @@ function getManagedToolDisplayName(toolName: string) {
       return i18n.t("homeWorkspace.requestClarification");
     case "debug_open_page":
       return i18n.t("replayDrawer.tabs.debug");
+    case "browser_interact":
+      return "浏览器操作";
     case "deploy_application":
       return i18n.t("homeWorkspace.deployApplication");
     case "redeploy_application":

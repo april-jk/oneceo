@@ -109,6 +109,19 @@ type NormalizedDebugTarget = {
   localFilePath?: string;
 };
 
+type BrowserInteractAction =
+  | 'locator_click'
+  | 'text_click'
+  | 'coordinate_click'
+  | 'locator_fill'
+  | 'keyboard_type'
+  | 'keyboard_press'
+  | 'mouse_wheel'
+  | 'wait_for_locator'
+  | 'wait_for_text'
+  | 'wait_for_load_state'
+  | 'wait_for_timeout';
+
 function isInsidePath(parent: string, child: string) {
   const relative = path.posix.relative(parent, child);
   return relative === '' || (!!relative && !relative.startsWith('..') && !path.posix.isAbsolute(relative));
@@ -155,6 +168,163 @@ function normalizeDebugTargetUrl(value: unknown, workspaceRoot: string): Normali
     targetUrl: parsed.toString(),
     protocol: protocol === 'https:' ? 'https' : 'http',
   };
+}
+
+function normalizeBrowserInteractAction(value: unknown): BrowserInteractAction {
+  const text = asText(value).toLowerCase();
+  if (
+    text === 'locator_click' ||
+    text === 'text_click' ||
+    text === 'coordinate_click' ||
+    text === 'locator_fill' ||
+    text === 'keyboard_type' ||
+    text === 'keyboard_press' ||
+    text === 'mouse_wheel' ||
+    text === 'wait_for_locator' ||
+    text === 'wait_for_text' ||
+    text === 'wait_for_load_state' ||
+    text === 'wait_for_timeout'
+  ) {
+    return text;
+  }
+  throw new Error('browser_interact_invalid_action');
+}
+
+function normalizeScrollDirection(value: unknown) {
+  const text = asText(value).toLowerCase();
+  if (text === 'up' || text === 'left' || text === 'right') return text;
+  return 'down';
+}
+
+function normalizeLoadState(value: unknown) {
+  const text = asText(value).toLowerCase();
+  if (text === 'load' || text === 'networkidle') return text;
+  return 'domcontentloaded';
+}
+
+function buildBrowserInteractCommand(input: {
+  action: BrowserInteractAction;
+  selector?: string;
+  text?: string;
+  key?: string;
+  direction?: string;
+  loadState?: string;
+  pixels?: number;
+  x?: number | null;
+  y?: number | null;
+  timeoutMs?: number;
+  description?: string;
+  cdpPort: number;
+}) {
+  const payload = {
+    action: input.action,
+    selector: asText(input.selector),
+    text: asText(input.text),
+    key: asText(input.key),
+    direction: normalizeScrollDirection(input.direction),
+    loadState: normalizeLoadState(input.loadState),
+    pixels: Math.max(1, Math.min(Math.floor(Number(input.pixels) || 600), 5000)),
+    x: typeof input.x === 'number' && Number.isFinite(input.x) ? input.x : null,
+    y: typeof input.y === 'number' && Number.isFinite(input.y) ? input.y : null,
+    timeoutMs: Math.max(100, Math.min(Math.floor(Number(input.timeoutMs) || 5000), 30000)),
+    description: asText(input.description),
+    cdpEndpoint: `http://127.0.0.1:${input.cdpPort}`,
+  };
+
+  return `
+set -euo pipefail
+export NODE_PATH="$(npm root -g 2>/dev/null || true)"
+ONECEO_BROWSER_ACTION=${shellEscape(JSON.stringify(payload))} node <<'NODE'
+const { chromium } = require('playwright');
+
+const payload = JSON.parse(process.env.ONECEO_BROWSER_ACTION || '{}');
+
+async function pickPage(browser) {
+  for (const context of browser.contexts()) {
+    const pages = context.pages();
+    const meaningful = pages.filter((page) => {
+      const url = page.url();
+      return url && url !== 'about:blank';
+    });
+    if (meaningful.length > 0) return meaningful[meaningful.length - 1];
+    if (pages.length > 0) return pages[pages.length - 1];
+  }
+  throw new Error('browser_interact_no_page');
+}
+
+async function main() {
+  const browser = await chromium.connectOverCDP(payload.cdpEndpoint);
+  try {
+    const page = await pickPage(browser);
+    const timeout = Number(payload.timeoutMs || 5000);
+    const selector = String(payload.selector || '');
+    const text = String(payload.text || '');
+    const action = String(payload.action || '');
+
+    if (action === 'locator_click') {
+      if (!selector) throw new Error('browser_interact_locator_click_missing_selector');
+      await page.locator(selector).first().click({ timeout });
+    } else if (action === 'text_click') {
+      if (!text) throw new Error('browser_interact_text_click_missing_text');
+      await page.getByText(text, { exact: false }).first().click({ timeout });
+    } else if (action === 'coordinate_click') {
+      if (typeof payload.x !== 'number' || typeof payload.y !== 'number') {
+        throw new Error('browser_interact_coordinate_click_missing_point');
+      }
+      await page.mouse.click(payload.x, payload.y);
+    } else if (action === 'locator_fill') {
+      if (!selector) throw new Error('browser_interact_locator_fill_missing_selector');
+      if (!text) throw new Error('browser_interact_locator_fill_missing_text');
+      await page.locator(selector).first().fill(text, { timeout });
+    } else if (action === 'keyboard_type') {
+      if (!text) throw new Error('browser_interact_keyboard_type_missing_text');
+      await page.keyboard.type(text);
+    } else if (action === 'keyboard_press') {
+      if (!payload.key) throw new Error('browser_interact_keyboard_press_missing_key');
+      await page.keyboard.press(String(payload.key));
+    } else if (action === 'mouse_wheel') {
+      const pixels = Number(payload.pixels || 600);
+      const direction = String(payload.direction || 'down');
+      const dx = direction === 'left' ? -pixels : direction === 'right' ? pixels : 0;
+      const dy = direction === 'up' ? -pixels : direction === 'down' ? pixels : 0;
+      await page.mouse.wheel(dx, dy);
+    } else if (action === 'wait_for_locator') {
+      if (!selector) throw new Error('browser_interact_wait_for_locator_missing_selector');
+      await page.locator(selector).first().waitFor({ state: 'visible', timeout });
+    } else if (action === 'wait_for_text') {
+      if (!text) throw new Error('browser_interact_wait_for_text_missing_text');
+      if (selector) {
+        await page.locator(selector).filter({ hasText: text }).first().waitFor({ state: 'visible', timeout });
+      } else {
+        await page.getByText(text, { exact: false }).first().waitFor({ state: 'visible', timeout });
+      }
+    } else if (action === 'wait_for_load_state') {
+      await page.waitForLoadState(String(payload.loadState || 'domcontentloaded'), { timeout });
+    } else if (action === 'wait_for_timeout') {
+      await page.waitForTimeout(timeout);
+    } else {
+      throw new Error('browser_interact_invalid_action');
+    }
+
+    await page.waitForLoadState('domcontentloaded', { timeout: Math.min(timeout, 5000) }).catch(() => undefined);
+    console.log(JSON.stringify({
+      ok: true,
+      action,
+      description: payload.description || '',
+      url: page.url(),
+      title: await page.title().catch(() => ''),
+    }));
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
+}
+
+main().catch((error) => {
+  console.error(error && error.stack ? error.stack : String(error));
+  process.exit(1);
+});
+NODE
+`;
 }
 
 function isManagedDeploymentToolName(value: string): value is AltusManagedDeploymentToolName {
@@ -1059,6 +1229,57 @@ export class AltusManagedToolRuntime {
           cdpPort,
           protocol: normalizedTarget.protocol,
           localFilePath: normalizedTarget.localFilePath,
+          output: stdout,
+        }),
+      };
+    }
+
+    if (toolName === 'browser_interact') {
+      const action = normalizeBrowserInteractAction(rawArgs.action);
+      const cdpPort = asPositiveInt(process.env.NEKO_CDP_PORT, 9222, 65535);
+      const xRaw = Number(rawArgs.x);
+      const yRaw = Number(rawArgs.y);
+      const command = buildBrowserInteractCommand({
+        action,
+        selector: asText(rawArgs.selector),
+        text: asText(rawArgs.text),
+        key: asText(rawArgs.key),
+        direction: asText(rawArgs.direction),
+        loadState: asText(rawArgs.loadState),
+        pixels: asPositiveInt(rawArgs.pixels, 600, 5000),
+        x: Number.isFinite(xRaw) ? xRaw : null,
+        y: Number.isFinite(yRaw) ? yRaw : null,
+        timeoutMs: asPositiveInt(rawArgs.timeoutMs, 5000, 30000),
+        description: asText(rawArgs.description),
+        cdpPort,
+      });
+      const result = await this.runShell(
+        command,
+        {
+          cwd: this.input.workspaceRoot,
+          timeoutMs: asPositiveInt(rawArgs.timeoutMs, 5000, 30000) + 10_000,
+        },
+        signal
+      );
+      const exitCode = Number((result as any)?.exitCode ?? -1);
+      const stdout = truncate(asText((result as any)?.stdout), 4000);
+      const stderr = truncate(asText((result as any)?.stderr), 2000);
+      if (exitCode !== 0) {
+        throw new Error(`browser_interact_failed:${stderr || stdout || 'unknown error'}`);
+      }
+      return {
+        type: 'result',
+        activatedSkills,
+        content: JSON.stringify({
+          action,
+          description: asText(rawArgs.description),
+          selector: asText(rawArgs.selector),
+          text: asText(rawArgs.text),
+          key: asText(rawArgs.key),
+          direction: asText(rawArgs.direction),
+          loadState: normalizeLoadState(rawArgs.loadState),
+          pixels: asPositiveInt(rawArgs.pixels, 600, 5000),
+          cdpPort,
           output: stdout,
         }),
       };

@@ -448,6 +448,63 @@ test('buildTaskIntentProfile accepts LLM advisory transition instead of forcing 
   assert.equal(profile.clarificationTransition?.nextState, 'advisory');
 });
 
+test('buildTaskIntentProfile treats explicit code-only delivery as enough acceptance scope', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content:
+        '请用纯 HTML、CSS 和少量原生 JavaScript 开发一个工业企业官网，包含首页、产品页、公司介绍页和联系页。不要使用后端框架，只完成完整网站代码。',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => null as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-code-only-delivery',
+    '请用纯 HTML、CSS 和少量原生 JavaScript 开发一个工业企业官网，包含首页、产品页、公司介绍页和联系页。不要使用后端框架，只完成完整网站代码。',
+    'user_input'
+  );
+
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.clarificationType, 'none');
+  assert.doesNotMatch(profile.clarificationQuestion, /上一条补充信息/);
+});
+
+test('buildTaskIntentProfile falls back instead of surfacing invalid no-pending transition', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content:
+        '请用纯 HTML、CSS 和少量原生 JavaScript 开发一个展示型网站，包含首页、产品页、公司介绍页和联系页。不要使用后端框架，只完成完整网站代码。',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => null as any);
+  mock.method(altusClarificationTransitionAgent, 'propose', async () => ({
+    action: 'answer_clarification',
+    clarificationType: 'acceptance_requirement',
+    answer: '完整代码',
+    confidence: 'high',
+    reason: 'invalid tool when there is no pending question',
+  }) as any);
+
+  const service = new AltusManagedSetupService();
+  const currentText =
+    '请用纯 HTML、CSS 和少量原生 JavaScript 开发一个展示型网站，包含首页、产品页、公司介绍页和联系页。不要使用后端框架，只完成完整网站代码。';
+  const profile = await service.buildTaskIntentProfile(
+    'session-invalid-no-pending-transition',
+    currentText,
+    'user_input'
+  );
+
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.clarificationType, 'none');
+  assert.doesNotMatch(profile.clarificationQuestion, /上一条补充信息/);
+});
+
 test('buildTaskIntentProfile clears a pending clarification when LLM detects advisory mode', async () => {
   mock.method(taskCreationSessionDAO, 'getMessages', async () => [
     {

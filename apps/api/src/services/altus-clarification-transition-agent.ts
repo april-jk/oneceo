@@ -49,6 +49,10 @@ function canUseRiskConfirmationTool(input: TransitionAgentInput) {
   return input.pendingClarificationType === 'acceptance_requirement';
 }
 
+function hasPendingClarification(input: TransitionAgentInput) {
+  return Boolean(input.pendingClarificationType && input.pendingClarificationType !== 'none');
+}
+
 function buildTransitionTools(input: TransitionAgentInput) {
   const clarificationType = {
     type: 'string',
@@ -63,40 +67,44 @@ function buildTransitionTools(input: TransitionAgentInput) {
     enum: [...CAPABILITY_NAMES],
   };
   return [
-    {
-      type: 'function',
-      function: {
-        name: 'answer_clarification',
-        description: 'Use when the user answered the pending clarification.',
-        parameters: objectSchema(
+    ...(hasPendingClarification(input)
+      ? [
           {
-            clarificationType,
-            answer: { type: 'string' },
-            confidence,
-            reason: { type: 'string' },
+            type: 'function',
+            function: {
+              name: 'answer_clarification',
+              description: 'Use when the user answered the pending clarification.',
+              parameters: objectSchema(
+                {
+                  clarificationType,
+                  answer: { type: 'string' },
+                  confidence,
+                  reason: { type: 'string' },
+                },
+                ['clarificationType', 'answer', 'confidence', 'reason']
+              ),
+            },
           },
-          ['clarificationType', 'answer', 'confidence', 'reason']
-        ),
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'delegate_to_agent_default',
-        description: 'Use when the user asks Altus to choose a reasonable default.',
-        parameters: objectSchema(
           {
-            clarificationType,
-            assumedDefault: { type: 'string' },
-            confidence,
-            reason: { type: 'string' },
-            targetCapability: capabilityName,
-            explicitConfirmation: { type: 'boolean' },
+            type: 'function',
+            function: {
+              name: 'delegate_to_agent_default',
+              description: 'Use when the user asks Altus to choose a reasonable default.',
+              parameters: objectSchema(
+                {
+                  clarificationType,
+                  assumedDefault: { type: 'string' },
+                  confidence,
+                  reason: { type: 'string' },
+                  targetCapability: capabilityName,
+                  explicitConfirmation: { type: 'boolean' },
+                },
+                ['clarificationType', 'assumedDefault', 'confidence', 'reason']
+              ),
+            },
           },
-          ['clarificationType', 'assumedDefault', 'confidence', 'reason']
-        ),
-      },
-    },
+        ]
+      : []),
     {
       type: 'function',
       function: {
@@ -114,20 +122,24 @@ function buildTransitionTools(input: TransitionAgentInput) {
         ),
       },
     },
-    {
-      type: 'function',
-      function: {
-        name: 'restart_as_new_turn',
-        description: 'Use when the user changed topic and the old pending clarification should not apply.',
-        parameters: objectSchema(
+    ...(hasPendingClarification(input)
+      ? [
           {
-            reason: { type: 'string' },
-            newUserIntentSummary: { type: 'string' },
+            type: 'function',
+            function: {
+              name: 'restart_as_new_turn',
+              description: 'Use when the user changed topic and the old pending clarification should not apply.',
+              parameters: objectSchema(
+                {
+                  reason: { type: 'string' },
+                  newUserIntentSummary: { type: 'string' },
+                },
+                ['reason', 'newUserIntentSummary']
+              ),
+            },
           },
-          ['reason', 'newUserIntentSummary']
-        ),
-      },
-    },
+        ]
+      : []),
     {
       type: 'function',
       function: {
@@ -260,6 +272,9 @@ export class AltusClarificationTransitionAgent {
               'Choose exactly one tool call. Do not answer the user directly.',
               'Interpret the user reply semantically. Do not rely on keyword matching.',
               'Judge the latest user reply against the immediately preceding Altus clarification question.',
+              'When there is no pending clarification question, judge only the current user request.',
+              'If there is no pending clarification question and the current request already names the artifact and delivery scope, call continue_execution.',
+              'Examples of enough current-request scope: complete website code only, source code only, local runnable app, tested app, or deploy this app.',
               'A short fragment or option such as "网页应用" is often a complete answer when the pending question lists options.',
               'Use the transcript as the primary context; use the JSON state only to identify the active pending field.',
               'If the user wants advice, planning, discussion, or a proposal before execution, call switch_to_advisory_mode.',

@@ -33,6 +33,16 @@ const BASE_TOOL_DESCRIPTORS: ManagedToolDescriptor[] = [
     hasStableProgressShape: false,
   },
   {
+    name: 'browser_interact',
+    category: 'web',
+    mutatesWorkspace: false,
+    readsWorkspace: false,
+    requiresConnectorGuide: false,
+    requiresExplicitDeploymentIntent: false,
+    budgetHint: 'small',
+    hasStableProgressShape: true,
+  },
+  {
     name: 'deploy_application',
     category: 'deployment',
     mutatesWorkspace: false,

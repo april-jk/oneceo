@@ -81,12 +81,26 @@ test('managed prompt defaults debug and testing to Playwright on the same n.eko 
   });
 
   assert.match(prompt, /Browser Use CLI is preinstalled in the sandbox/i);
+  assert.match(prompt, /Treat website debugging as entry into a testing workflow/i);
+  assert.match(prompt, /Before the first debug_open_page call, write or update a workspace test document/i);
+  assert.match(prompt, /docs\/test-plan\.md/i);
+  assert.match(prompt, /requirements, target flows, test cases, acceptance criteria, and a results section/i);
+  assert.match(prompt, /explicitly enter the testing phase/i);
+  assert.match(prompt, /cover the core user flows implied by the request/i);
+  assert.match(prompt, /record the failure in the test document, return to repair/i);
   assert.match(prompt, /use Playwright \/ playwright-mcp by default to inspect or test the same n\.eko Chromium session through CDP 9222/i);
   assert.match(prompt, /Do not launch a separate browser instance/i);
   assert.match(prompt, /not about:blank, a Chrome error page, or an unexpected fallback route/i);
   assert.match(prompt, /Use Browser Use for exploratory external-site access and interaction only/i);
   assert.match(prompt, /Use Playwright \/ playwright-mcp by default for debugging, deterministic testing/i);
   assert.match(prompt, /Do not install browser-use, Playwright, or @playwright\/mcp at task time/i);
+});
+
+test('managed task intent requires todo workflow for explicit debug trigger', () => {
+  const profile = deriveManagedTaskIntentProfile(['启动网站调试功能']);
+
+  assert.equal(profile.todoRequired, true);
+  assert.equal(profile.todoReason, 'debug_chain');
 });
 
 test('managed task intent profile carries a hard clarification gate for broad business-system requests', () => {

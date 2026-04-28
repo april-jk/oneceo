@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
+import { connectorRegistry } from '../src/services/connector-registry';
 import { sessionConnectorService } from '../src/services/session-connector-service';
 
 const envBackup = {
@@ -48,7 +49,7 @@ function buildProfile(connectorKey: 'supabase' | 'vercel' | 'notion') {
   } as any;
 }
 
-test('buildProviderTransport injects proxy env for supabase local bridge transport', () => {
+test('buildProviderTransport maps supabase streamable HTTP runtime to OSAC http_stream transport', () => {
   process.env.ONECEO_PROXY_ENABLED = 'true';
   process.env.HTTP_PROXY = 'http://127.0.0.1:7890';
   process.env.HTTPS_PROXY = 'http://127.0.0.1:7890';
@@ -57,11 +58,10 @@ test('buildProviderTransport injects proxy env for supabase local bridge transpo
   const serviceAny = sessionConnectorService as any;
   const result = serviceAny.buildProviderTransport('supabase', buildProfile('supabase'), null);
 
-  assert.equal(result.transport.type, 'local_stdio');
-  assert.equal(result.transport.command[0], 'node');
-  assert.equal(result.transport.command[1], '-e');
-  assert.match(result.transport.command[2], /SUPABASE_MCP_URL/);
-  assert.equal(result.transport.env.SUPABASE_ACCESS_TOKEN, 'supabase-token');
+  assert.equal(result.transport.type, 'http_stream');
+  assert.equal(result.transportName, 'http_stream');
+  assert.equal(result.transport.url, 'https://mcp.supabase.com/mcp');
+  assert.equal(result.transport.headers.Authorization, 'Bearer supabase-token');
   assert.equal(result.transport.env.HTTP_PROXY, 'http://127.0.0.1:7890');
   assert.equal(result.transport.env.HTTPS_PROXY, 'http://127.0.0.1:7890');
   assert.equal(result.transport.env.NO_PROXY, 'localhost,127.0.0.1');
@@ -110,6 +110,29 @@ test('buildProviderTransport honors explicit notion remote transport', () => {
   assert.equal(result.transport.url, 'https://mcp.notion.com/sse');
   assert.deepEqual(result.transport.env, {});
   assert.equal(result.transport.headers.Authorization, 'Bearer notion-token');
+});
+
+test('buildProviderTransport maps streamable_http connector config to OSAC http_stream transport', () => {
+  const originalMaterialize = connectorRegistry.materializeRuntimeConfig.bind(connectorRegistry);
+  (connectorRegistry as any).materializeRuntimeConfig = () => ({
+    type: 'remote',
+    enabled: true,
+    url: 'https://mcp.example.com/mcp',
+    headers: { Authorization: 'Bearer test-token' },
+    transport: 'streamable_http',
+  });
+
+  try {
+    const serviceAny = sessionConnectorService as any;
+    const result = serviceAny.buildProviderTransport('notion', buildProfile('notion'), null);
+
+    assert.equal(result.transport.type, 'http_stream');
+    assert.equal(result.transportName, 'http_stream');
+    assert.equal(result.transport.url, 'https://mcp.example.com/mcp');
+    assert.equal(result.transport.headers.Authorization, 'Bearer test-token');
+  } finally {
+    (connectorRegistry as any).materializeRuntimeConfig = originalMaterialize;
+  }
 });
 
 test('buildAttachFailureRuntimePatch clears live runtime projection for failed attach states', () => {

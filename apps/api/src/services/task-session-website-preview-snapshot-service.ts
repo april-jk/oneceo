@@ -51,6 +51,8 @@ type CommandCandidate = {
   appendVitePortArgs?: boolean;
 };
 
+const HTML_PREVIEW_FALLBACK_PATHS = ['index.html', 'public/index.html', 'dist/index.html'];
+
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -83,6 +85,15 @@ function normalizeRelativePath(value: string): string {
 
 function isHtmlPath(value: string): boolean {
   return /\.html?$/i.test(value);
+}
+
+function buildWorkspaceFileUrl(workspaceRoot: string, relativePath: string): string {
+  const absolutePath = path.posix.join(workspaceRoot, normalizeRelativePath(relativePath));
+  const encodedPath = absolutePath
+    .split('/')
+    .map((part) => encodeURIComponent(part))
+    .join('/');
+  return `file://${encodedPath.startsWith('/') ? '' : '/'}${encodedPath}`;
 }
 
 function extractNumber(value: unknown): number | null {
@@ -246,6 +257,39 @@ export class TaskSessionWebsitePreviewSnapshotService {
     }
   }
 
+  private resolveArtifactHtmlPreviewPath(input: {
+    attachments?: Array<{ path?: string | null }>;
+    deliverables?: Array<{ path?: string | null }>;
+  }) {
+    const paths = [
+      ...(input.deliverables || []).map((item) => asText(item.path)),
+      ...(input.attachments || []).map((item) => asText(item.path)),
+    ];
+    for (const itemPath of paths) {
+      const normalized = normalizeRelativePath(itemPath);
+      if (normalized && isHtmlPath(normalized)) return normalized;
+    }
+    return null;
+  }
+
+  private async resolveDebugOpenedHtmlPreviewPath(input: {
+    sandboxId: string;
+    workspaceRoot: string;
+    attachments?: Array<{ path?: string | null }>;
+    deliverables?: Array<{ path?: string | null }>;
+    debugOpenPageSucceeded?: boolean;
+  }) {
+    const artifactPath = this.resolveArtifactHtmlPreviewPath(input);
+    if (artifactPath) return artifactPath;
+    if (!input.debugOpenPageSucceeded) return null;
+
+    for (const fallbackPath of HTML_PREVIEW_FALLBACK_PATHS) {
+      const html = await this.readWorkspaceText(input.sandboxId, input.workspaceRoot, fallbackPath);
+      if (html.trim()) return fallbackPath;
+    }
+    return null;
+  }
+
   private resolveCommandCandidate(input: {
     manifest: Record<string, unknown> | null;
     packageJson: Record<string, unknown> | null;
@@ -397,10 +441,83 @@ test -s ${shellEscape(input.outputPath)}
 
     const candidate = this.resolveCommandCandidate({ manifest, packageJson });
     if (!candidate) {
+      const htmlPreviewPath = await this.resolveDebugOpenedHtmlPreviewPath({
+        sandboxId: input.sandboxId,
+        workspaceRoot: input.workspaceRoot,
+        attachments: input.attachments,
+        deliverables: input.deliverables,
+        debugOpenPageSucceeded: input.debugOpenPageSucceeded,
+      });
+      if (htmlPreviewPath) {
+        const fileUrl = buildWorkspaceFileUrl(input.workspaceRoot, htmlPreviewPath);
+        const screenshotPath = `/tmp/oneceo-preview-${input.runId}-${randomUUID()}.png`;
+        try {
+          const captured = await this.captureScreenshot({
+            sandboxId: input.sandboxId,
+            url: fileUrl,
+            outputPath: screenshotPath,
+            width: 1280,
+            height: 720,
+          });
+          if (!captured) {
+            return buildFailureSnapshot({
+              status: 'capture_failed',
+              reasonCode: 'html_file_capture_failed',
+              message: 'HTML 调试页面截图失败',
+              sandboxId: input.sandboxId,
+              url: fileUrl,
+            });
+          }
+
+          const bytes = Buffer.from(await this.deps.e2b.readFile(input.sandboxId, screenshotPath));
+          const storageKey = this.buildStorageKey({
+            sessionId: input.sessionId,
+            runId: input.runId,
+          });
+          try {
+            await this.deps.uploadToR2(storageKey, bytes);
+          } catch (error) {
+            return buildFailureSnapshot({
+              status: 'storage_failed',
+              reasonCode: 'preview_snapshot_storage_failed',
+              message: truncateMessage(error),
+              sandboxId: input.sandboxId,
+              url: fileUrl,
+            });
+          }
+
+          return {
+            kind: 'website_screenshot',
+            status: 'captured',
+            storageKey,
+            mimeType: 'image/png',
+            width: 1280,
+            height: 720,
+            capturedAt: new Date().toISOString(),
+            source: {
+              sandboxId: input.sandboxId,
+              url: fileUrl,
+            },
+          };
+        } catch (error) {
+          return buildFailureSnapshot({
+            status: 'capture_failed',
+            reasonCode: 'html_file_capture_failed',
+            message: truncateMessage(error),
+            sandboxId: input.sandboxId,
+            url: fileUrl,
+          });
+        } finally {
+          await this.deps.e2b
+            .runCommand(input.sandboxId, `rm -f ${shellEscape(screenshotPath)}`, { timeoutMs: 10_000 })
+            .catch(() => undefined);
+        }
+      }
+
       return buildFailureSnapshot({
         status: 'capture_unavailable',
         reasonCode: 'preview_start_command_missing',
-        message: '未找到可识别的网站启动命令',
+        message: '未找到可识别的网站启动命令或 HTML 预览文件',
         sandboxId: input.sandboxId,
       });
     }

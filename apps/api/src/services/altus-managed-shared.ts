@@ -252,7 +252,7 @@ export function buildManagedToolDefinitions() {
       function: {
         name: 'debug_open_page',
         description:
-          'Start website debugging behavior by opening a target http/https URL, or a file:// URL inside the workspace, in the sandbox Chromium debug session shown by n.eko. The tool verifies the target is reachable/readable and the CDP tab is ready before reporting success. After this, use Playwright/playwright-mcp against the same CDP 9222 browser to verify the visible page content. Use this when users ask to 启动网站调试功能 or open a page in the debug view.',
+          'Start website debugging behavior by opening a target http/https URL, or a file:// URL inside the workspace, in the sandbox Chromium debug session shown by n.eko. Before calling this for product/app QA, write or update a workspace test document such as docs/test-plan.md, then use this tool as the testing-phase browser entry. The tool verifies the target is reachable/readable and the CDP tab is ready before reporting success. After this, use Playwright/playwright-mcp against the same CDP 9222 browser for functional testing, record defects in the test document, repair, and retest before final delivery. Use this when users ask to 启动网站调试功能 or open a page in the debug view.',
         parameters: objectSchema(
           {
             url: {

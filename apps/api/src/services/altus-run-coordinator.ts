@@ -1002,7 +1002,7 @@ export class AltusRunCoordinator {
       return '这一步已经跑完了，我继续处理后面的内容';
     }
     if (toolName === 'debug_open_page') {
-      return '页面已经打开，我正在确认实际效果';
+      return '页面已经打开，我正在按测试文档确认功能是否符合要求';
     }
     if (toolName === 'get_application_deployment_status') {
       return '部署状态我已经拿到了，正在确认是否一切正常';

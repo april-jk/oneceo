@@ -168,6 +168,9 @@ const NEW_TURN_RESPONSE_KEYWORDS = [
 const ACCEPTANCE_RESPONSE_KEYWORDS = [
   '只要源码',
   '源码',
+  '只要代码',
+  '完整代码',
+  '完成代码',
   '本地可运行',
   '本地运行',
   '测试通过',
@@ -1241,14 +1244,20 @@ export class AltusManagedSetupService {
             },
             proposal
           );
-          return buildProfileFromTransition({
-            baseProfile,
-            shape,
-            todoDecision: resolveTodoDecision(shape),
-            reduced,
-            currentText,
-            texts,
-          });
+          if (
+            reduced.accepted ||
+            reduced.reason !== 'invalid_transition' ||
+            (pendingClarificationType && pendingClarificationType !== 'none')
+          ) {
+            return buildProfileFromTransition({
+              baseProfile,
+              shape,
+              todoDecision: resolveTodoDecision(shape),
+              reduced,
+              currentText,
+              texts,
+            });
+          }
         }
       } catch (error) {
         console.warn('[altus] clarification transition agent failed; falling back to deterministic gate', error);

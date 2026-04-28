@@ -1,4 +1,4 @@
-import { taskCreationSessionDAO, taskSessionConnectorBindingDAO } from '../db/dao';
+﻿import { taskCreationSessionDAO, taskSessionConnectorBindingDAO } from '../db/dao';
 import type { OsacMessage } from '../clients/osac-client';
 import { osacConnectionManager } from './osac-connection-manager';
 import { vercelMcpService } from './vercel-mcp-service';
@@ -84,19 +84,19 @@ export class HostedProviderHostService {
     const taskSessionId = asText(payload.taskSessionId) || inferTaskSessionId(providerId);
     const method = asText(payload.method);
     if (!providerId) {
-      throw new Error('BACKEND_MCP_RPC_REQUEST 缺少 providerId');
+      throw new Error('BACKEND_MCP_RPC_REQUEST 缂哄皯 providerId');
     }
     if (!connectorKey && !backendProvider) {
-      throw new Error('BACKEND_MCP_RPC_REQUEST 缺少 connectorKey/backendProvider');
+      throw new Error('BACKEND_MCP_RPC_REQUEST 缂哄皯 connectorKey/backendProvider');
     }
     if (!taskSessionId) {
-      throw new Error('BACKEND_MCP_RPC_REQUEST 缺少 taskSessionId');
+      throw new Error('BACKEND_MCP_RPC_REQUEST 缂哄皯 taskSessionId');
     }
     if (!method) {
-      throw new Error('BACKEND_MCP_RPC_REQUEST 缺少 method');
+      throw new Error('BACKEND_MCP_RPC_REQUEST 缂哄皯 method');
     }
     return {
-      sessionId: asText(payload.sessionId) || sessionId,
+      sessionId,
       taskSessionId,
       providerId,
       connectorKey,
@@ -111,7 +111,7 @@ export class HostedProviderHostService {
       case 'vercel':
         return this.executeVercel(input);
       default:
-        throw new Error(`不支持的 hosted provider: ${input.backendProvider || input.connectorKey}`);
+        throw new Error(`涓嶆敮鎸佺殑 hosted provider: ${input.backendProvider || input.connectorKey}`);
     }
   }
 
@@ -127,13 +127,13 @@ export class HostedProviderHostService {
       binding.runtimeProviderId !== input.providerId ||
       !profileId
     ) {
-      throw new Error('当前 task session 未挂载对应的 Vercel hosted provider');
+      throw new Error('褰撳墠 task session 鏈寕杞藉搴旂殑 Vercel hosted provider');
     }
 
     const session = await this.deps.sessionDAO.getSession(input.taskSessionId);
     const userId = asText(session?.userId);
     if (!userId) {
-      throw new Error('task session 缺少归属用户，无法执行 hosted provider');
+      throw new Error('task session 缂哄皯褰掑睘鐢ㄦ埛锛屾棤娉曟墽琛?hosted provider');
     }
 
     return this.deps.vercelService.executeRpc({

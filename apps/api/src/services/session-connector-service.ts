@@ -468,14 +468,16 @@ export class SessionConnectorService {
       };
     }
     const proxyEnv = buildSupabaseProxyEnv(connectorKey);
+    const osacTransport =
+      runtimeConfig.transport === 'streamable_http' ? 'http_stream' : runtimeConfig.transport;
     return {
       transport: {
-        type: runtimeConfig.transport,
+        type: osacTransport,
         url: runtimeConfig.url,
         headers: runtimeConfig.headers || {},
         env: proxyEnv,
       },
-      transportName: runtimeConfig.transport,
+      transportName: osacTransport,
     };
   }
 

@@ -119,9 +119,16 @@ export class AltusRunLifecycleService {
   }
 
   async markCompleted(state: AltusRunState) {
+    const existingRun = await taskSessionRunDAO.getRun(state.input.runId).catch(() => null);
+    const previousMetadata = existingRun?.metadataJson && typeof existingRun.metadataJson === 'object' && !Array.isArray(existingRun.metadataJson)
+      ? (existingRun.metadataJson as Record<string, unknown>)
+      : {};
     await taskSessionRunDAO.updateRunStatus(state.input.runId, 'completed', {
       completedAt: state.completedAt || new Date(),
       metadataJson: {
+        ...previousMetadata,
+        billingTargetKey: state.input.billingTargetKey || null,
+        runtimeSnapshot: state.input.runtimeSnapshot || null,
         deliverables: state.deliverables,
       },
     });

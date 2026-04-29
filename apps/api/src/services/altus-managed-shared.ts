@@ -161,6 +161,134 @@ export function pickObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => asText(item)).filter(Boolean);
+}
+
+function normalizeSkillGovernance(value: unknown): ManagedSkillContext['governance'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const autoActivation = pickObject(record.autoActivation);
+  return {
+    systemRole: asText(record.systemRole) || null,
+    adminManaged: Boolean(record.adminManaged),
+    required: Boolean(record.required),
+    autoActivation: {
+      enabled: Boolean(autoActivation.enabled),
+      triggers: readStringArray(autoActivation.triggers),
+      toolNames: readStringArray(autoActivation.toolNames),
+    },
+  };
+}
+
+function skillKey(value: {
+  sourceType: 'platform' | 'custom';
+  skillId: string;
+  revisionId: string;
+}) {
+  return `${value.sourceType}:${value.skillId}:${value.revisionId}`;
+}
+
+export function normalizeManagedSkillContexts(value: unknown): ManagedSkillContext[] {
+  if (!Array.isArray(value)) return [];
+  const results = new Map<string, ManagedSkillContext>();
+  for (const item of value) {
+    const record = pickObject(item);
+    const skillId = asText(record.skillId);
+    const revisionId = asText(record.revisionId);
+    const slug = asText(record.slug);
+    if (!skillId || !revisionId || !slug) continue;
+    const sourceType = asText(record.sourceType) === 'custom' ? 'custom' : 'platform';
+    const normalized: ManagedSkillContext = {
+      sourceType,
+      skillId,
+      revisionId,
+      slug,
+      name: asText(record.name) || slug,
+      description: asText(record.description),
+      category: asText(record.category) || 'general',
+      renderedMarkdown: asText(record.renderedMarkdown),
+      revisionNumber:
+        typeof record.revisionNumber === 'number' && Number.isFinite(record.revisionNumber)
+          ? Math.floor(record.revisionNumber)
+          : null,
+      resourceSummary:
+        record.resourceSummary && typeof record.resourceSummary === 'object' && !Array.isArray(record.resourceSummary)
+          ? (record.resourceSummary as ManagedSkillContext['resourceSummary'])
+          : null,
+      governance: normalizeSkillGovernance(record.governance),
+    };
+    results.set(skillKey(normalized), normalized);
+  }
+  return Array.from(results.values());
+}
+
+export function normalizeManagedSkillCatalogEntries(value: unknown): ManagedSkillCatalogEntry[] {
+  if (!Array.isArray(value)) return [];
+  const results = new Map<string, ManagedSkillCatalogEntry>();
+  for (const item of value) {
+    const record = pickObject(item);
+    const skillId = asText(record.skillId);
+    const revisionId = asText(record.revisionId);
+    const slug = asText(record.slug);
+    if (!skillId || !revisionId || !slug) continue;
+    const sourceType = asText(record.sourceType) === 'custom' ? 'custom' : 'platform';
+    const normalized: ManagedSkillCatalogEntry = {
+      sourceType,
+      skillId,
+      revisionId,
+      slug,
+      name: asText(record.name) || slug,
+      description: asText(record.description),
+      category: asText(record.category) || 'general',
+      revisionNumber:
+        typeof record.revisionNumber === 'number' && Number.isFinite(record.revisionNumber)
+          ? Math.floor(record.revisionNumber)
+          : null,
+      resourceSummary:
+        record.resourceSummary && typeof record.resourceSummary === 'object' && !Array.isArray(record.resourceSummary)
+          ? (record.resourceSummary as ManagedSkillCatalogEntry['resourceSummary'])
+          : null,
+      governance: normalizeSkillGovernance(record.governance),
+    };
+    results.set(skillKey(normalized), normalized);
+  }
+  return Array.from(results.values());
+}
+
+export function managedSkillContextToCatalogEntry(skill: ManagedSkillContext): ManagedSkillCatalogEntry {
+  return {
+    sourceType: skill.sourceType,
+    skillId: skill.skillId,
+    revisionId: skill.revisionId,
+    slug: skill.slug,
+    name: skill.name,
+    description: skill.description,
+    category: skill.category,
+    revisionNumber: skill.revisionNumber,
+    resourceSummary: skill.resourceSummary || null,
+    governance: skill.governance || null,
+  };
+}
+
+export function mergeManagedSkillCatalogEntries(
+  primary: ManagedSkillCatalogEntry[],
+  fallback: ManagedSkillCatalogEntry[]
+): ManagedSkillCatalogEntry[] {
+  const results = new Map<string, ManagedSkillCatalogEntry>();
+  for (const item of primary) {
+    results.set(skillKey(item), item);
+  }
+  for (const item of fallback) {
+    const key = skillKey(item);
+    if (!results.has(key)) {
+      results.set(key, item);
+    }
+  }
+  return Array.from(results.values());
+}
+
 export function toIso(value: unknown): string | null {
   if (!value) return null;
   if (value instanceof Date) return value.toISOString();

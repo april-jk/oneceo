@@ -57,7 +57,7 @@ test('prepareTaskSessionAnalyticsBinding reuses existing website id and rewrites
       tag: 'production',
     });
 
-    assert.equal(panel?.status, 'ready');
+    assert.equal(panel?.status, 'bound');
     assert.deepEqual(calls, [
       {
         scope: 'deployment',

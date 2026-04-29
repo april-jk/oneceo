@@ -77,6 +77,7 @@ export type UmamiWebsiteStatsRange = {
   endAt: number;
   unit?: 'hour' | 'day' | 'month' | 'year';
   timezone?: string;
+  scope?: UmamiTeamScope;
 };
 
 type JsonValue =
@@ -489,6 +490,46 @@ class UmamiAnalyticsService {
     };
   }
 
+  async getWebsite(
+    websiteId: string,
+    input?: {
+      scope?: UmamiTeamScope;
+    }
+  ): Promise<UmamiWebsiteSummary | null> {
+    const scope = input?.scope || 'deployment';
+    if (!this.isConfigured(scope)) {
+      return null;
+    }
+
+    const safeWebsiteId = asText(websiteId);
+    if (!safeWebsiteId) {
+      return null;
+    }
+
+    try {
+      const payload = await this.request<unknown>(`/api/websites/${encodeURIComponent(safeWebsiteId)}`, {
+        method: 'GET',
+      });
+      const record = asObject(unwrapPayload<unknown>(payload));
+      const id = asText(record.id) || safeWebsiteId;
+      if (!id) {
+        return null;
+      }
+      return {
+        id,
+        name: asText(record.name) || undefined,
+        domain: normalizeDomain(asText(record.domain)) || undefined,
+        teamId: asText(record.teamId) || undefined,
+      };
+    } catch (error: any) {
+      const message = asText(error?.message).toLowerCase();
+      if (message.includes('not found')) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
   async updateWebsite(
     websiteId: string,
     input: {
@@ -543,23 +584,22 @@ class UmamiAnalyticsService {
     const scope = input.scope || 'deployment';
     const normalizedDomain = normalizeDomain(input.domain);
     const safeWebsiteId = asText(input.websiteId);
-    const scopedWebsites = await this.listWebsites({ scope });
-
-    if (safeWebsiteId && scopedWebsites.some((item) => item.id === safeWebsiteId)) {
-      try {
+    if (safeWebsiteId) {
+      const existingById = await this.getWebsite(safeWebsiteId, { scope });
+      const scopeTeamId = this.getTeamId(scope);
+      if (
+        existingById?.id &&
+        (!scopeTeamId || !existingById.teamId || existingById.teamId === scopeTeamId)
+      ) {
         return await this.updateWebsite(safeWebsiteId, {
           scope,
           name: input.name,
           domain: input.domain,
         });
-      } catch (error: any) {
-        const message = asText(error?.message).toLowerCase();
-        if (!message.includes('not found')) {
-          throw error;
-        }
       }
     }
 
+    const scopedWebsites = await this.listWebsites({ scope });
     const matchedInScope = scopedWebsites.find(
       (item) => normalizeDomain(item.domain || '') === normalizedDomain
     );
@@ -662,7 +702,7 @@ class UmamiAnalyticsService {
   }
 
   async getWebsiteStats(websiteId: string, range: UmamiWebsiteStatsRange): Promise<UmamiWebsiteStats | null> {
-    if (!this.isConfigured('platform')) {
+    if (!this.isConfigured(range.scope || 'platform')) {
       return null;
     }
 
@@ -685,7 +725,7 @@ class UmamiAnalyticsService {
   }
 
   async getWebsitePageviews(websiteId: string, range: UmamiWebsiteStatsRange): Promise<UmamiWebsitePageviews | null> {
-    if (!this.isConfigured('platform')) {
+    if (!this.isConfigured(range.scope || 'platform')) {
       return null;
     }
 
@@ -728,7 +768,7 @@ class UmamiAnalyticsService {
     websiteId: string,
     range: UmamiWebsiteStatsRange & { type: UmamiMetricType; limit?: number; expanded?: boolean }
   ): Promise<UmamiWebsiteMetric[] | UmamiWebsiteExpandedMetric[]> {
-    if (!this.isConfigured('platform')) {
+    if (!this.isConfigured(range.scope || 'platform')) {
       return [];
     }
 

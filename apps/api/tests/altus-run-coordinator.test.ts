@@ -507,6 +507,24 @@ test('deployment status evidence only unlocks completion after non-transient suc
     }),
     true
   );
+  assert.equal(
+    (coordinator as any).isManagedDeploymentEvidenceSuccessful(intent, {
+      toolName: 'get_application_deployment_status',
+      status: 'success',
+      deploymentStatus: 'failed',
+      summary: 'deployment failed',
+    }),
+    false
+  );
+  assert.equal(
+    (coordinator as any).isManagedDeploymentEvidenceSuccessful(intent, {
+      toolName: 'deploy_application',
+      status: 'success',
+      deploymentStatus: 'failed',
+      summary: 'deployment failed',
+    }),
+    false
+  );
 });
 
 test('getMaxToolRounds allows larger website-generation budgets while keeping a hard ceiling', () => {
@@ -1211,6 +1229,9 @@ test('execute blocks deployment completion until managed deployment succeeds', a
             summary: '发布完成',
             deploymentStatus: 'SUCCESS',
             url: 'https://example.up.railway.app',
+            deploymentFlow: {
+              state: 'succeeded',
+            },
           }),
         };
       }
@@ -1271,7 +1292,120 @@ test('execute blocks deployment completion until managed deployment succeeds', a
   });
   assert.match(String(deployCompleted?.payload.internalView?.detail || ''), /工具: deploy_application/);
   assert.match(String(deployCompleted?.payload.internalView?.detail || ''), /deploymentStatus: SUCCESS/);
+  assert.match(String(deployCompleted?.payload.internalView?.detail || ''), /deploymentFlowState: succeeded/);
   assert.match(String(deployCompleted?.payload.internalView?.detail || ''), /url: https:\/\/example\.up\.railway\.app/);
+});
+
+test('execute blocks deployment completion when deployment tool success lacks succeeded reducer state', async () => {
+  const state = createState(
+    'run-coordinator-deployment-reducer-guard',
+    'session-coordinator-deployment-reducer-guard',
+    '帮我部署当前项目'
+  );
+  state.input.taskIntentProfile = {
+    mode: 'deployable_web_app',
+    reason: 'latest_deployable_request',
+    recentUserMessages: ['帮我部署当前项目'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: false,
+    deployRequested: true,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: true,
+  };
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-deployment-reducer-guard',
+      workspaceRoot: '/workspace/session-coordinator-deployment-reducer-guard',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => undefined),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return { sequence: eventCalls.length, payload };
+    }),
+  };
+  const lifecycleService = {
+    markRunning: mock.fn(async () => lifecycleCalls.push('running')),
+    markWaitingUser: mock.fn(async () => lifecycleCalls.push('waiting_user')),
+    markCompleted: mock.fn(async () => lifecycleCalls.push('completed')),
+    markFailed: mock.fn(async () => lifecycleCalls.push('failed')),
+    markStopped: mock.fn(async () => lifecycleCalls.push('stopped')),
+  };
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '', tool_calls: [{ id: 'tool-deploy-1', type: 'function', function: { name: 'deploy_application', arguments: JSON.stringify({}) } }] } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (fetchCount === 2) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '', tool_calls: [{ id: 'tool-complete-after-deploy', type: 'function', function: { name: 'complete_task', arguments: JSON.stringify({ summary: '应用已完成线上发布。' }) } }] } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (fetchCount === 3) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '', tool_calls: [{ id: 'tool-deploy-2', type: 'function', function: { name: 'deploy_application', arguments: JSON.stringify({}) } }] } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: '', tool_calls: [{ id: 'tool-complete-after-deploy', type: 'function', function: { name: 'complete_task', arguments: JSON.stringify({ summary: '应用已完成线上发布。' }) } }] } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+
+  let deployCallCount = 0;
+  mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'deploy_application') {
+      deployCallCount += 1;
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({
+          status: 'success',
+          summary: deployCallCount === 1 ? '发布工具返回成功但 reducer 尚未验证公网访问' : '发布完成',
+          deploymentStatus: 'SUCCESS',
+          url: 'https://example.up.railway.app',
+          deploymentFlow: {
+            state: deployCallCount === 1 ? 'verifying_public_access' : 'succeeded',
+          },
+        }),
+      };
+    }
+    return {
+      type: 'complete' as const,
+      summary: '应用已完成线上发布。',
+    };
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+  const blockedComplete = eventCalls.find(
+    (entry) => entry.eventType === 'tool_call_failed' && entry.payload.toolName === 'complete_task'
+  );
+  assert.ok(blockedComplete);
+  assert.equal(
+    blockedComplete.payload.error,
+    '线上部署尚未完成，Altus 将继续修复并重试发布。'
+  );
+  assert.equal(deployCallCount, 2);
 });
 
 test('execute emits deliverables_ready before final assistant message when complete_task returns attachments', async () => {

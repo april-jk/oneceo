@@ -227,7 +227,7 @@ export async function collectNekoDebugDiagnostics(sandboxId: string): Promise<{
         'echo "__LOG__"',
         'tail -n 200 /tmp/neko.log 2>/dev/null || true',
         'echo "__PORTS__"',
-        'ss -ltnup | grep -E "8081|8082|18080" || true',
+        'ss -ltnup | grep -E "8081|8082|8083|18080" || true',
       ].join('\n'),
       { timeoutMs: 30000 }
     );
@@ -292,7 +292,7 @@ export async function ensureNekoDebug(
   const webrtcEpr = webrtcEprDisabled ? '' : webrtcEprRaw;
   const forceMux = toBoolean(process.env.NEKO_WEBRTC_FORCE_MUX, true);
   const tcpMuxCandidate = toPositiveInt(process.env.NEKO_WEBRTC_TCPMUX, 8082);
-  const udpMuxCandidate = toPositiveInt(process.env.NEKO_WEBRTC_UDPMUX, 0);
+  const udpMuxCandidate = toPositiveInt(process.env.NEKO_WEBRTC_UDPMUX, 8083);
   const useMux = forceMux || !webrtcEpr;
   const tcpMuxPort = useMux ? tcpMuxCandidate : 0;
   const udpMuxPort = useMux ? udpMuxCandidate : 0;

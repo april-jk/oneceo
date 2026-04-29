@@ -51,6 +51,30 @@ test('ensureDeploymentTemplateBootstrap injects disabled default config for insp
   });
 });
 
+test('ensureDeploymentTemplateBootstrap replaces stale analytics bootstrap config', async () => {
+  const staleHtml = `<html><body><main>demo</main>
+<!-- ONECEO_ANALYTICS:START -->
+<script>window.__ONECEO_ANALYTICS__ = Object.freeze({"enabled":true,"host":"https://analytics.oneceo.ai","websiteId":"stale_site"});</script>
+<!-- ONECEO_ANALYTICS:END -->
+</body></html>`;
+
+  await withTempHtml(staleHtml, async (dir, htmlPath) => {
+    const report = await ensureDeploymentTemplateBootstrap(dir, {
+      analyticsConfig: {
+        enabled: true,
+        host: 'https://analytics.oneceo.ai',
+        websiteId: 'fresh_site',
+        tag: 'production',
+      },
+    });
+
+    const output = await readFile(htmlPath, 'utf-8');
+    assert.equal(report.analyticsInjected, true);
+    assert.match(output, /fresh_site/);
+    assert.doesNotMatch(output, /stale_site/);
+  });
+});
+
 test('ensureDeploymentTemplateBootstrap injects analytics bootstrap into server-rendered EJS layout when no html entry exists', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'oneceo-bootstrap-ejs-test-'));
   const layoutPath = join(dir, 'views/layouts/main.ejs');
@@ -75,6 +99,35 @@ test('ensureDeploymentTemplateBootstrap injects analytics bootstrap into server-
     assert.equal(report.analyticsTargetPath, layoutPath);
     assert.match(output, /ONECEO_ANALYTICS:START/);
     assert.match(output, /site_ejs_123/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('ensureDeploymentTemplateBootstrap injects analytics bootstrap into jinja2 template entry', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'oneceo-bootstrap-jinja2-test-'));
+  const templatePath = join(dir, 'templates/base.jinja2');
+  try {
+    await mkdir(join(dir, 'templates'), { recursive: true });
+    await writeFile(
+      templatePath,
+      '<!doctype html><html><head><title>{{ title }}</title></head><body>{% block content %}{% endblock %}</body></html>',
+      'utf-8'
+    );
+
+    const report = await ensureDeploymentTemplateBootstrap(dir, {
+      analyticsConfig: {
+        enabled: true,
+        host: 'https://analytics.oneceo.ai',
+        websiteId: 'site_jinja2_123',
+      },
+    });
+
+    const output = await readFile(templatePath, 'utf-8');
+    assert.equal(report.analyticsInjected, true);
+    assert.equal(report.analyticsTargetPath, templatePath);
+    assert.match(output, /ONECEO_ANALYTICS:START/);
+    assert.match(output, /site_jinja2_123/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

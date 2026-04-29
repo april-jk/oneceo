@@ -1015,12 +1015,14 @@ export async function triggerRailwayRedeploy(
   if (!targetId) {
     throw new Error('缺少 deploymentId');
   }
-  const result = await executeRailwayGraphql<{ deploymentRedeploy?: string | null }>(
+  const result = await executeRailwayGraphql<{ deploymentRedeploy?: { id?: string | null } | null }>(
     binding.token,
     binding.tokenKind,
     `
       mutation RailwayRedeploy($id: String!) {
-        deploymentRedeploy(id: $id)
+        deploymentRedeploy(id: $id) {
+          id
+        }
       }
     `,
     { id: targetId }
@@ -1028,7 +1030,7 @@ export async function triggerRailwayRedeploy(
 
   return {
     action: 'redeploy',
-    deploymentId: asText(result.deploymentRedeploy) || targetId,
+    deploymentId: asText(result.deploymentRedeploy?.id) || targetId,
   };
 }
 
@@ -1041,12 +1043,14 @@ export async function triggerRailwayRollback(
   if (!targetId) {
     throw new Error('缺少 deploymentId');
   }
-  const result = await executeRailwayGraphql<{ deploymentRollback?: string | null }>(
+  const result = await executeRailwayGraphql<{ deploymentRollback?: { id?: string | null } | null }>(
     binding.token,
     binding.tokenKind,
     `
       mutation RailwayRollback($id: String!) {
-        deploymentRollback(id: $id)
+        deploymentRollback(id: $id) {
+          id
+        }
       }
     `,
     { id: targetId }
@@ -1054,6 +1058,6 @@ export async function triggerRailwayRollback(
 
   return {
     action: 'rollback',
-    deploymentId: asText(result.deploymentRollback) || targetId,
+    deploymentId: asText(result.deploymentRollback?.id) || targetId,
   };
 }

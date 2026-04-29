@@ -428,25 +428,22 @@ export class AltusRunCoordinator {
   /**
    * 计费：根据模型调用估算并扣减积分
    */
-  private async chargeForModelCall(state: AltusRunState, input: {
+private async chargeForModelCall(state: AltusRunState, input: {
     messages: ChatMessage[];
     assistant: { content?: string | null; tool_calls?: ToolCall[]; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens?: number; cache_creation_input_tokens?: number }; cached_tokens?: number; cache_creation_input_tokens?: number } };
     model: string;
   }) {
+    const userId = state.input.userId;
+    const sessionId = state.input.sessionId;
+    const runId = state.input.runId;
+    let promptTokens: number;
+    let completionTokens: number;
+    let cachedPromptTokens = 0;
+    let cacheCreationTokens = 0;
+    let billingTargetKey = '';
+    let creditsConsumed = 0;
+
     try {
-      const userId = state.input.userId;
-      const sessionId = state.input.sessionId;
-      const runId = state.input.runId;
-
-      if (!userId) {
-        console.warn('[Billing] 无法计费：缺少 userId');
-        return;
-      }
-
-      let promptTokens: number;
-      let completionTokens: number;
-      let cachedPromptTokens = 0;
-      let cacheCreationTokens = 0;
 
       const usage = input.assistant?.usage;
       if (usage && typeof usage.prompt_tokens === 'number' && typeof usage.completion_tokens === 'number') {
@@ -454,6 +451,17 @@ export class AltusRunCoordinator {
         completionTokens = usage.completion_tokens;
         cachedPromptTokens = this.readUsageNumber(usage.prompt_tokens_details?.cached_tokens) || this.readUsageNumber(usage.cached_tokens) || 0;
         cacheCreationTokens = this.readUsageNumber(usage.prompt_tokens_details?.cache_creation_input_tokens) || this.readUsageNumber(usage.cache_creation_input_tokens) || 0;
+
+        // 负数归零保护
+        cachedPromptTokens = Math.max(0, cachedPromptTokens);
+        cacheCreationTokens = Math.max(0, cacheCreationTokens);
+
+        // 缓存 token 总和不超过 promptTokens
+        if (cachedPromptTokens + cacheCreationTokens > promptTokens) {
+          const ratio = promptTokens / (cachedPromptTokens + cacheCreationTokens);
+          cachedPromptTokens = Math.floor(cachedPromptTokens * ratio);
+          cacheCreationTokens = Math.floor(cacheCreationTokens * ratio);
+        }
       } else {
         // 无真实 usage 时回退到字符估算（每 4 字符 ≈ 1 token）
         const promptText = JSON.stringify(input.messages);
@@ -464,7 +472,7 @@ export class AltusRunCoordinator {
 
       const nonCachedPromptTokens = Math.max(0, promptTokens - cachedPromptTokens - cacheCreationTokens);
 
-      const billingTargetKey = state.input.billingTargetKey || input.model;
+      billingTargetKey = state.input.billingTargetKey || input.model;
       // 获取定价：Agent managed run 按业务 SKU 查价，token 日志保留实际模型。
       const pricing = await pricingService.getActivePricing(billingTargetKey);
       if (!pricing) {
@@ -479,7 +487,7 @@ export class AltusRunCoordinator {
       };
 
       // 计算积分消耗（含缓存）
-      const creditsConsumed = pricingService.calculateCredits(
+      creditsConsumed = pricingService.calculateCredits(
         {
           promptTokens,
           cachedPromptTokens,
@@ -537,8 +545,50 @@ export class AltusRunCoordinator {
       if (error instanceof Error && error.message.startsWith('billing_pricing_missing:')) {
         throw error;
       }
-      console.error('[Billing] 计费失败:', error);
-      // 非余额不足的计费失败不影响主流程
+      console.error('[Billing] 计费失败，准备重试:', error);
+      // 非余额不足的计费失败——尝试重试一次（可能是临时 DB 连接问题）
+      // 仅在已计算出扣费金额时才重试（变量在 try 块内声明，可能尚未赋值）
+      if (typeof creditsConsumed === 'number' && billingTargetKey) {
+        try {
+          const retryResult = await billingService.deductCredits(userId, creditsConsumed, {
+            sessionId,
+            runId,
+            model: billingTargetKey,
+            description: `Managed Run 调用(重试): ${billingTargetKey}`,
+            metadataJson: {
+              billingTarget: billingTargetKey,
+              actualModel: input.model,
+              runtimeSnapshot: state.input.runtimeSnapshot || null,
+              retryReason: error instanceof Error ? error.message : String(error),
+            },
+          });
+          if (retryResult.success) {
+            console.info('[Billing] 计费重试成功');
+          } else {
+            console.error('[Billing] 计费重试返回余额不足，用户可能漏费:', {
+              userId,
+              creditsConsumed,
+              model: billingTargetKey,
+              sessionId: state.input.sessionId,
+            });
+          }
+        } catch (retryError) {
+          // 重试也失败，记录到异常日志但不终止主流程
+          console.error('[Billing] 计费重试也失败，用户可能漏费:', {
+            userId,
+            creditsConsumed,
+            model: billingTargetKey,
+            sessionId: state.input.sessionId,
+            originalError: error instanceof Error ? error.message : String(error),
+            retryError: retryError instanceof Error ? retryError.message : String(retryError),
+          });
+        }
+      } else {
+        console.error('[Billing] 计费失败且无法重试（扣费参数尚未计算完成）:', {
+          userId,
+          originalError: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
 

@@ -145,6 +145,8 @@ async function findTemplateFiles(
     join(sourceDir, 'app/templates'),
     join(sourceDir, 'views'),
     join(sourceDir, 'app/views'),
+    join(sourceDir, 'src/main/resources/templates'),
+    join(sourceDir, 'src/main/resources/static'),
   ];
   const results: string[] = [];
   const seen = new Set<string>();
@@ -221,10 +223,13 @@ async function inferHealthcheckPath(sourceDir: string): Promise<string> {
   const candidates = [
     join(sourceDir, 'server.ts'),
     join(sourceDir, 'server.js'),
+    join(sourceDir, 'server.cjs'),
     join(sourceDir, 'server/index.ts'),
     join(sourceDir, 'server/index.js'),
+    join(sourceDir, 'server/index.cjs'),
     join(sourceDir, 'src/server/index.ts'),
     join(sourceDir, 'src/server/index.js'),
+    join(sourceDir, 'src/server/index.cjs'),
   ];
   const contents = await Promise.all(candidates.map((file) => readTextIfExists(file)));
   for (const content of contents) {
@@ -254,6 +259,19 @@ function looksLikePhpManifest(manifest: OneCeoDeploymentManifest): boolean {
   );
 }
 
+function looksLikeJavaManifest(manifest: OneCeoDeploymentManifest): boolean {
+  const stack = asText(manifest.stack).toLowerCase();
+  const framework = asText(manifest.runtime.framework).toLowerCase();
+  const startCommand = asText(manifest.start.command).toLowerCase();
+  return (
+    stack.includes('java') ||
+    stack.includes('spring') ||
+    framework.includes('java') ||
+    framework.includes('spring') ||
+    startCommand.includes('java -jar')
+  );
+}
+
 async function detectBrokenEjsLayoutBodyUsage(
   sourceDir: string,
   packageJson: Record<string, unknown> | null
@@ -279,10 +297,13 @@ async function detectBrokenEjsLayoutBodyUsage(
   const serverCandidates = [
     join(sourceDir, 'server.ts'),
     join(sourceDir, 'server.js'),
+    join(sourceDir, 'server.cjs'),
     join(sourceDir, 'server/index.ts'),
     join(sourceDir, 'server/index.js'),
+    join(sourceDir, 'server/index.cjs'),
     join(sourceDir, 'src/server/index.ts'),
     join(sourceDir, 'src/server/index.js'),
+    join(sourceDir, 'src/server/index.cjs'),
     join(sourceDir, 'src/index.ts'),
     join(sourceDir, 'src/index.js'),
     join(sourceDir, 'app.ts'),
@@ -383,7 +404,7 @@ function normalizeManifest(
 }
 
 async function detectAnalyticsEntry(sourceDir: string): Promise<boolean> {
-  const templateCandidates = await findTemplateFiles(sourceDir, ['.html', '.ejs', '.jinja', '.j2']);
+  const templateCandidates = await findTemplateFiles(sourceDir, ['.html', '.ejs', '.jinja', '.jinja2', '.j2']);
   const candidates = [
     join(sourceDir, 'client/src/main.tsx'),
     join(sourceDir, 'client/src/main.ts'),
@@ -465,6 +486,10 @@ export async function ensureTemplateCompliance(sourceDir: string): Promise<Templ
   ) {
     manifest.healthcheck.path = '/';
     warnings.push('检测到 PHP 站点入口且未提供显式健康检查路由，已将 manifest 健康检查标准化为 /');
+  }
+  if (looksLikeJavaManifest(manifest) && manifest.healthcheck.path !== '/') {
+    manifest.healthcheck.path = '/';
+    warnings.push('检测到 Java/Spring Boot 站点，已将 Railway 健康检查标准化为 /，避免框架控制器注解差异阻断上线');
   }
 
   const scripts = asObject(packageJson?.scripts);

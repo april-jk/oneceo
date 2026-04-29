@@ -64,6 +64,11 @@ const DEPLOYMENT_PENDING_STATUSES = new Set([
   'pending',
   'provisioning',
 ]);
+const DEPLOYMENT_FAILED_STATUSES = new Set([
+  'failed',
+  'crashed',
+  'removed',
+]);
 
 type DeploymentCompletionIntent = {
   mode: 'none' | 'deploy' | 'redeploy' | 'rollback';
@@ -75,6 +80,7 @@ type DeploymentCompletionEvidence = {
   toolName: string;
   status: string;
   deploymentStatus: string;
+  deploymentFlowState: string;
   summary: string;
 };
 
@@ -812,6 +818,7 @@ export class AltusRunCoordinator {
         toolName: asText(parsed.toolName),
         status: asText(parsed.status).toLowerCase(),
         deploymentStatus: asText(parsed.deploymentStatus).toLowerCase(),
+        deploymentFlowState: asText((parsed.deploymentFlow as Record<string, unknown> | undefined)?.state).toLowerCase(),
         summary: asText(parsed.summary),
       };
     } catch {
@@ -832,6 +839,12 @@ export class AltusRunCoordinator {
     if (evidence.status !== 'success') {
       return false;
     }
+    if (evidence.deploymentFlowState && evidence.deploymentFlowState !== 'succeeded') {
+      return false;
+    }
+    if (DEPLOYMENT_FAILED_STATUSES.has(evidence.deploymentStatus)) {
+      return false;
+    }
     if (evidence.toolName !== 'get_application_deployment_status') {
       return true;
     }
@@ -845,6 +858,7 @@ export class AltusRunCoordinator {
     const lastTool = evidence?.toolName || 'none';
     const lastStatus = evidence?.status || 'unknown';
     const lastDeploymentStatus = evidence?.deploymentStatus || 'unknown';
+    const lastDeploymentFlowState = evidence?.deploymentFlowState || 'unknown';
     const mode = intent.mode || 'deploy';
     return [
       DEPLOYMENT_COMPLETION_BLOCKED_PREFIX,
@@ -853,6 +867,7 @@ export class AltusRunCoordinator {
       `last_tool=${lastTool}`,
       `last_status=${lastStatus}`,
       `last_deployment_status=${lastDeploymentStatus}`,
+      `last_deployment_flow_state=${lastDeploymentFlowState}`,
       'do_not_treat_debug_open_page_or_local_server_as_deploy_success',
       'repair_and_call_the_managed_deployment_tool_again',
     ].join(' ');
@@ -877,6 +892,12 @@ export class AltusRunCoordinator {
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       const repair = parsed.repair && typeof parsed.repair === 'object' ? (parsed.repair as Record<string, unknown>) : {};
       const debug = parsed.debug && typeof parsed.debug === 'object' ? (parsed.debug as Record<string, unknown>) : {};
+      const deploymentFlow = parsed.deploymentFlow && typeof parsed.deploymentFlow === 'object'
+        ? (parsed.deploymentFlow as Record<string, unknown>)
+        : {};
+      const projectProfile = parsed.projectProfile && typeof parsed.projectProfile === 'object'
+        ? (parsed.projectProfile as Record<string, unknown>)
+        : {};
       const summary = asText(parsed.summary);
       const status = asText(parsed.status);
       const phase = asText(parsed.phase);
@@ -898,7 +919,9 @@ export class AltusRunCoordinator {
       if (summary) publicLines.push(summary);
       if (status === 'retryable_repair_required') {
         publicLines.push(
-          repairCategory === 'resource_binding'
+          repairCategory === 'deployment_failed'
+            ? '线上部署尚未成功，Altus 正在根据部署状态和公网访问结果修复后重试。'
+            : repairCategory === 'resource_binding'
             ? 'Altus 正在优先修复平台部署资源绑定，并将在资源恢复后重试发布。'
             : 'Altus 正在按平台部署基线自动修复后重试。'
         );
@@ -912,7 +935,9 @@ export class AltusRunCoordinator {
       const publicPreview = url
         ? `访问地址 ${url}`
         : status === 'retryable_repair_required'
-          ? repairCategory === 'resource_binding'
+          ? repairCategory === 'deployment_failed'
+            ? '线上部署未成功，Altus 正在修复后重试。'
+            : repairCategory === 'resource_binding'
             ? '已识别到平台部署资源问题，Altus 正在修复绑定后重试。'
             : '已识别到发布配置问题，Altus 正在自动修复后重试。'
           : summary || this.buildToolEventContent(toolName, 'completed');
@@ -924,6 +949,9 @@ export class AltusRunCoordinator {
       if (deploymentStatus) internalLines.push(`deploymentStatus: ${deploymentStatus}`);
       if (url) internalLines.push(`url: ${url}`);
       if (deploymentId) internalLines.push(`deploymentId: ${deploymentId}`);
+      if (asText(deploymentFlow.state)) internalLines.push(`deploymentFlowState: ${asText(deploymentFlow.state)}`);
+      if (asText(projectProfile.runtimeFamily)) internalLines.push(`runtimeFamily: ${asText(projectProfile.runtimeFamily)}`);
+      if (asText(projectProfile.deployability)) internalLines.push(`deployability: ${asText(projectProfile.deployability)}`);
       if (repairCategory) internalLines.push(`repairCategory: ${repairCategory}`);
       if (repairChecks.length > 0) internalLines.push(`repairChecks: ${repairChecks.join(', ')}`);
       if (suggestedActions.length > 0) internalLines.push(`suggestedActions: ${suggestedActions.join(' | ')}`);

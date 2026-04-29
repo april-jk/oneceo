@@ -16,6 +16,12 @@ export const DEPLOYMENT_TEMPLATE_HTML_ENTRY_RELATIVE_PATHS = [
   'app/templates/layout.html',
   'app/templates/main.html',
   'app/templates/home.html',
+  'src/main/resources/templates/index.html',
+  'src/main/resources/templates/base.html',
+  'src/main/resources/templates/layout.html',
+  'src/main/resources/templates/main.html',
+  'src/main/resources/templates/home.html',
+  'src/main/resources/static/index.html',
 ] as const;
 
 export const DEPLOYMENT_TEMPLATE_SERVER_RENDERED_ENTRY_RELATIVE_PATHS = [
@@ -31,9 +37,15 @@ export const DEPLOYMENT_TEMPLATE_SERVER_RENDERED_ENTRY_RELATIVE_PATHS = [
   'app/views/home.ejs',
 ] as const;
 
+export const DEPLOYMENT_TEMPLATE_PHP_ENTRY_RELATIVE_PATHS = [
+  'index.php',
+  'public/index.php',
+] as const;
+
 export const DEPLOYMENT_TEMPLATE_ANALYTICS_ENTRY_RELATIVE_PATHS = [
   ...DEPLOYMENT_TEMPLATE_HTML_ENTRY_RELATIVE_PATHS,
   ...DEPLOYMENT_TEMPLATE_SERVER_RENDERED_ENTRY_RELATIVE_PATHS,
+  ...DEPLOYMENT_TEMPLATE_PHP_ENTRY_RELATIVE_PATHS,
   'public/index.html',
 ] as const;
 
@@ -71,9 +83,11 @@ const TEMPLATE_SCAN_DIRECTORY_RELATIVE_PATHS = [
   'app/templates',
   'views',
   'app/views',
+  'src/main/resources/templates',
+  'src/main/resources/static',
 ] as const;
 
-const TEMPLATE_SCAN_FILE_SUFFIXES = ['.html', '.ejs', '.jinja', '.j2'] as const;
+const TEMPLATE_SCAN_FILE_SUFFIXES = ['.html', '.ejs', '.jinja', '.jinja2', '.j2'] as const;
 
 function normalizeRelativePath(path: string): string {
   return path.replace(/\\/g, '/');
@@ -81,6 +95,7 @@ function normalizeRelativePath(path: string): string {
 
 function rankTemplateCandidate(path: string): number {
   const fileName = basename(path).toLowerCase();
+  if (fileName === 'index.php') return 0;
   if (fileName === 'base.html' || fileName === 'layout.html' || fileName === 'main.ejs') return 0;
   if (fileName.startsWith('layout.') || fileName.startsWith('base.') || fileName.startsWith('main.'))
     return 1;
@@ -160,7 +175,10 @@ async function injectAnalyticsBootstrapIntoPath(
   analyticsConfig?: DeploymentTemplateAnalyticsConfig
 ): Promise<boolean> {
   const html = await readFile(path, 'utf-8');
-  const nextHtml = injectBeforeBodyClose(html, buildAnalyticsBootstrapSnippet(analyticsConfig));
+  const allowAppend = !path.toLowerCase().endsWith('.php');
+  const nextHtml = injectBeforeBodyClose(html, buildAnalyticsBootstrapSnippet(analyticsConfig), {
+    allowAppend,
+  });
   if (!nextHtml) {
     throw new Error(`HTML 入口 ${asText(path)} 内容异常，无法注入 analytics bootstrap`);
   }
@@ -195,7 +213,6 @@ window.__ONECEO_ANALYTICS__ = Object.freeze(${JSON.stringify(runtimeConfig)});
   var endpoint = readValue(config.host) || readValue(config.endpoint);
   var websiteId = readValue(config.websiteId);
   var tag = readValue(config.tag);
-  var domain = readValue(config.publicDomain);
   if (!endpoint || !websiteId) return;
   endpoint = endpoint.replace(/\\/+$/, '');
   if (window.location.protocol === 'https:' && endpoint.indexOf('https://') !== 0) return;
@@ -207,16 +224,27 @@ window.__ONECEO_ANALYTICS__ = Object.freeze(${JSON.stringify(runtimeConfig)});
   script.setAttribute('data-host-url', endpoint);
   script.setAttribute('data-oneceo-analytics', 'runtime');
   if (tag) script.setAttribute('data-tag', tag);
-  if (domain) script.setAttribute('data-domains', domain);
   document.body.appendChild(script);
 })();
 </script>
 ${ANALYTICS_BOOTSTRAP_MARKER_END}`;
 }
 
-function injectBeforeBodyClose(html: string, snippet: string): string | null {
-  if (html.includes(ANALYTICS_BOOTSTRAP_MARKER_START)) {
-    return html;
+function injectBeforeBodyClose(
+  html: string,
+  snippet: string,
+  options?: {
+    allowAppend?: boolean;
+  }
+): string | null {
+  const markerStartIndex = html.indexOf(ANALYTICS_BOOTSTRAP_MARKER_START);
+  if (markerStartIndex >= 0) {
+    const markerEndIndex = html.indexOf(ANALYTICS_BOOTSTRAP_MARKER_END, markerStartIndex);
+    if (markerEndIndex < 0) {
+      return null;
+    }
+    const replaceEndIndex = markerEndIndex + ANALYTICS_BOOTSTRAP_MARKER_END.length;
+    return `${html.slice(0, markerStartIndex)}${snippet}${html.slice(replaceEndIndex)}`;
   }
   const bodyCloseIndex = html.lastIndexOf('</body>');
   if (bodyCloseIndex >= 0) {
@@ -226,7 +254,7 @@ function injectBeforeBodyClose(html: string, snippet: string): string | null {
   if (htmlCloseIndex >= 0) {
     return `${html.slice(0, htmlCloseIndex)}${snippet}\n${html.slice(htmlCloseIndex)}`;
   }
-  if (html.trim()) {
+  if (options?.allowAppend !== false && html.trim()) {
     return `${html}\n${snippet}\n`;
   }
   return null;

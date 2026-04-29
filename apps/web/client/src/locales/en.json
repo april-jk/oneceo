@@ -728,28 +728,20 @@
         }
       },
       "notion": {
-        "intro": "The Notion connector only keeps the OAuth path. After OAuth completes, the actual accessible content still depends on whether the target page or database has been shared with the integration.",
+        "intro": "The Notion connector uses Composio managed authorization and MCP tool calls. oneceo keeps broker data on the API server only, without sending tokens or MCP headers into the sandbox.",
         "steps": {
-          "0": "Connect and complete Notion OAuth, then confirm you are using the correct workspace.",
-          "1": "Go back to Notion and share the target page or database with the integration via Add connections.",
-          "2": "Return to oneceo and use Notion MCP. If authorization happens in the session, the system mounts the result automatically."
+          "0": "Click connect and finish workspace authorization on the Composio/Notion authorization page.",
+          "1": "After returning to oneceo, the system saves the Notion profile and mounts it to the current session when needed.",
+          "2": "Session tool calls go through the API broker to Composio MCP; the sandbox receives no Notion or Composio credentials."
         },
         "tips": {
-          "0": "A successful connection does not mean the content is accessible. If the page is not shared, the content is still unavailable after authorization.",
-          "1": "If you switch workspaces, integration permissions, or sharing scope, reconnect and re-check the page sharing relationship."
+          "0": "Legacy direct Notion OAuth profiles must be reconnected through Composio.",
+          "1": "Reconnect Notion when switching workspaces or authorization scope."
         },
         "links": {
-          "integrations": {
-            "label": "My Integrations",
-            "description": "Review the Notion integration and workspace binding"
-          },
-          "authorization": {
-            "label": "Notion authorization docs",
-            "description": "Review the Notion OAuth authorization guide"
-          },
-          "mcpDocs": {
-            "label": "Notion MCP docs",
-            "description": "Review Notion MCP capabilities and integration guidance"
+          "composioToolkit": {
+            "label": "Composio Notion MCP",
+            "description": "Review the Composio managed Notion MCP toolkit"
           }
         }
       },
@@ -772,20 +764,20 @@
         }
       },
       "figma": {
-        "intro": "The Figma connector configures its access token outside the sandbox. The sandbox directly reuses the credential to access Figma capabilities.",
+        "intro": "The Figma connector uses Composio managed authorization and exposes Figma capabilities through oneceo API-brokered MCP tools. Personal Access Tokens are not accepted.",
         "steps": {
-          "0": "Create a Personal Access Token on the Figma developer page.",
-          "1": "Copy the token and save it in the connector configuration page.",
-          "2": "The sandbox uses the token directly, so no repeated authorization is required."
+          "0": "Click connect and finish the Composio/Figma authorization flow.",
+          "1": "After authorization, attach Figma to the current session or keep it as a reusable profile.",
+          "2": "The sandbox receives only brokered MCP tools; it never receives a Figma token."
         },
         "tips": {
-          "0": "If a token is leaked, revoke it immediately and create a new one.",
-          "1": "Leaving the secret empty does not overwrite the current configuration."
+          "0": "Do not paste Figma tokens into the chat, connector form, shell, or sandbox files.",
+          "1": "Reconnect through Composio if the Figma account or workspace access changes."
         },
         "links": {
-          "tokens": {
-            "label": "Figma Personal Access Tokens",
-            "description": "Create or manage tokens"
+          "composioToolkit": {
+            "label": "Composio Figma Toolkit",
+            "description": "Review the Composio-managed Figma toolkit"
           }
         }
       },
@@ -808,6 +800,22 @@
           "restApi": {
             "label": "Vercel REST API",
             "description": "Review project, deployment, domain, and env-var endpoints"
+          }
+        }
+      },
+      "google_cloud": {
+        "intro": "The Google Cloud connector uses Composio managed OAuth. Click connect to authorize externally; oneceo keeps the MCP URL and headers on the API server only.",
+        "steps": {
+          "0": "Click connect and finish the Composio Google Cloud authorization flow.",
+          "1": "After returning to oneceo, the system saves the default connection and mounts it to the current session when needed."
+        },
+        "tips": {
+          "0": "No Google token, Composio API key, or MCP header is sent into the sandbox."
+        },
+        "links": {
+          "composioDocs": {
+            "label": "Composio Tool Router",
+            "description": "Review the OAuth link session API used by this connector"
           }
         }
       },

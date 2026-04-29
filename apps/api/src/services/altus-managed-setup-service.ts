@@ -23,6 +23,15 @@ import { isSameUserId } from '../utils/user-id';
 const INLINE_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const INLINE_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 const INLINE_IMAGE_MAX_COUNT = 4;
+const COMPOSIO_BROKERED_RUNTIME_TRANSPORT = 'api_brokered_mcp';
+const COMPOSIO_BROKERED_CONNECTORS = new Set(['notion', 'figma']);
+
+function isSnapshotRuntimeTransportSupported(binding: { connectorKey?: unknown; runtimeTransport?: unknown }) {
+  if (!COMPOSIO_BROKERED_CONNECTORS.has(asText(binding.connectorKey))) {
+    return true;
+  }
+  return asText(binding.runtimeTransport) === COMPOSIO_BROKERED_RUNTIME_TRANSPORT;
+}
 
 function normalizeHistoryRole(role: unknown): 'system' | 'user' | 'assistant' | null {
   const normalized = asText(role).toLowerCase();
@@ -199,11 +208,13 @@ export class AltusManagedSetupService {
   }
 
   async captureConnectorSnapshot(sessionId: string, userId: string) {
+    await sessionConnectorService.waitForAttachIdle(sessionId).catch(() => false);
     const memory = await taskCreationFileMemoryStore.getSession(sessionId).catch(() => null);
     const orchestratorSessionId = asText(memory?.runtime?.orchestratorSessionId);
     if (orchestratorSessionId) {
       await sessionMcpRecoveryService.ensureSessionRecovered(sessionId, orchestratorSessionId).catch(() => null);
     }
+    await sessionConnectorService.waitForAttachIdle(sessionId).catch(() => false);
     let statuses = await sessionConnectorService.listSessionConnectors(sessionId, userId).catch(() => []);
     const attached = statuses
       .filter((item) => item.attached)
@@ -226,13 +237,15 @@ export class AltusManagedSetupService {
   }
 
   async captureMcpToolSnapshot(sessionId: string) {
+    await sessionConnectorService.waitForAttachIdle(sessionId).catch(() => false);
     const bindings = await taskSessionConnectorBindingDAO.listByTaskSessionId(sessionId).catch(() => []);
     const providers = bindings
       .filter(
         (item) =>
           item.desiredState === 'attached' &&
           asText(item.runtimeStatus).toLowerCase() === 'connected' &&
-          asText(item.runtimeProviderId)
+          asText(item.runtimeProviderId) &&
+          isSnapshotRuntimeTransportSupported(item)
       )
       .map((item) => ({
         connectorKey: item.connectorKey,

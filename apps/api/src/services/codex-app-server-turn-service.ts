@@ -3,7 +3,6 @@ import { codexAppServerService } from './codex-app-server-service';
 import {
   buildCodexAuthJson,
   buildCodexConfigToml,
-  DEFAULT_CODEX_API_KEY,
   ensurePlaywrightMcpInConfigToml,
   normalizeCodexApiKey,
   normalizeCodexBaseUrl,
@@ -83,9 +82,10 @@ function normalizeProviderBaseUrl(value: string | undefined): string {
 }
 
 function buildRuntimeConfig(): CodexAppServerRuntimeConfig {
-  const apiKey =
-    normalizeCodexApiKey(asString(process.env.CODEX_API_KEY) || asString(process.env.OPENAI_API_KEY) || undefined) ||
-    DEFAULT_CODEX_API_KEY;
+  const apiKey = normalizeCodexApiKey(asString(process.env.CODEX_API_KEY) || asString(process.env.OPENAI_API_KEY) || undefined);
+  if (!apiKey) {
+    throw new Error('Codex API Key 未配置');
+  }
   const baseUrl = normalizeProviderBaseUrl(
     asString(process.env.CODEX_BASE_URL) ||
       asString(process.env.OPENAI_BASE_URL) ||
@@ -158,9 +158,11 @@ export class CodexAppServerTurnService {
   async startBackgroundTurn(input: CodexAppServerTurnJobStartInput): Promise<CodexAppServerTurnJobStartResult> {
     const waitTimeoutMs = toPositiveInt(input.waitTimeoutMs, 10 * 60_000);
     const pollStartTimeoutMs = toPositiveInt(input.pollStartTimeoutMs, 15_000);
-    const runtimeConfig = buildRuntimeConfig();
-    const configToml = ensurePlaywrightMcpInConfigToml(asString(input.configToml) || buildConfigToml(runtimeConfig));
-    const authJson = asString(input.authJson) || buildAuthJson(runtimeConfig) || '';
+    const inputConfigToml = asString(input.configToml);
+    const inputAuthJson = asString(input.authJson);
+    const runtimeConfig = inputConfigToml && inputAuthJson ? null : buildRuntimeConfig();
+    const configToml = ensurePlaywrightMcpInConfigToml(inputConfigToml || buildConfigToml(runtimeConfig!));
+    const authJson = inputAuthJson || buildAuthJson(runtimeConfig!) || '';
     const jobId = `turn_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     const server = await codexAppServerService.ensureServer({
       sessionId: input.sessionId,

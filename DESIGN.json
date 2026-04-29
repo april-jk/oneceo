@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-04-25T20:22:20Z",
+  "title": "Design System: oneceo",
+  "extensions": {
+    "colorMeta": {
+      "command-blue": {
+        "role": "primary",
+        "displayName": "Command Blue",
+        "canonical": "#0969da",
+        "tonalRamp": ["oklch(18% 0.07 252)", "oklch(28% 0.11 252)", "oklch(38% 0.14 252)", "oklch(48% 0.16 252)", "oklch(58% 0.14 252)", "oklch(70% 0.10 252)", "oklch(84% 0.055 252)", "oklch(94% 0.025 252)"]
+      },
+      "rail-ink": {
+        "role": "secondary",
+        "displayName": "Rail Ink",
+        "canonical": "#1f2328",
+        "tonalRamp": ["oklch(15% 0.012 252)", "oklch(22% 0.014 252)", "oklch(30% 0.014 252)", "oklch(42% 0.012 252)", "oklch(56% 0.01 252)", "oklch(70% 0.008 252)", "oklch(84% 0.006 252)", "oklch(95% 0.004 252)"]
+      },
+      "audit-amber": {
+        "role": "tertiary",
+        "displayName": "Audit Amber",
+        "canonical": "#9a6700",
+        "tonalRamp": ["oklch(18% 0.05 78)", "oklch(30% 0.08 78)", "oklch(42% 0.10 78)", "oklch(54% 0.12 78)", "oklch(68% 0.13 78)", "oklch(78% 0.09 78)", "oklch(88% 0.055 78)", "oklch(96% 0.035 78)"]
+      },
+      "danger-red": {
+        "role": "tertiary",
+        "displayName": "Danger Red",
+        "canonical": "#cf222e",
+        "tonalRamp": ["oklch(18% 0.07 25)", "oklch(30% 0.11 25)", "oklch(42% 0.15 25)", "oklch(55% 0.18 25)", "oklch(66% 0.13 25)", "oklch(78% 0.08 25)", "oklch(88% 0.05 25)", "oklch(96% 0.028 25)"]
+      },
+      "success-green": {
+        "role": "tertiary",
+        "displayName": "Success Green",
+        "canonical": "#2f8f68",
+        "tonalRamp": ["oklch(18% 0.045 165)", "oklch(30% 0.065 165)", "oklch(42% 0.085 165)", "oklch(58% 0.115 165)", "oklch(70% 0.09 165)", "oklch(80% 0.065 165)", "oklch(90% 0.04 165)", "oklch(95% 0.03 165)"]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "登录页和极少数品牌化入口。" },
+      "headline": { "displayName": "Headline", "purpose": "详情壳、抽屉、危险确认标题。" },
+      "title": { "displayName": "Title", "purpose": "分区标题、指标标题、关系节点主文本。" },
+      "body": { "displayName": "Body", "purpose": "管理正文、说明和表单内容。" },
+      "label": { "displayName": "Label", "purpose": "eyebrow、标签、状态类别和键值名。" },
+      "mono": { "displayName": "Mono", "purpose": "id、路径、版本、日志和代码证据。" }
+    },
+    "shadows": [
+      { "name": "page-shadow", "value": "0 24px 50px color-mix(in srgb, var(--theme-rail) 10%, transparent)", "purpose": "页面级面板或主要 shell。" },
+      { "name": "soft-shadow", "value": "0 10px 24px color-mix(in srgb, var(--theme-rail) 8%, transparent)", "purpose": "移动卡片、小型前景块和代码面板。" },
+      { "name": "dialog-shadow", "value": "0 28px 80px color-mix(in srgb, var(--theme-rail) 18%, transparent), 0 4px 14px color-mix(in srgb, var(--theme-rail) 10%, transparent)", "purpose": "详情壳、diff 抽屉、危险确认。" },
+      { "name": "command-hover", "value": "0 10px 24px color-mix(in srgb, var(--admin-ui-blue) 30%, transparent)", "purpose": "主按钮 hover。" }
+    ],
+    "motion": [
+      { "name": "state-fast", "value": "160ms ease", "purpose": "按钮、边框、背景和输入焦点状态。" },
+      { "name": "spinner", "value": "900ms linear", "purpose": "加载中的 AdminButton spinner。" }
+    ],
+    "breakpoints": [
+      { "name": "sidebar-stack", "value": "920px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Admin Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "主动作按钮，稀缺使用，只给确定的提交或执行动作。",
+      "html": "<button class=\"ds-admin-button ds-admin-button-primary\">执行操作</button>",
+      "css": ".ds-admin-button { border: 1px solid transparent; border-radius: 8px; min-height: 34px; padding: 0 13px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; font-family: IBM Plex Sans, Noto Sans SC, Segoe UI, sans-serif; font-size: 12px; font-weight: 700; line-height: 1; transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease, opacity 160ms ease; } .ds-admin-button-primary { background: linear-gradient(135deg, var(--admin-ui-blue, #0969da), color-mix(in srgb, var(--admin-ui-blue, #0969da) 78%, var(--primary-strong, #0550ae))); color: oklch(98% 0.006 252); box-shadow: 0 8px 18px color-mix(in srgb, var(--admin-ui-blue, #0969da) 24%, transparent); } .ds-admin-button-primary:hover { box-shadow: 0 10px 24px color-mix(in srgb, var(--admin-ui-blue, #0969da) 30%, transparent); } .ds-admin-button:focus-visible { outline: 2px solid color-mix(in srgb, var(--admin-ui-blue, #0969da) 55%, transparent); outline-offset: 2px; }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "status-badge",
+      "description": "运行态、风险和处理状态的紧凑语义标签。",
+      "html": "<span class=\"ds-status-badge ds-status-badge-success\"><span class=\"ds-status-dot\"></span>运行中</span>",
+      "css": ".ds-status-badge { display: inline-flex; align-items: center; gap: 6px; min-height: 23px; padding: 0 9px; border: 1px solid transparent; border-radius: 999px; font-family: IBM Plex Sans, Noto Sans SC, Segoe UI, sans-serif; font-size: 12px; font-weight: 700; line-height: 1; white-space: nowrap; } .ds-status-dot { width: 7px; height: 7px; border-radius: 999px; display: inline-flex; background: currentColor; } .ds-status-badge-success { background: var(--admin-ui-success-soft, oklch(95% 0.03 165)); color: color-mix(in srgb, var(--admin-ui-success, oklch(58% 0.115 165)) 82%, var(--text, #1f2328)); border-color: color-mix(in srgb, var(--admin-ui-success, oklch(58% 0.115 165)) 22%, transparent); }"
+    },
+    {
+      "name": "Input Control",
+      "kind": "input",
+      "refersTo": "input-control",
+      "description": "详情壳和危险确认中的可复核字段。",
+      "html": "<input class=\"ds-input-control\" value=\"sandbox-prod-42\" aria-label=\"Sandbox ID\" />",
+      "css": ".ds-input-control { width: 100%; min-height: 36px; border: 1px solid color-mix(in srgb, var(--border, #9aa7ba) 84%, transparent); border-radius: 9px; background: linear-gradient(180deg, color-mix(in srgb, var(--surface-strong, #fbfdff) 96%, var(--admin-ui-fog, oklch(97% 0.006 252))), color-mix(in srgb, var(--surface-elevated, #f9fbfd) 92%, transparent)); color: var(--text, #1f2328); font-family: IBM Plex Sans, Noto Sans SC, Segoe UI, sans-serif; font-size: 13px; font-weight: 650; line-height: 1.35; padding: 8px 11px; box-shadow: inset 0 1px 0 color-mix(in srgb, var(--surface-strong, #fbfdff) 86%, transparent); transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease, opacity 160ms ease; } .ds-input-control:focus { outline: none; border-color: color-mix(in srgb, var(--admin-ui-blue, #0969da) 48%, var(--border, #9aa7ba)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--admin-ui-blue, #0969da) 13%, transparent), inset 0 1px 0 color-mix(in srgb, var(--surface-strong, #fbfdff) 90%, transparent); }"
+    },
+    {
+      "name": "Admin Detail Shell",
+      "kind": "card",
+      "refersTo": "detail-shell",
+      "description": "管理后台的指挥台容器，聚合对象身份、摘要、标签页、主体和底部动作。",
+      "html": "<section class=\"ds-detail-shell\"><header class=\"ds-detail-header\"><p class=\"ds-eyebrow\">Sandbox</p><h2>运行环境详情</h2><p>对象、状态、影响和下一步动作集中展示。</p></header><div class=\"ds-detail-body\">关键指标与检查器区域</div></section>",
+      "css": ".ds-detail-shell { width: min(720px, 100%); display: grid; grid-template-rows: auto minmax(0, 1fr); border: 1px solid color-mix(in srgb, var(--border, #9aa7ba) 82%, transparent); border-radius: 12px; background: linear-gradient(180deg, color-mix(in srgb, var(--surface-strong, #fbfdff) 96%, var(--admin-ui-blue-soft, oklch(94% 0.025 252))), var(--surface, #f9fbfd)); color: var(--text, #1f2328); box-shadow: var(--admin-ui-dialog-shadow, 0 28px 80px color-mix(in srgb, #1f2328 18%, transparent), 0 4px 14px color-mix(in srgb, #1f2328 10%, transparent)); overflow: hidden; } .ds-detail-header { padding: 18px 20px 14px; border-bottom: 1px solid color-mix(in srgb, var(--border, #9aa7ba) 62%, transparent); background: linear-gradient(135deg, color-mix(in srgb, var(--surface-strong, #fbfdff) 92%, var(--admin-ui-blue-soft, oklch(94% 0.025 252))), color-mix(in srgb, var(--surface, #f9fbfd) 86%, var(--admin-ui-fog, oklch(97% 0.006 252)))); } .ds-detail-header h2 { margin: 0; color: var(--admin-ui-ink, oklch(25% 0.018 252)); font-size: 18px; line-height: 1.2; font-weight: 800; } .ds-detail-header p { margin: 6px 0 0; color: var(--text-soft, #57606a); font-size: 13px; line-height: 1.45; } .ds-eyebrow { margin: 0 0 6px !important; color: var(--text-faint, #6b7480) !important; font-size: 11px !important; font-weight: 800 !important; letter-spacing: .04em; text-transform: uppercase; } .ds-detail-body { padding: 18px 20px; font-size: 14px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "任务塔台",
+    "overview": "oneceo 的界面像任务塔台，不像营销展厅。它面向平台管理员的多路值守场景：用户、会话、Sandbox、部署、技能、连接器、计费和审计同时存在，界面必须让状态、风险和下一步动作在第一屏内被快速判断。\n\n视觉系统采用结构性层级：浅色 GitHub 基底、深色 rail、蓝色指令色和少量语义色共同建立秩序。阴影服务于前景面板和危险确认，边框、色调层和粘性检查器承担日常密度。它拒绝通用 AI SaaS 模板，也拒绝传统后台的灰白堆叠。",
+    "keyCharacteristics": [
+      "高密度但有扫描路径，优先让用户判断状态和后果。",
+      "指令色稀缺，蓝色只给主动作、焦点、活跃状态和关键关系。",
+      "组件紧凑、确定、可复核，危险动作必须带对象和影响说明。",
+      "主题可切换，但默认设计语言仍是工程化、冷静、可值守。"
+    ],
+    "rules": [
+      { "name": "The Command Color Rule", "body": "蓝色只能表示可执行、已选中、聚焦或关系锚点。不要把蓝色当成装饰填充。", "section": "colors" },
+      { "name": "The Semantic State Rule", "body": "琥珀、红色、绿色必须绑定真实状态或风险，不允许用于普通视觉点缀。", "section": "colors" },
+      { "name": "The Scan First Rule", "body": "管理后台标题不靠大字号取胜，靠权重、标签、间距和位置形成扫描路径。", "section": "typography" },
+      { "name": "The Code Is Evidence Rule", "body": "id、路径、日志和版本号使用等宽字体，不要用普通正文样式弱化它们的证据属性。", "section": "typography" },
+      { "name": "The Foreground Only Rule", "body": "阴影表示前景层级或响应状态，不表示“好看”。如果一个块没有遮挡、确认或焦点意义，就用边框和色调层。", "section": "elevation" }
+    ],
+    "dos": [
+      "Do 使用 `command-blue` 表达主动作、聚焦、已选中和关系锚点，并保持稀缺。",
+      "Do 用 1px 边框、浅色 surface、sticky inspector 和明确标题建立密度秩序。",
+      "Do 在危险操作中展示对象、后果、可恢复边界和确认动作。",
+      "Do 保留等宽字体给 id、路径、版本、日志和代码，保持证据感。",
+      "Do 为 WCAG AA 保持焦点态、对比度和键盘路径，状态不能只靠颜色表达。"
+    ],
+    "donts": [
+      "Don't 做成通用 AI SaaS 模板：禁止渐变文字、英雄大数字、无差别卡片网格、抽象光效和空洞口号。",
+      "Don't 做成传统后台：禁止老式 ERP 的灰白表格堆叠、低信息层级、模糊按钮和缺少后果说明的弹窗。",
+      "Don't 用 `border-left` 或 `border-right` 大于 1px 的彩色侧边条表达卡片、告警、列表项或状态。",
+      "Don't 把玻璃拟态、背景 blur 或霓虹色作为默认风格；blur 只允许服务于遮罩前景关系。",
+      "Don't 为普通内容块添加悬浮阴影。没有前景意义的块必须保持结构性层级。"
+    ]
+  }
+}

@@ -15,6 +15,7 @@ import {
   DEFAULT_SKILL_MANAGEMENT_VIEW_STATE,
 } from './adminViewState';
 import type { SkillManagementViewState, SkillViewFilter } from './adminViewState';
+import { AdminButton, AdminDetailShell, AdminStickyInspector, AdminTabs, AuditTimeline, DangerConfirmDialog, DiffDrawer, StatusBadge, getAdminActionIcon, getAdminModuleIcon } from './admin-ui';
 
 type EditorState = {
   slug: string;
@@ -46,6 +47,13 @@ type ImportedFolderPayload = {
 };
 
 type ImportFileStatus = 'pending' | 'success' | 'failed';
+type SkillDangerAction = {
+  kind: 'archive' | 'activate';
+  skillId: string;
+  label: string;
+  slug: string;
+  status: string;
+};
 
 const EMPTY_EDITOR: EditorState = {
   slug: '',
@@ -297,6 +305,8 @@ export function SkillManagementSection({
   const [selectedDocumentIndex, setSelectedDocumentIndex] = useState(0);
   const [isCreating, setIsCreating] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [dangerAction, setDangerAction] = useState<SkillDangerAction | null>(null);
+  const [diffOpen, setDiffOpen] = useState(false);
   const [importPreview, setImportPreview] = useState<SkillImportPreview | null>(null);
   const [importPayload, setImportPayload] = useState<ImportedFolderPayload | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -658,21 +668,21 @@ export function SkillManagementSection({
     }
   };
 
-  const handleArchiveToggle = async () => {
-    if (!selectedSkillId || !detail) return;
+  const handleArchiveToggle = async (payload: SkillDangerAction) => {
     setBusy(true);
     try {
-      if (detail.status === 'archived') {
-        await api.activateSkill(selectedSkillId);
+      if (payload.kind === 'activate') {
+        await api.activateSkill(payload.skillId);
       } else {
-        await api.archiveSkill(selectedSkillId);
+        await api.archiveSkill(payload.skillId);
       }
       await loadSkills();
-      await loadSkillDetail(selectedSkillId);
+      await loadSkillDetail(payload.skillId);
     } catch (error) {
       onError(error instanceof Error ? error.message : '技能状态更新失败');
     } finally {
       setBusy(false);
+      setDangerAction(null);
     }
   };
 
@@ -960,12 +970,14 @@ export function SkillManagementSection({
         <div className="skill-toolbar">
           <input
             className="control-input"
+            aria-label="按名称或 slug 搜索技能"
             placeholder="按名称或 slug 搜索"
             value={filters.query}
             onChange={(event) => setFilters((prev) => ({ ...prev, query: event.target.value }))}
           />
           <select
             className="control-input"
+            aria-label="技能状态筛选"
             value={filters.status}
             onChange={(event) => setFilters((prev) => ({ ...prev, status: event.target.value }))}
           >
@@ -975,6 +987,7 @@ export function SkillManagementSection({
           </select>
           <select
             className="control-input"
+            aria-label="技能分类筛选"
             value={filters.category}
             onChange={(event) => setFilters((prev) => ({ ...prev, category: event.target.value }))}
           >
@@ -1063,62 +1076,30 @@ export function SkillManagementSection({
       </section>
 
       {detailDialogOpen ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeDetailDialog}>
-          <div
-            className="modal-card skill-detail-modal"
-            onClick={(event) => {
-              event.stopPropagation();
-            }}
-          >
-              <div className="modal-header skill-detail-modal-header">
-                <div>
-                  <p className="section-tag">技能详情</p>
-                  <h2>{isCreating ? '新建技能' : detail?.name || '技能详情'}</h2>
-                  <p className="cell-subtle">
-                    {isCreating
-                    ? '直接创建平台技能，并在同一窗口完成正文与资源校验'
-                    : `${detail?.slug || '-'} · 更新时间 ${formatDateTime(detail?.updatedAt)}`}
-                  </p>
-                  <div className="skill-detail-header-meta">
-                    {isCreating ? (
-                      <>
-                        <span className="skill-detail-meta-chip">新建模式</span>
-                        <span className="skill-detail-meta-chip">{skillCategoryLabel(editor.category)}</span>
-                      </>
-                    ) : detail ? (
-                      <>
-                        <span className={`status-pill status-${detail.status}`}>{skillStatusLabel(detail.status)}</span>
-                        <span className="skill-detail-meta-chip">{skillCategoryLabel(detail.category)}</span>
-                        <span className="skill-detail-meta-chip mono">{detail.slug}</span>
-                        {detail.governance?.systemRole ? (
-                          <span className="skill-detail-meta-chip">{detail.governance.systemRole}</span>
-                        ) : null}
-                        {detail.governance?.autoActivation?.enabled ? (
-                          <span className="skill-detail-meta-chip">
-                            自动加载 · {governanceTriggerLabel(detail.governance.autoActivation.triggers)}
-                          </span>
-                        ) : null}
-                        {detail.governance?.autoActivation?.toolNames?.length ? (
-                          <span className="skill-detail-meta-chip">
-                            工具 · {governanceToolLabel(detail.governance.autoActivation.toolNames)}
-                          </span>
-                        ) : null}
-                      </>
-                    ) : null}
-                  </div>
-                </div>
-              <div className="section-actions">
-                {!isCreating && detail ? (
-                  <button type="button" className="ghost-btn" onClick={handleArchiveToggle} disabled={busy}>
-                    {detail.status === 'archived' ? '重新启用' : '归档技能'}
-                  </button>
-                ) : null}
-                <button type="button" className="secondary-btn" onClick={closeDetailDialog}>
-                  关闭
-                </button>
-              </div>
-            </div>
-            {skillDetailSummary.length ? (
+        <>
+        <AdminDetailShell
+          open={detailDialogOpen}
+          onClose={closeDetailDialog}
+          size="fullscreen"
+          className="skill-detail-modal"
+          eyebrow="技能详情"
+          title={isCreating ? '新建技能' : detail?.name || '技能详情'}
+          subtitle={isCreating ? '直接创建平台技能，并在同一窗口完成正文与资源校验' : `${detail?.slug || '-'} · 更新时间 ${formatDateTime(detail?.updatedAt)}`}
+          icon={getAdminModuleIcon('skill')}
+          entityType="Skill"
+          lastUpdated={`更新 ${formatDateTime(detail?.updatedAt)}`}
+          risk={detail?.status === 'archived' ? '风险：已归档' : detail?.governance?.required ? '风险：系统必需' : '风险：常规'}
+          metrics={[
+            { label: '版本', value: publishedRevision ? `v${publishedRevision.revisionNumber}` : '-' },
+            { label: '资源', value: revisionResources?.resources?.length ?? '-' },
+            { label: '分类', value: skillCategoryLabel(editor.category) },
+            { label: '治理', value: editor.governance.systemRole || '-' },
+          ]}
+          status={detail ? <StatusBadge>{skillStatusLabel(detail.status)}</StatusBadge> : <StatusBadge>新建模式</StatusBadge>}
+          moreActions={<AdminButton variant="secondary" icon={getAdminActionIcon('logs')} onClick={() => setDiffOpen(true)}>查看 Diff</AdminButton>}
+          actions={!isCreating && detail ? <AdminButton variant="dangerSoft" onClick={() => setDangerAction({ kind: detail.status === 'archived' ? 'activate' : 'archive', skillId: detail.id, label: detail.name, slug: detail.slug, status: detail.status })} disabled={busy}>{detail.status === 'archived' ? '重新启用' : '归档技能'}</AdminButton> : null}
+          inspector={<AdminStickyInspector compact title="Actionable Inspector" sections={[{ key: 'risk', title: '当前风险', children: <div className="signal-list"><p>{detail?.status === 'archived' ? '技能已归档，默认不作为启用技能展示。' : detail?.governance?.required ? '系统必需技能，归档前需确认影响范围。' : '当前未发现阻断性风险。'}</p></div> }, { key: 'impact', title: '影响范围', children: <div className="signal-list"><p>影响技能加载、发布版本与资源同步。</p><p>当前资源数：{currentResourceCount}</p></div> }, { key: 'recent', title: '最近操作', children: <AuditTimeline compact emptyText="暂无真实审计事件。" items={[...(detail?.updatedAt ? [{ id: 'skill-updated', title: '技能记录更新', time: formatDateTime(detail.updatedAt), tone: 'info' as const, meta: [{ label: '发布版本', value: publishedRevision ? `版本 ${publishedRevision.revisionNumber}` : '未发布' }] }] : []), ...(validationResult?.syncedAt ? [{ id: 'skill-validation', title: '沙箱校验同步', time: formatDateTime(validationResult.syncedAt), tone: validationResult.restartTriggered ? 'warning' as const : 'success' as const, meta: [{ label: '签名', value: validationResult.signature || '-' }, { label: '资源', value: currentResourceCount }] }] : []), ...(revisionResources?.resources?.length ? [{ id: 'skill-resources', title: '版本资源已加载', time: formatDateTime(selectedRevision?.createdAt), tone: 'neutral' as const, meta: [{ label: '版本', value: selectedRevision ? `版本 ${selectedRevision.revisionNumber}` : '-' }, { label: '资源数', value: revisionResources.resources.length }] }] : [])]} /> }, { key: 'blockers', title: '阻断原因', children: <div className="signal-list"><p>{isCreating ? '创建前需填写并保存技能内容。' : validationResult ? '当前无前端可见阻断。' : '尚未执行本次沙箱校验。'}</p></div> }, { key: 'recommend', title: '推荐动作', children: <div className="signal-list"><p>{isCreating ? '完成正文与资源后创建并发布。' : '保存前先查看字段 Diff，必要时执行沙箱校验。'}</p></div> }, { key: 'actions', title: '快捷动作', children: <AdminButton variant="secondary" size="sm" onClick={() => setDiffOpen(true)}>查看字段 Diff</AdminButton> }]} />}
+          summary={skillDetailSummary.length ? (
               <div className="skill-detail-summary-strip">
                 {skillDetailSummary.map((item) => (
                   <article key={item.label} className="skill-detail-summary-card">
@@ -1127,22 +1108,9 @@ export function SkillManagementSection({
                   </article>
                 ))}
               </div>
-            ) : null}
-            <div className="button-grid modal-tab-grid skill-detail-tabbar">
-              {detailTabOptions.map((item) => (
-                <button
-                  key={item.key}
-                  type="button"
-                  className={`inspector-tab-card ${detailTab === item.key ? 'active' : ''}`}
-                  onClick={() => setDetailTab(item.key)}
-                  disabled={item.disabled}
-                >
-                  <span className="inspector-tab-card-key mono">{item.index}</span>
-                  <span className="inspector-tab-card-label">{item.label}</span>
-                  <span className="skill-detail-tab-meta">{item.meta}</span>
-                </button>
-              ))}
-            </div>
+          ) : null}
+          tabs={<AdminTabs value={detailTab} onChange={setDetailTab} items={detailTabOptions.map((item) => ({ key: item.key, label: item.label, disabled: item.disabled }))} />}
+        >
             <div className="modal-body">
               {detailTab === 'editor' ? (
                 <div className="skill-editor-layout">
@@ -1710,8 +1678,33 @@ export function SkillManagementSection({
                 </div>
               ) : null}
             </div>
-          </div>
-        </div>
+        </AdminDetailShell>
+        <DiffDrawer open={diffOpen} onClose={() => setDiffOpen(false)} title="Skill 字段 Diff" objectLabel={detail?.slug || editor.slug || 'Skill'} fields={[
+          { key: 'slug', label: 'Slug', before: detail?.slug || '-', after: editor.slug || '-', changeType: (detail?.slug || '') === editor.slug ? 'unchanged' : 'changed' },
+          { key: 'name', label: '名称', before: detail?.name || '-', after: editor.name || '-', changeType: (detail?.name || '') === editor.name ? 'unchanged' : 'changed' },
+          { key: 'category', label: '分类', before: detail?.category || '-', after: editor.category || '-', changeType: (detail?.category || '') === editor.category ? 'unchanged' : 'changed' },
+          { key: 'description', label: '描述', before: detail?.description || '-', after: editor.description || '-', changeType: (detail?.description || '') === editor.description ? 'unchanged' : 'changed' },
+          { key: 'systemRole', label: '系统角色', before: detail?.governance?.systemRole || '-', after: editor.governance.systemRole || '-', changeType: (detail?.governance?.systemRole || '') === editor.governance.systemRole ? 'unchanged' : 'changed' },
+        ]} impactItems={['技能名称、描述、治理配置会影响后续技能加载与检索', '保存会生成新版本，当前已发布资源不会被前端直接改写']} rollbackHint="如保存后需要恢复，请选择历史版本或重新保存旧内容。" syncHint="Diff 仅比较当前详情 detail 与编辑器 editor 的真实字段。" />
+        </>
+      ) : null}
+      {dangerAction ? (
+        <DangerConfirmDialog
+          open={Boolean(dangerAction)}
+          title={dangerAction.kind === 'activate' ? '确认重新启用技能' : '确认归档技能'}
+          objectLabel="技能"
+          objectId={dangerAction.skillId}
+          objectName={dangerAction.label}
+          objectMeta={[{ label: 'Slug', value: dangerAction.slug }, { label: '当前状态', value: skillStatusLabel(dangerAction.status) }]}
+          actionLabel={dangerAction.kind === 'activate' ? '重新启用技能' : '归档技能'}
+          impactItems={dangerAction.kind === 'activate' ? ['技能会重新出现在可用列表中', '现有版本与资源保持不变'] : ['技能会从启用列表移入归档状态', '已发布版本与资源保留但默认不再作为启用技能展示']}
+          nonImpactItems={['不修改业务 API', '审计原因仅前端收集，不随当前 API 提交']}
+          reversibility="reversible"
+          confirmText={dangerAction.slug}
+          loading={busy}
+          onCancel={() => setDangerAction(null)}
+          onConfirm={() => void handleArchiveToggle(dangerAction)}
+        />
       ) : null}
       {importDialogOpen && importPreview ? (
         <div

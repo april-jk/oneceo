@@ -9,7 +9,6 @@ export * from './app-user-legacy-id-mapping.dao';
 export * from './sandbox-execution-environment.dao';
 export * from './user-connector-account.dao';
 export * from './user-connector-profile.dao';
-export * from './user-codex-runtime-config.dao';
 export * from './user-skill.dao';
 export * from './task-session-connector-binding.dao';
 export * from './task-session-mcp-recovery-job.dao';

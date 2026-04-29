@@ -63,6 +63,11 @@ export function createBillingManagementRoutes() {
   router.post('/users/:userId/adjust', proxyToApi);
 
   // 定价配置列表
+  router.get('/runtime-config', proxyToApi);
+  router.post('/runtime-config/test', proxyToApi);
+  router.post('/runtime-config/models', proxyToApi);
+  router.put('/runtime-config/agent/:tier', proxyToApi);
+  router.put('/runtime-config/sandbox/:engine', proxyToApi);
   router.get('/pricing/model-candidates', proxyToApi);
   router.get('/pricing', proxyToApi);
 

@@ -13,6 +13,7 @@ import {
   DEFAULT_CONNECTOR_GUIDE_MANAGEMENT_VIEW_STATE,
 } from './adminViewState';
 import type { ConnectorGuideManagementViewState } from './adminViewState';
+import { AdminButton, AdminDetailShell, AdminStickyInspector, AdminTabs, AuditTimeline, DangerConfirmDialog, DiffDrawer, StatusBadge, getAdminActionIcon, getAdminModuleIcon } from './admin-ui';
 
 type Props = {
   onError: (message: string | null) => void;
@@ -20,6 +21,15 @@ type Props = {
   onRegisterRefresh?: (handler: (() => Promise<void>) | null) => void;
   persistedState?: ConnectorGuideManagementViewState | null;
   onStateChange?: (state: ConnectorGuideManagementViewState) => void;
+};
+
+type ConnectorDangerAction = {
+  kind: 'publish' | 'rollback';
+  policyId: string;
+  revisionId: string;
+  label: string;
+  status: string;
+  publishedLabel: string;
 };
 
 const DEFAULT_FILTERS = DEFAULT_CONNECTOR_GUIDE_MANAGEMENT_FILTERS;
@@ -98,6 +108,9 @@ export function ConnectorGuideManagementSection({
   const [filters, setFilters] = useState(initialState.filters);
   const [busy, setBusy] = useState(false);
   const [editorModalOpen, setEditorModalOpen] = useState(false);
+  const [dangerAction, setDangerAction] = useState<ConnectorDangerAction | null>(null);
+  const [detailTab, setDetailTab] = useState<'configuration' | 'audit' | 'raw'>('configuration');
+  const [diffOpen, setDiffOpen] = useState(false);
   const selectedRevisionIdRef = useRef<string | null>(initialState.selectedRevisionId);
 
   const revision = useMemo(
@@ -278,6 +291,7 @@ export function ConnectorGuideManagementSection({
       onError(error instanceof Error ? error.message : '创建 connector guide policy 失败');
     } finally {
       setBusy(false);
+      setDangerAction(null);
     }
   };
 
@@ -312,6 +326,7 @@ export function ConnectorGuideManagementSection({
       onError(error instanceof Error ? error.message : '保存 connector guide 失败');
     } finally {
       setBusy(false);
+      setDangerAction(null);
     }
   };
 
@@ -328,6 +343,7 @@ export function ConnectorGuideManagementSection({
       onError(error instanceof Error ? error.message : '创建 revision 失败');
     } finally {
       setBusy(false);
+      setDangerAction(null);
     }
   };
 
@@ -348,41 +364,42 @@ export function ConnectorGuideManagementSection({
       onError(error instanceof Error ? error.message : '校验 connector guide 失败');
     } finally {
       setBusy(false);
+      setDangerAction(null);
     }
   };
 
-  const publishRevision = async () => {
-    if (!detail || !revision) return;
+  const publishRevision = async (payload: ConnectorDangerAction) => {
     setBusy(true);
     try {
-      await api.updateConnectorGuideRevision(detail.id, revision.id, {
+      await api.updateConnectorGuideRevision(payload.policyId, payload.revisionId, {
         serverInstructionsMarkdown: editor.serverInstructionsMarkdown,
         guideReminderMarkdown: editor.guideReminderMarkdown,
         blockingRulesMarkdown: editor.blockingRulesMarkdown,
         notes: editor.notes,
       });
-      await api.publishConnectorGuideRevision(detail.id, revision.id);
-      await loadDetail(detail.id);
+      await api.publishConnectorGuideRevision(payload.policyId, payload.revisionId);
+      await loadDetail(payload.policyId);
       setValidationResult(null);
     } catch (error) {
       onError(error instanceof Error ? error.message : '发布 connector guide 失败');
     } finally {
       setBusy(false);
+      setDangerAction(null);
     }
   };
 
-  const rollbackRevision = async (revisionId: string) => {
-    if (!detail) return;
+  const rollbackRevision = async (payload: ConnectorDangerAction) => {
     setBusy(true);
     try {
-      await api.rollbackConnectorGuideRevision(detail.id, revisionId);
-      await loadDetail(detail.id);
-      setSelectedRevisionId(revisionId);
+      await api.rollbackConnectorGuideRevision(payload.policyId, payload.revisionId);
+      await loadDetail(payload.policyId);
+      setSelectedRevisionId(payload.revisionId);
       setValidationResult(null);
     } catch (error) {
       onError(error instanceof Error ? error.message : '回滚 connector guide 失败');
     } finally {
       setBusy(false);
+      setDangerAction(null);
     }
   };
 
@@ -501,6 +518,7 @@ export function ConnectorGuideManagementSection({
         <div className="skill-toolbar">
           <select
             className="control-input"
+            aria-label="连接器筛选"
             value={filters.connectorKey}
             onChange={(event) => setFilters((prev) => ({ ...prev, connectorKey: event.target.value }))}
           >
@@ -513,6 +531,7 @@ export function ConnectorGuideManagementSection({
           </select>
           <select
             className="control-input"
+            aria-label="连接器指南状态筛选"
             value={filters.status}
             onChange={(event) => setFilters((prev) => ({ ...prev, status: event.target.value }))}
           >
@@ -523,6 +542,7 @@ export function ConnectorGuideManagementSection({
           </select>
           <input
             className="control-input"
+            aria-label="按连接器搜索"
             placeholder="按连接器搜索"
             value={filters.query}
             onChange={(event) => setFilters((prev) => ({ ...prev, query: event.target.value }))}
@@ -696,7 +716,7 @@ export function ConnectorGuideManagementSection({
                             type="button"
                             className="ghost-btn"
                             disabled={busy || item.status === 'published'}
-                            onClick={() => void rollbackRevision(item.id)}
+                            onClick={() => setDangerAction({ kind: 'rollback', policyId: detail.id, revisionId: item.id, label: detail.connectorKey, status: item.status, publishedLabel: detail.publishedRevision ? `v${detail.publishedRevision.versionNumber}` : '未发布' })}
                           >
                             回滚到此版本
                           </button>
@@ -735,38 +755,40 @@ export function ConnectorGuideManagementSection({
       ) : null}
 
       {detail && editorModalOpen ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="connector-guide-editor-title" onClick={closeEditorModal}>
-          <div
-            className="modal-card connector-guide-editor-modal"
-            onClick={(event) => {
-              event.stopPropagation();
-            }}
-          >
-            <div className="modal-header">
-              <div>
-                <p className="section-tag">连接器编辑器</p>
-                <h2 id="connector-guide-editor-title">{detail.connectorKey}</h2>
-                <p className="panel-caption">
-                  当前编辑版本：{revision ? `v${revision.versionNumber} · ${guideStatusLabel(revision.status)}` : '暂无版本'}
-                </p>
-              </div>
-              <div className="section-actions connector-guide-editor-modal-actions">
-                <button type="button" className="secondary-btn" onClick={closeEditorModal}>
-                  关闭
-                </button>
-              </div>
-            </div>
+        <>
+        <AdminDetailShell
+          open={editorModalOpen}
+          onClose={closeEditorModal}
+          size="fullscreen"
+          className="connector-guide-editor-modal"
+          eyebrow="连接器编辑器"
+          title={detail.connectorKey}
+          subtitle={`当前编辑版本：${revision ? `v${revision.versionNumber} · ${guideStatusLabel(revision.status)}` : '暂无版本'}`}
+          icon={getAdminModuleIcon('connector')}
+          entityType="Connector Guide"
+          lastUpdated={`更新 ${formatDateTime(revision?.createdAt)}`}
+          risk={detail.status === 'archived' ? '风险：已归档' : revision?.status === 'published' ? '风险：发布中' : '风险：草稿编辑'}
+          metrics={[{ label: 'Revision', value: revision ? `v${revision.versionNumber}` : '-' }, { label: '状态', value: guideStatusLabel(detail.status) }, { label: '触发', value: triggerModeLabel(editor.triggerMode) }, { label: '版本数', value: detail.revisions.length }]}
+          status={<StatusBadge>{guideStatusLabel(detail.status)}</StatusBadge>}
+          moreActions={<AdminButton variant="secondary" icon={getAdminActionIcon('logs')} onClick={() => setDiffOpen(true)}>查看 Diff</AdminButton>}
+          summary={<div className="connector-guide-preview-grid"><div className="connector-guide-preview-fact"><span>连接器</span><strong>{detail.connectorKey}</strong></div><div className="connector-guide-preview-fact"><span>触发模式</span><strong>{triggerModeLabel(detail.triggerMode)}</strong></div><div className="connector-guide-preview-fact"><span>当前版本</span><strong>{revision ? `v${revision.versionNumber}` : '暂无版本'}</strong></div></div>}
+          tabs={<AdminTabs value={detailTab} onChange={setDetailTab} items={[{ key: 'configuration', label: 'Configuration' }, { key: 'audit', label: 'Audit' }, { key: 'raw', label: 'Raw Data' }]} />}
+          inspector={<AdminStickyInspector compact title="Actionable Inspector" sections={[{ key: 'risk', title: '当前风险', children: <div className="signal-list"><p>{detail.status === 'archived' ? 'Policy 已归档，发布前需先恢复可用状态。' : revision?.status === 'published' ? '当前 revision 已发布，编辑器变更需保存后才生效。' : '草稿编辑中，发布前需确认文本 Diff。'}</p></div> }, { key: 'impact', title: '影响范围', children: <div className="signal-list"><p>影响 {detail.connectorKey} 的连接器引导说明、提醒与阻断规则。</p><p>不修改 connector 目录对象。</p></div> }, { key: 'recent', title: '最近操作', children: <AuditTimeline compact emptyText="暂无 revision 审计事件。" items={detail.revisions.map((item) => ({ id: item.id, title: `v${item.versionNumber} · ${guideStatusLabel(item.status)}`, time: formatDateTime(item.publishedAt || item.createdAt), tone: item.status === 'published' ? 'success' as const : item.status === 'draft' ? 'info' as const : 'neutral' as const, meta: [{ label: '创建', value: formatDateTime(item.createdAt) }, { label: '发布', value: formatDateTime(item.publishedAt) }] }))} /> }, { key: 'blockers', title: '阻断原因', children: <div className="signal-list"><p>{revision ? '当前无前端可见阻断；发布前需保存编辑器内容。' : '暂无 revision，需先新建或保存生成 revision。'}</p></div> }, { key: 'recommend', title: '推荐动作', children: <div className="signal-list"><p>发布前查看文本 Diff，并按需执行校验。</p></div> }, { key: 'actions', title: '快捷动作', children: <AdminButton variant="secondary" size="sm" onClick={() => setDiffOpen(true)}>查看文本 Diff</AdminButton> }]} />}
+          footer={<AdminButton variant="secondary" disabled={busy} onClick={() => void savePolicy()}>保存当前内容</AdminButton>}
+        >
 
+          {detailTab === 'configuration' ? (
+          <>
             <div className="section-actions connector-guide-editor-toolbar">
-              <button type="button" className="ghost-btn" disabled={busy} onClick={() => void createRevision()}>
+              <AdminButton variant="secondary" icon={getAdminActionIcon('sync')} disabled={busy} onClick={() => void createRevision()}>
                 新建 revision
-              </button>
-              <button type="button" className="ghost-btn" disabled={busy || !revision} onClick={() => void validateRevision()}>
+              </AdminButton>
+              <AdminButton variant="secondary" icon={getAdminActionIcon('refresh')} disabled={busy || !revision} onClick={() => void validateRevision()}>
                 校验
-              </button>
-              <button type="button" className="primary-btn" disabled={busy || !revision} onClick={() => void publishRevision()}>
+              </AdminButton>
+              <AdminButton variant="primary" icon={getAdminActionIcon('save')} disabled={busy || !revision} onClick={() => revision && setDangerAction({ kind: 'publish', policyId: detail.id, revisionId: revision.id, label: detail.connectorKey, status: revision.status, publishedLabel: detail.publishedRevision ? `v${detail.publishedRevision.versionNumber}` : '未发布' })}>
                 发布当前 revision
-              </button>
+              </AdminButton>
             </div>
 
             <div className="detail-grid modal-grid connector-guide-editor-grid">
@@ -905,8 +927,33 @@ export function ConnectorGuideManagementSection({
                 </div>
               </article>
             </div>
-          </div>
-        </div>
+          </>
+          ) : detailTab === 'audit' ? (
+            <article className="sub-panel"><div className="editor-header"><div><h3>Audit</h3><p className="cell-subtle">仅展示现有 revision 状态，不请求新 API。</p></div></div><AuditTimeline emptyText="暂无 revision 审计事件。" items={detail.revisions.map((item) => ({ id: item.id, title: `v${item.versionNumber} · ${guideStatusLabel(item.status)}`, time: formatDateTime(item.publishedAt || item.createdAt), tone: item.status === 'published' ? 'success' as const : item.status === 'draft' ? 'info' as const : 'neutral' as const, meta: [{ label: '创建时间', value: formatDateTime(item.createdAt) }, { label: '发布时间', value: formatDateTime(item.publishedAt) }] }))} /></article>
+          ) : (
+            <article className="sub-panel"><div className="editor-header"><div><h3>Raw Data</h3><p className="cell-subtle">当前 revision 文本与编辑器值。</p></div></div><div className="detail-grid"><pre className="code-block">{JSON.stringify({ detail, revision }, null, 2)}</pre><pre className="code-block">{JSON.stringify(editor, null, 2)}</pre></div></article>
+          )}
+        </AdminDetailShell>
+        <DiffDrawer open={diffOpen} onClose={() => setDiffOpen(false)} title="Connector Guide Diff" objectLabel={detail.connectorKey} language="markdown" beforeText={[revision?.serverInstructionsMarkdown || '', revision?.guideReminderMarkdown || '', revision?.blockingRulesMarkdown || '', revision?.notes || ''].join('\n\n---\n\n')} afterText={[editor.serverInstructionsMarkdown, editor.guideReminderMarkdown, editor.blockingRulesMarkdown, editor.notes].join('\n\n---\n\n')} fields={[{ key: 'description', label: '说明', before: detail.description || '-', after: editor.description || '-', changeType: (detail.description || '') === editor.description ? 'unchanged' : 'changed' }, { key: 'triggerMode', label: '触发模式', before: triggerModeLabel(detail.triggerMode), after: triggerModeLabel(editor.triggerMode), changeType: detail.triggerMode === editor.triggerMode ? 'unchanged' : 'changed' }, { key: 'status', label: '状态', before: guideStatusLabel(detail.status), after: guideStatusLabel(editor.status), changeType: detail.status === editor.status ? 'unchanged' : 'changed' }]} impactItems={[`影响 ${detail.connectorKey} 的 guide 文本与触发策略`, '发布前会保存当前 revision 文本', '不修改 Connector Catalog']} rollbackHint="可通过 Revision 历史回滚到已有真实版本。" syncHint="Before 使用当前选中 revision/detail，After 使用编辑器内容。" />
+        </>
+      ) : null}
+      {dangerAction ? (
+        <DangerConfirmDialog
+          open={Boolean(dangerAction)}
+          title={dangerAction.kind === 'publish' ? '确认发布 Connector Guide' : '确认回滚 Connector Guide'}
+          objectLabel="Connector Guide"
+          objectId={dangerAction.revisionId}
+          objectName={dangerAction.label}
+          objectMeta={[{ label: 'Policy', value: dangerAction.policyId }, { label: '当前 published', value: dangerAction.publishedLabel }]}
+          actionLabel={dangerAction.kind === 'publish' ? '发布当前 revision' : '回滚到此版本'}
+          impactItems={dangerAction.kind === 'publish' ? ['该 connector 的 guide 将发布为当前生效内容', '发布前会先保存编辑器中当前 revision 文本'] : ['该 connector 的 published revision 会切换到目标历史版本', '当前编辑选择会同步到回滚后的 revision']}
+          nonImpactItems={['不修改业务 API', '审计原因仅前端收集，不随当前 API 提交']}
+          reversibility="partially_reversible"
+          confirmText={dangerAction.label}
+          loading={busy}
+          onCancel={() => setDangerAction(null)}
+          onConfirm={() => dangerAction.kind === 'publish' ? void publishRevision(dangerAction) : void rollbackRevision(dangerAction)}
+        />
       ) : null}
     </main>
   );

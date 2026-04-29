@@ -1,6 +1,7 @@
 import { buildFigmaDefinition } from './figma';
 import { buildGithubDefinition, resolveGithubOauthProvider } from './github';
-import { buildNotionDefinition, resolveNotionOauthProvider } from './notion';
+import { buildGoogleCloudDefinition } from './google-cloud';
+import { buildNotionDefinition } from './notion';
 import { buildPostgresDefinition } from './postgres';
 import { buildSlackDefinition, resolveSlackOauthProvider } from './slack';
 import { buildSupabaseDefinition } from './supabase';
@@ -27,6 +28,7 @@ export const CONNECTOR_KEYS = [
   'figma',
   'vercel',
   'postgres',
+  'google_cloud',
 ] as const;
 
 export function buildConnectorDefinitions(): ConnectorDefinition[] {
@@ -38,12 +40,12 @@ export function buildConnectorDefinitions(): ConnectorDefinition[] {
     buildFigmaDefinition(),
     buildVercelDefinition(),
     buildPostgresDefinition(),
+    buildGoogleCloudDefinition(),
   ].sort((left, right) => (left.sortOrder || 0) - (right.sortOrder || 0));
 }
 
 export function resolveOauthProvider(connectorKey: ConnectorKey): ConnectorOauthProvider | undefined {
   if (connectorKey === 'github') return resolveGithubOauthProvider();
-  if (connectorKey === 'notion') return resolveNotionOauthProvider();
   if (connectorKey === 'slack') return resolveSlackOauthProvider();
   if (connectorKey === 'vercel') return resolveVercelOauthProvider();
   return undefined;

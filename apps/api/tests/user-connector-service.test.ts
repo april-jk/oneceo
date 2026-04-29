@@ -21,6 +21,8 @@ const originalSlackUserScopes = process.env.SLACK_CONNECTOR_USER_SCOPES;
 const originalSlackAuthorizeUrl = process.env.SLACK_CONNECTOR_AUTHORIZE_URL;
 const originalSlackTokenUrl = process.env.SLACK_CONNECTOR_TOKEN_URL;
 const originalSupabaseSecretKey = process.env.SUPABASE_CONNECTOR_SECRET_KEY;
+const originalComposioApiKey = process.env.COMPOSIO_API_KEY;
+const originalComposioFigmaToolkits = process.env.COMPOSIO_FIGMA_TOOLKITS;
 const originalFrontendUrl = process.env.FRONTEND_URL;
 
 afterEach(() => {
@@ -95,6 +97,16 @@ afterEach(() => {
     delete process.env.SUPABASE_CONNECTOR_SECRET_KEY;
   } else {
     process.env.SUPABASE_CONNECTOR_SECRET_KEY = originalSupabaseSecretKey;
+  }
+  if (originalComposioApiKey === undefined) {
+    delete process.env.COMPOSIO_API_KEY;
+  } else {
+    process.env.COMPOSIO_API_KEY = originalComposioApiKey;
+  }
+  if (originalComposioFigmaToolkits === undefined) {
+    delete process.env.COMPOSIO_FIGMA_TOOLKITS;
+  } else {
+    process.env.COMPOSIO_FIGMA_TOOLKITS = originalComposioFigmaToolkits;
   }
   if (originalFrontendUrl === undefined) {
     delete process.env.FRONTEND_URL;
@@ -218,6 +230,42 @@ test('createProfile allows Supabase token-only save with empty profile/display n
     )?.accessToken,
     'sbp-token-only'
   );
+});
+
+test('createProfile does not authorize Figma from a user-supplied access token', async () => {
+  process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
+  process.env.COMPOSIO_API_KEY = 'unit-test-composio-key';
+  process.env.COMPOSIO_FIGMA_TOOLKITS = 'figma';
+  mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
+  mock.method(userConnectorProfileDAO, 'listByUserAndConnectorKey', async () => []);
+  let capturedCreate: Record<string, unknown> | null = null;
+  mock.method(userConnectorProfileDAO, 'create', async (input: any) => {
+    capturedCreate = input;
+    return {
+      ...input,
+      id: 'profile-figma-1',
+      connectorKey: 'figma',
+      updatedAt: new Date('2026-04-29T00:00:00.000Z'),
+      createdAt: new Date('2026-04-29T00:00:00.000Z'),
+      metadataJson: {},
+      configJson: {},
+      lastAuthAt: null,
+      lastError: null,
+      isDefault: true,
+    } as any;
+  });
+
+  const saved = await userConnectorService.createProfile('user-1', 'figma', {
+    profileName: 'Figma Token Attempt',
+    credentials: {
+      accessToken: 'figd_should_not_authorize',
+    },
+  });
+
+  assert.equal(saved.authStatus, 'needs_auth');
+  assert.equal(capturedCreate?.authMode, 'oauth');
+  assert.equal(capturedCreate?.secretCiphertext, null);
+  assert.equal(capturedCreate?.lastAuthAt, null);
 });
 
 test('startOAuthForProfile starts vercel integration install without PKCE', async () => {

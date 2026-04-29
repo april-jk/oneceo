@@ -76,19 +76,9 @@ export function getConnectorGuides(t: TFunction): Record<ConnectorKey, Connector
       intro: t("connectors.guides.notion.intro"),
       quickLinks: [
         {
-          label: t("connectors.guides.notion.links.integrations.label"),
-          href: "https://www.notion.so/my-integrations",
-          description: t("connectors.guides.notion.links.integrations.description"),
-        },
-        {
-          label: t("connectors.guides.notion.links.authorization.label"),
-          href: "https://developers.notion.com/guides/get-started/authorization",
-          description: t("connectors.guides.notion.links.authorization.description"),
-        },
-        {
-          label: t("connectors.guides.notion.links.mcpDocs.label"),
-          href: "https://developers.notion.com/docs/mcp",
-          description: t("connectors.guides.notion.links.mcpDocs.description"),
+          label: t("connectors.guides.notion.links.composioToolkit.label"),
+          href: "https://docs.composio.dev/toolkits/notion_mcp_oauth",
+          description: t("connectors.guides.notion.links.composioToolkit.description"),
         },
       ],
       steps: [
@@ -124,9 +114,9 @@ export function getConnectorGuides(t: TFunction): Record<ConnectorKey, Connector
       intro: t("connectors.guides.figma.intro"),
       quickLinks: [
         {
-          label: t("connectors.guides.figma.links.tokens.label"),
-          href: "https://www.figma.com/developers/api#access-tokens",
-          description: t("connectors.guides.figma.links.tokens.description"),
+          label: t("connectors.guides.figma.links.composioToolkit.label"),
+          href: "https://docs.composio.dev/toolkits/figma/",
+          description: t("connectors.guides.figma.links.composioToolkit.description"),
         },
       ],
       steps: [
@@ -162,6 +152,21 @@ export function getConnectorGuides(t: TFunction): Record<ConnectorKey, Connector
         t("connectors.guides.vercel.tips.0"),
         t("connectors.guides.vercel.tips.1"),
       ],
+    },
+    google_cloud: {
+      intro: t("connectors.guides.google_cloud.intro"),
+      quickLinks: [
+        {
+          label: t("connectors.guides.google_cloud.links.composioDocs.label"),
+          href: "https://docs.composio.dev/reference/api-reference/tool-router/postToolRouterSessionBySessionIdLink",
+          description: t("connectors.guides.google_cloud.links.composioDocs.description"),
+        },
+      ],
+      steps: [
+        t("connectors.guides.google_cloud.steps.0"),
+        t("connectors.guides.google_cloud.steps.1"),
+      ],
+      tips: [t("connectors.guides.google_cloud.tips.0")],
     },
     postgres: {
       intro: t("connectors.guides.postgres.intro"),

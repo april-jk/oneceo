@@ -1,7 +1,10 @@
 ﻿import { taskCreationSessionDAO, taskSessionConnectorBindingDAO } from '../db/dao';
 import type { OsacMessage } from '../clients/osac-client';
 import { osacConnectionManager } from './osac-connection-manager';
+import { composioConnectorService } from './composio-connector-service';
 import { vercelMcpService } from './vercel-mcp-service';
+import { connectorRegistry, type ConnectorKey } from './connector-registry';
+import { userConnectorService } from './user-connector-service';
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -51,6 +54,27 @@ type HostedProviderHostDeps = {
       };
     }): Promise<unknown>;
   };
+  composioService: {
+    executeRpc(input: {
+      method: string;
+      params?: Record<string, unknown>;
+      runtimeContext: {
+        connectorKey: ConnectorKey;
+        taskSessionId: string;
+        userId: string;
+        profileId: string;
+        profileSecret: any;
+        profileMetadata: Record<string, unknown>;
+        catalogItem: any;
+      };
+    }): Promise<unknown>;
+  };
+  userConnectorService: {
+    getProfileMaterial(userId: string, profileId: string): Promise<any>;
+  };
+  connectorRegistry: {
+    getCatalogItem(connectorKey: string): any;
+  };
 };
 
 export class HostedProviderHostService {
@@ -62,6 +86,9 @@ export class HostedProviderHostService {
       bindingDAO: taskSessionConnectorBindingDAO,
       sessionDAO: taskCreationSessionDAO,
       vercelService: vercelMcpService,
+      composioService: composioConnectorService,
+      userConnectorService,
+      connectorRegistry,
     }
   ) {}
 
@@ -110,15 +137,19 @@ export class HostedProviderHostService {
     switch (input.backendProvider || input.connectorKey) {
       case 'vercel':
         return this.executeVercel(input);
+      case 'figma':
+      case 'google_cloud':
+      case 'notion':
+        return this.executeComposio(input, (input.backendProvider || input.connectorKey) as ConnectorKey);
       default:
         throw new Error(`涓嶆敮鎸佺殑 hosted provider: ${input.backendProvider || input.connectorKey}`);
     }
   }
 
-  private async executeVercel(input: HostedProviderRequest) {
+  private async loadAttachedContext(input: HostedProviderRequest, connectorKey: string) {
     const binding = await this.deps.bindingDAO.getByTaskSessionAndConnectorKey(
       input.taskSessionId,
-      'vercel'
+      connectorKey
     );
     const profileId = asText(binding?.profileId);
     if (
@@ -127,14 +158,19 @@ export class HostedProviderHostService {
       binding.runtimeProviderId !== input.providerId ||
       !profileId
     ) {
-      throw new Error('褰撳墠 task session 鏈寕杞藉搴旂殑 Vercel hosted provider');
+      throw new Error(`当前 task session 未挂载对应的 ${connectorKey} hosted provider`);
     }
 
     const session = await this.deps.sessionDAO.getSession(input.taskSessionId);
     const userId = asText(session?.userId);
     if (!userId) {
-      throw new Error('task session 缂哄皯褰掑睘鐢ㄦ埛锛屾棤娉曟墽琛?hosted provider');
+      throw new Error('task session 缺少归属用户，无法执行 hosted provider');
     }
+    return { binding, profileId, userId };
+  }
+
+  private async executeVercel(input: HostedProviderRequest) {
+    const { profileId, userId } = await this.loadAttachedContext(input, 'vercel');
 
     return this.deps.vercelService.executeRpc({
       method: input.method,
@@ -144,6 +180,31 @@ export class HostedProviderHostService {
         taskSessionId: input.taskSessionId,
         userId,
         profileId,
+      },
+    });
+  }
+
+  private async executeComposio(input: HostedProviderRequest, connectorKey: ConnectorKey) {
+    const { profileId, userId } = await this.loadAttachedContext(input, connectorKey);
+    const profile = await this.deps.userConnectorService.getProfileMaterial(userId, profileId);
+    const catalogItem = this.deps.connectorRegistry.getCatalogItem(connectorKey);
+    if (!profile || profile.connectorKey !== connectorKey || profile.authStatus !== 'authorized') {
+      throw new Error(`${catalogItem.name} connector profile is not authorized`);
+    }
+    if (catalogItem.composio?.provider !== 'composio') {
+      throw new Error(`${catalogItem.name} connector is not a Composio hosted provider`);
+    }
+    return this.deps.composioService.executeRpc({
+      method: input.method,
+      params: input.params,
+      runtimeContext: {
+        connectorKey,
+        taskSessionId: input.taskSessionId,
+        userId,
+        profileId,
+        profileSecret: profile.secret || null,
+        profileMetadata: pickObject(profile.metadataJson),
+        catalogItem,
       },
     });
   }

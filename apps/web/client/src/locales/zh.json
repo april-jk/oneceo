@@ -762,28 +762,20 @@
         }
       },
       "notion": {
-        "intro": "Notion 连接器只保留 OAuth 授权路径。完成 OAuth 后，真正可访问的内容范围仍取决于目标 page 或 database 是否已经共享给对应 integration。",
+        "intro": "Notion 连接器通过 Composio 托管授权和 MCP 工具调用；oneceo 只在 API 服务端保存 broker 所需信息，不会把 token 或 MCP headers 下发到 sandbox。",
         "steps": {
-          "0": "点击连接并完成 Notion OAuth 授权，确认当前使用的是正确的 workspace。",
-          "1": "回到 Notion，把目标 page 或 database 通过 Add connections 共享给对应 integration。",
-          "2": "返回 oneceo 再使用 Notion MCP；如当前在会话中授权，系统会自动把连接结果挂载到该会话。"
+          "0": "点击连接并在 Composio/Notion 授权页面完成工作区授权。",
+          "1": "返回 oneceo 后，系统会保存 Notion profile 并在需要时挂载到当前会话。",
+          "2": "会话内工具调用会通过 API broker 转发到 Composio MCP，sandbox 不接收 Notion 或 Composio 凭据。"
         },
         "tips": {
-          "0": "连接成功不等于内容已可访问；未共享页面时，授权成功后仍会读不到内容。",
-          "1": "如果切换 workspace、integration 权限或共享范围，请重新连接并重新检查页面共享关系。"
+          "0": "旧版 Notion 直连 OAuth profile 需要重新通过 Composio 授权。",
+          "1": "如果切换 workspace 或授权范围，请重新连接 Notion。"
         },
         "links": {
-          "integrations": {
-            "label": "My Integrations",
-            "description": "查看 Notion integration 与工作区绑定"
-          },
-          "authorization": {
-            "label": "Notion 授权文档",
-            "description": "查看 Notion OAuth 授权说明"
-          },
-          "mcpDocs": {
-            "label": "Notion MCP 文档",
-            "description": "查看 Notion MCP 能力与接入方式"
+          "composioToolkit": {
+            "label": "Composio Notion MCP",
+            "description": "查看 Composio 托管的 Notion MCP toolkit"
           }
         }
       },
@@ -806,20 +798,20 @@
         }
       },
       "figma": {
-        "intro": "Figma 连接器在 sandbox 外配置 access token，sandbox 内直接复用该凭据访问 Figma 能力。",
+        "intro": "Figma 连接器通过 Composio 托管授权，并通过 oneceo API broker 暴露 MCP 工具。系统不再接受 Personal Access Token。",
         "steps": {
-          "0": "在 Figma 开发者页面创建 Personal Access Token。",
-          "1": "复制 token 并回到连接器配置页保存。",
-          "2": "sandbox 内将直接使用该 token，不需要重复授权。"
+          "0": "点击连接并完成 Composio/Figma 授权流程。",
+          "1": "授权完成后，将 Figma 挂载到当前会话，或保留为可复用 profile。",
+          "2": "sandbox 只接收 broker 后的 MCP 工具，不接收 Figma token。"
         },
         "tips": {
-          "0": "Token 一旦泄露应立即撤销并重新生成。",
-          "1": "留空 secret 不会覆盖当前配置。"
+          "0": "不要把 Figma token 粘贴到对话、连接器表单、shell 或 sandbox 文件中。",
+          "1": "如果 Figma 账号或 workspace 权限变化，请通过 Composio 重新连接。"
         },
         "links": {
-          "tokens": {
-            "label": "Figma Personal Access Tokens",
-            "description": "创建或管理 token"
+          "composioToolkit": {
+            "label": "Composio Figma Toolkit",
+            "description": "查看 Composio 托管的 Figma 工具集"
           }
         }
       },
@@ -842,6 +834,22 @@
           "restApi": {
             "label": "Vercel REST API",
             "description": "查看项目、部署、域名和环境变量接口"
+          }
+        }
+      },
+      "google_cloud": {
+        "intro": "Google Cloud 连接器使用 Composio managed OAuth。点击连接后进入外部授权；oneceo 只在 API 服务端保存 MCP URL 和 headers。",
+        "steps": {
+          "0": "点击连接并完成 Composio Google Cloud 授权流程。",
+          "1": "返回 oneceo 后，系统会保存默认连接，并在需要时挂载到当前会话。"
+        },
+        "tips": {
+          "0": "Google token、Composio API Key 和 MCP headers 都不会下发到 sandbox。"
+        },
+        "links": {
+          "composioDocs": {
+            "label": "Composio Tool Router",
+            "description": "查看本连接器使用的 OAuth link session API"
           }
         }
       },

@@ -696,6 +696,41 @@ test('buildTaskIntentProfile routes protected capability delegation to user conf
   assert.equal(profile.clarificationTransition?.nextState, 'risk_confirmation');
 });
 
+test('captureMcpToolSnapshot exposes only Composio brokered Notion tools', async () => {
+  mock.method(taskSessionConnectorBindingDAO, 'listByTaskSessionId', async () => [
+    {
+      connectorKey: 'notion',
+      desiredState: 'attached',
+      runtimeStatus: 'connected',
+      runtimeProviderId: 'provider-notion-composio',
+      runtimeTransport: 'api_brokered_mcp',
+      runtimeEnvVersion: 1,
+      runtimeAttachedToolsJson: [{ providerId: 'provider-notion-composio', toolName: 'notion__COMPOSIO_SEARCH_TOOLS' }],
+    },
+    {
+      connectorKey: 'notion',
+      desiredState: 'attached',
+      runtimeStatus: 'connected',
+      runtimeProviderId: 'provider-notion-legacy',
+      runtimeTransport: 'remote_sse',
+      runtimeEnvVersion: 1,
+      runtimeAttachedToolsJson: [{ providerId: 'provider-notion-legacy', toolName: 'notion_list_pages' }],
+    },
+  ] as any);
+  const snapshotMock = mock.method(taskSessionRunDAO, 'createMcpToolSnapshot', async (input: any) => ({
+    id: 'snapshot-notion',
+    snapshotJson: input.snapshotJson,
+  }));
+
+  const service = new AltusManagedSetupService();
+  const result = await service.captureMcpToolSnapshot('session-1');
+
+  assert.equal(result.providers.length, 1);
+  assert.equal(result.providers[0]?.providerId, 'provider-notion-composio');
+  assert.match(JSON.stringify(snapshotMock.mock.calls[0]?.arguments[0]), /notion__COMPOSIO_SEARCH_TOOLS/);
+  assert.doesNotMatch(JSON.stringify(snapshotMock.mock.calls[0]?.arguments[0]), /notion_list_pages/);
+});
+
 test('captureConnectorSnapshot forces recovery before reading connector statuses', async () => {
   mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
     id: 'session-1',

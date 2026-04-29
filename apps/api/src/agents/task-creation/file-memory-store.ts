@@ -651,6 +651,31 @@ class TaskCreationFileMemoryStore {
       session.titleResolvedAt = nextResolvedAt;
       session.updatedAt = new Date().toISOString();
       await this.writeMemory(memory);
+
+      // 同步标题到数据库 metadata_json，确保消费历史等 DB 查询能获取到正确标题
+      try {
+        const { db } = await import('../../config/database');
+        const { taskCreationSessions } = await import('../../db/schema');
+        const { eq } = await import('drizzle-orm');
+        const [existing] = await db
+          .select({ metadataJson: taskCreationSessions.metadataJson })
+          .from(taskCreationSessions)
+          .where(eq(taskCreationSessions.id, sessionId))
+          .limit(1);
+        if (existing) {
+          const currentMeta = (existing.metadataJson as Record<string, unknown>) || {};
+          await db
+            .update(taskCreationSessions)
+            .set({
+              metadataJson: { ...currentMeta, title: nextTitle },
+              updatedAt: new Date(),
+            })
+            .where(eq(taskCreationSessions.id, sessionId));
+        }
+      } catch (syncErr) {
+        // 数据库同步失败不影响主流程（文件存储已更新）
+        console.error('同步会话标题到数据库失败:', syncErr);
+      }
     });
   }
 

@@ -77,8 +77,9 @@ export class PricingService {
   async createPricing(data: {
     model: string;
     modelProvider: string;
-    promptPricePer1kTokens: number;
-    completionPricePer1kTokens: number;
+    promptPricePer1mTokens: number;
+    completionPricePer1mTokens: number;
+    multiplier?: number;
     effectiveFrom?: Date;
   }): Promise<ModelPricing> {
     return await db.transaction(async (trx) => {
@@ -106,8 +107,9 @@ export class PricingService {
       const result = await trx.insert(modelPricing).values({
         model: data.model,
         modelProvider: data.modelProvider,
-        promptPricePer1kTokens: data.promptPricePer1kTokens,
-        completionPricePer1kTokens: data.completionPricePer1kTokens,
+        promptPricePer1mTokens: data.promptPricePer1mTokens,
+        completionPricePer1mTokens: data.completionPricePer1mTokens,
+        multiplier: data.multiplier ?? 1.0,
         isActive: true,
         effectiveFrom,
       }).returning();
@@ -146,18 +148,22 @@ export class PricingService {
   ): number {
     const ratio = cacheRatio ?? this.getDefaultCacheRatios(this.resolveCacheProvider(pricing)) ?? { hit: 0, creation: 0 };
 
-    const cacheHitPrice = pricing.promptPricePer1kTokens * ratio.hit;
-    const cacheCreationPrice = pricing.promptPricePer1kTokens * ratio.creation;
+    const multiplier = pricing.multiplier ?? 1.0;
+    const effectivePromptPrice = pricing.promptPricePer1mTokens * multiplier;
+    const effectiveCompletionPrice = pricing.completionPricePer1mTokens * multiplier;
+
+    const cacheHitPrice = effectivePromptPrice * ratio.hit;
+    const cacheCreationPrice = effectivePromptPrice * ratio.creation;
 
     const nonCachedPromptTokens = usage.nonCachedPromptTokens ?? (usage.promptTokens - (usage.cachedPromptTokens || 0));
     const cachedPromptTokens = usage.cachedPromptTokens || 0;
     const cacheCreationTokens = usage.cacheCreationTokens || 0;
 
     return Math.ceil(
-      (nonCachedPromptTokens * pricing.promptPricePer1kTokens / 1000) +
-      (cachedPromptTokens * cacheHitPrice / 1000) +
-      (cacheCreationTokens * cacheCreationPrice / 1000) +
-      (usage.completionTokens * pricing.completionPricePer1kTokens / 1000)
+      (nonCachedPromptTokens * effectivePromptPrice / 1000000) +
+      (cachedPromptTokens * cacheHitPrice / 1000000) +
+      (cacheCreationTokens * cacheCreationPrice / 1000000) +
+      (usage.completionTokens * effectiveCompletionPrice / 1000000)
     );
   }
 

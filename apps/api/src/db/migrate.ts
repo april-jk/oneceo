@@ -42,7 +42,6 @@ const REQUIRED_TABLES = [
   'sandbox_execution_environments',
   'user_connector_accounts',
   'user_connector_profiles',
-  'user_codex_runtime_configs',
   'user_platform_skill_bindings',
   'user_custom_skills',
   'user_custom_skill_documents',
@@ -301,15 +300,6 @@ CREATE TABLE IF NOT EXISTS user_connector_profiles (
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS user_codex_runtime_configs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id TEXT NOT NULL,
-  config_toml TEXT NOT NULL,
-  auth_json TEXT NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
 -- 任务会话连接器绑定表
 CREATE TABLE IF NOT EXISTS task_session_connector_bindings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -468,8 +458,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_user_connector_profiles_user_connector_pro
   ON user_connector_profiles(user_id, connector_key, profile_name);
 CREATE INDEX IF NOT EXISTS idx_user_connector_profiles_user_id ON user_connector_profiles(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_connector_profiles_user_connector ON user_connector_profiles(user_id, connector_key);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_user_codex_runtime_configs_user_id ON user_codex_runtime_configs(user_id);
-CREATE INDEX IF NOT EXISTS idx_user_codex_runtime_configs_updated_at ON user_codex_runtime_configs(updated_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_connector_bindings_session_connector
   ON task_session_connector_bindings(task_session_id, connector_key);
 CREATE INDEX IF NOT EXISTS idx_task_session_connector_bindings_task_session_id
@@ -1492,7 +1480,9 @@ INSERT INTO cache_pricing_config (provider, hit_ratio, creation_ratio, is_active
 VALUES
   ('openai', 500, 0, true),
   ('anthropic', 100, 1250, true),
-  ('qwen', 200, 1250, true)
+  ('qwen', 200, 1250, true),
+  ('agent', 500, 0, true),
+  ('sandbox', 500, 0, true)
 ON CONFLICT DO NOTHING;
 `;
 
@@ -1591,7 +1581,12 @@ export async function runMigration() {
         VALUES
           ('qwen3-max-2026-01-23', 'qwen', 3, 6),
           ('qwen3-vl-plus', 'qwen', 5, 10),
-          ('claude-haiku-4-5-20251001', 'anthropic', 5, 10)
+          ('claude-haiku-4-5-20251001', 'anthropic', 5, 10),
+          ('agent.lite', 'agent', 3, 6),
+          ('agent.pro', 'agent', 3, 6),
+          ('agent.max', 'agent', 3, 6),
+          ('sandbox.opencode', 'sandbox', 3, 6),
+          ('sandbox.codex', 'sandbox', 3, 6)
       )
       INSERT INTO model_pricing (model, model_provider, prompt_price_per_1k_tokens, completion_price_per_1k_tokens, is_active, effective_from)
       SELECT seed.model, seed.model_provider, seed.prompt_price_per_1k_tokens, seed.completion_price_per_1k_tokens, true, NOW()
@@ -1628,7 +1623,6 @@ export async function runMigration() {
     console.log('  - connector_guide_revisions');
     console.log('  - task_session_connector_guides');
     console.log('  - connector_auth_requests');
-    console.log('  - user_codex_runtime_configs');
     console.log('  - platform_runtime_artifact_releases');
     console.log('  - platform_runtime_artifact_channels');
     console.log('  - user_credits');
@@ -1693,7 +1687,6 @@ export async function dropAllTables() {
       DROP TABLE IF EXISTS user_custom_skill_documents CASCADE;
       DROP TABLE IF EXISTS user_custom_skills CASCADE;
       DROP TABLE IF EXISTS user_platform_skill_bindings CASCADE;
-      DROP TABLE IF EXISTS user_codex_runtime_configs CASCADE;
       DROP TABLE IF EXISTS app_user_legacy_id_mappings CASCADE;
       DROP TABLE IF EXISTS user_connector_accounts CASCADE;
       DROP TABLE IF EXISTS task_creation_sessions CASCADE;

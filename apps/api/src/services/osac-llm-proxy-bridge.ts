@@ -30,9 +30,11 @@ const bridgeSendConnectTimeoutMs = toPositiveInt(
 function normalizeHeaders(input?: Record<string, unknown>): Record<string, string> {
   const headers: Record<string, string> = {};
   for (const [key, value] of Object.entries(input || {})) {
+    const lowerKey = key.toLowerCase();
     if (!value) continue;
-    if (key.toLowerCase() === 'host') continue;
-    if (key.toLowerCase() === 'content-length') continue;
+    if (lowerKey === 'host') continue;
+    if (lowerKey === 'content-length') continue;
+    if (lowerKey.startsWith('x-oneceo-internal-llm-')) continue;
     headers[key] = Array.isArray(value) ? value.join(',') : String(value);
   }
   return headers;

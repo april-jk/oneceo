@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getBillingErrorMessage, readBillingResponseError, type BillingNotify } from './billing-feedback';
+import { AdminButton, AdminDetailShell, IdToken } from './admin-ui';
 
 interface UsageLog {
   id: string;
@@ -155,12 +156,12 @@ export function BillingUsageLogs({ onOpenUser, onOpenConversation, onNotify }: B
             />
           </label>
           <div className="user-management-filter-actions">
-            <button type="button" className="secondary-btn" onClick={handleSearch}>
+            <AdminButton variant="secondary" onClick={handleSearch}>
               查询
-            </button>
-            <button type="button" className="secondary-btn" onClick={handleReset}>
+            </AdminButton>
+            <AdminButton variant="secondary" onClick={handleReset}>
               重置
-            </button>
+            </AdminButton>
           </div>
         </div>
       </section>
@@ -230,7 +231,7 @@ export function BillingUsageLogs({ onOpenUser, onOpenConversation, onNotify }: B
                           {log.userId.slice(0, 8)}...
                         </button>
                       ) : (
-                        <span className="mono">{log.userId.slice(0, 8)}...</span>
+                        <IdToken value={log.userId} head={8} tail={4} />
                       )}
                     </td>
                     <td><strong>{log.model.split('/').pop() || log.model}</strong></td>
@@ -293,6 +294,15 @@ export function BillingUsageLogs({ onOpenUser, onOpenConversation, onNotify }: B
             </tbody>
           </table>
         </div>
+        <div className="admin-mobile-card-list" aria-label="使用明细移动列表">
+          {loading ? <p className="empty">正在加载使用明细...</p> : logs.length === 0 ? <p className="empty">暂无数据</p> : logs.map((log) => (
+            <article key={log.id} className="admin-mobile-card" onClick={() => handleOpenDetail(log)}>
+              <div className="admin-mobile-card-head"><strong>{log.model.split('/').pop() || log.model}</strong><span>{formatDateTime(log.createdAt)}</span></div>
+              <div className="admin-mobile-card-meta"><span>{log.totalTokens.toLocaleString()} tokens</span><span>{log.creditsConsumed.toLocaleString()} credits</span></div>
+              <IdToken label="用户" value={log.userId} head={8} tail={4} />
+            </article>
+          ))}
+        </div>
 
         {/* Pagination */}
         {total > 0 && (
@@ -307,22 +317,20 @@ export function BillingUsageLogs({ onOpenUser, onOpenConversation, onNotify }: B
               共 {total.toLocaleString()} 条记录，第 {page} / {totalPages} 页
             </span>
             <div style={{ display: 'flex', gap: '8px' }}>
-              <button
+              <AdminButton
                 type="button"
-                className="secondary-btn"
                 onClick={() => setPage(p => Math.max(1, p - 1))}
                 disabled={page <= 1}
               >
                 上一页
-              </button>
-              <button
+              </AdminButton>
+              <AdminButton
                 type="button"
-                className="secondary-btn"
                 onClick={() => setPage(p => Math.min(totalPages, p + 1))}
                 disabled={page >= totalPages}
               >
                 下一页
-              </button>
+              </AdminButton>
             </div>
           </div>
         )}
@@ -330,24 +338,7 @@ export function BillingUsageLogs({ onOpenUser, onOpenConversation, onNotify }: B
 
       {/* Detail Modal */}
       {detailOpen && selectedLog && (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setDetailOpen(false)}>
-          <aside
-            className="modal-card user-management-modal"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="modal-header user-management-modal-header">
-              <div className="user-management-modal-heading">
-                <p className="section-tag">使用详情</p>
-                <h2>{selectedLog.model}</h2>
-                <p className="panel-caption">{formatDateTime(selectedLog.createdAt)}</p>
-              </div>
-              <div className="user-management-modal-actions">
-                <button type="button" className="secondary-btn" onClick={() => setDetailOpen(false)}>
-                  关闭
-                </button>
-              </div>
-            </div>
-            <div className="user-management-modal-body">
+        <AdminDetailShell open={detailOpen} onClose={() => setDetailOpen(false)} eyebrow="使用详情" title={selectedLog.model} subtitle={formatDateTime(selectedLog.createdAt)} size="lg" footer={<AdminButton variant="secondary" onClick={() => setDetailOpen(false)}>关闭</AdminButton>} contentClassName="user-management-modal-body">
               <div className="user-management-detail-grid">
                 <article className="sub-panel user-management-detail-card">
                   <div className="user-management-list-head">
@@ -437,9 +428,7 @@ export function BillingUsageLogs({ onOpenUser, onOpenConversation, onNotify }: B
                   </div>
                 </article>
               </div>
-            </div>
-          </aside>
-        </div>
+        </AdminDetailShell>
       )}
     </>
   );

@@ -22,3 +22,13 @@
 - 验证：Vite/JS、Node、Python、PHP、Java 均已真实部署到 Railway 且公网 200；JS/Node/Python/Java 的 Umami e2e 均确认面板进入 `tracking` 并读到 pageviews/visits/visitors；PHP 完整统计脚本曾遇到一次公网 TLS 瞬断，但通过真实页面上报与后端查询确认 `pageviews=1`、`visits=1`、`visitors=1`。
 - 本地检查：`pnpm --filter api exec tsx --test tests/deployment-template-baseline-service.test.ts tests/deployment-template-bootstrap-service.test.ts` 通过 24 项；`pnpm --filter api type-check` 通过。
 - 遗留观察：Java 统计脚本额外触发过一条 redeploy，面板历史列表中仍可见非当前的 `BUILDING` 记录；当前绑定为 `ready`、线上版本为 `SUCCESS`、`activeDeploymentPending=false`，不影响当前可用性。
+
+## Railway 线上地址短时间后 404 排查
+
+- 问题：已发布成功的 Railway 公网地址在后续一段时间后出现 `x-railway-fallback: true` / 404。
+- 根因：部署成功后 runtime 会调用跨资源键的 `pruneSupersededProjectResources`，按同一用户 Railway project 删除其他 Environment/Service。正确模型应是 OneCEO 用户 -> 一个 Railway Project，OneCEO 用户项目 -> 一个 Railway Environment；跨用户项目删除会误删其他项目线上服务，导致旧 URL 变为 Railway fallback 404。
+- 处理：移除部署成功、重部署/回滚成功后的跨 session 清理调用，并删除 `pruneSupersededProjectResources` 入口；普通 `provider_error`、`FAILED`、`CRASHED` 不再先删 service 再重建，只有明确的 `railway_environment_not_found` / `railway_service_not_found` 资源缺失才允许回收重建。
+- 补强：禁用“服务创建额度到顶时复用其他 session service”的路径，避免新项目覆盖旧项目；公网验证阶段的 `deployment_provider_error` 保留资源用于诊断/恢复，不再立即删除刚创建的 service 导致慢启动变 404。
+- 模型修正：部署资源键优先使用 `session.projectId`，只有未绑定用户项目的临时会话才回退到 `taskSessionId`；资源绑定标记更新为 `environmentModel=per_user_project`。
+- 保留：失败部署的当前 session 资源清理仍保留，避免首次部署或替换部署失败后留下持续计费资源。
+- 验证：`rg` 确认源码/测试无剩余 `pruneSupersededProjectResources` 或跨 session 复用入口；`pnpm --filter api exec tsx --test tests/platform-deployment-account-service.test.ts tests/task-session-deployment-runtime-service.test.ts` 通过 25 项；`pnpm --filter api type-check` 通过；`pnpm --filter web check` 通过；`git diff --check` 通过。

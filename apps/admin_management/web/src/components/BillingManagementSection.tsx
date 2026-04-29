@@ -16,8 +16,9 @@ interface Pricing {
   apiType?: string | null;
   tokenState?: 'configured' | 'inherited' | 'missing';
   runtimeConfigAnchor?: string | null;
-  promptPricePer1kTokens: number;
-  completionPricePer1kTokens: number;
+  promptPricePer1mTokens: number;
+  completionPricePer1mTokens: number;
+  multiplier: number;
   isActive: boolean;
   cacheHitRatio: number;
   cacheCreationRatio: number;
@@ -196,8 +197,9 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
   const [pricingForm, setPricingForm] = useState({
     model: '',
     modelProvider: 'openai',
-    promptPricePer1kTokens: '',
-    completionPricePer1kTokens: '',
+    promptPricePer1mTokens: '',
+    completionPricePer1mTokens: '',
+    multiplier: '',
     effectiveFrom: '',
     cacheHitRatio: '',
     cacheCreationRatio: '',
@@ -331,8 +333,8 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
     }
   }, [onOpenConversation]);
 
-  const promptPrice = Number(pricingForm.promptPricePer1kTokens);
-  const completionPrice = Number(pricingForm.completionPricePer1kTokens);
+  const promptPrice = Number(pricingForm.promptPricePer1mTokens);
+  const completionPrice = Number(pricingForm.completionPricePer1mTokens);
   const cacheHitPercent = Number(pricingForm.cacheHitRatio);
   const cacheCreationPercent = Number(pricingForm.cacheCreationRatio);
   const canSubmitPricing = Boolean(pricingForm.model.trim()) &&
@@ -349,16 +351,16 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
 
   const pricingFieldErrors = (() => {
     const errors: Record<string, string> = {};
-    const promptPrice = Number(pricingForm.promptPricePer1kTokens);
-    const completionPrice = Number(pricingForm.completionPricePer1kTokens);
+    const promptPrice = Number(pricingForm.promptPricePer1mTokens);
+    const completionPrice = Number(pricingForm.completionPricePer1mTokens);
     const cacheHit = Number(pricingForm.cacheHitRatio);
     const cacheCreation = Number(pricingForm.cacheCreationRatio);
 
-    if (pricingForm.promptPricePer1kTokens !== '' && (!Number.isInteger(promptPrice) || promptPrice <= 0)) {
-      errors.promptPricePer1kTokens = '请输入大于 0 的正整数';
+    if (pricingForm.promptPricePer1mTokens !== '' && (!Number.isInteger(promptPrice) || promptPrice <= 0)) {
+      errors.promptPricePer1mTokens = '请输入大于 0 的正整数';
     }
-    if (pricingForm.completionPricePer1kTokens !== '' && (!Number.isInteger(completionPrice) || completionPrice <= 0)) {
-      errors.completionPricePer1kTokens = '请输入大于 0 的正整数';
+    if (pricingForm.completionPricePer1mTokens !== '' && (!Number.isInteger(completionPrice) || completionPrice <= 0)) {
+      errors.completionPricePer1mTokens = '请输入大于 0 的正整数';
     }
     if (pricingForm.cacheHitRatio !== '' && (!Number.isFinite(cacheHit) || cacheHit < 0 || cacheHit > MAX_CACHE_HIT_PERCENT)) {
       errors.cacheHitRatio = `请输入 0 ~ ${MAX_CACHE_HIT_PERCENT} 之间的数值`;
@@ -398,8 +400,9 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
     setPricingForm({
       model: initial?.model || '',
       modelProvider: provider,
-      promptPricePer1kTokens: initial?.promptPricePer1kTokens || '',
-      completionPricePer1kTokens: initial?.completionPricePer1kTokens || '',
+      promptPricePer1mTokens: initial?.promptPricePer1mTokens || '',
+      completionPricePer1mTokens: initial?.completionPricePer1mTokens || '',
+      multiplier: initial?.multiplier || '',
       effectiveFrom: initial?.effectiveFrom || '',
       cacheHitRatio: initial?.cacheHitRatio || cacheForm.hitRatio,
       cacheCreationRatio: initial?.cacheCreationRatio || cacheForm.creationRatio,
@@ -419,8 +422,9 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
     openPricingForm({
       model: pricingItem.model,
       modelProvider: normalizedProvider,
-      promptPricePer1kTokens: String(pricingItem.promptPricePer1kTokens),
-      completionPricePer1kTokens: String(pricingItem.completionPricePer1kTokens),
+      promptPricePer1mTokens: String(pricingItem.promptPricePer1mTokens),
+      completionPricePer1mTokens: String(pricingItem.completionPricePer1mTokens),
+      multiplier: String(pricingItem.multiplier ?? 1.0),
       effectiveFrom: '',
       cacheHitRatio: formatPercentInput((pricingItem.cacheHitRatio || 0) * 100),
       cacheCreationRatio: formatPercentInput((pricingItem.cacheCreationRatio || 0) * 100),
@@ -564,8 +568,9 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
         body: JSON.stringify({
           model: pricingForm.model.trim(),
           modelProvider: pricingForm.modelProvider,
-          promptPricePer1kTokens: promptPrice,
-          completionPricePer1kTokens: completionPrice,
+          promptPricePer1mTokens: promptPrice,
+          completionPricePer1mTokens: completionPrice,
+          multiplier: Number(pricingForm.multiplier) || 1.0,
           effectiveFrom: pricingForm.effectiveFrom ? new Date(pricingForm.effectiveFrom).toISOString() : undefined,
           cacheHitRatio: Math.round(cacheHitPercent * 10),
           cacheCreationRatio: Math.round(cacheCreationPercent * 10),
@@ -576,8 +581,9 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
         setPricingForm({
           model: '',
           modelProvider: 'openai',
-          promptPricePer1kTokens: '',
-          completionPricePer1kTokens: '',
+          promptPricePer1mTokens: '',
+          completionPricePer1mTokens: '',
+          multiplier: '',
           effectiveFrom: '',
           cacheHitRatio: defaultCacheForm.hitRatio,
           cacheCreationRatio: defaultCacheForm.creationRatio,
@@ -674,8 +680,8 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
             <div className="pricing-live-head"><div className="pricing-live-title"><p className="section-tag">定价配置</p><p className="panel-caption">运行配置决定模型与接口，SKU 定价决定扣积分规则。修改运行配置只影响后续新任务。</p></div><div className="pricing-live-actions"><AdminButton variant="primary" onClick={() => openPricingForm()}>新建定价</AdminButton><AdminButton variant="secondary" onClick={async () => { await fetchRuntimeConfig(); await fetchPricing(); onNotify?.('success', '已刷新', '运行配置与定价数据已更新'); }} loading={runtimeConfigLoading}>{runtimeConfigLoading ? '刷新中...' : '刷新配置'}</AdminButton></div></div>
             <div className="pricing-live-rack-compact" aria-busy={runtimeConfigLoading}>{runtimeItems.map((item) => { const testResult = runtimeTestResults[item.key]; const isTesting = runtimeTestingKey === item.key; return (<section key={item.key} id={item.runtimeConfigAnchor} className="pricing-live-runtime-compact"><div className="pricing-live-runtime-top"><span className="pricing-detail-label">{item.kind === 'agent' ? 'Agent' : 'Sandbox'}</span><StatusBadge tone={tokenStateTone(item.tokenState)}>{tokenStateLabel(item.tokenState)}</StatusBadge></div><strong title={item.displayName}>{item.displayName}</strong><small title={`${item.model || '未配置模型'} · ${item.baseUrlHost || '未配置接口'} · ${item.apiType || '-'}`}>{item.model || '未配置模型'}</small>{testResult ? (<button type="button" className={`runtime-test-result runtime-test-result-${testResult.status}`} onClick={() => { setRuntimeTestModalTarget(item); setRuntimeTestModalOpen(true); }} title={`${testResult.latencyMs}ms · ${testResult.model || item.model || '未配置模型'} · ${testResult.baseUrlHost || item.baseUrlHost || '未配置接口'}`}><StatusBadge tone={runtimeTestTone(testResult)}>{testResult.status === 'success' ? '通过' : '失败'}</StatusBadge></button>) : null}<div className="runtime-config-actions"><button type="button" className="table-btn" onClick={() => openRuntimeForm(item)}>调整运行配置</button><button type="button" className="table-btn" onClick={() => void testRuntimeConfig(item)} disabled={isTesting}>{isTesting ? '...' : '测试'}</button></div></section>); })}</div>
             <div className="pricing-live-notice"><span className="pricing-form-tip-icon">ℹ</span><span>运行配置和定价分层展示，先确认执行入口，再处理扣费规则。</span></div>
-            <div className="table-wrap user-management-table-wrap pricing-live-table-wrap" aria-live="polite"><table className="user-management-table pricing-live-table"><colgroup><col style={{ width: '22%' }} /><col style={{ width: '12%' }} /><col style={{ width: '12%' }} /><col style={{ width: '16%' }} /><col style={{ width: '12%' }} /><col style={{ width: '14%' }} /><col style={{ width: '12%' }} /></colgroup><thead><tr><th><span className="runtime-th-label">计费对象</span></th><th><span className="runtime-th-label">输入单价</span></th><th><span className="runtime-th-label">输出单价</span></th><th><span className="runtime-th-label">缓存比例</span></th><th><span className="runtime-th-label">运行状态</span></th><th><span className="runtime-th-label">生效时间</span></th><th className="runtime-col-actions"><span className="runtime-th-label">操作</span></th></tr></thead><tbody>{pricingTargets.length === 0 ? (<tr><td colSpan={7} className="empty">暂无定价数据</td></tr>) : (pricingTargets.map((p) => { const normalizedProvider = normalizePricingProvider(p.model, p.modelProvider); const configured = p.isActive && p.promptPricePer1kTokens > 0 && p.completionPricePer1kTokens > 0; return (<tr key={p.id}><td><div className="user-management-table-user"><div className="user-management-table-user-head"><strong>{p.displayName || p.model}</strong></div><small>{p.billingTargetKey || p.model}</small>{p.actualModel && p.actualModel !== p.model ? (<small className="pricing-runtime-hint" title={`${p.actualModel} · ${p.baseUrlHost || '未配置接口'} · ${p.apiType || '-'}`}>{p.actualModel} · {p.baseUrlHost || '未配置接口'}</small>) : null}</div></td><td><div className="user-management-table-cell-stack user-management-table-metric"><strong>{p.promptPricePer1kTokens}</strong><small>/ 1k tokens</small></div></td><td><div className="user-management-table-cell-stack user-management-table-metric"><strong>{p.completionPricePer1kTokens}</strong><small>/ 1k tokens</small></div></td><td><div className="user-management-table-cell-stack">{p.cacheHitRatio > 0 && (<span>命中 {(p.cacheHitRatio * 100).toFixed(0)}%</span>)}{p.cacheCreationRatio > 0 && (<span>创建 {(p.cacheCreationRatio * 100).toFixed(0)}%</span>)}</div></td><td><StatusBadge tone={tokenStateTone(p.tokenState)}>{tokenStateLabel(p.tokenState)}</StatusBadge></td><td><div className="user-management-table-cell-stack">{p.effectiveFrom ? (<small>{new Date(p.effectiveFrom).toLocaleDateString('zh-CN')}</small>) : (<small>-</small>)}</div></td><td><div className="user-management-table-actions"><button type="button" className="table-btn" onClick={() => configured ? openPricingDetail(p) : openPricingForm({ model: p.model, modelProvider: normalizedProvider }, 'create')}>{configured ? '详情' : '配置'}</button></div></td></tr>);}))}</tbody></table></div>
-            <div className="admin-mobile-card-list" aria-label="定价配置移动列表">{pricingTargets.length === 0 ? <p className="empty">暂无定价数据</p> : pricingTargets.map((p) => (<article key={p.id} className="admin-mobile-card"><div className="admin-mobile-card-head"><strong>{p.displayName || p.model}</strong><StatusBadge tone={p.isActive ? 'success' : 'warning'}>{p.isActive ? '已定价' : '待配置'}</StatusBadge></div><div className="admin-mobile-card-meta"><span>输入 {p.promptPricePer1kTokens} / 1k</span><span>输出 {p.completionPricePer1kTokens} / 1k</span><span>缓存 {(p.cacheHitRatio * 100).toFixed(0)}% / {(p.cacheCreationRatio * 100).toFixed(0)}%</span></div>{p.isActive ? (
+            <div className="table-wrap user-management-table-wrap pricing-live-table-wrap" aria-live="polite"><table className="user-management-table pricing-live-table"><colgroup><col style={{ width: '20%' }} /><col style={{ width: '10%' }} /><col style={{ width: '10%' }} /><col style={{ width: '8%' }} /><col style={{ width: '14%' }} /><col style={{ width: '12%' }} /><col style={{ width: '12%' }} /><col style={{ width: '14%' }} /></colgroup><thead><tr><th><span className="runtime-th-label">计费对象</span></th><th><span className="runtime-th-label">输入单价</span></th><th><span className="runtime-th-label">输出单价</span></th><th><span className="runtime-th-label">倍率</span></th><th><span className="runtime-th-label">缓存比例</span></th><th><span className="runtime-th-label">运行状态</span></th><th><span className="runtime-th-label">生效时间</span></th><th className="runtime-col-actions"><span className="runtime-th-label">操作</span></th></tr></thead><tbody>{pricingTargets.length === 0 ? (<tr><td colSpan={8} className="empty">暂无定价数据</td></tr>) : (pricingTargets.map((p) => { const normalizedProvider = normalizePricingProvider(p.model, p.modelProvider); const configured = p.isActive && p.promptPricePer1mTokens > 0 && p.completionPricePer1mTokens > 0; return (<tr key={p.id}><td><div className="user-management-table-user"><div className="user-management-table-user-head"><strong>{p.displayName || p.model}</strong></div><small>{p.billingTargetKey || p.model}</small>{p.actualModel && p.actualModel !== p.model ? (<small className="pricing-runtime-hint" title={`${p.actualModel} · ${p.baseUrlHost || '未配置接口'} · ${p.apiType || '-'}`}>{p.actualModel} · {p.baseUrlHost || '未配置接口'}</small>) : null}</div></td><td><div className="user-management-table-cell-stack user-management-table-metric"><strong>{p.promptPricePer1mTokens}</strong><small>/ 1M tokens</small></div></td><td><div className="user-management-table-cell-stack user-management-table-metric"><strong>{p.completionPricePer1mTokens}</strong><small>/ 1M tokens</small></div></td><td><div className="user-management-table-cell-stack user-management-table-metric"><strong>{p.multiplier ?? 1.0}</strong><small>×</small></div></td><td><div className="user-management-table-cell-stack">{p.cacheHitRatio > 0 && (<span>命中 {(p.cacheHitRatio * 100).toFixed(0)}%</span>)}{p.cacheCreationRatio > 0 && (<span>创建 {(p.cacheCreationRatio * 100).toFixed(0)}%</span>)}</div></td><td><StatusBadge tone={tokenStateTone(p.tokenState)}>{tokenStateLabel(p.tokenState)}</StatusBadge></td><td><div className="user-management-table-cell-stack">{p.effectiveFrom ? (<small>{new Date(p.effectiveFrom).toLocaleDateString('zh-CN')}</small>) : (<small>-</small>)}</div></td><td><div className="user-management-table-actions"><button type="button" className="table-btn" onClick={() => configured ? openPricingDetail(p) : openPricingForm({ model: p.model, modelProvider: normalizedProvider }, 'create')}>{configured ? '详情' : '配置'}</button></div></td></tr>);}))}</tbody></table></div>
+            <div className="admin-mobile-card-list" aria-label="定价配置移动列表">{pricingTargets.length === 0 ? <p className="empty">暂无定价数据</p> : pricingTargets.map((p) => (<article key={p.id} className="admin-mobile-card"><div className="admin-mobile-card-head"><strong>{p.displayName || p.model}</strong><StatusBadge tone={p.isActive ? 'success' : 'warning'}>{p.isActive ? '已定价' : '待配置'}</StatusBadge></div><div className="admin-mobile-card-meta"><span>输入 {p.promptPricePer1mTokens} / 1M</span><span>输出 {p.completionPricePer1mTokens} / 1M</span><span>倍率 {p.multiplier ?? 1.0}×</span><span>缓存 {(p.cacheHitRatio * 100).toFixed(0)}% / {(p.cacheCreationRatio * 100).toFixed(0)}%</span></div>{p.isActive ? (
               <AdminButton variant="link" onClick={() => openPricingDetail(p)}>详情</AdminButton>
             ) : p.model?.trim() ? (
               <AdminButton variant="link" onClick={() => openPricingForm({ model: p.model, modelProvider: normalizePricingProvider(p.model, p.modelProvider) }, 'create')}>配置</AdminButton>
@@ -1733,8 +1739,8 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                         ...pricingForm,
                         model: candidate.model,
                         modelProvider: normalizedProvider,
-                        promptPricePer1kTokens: existingPricing ? String(existingPricing.promptPricePer1kTokens) : pricingForm.promptPricePer1kTokens,
-                        completionPricePer1kTokens: existingPricing ? String(existingPricing.completionPricePer1kTokens) : pricingForm.completionPricePer1kTokens,
+                        promptPricePer1mTokens: existingPricing ? String(existingPricing.promptPricePer1mTokens) : pricingForm.promptPricePer1mTokens,
+                        completionPricePer1mTokens: existingPricing ? String(existingPricing.completionPricePer1mTokens) : pricingForm.completionPricePer1mTokens,
                         cacheHitRatio: existingPricing ? formatPercentInput((existingPricing.cacheHitRatio || 0) * 100) : nextCache.hitRatio,
                         cacheCreationRatio: existingPricing ? formatPercentInput((existingPricing.cacheCreationRatio || 0) * 100) : nextCache.creationRatio,
                         });
@@ -1806,37 +1812,37 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                         <section className="pricing-form-section">
                         <h3 className="pricing-form-section-title">基础定价</h3>
                         <div className="pricing-form-grid">
-                        <div className={`pricing-form-field ${shouldShowPricingFieldError('promptPricePer1kTokens') ? 'has-error' : ''}`}>
-                        <span className="pricing-form-field-label">输入单价 <small>credits / 1k tokens</small></span>
+                        <div className={`pricing-form-field ${shouldShowPricingFieldError('promptPricePer1mTokens') ? 'has-error' : ''}`}>
+                        <span className="pricing-form-field-label">输入单价 <small>credits / 1M tokens</small></span>
                         <input
                         type="number"
                         min={1}
                         step={1}
-                        placeholder="如 25"
-                        value={pricingForm.promptPricePer1kTokens}
+                        placeholder="如 25000"
+                        value={pricingForm.promptPricePer1mTokens}
                         onChange={(e) => {
-                        markPricingFieldTouched('promptPricePer1kTokens');
-                        setPricingForm({ ...pricingForm, promptPricePer1kTokens: e.target.value });
+                        markPricingFieldTouched('promptPricePer1mTokens');
+                        setPricingForm({ ...pricingForm, promptPricePer1mTokens: e.target.value });
                         }}
-                        onBlur={() => markPricingFieldTouched('promptPricePer1kTokens')}
+                        onBlur={() => markPricingFieldTouched('promptPricePer1mTokens')}
                         />
-                        {shouldShowPricingFieldError('promptPricePer1kTokens') && <span className="pricing-form-field-error">{pricingFieldErrors.promptPricePer1kTokens}</span>}
+                        {shouldShowPricingFieldError('promptPricePer1mTokens') && <span className="pricing-form-field-error">{pricingFieldErrors.promptPricePer1mTokens}</span>}
                         </div>
-                        <div className={`pricing-form-field ${shouldShowPricingFieldError('completionPricePer1kTokens') ? 'has-error' : ''}`}>
-                        <span className="pricing-form-field-label">输出单价 <small>credits / 1k tokens</small></span>
+                        <div className={`pricing-form-field ${shouldShowPricingFieldError('completionPricePer1mTokens') ? 'has-error' : ''}`}>
+                        <span className="pricing-form-field-label">输出单价 <small>credits / 1M tokens</small></span>
                         <input
                         type="number"
                         min={1}
                         step={1}
-                        placeholder="如 50"
-                        value={pricingForm.completionPricePer1kTokens}
+                        placeholder="如 50000"
+                        value={pricingForm.completionPricePer1mTokens}
                         onChange={(e) => {
-                        markPricingFieldTouched('completionPricePer1kTokens');
-                        setPricingForm({ ...pricingForm, completionPricePer1kTokens: e.target.value });
+                        markPricingFieldTouched('completionPricePer1mTokens');
+                        setPricingForm({ ...pricingForm, completionPricePer1mTokens: e.target.value });
                         }}
-                        onBlur={() => markPricingFieldTouched('completionPricePer1kTokens')}
+                        onBlur={() => markPricingFieldTouched('completionPricePer1mTokens')}
                         />
-                        {shouldShowPricingFieldError('completionPricePer1kTokens') && <span className="pricing-form-field-error">{pricingFieldErrors.completionPricePer1kTokens}</span>}
+                        {shouldShowPricingFieldError('completionPricePer1mTokens') && <span className="pricing-form-field-error">{pricingFieldErrors.completionPricePer1mTokens}</span>}
                         </div>
                         <div className="pricing-form-field pricing-form-field-wide">
                         <span className="pricing-form-field-label">生效时间 <small>留空立即生效</small></span>
@@ -1846,11 +1852,28 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                         onChange={(e) => setPricingForm({ ...pricingForm, effectiveFrom: e.target.value })}
                         />
                         </div>
-                        </div>
-                        </section>
-                        
-                        <section className="pricing-form-section">
-                        <h3 className="pricing-form-section-title">缓存计费</h3>
+                         </div>
+                         </section>
+                         
+                         <section className="pricing-form-section">
+                         <h3 className="pricing-form-section-title">倍率</h3>
+                         <div className="pricing-form-grid">
+                         <div className="pricing-form-field pricing-form-field-wide">
+                         <span className="pricing-form-field-label">倍率 <small>默认 1.0，最终定价 = 基础定价 × 倍率</small></span>
+                         <input
+                         type="number"
+                         min={0.1}
+                         step={0.1}
+                         placeholder="如 1.2"
+                         value={pricingForm.multiplier}
+                         onChange={(e) => setPricingForm({ ...pricingForm, multiplier: e.target.value })}
+                         />
+                         </div>
+                         </div>
+                         </section>
+                         
+                         <section className="pricing-form-section">
+                         <h3 className="pricing-form-section-title">缓存计费</h3>
                         <div className="pricing-form-tip">
                         <span className="pricing-form-tip-icon">ℹ</span>
                         <span>缓存比例按 provider 生效，将影响 {providerLabel(pricingForm.modelProvider)} 下所有模型。Qwen 隐式缓存命中填 20，缓存创建填 125；无缓存创建费用填 0。</span>
@@ -2128,7 +2151,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
 
           {pricingDetailOpen && selectedPricing && (
             <>
-            <AdminDetailShell open={pricingDetailOpen} onClose={() => setPricingDetailOpen(false)} eyebrow="定价详情" title={selectedPricing.model} subtitle="查看当前定价快照，并在此更新或删除该规则。" icon={getAdminModuleIcon('billing')} entityType="Billing Pricing" lastUpdated={`生效 ${selectedPricing.effectiveFrom ? new Date(selectedPricing.effectiveFrom).toLocaleString('zh-CN', { hour12: false }) : '-'}`} risk={selectedPricing.isActive ? '风险：影响新请求计费' : '风险：已删除规则'} metrics={[{ label: '输入单价', value: selectedPricing.promptPricePer1kTokens }, { label: '输出单价', value: selectedPricing.completionPricePer1kTokens }, { label: '缓存命中', value: `${(selectedPricing.cacheHitRatio * 100).toFixed(0)}%` }, { label: '缓存创建', value: `${(selectedPricing.cacheCreationRatio * 100).toFixed(0)}%` }]} status={<StatusBadge tone={selectedPricing.isActive ? 'success' : 'danger'}>{selectedPricing.isActive ? '生效中' : '已删除'}</StatusBadge>} size="lg" moreActions={<><AdminButton variant="primary" onClick={() => openPricingUpdate(selectedPricing)}>更改定价</AdminButton><AdminButton variant="secondary" icon={getAdminActionIcon('logs')} onClick={() => setPricingDiffOpen(true)}>查看 Diff</AdminButton></>}>
+            <AdminDetailShell open={pricingDetailOpen} onClose={() => setPricingDetailOpen(false)} eyebrow="定价详情" title={selectedPricing.model} subtitle="查看当前定价快照，并在此更新或删除该规则。" icon={getAdminModuleIcon('billing')} entityType="Billing Pricing" lastUpdated={`生效 ${selectedPricing.effectiveFrom ? new Date(selectedPricing.effectiveFrom).toLocaleString('zh-CN', { hour12: false }) : '-'}`} risk={selectedPricing.isActive ? '风险：影响新请求计费' : '风险：已删除规则'} metrics={[{ label: '输入单价', value: selectedPricing.promptPricePer1mTokens }, { label: '输出单价', value: selectedPricing.completionPricePer1mTokens }, { label: '倍率', value: selectedPricing.multiplier ?? 1.0 }, { label: '缓存命中', value: `${(selectedPricing.cacheHitRatio * 100).toFixed(0)}%` }, { label: '缓存创建', value: `${(selectedPricing.cacheCreationRatio * 100).toFixed(0)}%` }]} status={<StatusBadge tone={selectedPricing.isActive ? 'success' : 'danger'}>{selectedPricing.isActive ? '生效中' : '已删除'}</StatusBadge>} size="lg" moreActions={<><AdminButton variant="primary" onClick={() => openPricingUpdate(selectedPricing)}>更改定价</AdminButton><AdminButton variant="secondary" icon={getAdminActionIcon('logs')} onClick={() => setPricingDiffOpen(true)}>查看 Diff</AdminButton></>}>
                 <div className="pricing-detail-flat">
                   <div className="pricing-detail-meta-row">
                     <div className="pricing-detail-meta-item">
@@ -2173,11 +2196,11 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                 </div>
 
               </AdminDetailShell>
-              <DiffDrawer open={pricingDiffOpen} onClose={() => setPricingDiffOpen(false)} title="Pricing Diff" objectLabel={selectedPricing.model} fields={[{ key: 'prompt', label: '输入单价', before: selectedPricing.promptPricePer1kTokens, after: pricingFormOpen ? pricingForm.promptPricePer1kTokens || '-' : selectedPricing.promptPricePer1kTokens, changeType: pricingFormOpen && String(selectedPricing.promptPricePer1kTokens) !== pricingForm.promptPricePer1kTokens ? 'changed' : 'unchanged' }, { key: 'completion', label: '输出单价', before: selectedPricing.completionPricePer1kTokens, after: pricingFormOpen ? pricingForm.completionPricePer1kTokens || '-' : selectedPricing.completionPricePer1kTokens, changeType: pricingFormOpen && String(selectedPricing.completionPricePer1kTokens) !== pricingForm.completionPricePer1kTokens ? 'changed' : 'unchanged' }, { key: 'cacheHit', label: '缓存命中', before: `${formatPercentInput(selectedPricing.cacheHitRatio * 100)}%`, after: pricingFormOpen ? `${pricingForm.cacheHitRatio || '-'}%` : `${formatPercentInput(selectedPricing.cacheHitRatio * 100)}%`, changeType: pricingFormOpen && formatPercentInput(selectedPricing.cacheHitRatio * 100) !== pricingForm.cacheHitRatio ? 'changed' : 'unchanged' }, { key: 'cacheCreation', label: '缓存创建', before: `${formatPercentInput(selectedPricing.cacheCreationRatio * 100)}%`, after: pricingFormOpen ? `${pricingForm.cacheCreationRatio || '-'}%` : `${formatPercentInput(selectedPricing.cacheCreationRatio * 100)}%`, changeType: pricingFormOpen && formatPercentInput(selectedPricing.cacheCreationRatio * 100) !== pricingForm.cacheCreationRatio ? 'changed' : 'unchanged' }]} impactItems={[selectedPricing.isActive ? '该规则影响新请求计费' : '该规则已删除，不参与新请求计费', '历史 usage 不回写']} rollbackHint="更新会创建新的定价版本；历史 usage 不回写。" syncHint="Before 使用 selectedPricing，After 仅在编辑表单打开时使用 pricingForm，否则保持当前快照。" />
+              <DiffDrawer open={pricingDiffOpen} onClose={() => setPricingDiffOpen(false)} title="Pricing Diff" objectLabel={selectedPricing.model} fields={[{ key: 'prompt', label: '输入单价', before: selectedPricing.promptPricePer1mTokens, after: pricingFormOpen ? pricingForm.promptPricePer1mTokens || '-' : selectedPricing.promptPricePer1mTokens, changeType: pricingFormOpen && String(selectedPricing.promptPricePer1mTokens) !== pricingForm.promptPricePer1mTokens ? 'changed' : 'unchanged' }, { key: 'completion', label: '输出单价', before: selectedPricing.completionPricePer1mTokens, after: pricingFormOpen ? pricingForm.completionPricePer1mTokens || '-' : selectedPricing.completionPricePer1mTokens, changeType: pricingFormOpen && String(selectedPricing.completionPricePer1mTokens) !== pricingForm.completionPricePer1mTokens ? 'changed' : 'unchanged' }, { key: 'multiplier', label: '倍率', before: selectedPricing.multiplier ?? 1.0, after: pricingFormOpen ? pricingForm.multiplier || '-' : selectedPricing.multiplier ?? 1.0, changeType: pricingFormOpen && String(selectedPricing.multiplier ?? 1.0) !== pricingForm.multiplier ? 'changed' : 'unchanged' }, { key: 'cacheHit', label: '缓存命中', before: `${formatPercentInput(selectedPricing.cacheHitRatio * 100)}%`, after: pricingFormOpen ? `${pricingForm.cacheHitRatio || '-'}%` : `${formatPercentInput(selectedPricing.cacheHitRatio * 100)}%`, changeType: pricingFormOpen && formatPercentInput(selectedPricing.cacheHitRatio * 100) !== pricingForm.cacheHitRatio ? 'changed' : 'unchanged' }, { key: 'cacheCreation', label: '缓存创建', before: `${formatPercentInput(selectedPricing.cacheCreationRatio * 100)}%`, after: pricingFormOpen ? `${pricingForm.cacheCreationRatio || '-'}%` : `${formatPercentInput(selectedPricing.cacheCreationRatio * 100)}%`, changeType: pricingFormOpen && formatPercentInput(selectedPricing.cacheCreationRatio * 100) !== pricingForm.cacheCreationRatio ? 'changed' : 'unchanged' }]} impactItems={[selectedPricing.isActive ? '该规则影响新请求计费' : '该规则已删除，不参与新请求计费', '历史 usage 不回写']} rollbackHint="更新会创建新的定价版本；历史 usage 不回写。" syncHint="Before 使用 selectedPricing，After 仅在编辑表单打开时使用 pricingForm，否则保持当前快照。" />
               </>
           )}
           <DangerConfirmDialog open={Boolean(deletePricingTarget)} title="删除模型定价" objectLabel="模型定价" objectId={deletePricingTarget?.id} objectName={deletePricingTarget?.model} actionLabel="删除定价" confirmText="DELETE" reasonRequired loading={deletePricingLoading} reversibility="partially_reversible" impactItems={["该规则不再参与新请求计费", "历史账单不会回写"]} nonImpactItems={["不会删除历史使用明细"]} onCancel={() => setDeletePricingTarget(null)} onConfirm={() => void handleDeletePricing()} />
-          <DangerConfirmDialog open={updateConfirmOpen} title="确认更新模型定价" objectLabel="模型定价" objectName={pricingForm.model} actionLabel="保存新版本" confirmText="UPDATE" reasonRequired={false} loading={pricingFormLoading} reversibility="partially_reversible" objectMeta={[{ label: '输入单价', value: `${selectedPricing?.promptPricePer1kTokens ?? '-'} → ${promptPrice}` }, { label: '输出单价', value: `${selectedPricing?.completionPricePer1kTokens ?? '-'} → ${completionPrice}` }, { label: '缓存命中', value: `${selectedPricing ? formatPercentInput(selectedPricing.cacheHitRatio * 100) : '-'}% → ${cacheHitPercent}%` }, { label: '缓存创建', value: `${selectedPricing ? formatPercentInput(selectedPricing.cacheCreationRatio * 100) : '-'}% → ${cacheCreationPercent}%` }]} impactItems={["将创建新的定价版本", "历史 usage 不回写"]} onCancel={() => setUpdateConfirmOpen(false)} onConfirm={async () => { setUpdateConfirmOpen(false); await submitPricing(); }} />
+          <DangerConfirmDialog open={updateConfirmOpen} title="确认更新模型定价" objectLabel="模型定价" objectName={pricingForm.model} actionLabel="保存新版本" confirmText="UPDATE" reasonRequired={false} loading={pricingFormLoading} reversibility="partially_reversible" objectMeta={[{ label: '输入单价', value: `${selectedPricing?.promptPricePer1mTokens ?? '-'} → ${promptPrice}` }, { label: '输出单价', value: `${selectedPricing?.completionPricePer1mTokens ?? '-'} → ${completionPrice}` }, { label: '倍率', value: `${selectedPricing?.multiplier ?? 1.0} → ${Number(pricingForm.multiplier) || 1.0}` }, { label: '缓存命中', value: `${selectedPricing ? formatPercentInput(selectedPricing.cacheHitRatio * 100) : '-'}% → ${cacheHitPercent}%` }, { label: '缓存创建', value: `${selectedPricing ? formatPercentInput(selectedPricing.cacheCreationRatio * 100) : '-'}% → ${cacheCreationPercent}%` }]} impactItems={["将创建新的定价版本", "历史 usage 不回写"]} onCancel={() => setUpdateConfirmOpen(false)} onConfirm={async () => { setUpdateConfirmOpen(false); await submitPricing(); }} />
         </>
       )}
 

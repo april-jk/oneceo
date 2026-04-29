@@ -513,6 +513,127 @@ function buildDeploymentAnalyticsRuntimeConfig(input: {
   };
 }
 
+function extractPublishedAnalyticsConfig(html: string): {
+  host?: string;
+  websiteId?: string;
+  tag?: string;
+  publicDomain?: string;
+} | null {
+  const markerStart = html.indexOf('<!-- ONECEO_ANALYTICS:START -->');
+  const markerEnd = html.indexOf('<!-- ONECEO_ANALYTICS:END -->', Math.max(0, markerStart));
+  const source =
+    markerStart >= 0 && markerEnd > markerStart
+      ? html.slice(markerStart, markerEnd)
+      : html.slice(0, 200_000);
+  const frozenConfigMatch = source.match(/window\.__ONECEO_ANALYTICS__\s*=\s*Object\.freeze\((\{[\s\S]*?\})\);/);
+  if (frozenConfigMatch?.[1]) {
+    try {
+      const parsed = JSON.parse(frozenConfigMatch[1]) as Record<string, unknown>;
+      return {
+        host: asText(parsed.host || parsed.endpoint) || undefined,
+        websiteId: asText(parsed.websiteId) || undefined,
+        tag: asText(parsed.tag) || undefined,
+        publicDomain: asText(parsed.publicDomain) || undefined,
+      };
+    } catch {
+      // Fall through to attribute/string based extraction.
+    }
+  }
+  const websiteId =
+    source.match(/["']websiteId["']\s*:\s*["']([^"']+)["']/)?.[1] ||
+    source.match(/data-website-id=["']([^"']+)["']/)?.[1];
+  if (!asText(websiteId)) {
+    return null;
+  }
+  return {
+    websiteId: asText(websiteId),
+    host:
+      asText(source.match(/["']host["']\s*:\s*["']([^"']+)["']/)?.[1]) ||
+      asText(source.match(/data-host-url=["']([^"']+)["']/)?.[1]) ||
+      undefined,
+    tag:
+      asText(source.match(/["']tag["']\s*:\s*["']([^"']+)["']/)?.[1]) ||
+      asText(source.match(/data-tag=["']([^"']+)["']/)?.[1]) ||
+      undefined,
+    publicDomain: asText(source.match(/["']publicDomain["']\s*:\s*["']([^"']+)["']/)?.[1]) || undefined,
+  };
+}
+
+async function readPublishedAnalyticsConfig(panel: RailwayDeploymentPanelData): Promise<{
+  host?: string;
+  websiteId?: string;
+  tag?: string;
+  publicDomain?: string;
+} | null> {
+  const publicUrl =
+    asText(panel.latestStaticUrl) ||
+    asText(panel.latestUrl) ||
+    asText(panel.domains[0]);
+  if (!publicUrl) {
+    return null;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5_000);
+  try {
+    const response = await fetch(publicUrl, {
+      method: 'GET',
+      headers: {
+        accept: 'text/html,application/xhtml+xml,text/plain;q=0.8,*/*;q=0.1',
+        'user-agent': 'OneCEO-Deployment-Analytics-Reconcile/1.0',
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const text = (await response.text()).slice(0, 2_000_000);
+    return extractPublishedAnalyticsConfig(text);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function reconcilePublishedAnalyticsMetadata(input: {
+  orchestratorSessionId: string;
+  metadata: Record<string, unknown>;
+  panel: RailwayDeploymentPanelData;
+}): Promise<Record<string, unknown>> {
+  const published = await readPublishedAnalyticsConfig(input.panel);
+  const publishedWebsiteId = asText(published?.websiteId);
+  if (!publishedWebsiteId) {
+    return input.metadata;
+  }
+  const currentAnalytics = pickRecord(input.metadata.analytics);
+  if (asText(currentAnalytics.websiteId) === publishedWebsiteId) {
+    return input.metadata;
+  }
+  const nextAnalytics = {
+    ...currentAnalytics,
+    provider: 'umami',
+    status: 'bound',
+    host: asText(published?.host) || asText(currentAnalytics.host),
+    websiteId: publishedWebsiteId,
+    tag: asText(published?.tag) || asText(currentAnalytics.tag) || 'production',
+    domain:
+      asText(published?.publicDomain) ||
+      asText(currentAnalytics.domain) ||
+      asText(input.panel.latestStaticUrl || input.panel.latestUrl || input.panel.domains[0])
+        .replace(/^https?:\/\//, '')
+        .replace(/\/.*$/, ''),
+    updatedAt: new Date().toISOString(),
+    lastError: undefined,
+  };
+  await setSandboxMetadata(input.orchestratorSessionId, {
+    analytics: nextAnalytics,
+  });
+  return {
+    ...input.metadata,
+    analytics: nextAnalytics,
+  };
+}
+
 async function prepareSessionAnalyticsBindingSafely(input: {
   sessionId: string;
   orchestratorSessionId: string;
@@ -550,10 +671,23 @@ async function finalizeSessionAnalyticsBinding(input: {
   account: Awaited<ReturnType<typeof platformDeploymentAccountService.ensureUserAccount>>;
   panel: RailwayDeploymentPanelData;
 }) {
+  const latestEnvironment = input.orchestratorSessionId
+    ? await sandboxExecutionEnvironmentDAO.getBySessionId(input.orchestratorSessionId).catch(() => null)
+    : null;
+  const latestMetadata = latestEnvironment?.metadata ?? input.environmentMetadata;
+  const latestAnalytics = pickRecord(pickRecord(latestMetadata).analytics);
+  const panelAnalytics = pickRecord(input.panel.analytics);
+  const stableMetadata =
+    asText(latestAnalytics.websiteId) || !asText(panelAnalytics.websiteId)
+      ? latestMetadata
+      : {
+          ...pickRecord(latestMetadata),
+          analytics: panelAnalytics,
+        };
   await prepareSessionAnalyticsBindingSafely({
     sessionId: input.sessionId,
     orchestratorSessionId: input.orchestratorSessionId,
-    environmentMetadata: input.environmentMetadata,
+    environmentMetadata: stableMetadata,
     account: input.account,
     panel: input.panel,
   });
@@ -1198,9 +1332,20 @@ export async function refreshTaskSessionDeploymentSnapshot(input: {
     panel: nextPanel,
     healthPath: asText(baseline.healthcheckPath) || undefined,
   });
+  const reconciledMetadata = await reconcilePublishedAnalyticsMetadata({
+    orchestratorSessionId,
+    metadata: refreshedMetadata,
+    panel: nextPanel,
+  });
+  if (reconciledMetadata !== refreshedMetadata) {
+    nextPanel = {
+      ...nextPanel,
+      analytics: await buildTaskSessionAnalyticsPanel(reconciledMetadata),
+    };
+  }
   await persistTaskSessionDeploymentState(
     orchestratorSessionId,
-    pickTaskSessionDeploymentState(refreshedMetadata.deploymentState || metadata.deploymentState),
+    pickTaskSessionDeploymentState(reconciledMetadata.deploymentState || metadata.deploymentState),
     buildDeploymentStatePatchFromPanel(nextPanel, resourceBinding || undefined)
   );
   await persistTaskSessionDeploymentPanelSnapshot(orchestratorSessionId, nextPanel);

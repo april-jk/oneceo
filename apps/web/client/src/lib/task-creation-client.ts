@@ -286,6 +286,63 @@ export type TaskCreationAnalyticsInfo = {
   error?: string;
 };
 
+export type TaskCreationDeploymentAnalyticsRangeKey = "24h" | "7d" | "30d";
+
+export type TaskCreationDeploymentAnalyticsMetric = {
+  name: string;
+  pageviews: number;
+  visitors: number;
+  visits: number;
+  bounces: number;
+  totaltime: number;
+};
+
+export type TaskCreationDeploymentAnalyticsTimeseriesPoint = {
+  x: string;
+  y: number;
+};
+
+export type TaskCreationDeploymentAnalyticsOverview = {
+  updatedAt: string;
+  configured: boolean;
+  enabled: boolean;
+  status:
+    | "bound"
+    | "tracking"
+    | "pending"
+    | "pending_domain"
+    | "unconfigured"
+    | "error"
+    | "empty";
+  message?: string;
+  error?: string;
+  range: {
+    key: TaskCreationDeploymentAnalyticsRangeKey;
+    startAt: string;
+    endAt: string;
+    unit?: "hour" | "day" | "month" | "year";
+    timezone: string;
+  };
+  stats: {
+    pageviews: number;
+    visits: number;
+    visitors: number;
+    bounces: number;
+    totaltime: number;
+  };
+  activeVisitors: number;
+  bounceRate: number;
+  averageVisitDurationSeconds: number;
+  pageviews: {
+    pageviews: TaskCreationDeploymentAnalyticsTimeseriesPoint[];
+    sessions: TaskCreationDeploymentAnalyticsTimeseriesPoint[];
+  };
+  topPages: TaskCreationDeploymentAnalyticsMetric[];
+  referrers: TaskCreationDeploymentAnalyticsMetric[];
+  regions: TaskCreationDeploymentAnalyticsMetric[];
+  devices: TaskCreationDeploymentAnalyticsMetric[];
+};
+
 export type TaskCreationDeploymentResourceBinding = {
   projectKey: string;
   isolationMode: "session" | "default";
@@ -1226,6 +1283,20 @@ export async function getTaskCreationDeploymentInfo(
   const suffix = params.toString() ? `?${params.toString()}` : "";
   const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment${suffix}`;
   const result = await fetchJson<{ data?: TaskCreationDeploymentInfo }>(url);
+  return result?.data || null;
+}
+
+export async function getTaskCreationDeploymentAnalytics(
+  sessionId: string,
+  range: TaskCreationDeploymentAnalyticsRangeKey
+): Promise<TaskCreationDeploymentAnalyticsOverview | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const params = new URLSearchParams();
+  params.set("range", range);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/analytics?${params.toString()}`;
+  const result = await fetchJson<{ data?: TaskCreationDeploymentAnalyticsOverview }>(
+    url
+  );
   return result?.data || null;
 }
 

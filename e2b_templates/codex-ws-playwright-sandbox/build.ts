@@ -22,7 +22,7 @@ async function main() {
     process.env.E2B_CODEX_WS_TEMPLATE ||
     process.env.E2B_TEMPLATE_CODEX_WS ||
     process.env.E2B_TEMPLATE_NAME ||
-    'codex-ws-playwright-sandbox-v1';
+    'codex-ws-browseruse-playwright-sandbox-v1-20260426';
 
   const template = buildTemplate();
 

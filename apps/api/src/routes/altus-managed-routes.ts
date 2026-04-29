@@ -7,13 +7,20 @@ import { altusManagedInputService } from '../services/altus-managed-input-servic
 import { getPublicErrorMessage } from '../utils/error-response';
 import { taskCreationSessionDAO, taskSessionRunDAO } from '../db/dao';
 import { altusManagedTurnSnapshotService } from '../services/altus-managed-turn-snapshot-service';
-import type { ManagedMcpProvider } from '../services/altus-managed-shared';
+import {
+  normalizeManagedSkillContexts,
+  type ManagedMcpProvider,
+  type ManagedSkillContext,
+} from '../services/altus-managed-shared';
 import { altusManagedDynamicContextBlockService } from '../services/altus-managed-dynamic-context-blocks';
 import { altusManagedContextCacheObserver } from '../services/altus-managed-context-cache-observer';
 import { altusManagedContextDebugSummaryService } from '../services/altus-managed-context-debug-summary-service';
 import { altusManagedContextRecoveryService } from '../services/altus-managed-context-recovery-service';
 import { altusManagedContextBudgetService } from '../services/altus-managed-context-budget-service';
 import { altusMemoryContextService } from '../services/altus-memory-context-service';
+import { taskSessionSkillStateService } from '../services/task-session-skill-state-service';
+import { userSkillService } from '../services/user-skill-service';
+import { inspectTaskSessionProjectProfile } from '../services/task-session-project-profile-service';
 import {
   TASK_ATTACHMENT_MAX_BYTES,
   TASK_ATTACHMENT_MAX_COUNT,
@@ -56,6 +63,54 @@ function readMcpProvidersFromSnapshot(value: unknown): ManagedMcpProvider[] {
     ? (value as Record<string, unknown>)
     : {};
   return Array.isArray(snapshot.providers) ? (snapshot.providers as ManagedMcpProvider[]) : [];
+}
+
+function skillContextKey(value: {
+  sourceType: 'platform' | 'custom';
+  skillId: string;
+  revisionId: string;
+}) {
+  return `${value.sourceType}:${value.skillId}:${value.revisionId}`;
+}
+
+function mergeSkillContexts(primary: ManagedSkillContext[], fallback: ManagedSkillContext[]) {
+  const results = new Map<string, ManagedSkillContext>();
+  for (const item of primary) {
+    results.set(skillContextKey(item), item);
+  }
+  for (const item of fallback) {
+    const key = skillContextKey(item);
+    if (!results.has(key)) {
+      results.set(key, item);
+    }
+  }
+  return Array.from(results.values());
+}
+
+function readMessageSkillContexts(messages: Array<{ metadata?: Record<string, unknown> }>, runId?: string | null) {
+  const contexts: ManagedSkillContext[] = [];
+  for (const message of messages) {
+    const metadata = message.metadata || {};
+    if (runId && asText(metadata.runId) !== runId) continue;
+    contexts.push(...normalizeManagedSkillContexts(metadata.managedSkillContext));
+  }
+  return mergeSkillContexts(contexts, []);
+}
+
+function readLatestWorkspaceRuntime(messages: Array<{ metadata?: Record<string, unknown> }>) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const metadata = messages[index]?.metadata || {};
+    const orchestratorSessionId = asText(metadata.orchestratorSessionId);
+    const workspaceRoot = asText(metadata.workspaceRoot) || asText(metadata.workspacePath);
+    if (orchestratorSessionId && workspaceRoot) {
+      return {
+        orchestratorSessionId,
+        workspaceRoot,
+        runtimeGeneration: Number(metadata.runtimeGeneration) || undefined,
+      };
+    }
+  }
+  return null;
 }
 
 function resolveCurrentUserError(error: unknown): { status: number; message: string } | null {
@@ -210,11 +265,62 @@ router.get('/sessions/:sessionId/context-debug', async (req, res) => {
       : null;
     const mcpProviders = readMcpProvidersFromSnapshot(mcpSnapshot?.snapshotJson);
     const messages = await taskCreationSessionDAO.getMessages(sessionId);
+    const workspaceRuntime = readLatestWorkspaceRuntime(messages as any);
+    const projectProfile = workspaceRuntime
+      ? await inspectTaskSessionProjectProfile({
+          sessionId,
+          orchestratorSessionId: workspaceRuntime.orchestratorSessionId,
+          workspaceRoot: workspaceRuntime.workspaceRoot,
+          runtimeGeneration: workspaceRuntime.runtimeGeneration,
+        }).catch((error) => ({
+          version: '1.0' as const,
+          sessionId,
+          runtimeGeneration: workspaceRuntime.runtimeGeneration,
+          updatedAt: new Date().toISOString(),
+          artifactType: 'unknown' as const,
+          runtimeFamily: 'unknown' as const,
+          deployability: 'unknown' as const,
+          entrypoints: [],
+          commands: {},
+          analyticsStatus: 'unknown' as const,
+          configFiles: {},
+          evidence: [
+            {
+              source: 'file_scan' as const,
+              message: `project profile unavailable: ${getPublicErrorMessage((error as Error)?.message || String(error))}`,
+            },
+          ],
+        }))
+      : null;
+    const messageSkillContexts = readMessageSkillContexts(messages as any, runId);
+    const sessionSkillState = await taskSessionSkillStateService.getSessionSkillState(sessionId).catch(() => null);
+    const stateSelections = sessionSkillState
+      ? [
+          ...sessionSkillState.explicitSelections,
+          ...sessionSkillState.residentSelections,
+          ...sessionSkillState.bindings.map((item) => ({
+            sourceType: item.sourceType,
+            skillId: item.skillId,
+            revisionId: item.revisionId,
+          })),
+        ]
+      : [];
+    const resolvedStateSkills =
+      stateSelections.length > 0
+        ? await userSkillService.resolveSelectionsForSession(sessionId, stateSelections).catch(() => [])
+        : [];
+    const activeSkills = mergeSkillContexts(
+      resolvedStateSkills as ManagedSkillContext[],
+      messageSkillContexts
+    );
     const memoryContext = await altusMemoryContextService.buildPromptSectionForRun({
       sessionId,
       userId: currentUser.userId,
     });
     const dynamicContextBlocks = [
+      ...altusManagedDynamicContextBlockService.buildSkillBlocks({
+        activeSkills,
+      }),
       ...altusManagedDynamicContextBlockService.buildAttachmentBlocks(messages as any),
       ...altusManagedDynamicContextBlockService.buildMcpBlocks({
         providers: mcpProviders,
@@ -237,6 +343,7 @@ router.get('/sessions/:sessionId/context-debug', async (req, res) => {
       runId,
       model: run?.model || null,
       mcpProviders,
+      skills: activeSkills,
     });
     const budgetProjection = altusManagedContextBudgetService.projectMessagesForModelWithReport(recovery.compiled.messages);
     const cacheObservation = altusManagedContextCacheObserver.buildObservation({
@@ -259,6 +366,7 @@ router.get('/sessions/:sessionId/context-debug', async (req, res) => {
         manifest: recovery.manifest,
         reconciliation: recovery.reconciliation,
         cacheObservation,
+        projectProfile,
         roundTrip: recovery.roundTrip,
         recovery,
         budgetProjection: budgetProjection.replacementSummary,

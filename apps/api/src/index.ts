@@ -269,6 +269,19 @@ let listenAttempts = 0;
 const maxListenRetries = Math.max(0, Number(process.env.API_PORT_RETRY_ATTEMPTS || 12));
 const listenRetryDelayMs = Math.max(100, Number(process.env.API_PORT_RETRY_DELAY_MS || 500));
 
+function isRecoverableSocketProcessError(error: unknown): boolean {
+  const record = error as { code?: unknown; message?: unknown; syscall?: unknown } | null;
+  const code = typeof record?.code === 'string' ? record.code.toUpperCase() : '';
+  const syscall = typeof record?.syscall === 'string' ? record.syscall.toLowerCase() : '';
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error || '').toLowerCase();
+  return (
+    code === 'EPIPE' ||
+    code === 'ECONNRESET' ||
+    (syscall === 'write' && message.includes('epipe')) ||
+    message.includes('socket hang up')
+  );
+}
+
 async function shutdown(signal: string, exitCode = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -406,4 +419,22 @@ process.on('SIGINT', () => {
 
 process.on('SIGTERM', () => {
   void shutdown('SIGTERM');
+});
+
+process.on('uncaughtException', (error) => {
+  if (isRecoverableSocketProcessError(error)) {
+    console.warn('[API_RECOVERABLE_SOCKET_ERROR]', error);
+    return;
+  }
+  console.error('[API_UNCAUGHT_EXCEPTION]', error);
+  void shutdown('uncaughtException', 1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  if (isRecoverableSocketProcessError(reason)) {
+    console.warn('[API_RECOVERABLE_SOCKET_REJECTION]', reason);
+    return;
+  }
+  console.error('[API_UNHANDLED_REJECTION]', reason);
+  void shutdown('unhandledRejection', 1);
 });

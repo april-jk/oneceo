@@ -19,7 +19,7 @@ async function main() {
     setGlobalDispatcher(new ProxyAgent(proxyUrl));
   }
 
-  const templateName = process.env.E2B_TEMPLATE_NAME || 'opencode-playwright-mcp-v7-osac-prebuilt-20260421';
+  const templateName = process.env.E2B_TEMPLATE_NAME || 'opencode-browseruse-playwright-mcp-v1-20260426';
   const patchUrl = await resolvePatchUrl();
   const osacSpec = await resolveOsacBuildSpec();
 

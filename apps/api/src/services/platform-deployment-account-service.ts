@@ -153,6 +153,12 @@ function isRailwayServiceCreationLimitError(message: string) {
   );
 }
 
+function buildServiceCreationLimitIsolationError() {
+  return new Error(
+    'Railway 已达到每日服务创建配额。为避免覆盖其他会话的线上服务，平台不会复用其他项目的部署资源；请稍后重试，或先下线明确不再需要的部署资源。'
+  );
+}
+
 function sanitizeNameSegment(value: string, maxLength: number) {
   return (
     value
@@ -1450,98 +1456,6 @@ export class PlatformDeploymentAccountService {
     return null;
   }
 
-  private async reuseExistingServiceSlot(input: {
-    userId: string;
-    projectKey: string;
-    projectId: string;
-    projectName?: string;
-    displayName?: string;
-  }): Promise<UserPlatformDeploymentAccount> {
-    const candidates = await this.listReusableAccountRows(input.userId, {
-      excludeProjectKey: input.projectKey,
-      projectId: input.projectId,
-    });
-    if (candidates.length === 0) {
-      throw new Error('Railway 已达到每日服务创建配额，且当前账号没有可复用的既有部署服务。');
-    }
-
-    const adminToken = requireEnv('RAILWAY_ADMIN_TOKEN');
-    let lastError: unknown = null;
-
-    for (const candidate of candidates) {
-      const config = toDeploymentConfig(candidate.configJson);
-      if (!config.serviceId || !config.environmentId || !config.projectId) {
-        continue;
-      }
-
-      try {
-        const reusedEnvironmentId = config.environmentId;
-        const reusedEnvironmentName = config.environmentName || undefined;
-
-        await configureServiceInstance(adminToken, reusedEnvironmentId, config.serviceId);
-        const serviceDomain = await ensureServiceDomain(
-          adminToken,
-          config.projectId,
-          reusedEnvironmentId,
-          config.serviceId
-        );
-        await waitForEnvironmentServiceInstance(
-          adminToken,
-          reusedEnvironmentId,
-          config.serviceId
-        );
-        const tokenRotatedAt = new Date().toISOString();
-        const projectToken = await createProjectToken(
-          adminToken,
-          input.userId,
-          config.projectId,
-          reusedEnvironmentId,
-          input.projectKey
-        );
-
-        await this.persistAccountRow(
-          input.userId,
-          buildConfigFromState({
-            projectKey: input.projectKey,
-            projectId: config.projectId,
-            projectName: input.projectName || config.projectName,
-            environmentId: reusedEnvironmentId,
-            environmentName: reusedEnvironmentName,
-            serviceId: config.serviceId,
-            serviceName: config.serviceName,
-            serviceDomain,
-            tokenId: projectToken.tokenId,
-            tokenRotatedAt,
-            createdAt: new Date().toISOString(),
-            databaseServiceId: config.databaseServiceId,
-            databaseServiceName: config.databaseServiceName,
-            databaseVolumeId: config.databaseVolumeId,
-            databaseVolumeName: config.databaseVolumeName,
-          }),
-          connectorSecretService.encrypt({
-            accessToken: projectToken.token,
-            tokenKind: 'project',
-            tokenId: projectToken.tokenId,
-            tokenRotatedAt,
-          } satisfies DeploymentSecret),
-          input.displayName
-        );
-
-        const account = await this.getProjectAccount(input.userId, input.projectKey);
-        if (account) {
-          return account;
-        }
-      } catch (error: any) {
-        lastError = error;
-      }
-    }
-
-    if (lastError instanceof Error) {
-      throw lastError;
-    }
-    throw new Error('Railway 已达到每日服务创建配额，且复用既有部署服务失败。');
-  }
-
   async getUserAccount(userId: string): Promise<UserPlatformDeploymentAccount | null> {
     const row = await this.getAccountRow(userId, DEFAULT_DEPLOYMENT_PROJECT_KEY);
     return toAccount(row);
@@ -1953,28 +1867,6 @@ export class PlatformDeploymentAccountService {
     await this.purgeProjectAccountRowResources(row);
   }
 
-  async pruneSupersededProjectResources(
-    userId: string,
-    keepProjectKey: string,
-    projectId: string
-  ): Promise<void> {
-    const normalizedUserId = asText(userId);
-    const normalizedKeepProjectKey = normalizeProjectKey(keepProjectKey);
-    const normalizedProjectId = asText(projectId);
-    if (!normalizedUserId || !normalizedProjectId) {
-      return;
-    }
-
-    const rows = await this.listReusableAccountRows(normalizedUserId, {
-      excludeProjectKey: normalizedKeepProjectKey,
-      projectId: normalizedProjectId,
-    });
-
-    for (const row of rows) {
-      await this.purgeProjectAccountRowResources(row);
-    }
-  }
-
   private async repairExistingAccount(
     userId: string,
     row: DeploymentAccountRow,
@@ -2005,12 +1897,7 @@ export class PlatformDeploymentAccountService {
       );
     } catch (error: any) {
       if (isRailwayServiceCreationLimitError(error?.message || '')) {
-        return this.reuseExistingServiceSlot({
-          userId,
-          projectKey: normalizedProjectKey,
-          projectId: config.projectId,
-          projectName: config.projectName,
-        });
+        throw buildServiceCreationLimitIsolationError();
       }
       throw error;
     }
@@ -2106,12 +1993,7 @@ export class PlatformDeploymentAccountService {
       );
     } catch (error: any) {
       if (isRailwayServiceCreationLimitError(error?.message || '')) {
-        return this.reuseExistingServiceSlot({
-          userId,
-          projectKey: normalizedProjectKey,
-          projectId: userProject.projectId,
-          projectName: userProject.projectName,
-        });
+        throw buildServiceCreationLimitIsolationError();
       }
       throw error;
     }

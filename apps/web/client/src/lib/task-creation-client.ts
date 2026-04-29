@@ -347,7 +347,7 @@ export type TaskCreationDeploymentResourceBinding = {
   projectKey: string;
   isolationMode: "session" | "default";
   projectModel: "per_user";
-  environmentModel: "per_session";
+  environmentModel: "per_user_project" | "per_session";
   tokenKind: "project";
   tokenScope: "railway_project_environment";
   tokenManagedBy: "oneceo_platform";

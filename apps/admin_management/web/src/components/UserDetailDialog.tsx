@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getBillingErrorMessage, readBillingResponseError, type BillingNotify } from './billing-feedback';
+import { AdminDetailShell, AdminTabs, StatusBadge } from './admin-ui';
 
 interface UserDetailDialogProps {
   user: {
@@ -151,7 +152,15 @@ export function UserDetailDialog({ user, open, onOpenChange, onAdjusted, onNotif
   const canSubmitAdjust = Number.isInteger(parsedAdjustAmount) && parsedAdjustAmount > 0;
 
   return (
-    <>
+    <AdminDetailShell
+      open={open}
+      onClose={() => onOpenChange(false)}
+      eyebrow="用户计费详情"
+      title={user.displayName || user.email || user.userId}
+      subtitle={user.email || user.userId}
+      size="xl"
+      tabs={<AdminTabs value={activeTab} items={tabs} onChange={setActiveTab} ariaLabel="用户计费详情分页" />}
+    >
       {/* Summary Cards */}
       <section className="user-management-summary-strip">
         <article className="user-management-summary-card">
@@ -187,22 +196,6 @@ export function UserDetailDialog({ user, open, onOpenChange, onAdjusted, onNotif
         </article>
       </section>
 
-      {/* Inner Tab Strip */}
-      <section className="sub-panel user-management-filter-panel" style={{ padding: '12px 16px' }}>
-        <div className="user-management-tab-strip" style={{ margin: 0 }}>
-          {tabs.map((tab) => (
-            <button
-              key={tab.key}
-              type="button"
-              className={`secondary-btn ${activeTab === tab.key ? 'active' : ''}`}
-              onClick={() => setActiveTab(tab.key)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      </section>
-
       {/* Overview */}
       {activeTab === 'overview' && (
         <>
@@ -233,9 +226,9 @@ export function UserDetailDialog({ user, open, onOpenChange, onAdjusted, onNotif
                         </div>
                       </td>
                       <td>
-                        <span className={`state-chip ${tx.type === 'consume' ? 'status-error' : tx.type === 'recharge' ? 'status-running' : 'status-paused'}`}>
+                        <StatusBadge tone={tx.type === 'consume' ? 'danger' : tx.type === 'recharge' ? 'success' : 'warning'}>
                           {tx.type === 'consume' ? '消费' : tx.type === 'recharge' ? '充值' : '调整'}
-                        </span>
+                        </StatusBadge>
                       </td>
                       <td>
                         <div className="user-management-table-cell-stack user-management-table-metric">
@@ -341,9 +334,9 @@ export function UserDetailDialog({ user, open, onOpenChange, onAdjusted, onNotif
                       </div>
                     </td>
                     <td>
-                      <span className={`state-chip ${tx.type === 'consume' ? 'status-error' : tx.type === 'recharge' ? 'status-running' : 'status-paused'}`}>
+                      <StatusBadge tone={tx.type === 'consume' ? 'danger' : tx.type === 'recharge' ? 'success' : 'warning'}>
                         {tx.type === 'consume' ? '消费' : tx.type === 'recharge' ? '充值' : '调整'}
-                      </span>
+                      </StatusBadge>
                     </td>
                     <td>
                       <div className="user-management-table-cell-stack user-management-table-metric">
@@ -491,6 +484,6 @@ export function UserDetailDialog({ user, open, onOpenChange, onAdjusted, onNotif
           </div>
         </section>
       )}
-    </>
+    </AdminDetailShell>
   );
 }

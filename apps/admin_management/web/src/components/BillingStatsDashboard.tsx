@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, type CSSProperties } from 'react';
 import { getBillingErrorMessage, readBillingResponseError, type BillingNotify } from './billing-feedback';
 import {
   BarChart,
@@ -283,7 +283,7 @@ export function BillingStatsDashboard({ onNotify }: BillingStatsDashboardProps) 
       {stats && (
         <>
           {/* Core KPI Strip */}
-          <section className="billing-metric-strip">
+          <section className="billing-metric-strip billing-metric-strip-compact">
             <div className="billing-metric-item">
               <span className="billing-metric-label">积分消耗</span>
               <strong className="billing-metric-value">{formatNumber(stats.totalCreditsConsumed)}</strong>
@@ -309,53 +309,26 @@ export function BillingStatsDashboard({ onNotify }: BillingStatsDashboardProps) 
           {/* Analytics Panel */}
           <section className="sub-panel billing-analytics-panel">
             <div className="billing-chart-grid">
-              {/* ── Top Users Bar Chart ── */}
-              <div className="billing-chart-section">
+              {/* ── Top Users Rank List ── */}
+              <div className="billing-chart-section top-users-rank-shell">
                 <div className="billing-chart-section-head">
                   <p className="section-tag">消费排行 Top 10</p>
-                  <p className="billing-chart-caption">按积分消耗量降序排列</p>
+                  <p className="billing-chart-caption">条形排行直读积分规模，突出头部消耗</p>
                 </div>
                 {stats.topUsers.length > 0 ? (
-                  <div className="billing-chart-body">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={topUsersData}
-                        layout="vertical"
-                        margin={{ left: 4, right: 20, top: 4, bottom: 4 }}
-                      >
-                        <CartesianGrid
-                          horizontal={false}
-                          strokeDasharray="3 3"
-                          stroke={C.border}
-                        />
-                        <XAxis
-                          type="number"
-                          tick={axisTick}
-                          axisLine={{ stroke: C.border }}
-                          tickLine={false}
-                        />
-                        <YAxis
-                          dataKey="name"
-                          type="category"
-                          width={118}
-                          tick={yAxisTickSoft}
-                          axisLine={false}
-                          tickLine={false}
-                          tickFormatter={truncateLabel(14)}
-                        />
-                        <Tooltip
-                          content={<ChartTooltip />}
-                          cursor={{ fill: 'var(--surface-muted)' }}
-                        />
-                        <Bar
-                          dataKey="credits"
-                          fill={C.primary}
-                          radius={[0, 6, 6, 0]}
-                          barSize={18}
-                          animationDuration={600}
-                        />
-                      </BarChart>
-                    </ResponsiveContainer>
+                  <div className="top-users-rank-list">
+                    {topUsersData.map((user, index) => {
+                      const maxCredits = topUsersData[0]?.credits || 1;
+                      const width = Math.max(8, Math.round((user.credits / maxCredits) * 100));
+                      return (
+                        <div key={`top-users-rank-${user.userId}`} className="top-users-rank-row" style={{ '--rank-width': `${width}%` } as CSSProperties}>
+                          <span className="top-users-rank-index">{String(index + 1).padStart(2, '0')}</span>
+                          <span className="top-users-rank-name">{user.name}</span>
+                          <span className="top-users-rank-track" aria-hidden="true"><i className="top-users-rank-fill" /></span>
+                          <strong className="top-users-rank-value">{formatNumber(user.credits)}</strong>
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
                   <ChartEmpty message="暂无消费数据" />
@@ -363,108 +336,63 @@ export function BillingStatsDashboard({ onNotify }: BillingStatsDashboardProps) 
               </div>
 
               {/* ── Top Models Bar Chart ── */}
-              <div className="billing-chart-section">
+              <div className="billing-chart-section top-users-rank-shell">
                 <div className="billing-chart-section-head">
                   <p className="section-tag">模型使用 Top 10</p>
-                  <p className="billing-chart-caption">各模型积分消耗占比</p>
+                  <p className="billing-chart-caption">与消费排行一致的条形排行，按积分消耗降序</p>
                 </div>
                 {stats.topModels.length > 0 ? (
-                  <div className="billing-chart-body">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={topModelsData}
-                        layout="vertical"
-                        margin={{ left: 4, right: 20, top: 4, bottom: 4 }}
-                      >
-                        <CartesianGrid
-                          horizontal={false}
-                          strokeDasharray="3 3"
-                          stroke={C.border}
-                        />
-                        <XAxis
-                          type="number"
-                          tick={axisTick}
-                          axisLine={{ stroke: C.border }}
-                          tickLine={false}
-                        />
-                        <YAxis
-                          dataKey="name"
-                          type="category"
-                          width={130}
-                          tick={yAxisTickSoft}
-                          axisLine={false}
-                          tickLine={false}
-                          tickFormatter={truncateLabel(16)}
-                        />
-                        <Tooltip
-                          content={<ChartTooltip />}
-                          cursor={{ fill: 'var(--surface-muted)' }}
-                        />
-                        <Bar
-                          dataKey="credits"
-                          name="积分消耗"
-                          fill={C.primary}
-                          radius={[0, 6, 6, 0]}
-                          barSize={18}
-                          animationDuration={600}
-                        />
-                      </BarChart>
-                    </ResponsiveContainer>
+                  <div className="top-users-rank-list">
+                    {topModelsData.map((model, index) => {
+                      const maxCredits = topModelsData[0]?.credits || 1;
+                      const width = Math.max(8, Math.round((model.credits / maxCredits) * 100));
+                      return (
+                        <div key={`top-models-rank-${model.name}`} className="top-users-rank-row" style={{ '--rank-width': `${width}%` } as CSSProperties}>
+                          <span className="top-users-rank-index">{String(index + 1).padStart(2, '0')}</span>
+                          <span className="top-users-rank-name">{model.name}</span>
+                          <span className="top-users-rank-track" aria-hidden="true"><i className="top-users-rank-fill" /></span>
+                          <strong className="top-users-rank-value">{formatNumber(model.credits)}</strong>
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
                   <ChartEmpty message="暂无模型使用数据" />
                 )}
               </div>
 
-              {/* ── Balance Distribution Pie Chart ── */}
-              <div className="billing-chart-section">
+              <div className="billing-chart-section balance-modern-shell">
                 <div className="billing-chart-section-head">
                   <p className="section-tag">用户余额分布</p>
-                  <p className="billing-chart-caption">按余额区间统计用户数 · 共 {balanceTotal.toLocaleString()} 人</p>
+                  <p className="billing-chart-caption">环形占比 + 明细排行 · 共 {balanceTotal.toLocaleString()} 人</p>
                 </div>
                 {stats.balanceDistribution.length > 0 ? (
-                  <div className="billing-chart-body">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={balanceData}
-                          cx="50%"
-                          cy="45%"
-                          outerRadius={82}
-                          innerRadius={52}
-                          dataKey="value"
-                          nameKey="name"
-                          paddingAngle={2}
-                          stroke={C.surfaceMuted}
-                          strokeWidth={2}
-                          activeIndex={activePieIndex}
-                          activeShape={PieActiveShape}
-                          onMouseEnter={(_, index) => setActivePieIndex(index)}
-                          onMouseLeave={() => setActivePieIndex(undefined)}
-                          animationDuration={700}
-                          animationBegin={100}
-                        >
-                          {balanceData.map((_, index) => (
-                            <Cell
-                              key={`balance-${index}`}
-                              fill={PIE_COLORS[index % PIE_COLORS.length]}
-                            />
-                          ))}
-                        </Pie>
-                        <Tooltip content={<ChartTooltip />} />
-                        <Legend
-                          verticalAlign="bottom"
-                          align="center"
-                          iconType="circle"
-                          iconSize={8}
-                          wrapperStyle={{
-                            paddingTop: 12,
-                            fontSize: 12,
-                            color: 'var(--text-soft)',
-                          }}
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
+                  <div className="balance-modern-body">
+                    <div className="balance-modern-donut">
+                      <ResponsiveContainer width="100%" height={216}>
+                        <PieChart>
+                          <Pie data={balanceData} cx="50%" cy="50%" outerRadius={92} innerRadius={64} dataKey="value" nameKey="name" paddingAngle={3} stroke="var(--surface-strong)" strokeWidth={3}>
+                            {balanceData.map((_, index) => (
+                              <Cell key={`balance-modern-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                            ))}
+                          </Pie>
+                          <Tooltip content={<ChartTooltip />} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                      <div className="balance-modern-total">
+                        <strong>{balanceTotal.toLocaleString()}</strong>
+                        <span>用户总数</span>
+                      </div>
+                    </div>
+                    <div className="balance-modern-list">
+                      {balanceData.map((item, index) => (
+                        <div key={`balance-modern-row-${item.name}`} className="balance-modern-row" style={{ '--balance-color': PIE_COLORS[index % PIE_COLORS.length] } as CSSProperties}>
+                          <i className="balance-modern-dot" aria-hidden="true" />
+                          <span className="balance-modern-label">{item.name}</span>
+                          <strong className="balance-modern-value">{item.value.toLocaleString()} 人</strong>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ) : (
                   <ChartEmpty message="暂无余额分布数据" />
@@ -472,98 +400,36 @@ export function BillingStatsDashboard({ onNotify }: BillingStatsDashboardProps) 
               </div>
 
               {/* ── Credits Trend Line Chart ── */}
-              <div className="billing-chart-section">
+              <div className="billing-chart-section credit-trend-modern-shell">
                 <div className="billing-chart-section-head">
                   <p className="section-tag">积分消费/充值趋势</p>
-                  <p className="billing-chart-caption">单位：积分</p>
+                  <p className="billing-chart-caption">趋势线保留，顶部补充关键总量，减少读图成本</p>
                 </div>
                 {stats.trend && stats.trend.length > 0 ? (
-                  <div className="billing-chart-body">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <ComposedChart
-                        data={stats.trend}
-                        margin={{ left: 4, right: 20, top: 8, bottom: 4 }}
-                      >
-                        <defs>
-                          <linearGradient id="consumedFill" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor={C.danger} stopOpacity={0.08} />
-                            <stop offset="100%" stopColor={C.danger} stopOpacity={0} />
-                          </linearGradient>
-                          <linearGradient id="rechargedFill" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor={C.success} stopOpacity={0.08} />
-                            <stop offset="100%" stopColor={C.success} stopOpacity={0} />
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid
-                          vertical={false}
-                          strokeDasharray="3 3"
-                          stroke={C.border}
-                        />
-                        <XAxis
-                          dataKey="label"
-                          minTickGap={20}
-                          tick={axisTick}
-                          axisLine={{ stroke: C.border }}
-                          tickLine={false}
-                        />
-                        <YAxis
-                          tick={axisTick}
-                          axisLine={false}
-                          tickLine={false}
-                          width={56}
-                          tickFormatter={(v: number) =>
-                            v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v.toString()
-                          }
-                        />
-                        <Tooltip content={<ChartTooltip />} />
-                        <Legend
-                          verticalAlign="top"
-                          align="right"
-                          iconType="circle"
-                          iconSize={7}
-                          wrapperStyle={{
-                            paddingBottom: 8,
-                            fontSize: 12,
-                            color: 'var(--text-soft)',
-                          }}
-                        />
-                        <Area
-                          type="monotone"
-                          dataKey="consumed"
-                          stroke="none"
-                          fill="url(#consumedFill)"
-                          animationDuration={800}
-                        />
-                        <Area
-                          type="monotone"
-                          dataKey="recharged"
-                          stroke="none"
-                          fill="url(#rechargedFill)"
-                          animationDuration={800}
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="consumed"
-                          name="积分消费"
-                          stroke={C.danger}
-                          strokeWidth={2.5}
-                          dot={{ r: 3, fill: C.surfaceStrong, stroke: C.danger, strokeWidth: 2 }}
-                          activeDot={{ r: 5, strokeWidth: 0 }}
-                          animationDuration={800}
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="recharged"
-                          name="积分充值"
-                          stroke={C.success}
-                          strokeWidth={2.5}
-                          dot={{ r: 3, fill: C.surfaceStrong, stroke: C.success, strokeWidth: 2 }}
-                          activeDot={{ r: 5, strokeWidth: 0 }}
-                          animationDuration={800}
-                        />
-                      </ComposedChart>
-                    </ResponsiveContainer>
-                  </div>
+                  <>
+                    <div className="credit-trend-modern-summary">
+                      <div className="credit-trend-modern-card" style={{ '--trend-color': C.danger } as CSSProperties}>
+                        <span>累计消费</span>
+                        <strong>{formatNumber(stats.trend.reduce((sum, item) => sum + item.consumed, 0))}</strong>
+                      </div>
+                      <div className="credit-trend-modern-card" style={{ '--trend-color': C.success } as CSSProperties}>
+                        <span>累计充值</span>
+                        <strong>{formatNumber(stats.trend.reduce((sum, item) => sum + item.recharged, 0))}</strong>
+                      </div>
+                    </div>
+                    <div className="credit-trend-modern-chart">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <ComposedChart data={stats.trend} margin={{ left: 4, right: 20, top: 8, bottom: 4 }}>
+                          <CartesianGrid vertical={false} stroke={C.border} strokeDasharray="3 3" />
+                          <XAxis dataKey="label" tick={axisTick} axisLine={false} tickLine={false} minTickGap={18} />
+                          <YAxis tick={axisTick} axisLine={false} tickLine={false} width={52} tickFormatter={(v: number) => (v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v.toString())} />
+                          <Tooltip content={<ChartTooltip />} />
+                          <Line type="monotone" dataKey="consumed" name="积分消费" stroke={C.danger} strokeWidth={3} dot={{ r: 3, fill: C.surfaceStrong, stroke: C.danger, strokeWidth: 2 }} />
+                          <Line type="monotone" dataKey="recharged" name="积分充值" stroke={C.success} strokeWidth={3} dot={{ r: 3, fill: C.surfaceStrong, stroke: C.success, strokeWidth: 2 }} />
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </>
                 ) : (
                   <ChartEmpty message="暂无趋势数据" />
                 )}

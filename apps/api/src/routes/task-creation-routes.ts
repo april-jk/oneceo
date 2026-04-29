@@ -48,7 +48,6 @@ import {
 } from '../services/task-session-deployment-runtime-service';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { currentUserResolver } from '../services/current-user-resolver';
-import { codexRuntimeConfigService } from '../services/codex-runtime-config-service';
 import { codexRemoteService } from '../services/codex-remote-service';
 import { restoreWorkspaceIfArchived } from '../services/sandbox-archive-service';
 import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registry';
@@ -256,48 +255,6 @@ router.post('/settings/skills/custom/:customSkillId/activate', async (req, res) 
     return res.status(authError?.status || 400).json({
       success: false,
       error: getPublicErrorMessage(authError?.message || error?.message || '启用自定义技能失败'),
-    });
-  }
-});
-
-router.get('/codex/runtime-config', async (req, res) => {
-  try {
-    const currentUser = currentUserResolver.require(req);
-    const data = await codexRuntimeConfigService.getByUserId(currentUser.userId);
-    return res.json({
-      success: true,
-      data,
-    });
-  } catch (error: any) {
-    const authError = resolveCurrentUserError(error);
-    console.error('获取 Codex 运行配置失败:', error);
-    return res.status(authError?.status || 400).json({
-      success: false,
-      error: getPublicErrorMessage(authError?.message || error?.message || '获取 Codex 运行配置失败'),
-    });
-  }
-});
-
-router.put('/codex/runtime-config', express.json({ limit: '2mb' }), async (req, res) => {
-  try {
-    const currentUser = currentUserResolver.require(req);
-    const data = await codexRuntimeConfigService.upsertByUserId(currentUser.userId, {
-      baseUrl: typeof req.body?.baseUrl === 'string' ? req.body.baseUrl : undefined,
-      model: typeof req.body?.model === 'string' ? req.body.model : undefined,
-      apiKey: typeof req.body?.apiKey === 'string' ? req.body.apiKey : undefined,
-      configToml: typeof req.body?.configToml === 'string' ? req.body.configToml : undefined,
-      authJson: typeof req.body?.authJson === 'string' ? req.body.authJson : undefined,
-    });
-    return res.json({
-      success: true,
-      data,
-    });
-  } catch (error: any) {
-    const authError = resolveCurrentUserError(error);
-    console.error('保存 Codex 运行配置失败:', error);
-    return res.status(authError?.status || 400).json({
-      success: false,
-      error: getPublicErrorMessage(authError?.message || error?.message || '保存 Codex 运行配置失败'),
     });
   }
 });
@@ -886,10 +843,8 @@ function normalizeLiveSessionStage(
       mode === 'sandbox' ||
       driver === 'opencode' ||
       driver === 'codex' ||
-      driver === 'claudecode' ||
       executor === 'opencode' ||
       executor === 'codex' ||
-      executor === 'claudecode' ||
       hasRuntime ||
       hasExecutorRuntime ||
       hasOpencodeRuntime
@@ -4030,9 +3985,14 @@ router.post('/sessions', creditCheckMiddleware, async (req, res) => {
     const requestedSessionId = asText(req.body?.sessionId);
     const requestedTitle = asText(req.body?.title);
     const requestedMode = asText(req.body?.mode);
-    const requestedExecutor = asText(req.body?.executor);
+    const requestedExecutorRaw = asText(req.body?.executor);
+    const requestedExecutor = requestedExecutorRaw === 'codex' || requestedExecutorRaw === 'opencode' ? requestedExecutorRaw : '';
     const requestedCodexExecutionMode = asText(req.body?.codexExecutionMode);
-    const requestedDriver = asText(req.body?.driver);
+    const requestedDriverRaw = asText(req.body?.driver);
+    const requestedDriver =
+      requestedDriverRaw === 'altus' || requestedDriverRaw === 'opencode' || requestedDriverRaw === 'codex'
+        ? requestedDriverRaw
+        : '';
     const requestedProjectId = asText(req.body?.projectId);
     const initialMessage = asText(req.body?.initialMessage);
     const initialMessageTypeRaw = asText(req.body?.initialMessageType);
@@ -5800,9 +5760,9 @@ router.post('/sessions/:sessionId/runtime/interrupt', async (req, res) => {
       });
     }
 
-    if (executor === 'opencode' || executor === 'claudecode') {
+    if (executor === 'opencode') {
       await osacAgentService.interruptExecutor(orchestratorSessionId, {
-        executor: executor as 'opencode' | 'claudecode',
+        executor: 'opencode',
         executorSessionId: executorSessionId || '',
       });
       await touchSandbox(orchestratorSessionId, `${executor}_interrupt`);

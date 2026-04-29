@@ -1158,6 +1158,7 @@ export default function Home() {
           sessionId: activeSessionId || undefined,
           metadata: buildManagedTaskInputMetadata({
             originalInput: displayText,
+            modelTier: selectedModel || "pro",
             skills: mergedSkills,
             mcpReferences: selectedMcp,
             fileCount: uploadableAttachments.length,
@@ -1325,6 +1326,7 @@ export default function Home() {
           sessionId: activeSessionId,
           metadata: buildManagedTaskInputMetadata({
             originalInput: displayText,
+            modelTier: selectedModel || "pro",
             skills: mergedSkills,
             mcpReferences: selectedMcp,
             fileCount: uploadableAttachments.length,
@@ -7376,7 +7378,6 @@ function getExecutorDisplayName(metadataRaw: unknown) {
   const executor = asText(metadata.executor).toLowerCase();
   if (executor === "codex") return "Codex";
   if (executor === "altus") return "Altus";
-  if (executor === "claudecode") return "ClaudeCode";
   if (executor === "opencode") return "OpenCode";
   return i18n.t("homeWorkspace.executorLabel");
 }

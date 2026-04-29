@@ -39,6 +39,8 @@ export type ConnectorAccountSecret = {
   scope?: string;
   expiresAt?: string;
   dsn?: string;
+  composioMcpUrl?: string;
+  composioMcpHeaders?: Record<string, string>;
 };
 
 export type ConnectorProfileMaterial = {
@@ -264,11 +266,6 @@ function buildRemoteHeaders(
     }
     return headers;
   }
-  if (item.runtime.headerTemplate === 'figma') {
-    return {
-      'X-Figma-Token': accessToken,
-    };
-  }
   if (item.runtime.headerTemplate === 'bearer-token') {
     return {
       Authorization: `Bearer ${accessToken}`,
@@ -279,7 +276,7 @@ function buildRemoteHeaders(
 
 function buildRemoteUrl(
   item: ConnectorCatalogItem,
-  input: {
+  _input: {
     connectorKey: ConnectorKey;
   }
 ): string {
@@ -289,12 +286,6 @@ function buildRemoteUrl(
     throw new Error(`${item.name} MCP remote URL is not configured`);
   }
   const url = new URL(baseUrl);
-  if (input.connectorKey === 'notion') {
-    const normalizedPath = url.pathname.replace(/\/+$/, '') || '/';
-    if (!normalizedPath.endsWith('/sse')) {
-      throw new Error('Notion MCP remote URL must point to an SSE endpoint ending with /sse');
-    }
-  }
   return url.toString();
 }
 
@@ -381,6 +372,23 @@ export class ConnectorRegistry {
         provider: 'vercel',
         capabilities: ['initialize', 'tools/list', 'tools/call'],
       };
+    }
+    if (item.composio?.provider === 'composio') {
+      if (account.authStatus !== 'authorized') {
+        throw new Error(`${item.name} connector is not authorized`);
+      }
+      if (
+        asText(account.metadataJson?.provider) !== 'composio' ||
+        !asText(secret.composioMcpUrl)
+      ) {
+        throw new Error(`${item.name} connector must be reconnected through Composio`);
+      }
+      return {
+        type: 'hosted',
+        enabled: true,
+        provider: connectorKey,
+        capabilities: ['initialize', 'tools/list', 'tools/call'],
+      };
     } else if (!accessToken) {
       throw new Error(`${item.name} 杩炴帴鍣ㄧ己灏?access token`);
     }
@@ -425,6 +433,8 @@ export class ConnectorRegistry {
         return normalized.includes('vercel');
       case 'postgres':
         return normalized.includes('postgres');
+      case 'google_cloud':
+        return normalized.includes('google_cloud') || normalized.includes('googlecloud');
       default:
         return false;
     }

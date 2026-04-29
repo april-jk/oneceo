@@ -5,6 +5,7 @@ import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 const SUPPORTED_TRIGGER_MODES = ['on_attach', 'on_active_use', 'on_attach_and_active_use'] as const;
 const RESERVED_SKILL_PATTERNS = [/\bplatform[_ -]?skill\b/i, /\bsandbox[_ -]?skill[_ -]?sync\b/i];
 const MAX_MARKDOWN_LENGTH = 20_000;
+const BUILTIN_NOTES_PREFIX = 'Seeded from connector guide builtin';
 
 type BuiltinConnectorGuide = {
   description: string;
@@ -75,19 +76,51 @@ const BUILTIN_CONNECTOR_GUIDES: Record<string, BuiltinConnectorGuide> = {
     description: 'Notion connector prompt guide',
     triggerMode: 'on_attach',
     serverInstructionsMarkdown: [
+      'Notion is connected through oneceo API broker and Composio Tool Router, not through a sandbox-installed Notion MCP CLI.',
+      'Never install, curl, run, ping, or configure `@notionhq/mcp-cli`, `notion-mcp`, `mcp.notion.com`, or any local Notion MCP server inside the sandbox.',
+      'Use the attached Notion MCP router tools exposed in this session. Start with `notion__COMPOSIO_SEARCH_TOOLS` to find Notion actions, then use `notion__COMPOSIO_GET_TOOL_SCHEMAS` and `notion__COMPOSIO_MULTI_EXECUTE_TOOL` for execution.',
+      'Call `notion__COMPOSIO_SEARCH_TOOLS` with `queries`, for example `{ "queries": [{ "use_case": "search Notion pages by title" }], "session": { "generate_id": true } }`. Do not pass `toolkits` or `NOTION_MCP_OAUTH` to this search tool.',
       'Treat Notion as a workspace-scoped knowledge connector and confirm the current workspace/page/database target before writes.',
       'Prefer reading page structure, database schema, and access scope before create/update/archive operations.',
       'When the user asks to organize or update Notion content, inspect the existing hierarchy first instead of assuming naming or parent page structure.',
     ].join('\n'),
     guideReminderMarkdown: [
       'A Notion connector guide is active for this session.',
-      'Identify the target workspace/page/database first, then proceed with reads or writes against the confirmed scope.',
+      'Use the already attached Composio-backed Notion router tools; do not install or invoke any Notion MCP CLI in shell.',
+      'Identify the target workspace/page/database first, then call `notion__COMPOSIO_SEARCH_TOOLS` with a `queries` array, schema lookup, and router execution against the confirmed scope.',
     ].join('\n'),
     blockingRulesMarkdown: [
+      'Do not use shell commands to install or invoke Notion MCP. The sandbox does not receive Notion or Composio credentials.',
+      'If the needed Notion action is unclear, search the attached Composio router tools instead of trying a local MCP setup.',
       'Do not create, move, archive, or overwrite Notion pages/databases until the target parent location is explicit.',
       'If multiple workspaces or similarly named pages could match the user request, stop and ask instead of guessing.',
     ].join('\n'),
-    notes: 'Seeded from connector guide builtin v1.',
+    notes: `${BUILTIN_NOTES_PREFIX} v3-composio-router-search-schema.`,
+  },
+  figma: {
+    description: 'Figma connector prompt guide',
+    triggerMode: 'on_attach',
+    serverInstructionsMarkdown: [
+      'Figma is connected through oneceo API broker and Composio Tool Router, not through a sandbox-installed Figma MCP CLI or user-provided personal access token.',
+      'Never ask the user to paste a Figma token into the chat, shell, environment variables, or sandbox files.',
+      'Never install, curl, run, or configure a local Figma MCP server inside the sandbox.',
+      'Use the attached Figma MCP router tools exposed in this session. Start with `figma__COMPOSIO_SEARCH_TOOLS` to find Figma actions, then use schema lookup and router execution for the confirmed scope.',
+      'Call `figma__COMPOSIO_SEARCH_TOOLS` with `queries`, for example `{ "queries": [{ "use_case": "read Figma file structure from a file URL" }], "session": { "generate_id": true } }`.',
+      'Treat Figma as a design-file connector. Confirm the current file, page, frame, node, or comment target before write operations.',
+      'Read existing file structure and node metadata before creating comments, editing variables, or modifying design resources.',
+    ].join('\n'),
+    guideReminderMarkdown: [
+      'A Figma connector guide is active for this session.',
+      'Use the already attached Composio-backed Figma router tools; do not request tokens or install any Figma MCP CLI in shell.',
+      'Identify the target file/page/node first, then call `figma__COMPOSIO_SEARCH_TOOLS` with a `queries` array, schema lookup, and router execution against the confirmed scope.',
+    ].join('\n'),
+    blockingRulesMarkdown: [
+      'Do not use shell commands to install or invoke Figma MCP. The sandbox does not receive Figma or Composio credentials.',
+      'Do not ask for or transmit Figma Personal Access Tokens. Figma authorization must go through the platform Composio connector.',
+      'Do not create comments, webhooks, variables, dev resources, or modify Figma resources until the target file/page/node is explicit.',
+      'If the user provides only a vague design reference and multiple files or nodes could match, stop and ask instead of guessing.',
+    ].join('\n'),
+    notes: `${BUILTIN_NOTES_PREFIX} v1-figma-composio-router.`,
   },
 };
 export type ConnectorGuideTriggerMode = (typeof SUPPORTED_TRIGGER_MODES)[number];
@@ -531,6 +564,33 @@ export class ConnectorGuideService {
         if (builtin) {
           await connectorGuideDAO.publishRevision(policy.id, revision.id);
         }
+        continue;
+      }
+
+      const publishedRevision =
+        policy.publishedRevisionId
+          ? revisions.find((item) => item.id === policy.publishedRevisionId) || null
+          : null;
+      const isBuiltinManaged =
+        Boolean(builtin) &&
+        (policy.createdBy === 'system_builtin' ||
+          asText(publishedRevision?.notes || revisions[0]?.notes).startsWith(BUILTIN_NOTES_PREFIX));
+      if (builtin && isBuiltinManaged && asText(publishedRevision?.notes) !== builtin.notes) {
+        const latestVersion = Math.max(...revisions.map((item) => Number(item.versionNumber) || 0));
+        const revision = await connectorGuideDAO.createRevision({
+          policyId: policy.id,
+          versionNumber: latestVersion + 1,
+          status: 'draft',
+          serverInstructionsMarkdown: builtin.serverInstructionsMarkdown,
+          guideReminderMarkdown: builtin.guideReminderMarkdown,
+          blockingRulesMarkdown: builtin.blockingRulesMarkdown,
+          notes: builtin.notes,
+          createdBy: 'system_builtin',
+          publishedAt: null,
+        });
+        createdRevisions.push(`${connectorKey}:${latestVersion + 1}`);
+        touchedConnectorKeys.add(connectorKey);
+        await connectorGuideDAO.publishRevision(policy.id, revision.id);
       }
     }
 

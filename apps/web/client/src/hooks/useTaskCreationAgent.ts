@@ -73,7 +73,7 @@ export interface AgentMessage {
 export interface OrchestrationRuntime {
   generation: number | null;
   orchestratorSessionId: string | null;
-  executor: 'opencode' | 'claudecode' | 'codex';
+  executor: 'opencode' | 'codex';
   executorSessionId: string | null;
   opencodeSessionId: string | null;
   status: string | null;
@@ -376,18 +376,18 @@ const MANAGED_RUN_FAILED_TEXT = 'managed run 已失败';
 const REQUEST_FAILED_RETRY_TEXT = '请求失败，请稍后重试';
 
 // Altus 控制模式存储键：
-// - sandbox: 直通 sandbox 执行器（OpenCode/ClaudeCode/Codex 等）
+// - sandbox: 直通 sandbox 执行器（OpenCode/Codex）
 // - managed: Altus 三层智能体编排
 // 注意：直通模式不应触发 Altus 编排与澄清逻辑，避免误走流程。
 const EXECUTOR_STORAGE_KEY = 'altus_executor';
 const CODEX_EXECUTION_MODE_STORAGE_KEY = 'codex_execution_mode';
 const SSE_CLIENT_ID_STORAGE_KEY = 'task_creation_sse_client_id';
 
-function readExecutor(): 'opencode' | 'claudecode' | 'codex' {
+function readExecutor(): 'opencode' | 'codex' {
   if (typeof window === 'undefined') return 'opencode';
   try {
     const stored = window.localStorage.getItem(EXECUTOR_STORAGE_KEY);
-    if (stored === 'claudecode' || stored === 'codex' || stored === 'opencode') {
+    if (stored === 'codex' || stored === 'opencode') {
       return stored;
     }
     window.localStorage.setItem(EXECUTOR_STORAGE_KEY, 'opencode');
@@ -449,9 +449,8 @@ function isManagedRunTerminalStatus(value: unknown): boolean {
   );
 }
 
-function normalizeExecutor(value: unknown): 'opencode' | 'claudecode' | 'codex' {
+function normalizeExecutor(value: unknown): 'opencode' | 'codex' {
   const normalized = asText(value).toLowerCase();
-  if (normalized === 'claudecode') return 'claudecode';
   if (normalized === 'codex') return 'codex';
   return 'opencode';
 }

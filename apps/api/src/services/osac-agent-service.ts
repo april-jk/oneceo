@@ -25,7 +25,7 @@ type OpencodePartInput = {
   name?: string;
 };
 
-type ExecutorName = 'opencode' | 'codex' | 'claudecode';
+type ExecutorName = 'opencode' | 'codex';
 
 type ExecutorPartInput = OpencodePartInput;
 
@@ -152,7 +152,6 @@ function createOsacRequestId(prefix: string) {
 function normalizeExecutorName(value: unknown): ExecutorName {
   const normalized = asString(value).toLowerCase();
   if (normalized === 'codex') return 'codex';
-  if (normalized === 'claudecode') return 'claudecode';
   return 'opencode';
 }
 

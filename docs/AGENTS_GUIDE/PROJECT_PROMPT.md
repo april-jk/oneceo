@@ -1,12 +1,12 @@
-# Codex Prompt (Workspace A)
+# Project Prompt
 
 你正在仓库 `oneceo` 的主工作区开发。
 
 ## 当前定位
 
-- 工作区路径：`/Users/watson/codingProj/oneceo`
+- 工作区路径：`/home/thweki/Project/oneceo`（以实际 `pwd` 为准）
 - 当前常用分支：`task-creation-agent`
-- 开发前先确认实际分支，不要假设自己仍在历史 worktree 或 Windows 路径下工作
+- 开发前先确认实际分支，不要假设自己仍在历史 worktree 或其他路径下工作
 
 ## 开发要求
 

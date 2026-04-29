@@ -785,22 +785,6 @@ export const userConnectorProfiles = pgTable(
   })
 );
 
-export const userCodexRuntimeConfigs = pgTable(
-  'user_codex_runtime_configs',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    userId: text('user_id').notNull(),
-    configToml: text('config_toml').notNull(),
-    authJson: text('auth_json').notNull(),
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
-  },
-  (table) => ({
-    userUnique: uniqueIndex('idx_user_codex_runtime_configs_user_id').on(table.userId),
-    updatedAtIdx: index('idx_user_codex_runtime_configs_updated_at').on(table.updatedAt),
-  })
-);
-
 export const userPlatformSkillBindings = pgTable(
   'user_platform_skill_bindings',
   {
@@ -1208,8 +1192,6 @@ export type NewUserConnectorAccount = typeof userConnectorAccounts.$inferInsert;
 export type UserConnectorProfile = typeof userConnectorProfiles.$inferSelect;
 export type NewUserConnectorProfile = typeof userConnectorProfiles.$inferInsert;
 
-export type UserCodexRuntimeConfig = typeof userCodexRuntimeConfigs.$inferSelect;
-export type NewUserCodexRuntimeConfig = typeof userCodexRuntimeConfigs.$inferInsert;
 export type UserPlatformSkillBinding = typeof userPlatformSkillBindings.$inferSelect;
 export type NewUserPlatformSkillBinding = typeof userPlatformSkillBindings.$inferInsert;
 export type UserCustomSkill = typeof userCustomSkills.$inferSelect;
@@ -1237,3 +1219,154 @@ export type NewPlatformRuntimeArtifactChannel = typeof platformRuntimeArtifactCh
 
 export type ConnectorAuthRequest = typeof connectorAuthRequests.$inferSelect;
 export type NewConnectorAuthRequest = typeof connectorAuthRequests.$inferInsert;
+
+/**
+ * 用户积分余额表
+ * 
+ * 记录每个用户的积分余额和累计消费/获得
+ */
+export const userCredits = pgTable(
+  'user_credits',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => appUsers.id, { onDelete: 'cascade' }),
+    balance: integer('balance').notNull().default(0),
+    totalEarned: integer('total_earned').notNull().default(0),
+    totalConsumed: integer('total_consumed').notNull().default(0),
+    lastRechargeAt: timestamp('last_recharge_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdUnique: uniqueIndex('idx_user_credits_user_id').on(table.userId),
+  })
+);
+
+/**
+ * 积分交易记录表
+ * 
+ * 记录所有积分变动（充值、消费、人工调整）
+ */
+export const creditTransactions = pgTable(
+  'credit_transactions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => appUsers.id, { onDelete: 'cascade' }),
+    type: text('type').notNull(),
+    amount: integer('amount').notNull(),
+    balanceAfter: integer('balance_after').notNull(),
+    sourceId: uuid('source_id'),
+    sourceType: text('source_type'),
+    description: text('description'),
+    metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdIdx: index('idx_credit_transactions_user_id').on(table.userId),
+    typeIdx: index('idx_credit_transactions_type').on(table.type),
+    createdAtIdx: index('idx_credit_transactions_created_at').on(table.createdAt),
+  })
+);
+
+/**
+ * Token 使用明细表
+ * 
+ * 记录每次 LLM 调用的 token 使用情况和积分消耗
+ */
+export const tokenUsageLogs = pgTable(
+  'token_usage_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => appUsers.id, { onDelete: 'cascade' }),
+    sessionId: uuid('session_id')
+      .references(() => taskCreationSessions.id, { onDelete: 'set null' }),
+    runId: uuid('run_id')
+      .references(() => taskSessionRuns.id, { onDelete: 'set null' }),
+    model: text('model').notNull(),
+    promptTokens: integer('prompt_tokens').notNull().default(0),
+    cachedPromptTokens: integer('cached_prompt_tokens').notNull().default(0),
+    nonCachedPromptTokens: integer('non_cached_prompt_tokens').notNull().default(0),
+    cacheCreationTokens: integer('cache_creation_tokens').notNull().default(0),
+    completionTokens: integer('completion_tokens').notNull().default(0),
+    totalTokens: integer('total_tokens').notNull().default(0),
+    creditsConsumed: integer('credits_consumed').notNull().default(0),
+    pricingSnapshot: jsonb('pricing_snapshot').notNull().default(sql`'{}'::jsonb`),
+    metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdIdx: index('idx_token_usage_logs_user_id').on(table.userId),
+    sessionIdIdx: index('idx_token_usage_logs_session_id').on(table.sessionId),
+    createdAtIdx: index('idx_token_usage_logs_created_at').on(table.createdAt),
+  })
+);
+
+/**
+ * 模型定价配置表
+ * 
+ * 配置各模型的积分定价（按 1k tokens 计费）
+ * 缓存比例由系统固定：OpenAI 命中 50%，Anthropic 命中 10%/创建 125%
+ */
+export const modelPricing = pgTable(
+  'model_pricing',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    model: text('model').notNull(),
+    modelProvider: text('model_provider').notNull(),
+    promptPricePer1kTokens: integer('prompt_price_per_1k_tokens').notNull(),
+    completionPricePer1kTokens: integer('completion_price_per_1k_tokens').notNull(),
+    isActive: boolean('is_active').notNull().default(true),
+    effectiveFrom: timestamp('effective_from').notNull().defaultNow(),
+    effectiveUntil: timestamp('effective_until'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    modelActiveIdx: index('idx_model_pricing_model_active')
+      .on(table.model, table.isActive, table.effectiveFrom),
+    activeIdx: index('idx_model_pricing_active').on(table.isActive),
+  })
+);
+
+/**
+ * 缓存计费比例配置表
+ *
+ * 各模型提供商的缓存命中/创建计费比例（千分比整数存库）
+ * 如 hitRatio=500 表示 50%，creationRatio=1250 表示 125%
+ */
+export const cachePricingConfig = pgTable(
+  'cache_pricing_config',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    provider: text('provider').notNull(),
+    hitRatio: integer('hit_ratio').notNull(),
+    creationRatio: integer('creation_ratio').notNull(),
+    isActive: boolean('is_active').notNull().default(true),
+    effectiveFrom: timestamp('effective_from').notNull().defaultNow(),
+    effectiveUntil: timestamp('effective_until'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    providerUnique: uniqueIndex('idx_cache_pricing_config_provider_active')
+      .on(table.provider)
+      .where(sql`${table.isActive} = true`),
+  })
+);
+
+export type UserCredit = typeof userCredits.$inferSelect;
+export type NewUserCredit = typeof userCredits.$inferInsert;
+export type CreditTransaction = typeof creditTransactions.$inferSelect;
+export type NewCreditTransaction = typeof creditTransactions.$inferInsert;
+export type CachePricingConfig = typeof cachePricingConfig.$inferSelect;
+export type NewCachePricingConfig = typeof cachePricingConfig.$inferInsert;
+export type TokenUsageLog = typeof tokenUsageLogs.$inferSelect;
+export type NewTokenUsageLog = typeof tokenUsageLogs.$inferInsert;
+export type ModelPricing = typeof modelPricing.$inferSelect;
+export type NewModelPricing = typeof modelPricing.$inferInsert;

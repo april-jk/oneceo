@@ -34,7 +34,7 @@ afterEach(() => {
   }
 });
 
-function buildProfile(connectorKey: 'supabase' | 'vercel' | 'notion') {
+function buildProfile(connectorKey: 'supabase' | 'vercel' | 'notion' | 'figma') {
   return {
     profileId: `profile-${connectorKey}`,
     connectorKey,
@@ -42,9 +42,22 @@ function buildProfile(connectorKey: 'supabase' | 'vercel' | 'notion') {
     authMode: 'token',
     authStatus: 'authorized',
     configJson: {},
-    metadataJson: {},
+    metadataJson:
+      connectorKey === 'figma'
+        ? {
+            provider: 'composio',
+          }
+        : {},
     secret: {
-      accessToken: `${connectorKey}-token`,
+      ...(connectorKey === 'figma'
+        ? {
+            source: 'composio',
+            composioMcpUrl: 'https://composio.example.com/mcp',
+            composioMcpHeaders: { 'x-api-key': 'test-composio-key' },
+          }
+        : {
+            accessToken: `${connectorKey}-token`,
+          }),
     },
   } as any;
 }
@@ -93,6 +106,20 @@ test('buildProviderTransport materializes vercel as backend rpc transport', () =
   assert.equal(result.transport.backendProvider, 'vercel');
   assert.deepEqual(result.transport.capabilities, ['initialize', 'tools/list', 'tools/call']);
   assert.equal(result.transportName, 'backend_rpc');
+});
+
+test('buildProviderTransport materializes Figma Composio as API-brokered MCP transport', () => {
+  const serviceAny = sessionConnectorService as any;
+  const result = serviceAny.buildProviderTransport('figma', buildProfile('figma'), null, {
+    taskSessionId: 'task-figma',
+    userId: 'user-figma',
+  });
+
+  assert.equal(result.transport.type, 'backend_rpc');
+  assert.equal(result.transport.rpcNamespace, 'mcp');
+  assert.equal(result.transport.backendProvider, 'figma');
+  assert.deepEqual(result.transport.capabilities, ['initialize', 'tools/list', 'tools/call']);
+  assert.equal(result.transportName, 'api_brokered_mcp');
 });
 
 test('buildProviderTransport honors explicit notion remote transport', () => {

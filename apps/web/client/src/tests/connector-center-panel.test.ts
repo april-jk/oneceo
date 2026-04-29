@@ -19,8 +19,9 @@ describe("connector center panel profile id normalization", () => {
     expect(normalizeEditableProfileId("profile-123")).toBe("profile-123");
   });
 
-  it("uses connector-level OAuth for Notion, Slack, and Vercel", () => {
+  it("uses connector-level OAuth for Notion, Figma, Slack, and Vercel", () => {
     expect(shouldUseConnectorLevelOauth("notion")).toBe(true);
+    expect(shouldUseConnectorLevelOauth("figma")).toBe(true);
     expect(shouldUseConnectorLevelOauth("slack")).toBe(true);
     expect(shouldUseConnectorLevelOauth("vercel")).toBe(true);
     expect(shouldUseConnectorLevelOauth("github")).toBe(false);
@@ -30,6 +31,7 @@ describe("connector center panel profile id normalization", () => {
     expect(shouldUseUnifiedConnectorCard("github")).toBe(true);
     expect(shouldUseUnifiedConnectorCard("slack")).toBe(true);
     expect(shouldUseUnifiedConnectorCard("notion")).toBe(true);
+    expect(shouldUseUnifiedConnectorCard("figma")).toBe(true);
     expect(shouldUseUnifiedConnectorCard("vercel")).toBe(true);
     expect(shouldUseUnifiedConnectorCard("supabase")).toBe(false);
   });

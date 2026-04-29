@@ -1643,14 +1643,15 @@ export function GlobalSettingsDialogHost() {
   const searchState = useMemo(() => {
     const params = new URLSearchParams(search);
     const callbackPath = new URL(location, window.location.origin).pathname;
-    const hasOauthCallbackParams =
-      Boolean(params.get("code")) && Boolean(params.get("state"));
+    const hasOauthCallbackParams = Boolean(params.get("state"));
     const isNotionCallback =
       callbackPath === "/notion/callback" && hasOauthCallbackParams;
     const isSlackCallback =
       callbackPath === "/slack/callback" && hasOauthCallbackParams;
     const isVercelCallback =
       callbackPath === "/vercel/callback" && hasOauthCallbackParams;
+    const isGoogleCloudCallback =
+      callbackPath === "/google-cloud/callback" && hasOauthCallbackParams;
     return {
       shouldOpen:
         params.get("settings") === "open" ||
@@ -1658,9 +1659,10 @@ export function GlobalSettingsDialogHost() {
         params.get("connector_oauth") === "1" ||
         isNotionCallback ||
         isSlackCallback ||
-        isVercelCallback,
+        isVercelCallback ||
+        isGoogleCloudCallback,
       settingsTab:
-        isNotionCallback || isSlackCallback || isVercelCallback
+        isNotionCallback || isSlackCallback || isVercelCallback || isGoogleCloudCallback
           ? "connectors"
           : params.get("settingsTab"),
       targetSessionId: params.get("targetSessionId"),
@@ -1670,6 +1672,8 @@ export function GlobalSettingsDialogHost() {
           ? "slack"
           : isVercelCallback
             ? "vercel"
+            : isGoogleCloudCallback
+              ? "google_cloud"
             : params.get("connector"),
     };
   }, [location, search]);

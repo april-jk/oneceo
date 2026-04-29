@@ -78,6 +78,7 @@ const NEW_PROFILE_ID = "__new__";
 export const NOTION_FIXED_CALLBACK_PATH = "/notion/callback";
 export const SLACK_FIXED_CALLBACK_PATH = "/slack/callback";
 export const VERCEL_FIXED_CALLBACK_PATH = "/vercel/callback";
+export const GOOGLE_CLOUD_FIXED_CALLBACK_PATH = "/google-cloud/callback";
 const GITHUB_APP_AUTHORIZATIONS_URL = "https://github.com/settings/apps/authorizations";
 const GITHUB_APP_INSTALLATIONS_URL = "https://github.com/settings/installations";
 const GITHUB_INSTALLATION_MISSING_PATTERN = /没有任何可用安装|未安装到任何账号|installation/i;
@@ -186,7 +187,8 @@ function isFixedConnectorCallbackPath(pathname: string) {
   return (
     pathname === NOTION_FIXED_CALLBACK_PATH ||
     pathname === SLACK_FIXED_CALLBACK_PATH ||
-    pathname === VERCEL_FIXED_CALLBACK_PATH
+    pathname === VERCEL_FIXED_CALLBACK_PATH ||
+    pathname === GOOGLE_CLOUD_FIXED_CALLBACK_PATH
   );
 }
 
@@ -200,16 +202,18 @@ export function resolveConnectorOauthCallbackContext(location: string, params: U
         ? "slack"
         : currentPath === VERCEL_FIXED_CALLBACK_PATH
           ? "vercel"
+          : currentPath === GOOGLE_CLOUD_FIXED_CALLBACK_PATH
+            ? "google_cloud"
           : null;
   const connector =
     (params.get("connector") as ConnectorKey | null) ||
-    (hasOauthCallbackParams ? fixedPathConnector : null);
+    (params.get("state") ? fixedPathConnector : null);
   const hasConnectorOAuthFlag = params.get("connector_oauth") === "1";
   return {
     connector,
     currentPath,
-    isFixedCallback: Boolean(fixedPathConnector && hasOauthCallbackParams),
-    shouldHandle: hasConnectorOAuthFlag || Boolean(fixedPathConnector && hasOauthCallbackParams),
+    isFixedCallback: Boolean(fixedPathConnector && params.get("state")),
+    shouldHandle: hasConnectorOAuthFlag || Boolean(fixedPathConnector && params.get("state")),
   };
 }
 
@@ -360,7 +364,13 @@ function isGithubConnector(item: ConnectorCatalogItem | null | undefined) {
 }
 
 export function shouldUseConnectorLevelOauth(connectorKey: ConnectorKey | null | undefined) {
-  return connectorKey === "notion" || connectorKey === "slack" || connectorKey === "vercel";
+  return (
+    connectorKey === "notion" ||
+    connectorKey === "figma" ||
+    connectorKey === "slack" ||
+    connectorKey === "vercel" ||
+    connectorKey === "google_cloud"
+  );
 }
 
 export function shouldUseUnifiedConnectorCard(connectorKey: ConnectorKey | null | undefined) {
@@ -474,7 +484,8 @@ export function ConnectorCenterPanel({
     const useConnectorLevelOauth = shouldUseConnectorLevelOauth(connector);
     const useConnectorLevelCallback = useConnectorLevelOauth;
     if (!callbackContext.shouldHandle) return;
-    if (!code || !state || !connector) return;
+    if (!state || !connector) return;
+    if (!code && connector !== "google_cloud" && connector !== "notion" && connector !== "figma") return;
     if (!useConnectorLevelCallback && !profileId) return;
     if (callbackHandled.current) return;
     callbackHandled.current = true;
@@ -505,6 +516,10 @@ export function ConnectorCenterPanel({
               ? {
                   callbackPath: SLACK_FIXED_CALLBACK_PATH,
                 }
+              : connector === "google_cloud"
+                ? {
+                    callbackPath: GOOGLE_CLOUD_FIXED_CALLBACK_PATH,
+                  }
               : connector === "vercel"
                 ? {
                     callbackPath: VERCEL_FIXED_CALLBACK_PATH,
@@ -518,7 +533,7 @@ export function ConnectorCenterPanel({
 
         if (useConnectorLevelCallback) {
           const result = await completeConnectorOauth(connector, {
-            code,
+            code: code || "",
             state,
             redirectUri,
             teamId: asText(params.get("teamId")),
@@ -533,7 +548,7 @@ export function ConnectorCenterPanel({
           callbackLastError = asText(result.account?.lastError);
         } else {
           const result = await completeConnectorProfileOauth(profileId!, {
-            code,
+            code: code || "",
             state,
             redirectUri,
             teamId: asText(params.get("teamId")),
@@ -694,6 +709,7 @@ export function ConnectorCenterPanel({
       item.key !== "github" &&
       item.key !== "supabase" &&
       item.key !== "notion" &&
+      item.key !== "figma" &&
       item.key !== "vercel";
 
     if (requiresExplicitProfileName && !payload.profileName) {
@@ -823,6 +839,17 @@ export function ConnectorCenterPanel({
         const redirectUri =
           detailItem.key === "slack"
             ? new URL(SLACK_FIXED_CALLBACK_PATH, resolveBrowserOrigin()).toString()
+            : detailItem.key === "google_cloud"
+              ? buildConnectorRedirectUri(
+                  location,
+                  "",
+                  detailItem.key,
+                  null,
+                  effectiveTargetSessionId,
+                  {
+                    callbackPath: GOOGLE_CLOUD_FIXED_CALLBACK_PATH,
+                  }
+                )
             : buildConnectorRedirectUri(
                 location,
                 search,
@@ -837,7 +864,7 @@ export function ConnectorCenterPanel({
                     ? {
                         callbackPath: VERCEL_FIXED_CALLBACK_PATH,
                       }
-                  : undefined
+                    : undefined
               );
         const { authUrl } = await startConnectorOauth(detailItem.key, {
           redirectUri,

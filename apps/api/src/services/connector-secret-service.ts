@@ -19,7 +19,6 @@ function fromBase64Url(value: string): Buffer {
 }
 
 function resolveEnvKeyNames(scope?: ConnectorSecretScope): string[] {
-  if (scope === 'notion') return ['NOTION_CONNECTOR_SECRET_KEY', 'CONNECTOR_SECRET_KEY'];
   if (scope === 'slack') return ['SLACK_CONNECTOR_SECRET_KEY', 'CONNECTOR_SECRET_KEY'];
   if (scope === 'supabase') return ['SUPABASE_CONNECTOR_SECRET_KEY'];
   return ['CONNECTOR_SECRET_KEY'];

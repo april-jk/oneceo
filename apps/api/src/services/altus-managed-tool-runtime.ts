@@ -138,6 +138,30 @@ function isFrontendBuildCommand(value: string) {
   );
 }
 
+function isLegacyNotionMcpShellCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('@notionhq/mcp-cli') ||
+    normalized.includes('notion-mcp') ||
+    normalized.includes('mcp.notion.com') ||
+    normalized.includes('notion mcp cli')
+  );
+}
+
+function isLegacyFigmaMcpShellCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('figma-mcp') ||
+    normalized.includes('figma mcp') ||
+    normalized.includes('@composio/cli add') && normalized.includes('figma') ||
+    normalized.includes('x-figma-token') ||
+    normalized.includes('figma_personal_access_token') ||
+    normalized.includes('figma access token')
+  );
+}
+
 function extractLeadingCdTarget(value: string) {
   const raw = asText(value).trim();
   if (!raw.toLowerCase().startsWith('cd ')) {
@@ -654,6 +678,30 @@ export class AltusManagedToolRuntime {
       const command = asText(rawArgs.command);
       if (!command) {
         throw new Error('shell_execute_missing_command');
+      }
+      if (
+        isLegacyNotionMcpShellCommand(command) &&
+        (await connectorGuideService.getActiveGuideForConnector(this.input.sessionId, 'notion'))
+      ) {
+        throw new Error(
+          [
+            'notion_legacy_mcp_shell_blocked:当前会话的 Notion 已通过 oneceo API broker + Composio Tool Router 挂载。',
+            '禁止在 sandbox 内安装或运行 @notionhq/mcp-cli / notion-mcp / mcp.notion.com。',
+            '请先调用 load_connector_guide(connectorKey=notion)，然后使用已挂载的 notion__COMPOSIO_SEARCH_TOOLS、notion__COMPOSIO_GET_TOOL_SCHEMAS、notion__COMPOSIO_MULTI_EXECUTE_TOOL。',
+          ].join('\n')
+        );
+      }
+      if (
+        isLegacyFigmaMcpShellCommand(command) &&
+        (await connectorGuideService.getActiveGuideForConnector(this.input.sessionId, 'figma'))
+      ) {
+        throw new Error(
+          [
+            'figma_legacy_mcp_shell_blocked: Figma is attached through oneceo API broker + Composio Tool Router.',
+            'Do not install or run local Figma MCP tooling, and do not place Figma tokens in the sandbox.',
+            'Call load_connector_guide(connectorKey=figma), then use the attached figma__COMPOSIO_SEARCH_TOOLS and related Figma router tools.',
+          ].join('\n')
+        );
       }
       if (
         this.hasActiveSkill('deployment-orchestrator') &&

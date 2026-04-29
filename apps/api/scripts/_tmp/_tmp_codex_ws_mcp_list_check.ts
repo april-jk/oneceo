@@ -8,22 +8,11 @@ async function main() {
   const taskSessionId = randomUUID();
   const userId = `codex-ws-mcp-list-${Date.now()}`;
 
-  const { codexRuntimeConfigService } = await import('../../src/services/codex-runtime-config-service');
   const { taskCreationSessionDAO } = await import('../../src/db/dao/task-creation-session.dao');
   const { taskCreationFileMemoryStore } = await import('../../src/agents/task-creation/file-memory-store');
   const { sandboxAgentProvisionService } = await import('../../src/services/sandbox-agent-provision-service');
   const { e2bConnector } = await import('../../src/connectors/e2b-connector');
 
-  const apiKey = String(process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY || '').trim();
-  if (!apiKey) {
-    throw new Error('missing OPENAI_API_KEY/CODEX_API_KEY');
-  }
-
-  await codexRuntimeConfigService.upsertByUserId(userId, {
-    baseUrl: 'https://ai.hvmz.cn',
-    model: 'gpt-5.2',
-    apiKey,
-  });
   await taskCreationSessionDAO.createSession({
     id: taskSessionId,
     userId,

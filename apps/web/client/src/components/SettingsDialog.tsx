@@ -4,6 +4,7 @@ import { useLocation, useSearch } from "wouter";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -26,6 +27,7 @@ import { normalizeLanguage } from "@/i18n";
 import {
   ChevronLeft,
   Copy,
+  Diamond,
   KeyRound,
   LogOut,
   Mail,
@@ -41,10 +43,7 @@ import {
 } from "lucide-react";
 import { ConnectorCenterPanel } from "@/components/ConnectorCenterPanel";
 import { UserSkillSettingsPanel } from "@/components/UserSkillSettingsPanel";
-import {
-  getCodexRuntimeConfig,
-  updateCodexRuntimeConfig,
-} from "@/lib/task-creation-client";
+import { BillingSettingsPanel } from "@/components/BillingSettingsPanel";
 import {
   ALTUS_MODE_STORAGE_KEY,
   DEFAULT_ALTUS_MODE,
@@ -74,6 +73,7 @@ interface SettingsDialogProps {
 type SettingsPanelProps = {
   activeTab: SettingsTab;
   onActiveTabChange: (tab: SettingsTab) => void;
+  onClose?: () => void;
   connectorTargetSessionId?: string | null;
   highlightedConnector?: ConnectorKey | null;
 };
@@ -85,11 +85,8 @@ const SETTINGS_TABS: SettingsTab[] = [
   "settings",
   "skills",
   "connectors",
+  "billing",
 ];
-const DEFAULT_CODEX_BASE_URL = "https://llmapi.oneceo.ai";
-const DEFAULT_CODEX_MODEL = "gpt-5.3-codex";
-const DEFAULT_CODEX_API_KEY =
-  "sk-2ea35443a67d931ba178743b155f9627b8e2f81e5bc531d727f53172c3aa5555";
 const ACCOUNT_AVATAR_TONES = [
   "bg-emerald-500",
   "bg-sky-500",
@@ -261,6 +258,7 @@ function AppearancePreview({ theme }: { theme: ThemePreference }) {
 export function SettingsPanel({
   activeTab,
   onActiveTabChange,
+  onClose,
   connectorTargetSessionId,
   highlightedConnector,
 }: SettingsPanelProps) {
@@ -272,18 +270,6 @@ export function SettingsPanel({
   const [pushNotifications, setPushNotifications] = useState(true);
   const [executor, setExecutor] = useState("opencode");
   const [codexExecutionMode, setCodexExecutionMode] = useState("sdk");
-  const [codexBaseUrl, setCodexBaseUrl] = useState(DEFAULT_CODEX_BASE_URL);
-  const [codexModel, setCodexModel] = useState(DEFAULT_CODEX_MODEL);
-  const [codexApiKey, setCodexApiKey] = useState(DEFAULT_CODEX_API_KEY);
-  const [codexConfigToml, setCodexConfigToml] = useState("");
-  const [codexAuthJson, setCodexAuthJson] = useState("");
-  const [codexConfigDirty, setCodexConfigDirty] = useState(false);
-  const [codexAuthDirty, setCodexAuthDirty] = useState(false);
-  const [codexConfigLoading, setCodexConfigLoading] = useState(false);
-  const [codexConfigSaving, setCodexConfigSaving] = useState(false);
-  const [codexConfigError, setCodexConfigError] = useState("");
-  const [codexConfigUpdatedAt, setCodexConfigUpdatedAt] = useState("");
-  const [codexConfigLoaded, setCodexConfigLoaded] = useState(false);
   const [accountDisplayNameDraft, setAccountDisplayNameDraft] = useState("");
   const [accountSaving, setAccountSaving] = useState(false);
   const [personalizationDraft, setPersonalizationDraft] =
@@ -295,7 +281,7 @@ export function SettingsPanel({
   // Altus 控制模式：
   // - sandbox: 直通模式，前端输入直接转发到 sandbox 内执行器（当前为 OpenCode）。
   // - managed: Altus 接管模式，走三层智能体编排。
-  // 预留后续 claudecode/codex 直通模式扩展，保持此枚举语义稳定。
+  // 预留后续直通模式扩展，保持此枚举语义稳定。
   const [altusMode, setAltusMode] = useState<AltusMode>(DEFAULT_ALTUS_MODE);
   const accountNameInputRef = useRef<HTMLInputElement | null>(null);
   const EXECUTOR_STORAGE_KEY = "altus_executor";
@@ -342,8 +328,6 @@ export function SettingsPanel({
   }, [executor, altusMode, codexExecutionMode]);
 
   const shouldShowExecutorSettings = altusMode === "sandbox";
-  const shouldShowCodexLlmSettings =
-    executor === "codex" && altusMode === "sandbox";
   const accountInitial = getAccountInitial(user?.displayName || user?.email);
   const accountAvatarTone = getAccountAvatarTone(
     user?.email || user?.displayName,
@@ -387,79 +371,6 @@ export function SettingsPanel({
   };
 
   useEffect(() => {
-    if (!shouldShowCodexLlmSettings || codexConfigLoaded) return;
-    let cancelled = false;
-    setCodexConfigLoading(true);
-    setCodexConfigError("");
-    getCodexRuntimeConfig()
-      .then((config) => {
-        if (cancelled) return;
-        setCodexBaseUrl(config.baseUrl || DEFAULT_CODEX_BASE_URL);
-        setCodexModel(config.model || DEFAULT_CODEX_MODEL);
-        setCodexApiKey(config.apiKey || DEFAULT_CODEX_API_KEY);
-        setCodexConfigToml(config.configToml || "");
-        setCodexAuthJson(config.authJson || "");
-        setCodexConfigUpdatedAt(config.updatedAt || "");
-        setCodexConfigDirty(false);
-        setCodexAuthDirty(false);
-        setCodexConfigLoaded(true);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        setCodexConfigError(
-          error instanceof Error ? error.message : String(error),
-        );
-      })
-      .finally(() => {
-        if (!cancelled) setCodexConfigLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [codexConfigLoaded, shouldShowCodexLlmSettings]);
-
-  useEffect(() => {
-    if (codexConfigDirty) return;
-    setCodexConfigToml(
-      [
-        'model_provider = "OpenAI"',
-        `model = ${JSON.stringify(codexModel || DEFAULT_CODEX_MODEL)}`,
-        `review_model = ${JSON.stringify(codexModel || DEFAULT_CODEX_MODEL)}`,
-        'model_reasoning_effort = "high"',
-        "disable_response_storage = true",
-        'network_access = "enabled"',
-        "windows_wsl_setup_acknowledged = true",
-        "model_context_window = 1000000",
-        "model_auto_compact_token_limit = 900000",
-        "",
-        "[model_providers.OpenAI]",
-        'name = "OpenAI"',
-        `base_url = ${JSON.stringify(codexBaseUrl || DEFAULT_CODEX_BASE_URL)}`,
-        'wire_api = "responses"',
-        "supports_websockets = true",
-        "requires_openai_auth = true",
-        "",
-        "[features]",
-        "responses_websockets_v2 = true",
-        "",
-      ].join("\n"),
-    );
-  }, [codexBaseUrl, codexModel, codexConfigDirty]);
-
-  useEffect(() => {
-    if (codexAuthDirty) return;
-    setCodexAuthJson(
-      JSON.stringify(
-        {
-          OPENAI_API_KEY: codexApiKey || DEFAULT_CODEX_API_KEY,
-        },
-        null,
-        2,
-      ),
-    );
-  }, [codexApiKey, codexAuthDirty]);
-
-  useEffect(() => {
     setAccountDisplayNameDraft(user?.displayName || "");
   }, [user?.displayName]);
 
@@ -472,35 +383,6 @@ export function SettingsPanel({
       setAccountView("overview");
     }
   }, [activeTab]);
-
-  const handleSaveCodexConfig = async () => {
-    try {
-      setCodexConfigSaving(true);
-      setCodexConfigError("");
-      const saved = await updateCodexRuntimeConfig({
-        baseUrl: codexBaseUrl,
-        model: codexModel,
-        apiKey: codexApiKey,
-        configToml: codexConfigToml,
-        authJson: codexAuthJson,
-      });
-      setCodexBaseUrl(saved.baseUrl || DEFAULT_CODEX_BASE_URL);
-      setCodexModel(saved.model || DEFAULT_CODEX_MODEL);
-      setCodexApiKey(saved.apiKey || DEFAULT_CODEX_API_KEY);
-      setCodexConfigToml(saved.configToml || "");
-      setCodexAuthJson(saved.authJson || "");
-      setCodexConfigUpdatedAt(saved.updatedAt || "");
-      setCodexConfigDirty(false);
-      setCodexAuthDirty(false);
-      setCodexConfigLoaded(true);
-    } catch (error) {
-      setCodexConfigError(
-        error instanceof Error ? error.message : String(error),
-      );
-    } finally {
-      setCodexConfigSaving(false);
-    }
-  };
 
   const handleCopyUserId = async () => {
     if (!user?.id) return;
@@ -663,6 +545,15 @@ export function SettingsPanel({
                     <span className="truncate">
                       {t("settings.connectorsTab")}
                     </span>
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="billing"
+                    className="flex px-2 py-2.5 items-center text-[14px] leading-5 text-foreground max-md:whitespace-nowrap md:h-9 md:gap-2 md:self-stretch md:px-4 md:rounded-lg hover:bg-muted/60 data-[state=active]:bg-muted/60 data-[state=active]:font-medium max-md:border-b-2 max-md:border-foreground"
+                  >
+                    <span className="hidden md:block text-muted-foreground data-[state=active]:text-foreground">
+                      <Diamond className="h-4 w-4" />
+                    </span>
+                    <span className="truncate">积分与消费</span>
                   </TabsTrigger>
                 </div>
               </TabsList>
@@ -1055,9 +946,6 @@ export function SettingsPanel({
                         <SelectItem value="opencode" className="rounded-md">
                           {t("settings.executorOpencode")}
                         </SelectItem>
-                        <SelectItem value="claudecode" className="rounded-md">
-                          {t("settings.executorClaudecode")}
-                        </SelectItem>
                         <SelectItem value="codex" className="rounded-md">
                           {t("settings.executorCodex")}
                         </SelectItem>
@@ -1092,127 +980,6 @@ export function SettingsPanel({
                         </SelectItem>
                       </SelectContent>
                     </Select>
-
-                    <div className="space-y-4 rounded-2xl border border-border/60 bg-background/80 p-4">
-                      <div className="space-y-1">
-                        <Label className="text-sm font-medium">
-                          {t("settings.codexLlmSettingsLabel")}
-                        </Label>
-                        <p className="text-sm text-muted-foreground">
-                          {t("settings.codexLlmSettingsDescription")}
-                        </p>
-                        <p className="text-xs text-amber-600">
-                          {t("settings.codexLlmTodo")}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {t("settings.codexLlmSandboxOnly")}
-                        </p>
-                      </div>
-
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <div className="space-y-2">
-                          <Label className="text-sm">
-                            {t("settings.codexLlmBaseUrl")}
-                          </Label>
-                          <Input
-                            value={codexBaseUrl}
-                            onChange={(event) =>
-                              setCodexBaseUrl(event.target.value)
-                            }
-                            placeholder={DEFAULT_CODEX_BASE_URL}
-                            className="rounded-xl"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label className="text-sm">
-                            {t("settings.codexLlmModel")}
-                          </Label>
-                          <Input
-                            value={codexModel}
-                            onChange={(event) =>
-                              setCodexModel(event.target.value)
-                            }
-                            placeholder={DEFAULT_CODEX_MODEL}
-                            className="rounded-xl"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label className="text-sm">
-                          {t("settings.codexLlmApiKey")}
-                        </Label>
-                        <Input
-                          value={codexApiKey}
-                          onChange={(event) =>
-                            setCodexApiKey(event.target.value)
-                          }
-                          placeholder="sk-..."
-                          className="rounded-xl"
-                        />
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label className="text-sm">
-                          {t("settings.codexConfigTomlLabel")}
-                        </Label>
-                        <Textarea
-                          value={codexConfigToml}
-                          onChange={(event) => {
-                            setCodexConfigToml(event.target.value);
-                            setCodexConfigDirty(true);
-                          }}
-                          rows={12}
-                          className="rounded-xl font-mono text-xs"
-                        />
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label className="text-sm">
-                          {t("settings.codexAuthJsonLabel")}
-                        </Label>
-                        <Textarea
-                          value={codexAuthJson}
-                          onChange={(event) => {
-                            setCodexAuthJson(event.target.value);
-                            setCodexAuthDirty(true);
-                          }}
-                          rows={8}
-                          className="rounded-xl font-mono text-xs"
-                        />
-                      </div>
-
-                      {codexConfigError ? (
-                        <p className="text-sm text-destructive">
-                          {codexConfigError}
-                        </p>
-                      ) : null}
-
-                      {codexConfigUpdatedAt ? (
-                        <p className="text-xs text-muted-foreground">
-                          {t("settings.codexLlmUpdatedAt")}:{" "}
-                          {codexConfigUpdatedAt}
-                        </p>
-                      ) : null}
-
-                      <div className="flex items-center gap-3">
-                        <Button
-                          type="button"
-                          onClick={handleSaveCodexConfig}
-                          disabled={codexConfigLoading || codexConfigSaving}
-                          className="rounded-xl bg-foreground hover:bg-foreground/90 text-background"
-                        >
-                          {codexConfigSaving
-                            ? t("common.loading")
-                            : t("common.save")}
-                        </Button>
-                        {codexConfigLoading ? (
-                          <span className="text-sm text-muted-foreground">
-                            {t("common.loading")}
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
                   </div>
                 ) : null}
               </TabsContent>
@@ -1583,6 +1350,10 @@ export function SettingsPanel({
                   highlightedConnector={highlightedConnector}
                 />
               </TabsContent>
+
+              <TabsContent value="billing" className="mt-0">
+                <BillingSettingsPanel onClose={onClose} />
+              </TabsContent>
             </div>
           </div>
         </div>
@@ -1609,6 +1380,7 @@ export function SettingsDialog({
       >
         <DialogHeader className="sr-only">
           <DialogTitle>{t("settings.title")}</DialogTitle>
+          <DialogDescription>{t("settings.description")}</DialogDescription>
         </DialogHeader>
         <button
           onClick={() => onOpenChange(false)}
@@ -1620,6 +1392,7 @@ export function SettingsDialog({
           <SettingsPanel
             activeTab={activeTab}
             onActiveTabChange={onActiveTabChange}
+            onClose={() => onOpenChange(false)}
             connectorTargetSessionId={connectorTargetSessionId}
             highlightedConnector={highlightedConnector}
           />

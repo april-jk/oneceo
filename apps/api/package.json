@@ -9,6 +9,7 @@
     "start": "node dist/index.js",
     "type-check": "tsc --noEmit",
     "test": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:5432/oneceo_test?sslmode=disable} tsx --test tests/**/*.test.ts",
+    "test:db:migration": "tsx scripts/run-db-migration-readiness-test.ts",
     "altus-eval:init": "tsx scripts/altus-eval/init-run.ts",
     "altus-eval:finalize": "tsx scripts/altus-eval/finalize-run.ts",
     "test:deployment-main-chain:e2e": "tsx tests/e2e/deployment-main-chain.e2e.ts",

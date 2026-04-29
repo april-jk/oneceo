@@ -14,23 +14,11 @@ async function main() {
   const taskSessionId = randomUUID();
   const prompt = process.argv.slice(3).join(' ').trim() || '请只回复“OK”，不要输出其他内容。';
 
-  const { codexRuntimeConfigService } = await import('../../src/services/codex-runtime-config-service');
   const { taskCreationSessionDAO, sandboxExecutionEnvironmentDAO } = await import('../../src/db/dao');
   const { taskCreationFileMemoryStore } = await import('../../src/agents/task-creation/file-memory-store');
   const { codexRemoteService } = await import('../../src/services/codex-remote-service');
   const { e2bConnector } = await import('../../src/connectors/e2b-connector');
   const { e2bConfig } = await import('../../src/config/e2b-config');
-
-  const apiKey = String(process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY || '').trim();
-  if (!apiKey) {
-    throw new Error('missing OPENAI_API_KEY/CODEX_API_KEY');
-  }
-
-  await codexRuntimeConfigService.upsertByUserId(userId, {
-    baseUrl: 'https://ai.hvmz.cn',
-    model: 'gpt-5.2',
-    apiKey,
-  });
 
   await taskCreationSessionDAO.createSession({
     id: taskSessionId,

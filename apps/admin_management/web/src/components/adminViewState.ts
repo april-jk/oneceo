@@ -13,7 +13,7 @@ export type UserManagementSort = {
   direction: UserManagementSortDirection;
 };
 
-export type UserDetailTab = 'overview' | 'conversations' | 'sandboxes' | 'deployments';
+export type UserDetailTab = 'overview' | 'billing' | 'conversations' | 'sandboxes' | 'deployments';
 export type UserManagementViewState = {
   filters: UserManagementFilters;
   sort: UserManagementSort;

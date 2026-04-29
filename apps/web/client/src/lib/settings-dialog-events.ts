@@ -6,7 +6,8 @@ export type SettingsTab =
   | "model"
   | "settings"
   | "skills"
-  | "connectors";
+  | "connectors"
+  | "billing";
 
 export type OpenSettingsDialogDetail = {
   tab?: SettingsTab;

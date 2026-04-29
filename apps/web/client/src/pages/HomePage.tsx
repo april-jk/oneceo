@@ -21,6 +21,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { CreditBadge } from "@/components/CreditBadge";
 import UserMenu from "@/components/UserMenu";
 import type { TaskCreationPlatformSkill } from "@/lib/task-creation-client";
 import {
@@ -114,6 +115,7 @@ export default function HomePage() {
             </div>
           </div>
           <div className="flex items-center gap-4">
+            <CreditBadge />
             <UserMenu />
           </div>
         </div>

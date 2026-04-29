@@ -4,6 +4,24 @@ import type * as React from 'react';
 // 管理后台主页面：统一组装导航、区块切换和会话/主机/技能/发布等能力面板。
 import { api } from './api';
 import type { AdminUser } from './api';
+import adminLoginBackground from './assets/auth/oneceo-admin-login-bg.webp';
+import {
+  AdminButton,
+  AdminDetailShell,
+  AdminStickyInspector,
+  AuditTimeline,
+  AdminTabs,
+  CodePanel,
+  DangerConfirmDialog,
+  RelationTopology,
+  getAdminActionIcon,
+  getAdminModuleIcon,
+  getAdminStatusIcon,
+  IdToken,
+  StatusBadge,
+  statusToneFromValue,
+} from './components/admin-ui';
+import type { AdminModuleIconKey } from './components/admin-ui';
 import {
   DEFAULT_DEPLOYMENT_MANAGEMENT_VIEW_STATE,
   DEFAULT_CONNECTOR_GUIDE_MANAGEMENT_VIEW_STATE,
@@ -79,11 +97,20 @@ const ConnectorGuideManagementSection = lazy(() =>
 const OsacReleaseManagementSection = lazy(() =>
   import('./components/OsacReleaseManagementSection').then((module) => ({ default: module.OsacReleaseManagementSection }))
 );
+const BillingManagementSection = lazy(() =>
+  import('./components/BillingManagementSection').then((module) => ({ default: module.BillingManagementSection }))
+);
 
-type SectionKey = 'kvm' | 'operations' | 'deployment' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit';
-type NavGroupKey = 'runtime' | 'platform';
+type SectionKey = 'kvm' | 'operations' | 'deployment' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit' | 'billing';
+type NavGroupKey = 'runtime' | 'platform' | 'billing';
 type ToastTone = 'error' | 'success' | 'warning' | 'info';
 type SandboxDetailTab = 'overview' | 'files' | 'processes' | 'connectivity' | 'archive' | 'terminal';
+type SandboxDangerAction =
+  | { type: 'close'; sandboxId: string; label: string }
+  | { type: 'restart'; sandboxId: string; label: string }
+  | { type: 'archive'; sandboxId: string; label: string }
+  | { type: 'delete-file'; sandboxId: string; path: string; targetKind: SandboxFileItem['kind'] | 'dir' };
+type KvmDangerAction = { type: 'stop'; vm: VmItem };
 type SandboxProcessToolView = 'processes' | 'ports';
 type SandboxFileOperation = 'upload' | 'download' | 'delete';
 type SandboxFileTransferProgress = {
@@ -126,7 +153,27 @@ type AuditFilterState = {
   to: string;
 };
 
-type ConversationDialogTab = 'overview' | 'interaction' | 'infra' | 'raw' | 'transitions';
+type ConversationDialogTab = 'overview' | 'billing' | 'interaction' | 'infra' | 'raw' | 'transitions';
+type ConversationBillingUsage = {
+  totalCredits: number;
+  totalTokens: number;
+  promptTokens: number;
+  completionTokens: number;
+  cachedPromptTokens: number;
+  cacheCreationTokens: number;
+  callCount: number;
+  items: Array<{
+    id: string;
+    model: string;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    cachedPromptTokens: number;
+    cacheCreationTokens: number;
+    creditsConsumed: number;
+    createdAt: string;
+  }>;
+};
 type AdminDetailOrigin = {
   section: SectionKey;
   trail: string;
@@ -311,6 +358,7 @@ function applyAdminTheme(themeKey: AdminThemeKey, mode: AdminThemeMode, systemTo
 const NAV_GROUPS: Array<{ key: NavGroupKey; label: string; description: string }> = [
   { key: 'runtime', label: '运行管理', description: '运行状态与操作记录' },
   { key: 'platform', label: '平台配置', description: '能力、策略与发布配置' },
+  { key: 'billing', label: '计费管理', description: '积分、定价与消费统计' },
 ];
 
 const NAV_ITEMS: Array<{
@@ -319,6 +367,7 @@ const NAV_ITEMS: Array<{
   label: string;
   subtitle: string;
   tag: string;
+  iconKey: AdminModuleIconKey;
   description: string;
   signal: string;
 }> = [
@@ -328,6 +377,7 @@ const NAV_ITEMS: Array<{
     label: 'Sandbox 管理',
     subtitle: 'Sandbox 与 OSAC',
     tag: 'SBX',
+    iconKey: 'sandbox',
     description: '查看 Sandbox、归档记录和连通性状态。',
     signal: 'Sandbox 状态',
   },
@@ -337,6 +387,7 @@ const NAV_ITEMS: Array<{
     label: '部署管理',
     subtitle: '发布与访问状态',
     tag: 'DEP',
+    iconKey: 'deployment',
     description: '查看会话部署记录、访问地址和用户归属。',
     signal: '部署状态',
   },
@@ -346,6 +397,7 @@ const NAV_ITEMS: Array<{
     label: '运营数据',
     subtitle: '平台增长与使用',
     tag: 'OPS',
+    iconKey: 'operations',
     description: '查看 OneCEO 平台流量、来源、页面、事件和业务转化。',
     signal: '运营指标',
   },
@@ -355,6 +407,7 @@ const NAV_ITEMS: Array<{
     label: '对话管理',
     subtitle: '会话记录',
     tag: 'MSG',
+    iconKey: 'conversation',
     description: '查看会话状态、轨迹和运行绑定信息。',
     signal: '会话状态',
   },
@@ -364,6 +417,7 @@ const NAV_ITEMS: Array<{
     label: '用户管理',
     subtitle: '普通用户账号',
     tag: 'USR',
+    iconKey: 'user',
     description: '查看普通用户账号状态、登录来源，以及对话和 Sandbox 的关联情况。',
     signal: '账号关联',
   },
@@ -373,6 +427,7 @@ const NAV_ITEMS: Array<{
     label: '审计日志',
     subtitle: '操作追踪',
     tag: 'LOG',
+    iconKey: 'audit',
     description: '查看操作记录、结果状态和时间线。',
     signal: '操作记录',
   },
@@ -382,6 +437,7 @@ const NAV_ITEMS: Array<{
     label: 'KVM 管理',
     subtitle: '虚拟机与资源',
     tag: 'KVM',
+    iconKey: 'kvm',
     description: '查看宿主机资源、虚拟机状态和实例操作。',
     signal: '资源占用',
   },
@@ -391,6 +447,7 @@ const NAV_ITEMS: Array<{
     label: '智能体管理',
     subtitle: '智能体运行状态',
     tag: 'AGT',
+    iconKey: 'agent',
     description: '查看服务健康、能力分布和会话状态。',
     signal: '服务健康',
   },
@@ -400,6 +457,7 @@ const NAV_ITEMS: Array<{
     label: '技能管理',
     subtitle: '平台技能与版本',
     tag: 'SKL',
+    iconKey: 'skill',
     description: '维护平台技能、版本记录和校验结果。',
     signal: '技能工作区',
   },
@@ -409,6 +467,7 @@ const NAV_ITEMS: Array<{
     label: '连接器 Guide',
     subtitle: '引导与发布',
     tag: 'CGD',
+    iconKey: 'connectorGuide',
     description: '维护连接器引导策略、版本与发布记录。',
     signal: '引导策略',
   },
@@ -418,8 +477,19 @@ const NAV_ITEMS: Array<{
     label: 'OSAC 版本',
     subtitle: '工件发布与当前版本',
     tag: 'OSA',
+    iconKey: 'osac',
     description: '管理上传、校验、发布和回滚。',
     signal: '工件发布',
+  },
+  {
+    key: 'billing',
+    group: 'billing',
+    label: '计费管理',
+    subtitle: '积分与定价配置',
+    tag: 'BIL',
+    iconKey: 'billing',
+    description: '查看平台积分消耗、调整用户余额、配置模型定价。',
+    signal: '消费统计',
   },
 ];
 
@@ -3228,7 +3298,7 @@ const ADMIN_URL_QUERY_KEYS = [
   'audit_to',
 ] as const;
 
-const USER_DETAIL_TAB_VALUES = new Set(['overview', 'conversations', 'sandboxes', 'deployments']);
+const USER_DETAIL_TAB_VALUES = new Set(['overview', 'billing', 'conversations', 'sandboxes', 'deployments']);
 const DEPLOYMENT_VIEW_VALUES = new Set(['records', 'conversations', 'users', 'railway']);
 const DEPLOYMENT_DETAIL_TAB_VALUES = new Set(['overview', 'history', 'logs', 'relations', 'raw']);
 const SANDBOX_TAB_VALUES = new Set(['runtime']);
@@ -3250,7 +3320,8 @@ function isSectionKey(value: string | null): value is SectionKey {
     || value === 'connectorGuide'
     || value === 'osacRelease'
     || value === 'sandbox'
-    || value === 'audit';
+    || value === 'audit'
+    || value === 'billing';
 }
 
 function cloneDeploymentManagementViewState(
@@ -3652,6 +3723,7 @@ export default function App() {
   const [hosts, setHosts] = useState<HostListResponse['hosts']>([]);
   const [hostTrendMap, setHostTrendMap] = useState<Record<string, HostTrendPoint[]>>({});
   const [busyVmIds, setBusyVmIds] = useState<Record<string, boolean>>({});
+  const [kvmDangerAction, setKvmDangerAction] = useState<KvmDangerAction | null>(null);
 
   const [conversationSessions, setConversationSessions] = useState<ConversationSession[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(initialUrlState.conversation.selectedSessionId);
@@ -3671,7 +3743,7 @@ export default function App() {
   const [conversationSummaryClock, setConversationSummaryClock] = useState(() => Date.now());
   const [conversationDialog, setConversationDialog] = useState<{ sessionId: string } | null>(null);
   const [conversationDialogOrigin, setConversationDialogOrigin] = useState<AdminDetailOrigin | null>(null);
-  const [conversationDialogZIndex, setConversationDialogZIndex] = useState(240);
+  const [conversationDialogZIndex, setConversationDialogZIndex] = useState(1510);
   const [conversationSectionOrigin, setConversationSectionOrigin] = useState<AdminDetailOrigin | null>(null);
   const [showOpencodePayload, setShowOpencodePayload] = useState(false);
   const [conversationGovernanceFilter, setConversationGovernanceFilter] = useState<string | null>(null);
@@ -3679,6 +3751,8 @@ export default function App() {
   const [conversationDialogTab, setConversationDialogTab] = useState<ConversationDialogTab>('overview');
   const [conversationDeploymentSummary, setConversationDeploymentSummary] = useState<DeploymentRecord | null>(null);
   const [conversationDeploymentLoading, setConversationDeploymentLoading] = useState(false);
+  const [conversationBillingUsage, setConversationBillingUsage] = useState<ConversationBillingUsage | null>(null);
+  const [conversationBillingLoading, setConversationBillingLoading] = useState(false);
   const [transitionView, setTransitionView] = useState<'timeline' | 'list'>('timeline');
   const [transitionQuery, setTransitionQuery] = useState('');
   const [transitionFilters, setTransitionFilters] = useState(DEFAULT_TRANSITION_FILTERS);
@@ -3706,7 +3780,9 @@ export default function App() {
   const [sandboxArchiveHistory, setSandboxArchiveHistory] = useState<SandboxArchiveHistoryEntry[]>([]);
   const [sandboxModalOpen, setSandboxModalOpen] = useState(false);
   const [sandboxModalOrigin, setSandboxModalOrigin] = useState<AdminDetailOrigin | null>(null);
-  const [sandboxModalZIndex, setSandboxModalZIndex] = useState(250);
+  const [sandboxModalZIndex, setSandboxModalZIndex] = useState(1510);
+  const [sandboxUserPreview, setSandboxUserPreview] = useState<ConversationSession['user'] | null>(null);
+  const [sandboxUserPreviewZIndex, setSandboxUserPreviewZIndex] = useState(1530);
   const [sandboxSectionOrigin, setSandboxSectionOrigin] = useState<AdminDetailOrigin | null>(null);
   const [sandboxRuntimeQuery, setSandboxRuntimeQuery] = useState(initialUrlState.sandbox.query);
   const [sandboxExecutorFilter, setSandboxExecutorFilter] = useState(initialUrlState.sandbox.executor);
@@ -3736,6 +3812,7 @@ export default function App() {
   const [, setSandboxFileStatus] = useState('等待加载目录');
   const [sandboxFileOperation, setSandboxFileOperation] = useState<SandboxFileOperation | null>(null);
   const [sandboxFileTransferProgress, setSandboxFileTransferProgress] = useState<SandboxFileTransferProgress | null>(null);
+  const [sandboxDangerAction, setSandboxDangerAction] = useState<SandboxDangerAction | null>(null);
   const [sandboxProcessResult, setSandboxProcessResult] = useState<unknown>(null);
   const [sandboxProcessFetchedAt, setSandboxProcessFetchedAt] = useState<number | null>(null);
   const [sandboxPidInput, setSandboxPidInput] = useState('');
@@ -3746,7 +3823,7 @@ export default function App() {
     '{"template":"opencode-playwright-mcp-v4-neko-lockapi-20260413","timeoutMs":300000}'
   );
   const [sandboxCreateDrawerOpen, setSandboxCreateDrawerOpen] = useState(false);
-  const overlayZIndexRef = useRef(260);
+  const overlayZIndexRef = useRef(1530);
   const [archiveDetailRow, setArchiveDetailRow] = useState<{
     id: string;
     snapshotKey: string | null;
@@ -4442,7 +4519,11 @@ export default function App() {
       selectedUserId: userId,
       selectedUserLabel: current.selectedUserLabel,
       drawerOpen: true,
-      detailTab: origin?.section === 'deployment' ? 'deployments' : 'overview',
+      detailTab: origin?.section === 'billing'
+        ? 'billing'
+        : origin?.section === 'deployment'
+          ? 'deployments'
+          : 'overview',
     }));
     setActiveSection('user');
     setError(null);
@@ -4576,6 +4657,7 @@ export default function App() {
     setSandboxModalOpen(false);
     setSandboxModalOrigin(null);
     setSandboxDeepLinkId(null);
+    setSandboxUserPreview(null);
   }, []);
 
   const closeTemplateDetail = useCallback(() => {
@@ -4597,6 +4679,13 @@ export default function App() {
     setError(null);
     openConversationDialog(taskSessionId, 'overview', currentSandboxOrigin());
   }, [currentSandboxOrigin, openConversationDialog]);
+
+  const openSandboxUserPreview = useCallback((user?: ConversationSession['user'] | null) => {
+    if (!user?.id) return;
+    setError(null);
+    setSandboxUserPreview(user);
+    setSandboxUserPreviewZIndex(claimOverlayZIndex());
+  }, [claimOverlayZIndex]);
 
   const openDeploymentFromConversation = useCallback((taskSessionId?: string | null) => {
     if (!taskSessionId) return;
@@ -5016,10 +5105,11 @@ export default function App() {
     pushToast,
   ]);
 
-  const deleteSandboxFileTarget = useCallback(async () => {
+  const deleteSandboxFileTarget = useCallback(async (confirmedByDialog = false) => {
     const sandboxId = sandboxRuntimeDetail?.runtime.sandboxId || sandboxDetail?.sandboxId;
-    const targetPath = normalizeSandboxPath(sandboxFilePath || sandboxDirectoryPath);
-    const targetKind = sandboxFileTargetKind || 'dir';
+    const confirmedDeleteTarget = confirmedByDialog && sandboxDangerAction?.type === 'delete-file' ? sandboxDangerAction : null;
+    const targetPath = normalizeSandboxPath(confirmedDeleteTarget?.path || sandboxFilePath || sandboxDirectoryPath);
+    const targetKind = confirmedDeleteTarget?.targetKind || sandboxFileTargetKind || 'dir';
     const treeRootPath = normalizeSandboxPath(sandboxFileTreeRootPath);
     if (!sandboxId || !targetPath) return;
     if (targetPath === '/' || targetPath === treeRootPath) {
@@ -5028,8 +5118,10 @@ export default function App() {
     }
 
     const targetLabel = targetKind === 'dir' ? '目录' : '文件';
-    const confirmed = window.confirm(`确定删除${targetLabel}：${targetPath}？此操作不可撤销。`);
-    if (!confirmed) return;
+    if (!confirmedByDialog) {
+      setSandboxDangerAction({ type: 'delete-file', sandboxId, path: targetPath, targetKind });
+      return;
+    }
 
     const refreshPath = parentPath(targetPath);
     setSandboxFileOperation('delete');
@@ -5059,6 +5151,7 @@ export default function App() {
       setError(toolError instanceof Error ? toolError.message : '删除失败');
     } finally {
       setSandboxFileOperation(null);
+      setSandboxDangerAction(null);
     }
   }, [
     sandboxRuntimeDetail?.runtime.sandboxId,
@@ -5067,6 +5160,7 @@ export default function App() {
     sandboxDirectoryPath,
     sandboxFileTargetKind,
     sandboxFileTreeRootPath,
+    sandboxDangerAction,
     listSandboxFiles,
     pushToast,
   ]);
@@ -5117,6 +5211,33 @@ export default function App() {
     },
     [loadSandboxRuntimeDetail, loadSandboxSection]
   );
+
+  const requestSandboxClose = useCallback((sandboxId: string, label: string) => {
+    setSandboxDangerAction({ type: 'close', sandboxId, label });
+  }, []);
+
+  const requestSandboxRestart = useCallback((sandboxId: string, label: string) => {
+    setSandboxDangerAction({ type: 'restart', sandboxId, label });
+  }, []);
+
+  const requestSandboxArchive = useCallback((sandboxId: string, label: string) => {
+    setSandboxDangerAction({ type: 'archive', sandboxId, label });
+  }, []);
+
+  const confirmSandboxDangerAction = useCallback(async () => {
+    if (!sandboxDangerAction) return;
+    const action = sandboxDangerAction;
+    if (action.type === 'close') {
+      await closeSandbox(action.sandboxId);
+    } else if (action.type === 'restart') {
+      await restartSandbox(action.sandboxId);
+    } else if (action.type === 'archive') {
+      await runSandboxArchive(action.sandboxId);
+    } else if (action.type === 'delete-file') {
+      await deleteSandboxFileTarget(true);
+    }
+    setSandboxDangerAction(null);
+  }, [closeSandbox, deleteSandboxFileTarget, restartSandbox, runSandboxArchive, sandboxDangerAction]);
 
   const runSandboxRestore = useCallback(
     async (sandboxId: string, snapshotKey?: string) => {
@@ -5781,6 +5902,49 @@ export default function App() {
       cancelled = true;
     };
   }, [activeSection, authStatus, conversationDialog, selectedSessionId]);
+
+  useEffect(() => {
+    const sessionId = conversationDetail?.session.id || null;
+    if (!sessionId || conversationDialogTab !== 'billing') return;
+    let cancelled = false;
+    setConversationBillingLoading(true);
+    void fetch(`/api/internal/billing/usage-logs?sessionId=${encodeURIComponent(sessionId)}&limit=100`, {
+      credentials: 'include',
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null);
+          throw new Error(payload?.error || '会话计费信息加载失败');
+        }
+        return response.json();
+      })
+      .then((payload) => {
+        if (cancelled) return;
+        const items = Array.isArray(payload?.items) ? payload.items : [];
+        setConversationBillingUsage({
+          totalCredits: items.reduce((sum: number, item: any) => sum + Number(item.creditsConsumed || 0), 0),
+          totalTokens: items.reduce((sum: number, item: any) => sum + Number(item.totalTokens || 0), 0),
+          promptTokens: items.reduce((sum: number, item: any) => sum + Number(item.promptTokens || 0), 0),
+          completionTokens: items.reduce((sum: number, item: any) => sum + Number(item.completionTokens || 0), 0),
+          cachedPromptTokens: items.reduce((sum: number, item: any) => sum + Number(item.cachedPromptTokens || 0), 0),
+          cacheCreationTokens: items.reduce((sum: number, item: any) => sum + Number(item.cacheCreationTokens || 0), 0),
+          callCount: items.length,
+          items,
+        });
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setConversationBillingUsage(null);
+          setError(error instanceof Error ? error.message : '会话计费信息加载失败');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setConversationBillingLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationDetail?.session.id, conversationDialogTab]);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') {
@@ -6693,353 +6857,360 @@ export default function App() {
     }
 
     const sourceUser = conversationDetail.session.user;
+    const sourceUserId = sourceUser?.source === 'app_user' ? sourceUser.id : null;
+    const canOpenSourceUser = Boolean(sourceUserId);
 
     return (
-      <div className="conversation-inspector-content conversation-dialog-infra conversation-dialog-infra-compact conversation-infra-layout">
+      <div className="conversation-billing-ledger conversation-workbench conversation-infra-workbench">
+        <section className="conversation-billing-ledger-head conversation-workbench-head">
+          <div>
+            <p className="section-tag">运行绑定</p>
+            <h3 className="conversation-dialog-overview-title">{primaryEnvironmentSandboxId || '当前还没有主 Sandbox'}</h3>
+            <p className="conversation-dialog-overview-subtitle">
+              {primaryEnvironmentSandboxId ? '主 Sandbox、编排会话和最近关联实例。' : '当前会话尚未绑定可排查的主 Sandbox。'}
+            </p>
+          </div>
+          <div className="conversation-dialog-overview-badges">
+            <span className="session-status">{executorLabel(primaryEnvironmentExecutor)}</span>
+            <span className="session-status">{archiveStatusLabel(primaryEnvironmentArchiveStatus)}</span>
+          </div>
+        </section>
+
         {conversationInfraError ? (
-          <p className="panel-caption">关联信息加载异常：{conversationInfraError}</p>
+          <section className="conversation-workbench-section">
+            <p className="panel-caption">关联信息加载异常：{conversationInfraError}</p>
+          </section>
         ) : null}
-        <article className="sub-panel conversation-infra-panel conversation-infra-panel-identity">
-          <div className="conversation-infra-panel-top">
+
+        <section className="conversation-billing-metric-row conversation-workbench-metric-row conversation-infra-metric-row" aria-label="运行绑定指标">
+          <div>
+            <span>编排会话 ID</span>
+            {conversationDetail.runtime?.orchestratorSessionId ? (
+              <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(conversationDetail.runtime?.orchestratorSessionId)}>
+                {conversationDetail.runtime.orchestratorSessionId}
+              </button>
+            ) : (
+              <strong className="mono">-</strong>
+            )}
+          </div>
+          <div>
+            <span>主 Sandbox</span>
+            {primaryEnvironmentSandboxId ? (
+              <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(primaryEnvironmentSandboxId)}>
+                {primaryEnvironmentSandboxId}
+              </button>
+            ) : (
+              <strong className="mono">-</strong>
+            )}
+          </div>
+          <div><span>处理方式</span><strong>{executorLabel(primaryEnvironmentExecutor)}</strong></div>
+          <div><span>归档状态</span><strong>{archiveStatusLabel(primaryEnvironmentArchiveStatus)}</strong></div>
+          <div><span>关联记录数</span><strong>{relatedEnvironments.length}</strong></div>
+          <div><span>最近绑定变更</span><strong>{formatDateTime(latestRelatedEnvironmentUpdatedAt)}</strong></div>
+        </section>
+
+        {primaryEnvironmentReplacementId ? (
+          <section className="conversation-workbench-section conversation-workbench-inline-note">
+            <span className="conversation-infra-note-label">接管 Sandbox</span>
+            <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(primaryEnvironmentReplacementId)}>
+              {primaryEnvironmentReplacementId}
+            </button>
+          </section>
+        ) : null}
+
+        <section className="conversation-workbench-section">
+          <div className="conversation-billing-section-head">
             <div>
-              <p className="section-tag">会话身份</p>
-              <h3 className="conversation-infra-panel-title">{conversationUserLabel(sourceUser)}</h3>
-              <p className="panel-caption conversation-infra-caption">
-                {sourceUser?.email || '当前没有可识别邮箱'}{sourceUser?.source ? ` · ${conversationUserSourceLabel(sourceUser.source)}` : ''}
-              </p>
+              <h3>会话身份</h3>
+              <p className="panel-caption">来源账号、访问来源与会话状态。</p>
             </div>
-            <div className="conversation-infra-pill-row">
+            <div className="conversation-dialog-overview-badges">
               <span className={stateClassName(conversationDetail.session.status)}>{statusLabel(conversationDetail.session.status)}</span>
               <span className="session-status">{conversationStageLabel(conversationDetail.session.stage)}</span>
             </div>
           </div>
-          <div className="conversation-infra-kv-grid">
+          <div className="conversation-billing-token-strip conversation-workbench-identity-row">
             <div>
               <span>来源用户</span>
-              <strong>{conversationUserLabel(sourceUser)}</strong>
+              <strong>
+                {canOpenSourceUser ? (
+                  <button type="button" className="link-btn sandbox-jump-btn" onClick={() => sourceUserId ? openUserManagementView(sourceUserId, currentConversationOrigin()) : undefined}>
+                    {conversationUserLabel(sourceUser)}
+                  </button>
+                ) : conversationUserLabel(sourceUser)}
+              </strong>
             </div>
-            <div>
-              <span>来源 IP</span>
-              <strong className="mono">{sourceUser?.ipAddress || '-'}</strong>
-            </div>
-            <div>
-              <span>最近活跃</span>
-              <strong>{formatDateTime(conversationDetail.session.updatedAt)}</strong>
-            </div>
-            <div>
-              <span>最近访问来源</span>
-              <strong>{conversationUserSourceLabel(sourceUser?.source)}</strong>
-            </div>
+            <div><span>来源 IP</span><strong className="mono">{sourceUser?.ipAddress || '-'}</strong></div>
+            <div><span>最近活跃</span><strong>{formatDateTime(conversationDetail.session.updatedAt)}</strong></div>
+            <div><span>最近访问来源</span><strong>{conversationUserSourceLabel(sourceUser?.source)}</strong></div>
           </div>
           {sourceUser?.userAgent ? (
-            <p className="conversation-infra-footnote">{conversationUserAgentLabel(sourceUser.userAgent)}</p>
+            <p className="conversation-infra-footnote conversation-workbench-footnote">{conversationUserAgentLabel(sourceUser.userAgent)}</p>
           ) : null}
-        </article>
+        </section>
 
-        <article className="sub-panel conversation-infra-panel conversation-infra-panel-runtime">
-          <div className="conversation-infra-panel-top">
+        <section className="conversation-billing-call-section">
+          <div className="conversation-billing-section-head">
             <div>
-              <p className="section-tag">运行绑定</p>
-              <h3 className="conversation-infra-panel-title">{primaryEnvironmentSandboxId || '当前还没有主 Sandbox'}</h3>
-              <p className="panel-caption conversation-infra-caption">
-                {primaryEnvironmentSandboxId ? '主 Sandbox、编排会话和最近关联实例都收在这里。' : '当前会话尚未绑定可排查的主 Sandbox。'}
-              </p>
+              <h3>最近关联的 Sandbox</h3>
+              <p className="panel-caption">保留最近 {recentRelatedEnvironments.length} 条，用于回溯接管、归档与恢复链路。</p>
             </div>
-            <div className="conversation-infra-pill-row">
-              <span className="session-status">{executorLabel(primaryEnvironmentExecutor)}</span>
-              <span className="session-status">{archiveStatusLabel(primaryEnvironmentArchiveStatus)}</span>
-            </div>
+            <span className="session-status">{recentRelatedEnvironments.length} 条</span>
           </div>
-          {primaryEnvironmentSandboxId ? (
-            <div className="conversation-infra-binding-hero">
-              <div className="conversation-infra-binding-copy">
-                <span className="conversation-infra-binding-label">主 Sandbox</span>
-                <button type="button" className="link-btn sandbox-jump-btn mono conversation-infra-binding-id" onClick={() => openSandboxFromConversation(primaryEnvironmentSandboxId)}>
-                  {primaryEnvironmentSandboxId}
-                </button>
-              </div>
-              <div className="conversation-infra-binding-summary">
-                <span>{executorLabel(primaryEnvironmentExecutor)}</span>
-                <span>{archiveStatusLabel(primaryEnvironmentArchiveStatus)}</span>
-                <span>{relatedEnvironments.length} 条关联记录</span>
-              </div>
+          {recentRelatedEnvironments.length ? (
+            <div className="conversation-billing-call-table conversation-infra-related-compact-table">
+              {recentRelatedEnvironments.map((environment) => {
+                const sandboxId = environmentSandboxId(environment);
+                return (
+                  <div key={environment.id} className="conversation-billing-call-row conversation-infra-related-row">
+                    {sandboxId ? (
+                      <button type="button" className="link-btn sandbox-jump-btn mono conversation-infra-related-id-link" onClick={() => openSandboxFromConversation(sandboxId)}>
+                        {sandboxId}
+                      </button>
+                    ) : <strong>-</strong>}
+                    <span>{sandboxRuntimeStateLabel(environment.status)}</span>
+                    <span>{executorLabel(environmentExecutor(environment))}</span>
+                    <span>{archiveStatusLabel(environmentArchiveStatus(environment))}</span>
+                    <span className="mono">{formatDateTime(environment.updatedAt)}</span>
+                  </div>
+                );
+              })}
             </div>
           ) : (
-            <div className="conversation-infra-binding-hero conversation-infra-binding-hero-empty">
-              <p className="conversation-infra-empty">当前还没有主 Sandbox 关联。</p>
-            </div>
+            <p className="empty">当前没有最近关联实例</p>
           )}
-          <div className="conversation-infra-kv-grid">
-            <div>
-              <span>编排会话 ID</span>
-              {conversationDetail.runtime?.orchestratorSessionId ? (
-                <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(conversationDetail.runtime?.orchestratorSessionId)}>
-                  {conversationDetail.runtime.orchestratorSessionId}
-                </button>
-              ) : (
-                <strong className="mono">-</strong>
-              )}
-            </div>
-            <div>
-              <span>主 Sandbox</span>
-              {primaryEnvironmentSandboxId ? (
-                <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(primaryEnvironmentSandboxId)}>
-                  {primaryEnvironmentSandboxId}
-                </button>
-              ) : (
-                <strong className="mono">-</strong>
-              )}
-            </div>
-            <div>
-              <span>处理方式</span>
-              <strong>{executorLabel(primaryEnvironmentExecutor)}</strong>
-            </div>
-            <div>
-              <span>归档状态</span>
-              <strong>{archiveStatusLabel(primaryEnvironmentArchiveStatus)}</strong>
-            </div>
-            <div>
-              <span>关联记录数</span>
-              <strong>{relatedEnvironments.length}</strong>
-            </div>
-            <div>
-              <span>最近绑定变更</span>
-              <strong>{formatDateTime(latestRelatedEnvironmentUpdatedAt)}</strong>
-            </div>
+        </section>
+      </div>
+    );
+  };
+
+  const renderConversationBillingPanel = () => {
+    if (conversationBillingLoading) {
+      return <p className="empty">正在加载会话计费信息...</p>;
+    }
+    if (!conversationBillingUsage) {
+      return <p className="empty">当前会话暂无计费记录</p>;
+    }
+    return (
+      <div className="conversation-billing-ledger">
+        <section className="conversation-billing-ledger-head">
+          <div>
+            <p className="section-tag">计费摘要</p>
+            <h3 className="conversation-dialog-overview-title">{conversationDetail?.session.title || '未命名会话'}</h3>
+            <p className="conversation-dialog-overview-subtitle mono">{conversationDetail?.session.id || '-'}</p>
           </div>
-          {primaryEnvironmentReplacementId ? (
-            <div className="conversation-infra-note">
-              <span className="conversation-infra-note-label">接管 Sandbox</span>
-              <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(primaryEnvironmentReplacementId)}>
-                {primaryEnvironmentReplacementId}
-              </button>
+          <div className="conversation-billing-ledger-total">
+            <span>积分消耗</span>
+            <strong>{conversationBillingUsage.totalCredits.toLocaleString()}</strong>
+            <small>credits</small>
+          </div>
+        </section>
+
+        <section className="conversation-billing-metric-row" aria-label="计费关键指标">
+          <div>
+            <span>Total tokens</span>
+            <strong>{conversationBillingUsage.totalTokens.toLocaleString()}</strong>
+          </div>
+          <div>
+            <span>输入 tokens</span>
+            <strong>{conversationBillingUsage.promptTokens.toLocaleString()}</strong>
+          </div>
+          <div>
+            <span>输出 tokens</span>
+            <strong>{conversationBillingUsage.completionTokens.toLocaleString()}</strong>
+          </div>
+          <div>
+            <span>调用次数</span>
+            <strong>{conversationBillingUsage.callCount.toLocaleString()}</strong>
+          </div>
+        </section>
+
+        <section className="conversation-billing-token-strip">
+          <div>
+            <span>缓存创建</span>
+            <strong>{conversationBillingUsage.cacheCreationTokens.toLocaleString()}</strong>
+          </div>
+          <div>
+            <span>缓存命中</span>
+            <strong>{conversationBillingUsage.cachedPromptTokens.toLocaleString()}</strong>
+          </div>
+        </section>
+
+        <section className="conversation-billing-call-section">
+          <div className="conversation-billing-section-head">
+            <div>
+              <h3>调用明细</h3>
+              <p className="panel-caption">按计费记录展示 credits、tokens 与创建时间。</p>
             </div>
-          ) : null}
-          {recentRelatedEnvironments.length ? (
-            <div className="conversation-infra-related-section">
-              <div className="panel-subtitle panel-subtitle-row">
-                <span>最近关联的 Sandbox</span>
-                <span className="panel-caption">最近 {recentRelatedEnvironments.length} 条</span>
-              </div>
-              <div className="compact-list conversation-infra-related-list">
-                {recentRelatedEnvironments.map((environment) => {
-                  const sandboxId = environmentSandboxId(environment);
-                  return (
-                    <article key={environment.id} className="compact-item conversation-infra-related-item">
-                      <div className="conversation-infra-related-head">
-                        <strong>{sandboxId || '-'}</strong>
-                        <span className="mono">{formatDateTime(environment.updatedAt)}</span>
-                      </div>
-                      <div className="conversation-infra-related-main">
-                        <span>{sandboxRuntimeStateLabel(environment.status)}</span>
-                        <span>{executorLabel(environmentExecutor(environment))}</span>
-                        <span>{archiveStatusLabel(environmentArchiveStatus(environment))}</span>
-                      </div>
-                      {sandboxId ? (
-                        <button type="button" className="link-btn sandbox-jump-btn mono conversation-infra-related-link" onClick={() => openSandboxFromConversation(sandboxId)}>
-                          打开 {sandboxId}
-                        </button>
-                      ) : null}
-                    </article>
-                  );
-                })}
-              </div>
+            <span className="session-status">{conversationBillingUsage.items.length} 条</span>
+          </div>
+          {conversationBillingUsage.items.length > 0 ? (
+            <div className="conversation-billing-call-table">
+              {conversationBillingUsage.items.map((item) => (
+                <div key={item.id} className="conversation-billing-call-row">
+                  <strong>{item.creditsConsumed.toLocaleString()} credits</strong>
+                  <span>{Number(item.totalTokens || item.promptTokens + item.completionTokens).toLocaleString()} tokens</span>
+                  <span>输入 {item.promptTokens.toLocaleString()}</span>
+                  <span>输出 {item.completionTokens.toLocaleString()}</span>
+                  <span>缓存命中 {item.cachedPromptTokens.toLocaleString()}</span>
+                  <span className="mono">{formatDateTime(item.createdAt)}</span>
+                </div>
+              ))}
             </div>
-          ) : null}
-        </article>
+          ) : (
+            <p className="empty">当前会话暂无调用明细</p>
+          )}
+        </section>
       </div>
     );
   };
 
   const renderConversationContentOverview = () => {
     const sourceUser = conversationDetail?.session.user || null;
+    const sourceUserId = sourceUser?.source === 'app_user' ? sourceUser.id : null;
+    const canOpenSourceUser = Boolean(sourceUserId);
     const latestPendingQuestion = conversationDetail?.runtime?.pendingQuestion || conversationMessageSummary.latestClarificationSummary;
     const conversationStatusText = conversationDetail ? statusLabel(conversationDetail.session.status) : '-';
     const conversationStageText = conversationDetail ? conversationStageLabel(conversationDetail.session.stage) : '-';
     return (
-      <div className="conversation-dialog-overview conversation-dialog-overview-layout">
-        <article className="sub-panel conversation-dialog-overview-hero">
-          <div className="conversation-dialog-overview-top">
+      <div className="conversation-billing-ledger conversation-workbench conversation-overview-workbench">
+        <section className="conversation-billing-ledger-head conversation-workbench-head">
+          <div>
+            <p className="section-tag">会话总览</p>
+            <h3 className="conversation-dialog-overview-title">{conversationDetail?.session.title || '未命名会话'}</h3>
+            <p className="conversation-dialog-overview-subtitle mono">{conversationDetail?.session.id || '-'}</p>
+          </div>
+          <div className="conversation-dialog-overview-badges">
+            <span className={stateClassName(conversationDetail?.session.status || 'unknown')}>{conversationStatusText}</span>
+            {conversationStageText !== conversationStatusText ? <span className="session-status">{conversationStageText}</span> : null}
+            <span className="session-status">{conversationUserSourceLabel(sourceUser?.source)}</span>
+          </div>
+        </section>
+
+        <section className="conversation-billing-metric-row conversation-workbench-metric-row" aria-label="会话关键指标">
+          <div><span>最近更新</span><strong>{formatDateTime(conversationDetail?.session.updatedAt || conversationDetail?.runtime?.bindingUpdatedAt)}</strong></div>
+          <div><span>对话消息</span><strong>{conversationTabCounts.messages}</strong></div>
+          <div><span>执行事件</span><strong>{conversationMessageSummary.executionCount}</strong></div>
+          <div><span>状态流转</span><strong>{conversationTabCounts.transitions}</strong></div>
+        </section>
+
+        <section className="conversation-workbench-section">
+          <div className="conversation-billing-section-head">
             <div>
-              <p className="section-tag">会话总览</p>
-              <h3 className="conversation-dialog-overview-title">{conversationDetail?.session.title || '未命名会话'}</h3>
-              <p className="conversation-dialog-overview-subtitle mono">{conversationDetail?.session.id || '-'}</p>
-            </div>
-            <div className="conversation-dialog-overview-badges">
-              <span className={stateClassName(conversationDetail?.session.status || 'unknown')}>
-                {conversationStatusText}
-              </span>
-              {conversationStageText !== conversationStatusText ? (
-                <span className="session-status">{conversationStageText}</span>
-              ) : null}
-              <span className="session-status">{conversationUserSourceLabel(sourceUser?.source)}</span>
+              <h3>会话与来源</h3>
+              <p className="panel-caption">运行会话、来源用户与最近访问合并展示。</p>
             </div>
           </div>
-
-          <div className="conversation-dialog-overview-stats">
-            <article className="conversation-dialog-overview-stat">
-              <span>最近更新</span>
-              <strong>{formatDateTime(conversationDetail?.session.updatedAt || conversationDetail?.runtime?.bindingUpdatedAt)}</strong>
-              <small>当前会话的最近更新时间</small>
-            </article>
-            <article className="conversation-dialog-overview-stat">
-              <span>对话消息</span>
-              <strong>{conversationTabCounts.messages}</strong>
-              <small>用户与智能体消息总数</small>
-            </article>
-            <article className="conversation-dialog-overview-stat">
-              <span>执行事件</span>
-              <strong>{conversationMessageSummary.executionCount}</strong>
-              <small>工具与执行节点记录</small>
-            </article>
-            <article className="conversation-dialog-overview-stat">
-              <span>状态流转</span>
-              <strong>{conversationTabCounts.transitions}</strong>
-              <small>{transitionStats.stages.length ? `覆盖 ${transitionStats.stages.length} 个阶段` : '当前无流转记录'}</small>
-            </article>
-          </div>
-
-          <dl className="conversation-dialog-overview-facts">
-            <div>
-              <dt>OpenCode 会话</dt>
-              <dd className="mono">{conversationDetail?.runtime?.opencodeSessionId || '-'}</dd>
-            </div>
+          <dl className="conversation-workbench-fact-grid">
+            <div><dt>OpenCode 会话</dt><dd className="mono">{conversationDetail?.runtime?.opencodeSessionId || '-'}</dd></div>
             <div>
               <dt>编排会话</dt>
               <dd>
                 {conversationDetail?.runtime?.orchestratorSessionId ? (
-                  <button
-                    type="button"
-                    className="link-btn sandbox-jump-btn mono"
-                    onClick={() => openSandboxFromConversation(conversationDetail.runtime?.orchestratorSessionId)}
-                  >
+                  <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(conversationDetail.runtime?.orchestratorSessionId)}>
                     {conversationDetail.runtime.orchestratorSessionId}
                   </button>
-                ) : (
-                  <span className="mono">-</span>
-                )}
+                ) : <span className="mono">-</span>}
               </dd>
             </div>
+            <div><dt>挂起原因</dt><dd>{conversationDetail?.runtime?.pendingResume?.reason || '-'}</dd></div>
+            <div><dt>最近阶段</dt><dd>{conversationStageLabel(conversationMessageSummary.latestStatusStage || conversationDetail?.session.stage)}</dd></div>
             <div>
-              <dt>挂起原因</dt>
-              <dd>{conversationDetail?.runtime?.pendingResume?.reason || '-'}</dd>
+              <dt>来源用户</dt>
+              <dd>
+                {canOpenSourceUser ? (
+                  <button type="button" className="link-btn sandbox-jump-btn" onClick={() => sourceUserId ? openUserManagementView(sourceUserId, currentConversationOrigin()) : undefined}>
+                    {conversationUserLabel(sourceUser)}
+                  </button>
+                ) : conversationUserLabel(sourceUser)}
+              </dd>
             </div>
-            <div>
-              <dt>待确认问题</dt>
-              <dd>{latestPendingQuestion ? summarizeText(latestPendingQuestion, 120) : '当前无需补充信息'}</dd>
-            </div>
+            <div><dt>来源邮箱</dt><dd>{sourceUser?.email || '-'}</dd></div>
+            <div><dt>来源 IP</dt><dd className="mono">{sourceUser?.ipAddress || '-'}</dd></div>
+            <div><dt>最近访问</dt><dd>{formatDateTime(sourceUser?.lastSeenAt || sourceUser?.sessionCreatedAt)}</dd></div>
           </dl>
-        </article>
+          {sourceUser?.userAgent ? (
+            <p className="conversation-user-agent conversation-workbench-footnote">{conversationUserAgentLabel(sourceUser.userAgent)}</p>
+          ) : null}
+        </section>
 
-        <div className="conversation-dialog-overview-side">
-          <section className="sub-panel conversation-user-panel conversation-dialog-side-panel">
-          <div className="panel-header">
+        <section className="conversation-workbench-section">
+          <div className="conversation-billing-section-head">
             <div>
-              <h3>来源用户</h3>
-              <p className="panel-caption">对话归属与最近访问来源。</p>
-            </div>
-            <span className="session-status">{conversationUserSourceLabel(sourceUser?.source)}</span>
-          </div>
-          <div className="detail-grid conversation-user-grid">
-            <div>
-              <p className="kpi-title">用户</p>
-              <p>{conversationUserLabel(sourceUser)}</p>
-            </div>
-            <div>
-              <p className="kpi-title">邮箱</p>
-              <p>{sourceUser?.email || '-'}</p>
-            </div>
-            <div>
-              <p className="kpi-title">来源 IP</p>
-              <p className="mono">{sourceUser?.ipAddress || '-'}</p>
-            </div>
-            <div>
-              <p className="kpi-title">最近访问</p>
-              <p>{formatDateTime(sourceUser?.lastSeenAt || sourceUser?.sessionCreatedAt)}</p>
+              <h3>消息摘要</h3>
+              <p className="panel-caption">按对话阅读顺序展示最近输入、主回复与关键状态。</p>
             </div>
           </div>
-          <p className="conversation-user-agent">{conversationUserAgentLabel(sourceUser?.userAgent)}</p>
-          </section>
+          {conversationMessageSummary.latestFailureSummary ? (
+            <div className="conversation-message-summary-alert conversation-message-summary-alert-error">
+              <span>最近阻塞</span>
+              <strong>{conversationMessageSummary.latestFailureSummary}</strong>
+              {conversationMessageSummary.latestFailureAt ? <small>{formatDateTime(conversationMessageSummary.latestFailureAt)}</small> : null}
+            </div>
+          ) : latestPendingQuestion ? (
+            <div className="conversation-message-summary-alert conversation-message-summary-alert-warning">
+              <span>当前待确认问题</span>
+              <strong>{latestPendingQuestion}</strong>
+            </div>
+          ) : null}
+          <div className="conversation-message-summary-flow">
+            <article className="conversation-message-summary-line conversation-message-summary-line-user">
+              <span>用户输入</span>
+              <p>{conversationMessageSummary.latestUserSummary}</p>
+            </article>
+            <article className="conversation-message-summary-line conversation-message-summary-line-agent">
+              <span>主回复</span>
+              <p>{conversationMessageSummary.latestAssistantSummary}</p>
+            </article>
+          </div>
+          <div className="conversation-message-summary-mini-stats">
+            <span className="session-status">轮次结果 {conversationInteractionGroups[conversationInteractionGroups.length - 1]?.outcome || '暂无'}</span>
+            <span className="session-status">用户消息 {conversationMessageSummary.userCount}</span>
+            <span className="session-status">主回复 {conversationMessageSummary.assistantCount}</span>
+            <span className="session-status">执行事件 {conversationMessageSummary.executionCount}</span>
+            <span className={`session-status ${conversationMessageSummary.failureCount > 0 ? 'state-error' : ''}`}>失败事件 {conversationMessageSummary.failureCount}</span>
+          </div>
+        </section>
 
-          <section className="sub-panel conversation-dialog-side-panel">
-            <div className="panel-header">
-              <div>
-                <h3>部署摘要</h3>
-                <p className="panel-caption">当前会话的部署状态与访问入口。</p>
+        <section className="conversation-workbench-section">
+          <div className="conversation-billing-section-head">
+            <div>
+              <h3>部署摘要</h3>
+              <p className="panel-caption">当前会话的部署状态与访问入口。</p>
+            </div>
+            {conversationDeploymentSummary ? (
+              <span className={`state-chip ${deploymentStatusTone(conversationDeploymentSummary.statusCategory)}`}>
+                {deploymentStatusLabel(conversationDeploymentSummary.statusCategory)}
+              </span>
+            ) : null}
+          </div>
+          {conversationDeploymentLoading ? (
+            <p className="panel-caption">正在加载部署状态...</p>
+          ) : conversationDeploymentSummary ? (
+            <>
+              <div className="conversation-billing-token-strip conversation-workbench-identity-row">
+                <div><span>项目 / 服务</span><strong>{conversationDeploymentSummary.projectName || '-'} / {conversationDeploymentSummary.serviceName || '-'}</strong></div>
+                <div><span>最新状态</span><strong>{conversationDeploymentSummary.latestStatus || conversationDeploymentSummary.bindingState}</strong></div>
+                <div><span>访问地址</span><strong>{conversationDeploymentSummary.latestUrl || conversationDeploymentSummary.latestStaticUrl || '-'}</strong></div>
+                <div><span>最近验证</span><strong>{formatDateTime(conversationDeploymentSummary.lastVerifiedAt)}</strong></div>
               </div>
-              {conversationDeploymentSummary ? (
-                <span className={`state-chip ${deploymentStatusTone(conversationDeploymentSummary.statusCategory)}`}>
-                  {deploymentStatusLabel(conversationDeploymentSummary.statusCategory)}
-                </span>
+              <div className="section-actions conversation-workbench-actions">
+                <button type="button" className="table-btn" onClick={() => openDeploymentFromConversation(conversationDeploymentSummary.taskSessionId)}>
+                  打开部署管理
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="section-actions conversation-workbench-actions">
+              <p className="panel-caption">当前会话暂无部署记录。</p>
+              {conversationDetail?.session.id ? (
+                <button type="button" className="table-btn" onClick={() => openDeploymentFromConversation(conversationDetail.session.id)}>
+                  前往部署管理
+                </button>
               ) : null}
             </div>
-            {conversationDeploymentLoading ? (
-              <p className="panel-caption">正在加载部署状态...</p>
-            ) : conversationDeploymentSummary ? (
-              <>
-                <div className="detail-grid conversation-message-summary-grid">
-                  <div>
-                    <p className="kpi-title">项目 / 服务</p>
-                    <p>{conversationDeploymentSummary.projectName || '-'} / {conversationDeploymentSummary.serviceName || '-'}</p>
-                  </div>
-                  <div>
-                    <p className="kpi-title">最新状态</p>
-                    <p>{conversationDeploymentSummary.latestStatus || conversationDeploymentSummary.bindingState}</p>
-                  </div>
-                  <div>
-                    <p className="kpi-title">访问地址</p>
-                    <p>{conversationDeploymentSummary.latestUrl || conversationDeploymentSummary.latestStaticUrl || '-'}</p>
-                  </div>
-                  <div>
-                    <p className="kpi-title">最近验证</p>
-                    <p>{formatDateTime(conversationDeploymentSummary.lastVerifiedAt)}</p>
-                  </div>
-                </div>
-                <div className="section-actions">
-                  <button type="button" className="table-btn" onClick={() => openDeploymentFromConversation(conversationDeploymentSummary.taskSessionId)}>
-                    打开部署管理
-                  </button>
-                </div>
-              </>
-            ) : (
-              <div className="section-actions">
-                <p className="panel-caption">当前会话暂无部署记录。</p>
-                {conversationDetail?.session.id ? (
-                  <button type="button" className="table-btn" onClick={() => openDeploymentFromConversation(conversationDetail.session.id)}>
-                    前往部署管理
-                  </button>
-                ) : null}
-              </div>
-            )}
-          </section>
-
-          <section className="sub-panel conversation-message-summary conversation-dialog-message-summary conversation-dialog-side-panel">
-            <div className="detail-grid conversation-message-summary-grid">
-              <div>
-                <p className="kpi-title">最近用户输入</p>
-                <p>{conversationMessageSummary.latestUserSummary}</p>
-              </div>
-              <div>
-                <p className="kpi-title">最近主回复</p>
-                <p>{conversationMessageSummary.latestAssistantSummary}</p>
-              </div>
-              <div>
-                <p className="kpi-title">最近轮次结果</p>
-                <p>{conversationInteractionGroups[conversationInteractionGroups.length - 1]?.outcome || '暂无'}</p>
-              </div>
-              <div>
-                <p className="kpi-title">最近阶段</p>
-                <p>{conversationStageLabel(conversationMessageSummary.latestStatusStage || conversationDetail?.session.stage)}</p>
-              </div>
-            </div>
-            {latestPendingQuestion ? (
-              <div className="conversation-message-inline-card">
-                <p className="kpi-title">当前待确认问题</p>
-                <p className="message-content">{latestPendingQuestion}</p>
-              </div>
-            ) : null}
-          </section>
-        </div>
+          )}
+        </section>
       </div>
     );
   };
@@ -7507,12 +7678,19 @@ export default function App() {
   if (authStatus === 'loading') {
     return (
       <div className="auth-shell">
-        <div className="auth-background" aria-hidden="true" />
-        <section className="admin-auth-card">
-          <p className="eyebrow">ONECEO 管理控制台</p>
-          <h1>正在验证管理员会话</h1>
-          <p className="admin-auth-loading-copy">请稍候，系统正在检查当前登录状态。</p>
-        </section>
+        <div className="auth-background" aria-hidden="true"><img src={adminLoginBackground} alt="" /></div>
+        <div className="admin-auth-layout admin-auth-layout-loading admin-auth-layout-single">
+          <section className="admin-auth-card admin-auth-loading-card" aria-live="polite">
+            <div className="admin-auth-brand">
+              <span className="admin-auth-brand-mark" aria-hidden="true"><img src="/favicon.svg" alt="" /></span>
+              <div><strong>ONECEO</strong><span>管理控制台</span></div>
+            </div>
+            <p className="eyebrow">管理员会话</p>
+            <h1>正在验证管理员会话</h1>
+            <p className="admin-auth-loading-copy">请稍候，系统正在检查当前登录状态。</p>
+            <div className="admin-auth-progress" aria-hidden="true"><span /></div>
+          </section>
+        </div>
       </div>
     );
   }
@@ -7520,22 +7698,18 @@ export default function App() {
   if (authStatus !== 'authenticated') {
     return (
       <div className="auth-shell">
-        <div className="auth-background" aria-hidden="true" />
-        <div className="admin-auth-layout">
-          <section className="admin-auth-hero">
-            <p className="eyebrow">ONECEO 管理控制台</p>
-            <h1>平台管理与运维控制台</h1>
-            <p className="admin-auth-copy">用于访问平台配置、运行状态和管理能力。仅限已授权管理员登录。</p>
-            <div className="admin-auth-badges">
-              <span>平台管理</span>
-              <span>运行监控</span>
-              <span>配置管理</span>
-            </div>
-          </section>
-
+        <div className="auth-background" aria-hidden="true"><img src={adminLoginBackground} alt="" /></div>
+        <div className="admin-auth-layout admin-auth-layout-single">
           <section className="admin-auth-card">
-            <p className="eyebrow">管理员入口</p>
-            <h2>管理员登录</h2>
+            <div className="admin-auth-brand">
+              <span className="admin-auth-brand-mark" aria-hidden="true"><img src="/favicon.svg" alt="" /></span>
+              <div><strong>ONECEO</strong><span>管理控制台</span></div>
+            </div>
+            <div className="admin-auth-card-head">
+              <p className="eyebrow">管理员入口</p>
+              <h2>管理员登录</h2>
+              <p>平台治理、运行监控与配置管理。</p>
+            </div>
             <form className="admin-auth-form" onSubmit={handleAdminLogin}>
               <label>
                 <span>登录名</span>
@@ -7566,6 +7740,7 @@ export default function App() {
               <button type="submit" className="primary-btn admin-auth-submit-btn" disabled={authSubmitting}>
                 {authSubmitting ? '登录中...' : '登录'}
               </button>
+              <p className="admin-auth-security-note">仅限授权管理员访问。登录活动会记录在审计日志中。</p>
             </form>
           </section>
         </div>
@@ -7586,6 +7761,12 @@ export default function App() {
     }
   };
 
+  const confirmKvmDangerAction = async () => {
+    if (!kvmDangerAction) return;
+    await handlePower(kvmDangerAction.vm, 'stop');
+    setKvmDangerAction(null);
+  };
+
   const renderKvmSection = () => (
     <main className="content-stack">
       <section className="page-intro-grid fade-in">
@@ -7600,21 +7781,12 @@ export default function App() {
             </span>
           </div>
           <p className="panel-copy">
-            展示宿主机资源、虚拟机数量和当前运行状态。
+            聚合宿主机资源、虚拟机运行态和 KVM 编排器连接状态。真实数量集中在下方 KPI 区，危险操作统一进入可复核确认。
           </p>
-          <div className="hero-metrics">
-            <div>
-              <span className="hero-metric-label">宿主机</span>
-              <strong>{hosts.length}</strong>
-            </div>
-            <div>
-              <span className="hero-metric-label">运行 VM</span>
-              <strong>{kvmOverview?.vmSummary.running ?? 0}</strong>
-            </div>
-            <div>
-              <span className="hero-metric-label">异常 VM</span>
-              <strong>{kvmOverview?.vmSummary.error ?? 0}</strong>
-            </div>
+          <div className="kvm-command-notes" aria-label="KVM 操作约束">
+            <span>数据源：KVM orchestrator</span>
+            <span>关机需确认 VM ID 与审计原因</span>
+            <span>操作后刷新资源与审计记录</span>
           </div>
         </article>
 
@@ -7626,9 +7798,9 @@ export default function App() {
             </div>
           </div>
           <ul className="signal-list">
-            <li>宿主机资源使用率</li>
-            <li>异常 VM 与停止 VM 数量</li>
-            <li>控制中心批量操作</li>
+            <li>先看宿主机资源趋势，再处理异常 VM。</li>
+            <li>运行中 VM 的关机会进入确认链路。</li>
+            <li>批量能力保留在控制中心，不混入列表行操作。</li>
           </ul>
         </article>
       </section>
@@ -7789,7 +7961,7 @@ export default function App() {
                         <button
                           type="button"
                           className="table-btn danger"
-                          onClick={() => handlePower(vm, 'stop')}
+                          onClick={() => setKvmDangerAction({ type: 'stop', vm })}
                           disabled={vm.state !== 'running' || vmBusy}
                         >
                           关机
@@ -7811,6 +7983,36 @@ export default function App() {
           await loadAuditSection();
         }}
         onError={(message) => setError(message)}
+      />
+
+      <DangerConfirmDialog
+        open={Boolean(kvmDangerAction)}
+        title="确认关闭 KVM 虚拟机"
+        objectLabel="KVM VM"
+        objectName={kvmDangerAction?.vm.vmId}
+        objectId={kvmDangerAction?.vm.vmId}
+        objectMeta={[
+          { label: '当前状态', value: kvmDangerAction?.vm.state || '-' },
+          { label: 'Session', value: kvmDangerAction?.vm.sessionId || '-' },
+          { label: '内存', value: kvmDangerAction?.vm.memoryMb ? `${Math.round(kvmDangerAction.vm.memoryMb / 1024)} GB` : '-' },
+        ]}
+        actionLabel="关闭 VM"
+        confirmText={kvmDangerAction?.vm.vmId}
+        reasonRequired
+        loading={Boolean(kvmDangerAction && busyVmIds[kvmDangerAction.vm.vmId])}
+        reversibility="partially_reversible"
+        impactItems={[
+          '目标 VM 会进入关机流程，当前运行中的任务或会话绑定可能中断',
+          '依赖该 VM 的实时调试、端口和后台进程会不可用',
+          '操作会刷新 KVM 列表并写入审计记录，便于后续追溯',
+        ]}
+        nonImpactItems={[
+          '不会删除会话记录或用户数据',
+          '不会删除 Sandbox 归档或部署记录',
+          '不会绕过 KVM 编排器的既有 power 接口',
+        ]}
+        onCancel={() => setKvmDangerAction(null)}
+        onConfirm={() => void confirmKvmDangerAction()}
       />
     </main>
   );
@@ -8974,80 +9176,56 @@ export default function App() {
         </section>
       </main>
       {conversationDialog ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeConversationDialog} style={{ zIndex: conversationDialogZIndex }}>
-          <div
-            className="modal-card conversation-dialog-modal"
-            onClick={(event) => {
-              event.stopPropagation();
-            }}
-          >
-              <div className="modal-header">
-                <div>
-                  <p className="section-tag">对话详情</p>
-                  <h2>{conversationDialogDetail?.session.title || conversationDialogDetail?.session.id || '正在加载会话...'}</h2>
-                  {conversationDialogOrigin ? <p className="modal-context-path">来自 {conversationDialogOrigin.trail}</p> : null}
-                </div>
-                <div className="conversation-dialog-actions">
-                  {activeSection !== 'conversation' ? (
-                    <button
-                    type="button"
-                    className="secondary-btn"
-                    onClick={openConversationManagementView}
-                  >
-                    在对话管理中查看
-                  </button>
-                ) : null}
-                {conversationDialogDetail ? (
-                  <button type="button" className="secondary-btn" onClick={exportConversationDetail}>
-                    下载会话
-                  </button>
-                ) : null}
-                <button type="button" className="secondary-btn" onClick={closeConversationDialog}>
-                  关闭
-                </button>
-              </div>
-            </div>
-
-            {conversationDialogLoading ? (
-              <div className="modal-body conversation-dialog-body">
-                <p className="empty">正在加载会话内容...</p>
-              </div>
-            ) : (
-              <>
-                <div className="button-grid modal-tab-grid conversation-dialog-tab-grid">
-                  {[
-                    { key: 'overview', label: '概览', tabKey: '01' },
-                    { key: 'interaction', label: '交互回放', tabKey: '02' },
-                    { key: 'infra', label: '关联', tabKey: '03' },
-                    { key: 'raw', label: `日志 (${conversationDetailedLogs.counts.total})`, tabKey: '04' },
-                    { key: 'transitions', label: `流转 (${conversationTabCounts.transitions})`, tabKey: '05' },
-                  ].map((item) => (
-                    <button
-                      key={item.key}
-                      type="button"
-                      className={`inspector-tab-card ${conversationDialogTab === item.key ? 'active' : ''}`}
-                      onClick={() => setConversationDialogTab(item.key as ConversationDialogTab)}
-                    >
-                      <span className="inspector-tab-card-key mono">{item.tabKey}</span>
-                      <span className="inspector-tab-card-label">{item.label}</span>
-                    </button>
-                  ))}
-                </div>
-                <div className="modal-body conversation-dialog-body">
-                  {conversationDialogTab === 'overview' ? renderConversationContentOverview() : null}
-                  {conversationDialogTab === 'interaction' ? (
-                    <>
-                      {renderConversationReplayPanel()}
-                    </>
-                  ) : null}
-                  {conversationDialogTab === 'infra' ? renderConversationInfraPanel() : null}
-                  {conversationDialogTab === 'raw' ? renderConversationDetailedLogsPanel() : null}
-                  {conversationDialogTab === 'transitions' ? renderConversationTransitionsPanel() : null}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
+        <AdminDetailShell
+          open={Boolean(conversationDialog)}
+          onClose={closeConversationDialog}
+          className="conversation-dialog-modal"
+          zIndex={conversationDialogZIndex}
+          contentClassName={`conversation-dialog-body ${conversationDialogTab === 'overview' ? 'conversation-dialog-body-overview' : ''}`}
+          title={conversationDialogDetail?.session.title || conversationDialogDetail?.session.id || '正在加载会话...'}
+          eyebrow="对话详情"
+          originTrail={conversationDialogOrigin ? <>来自 {conversationDialogOrigin.trail}</> : undefined}
+          subtitle={conversationDialogDetail?.session.id ? <IdToken label="Session" value={conversationDialogDetail.session.id} /> : undefined}
+          status={conversationDialogDetail ? <StatusBadge tone={statusToneFromValue(conversationDialogDetail.session.status)}>{statusLabel(conversationDialogDetail.session.status)}</StatusBadge> : undefined}
+          actions={(
+            <>
+              {activeSection !== 'conversation' ? <AdminButton variant="secondary" onClick={openConversationManagementView}>在对话管理中查看</AdminButton> : null}
+              {conversationDialogDetail ? <AdminButton variant="secondary" onClick={exportConversationDetail}>下载会话</AdminButton> : null}
+            </>
+          )}
+          summary={conversationDialogDetail ? (
+            <dl className="admin-detail-summary-grid">
+              <div><span>状态</span><strong>{statusLabel(conversationDialogDetail.session.status)}</strong></div>
+              <div><span>阶段</span><strong>{conversationDialogDetail.session.stage || '-'}</strong></div>
+              <div><span>更新时间</span><strong>{formatDateTime(conversationDialogDetail.session.updatedAt)}</strong></div>
+              <div><span>创建时间</span><strong>{formatDateTime(conversationDialogDetail.session.createdAt)}</strong></div>
+            </dl>
+          ) : undefined}
+          tabs={!conversationDialogLoading ? (
+            <AdminTabs<ConversationDialogTab>
+              value={conversationDialogTab}
+              onChange={setConversationDialogTab}
+              items={[
+                { key: 'overview', label: '概览' },
+                { key: 'billing', label: '计费' },
+                { key: 'interaction', label: '交互回放' },
+                { key: 'infra', label: '关联' },
+                { key: 'raw', label: '日志', count: conversationDetailedLogs.counts.total },
+                { key: 'transitions', label: '流转', count: conversationTabCounts.transitions },
+              ]}
+            />
+          ) : undefined}
+          size="xl"
+          footer={<AdminButton variant="secondary" onClick={closeConversationDialog}>关闭</AdminButton>}
+        >
+          {conversationDialogLoading ? <p className="empty">正在加载会话内容...</p> : null}
+          {!conversationDialogLoading && conversationDialogTab === 'overview' ? renderConversationContentOverview() : null}
+          {!conversationDialogLoading && conversationDialogTab === 'billing' ? renderConversationBillingPanel() : null}
+          {!conversationDialogLoading && conversationDialogTab === 'interaction' ? renderConversationReplayPanel() : null}
+          {!conversationDialogLoading && conversationDialogTab === 'infra' ? renderConversationInfraPanel() : null}
+          {!conversationDialogLoading && conversationDialogTab === 'raw' ? renderConversationDetailedLogsPanel() : null}
+          {!conversationDialogLoading && conversationDialogTab === 'transitions' ? renderConversationTransitionsPanel() : null}
+        </AdminDetailShell>
       ) : null}
       </>
     );
@@ -9133,6 +9311,7 @@ export default function App() {
                     type="button"
                     role="tab"
                     aria-selected={selectedAgentStage?.stageKey === item.stageKey}
+                    aria-controls="agent-stage-detail-panel"
                     className={`agent-stage-tab ${selectedAgentStage?.stageKey === item.stageKey ? 'active' : ''}`}
                     onClick={() => setSelectedAgentStageKey(item.stageKey)}
                   >
@@ -9143,7 +9322,7 @@ export default function App() {
               </div>
 
               {selectedAgentStage ? (
-                <div className="agent-stage-detail-surface" role="tabpanel">
+                <div id="agent-stage-detail-panel" className="agent-stage-detail-surface" role="tabpanel">
                   <div className="agent-stage-detail-head">
                     <div>
                       <p className="section-tag">当前阶段</p>
@@ -9736,86 +9915,125 @@ export default function App() {
         </main>
 
         {sandboxModalOpen && sandboxRuntimeDetail ? (
-          <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeSandboxDetail} style={{ zIndex: sandboxModalZIndex }}>
-            <div
-              className="modal-card runtime-inspector-modal"
-              onClick={(event) => {
-                event.stopPropagation();
-              }}
-            >
-              <div className="modal-header">
-                <div>
-                  <p className="section-tag">Sandbox 详情</p>
-                  <h2>{sandboxRuntimeDetail.runtime.alias || sandboxRuntimeDetail.taskSession?.title || sandboxDisplayLabel(sandboxRuntimeDetail)}</h2>
-                  {sandboxModalOrigin ? <p className="modal-context-path">来自 {sandboxModalOrigin.trail}</p> : null}
-                </div>
-                <div className="conversation-dialog-actions">
-                  {activeSection !== 'sandbox' ? (
-                    <button
-                      type="button"
-                      className="secondary-btn"
-                      onClick={openSandboxManagementView}
-                    >
-                      在 Sandbox 管理中查看
-                    </button>
-                  ) : null}
-                  <button type="button" className="secondary-btn" onClick={closeSandboxDetail}>
-                    关闭
-                  </button>
-                </div>
-              </div>
-              <div className="button-grid modal-tab-grid">
-                <button
-                  type="button"
-                  className={`inspector-tab-card ${sandboxDetailTab === 'overview' ? 'active' : ''}`}
-                  onClick={() => setSandboxDetailTab('overview')}
-                >
-                  <span className="inspector-tab-card-key mono">01</span>
-                  <span className="inspector-tab-card-label">摘要</span>
-                </button>
-                <button
-                  type="button"
-                  className={`inspector-tab-card ${sandboxDetailTab === 'files' ? 'active' : ''}`}
-                  onClick={() => setSandboxDetailTab('files')}
-                >
-                  <span className="inspector-tab-card-key mono">02</span>
-                  <span className="inspector-tab-card-label">文件</span>
-                </button>
-                <button
-                  type="button"
-                  className={`inspector-tab-card ${sandboxDetailTab === 'processes' ? 'active' : ''}`}
-                  onClick={() => setSandboxDetailTab('processes')}
-                >
-                  <span className="inspector-tab-card-key mono">03</span>
-                  <span className="inspector-tab-card-label">进程与端口</span>
-                </button>
-                <button
-                  type="button"
-                  className={`inspector-tab-card ${sandboxDetailTab === 'connectivity' ? 'active' : ''}`}
-                  onClick={() => setSandboxDetailTab('connectivity')}
-                >
-                  <span className="inspector-tab-card-key mono">04</span>
-                  <span className="inspector-tab-card-label">连通性</span>
-                </button>
-                <button
-                  type="button"
-                  className={`inspector-tab-card ${sandboxDetailTab === 'archive' ? 'active' : ''}`}
-                  onClick={() => setSandboxDetailTab('archive')}
-                >
-                  <span className="inspector-tab-card-key mono">05</span>
-                  <span className="inspector-tab-card-label">归档</span>
-                </button>
-                <button
-                  type="button"
-                  className={`inspector-tab-card ${sandboxDetailTab === 'terminal' ? 'active' : ''}`}
-                  onClick={() => setSandboxDetailTab('terminal')}
-                >
-                  <span className="inspector-tab-card-key mono">06</span>
-                  <span className="inspector-tab-card-label">命令调试</span>
-                </button>
-              </div>
-
-              <div className="modal-body">
+          <AdminDetailShell
+            open={sandboxModalOpen}
+            onClose={closeSandboxDetail}
+            className="runtime-inspector-modal"
+            zIndex={sandboxModalZIndex}
+            icon={getAdminModuleIcon('sandbox', { size: 21 })}
+            entityType="Sandbox Runtime"
+            title={sandboxRuntimeDetail.runtime.alias || sandboxRuntimeDetail.taskSession?.title || sandboxDisplayLabel(sandboxRuntimeDetail)}
+            eyebrow="Sandbox 详情"
+            originTrail={sandboxModalOrigin ? <>来自 {sandboxModalOrigin.trail}</> : undefined}
+            subtitle={<IdToken label="Sandbox" value={sandboxRuntimeDetail.runtime.sandboxId || sandboxDisplayLabel(sandboxRuntimeDetail)} />}
+            lastUpdated={<>最近活跃：{formatDateTime(sandboxRuntimeDetail.runtime.lastActiveAt)}</>}
+            risk={sandboxRuntimeDetail.runtime.riskTags.length ? <>风险：{sandboxRuntimeDetail.runtime.riskTags.map(sandboxRiskLabel).join(' / ')}</> : '风险：无'}
+            status={<StatusBadge tone={statusToneFromValue(sandboxRuntimeDetail.runtime.sandboxState || sandboxRuntimeDetail.runtime.status)} icon={getAdminStatusIcon((sandboxRuntimeDetail.runtime.sandboxState || sandboxRuntimeDetail.runtime.status) === 'paused' ? 'paused' : (sandboxRuntimeDetail.runtime.sandboxState || sandboxRuntimeDetail.runtime.status) === 'failed' ? 'failed' : 'running', { size: 12 })}>{sandboxRuntimeStateLabel(sandboxRuntimeDetail.runtime.sandboxState || sandboxRuntimeDetail.runtime.status)}</StatusBadge>}
+            actions={activeSection !== 'sandbox' ? <AdminButton variant="secondary" icon={getAdminActionIcon('external', { size: 14 })} onClick={openSandboxManagementView}>在 Sandbox 管理中查看</AdminButton> : undefined}
+            moreActions={<AdminButton variant="ghost" size="icon" iconOnly icon={getAdminActionIcon('refresh', { size: 15 })} aria-label="刷新详情" onClick={() => void loadSandboxRuntimeDetail(sandboxRuntimeDetail.runtime.sandboxId)} />}
+            metrics={[
+              { label: '执行器', value: executorLabel(sandboxRuntimeDetail.runtime.executor) },
+              { label: '归档', value: archiveStatusLabel(sandboxRuntimeDetail.archive.archiveStatus || sandboxRuntimeDetail.runtime.archiveStatus) || '未归档', tone: sandboxRuntimeDetail.archive.archiveDirty || sandboxRuntimeDetail.archive.pendingArchiveUpdate ? 'warning' : 'neutral' },
+              { label: '会话', value: sandboxRuntimeDetail.runtime.taskSessionId ? '已绑定' : '未绑定', hint: sandboxRuntimeDetail.runtime.taskTitle || sandboxRuntimeDetail.taskSession?.title || undefined },
+              { label: '风险', value: sandboxRuntimeDetail.runtime.riskTags.length ? `${sandboxRuntimeDetail.runtime.riskTags.length} 项` : '无', tone: sandboxRuntimeDetail.runtime.riskTags.length ? 'warning' : 'success' },
+            ]}
+            tabs={(
+              <AdminTabs<SandboxDetailTab>
+                value={sandboxDetailTab}
+                onChange={setSandboxDetailTab}
+                items={[
+                  { key: 'overview', label: '摘要' },
+                  { key: 'files', label: '文件' },
+                  { key: 'processes', label: '进程与端口' },
+                  { key: 'connectivity', label: '连通性' },
+                  { key: 'archive', label: '归档', count: archiveRows.length },
+                  { key: 'terminal', label: '命令调试' },
+                ]}
+              />
+            )}
+            size="xl"
+            dangerZone={<><AdminButton variant="dangerSoft" icon={getAdminActionIcon('pause', { size: 14 })} disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId]} onClick={() => requestSandboxClose(sandboxRuntimeDetail.runtime.sandboxId, sandboxDisplayLabel(sandboxRuntimeDetail))}>关机</AdminButton><AdminButton variant="dangerSoft" icon={getAdminActionIcon('restart', { size: 14 })} disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId]} onClick={() => requestSandboxRestart(sandboxRuntimeDetail.runtime.sandboxId, sandboxDisplayLabel(sandboxRuntimeDetail))}>重启</AdminButton><AdminButton variant="dangerSoft" icon={getAdminActionIcon('archive', { size: 14 })} disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId]} onClick={() => requestSandboxArchive(sandboxRuntimeDetail.runtime.sandboxId, sandboxDisplayLabel(sandboxRuntimeDetail))}>归档</AdminButton></>}
+            footer={<AdminButton variant="secondary" onClick={closeSandboxDetail}>关闭</AdminButton>}
+            inspector={(
+              <AdminStickyInspector
+                title="Actionable Inspector"
+                sections={[
+                  {
+                    key: 'risk',
+                    title: '当前风险',
+                    icon: getAdminStatusIcon('running', { size: 15 }),
+                    badge: <StatusBadge tone={sandboxRuntimeDetail.runtime.riskTags.length ? 'warning' : 'success'}>{sandboxRuntimeDetail.runtime.riskTags.length ? '需关注' : '稳定'}</StatusBadge>,
+                    children: (
+                      <div className="signal-list">
+                        <p>{sandboxRuntimeDetail.runtime.riskTags.length ? sandboxRuntimeDetail.runtime.riskTags.map(sandboxRiskLabel).join(' / ') : '暂无运行风险标签。'}</p>
+                        {sandboxRuntimeDetail.archive.archiveDirty || sandboxRuntimeDetail.archive.pendingArchiveUpdate ? <p>归档状态需要关注：{sandboxRuntimeDetail.archive.archiveDirty ? '存在未归档变更' : '等待归档更新'}。</p> : null}
+                      </div>
+                    ),
+                  },
+                  {
+                    key: 'impact',
+                    title: '影响范围',
+                    icon: getAdminModuleIcon('conversation', { size: 15 }),
+                    children: (
+                      <div className="signal-list">
+                        <p>{sandboxRuntimeDetail.runtime.taskSessionId ? '操作会影响当前绑定会话的运行时。' : '当前未绑定会话，影响范围仅限该 Sandbox。'}</p>
+                        <p>{sandboxRuntimeDetail.archive.archiveKey || sandboxRuntimeDetail.archive.snapshotKey ? '归档/恢复动作会影响当前快照链路。' : '当前没有可定位的归档对象。'}</p>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: 'blocking',
+                    title: '阻断原因',
+                    icon: getAdminStatusIcon('waiting', { size: 15 }),
+                    children: (
+                      <div className="signal-list">
+                        <p>{sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId] ? '该 Sandbox 正在执行操作，请等待任务结束。' : '当前无前端操作阻断。'}</p>
+                        {!sandboxRuntimeDetail.runtime.taskSessionId ? <p>缺少绑定会话，不能从拓扑跳转到 Session 详情。</p> : null}
+                        {!sandboxRuntimeDetail.taskSession?.user?.id ? <p>缺少真实用户 ID，不能从拓扑打开用户详情。</p> : null}
+                      </div>
+                    ),
+                  },
+                  {
+                    key: 'audit',
+                    title: '最近操作',
+                    icon: getAdminModuleIcon('audit', { size: 15 }),
+                    children: (
+                      <AuditTimeline
+                        compact
+                        maxItems={3}
+                        items={[
+                          { id: 'last-active', title: '最近活跃', time: formatDateTime(sandboxRuntimeDetail.runtime.lastActiveAt), description: sandboxRuntimeDetail.runtime.lastActiveReason || '暂无活跃原因', tone: 'info', icon: getAdminStatusIcon('running', { size: 12 }) },
+                          ...archiveRows.slice(0, 2).map((row) => ({ id: `archive-${row.id}`, title: '归档快照', time: formatDateTime(row.timestamp), description: row.reason || '归档记录', tone: row.status === 'failed' ? 'danger' as const : 'success' as const, icon: getAdminActionIcon('archive', { size: 12 }) })),
+                        ]}
+                      />
+                    ),
+                  },
+                  {
+                    key: 'recommendation',
+                    title: '推荐动作',
+                    icon: getAdminActionIcon('sync', { size: 15 }),
+                    children: (
+                      <div className="signal-list">
+                        <p>{sandboxRuntimeDetail.runtime.riskTags.length ? '先检查风险标签与最近活跃原因，再执行重启或归档。' : '状态稳定时优先刷新详情或查看关联会话。'}</p>
+                        <p>{sandboxRuntimeDetail.archive.archiveDirty ? '存在未归档变更，建议手动归档前确认快照内容。' : '归档链路稳定，可按需查看历史快照。'}</p>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: 'actions',
+                    title: '快捷动作',
+                    icon: getAdminActionIcon('more', { size: 15 }),
+                    children: (
+                      <div className="admin-inspector-action-list">
+                        <AdminButton size="sm" variant="secondary" icon={getAdminActionIcon('copy', { size: 13 })} onClick={() => void navigator.clipboard?.writeText(sandboxRuntimeDetail.runtime.sandboxId)}>复制 ID</AdminButton>
+                        <AdminButton size="sm" variant="secondary" icon={getAdminActionIcon('refresh', { size: 13 })} onClick={() => void loadSandboxRuntimeDetail(sandboxRuntimeDetail.runtime.sandboxId)}>刷新</AdminButton>
+                      </div>
+                    ),
+                  },
+                ]}
+              />
+            )}
+          >
               {sandboxDetailTab === 'overview' ? (
                 <div className="inspector-page-stack sandbox-overview-stack">
                   <article className="inspector-card inspector-overview-hero">
@@ -9890,6 +10108,38 @@ export default function App() {
                     ) : null}
                   </article>
 
+                  <section className="admin-detail-section-stack sandbox-command-center-grid">
+                    <article className="admin-detail-section">
+                      <h3 className="admin-detail-section-title">关联拓扑</h3>
+                      <RelationTopology
+                        focusNodeId="sandbox"
+                        nodes={[
+                          ...(sandboxRuntimeDetail.taskSession?.user?.id ? [{ id: 'user', type: 'user' as const, label: 'User', meta: sandboxRuntimeDetail.taskSession.user.displayName || sandboxRuntimeDetail.taskSession.user.email || sandboxRuntimeDetail.taskSession.user.id, onOpen: () => openSandboxUserPreview(sandboxRuntimeDetail.taskSession?.user) }] : []),
+                          ...(sandboxRuntimeDetail.runtime.taskSessionId ? [{ id: 'session', type: 'session' as const, label: 'Session', meta: sandboxRuntimeDetail.runtime.taskSessionId, onOpen: () => openConversationSessionFromSandbox(sandboxRuntimeDetail.runtime.taskSessionId) }] : []),
+                          { id: 'sandbox', type: 'sandbox', label: 'Sandbox', meta: sandboxDisplayLabel(sandboxRuntimeDetail), active: true },
+                          ...(sandboxRuntimeDetail.runtime.executor || sandboxRuntimeDetail.runtime.opencodeBaseUrl || sandboxRuntimeDetail.runtime.osacEndpoint ? [{ id: 'runtime', type: 'runtime' as const, label: executorLabel(sandboxRuntimeDetail.runtime.executor), meta: sandboxRuntimeDetail.runtime.opencodeBaseUrl ? 'OpenCode endpoint' : sandboxRuntimeDetail.runtime.osacEndpoint ? 'OSAC endpoint' : '执行器记录' }] : []),
+                          ...(sandboxRuntimeDetail.archive.archiveKey || sandboxRuntimeDetail.archive.snapshotKey || sandboxRuntimeDetail.archive.archiveStatus || sandboxRuntimeDetail.runtime.archiveStatus ? [{ id: 'artifact', type: 'artifact' as const, label: 'Artifact', meta: archiveStatusLabel(sandboxRuntimeDetail.archive.archiveStatus || sandboxRuntimeDetail.runtime.archiveStatus) || sandboxRuntimeDetail.archive.snapshotKey || sandboxRuntimeDetail.archive.archiveKey || '归档记录' }] : []),
+                        ]}
+                        edges={[
+                          ...(sandboxRuntimeDetail.taskSession?.user?.id && sandboxRuntimeDetail.runtime.taskSessionId ? [{ from: 'user', to: 'session', label: '发起会话' }] : []),
+                          ...(sandboxRuntimeDetail.runtime.taskSessionId ? [{ from: 'session', to: 'sandbox', label: '绑定运行时' }] : []),
+                          ...(sandboxRuntimeDetail.runtime.executor || sandboxRuntimeDetail.runtime.opencodeBaseUrl || sandboxRuntimeDetail.runtime.osacEndpoint ? [{ from: 'sandbox', to: 'runtime', label: executorLabel(sandboxRuntimeDetail.runtime.executor) }] : []),
+                          ...(sandboxRuntimeDetail.archive.archiveKey || sandboxRuntimeDetail.archive.snapshotKey || sandboxRuntimeDetail.archive.archiveStatus || sandboxRuntimeDetail.runtime.archiveStatus ? [{ from: 'sandbox', to: 'artifact', label: '归档链路', tone: sandboxRuntimeDetail.archive.archiveDirty ? 'warning' as const : 'neutral' as const }] : []),
+                        ]}
+                      />
+                    </article>
+                    <article className="admin-detail-section">
+                      <h3 className="admin-detail-section-title">审计时间线</h3>
+                      <AuditTimeline
+                        items={[
+                          { id: 'created', title: 'Sandbox 记录创建', time: formatDateTime(sandboxRuntimeDetail.runtime.createdAt || sandboxRuntimeDetail.runtime.startedAt), description: sandboxRuntimeDetail.runtime.template ? `模板：${sandboxRuntimeDetail.runtime.template}` : '创建时间来自运行时记录', tone: 'neutral', icon: getAdminStatusIcon('waiting', { size: 12 }) },
+                          { id: 'last-active', title: '最近活跃', time: formatDateTime(sandboxRuntimeDetail.runtime.lastActiveAt), description: sandboxRuntimeDetail.runtime.lastActiveReason || '暂无活跃原因', tone: 'info', icon: getAdminStatusIcon('running', { size: 12 }) },
+                          ...archiveRows.slice(0, 3).map((row) => ({ id: `archive-full-${row.id}`, title: '归档快照', time: formatDateTime(row.timestamp), description: row.reason || '归档记录', tone: row.status === 'failed' ? 'danger' as const : 'success' as const, icon: getAdminActionIcon('archive', { size: 12 }), meta: [{ label: '快照', value: row.snapshotKey || row.id || '-' }, { label: '大小', value: row.size }] })),
+                        ]}
+                      />
+                    </article>
+                  </section>
+
                   <section className="inspector-overview-bottom-grid">
                     <article className="inspector-card inspector-card-large">
                       <div className="inspector-card-header">
@@ -9936,7 +10186,7 @@ export default function App() {
                           type="button"
                           className="secondary-btn"
                           disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId]}
-                          onClick={() => void closeSandbox(sandboxRuntimeDetail.runtime.sandboxId)}
+                          onClick={() => requestSandboxClose(sandboxRuntimeDetail.runtime.sandboxId, sandboxDisplayLabel(sandboxRuntimeDetail))}
                         >
                           关机
                         </button>
@@ -9944,7 +10194,7 @@ export default function App() {
                           type="button"
                           className="secondary-btn"
                           disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId]}
-                          onClick={() => void restartSandbox(sandboxRuntimeDetail.runtime.sandboxId)}
+                          onClick={() => requestSandboxRestart(sandboxRuntimeDetail.runtime.sandboxId, sandboxDisplayLabel(sandboxRuntimeDetail))}
                         >
                           重启
                         </button>
@@ -9952,7 +10202,7 @@ export default function App() {
                           type="button"
                           className="secondary-btn"
                           disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId]}
-                          onClick={() => void runSandboxArchive(sandboxRuntimeDetail.runtime.sandboxId)}
+                          onClick={() => requestSandboxArchive(sandboxRuntimeDetail.runtime.sandboxId, sandboxDisplayLabel(sandboxRuntimeDetail))}
                         >
                           归档
                         </button>
@@ -10106,7 +10356,7 @@ export default function App() {
                         type="button"
                         className="primary-btn"
                         disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId]}
-                        onClick={() => void runSandboxArchive(sandboxRuntimeDetail.runtime.sandboxId)}
+                        onClick={() => requestSandboxArchive(sandboxRuntimeDetail.runtime.sandboxId, sandboxDisplayLabel(sandboxRuntimeDetail))}
                       >
                         手动归档
                       </button>
@@ -10521,7 +10771,7 @@ export default function App() {
                         >
                           <span
                             className="file-transfer-progress-bar"
-                            style={sandboxFileTransferPercent === null ? undefined : { width: `${sandboxFileTransferPercent}%` }}
+                            style={sandboxFileTransferPercent === null ? undefined : { '--file-transfer-progress': sandboxFileTransferPercent / 100 } as React.CSSProperties}
                           />
                         </div>
                         <span className="file-transfer-percent mono">
@@ -10746,13 +10996,66 @@ export default function App() {
                   </details>
                 </div>
               ) : null}
-              </div>
-            </div>
-          </div>
+          </AdminDetailShell>
         ) : null}
 
+        <DangerConfirmDialog
+          open={Boolean(sandboxDangerAction)}
+          title={
+            sandboxDangerAction?.type === 'close'
+              ? '确认关闭 Sandbox'
+              : sandboxDangerAction?.type === 'restart'
+                ? '确认重启 Sandbox'
+                : sandboxDangerAction?.type === 'archive'
+                  ? '确认归档 Sandbox'
+                  : '确认删除 Sandbox 文件'
+          }
+          objectLabel={sandboxDangerAction?.type === 'delete-file' ? (sandboxDangerAction.targetKind === 'dir' ? '目录' : '文件') : 'Sandbox'}
+          objectName={sandboxDangerAction?.type === 'delete-file' ? sandboxDangerAction.path : sandboxDangerAction?.label}
+          objectId={sandboxDangerAction?.type === 'delete-file' ? sandboxDangerAction.path : sandboxDangerAction?.sandboxId}
+          actionLabel={
+            sandboxDangerAction?.type === 'close'
+              ? '关闭 Sandbox'
+              : sandboxDangerAction?.type === 'restart'
+                ? '重启 Sandbox'
+                : sandboxDangerAction?.type === 'archive'
+                  ? '归档 Sandbox'
+                  : '删除文件'
+          }
+          confirmText={
+            sandboxDangerAction?.type === 'close'
+              ? sandboxDangerAction.sandboxId
+              : sandboxDangerAction?.type === 'restart'
+                ? 'RESTART'
+                : sandboxDangerAction?.type === 'archive'
+                  ? 'ARCHIVE'
+                  : sandboxDangerAction?.type === 'delete-file'
+                    ? `DELETE ${sandboxDangerAction.path}`
+                    : undefined
+          }
+          reasonRequired
+          loading={Boolean(sandboxDangerAction && sandboxBusyIds[sandboxDangerAction.sandboxId]) || sandboxFileOperation === 'delete'}
+          reversibility={sandboxDangerAction?.type === 'delete-file' ? 'irreversible' : 'partially_reversible'}
+          impactItems={
+            sandboxDangerAction?.type === 'close'
+              ? ['当前实例会停止，不保证原实例可继续复用', '运行中工具与端口会中断']
+              : sandboxDangerAction?.type === 'restart'
+                ? ['将按既有语义归档、关闭并恢复或重建运行态', '运行中任务会短暂不可用']
+                : sandboxDangerAction?.type === 'archive'
+                  ? ['会生成或更新当前工作区快照', '归档过程可能占用运行资源']
+                  : ['目标文件或目录将从当前工作区移除', '此操作不可撤销']
+          }
+          nonImpactItems={
+            sandboxDangerAction?.type === 'delete-file'
+              ? ['不会自动重启 Sandbox', '不会删除任务会话记录']
+              : ['不会删除任务会话记录', '不会绕过现有 Sandbox 主链 API']
+          }
+          onCancel={() => setSandboxDangerAction(null)}
+          onConfirm={() => void confirmSandboxDangerAction()}
+        />
+
         {templateModalOpen ? (
-          <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeTemplateDetail}>
+          <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="template-workbench-title" onClick={closeTemplateDetail}>
             <div
               className="modal-card template-workbench-modal"
               onClick={(event) => {
@@ -10762,7 +11065,7 @@ export default function App() {
               <div className="modal-header">
                 <div>
                   <p className="section-tag">模板工作台</p>
-                  <h2>{templateWorkbenchTitle}</h2>
+                  <h2 id="template-workbench-title">{templateWorkbenchTitle}</h2>
                   <p className="panel-caption">{templateWorkbenchCaption}</p>
                 </div>
                 <button type="button" className="secondary-btn" onClick={closeTemplateDetail}>
@@ -11672,6 +11975,7 @@ export default function App() {
     if (activeSection === 'user') {
       return (
         <UserManagementSection
+          key={`${userManagementViewState.selectedUserId || 'list'}:${userManagementViewState.detailTab}:${userManagementViewState.drawerOpen ? 'open' : 'closed'}`}
           onError={setError}
           onUpdatedAtChange={setUserManagementUpdatedAt}
           onRegisterRefresh={registerSectionRefresh}
@@ -11723,6 +12027,21 @@ export default function App() {
         />
       );
     }
+    if (activeSection === 'billing') {
+      return (
+        <Suspense fallback={<div className="p-6">加载中...</div>}>
+          <BillingManagementSection
+            onOpenUser={(userId) => {
+              openUserManagementView(userId, { section: 'billing', trail: '计费管理' });
+            }}
+            onOpenConversation={(sessionId) => {
+              openConversationDialog(sessionId, 'overview', { section: 'billing', trail: '计费管理' });
+            }}
+            onNotify={pushToast}
+          />
+        </Suspense>
+      );
+    }
     if (activeSection === 'sandbox') return renderSandboxSection();
     return renderAuditSection();
   };
@@ -11761,10 +12080,11 @@ export default function App() {
                       key={item.key}
                       type="button"
                       className={`nav-item ${activeSection === item.key ? 'active' : ''}`}
+                      aria-current={activeSection === item.key ? 'page' : undefined}
                       onClick={() => handleSidebarSectionOpen(item.key)}
                       title={sidebarCollapsed ? item.label : undefined}
                     >
-                      <span className="nav-item-tag">{item.tag}</span>
+                      <span className="nav-item-icon" aria-hidden="true">{getAdminModuleIcon(item.iconKey, { size: 17 })}</span>
                       <span className="nav-item-body">
                         <span>{item.label}</span>
                       </span>
@@ -11819,15 +12139,23 @@ export default function App() {
                     onClick={() => setSettingsMenuOpen((open) => !open)}
                   >
                     <svg className="topbar-settings-icon" viewBox="0 0 20 20" aria-hidden="true">
-                      <path d="M8.861 2.1a1.25 1.25 0 0 1 2.278 0l.41 1.008c.158.388.504.664.92.735l1.081.181a1.25 1.25 0 0 1 .904 1.813l-.516.968a1.19 1.19 0 0 0 0 1.12l.516.968a1.25 1.25 0 0 1-.904 1.813l-1.08.18a1.2 1.2 0 0 0-.922.736l-.41 1.008a1.25 1.25 0 0 1-2.277 0l-.41-1.008a1.2 1.2 0 0 0-.921-.735l-1.081-.181a1.25 1.25 0 0 1-.904-1.813l.516-.968a1.19 1.19 0 0 0 0-1.12l-.516-.968a1.25 1.25 0 0 1 .904-1.813l1.08-.18a1.2 1.2 0 0 0 .922-.736z" />
-                      <path d="M10 7.05A2.95 2.95 0 1 0 10 12.95A2.95 2.95 0 1 0 10 7.05Z" />
+                      <path d="M4.25 5.25h6.1a2.15 2.15 0 0 0 4.05 0h1.35a.95.95 0 0 0 0-1.9H14.4a2.15 2.15 0 0 0-4.05 0h-6.1a.95.95 0 1 0 0 1.9Z" />
+                      <path d="M4.25 10.95h1.35a2.15 2.15 0 0 0 4.05 0h6.1a.95.95 0 0 0 0-1.9h-6.1a2.15 2.15 0 0 0-4.05 0H4.25a.95.95 0 1 0 0 1.9Z" />
+                      <path d="M4.25 16.65h7.85a2.15 2.15 0 0 0 4.05 0h-.4a.95.95 0 0 0 0-1.9h.4a2.15 2.15 0 0 0-4.05 0H4.25a.95.95 0 1 0 0 1.9Z" />
                     </svg>
                   </button>
                   {settingsMenuOpen ? (
-                    <div className="topbar-settings-menu" role="dialog" aria-label="界面设置">
+                    <div
+                      className="topbar-settings-menu"
+                      role="region"
+                      aria-labelledby="topbar-settings-title"
+                      onKeyDown={(event) => {
+                        if (event.key === 'Escape') setSettingsMenuOpen(false);
+                      }}
+                    >
                       <div className="topbar-settings-head">
                         <div className="topbar-settings-copy">
-                          <strong>界面设置</strong>
+                          <strong id="topbar-settings-title">界面设置</strong>
                           <span>
                             {selectedThemeOption?.label} · {selectedThemeMode?.label}
                             {currentThemeMode === 'system' ? `（当前${resolvedThemeTone === 'dark' ? '暗色' : '亮色'}）` : ''}
@@ -11849,6 +12177,7 @@ export default function App() {
                                 key={theme.key}
                                 type="button"
                                 className={`theme-family-card ${theme.key === currentTheme ? 'active' : ''}`}
+                                aria-pressed={theme.key === currentTheme}
                                 onClick={() => void saveThemePreferences(theme.key, currentThemeMode)}
                                 disabled={themeSaving}
                               >
@@ -11872,11 +12201,13 @@ export default function App() {
                           <span>外观</span>
                           <small>亮色、暗色、跟随系统</small>
                         </div>
-                        <div className="theme-mode-strip" role="group" aria-label="外观模式">
+                        <div className="theme-mode-strip" role="radiogroup" aria-label="外观模式">
                           {themeModeOptions.map((mode) => (
                             <button
                               key={mode.key}
                               type="button"
+                              role="radio"
+                              aria-checked={mode.key === currentThemeMode}
                               className={`theme-mode-btn ${mode.key === currentThemeMode ? 'active' : ''}`}
                               onClick={() => void saveThemePreferences(currentTheme, mode.key)}
                               disabled={themeSaving}
@@ -11929,6 +12260,38 @@ export default function App() {
             <div className="section-overlay-host section-overlay-host-sandbox">
               {renderSandboxSection()}
             </div>
+          ) : null}
+          {sandboxUserPreview ? (
+            <AdminDetailShell
+              open={Boolean(sandboxUserPreview)}
+              onClose={() => setSandboxUserPreview(null)}
+              zIndex={sandboxUserPreviewZIndex}
+              size="lg"
+              eyebrow="拓扑关联用户"
+              title={sandboxUserPreview.displayName || sandboxUserPreview.email || sandboxUserPreview.id}
+              subtitle={<IdToken label="User" value={sandboxUserPreview.id} />}
+              icon={getAdminModuleIcon('user', { size: 21 })}
+              entityType="App User"
+              lastUpdated={<>最近访问：{formatDateTime(sandboxUserPreview.lastSeenAt || sandboxUserPreview.lastLoginAt)}</>}
+              risk={sandboxUserPreview.source === 'app_user' ? '风险：真实用户已绑定' : `风险：${sandboxUserPreview.source || '来源未知'}`}
+              status={<StatusBadge tone={sandboxUserPreview.status === 'disabled' ? 'danger' : 'success'}>{sandboxUserPreview.status || '已识别'}</StatusBadge>}
+              actions={<AdminButton variant="secondary" icon={getAdminActionIcon('external', { size: 14 })} onClick={() => { openUserManagementView(sandboxUserPreview.id, currentSandboxOrigin()); setSandboxUserPreview(null); }}>在用户管理中查看</AdminButton>}
+              footer={<AdminButton variant="secondary" onClick={() => setSandboxUserPreview(null)}>关闭</AdminButton>}
+            >
+              <div className="admin-detail-section-stack">
+                <article className="admin-detail-section">
+                  <h3 className="admin-detail-section-title">真实关联来源</h3>
+                  <dl className="admin-inspector-kv">
+                    <div><dt>来源</dt><dd>{sandboxUserPreview.source || '-'}</dd></div>
+                    <div><dt>邮箱</dt><dd>{sandboxUserPreview.email || '-'}</dd></div>
+                    <div><dt>最近登录</dt><dd>{formatDateTime(sandboxUserPreview.lastLoginAt)}</dd></div>
+                    <div><dt>最近访问</dt><dd>{formatDateTime(sandboxUserPreview.lastSeenAt)}</dd></div>
+                    <div><dt>会话创建</dt><dd>{formatDateTime(sandboxUserPreview.sessionCreatedAt)}</dd></div>
+                    <div><dt>IP</dt><dd className="mono">{sandboxUserPreview.ipAddress || '-'}</dd></div>
+                  </dl>
+                </article>
+              </div>
+            </AdminDetailShell>
           ) : null}
         </section>
       </div>

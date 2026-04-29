@@ -155,7 +155,10 @@ router.post('/inputs', async (req, res) => {
           buffer: file.buffer,
         }))
       : [];
-    const metadata = parseMetadata(req.body?.metadata);
+    const metadata = parseMetadata(req.body?.metadata) || {};
+    if (asText(req.body?.modelTier)) {
+      metadata.modelTier = asText(req.body.modelTier);
+    }
     const result = await altusManagedInputService.submit(currentUser.userId, {
       sessionId: asText(req.body?.sessionId) || undefined,
       content: asText(req.body?.content),
@@ -191,7 +194,10 @@ router.post('/sessions/:sessionId/runs', async (req, res) => {
     const metadata =
       req.body?.metadata && typeof req.body.metadata === 'object' && !Array.isArray(req.body.metadata)
         ? (req.body.metadata as Record<string, unknown>)
-        : undefined;
+        : {};
+    if (asText(req.body?.modelTier)) {
+      metadata.modelTier = asText(req.body.modelTier);
+    }
 
     const run = await altusManagedRunService.startRun(sessionId, currentUser.userId, {
       content,

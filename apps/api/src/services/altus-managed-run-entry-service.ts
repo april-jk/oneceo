@@ -27,6 +27,7 @@ import {
   AltusManagedAskUserPairingService,
   altusManagedAskUserPairingService,
 } from './altus-managed-ask-user-pairing-service';
+import { normalizeAgentModelTier, resolveAgentRuntimeProfile, toAgentRuntimeSnapshot } from './agent-runtime-profile-service';
 
 export class AltusManagedRunEntryService {
   private readonly controllers = new Map<string, AbortController>();
@@ -49,6 +50,26 @@ export class AltusManagedRunEntryService {
       asText(process.env.OPENAI_MODEL) ||
       'claude-haiku-4-5-20251001'
     );
+  }
+
+  private resolveModelTier(metadata?: Record<string, unknown>) {
+    const nested = metadata?.metadata && typeof metadata.metadata === 'object' && !Array.isArray(metadata.metadata)
+      ? (metadata.metadata as Record<string, unknown>)
+      : undefined;
+    return normalizeAgentModelTier(metadata?.modelTier ?? nested?.modelTier);
+  }
+
+  private metadataHasImageInput(value: unknown): boolean {
+    if (!value) return false;
+    if (typeof value === 'string') return value.toLowerCase().startsWith('image/');
+    if (Array.isArray(value)) return value.some((item) => this.metadataHasImageInput(item));
+    if (typeof value === 'object') {
+      const record = value as Record<string, unknown>;
+      const mimeType = asText(record.mimeType || record.contentType).toLowerCase();
+      if (mimeType.startsWith('image/')) return true;
+      return Object.values(record).some((item) => this.metadataHasImageInput(item));
+    }
+    return false;
   }
 
   private getHeartbeatIntervalMs() {
@@ -93,17 +114,25 @@ export class AltusManagedRunEntryService {
     if (orchestratorSessionId) {
       void sessionMcpRecoveryService.ensureSessionRecovered(sessionId, orchestratorSessionId).catch(() => null);
     }
+    const runtimeProfile = resolveAgentRuntimeProfile({
+      tier: this.resolveModelTier(input.metadata),
+      needsVision: this.metadataHasImageInput(input.metadata),
+    });
+    const runtimeSnapshot = toAgentRuntimeSnapshot(runtimeProfile);
     const connectorSnapshot = await this.setupService.captureConnectorSnapshot(sessionId, userId);
     const mcpToolSnapshot = await this.setupService.captureMcpToolSnapshot(sessionId);
     const run = await taskSessionRunDAO.createRun({
       sessionId,
       status: 'queued',
       mode: 'managed',
-      model: this.getModelName(),
+      model: runtimeSnapshot.model,
       connectorSnapshotId: connectorSnapshot.snapshotId,
       mcpToolSnapshotId: mcpToolSnapshot.snapshotId,
       metadataJson: {
         trigger: 'user_input',
+        modelTier: runtimeSnapshot.tier,
+        billingTargetKey: runtimeSnapshot.billingTargetKey,
+        runtimeSnapshot,
         mcpToolSnapshotId: mcpToolSnapshot.snapshotId,
       },
     });
@@ -111,14 +140,14 @@ export class AltusManagedRunEntryService {
       runId: run.id,
       sessionId,
       userId,
-      model: run.model || this.getModelName(),
+      model: run.model || runtimeSnapshot.model,
       status: 'queued',
     });
     const queuedRecovery = await this.recoveryService.buildRecoverySnapshot({
       runId: run.id,
       sessionId,
       userId,
-      model: run.model || this.getModelName(),
+      model: run.model || runtimeSnapshot.model,
       status: 'queued',
     });
     await this.redisStateService.setRecoverySnapshot({
@@ -143,6 +172,9 @@ export class AltusManagedRunEntryService {
       content,
       metadata: {
         ...(input.metadata || {}),
+        modelTier: runtimeSnapshot.tier,
+        billingTargetKey: runtimeSnapshot.billingTargetKey,
+        runtimeSnapshot,
         runId: run.id,
         ...(pendingAskUser
           ? {
@@ -216,7 +248,10 @@ export class AltusManagedRunEntryService {
       runId: run.id,
       sessionId,
       userId,
-      model: run.model || this.getModelName(),
+      model: run.model || runtimeSnapshot.model,
+      billingTargetKey: runtimeSnapshot.billingTargetKey,
+      runtimeSnapshot,
+      runtimeTokenSource: runtimeProfile.tokenSource,
       userInput: content,
       messageType,
       sessionTitle: sessionMemory?.title || null,

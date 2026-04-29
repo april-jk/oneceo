@@ -4403,6 +4403,10 @@ select:focus-visible {
   gap: 14px;
 }
 
+.deployment-sensed-data-panel {
+  grid-column: 1 / -1;
+}
+
 .deployment-links {
   display: grid;
   gap: 6px;

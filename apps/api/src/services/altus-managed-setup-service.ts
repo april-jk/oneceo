@@ -1247,7 +1247,7 @@ export class AltusManagedSetupService {
           if (
             reduced.accepted ||
             reduced.reason !== 'invalid_transition' ||
-            (pendingClarificationType && pendingClarificationType !== 'none')
+            Boolean(pendingClarificationType)
           ) {
             return buildProfileFromTransition({
               baseProfile,

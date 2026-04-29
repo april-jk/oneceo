@@ -161,6 +161,8 @@ router.post('/environment/:sessionId/restore', async (req, res) => {
     const snapshotKey = asText(req.body?.snapshotKey);
     const restored = await restoreWorkspaceIfArchived(req.params.sessionId, {
       snapshotKey: snapshotKey || undefined,
+      restoreRequired: Boolean(snapshotKey),
+      reason: 'admin_management_manual_restore',
     });
     return res.json({
       success: true,

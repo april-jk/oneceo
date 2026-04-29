@@ -138,6 +138,8 @@ console.log('[oneceo-static-server] listening on port ' + port);
 });
 `;
 
+const FRONTEND_DIST_SERVER_FILE_NAME = 'server.cjs';
+
 const FRONTEND_DIST_SERVER_SOURCE = `const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
@@ -146,6 +148,7 @@ const port = Number(process.env.PORT || 8080);
 const rootDir = path.join(__dirname, 'dist');
 const indexPath = path.join(rootDir, 'index.html');
 const ANALYTICS_MARKER_START = '<!-- ONECEO_ANALYTICS:START -->';
+const ANALYTICS_MARKER_END = '<!-- ONECEO_ANALYTICS:END -->';
 const mimeTypes = {
   '.css': 'text/css; charset=utf-8',
   '.gif': 'image/gif',
@@ -177,7 +180,6 @@ function buildAnalyticsBootstrapSnippet() {
   const endpoint = readEnv('VITE_ANALYTICS_ENDPOINT') || host;
   const websiteId = readEnv('VITE_ANALYTICS_WEBSITE_ID');
   const tag = readEnv('VITE_ANALYTICS_TAG');
-  const publicDomain = readEnv('VITE_PUBLIC_DOMAIN');
   const enabled = !['0', 'false', 'no', 'off'].includes(enabledValue) && Boolean(endpoint && websiteId);
   if (!enabled) {
     return '';
@@ -195,7 +197,6 @@ function buildAnalyticsBootstrapSnippet() {
     "  script.setAttribute('data-host-url', " + JSON.stringify(normalizedEndpoint) + ');',
     "  script.setAttribute('data-oneceo-analytics', 'runtime');",
     tag ? "  script.setAttribute('data-tag', " + JSON.stringify(tag) + ');' : '',
-    publicDomain ? "  script.setAttribute('data-domains', " + JSON.stringify(publicDomain) + ');' : '',
     '  document.body.appendChild(script);',
     '})();',
     '</script>',
@@ -204,12 +205,20 @@ function buildAnalyticsBootstrapSnippet() {
 }
 
 function injectRuntimeAnalytics(html) {
-  if (!html || html.includes(ANALYTICS_MARKER_START)) {
+  if (!html) {
     return html;
   }
   const snippet = buildAnalyticsBootstrapSnippet();
   if (!snippet) {
     return html;
+  }
+  const markerStartIndex = html.indexOf(ANALYTICS_MARKER_START);
+  if (markerStartIndex >= 0) {
+    const markerEndIndex = html.indexOf(ANALYTICS_MARKER_END, markerStartIndex);
+    if (markerEndIndex < 0) {
+      return html;
+    }
+    return html.slice(0, markerStartIndex) + snippet + html.slice(markerEndIndex + ANALYTICS_MARKER_END.length);
   }
   const bodyCloseIndex = html.lastIndexOf('</body>');
   if (bodyCloseIndex >= 0) {
@@ -324,7 +333,7 @@ const FRONTEND_DIST_TEMPLATE_MANIFEST: OneCeoDeploymentManifest = {
     outputDir: 'dist',
   },
   start: {
-    command: 'node server.js',
+    command: `node ${FRONTEND_DIST_SERVER_FILE_NAME}`,
     portEnv: 'PORT',
   },
   healthcheck: {
@@ -339,6 +348,62 @@ const FRONTEND_DIST_TEMPLATE_MANIFEST: OneCeoDeploymentManifest = {
   },
   runtime: {
     framework: 'frontend_dist',
+    transport: 'http',
+  },
+};
+
+const PHP_TEMPLATE_MANIFEST: OneCeoDeploymentManifest = {
+  templateVersion: '1.0.0',
+  appType: 'web_app',
+  stack: 'php_http_api_dbless',
+  build: {
+    command: 'echo "oneceo php app ready"',
+    outputDir: '.',
+  },
+  start: {
+    command: 'php -S 0.0.0.0:$PORT -t .',
+    portEnv: 'PORT',
+  },
+  healthcheck: {
+    path: '/',
+  },
+  features: {
+    analytics: true,
+    userTracking: true,
+    database: false,
+    auth: false,
+    objectStorage: false,
+  },
+  runtime: {
+    framework: 'php',
+    transport: 'http',
+  },
+};
+
+const JAVA_TEMPLATE_MANIFEST: OneCeoDeploymentManifest = {
+  templateVersion: '1.0.0',
+  appType: 'web_app',
+  stack: 'java_http_api_dbless',
+  build: {
+    command: './mvnw package -DskipTests',
+    outputDir: 'target',
+  },
+  start: {
+    command: "sh -c 'java -jar target/*.jar'",
+    portEnv: 'PORT',
+  },
+  healthcheck: {
+    path: '/',
+  },
+  features: {
+    analytics: true,
+    userTracking: true,
+    database: false,
+    auth: false,
+    objectStorage: false,
+  },
+  runtime: {
+    framework: 'java',
     transport: 'http',
   },
 };
@@ -405,6 +470,25 @@ function isFrontendPreviewOrDevStartCommand(value: string): boolean {
     normalized.startsWith('bun preview ') ||
     normalized.startsWith('bun dev ')
   );
+}
+
+async function hasModulePackageWithCommonJsServer(sourceDir: string, packageJson: Record<string, unknown>) {
+  if (asText(packageJson.type).toLowerCase() !== 'module') {
+    return false;
+  }
+  const serverSource = await readTextIfExists(join(sourceDir, 'server.js'));
+  if (!serverSource) {
+    return false;
+  }
+  return /\brequire\s*\(/.test(serverSource) || /\bmodule\.exports\b/.test(serverSource);
+}
+
+async function frontendDistServerNeedsRuntimeAnalytics(sourceDir: string, startCommand: string) {
+  if (normalizeCommandForMatch(startCommand) !== `node ${FRONTEND_DIST_SERVER_FILE_NAME}`) {
+    return false;
+  }
+  const serverSource = await readTextIfExists(join(sourceDir, FRONTEND_DIST_SERVER_FILE_NAME));
+  return !serverSource.includes('ONECEO_ANALYTICS:START');
 }
 
 export type DeploymentTemplateBaselineData = {
@@ -577,7 +661,12 @@ async function findSingleNestedAppDirectory(sourceDir: string): Promise<string |
     (await exists(join(sourceDir, 'pyproject.toml'))) ||
     (await exists(join(sourceDir, 'main.py'))) ||
     (await exists(join(sourceDir, 'app.py'))) ||
-    (await exists(join(sourceDir, 'server.py')));
+    (await exists(join(sourceDir, 'server.py'))) ||
+    (await exists(join(sourceDir, 'index.php'))) ||
+    (await exists(join(sourceDir, 'public/index.php'))) ||
+    (await exists(join(sourceDir, 'pom.xml'))) ||
+    (await exists(join(sourceDir, 'build.gradle'))) ||
+    (await exists(join(sourceDir, 'build.gradle.kts')));
   if (rootHasDeploymentEntry) {
     return null;
   }
@@ -606,7 +695,12 @@ async function findSingleNestedAppDirectory(sourceDir: string): Promise<string |
     (await exists(join(nestedDir, 'pyproject.toml'))) ||
     (await exists(join(nestedDir, 'main.py'))) ||
     (await exists(join(nestedDir, 'app.py'))) ||
-    (await exists(join(nestedDir, 'server.py')));
+    (await exists(join(nestedDir, 'server.py'))) ||
+    (await exists(join(nestedDir, 'index.php'))) ||
+    (await exists(join(nestedDir, 'public/index.php'))) ||
+    (await exists(join(nestedDir, 'pom.xml'))) ||
+    (await exists(join(nestedDir, 'build.gradle'))) ||
+    (await exists(join(nestedDir, 'build.gradle.kts')));
   return hasNestedAppEntry ? nestedDir : null;
 }
 
@@ -681,8 +775,16 @@ async function ensureBuiltFrontendDeploymentFiles(sourceDir: string) {
   const scripts = (packageJson.scripts || {}) as Record<string, unknown>;
   const buildCommand = asText(scripts.build);
   const startCommand = asText(scripts.start);
+  const hasIncompatibleCommonJsServer =
+    normalizeCommandForMatch(startCommand) === 'node server.js' &&
+    await hasModulePackageWithCommonJsServer(sourceDir, packageJson);
+  const hasFrontendServerWithoutRuntimeAnalytics =
+    await frontendDistServerNeedsRuntimeAnalytics(sourceDir, startCommand);
   const shouldRewriteStartCommand =
-    !startCommand || isFrontendPreviewOrDevStartCommand(startCommand);
+    !startCommand ||
+    isFrontendPreviewOrDevStartCommand(startCommand) ||
+    hasIncompatibleCommonJsServer ||
+    hasFrontendServerWithoutRuntimeAnalytics;
   if (!buildCommand || !shouldRewriteStartCommand) {
     return false;
   }
@@ -712,14 +814,15 @@ async function ensureBuiltFrontendDeploymentFiles(sourceDir: string) {
     ...packageJson,
     scripts: {
       ...scripts,
-      start: 'node server.js',
+      start: `node ${FRONTEND_DIST_SERVER_FILE_NAME}`,
     },
   };
   await writeFile(packageJsonPath, `${JSON.stringify(nextPackageJson, null, 2)}\n`, 'utf-8');
 
-  const serverPath = join(sourceDir, 'server.js');
-  if (!(await exists(serverPath))) {
-    await writeFile(serverPath, FRONTEND_DIST_SERVER_SOURCE, 'utf-8');
+  const frontendServerPath = join(sourceDir, FRONTEND_DIST_SERVER_FILE_NAME);
+  const existingFrontendServerSource = await readTextIfExists(frontendServerPath);
+  if (!existingFrontendServerSource.includes('ONECEO_ANALYTICS:START')) {
+    await writeFile(frontendServerPath, FRONTEND_DIST_SERVER_SOURCE, 'utf-8');
   }
 
   const manifestPath = join(sourceDir, 'oneceo.manifest.json');
@@ -927,12 +1030,87 @@ async function ensurePythonRootDeploymentFiles(sourceDir: string) {
   return true;
 }
 
+async function ensurePhpRootDeploymentFiles(sourceDir: string) {
+  if (await exists(join(sourceDir, 'package.json'))) {
+    return false;
+  }
+  const phpSignal =
+    (await exists(join(sourceDir, 'index.php'))) ||
+    (await exists(join(sourceDir, 'public/index.php')));
+  if (!phpSignal) {
+    return false;
+  }
+
+  const documentRoot =
+    (await exists(join(sourceDir, 'public/index.php'))) &&
+    !(await exists(join(sourceDir, 'index.php')))
+      ? 'public'
+      : '.';
+  const manifest: OneCeoDeploymentManifest = {
+    ...PHP_TEMPLATE_MANIFEST,
+    start: {
+      ...PHP_TEMPLATE_MANIFEST.start,
+      command: `php -S 0.0.0.0:$PORT -t ${documentRoot}`,
+    },
+  };
+
+  const manifestPath = join(sourceDir, 'oneceo.manifest.json');
+  if (!(await exists(manifestPath))) {
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8');
+  }
+  await ensureRailwayConfigFile(sourceDir, manifest);
+
+  return true;
+}
+
+async function ensureJavaRootDeploymentFiles(sourceDir: string) {
+  if (await exists(join(sourceDir, 'package.json'))) {
+    return false;
+  }
+  const hasPom = await exists(join(sourceDir, 'pom.xml'));
+  const hasGradle =
+    (await exists(join(sourceDir, 'build.gradle'))) ||
+    (await exists(join(sourceDir, 'build.gradle.kts')));
+  if (!hasPom && !hasGradle) {
+    return false;
+  }
+
+  const manifest: OneCeoDeploymentManifest = {
+    ...JAVA_TEMPLATE_MANIFEST,
+    build: {
+      ...JAVA_TEMPLATE_MANIFEST.build,
+      command: hasPom
+        ? ((await exists(join(sourceDir, 'mvnw'))) ? './mvnw package -DskipTests' : 'mvn package -DskipTests')
+        : ((await exists(join(sourceDir, 'gradlew'))) ? './gradlew build -x test' : 'gradle build -x test'),
+      outputDir: hasPom ? 'target' : 'build/libs',
+    },
+    start: {
+      ...JAVA_TEMPLATE_MANIFEST.start,
+      command: hasPom ? "sh -c 'java -jar target/*.jar'" : "sh -c 'java -jar build/libs/*.jar'",
+    },
+    runtime: {
+      ...JAVA_TEMPLATE_MANIFEST.runtime,
+      framework: hasPom ? 'java_maven' : 'java_gradle',
+    },
+  };
+
+  const manifestPath = join(sourceDir, 'oneceo.manifest.json');
+  if (!(await exists(manifestPath))) {
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8');
+  }
+  await ensureRailwayConfigFile(sourceDir, manifest);
+
+  return true;
+}
+
 export async function normalizeDeploymentSourceDirectoryForPublish(sourceDir: string): Promise<{
   promotedNestedApp: boolean;
   injectedBuiltFrontendBaseline: boolean;
   injectedStaticBaseline: boolean;
   injectedNodeScriptBaseline: boolean;
   injectedPythonBaseline: boolean;
+  injectedPhpBaseline: boolean;
+  injectedJavaBaseline: boolean;
 }> {
   const nestedDir = await findSingleNestedAppDirectory(sourceDir);
   let promotedNestedApp = false;
@@ -952,6 +1130,21 @@ export async function normalizeDeploymentSourceDirectoryForPublish(sourceDir: st
     injectedBuiltFrontendBaseline || injectedStaticBaseline || injectedNodeScriptBaseline
       ? false
       : await ensurePythonRootDeploymentFiles(sourceDir);
+  const injectedPhpBaseline =
+    injectedBuiltFrontendBaseline ||
+    injectedStaticBaseline ||
+    injectedNodeScriptBaseline ||
+    injectedPythonBaseline
+      ? false
+      : await ensurePhpRootDeploymentFiles(sourceDir);
+  const injectedJavaBaseline =
+    injectedBuiltFrontendBaseline ||
+    injectedStaticBaseline ||
+    injectedNodeScriptBaseline ||
+    injectedPythonBaseline ||
+    injectedPhpBaseline
+      ? false
+      : await ensureJavaRootDeploymentFiles(sourceDir);
   const manifestPath = join(sourceDir, 'oneceo.manifest.json');
   if (await exists(manifestPath)) {
     try {
@@ -967,6 +1160,8 @@ export async function normalizeDeploymentSourceDirectoryForPublish(sourceDir: st
     injectedStaticBaseline,
     injectedNodeScriptBaseline,
     injectedPythonBaseline,
+    injectedPhpBaseline,
+    injectedJavaBaseline,
   };
 }
 

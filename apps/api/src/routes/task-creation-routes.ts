@@ -45,6 +45,7 @@ import {
   getTaskSessionDeploymentErrorMessage,
   resolveTaskSessionEnvironment,
 } from '../services/task-session-deployment-runtime-service';
+import { buildTaskSessionDeploymentAnalyticsOverview } from '../services/task-session-deployment-analytics-service';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { currentUserResolver } from '../services/current-user-resolver';
 import { codexRuntimeConfigService } from '../services/codex-runtime-config-service';
@@ -3465,8 +3466,12 @@ async function tryRestoreWorkspaceForPreviewRead(
   const restoreSourceKey = resolveRuntimeRestoreSourceKey(session?.runtime);
   if (!restoreSourceKey) return false;
   try {
-    const restored = await restoreWorkspaceIfArchived(orchestratorSessionId);
-    if (restored) {
+    const restored = await restoreWorkspaceIfArchived(orchestratorSessionId, {
+      taskSessionId: sessionId,
+      restoreRequired: true,
+      reason: 'preview_read_missing_file',
+    });
+    if (restored.status === 'restored') {
       await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
       await taskSessionCacheFacade.invalidateWorkspaceBySessionId(sessionId);
       return true;
@@ -6080,6 +6085,43 @@ router.get('/sessions/:sessionId/deployment', async (req, res) => {
 });
 
 /**
+ * GET /api/task-creation/sessions/:sessionId/deployment/analytics
+ * 获取当前部署站点的 Umami 明细统计
+ */
+router.get('/sessions/:sessionId/deployment/analytics', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const runtimeContext = await resolveTaskSessionRuntimeReadContext(sessionId, session);
+    const data = await buildTaskSessionDeploymentAnalyticsOverview(
+      runtimeContext.environment?.metadata,
+      req.query.range
+    );
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('获取部署统计失败:', error);
+    return res.status(authError?.status || ownershipError?.status || 500).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '获取部署统计失败，请稍后重试'),
+    });
+  }
+});
+
+/**
  * GET /api/task-creation/sessions/:sessionId/deployment/template
  * 获取当前工作区的部署模板基线状态
  */
@@ -6649,8 +6691,12 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
         asText(runtime.codexRestoreSourceKey) || asText(runtime.r2RestoreSourceKey) || asText(runtime.r2ArchiveKey);
       if (restoreSourceKey) {
         try {
-          const restored = await restoreWorkspaceIfArchived(orchestratorSessionId);
-          if (restored) {
+          const restored = await restoreWorkspaceIfArchived(orchestratorSessionId, {
+            taskSessionId: sessionId,
+            restoreRequired: true,
+            reason: 'workspace_directory_empty',
+          });
+          if (restored.status === 'restored') {
             await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
             await taskSessionCacheFacade.invalidateWorkspaceBySessionId(sessionId);
             nodes = await listWorkspaceNodes();
@@ -7178,7 +7224,43 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
 
     if (isE2bWorkspaceExecutor(workspaceExecutor)) {
       const absolutePath = resolveWorkspaceAbsolutePath(workspaceRoot, normalizedPath);
-      const bytes = await e2bConnector.readFile(orchestratorSessionId, absolutePath);
+      let bytes: Uint8Array | null = null;
+      try {
+        bytes = await e2bConnector.readFile(orchestratorSessionId, absolutePath);
+      } catch (readError) {
+        if (!isWorkspaceFileNotFoundError(readError)) {
+          throw readError;
+        }
+        const restored = await tryRestoreWorkspaceForPreviewRead(
+          sessionId,
+          orchestratorSessionId,
+          session,
+        );
+        if (restored) {
+          try {
+            bytes = await e2bConnector.readFile(orchestratorSessionId, absolutePath);
+          } catch (afterRestoreError) {
+            if (!isWorkspaceFileNotFoundError(afterRestoreError)) {
+              throw afterRestoreError;
+            }
+          }
+        }
+        if (!bytes) {
+          const rebuilt = await tryRebuildWorkspaceFileForPreview({
+            sessionId,
+            tenantKey,
+            normalizedPath,
+            workspaceRoot,
+            orchestratorSessionId,
+          });
+          if (rebuilt) {
+            bytes = await e2bConnector.readFile(orchestratorSessionId, absolutePath);
+          }
+        }
+        if (!bytes) {
+          throw readError;
+        }
+      }
       const buffer = Buffer.from(bytes);
       const hasNullByte = buffer.includes(0);
       const textContent = hasNullByte ? '' : buffer.toString('utf8');
@@ -7330,7 +7412,7 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
         });
       }
     }
-    if (isSandboxNotFoundError(error)) {
+	    if (isSandboxNotFoundError(error)) {
       const orchestratorSessionId = session?.runtime?.orchestratorSessionId;
       if (orchestratorSessionId) {
         await markSandboxClosed(orchestratorSessionId);
@@ -7350,12 +7432,18 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
           });
         }
       }
-      return res.status(409).json({
-        success: false,
-        error: getPublicErrorMessage('执行环境已关闭，请重新启动'),
-      });
-    }
-    if (isE2bWorkspaceExecutor(resolveWorkspaceExecutor(session))) {
+	      return res.status(409).json({
+	        success: false,
+	        error: getPublicErrorMessage('执行环境已关闭，请重新启动'),
+	      });
+	    }
+	    if (isWorkspaceFileNotFoundError(error)) {
+	      return res.status(409).json({
+	        success: false,
+	        error: getPublicErrorMessage('文件暂不可用，请重新加载预览'),
+	      });
+	    }
+	    if (isE2bWorkspaceExecutor(resolveWorkspaceExecutor(session))) {
       const dbCached = await taskSessionWorkspaceCacheDAO.get({
         sessionId,
         tenantKey,

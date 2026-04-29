@@ -144,6 +144,199 @@ test('prepareRunState keeps contextual resident skill only when current intent s
   assert.ok(persistedStates.length >= 2);
 });
 
+test('prepareRunState auto-attaches deployment orchestrator for action triggers only on deploy requests', async () => {
+  const service = new TaskSessionSkillStateService();
+  const resolvedSelections: any[][] = [];
+
+  mock.method(taskSessionRedisCacheService, 'resolveScopeBySession', async () => null as any);
+  mock.method(taskCreationSessionDAO, 'getSessionMetadataJson', async () => ({
+    sessionSkillState: {
+      explicitSelections: [],
+      residentSelections: [],
+      bindings: [],
+    },
+  }));
+  mock.method(taskCreationSessionDAO, 'patchSessionMetadataJson', async () => null as any);
+  mock.method(userSkillService, 'resolveSelectionsForSession', async (_sessionId, selections) => {
+    resolvedSelections.push(Array.isArray(selections) ? selections : []);
+    return (Array.isArray(selections) ? selections : []).map((item: any) => ({
+      sourceType: item.sourceType,
+      skillId: item.skillId,
+      revisionId: item.revisionId,
+      slug: 'deployment-orchestrator',
+      name: '部署编排',
+      description: '',
+      category: 'deployment',
+      renderedMarkdown: '# deployment-orchestrator',
+      revisionNumber: 1,
+      resourceSummary: null,
+      governance: null,
+    })) as any;
+  });
+
+  const skillCatalog = [
+    {
+      sourceType: 'platform',
+      skillId: 'deploy-skill',
+      revisionId: 'rev-deploy',
+      slug: 'deployment-orchestrator',
+      name: '部署编排',
+      description: '',
+      category: 'deployment',
+      revisionNumber: 1,
+      resourceSummary: null,
+      governance: {
+        systemRole: 'deployment_orchestrator',
+        adminManaged: true,
+        required: false,
+        autoActivation: {
+          enabled: true,
+          triggers: ['deploy', 'redeploy', 'rollback', 'status'],
+          toolNames: ['deploy_application'],
+        },
+      },
+    },
+  ] as any;
+
+  const deployRun = await service.prepareRunState({
+    sessionId: 'session-deploy-action-trigger',
+    skillCatalog,
+    taskIntentProfile: {
+      mode: 'deployable_web_app',
+      reason: 'latest_deployable_request',
+      recentUserMessages: ['帮我部署当前项目'],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: true,
+      deployRequested: true,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: true,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
+    },
+    messageType: 'user_input',
+  });
+
+  assert.deepEqual(
+    deployRun.activeSkillsForTurn.map((item) => item.skillId),
+    ['deploy-skill']
+  );
+
+  const sourceOnlyRun = await service.prepareRunState({
+    sessionId: 'session-web-source-only',
+    skillCatalog,
+    taskIntentProfile: {
+      mode: 'deployable_web_app',
+      reason: 'latest_deployable_request',
+      recentUserMessages: ['帮我做一个网页应用'],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: true,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
+    },
+    messageType: 'user_input',
+  });
+
+  assert.equal(sourceOnlyRun.activeSkillsForTurn.length, 0);
+  assert.ok(resolvedSelections.some((items) => items.some((item) => item.skillId === 'deploy-skill')));
+});
+
+test('prepareRunState preserves submitted managed skill context when fresh catalog misses it', async () => {
+  const service = new TaskSessionSkillStateService();
+  let savedPatch: Record<string, unknown> | null = null;
+
+  mock.method(taskSessionRedisCacheService, 'resolveScopeBySession', async () => null as any);
+  mock.method(taskCreationSessionDAO, 'getSessionMetadataJson', async () => ({
+    sessionSkillState: {
+      explicitSelections: [],
+      residentSelections: [],
+      bindings: [],
+    },
+  }));
+  mock.method(taskCreationSessionDAO, 'patchSessionMetadataJson', async (_sessionId, patch) => {
+    savedPatch = patch;
+    return null as any;
+  });
+  mock.method(userSkillService, 'resolveSelectionsForSession', async () => [] as any);
+
+  const result = await service.prepareRunState({
+    sessionId: 'session-metadata-skill-fallback',
+    skillCatalog: [],
+    submittedSelections: [
+      {
+        sourceType: 'platform',
+        skillId: 'deploy-skill',
+        revisionId: 'rev-deploy',
+      },
+    ],
+    submittedSkillContexts: [
+      {
+        sourceType: 'platform',
+        skillId: 'deploy-skill',
+        revisionId: 'rev-deploy',
+        slug: 'deployment-orchestrator',
+        name: '部署编排',
+        description: '多运行时部署编排',
+        category: 'deployment',
+        renderedMarkdown: '# Skill Brief: 部署编排\n\n先识别项目形态，再决定修复路径。',
+        revisionNumber: 3,
+        resourceSummary: null,
+        governance: {
+          systemRole: 'deployment_orchestrator',
+          adminManaged: true,
+          required: false,
+          autoActivation: {
+            enabled: true,
+            triggers: ['deploy', 'redeploy', 'rollback', 'status'],
+            toolNames: ['deploy_application', 'redeploy_application', 'get_application_deployment_status'],
+          },
+        },
+      },
+    ],
+    taskIntentProfile: {
+      mode: 'deployable_web_app',
+      reason: 'latest_deployable_request',
+      recentUserMessages: ['帮我部署'],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: true,
+      deployRequested: true,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: true,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
+    },
+    messageType: 'user_input',
+  });
+
+  assert.deepEqual(
+    result.skillCatalog.map((item) => item.slug),
+    ['deployment-orchestrator']
+  );
+  assert.deepEqual(
+    result.activeSkillsForTurn.map((item) => item.slug),
+    ['deployment-orchestrator']
+  );
+  assert.match(result.activeSkillsForTurn[0]?.renderedMarkdown || '', /先识别项目形态/);
+  assert.ok(savedPatch);
+});
+
 test('prepareRunState drops stale required resident binding after governance no longer requires it', async () => {
   const service = new TaskSessionSkillStateService();
   let savedPatch: Record<string, unknown> | null = null;

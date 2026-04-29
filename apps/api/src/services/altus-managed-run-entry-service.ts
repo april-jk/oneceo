@@ -5,6 +5,10 @@ import { altusManagedStreamService } from './altus-managed-stream-service';
 import {
   asText,
   isManagedRunTerminalStatus,
+  managedSkillContextToCatalogEntry,
+  mergeManagedSkillCatalogEntries,
+  normalizeManagedSkillCatalogEntries,
+  normalizeManagedSkillContexts,
   type ManagedRunStartInput,
 } from './altus-managed-shared';
 import { AltusManagedSetupService, altusManagedSetupService } from './altus-managed-setup-service';
@@ -167,7 +171,13 @@ export class AltusManagedRunEntryService {
           taskIntentProfile,
         })
       : null;
-    const skillCatalog = await userSkillService.listAvailableSkills(userId);
+    const submittedSkillContexts = normalizeManagedSkillContexts(input.metadata?.managedSkillContext);
+    const metadataSkillCatalog = normalizeManagedSkillCatalogEntries(input.metadata?.managedSkillCatalog);
+    const availableSkillCatalog = await userSkillService.listAvailableSkills(userId);
+    const skillCatalog = mergeManagedSkillCatalogEntries(
+      mergeManagedSkillCatalogEntries(availableSkillCatalog as any, metadataSkillCatalog),
+      submittedSkillContexts.map((item) => managedSkillContextToCatalogEntry(item))
+    );
     const preparedSkills = await taskSessionSkillStateService.prepareRunState({
       sessionId,
       skillCatalog: skillCatalog as any,
@@ -176,6 +186,7 @@ export class AltusManagedRunEntryService {
         input.metadata && Object.prototype.hasOwnProperty.call(input.metadata, 'skills')
           ? input.metadata.skills
           : undefined,
+      submittedSkillContexts,
       messageType,
     });
     const memoryContext = await altusMemoryContextService.buildPromptSectionForRun({

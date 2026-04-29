@@ -252,6 +252,30 @@ test('GET /api/altus-managed/sessions/:sessionId/context-debug returns recovery 
         runId: 'run-debug-1',
         toolCallId: 'tool-debug-1',
         clarificationType: 'artifact_type',
+        managedSkillContext: [
+          {
+            sourceType: 'platform',
+            skillId: 'deploy-skill',
+            revisionId: 'rev-deploy',
+            slug: 'deployment-orchestrator',
+            name: '部署编排',
+            description: '',
+            category: 'deployment',
+            renderedMarkdown: '# Skill Brief: 部署编排',
+            revisionNumber: 1,
+            resourceSummary: null,
+            governance: {
+              systemRole: 'deployment_orchestrator',
+              adminManaged: true,
+              required: false,
+              autoActivation: {
+                enabled: true,
+                triggers: ['deploy'],
+                toolNames: ['deploy_application'],
+              },
+            },
+          },
+        ],
       },
       createdAt: '2026-04-26T03:29:59.000Z',
     },
@@ -403,6 +427,8 @@ test('GET /api/altus-managed/sessions/:sessionId/context-debug returns recovery 
     assert.ok(payload.data.cacheObservation.memorySnapshotHash);
     assert.ok(payload.data.manifest.includedContext.blocks.some((block: any) => block.type === 'attachment'));
     assert.ok(payload.data.manifest.includedContext.blocks.some((block: any) => block.type === 'mcp'));
+    assert.ok(payload.data.manifest.includedContext.blocks.some((block: any) => block.id === 'skill:platform:deploy-skill:rev-deploy'));
+    assert.deepEqual(payload.data.snapshot.skills.map((skill: any) => skill.slug), ['deployment-orchestrator']);
     const includedBlockIds = payload.data.manifest.includedContext.blocks.map((block: any) => block.id);
     assert.ok(includedBlockIds.includes('memory:user'));
     assert.ok(includedBlockIds.includes('memory:project'));

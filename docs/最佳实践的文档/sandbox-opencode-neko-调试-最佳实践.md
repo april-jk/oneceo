@@ -102,7 +102,7 @@ GET /api/task-creation/sessions/<taskSessionId>/debug
 - Xvfb Display：`NEKO_DISPLAY`（默认 `:0`）
 - `NEKO_WEBRTC_FORCE_MUX`：默认 `true`（推荐，E2B 场景优先）。
 - `NEKO_WEBRTC_TCPMUX`：默认 `8082`。
-- `NEKO_WEBRTC_UDPMUX`：默认 `0`（可按需开启）。
+- `NEKO_WEBRTC_UDPMUX`：默认 `8083`。TURN 场景下浏览器常返回 `udp4 relay` candidate，必须启用 UDP mux，否则 n.eko/Pion 会忽略 UDP candidate 并导致 ICE 失败。
 - `NEKO_WEBRTC_EPR`：默认 `0`（禁用；仅明确需要时再启用端口段）。
 - `NEKO_AUTO_NAT1TO1`：默认 `false`（仅在确认需要时开启）。
 

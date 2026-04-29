@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { mock, test } from 'node:test';
 import {
   buildTaskSessionDeploymentResponse,
+  resolveDeploymentResourceProjectKey,
   resolveTaskSessionEnvironment,
+  shouldCleanupFailedDeploymentResources,
   shouldRecycleRailwayServiceForFailedRedeploy,
   validateTaskSessionDeploymentPublicReadiness,
 } from '../src/services/task-session-deployment-runtime-service';
@@ -91,10 +93,23 @@ test('validateTaskSessionDeploymentPublicReadiness promotes a live successful de
   assert.equal(result.activeDeploymentPending, false);
 });
 
-test('shouldRecycleRailwayServiceForFailedRedeploy returns true for provider_error bindings with a service id', () => {
+test('shouldRecycleRailwayServiceForFailedRedeploy returns false for generic provider_error bindings', () => {
   const result = shouldRecycleRailwayServiceForFailedRedeploy({
     state: {
       bindingState: 'provider_error',
+      providerErrorCode: 'deployment_provider_error',
+      serviceId: 'svc-1',
+    },
+  });
+
+  assert.equal(result, false);
+});
+
+test('shouldRecycleRailwayServiceForFailedRedeploy returns true for missing Railway service bindings', () => {
+  const result = shouldRecycleRailwayServiceForFailedRedeploy({
+    state: {
+      bindingState: 'repair_required',
+      providerErrorCode: 'railway_service_not_found',
       serviceId: 'svc-1',
     },
   });
@@ -102,18 +117,19 @@ test('shouldRecycleRailwayServiceForFailedRedeploy returns true for provider_err
   assert.equal(result, true);
 });
 
-test('shouldRecycleRailwayServiceForFailedRedeploy returns true for provider_error bindings even when the service id has not been snapshotted yet', () => {
+test('shouldRecycleRailwayServiceForFailedRedeploy returns true for missing Railway environment bindings', () => {
   const result = shouldRecycleRailwayServiceForFailedRedeploy({
     state: {
-      bindingState: 'provider_error',
-      serviceId: '',
+      bindingState: 'repair_required',
+      providerErrorCode: 'railway_environment_not_found',
+      serviceId: 'svc-1',
     },
   });
 
   assert.equal(result, true);
 });
 
-test('shouldRecycleRailwayServiceForFailedRedeploy returns true when the selected deployment already failed', () => {
+test('shouldRecycleRailwayServiceForFailedRedeploy returns false when the selected deployment failed but resources still exist', () => {
   const result = shouldRecycleRailwayServiceForFailedRedeploy({
     panel: createPanel({
       bindingState: 'ready',
@@ -129,7 +145,7 @@ test('shouldRecycleRailwayServiceForFailedRedeploy returns true when the selecte
     }),
   });
 
-  assert.equal(result, true);
+  assert.equal(result, false);
 });
 
 test('shouldRecycleRailwayServiceForFailedRedeploy returns false for healthy ready deployments', () => {
@@ -148,6 +164,75 @@ test('shouldRecycleRailwayServiceForFailedRedeploy returns false for healthy rea
   });
 
   assert.equal(result, false);
+});
+
+test('shouldCleanupFailedDeploymentResources keeps public reachability failures for diagnosis', () => {
+  const result = shouldCleanupFailedDeploymentResources({
+    currentPhase: 'public_reachability',
+    providerErrorCode: 'deployment_provider_error',
+    account: {
+      serviceId: 'svc-new',
+      environmentId: 'env-new',
+    },
+    previousAccount: null,
+  });
+
+  assert.equal(result, false);
+});
+
+test('shouldCleanupFailedDeploymentResources removes newly provisioned resources before public success', () => {
+  const result = shouldCleanupFailedDeploymentResources({
+    currentPhase: 'workspace_publish',
+    providerErrorCode: 'deployment_provider_error',
+    account: {
+      serviceId: 'svc-new',
+      environmentId: 'env-new',
+    },
+    previousAccount: null,
+  });
+
+  assert.equal(result, true);
+});
+
+test('shouldCleanupFailedDeploymentResources keeps unchanged existing service resources', () => {
+  const result = shouldCleanupFailedDeploymentResources({
+    currentPhase: 'workspace_publish',
+    providerErrorCode: 'deployment_provider_error',
+    account: {
+      serviceId: 'svc-existing',
+      environmentId: 'env-existing',
+    },
+    previousAccount: {
+      serviceId: 'svc-existing',
+      environmentId: 'env-existing',
+    },
+  });
+
+  assert.equal(result, false);
+});
+
+test('resolveDeploymentResourceProjectKey prefers user project id over task session id', () => {
+  const result = resolveDeploymentResourceProjectKey({
+    session: {
+      id: 'session-1',
+      projectId: 'project-1',
+    },
+    taskSessionId: 'session-1',
+  });
+
+  assert.equal(result, 'project-1');
+});
+
+test('resolveDeploymentResourceProjectKey falls back to task session id for unassigned sessions', () => {
+  const result = resolveDeploymentResourceProjectKey({
+    session: {
+      id: 'session-1',
+      projectId: null,
+    },
+    taskSessionId: 'session-1',
+  });
+
+  assert.equal(result, 'session-1');
 });
 
 test('resolveTaskSessionEnvironment prefers sandbox binding over canonical environment lookup', async () => {

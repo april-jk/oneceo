@@ -3004,15 +3004,25 @@ function DeploymentOverviewSection({
               </span>
             </div>
             {primaryAccessUrl ? (
-              <a
-                href={primaryAccessUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-1 inline-flex max-w-full min-w-0 items-center gap-1 text-[13px] leading-[18px] text-muted-foreground hover:text-foreground hover:underline"
-              >
-                <span className="truncate">{displayUrl}</span>
-                <Pencil className="size-3.5 shrink-0" />
-              </a>
+              <div className="mt-1 flex max-w-full min-w-0 items-center gap-1">
+                <a
+                  href={primaryAccessUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="min-w-0 truncate text-[13px] leading-[18px] text-muted-foreground hover:text-foreground hover:underline"
+                >
+                  {displayUrl}
+                </a>
+                <button
+                  type="button"
+                  className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label={i18n.t("previewPanel.deployment.overview.manageAccess")}
+                  title={i18n.t("previewPanel.deployment.overview.manageAccess")}
+                  onClick={onManageAccess}
+                >
+                  <Pencil className="size-3.5" />
+                </button>
+              </div>
             ) : (
               <div className="mt-1 text-[13px] leading-[18px] text-muted-foreground">
                 {displayUrl}

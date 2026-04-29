@@ -7,7 +7,6 @@ import { appUserProjectDAO, taskCreationSessionDAO } from '../src/db/dao';
 import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-memory-store';
 import { sessionConnectorService } from '../src/services/session-connector-service';
 import { userSkillService } from '../src/services/user-skill-service';
-import { codexRuntimeConfigService } from '../src/services/codex-runtime-config-service';
 
 type TestServer = {
   origin: string;
@@ -19,7 +18,6 @@ const projectDaoAny = appUserProjectDAO as any;
 const fileStoreAny = taskCreationFileMemoryStore as any;
 const sessionConnectorAny = sessionConnectorService as any;
 const userSkillServiceAny = userSkillService as any;
-const runtimeConfigServiceAny = codexRuntimeConfigService as any;
 
 const originalGetSession = sessionDaoAny.getSession;
 const originalListProjects = projectDaoAny.listByUser;
@@ -53,8 +51,6 @@ const originalCreateCustomSkill = userSkillServiceAny.createCustomSkill;
 const originalUpdateCustomSkill = userSkillServiceAny.updateCustomSkill;
 const originalArchiveCustomSkill = userSkillServiceAny.archiveCustomSkill;
 const originalActivateCustomSkill = userSkillServiceAny.activateCustomSkill;
-const originalGetRuntimeConfig = runtimeConfigServiceAny.getByUserId;
-const originalUpsertRuntimeConfig = runtimeConfigServiceAny.upsertByUserId;
 
 after(() => {
   sessionDaoAny.getSession = originalGetSession;
@@ -89,8 +85,6 @@ after(() => {
   userSkillServiceAny.updateCustomSkill = originalUpdateCustomSkill;
   userSkillServiceAny.archiveCustomSkill = originalArchiveCustomSkill;
   userSkillServiceAny.activateCustomSkill = originalActivateCustomSkill;
-  runtimeConfigServiceAny.getByUserId = originalGetRuntimeConfig;
-  runtimeConfigServiceAny.upsertByUserId = originalUpsertRuntimeConfig;
 });
 
 async function startServer(): Promise<TestServer> {
@@ -131,8 +125,6 @@ test('auth-only task-creation routes reject anonymous access', async () => {
     { method: 'PUT', path: '/api/task-creation/settings/skills/custom/custom-1', body: { name: 'Custom 2' } },
     { method: 'POST', path: '/api/task-creation/settings/skills/custom/custom-1/archive' },
     { method: 'POST', path: '/api/task-creation/settings/skills/custom/custom-1/activate' },
-    { method: 'GET', path: '/api/task-creation/codex/runtime-config' },
-    { method: 'PUT', path: '/api/task-creation/codex/runtime-config', body: { model: 'gpt-5.4' } },
     { method: 'GET', path: '/api/task-creation/projects' },
     { method: 'GET', path: '/api/task-creation/projects/project-1' },
     { method: 'GET', path: '/api/task-creation/projects/project-1/sessions' },
@@ -159,22 +151,13 @@ test('auth-only task-creation routes reject anonymous access', async () => {
   }
 });
 
-test('skills and codex runtime routes bind requests to current user', async () => {
+test('skills routes bind requests to current user', async () => {
   const server = await startServer();
   const receivedUserIds: string[] = [];
 
   userSkillServiceAny.listAvailableSkills = async (userId: string) => {
     receivedUserIds.push(`skills:${userId}`);
     return [{ skillId: 'platform-skill-1' }];
-  };
-  runtimeConfigServiceAny.getByUserId = async (userId: string) => {
-    receivedUserIds.push(`runtime:get:${userId}`);
-    return { model: 'gpt-5.4', baseUrl: 'https://example.com', apiKey: '***', configToml: '', authJson: '' };
-  };
-  runtimeConfigServiceAny.upsertByUserId = async (userId: string, input: Record<string, unknown>) => {
-    receivedUserIds.push(`runtime:put:${userId}`);
-    assert.equal(input.model, 'gpt-5.4-mini');
-    return { model: 'gpt-5.4-mini', baseUrl: 'https://example.com', apiKey: '***', configToml: '', authJson: '' };
   };
 
   try {
@@ -183,22 +166,7 @@ test('skills and codex runtime routes bind requests to current user', async () =
     });
     assert.equal(skillsResponse.status, 200);
 
-    const getConfigResponse = await fetch(`${server.origin}/api/task-creation/codex/runtime-config`, {
-      headers: { 'x-test-user-id': 'user-auth-1' },
-    });
-    assert.equal(getConfigResponse.status, 200);
-
-    const putConfigResponse = await fetch(`${server.origin}/api/task-creation/codex/runtime-config`, {
-      method: 'PUT',
-      headers: {
-        'content-type': 'application/json',
-        'x-test-user-id': 'user-auth-1',
-      },
-      body: JSON.stringify({ model: 'gpt-5.4-mini' }),
-    });
-    assert.equal(putConfigResponse.status, 200);
-
-    assert.deepEqual(receivedUserIds, ['skills:user-auth-1', 'runtime:get:user-auth-1', 'runtime:put:user-auth-1']);
+    assert.deepEqual(receivedUserIds, ['skills:user-auth-1']);
   } finally {
     await server.close();
   }

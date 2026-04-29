@@ -186,7 +186,6 @@
     "executorLabel": "Executor Selection",
     "executorDescription": "Choose the task execution engine",
     "executorOpencode": "opencode",
-    "executorClaudecode": "claudecode",
     "executorCodex": "codex",
     "codexModeLabel": "Codex Mode",
     "codexModeDescription": "Choose the Codex execution path. SDK mode uses the current stable path, while WS mode uses the App Server path for native file changes and diff.",
@@ -205,7 +204,8 @@
     "altusControlLabel": "Altus Control",
     "altusControlDescription": "Decide whether Altus manages the conversation",
     "altusSandboxDirect": "Sandbox direct",
-    "altusManaged": "Altus managed"
+    "altusManaged": "Altus managed",
+    "description": "Manage your personalization, account settings, model preferences, and billing."
   },
   "auth": {
     "nameLabel": "Name",

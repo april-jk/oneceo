@@ -26,10 +26,10 @@ import { archiveSandboxWorkspace, restoreWorkspaceIfArchived } from './sandbox-a
 import { touchSandbox } from './sandbox-activity-service';
 import { osacAgentService } from './osac-agent-service';
 import { ensureNekoDebug } from './sandbox-debug-service';
-import { codexRuntimeConfigService } from './codex-runtime-config-service';
 import { codexAppServerService } from './codex-app-server-service';
 import {
-  DEFAULT_CODEX_API_KEY,
+  buildCodexAuthJson,
+  buildCodexConfigToml,
   DEFAULT_CODEX_MODEL,
   DEFAULT_SANDBOX_OPENAI_BASE_URL,
 } from '../utils/codex-runtime-config';
@@ -52,7 +52,7 @@ type ProvisionInput = {
   idempotencyKey?: string;
   bind?: Record<string, unknown>;
   requestBaseUrl?: string;
-  executor?: 'opencode' | 'codex' | 'claudecode' | string;
+  executor?: 'opencode' | 'codex' | string;
 };
 
 type ProvisionResult = {
@@ -80,7 +80,7 @@ type ProvisionResult = {
   trafficAccessToken?: string | null;
 };
 
-type ProvisionExecutor = 'opencode' | 'codex' | 'claudecode' | 'altus';
+type ProvisionExecutor = 'opencode' | 'codex' | 'altus';
 type ProvisionCodexMode = 'sdk' | 'ws';
 
 type ReusableSandboxResolution = {
@@ -100,7 +100,6 @@ function normalizeProvisionExecutor(value: unknown): ProvisionExecutor {
   const normalized = pickString(value)?.toLowerCase();
   if (normalized === 'altus') return 'altus';
   if (normalized === 'codex') return 'codex';
-  if (normalized === 'claudecode') return 'claudecode';
   return 'opencode';
 }
 
@@ -355,7 +354,7 @@ async function markSandboxClosedBestEffort(sessionId: string, reason: string) {
   }
 }
 
-function buildSandboxEnv(): Record<string, string> {
+function buildSandboxEnv(executor: ProvisionExecutor = 'opencode'): Record<string, string> {
   const env: Record<string, string> = {};
   const passthrough = [
     'OPENAI_API_KEY',
@@ -408,6 +407,34 @@ function buildSandboxEnv(): Record<string, string> {
   if (sandboxOverrideEnabled) {
     env.OPENCODE_PROVIDER_ID = 'openai';
   }
+
+  const engineSuffix = executor.toUpperCase();
+  const engineApiKey = pickString(process.env[`SANDBOX_ENGINE_${engineSuffix}_API_KEY`]);
+  const engineBaseUrl = pickString(process.env[`SANDBOX_ENGINE_${engineSuffix}_BASE_URL`]);
+  const engineModel = pickString(process.env[`SANDBOX_ENGINE_${engineSuffix}_MODEL`]);
+  const engineApiType = pickString(process.env[`SANDBOX_ENGINE_${engineSuffix}_API_TYPE`])?.toLowerCase() || null;
+  if (engineApiKey) {
+    env.OPENAI_API_KEY = engineApiKey;
+    env.CODEX_API_KEY = engineApiKey;
+    env.OPENCODE_API_KEY = engineApiKey;
+    env.ANTHROPIC_API_KEY = engineApiKey;
+  }
+  if (engineBaseUrl) {
+    env.OPENAI_BASE_URL = engineBaseUrl;
+    env.OPENAI_API_BASE = engineBaseUrl;
+    env.CODEX_BASE_URL = engineBaseUrl;
+    env.OPENCODE_BASE_URL = engineBaseUrl;
+    env.ANTHROPIC_BASE_URL = engineBaseUrl;
+  }
+  if (engineModel) {
+    env.OPENAI_MODEL = engineModel;
+    env.CODEX_MODEL = engineModel;
+    env.OPENCODE_MODEL = engineModel;
+    env.ANTHROPIC_MODEL = engineModel;
+  }
+  if (engineApiType) {
+    env.LLM_PROXY_UPSTREAM_API_TYPE = engineApiType;
+  }
   if (!env.CODEX_API_KEY && env.OPENAI_API_KEY) {
     env.CODEX_API_KEY = env.OPENAI_API_KEY;
   }
@@ -422,9 +449,6 @@ function buildSandboxEnv(): Record<string, string> {
     } else if (env.OPENAI_API_BASE) {
       env.OPENAI_BASE_URL = env.OPENAI_API_BASE;
     }
-  }
-  if (!env.OPENAI_API_KEY) {
-    env.OPENAI_API_KEY = DEFAULT_CODEX_API_KEY;
   }
   if (!env.OPENAI_BASE_URL) {
     env.OPENAI_BASE_URL = DEFAULT_SANDBOX_OPENAI_BASE_URL;
@@ -1213,7 +1237,7 @@ export class SandboxAgentProvisionService {
       (info as any)?.trafficAccessToken || (info as any)?.traffic_access_token || null;
     const host = await e2bConnector.getSandboxHost(sessionId, e2bConfig.opencodePort);
     const baseUrl = `https://${host}`;
-    const baseEnvs = buildSandboxEnv();
+    const baseEnvs = buildSandboxEnv('opencode');
     const connectorBootstrap = await resolveAttachedConnectorBootstrap(input.taskSessionId);
     const opencodeEnvs = {
       ...baseEnvs,
@@ -1313,8 +1337,8 @@ export class SandboxAgentProvisionService {
       }
     };
 
-    const envInput = buildSandboxEnv();
     const codexExecutionMode = await resolveProvisionCodexMode(taskSessionId, input.metadata);
+    const envInput = buildSandboxEnv(executor);
     const selectedTemplate = resolveProvisionTemplate(executor, codexExecutionMode);
     const reusableResolution = taskSessionId
       ? await resolveReusableSandbox(taskSessionId, executor, codexExecutionMode, selectedTemplate)
@@ -1477,20 +1501,20 @@ export class SandboxAgentProvisionService {
           );
           codexArchiveHome = codexHomeMapping.codexArchiveHome;
           codexDotCodexPath = codexHomeMapping.codexDotCodexPath;
-          if (taskSessionId) {
-            const runtimeConfig = await runStep('codex_runtime_config', () =>
-              codexRuntimeConfigService.getByTaskSessionId(taskSessionId)
-            );
-            codexConfigToml = runtimeConfig.configToml;
-            codexAuthJson = runtimeConfig.authJson;
-            await runStep('codex_runtime_files', () =>
-              codexAppServerService.ensureRuntimeFiles({
-                sessionId,
-                configToml: codexConfigToml,
-                authJson: codexAuthJson,
-              })
-            );
-          }
+          codexConfigToml = buildCodexConfigToml({
+            baseUrl: envInput.CODEX_BASE_URL || envInput.OPENAI_BASE_URL || DEFAULT_SANDBOX_OPENAI_BASE_URL,
+            model: envInput.CODEX_MODEL || envInput.OPENAI_MODEL || DEFAULT_CODEX_MODEL,
+          });
+          codexAuthJson = buildCodexAuthJson({
+            apiKey: envInput.CODEX_API_KEY || envInput.OPENAI_API_KEY || '',
+          });
+          await runStep('codex_runtime_files', () =>
+            codexAppServerService.ensureRuntimeFiles({
+              sessionId,
+              configToml: codexConfigToml,
+              authJson: codexAuthJson,
+            })
+          );
           const reusableBridge = await canReuseOsacBridge({
             endpoint: osacEndpoint,
             authToken: osacAuthToken,

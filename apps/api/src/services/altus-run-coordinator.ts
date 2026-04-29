@@ -50,6 +50,13 @@ import {
   normalizeOpenAiToolCallArguments,
 } from '../utils/openai-chat-sanitizer';
 import { classifyPlatformCapabilityIntent } from './platform-capability-intent-service';
+import { billingService } from './billing-service';
+import { pricingService } from './pricing-service';
+import type { AgentRuntimeSnapshot } from './agent-runtime-profile-service';
+import {
+  LLM_PROXY_INTERNAL_OVERRIDE_HEADER,
+  getLlmProxyInternalOverrideToken,
+} from './llm-proxy-internal-auth';
 
 const DELIVERABLES_READY_TEXT = '交付文件已生成';
 const DEPLOYMENT_COMPLETION_BLOCKED_PREFIX = 'deployment_completion_blocked:';
@@ -366,6 +373,8 @@ export class AltusRunCoordinator {
   ) {}
 
   private getModelName(messages: ChatMessage[], fallbackModel?: string | null) {
+    const explicitModel = asText(fallbackModel);
+    if (explicitModel) return explicitModel;
     const needsVision = hasVisionInput(messages);
     if (needsVision) {
       return (
@@ -376,7 +385,6 @@ export class AltusRunCoordinator {
     }
     return (
       asText(process.env.ALTUS_MANAGED_MODEL) ||
-      asText(fallbackModel) ||
       asText(process.env.AGENT_OPENAI_MODEL) ||
       asText(process.env.OPENAI_MODEL) ||
       'claude-haiku-4-5-20251001'
@@ -406,6 +414,132 @@ export class AltusRunCoordinator {
   private async delay(ms: number) {
     if (ms <= 0) return;
     await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private readUsageNumber(value: unknown): number | undefined {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    }
+    return undefined;
+  }
+
+  /**
+   * 计费：根据模型调用估算并扣减积分
+   */
+  private async chargeForModelCall(state: AltusRunState, input: {
+    messages: ChatMessage[];
+    assistant: { content?: string | null; tool_calls?: ToolCall[]; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens?: number; cache_creation_input_tokens?: number }; cached_tokens?: number; cache_creation_input_tokens?: number } };
+    model: string;
+  }) {
+    try {
+      const userId = state.input.userId;
+      const sessionId = state.input.sessionId;
+      const runId = state.input.runId;
+
+      if (!userId) {
+        console.warn('[Billing] 无法计费：缺少 userId');
+        return;
+      }
+
+      let promptTokens: number;
+      let completionTokens: number;
+      let cachedPromptTokens = 0;
+      let cacheCreationTokens = 0;
+
+      const usage = input.assistant?.usage;
+      if (usage && typeof usage.prompt_tokens === 'number' && typeof usage.completion_tokens === 'number') {
+        promptTokens = usage.prompt_tokens;
+        completionTokens = usage.completion_tokens;
+        cachedPromptTokens = this.readUsageNumber(usage.prompt_tokens_details?.cached_tokens) || this.readUsageNumber(usage.cached_tokens) || 0;
+        cacheCreationTokens = this.readUsageNumber(usage.prompt_tokens_details?.cache_creation_input_tokens) || this.readUsageNumber(usage.cache_creation_input_tokens) || 0;
+      } else {
+        // 无真实 usage 时回退到字符估算（每 4 字符 ≈ 1 token）
+        const promptText = JSON.stringify(input.messages);
+        promptTokens = Math.ceil(promptText.length / 4);
+        const completionText = JSON.stringify(input.assistant);
+        completionTokens = Math.ceil(completionText.length / 4);
+      }
+
+      const nonCachedPromptTokens = Math.max(0, promptTokens - cachedPromptTokens - cacheCreationTokens);
+
+      const billingTargetKey = state.input.billingTargetKey || input.model;
+      // 获取定价：Agent managed run 按业务 SKU 查价，token 日志保留实际模型。
+      const pricing = await pricingService.getActivePricing(billingTargetKey);
+      if (!pricing) {
+        throw new Error(`billing_pricing_missing:${billingTargetKey}`);
+      }
+      const cacheRatio = await pricingService.getCacheRatiosForPricing(pricing);
+      const pricingSnapshot = {
+        ...pricing,
+        billingTarget: billingTargetKey,
+        actualModel: input.model,
+        cacheRatio,
+      };
+
+      // 计算积分消耗（含缓存）
+      const creditsConsumed = pricingService.calculateCredits(
+        {
+          promptTokens,
+          cachedPromptTokens,
+          nonCachedPromptTokens,
+          cacheCreationTokens,
+          completionTokens,
+        },
+        pricing,
+        cacheRatio || undefined
+      );
+
+      // 扣减积分
+      const result = await billingService.deductCredits(userId, creditsConsumed, {
+        sessionId,
+        runId,
+        model: billingTargetKey,
+        description: `Managed Run 调用: ${billingTargetKey}`,
+        metadataJson: {
+          billingTarget: billingTargetKey,
+          actualModel: input.model,
+          runtimeSnapshot: state.input.runtimeSnapshot || null,
+          pricingSnapshot,
+        },
+      });
+
+      if (result.success) {
+        console.log(`[Billing] 扣费成功: ${creditsConsumed} 积分, 余额: ${result.balanceAfter}, run: ${runId}`);
+
+        // 记录 token 使用日志
+        await billingService.logTokenUsage({
+          userId,
+          sessionId,
+          runId,
+          model: input.model,
+          promptTokens,
+          cachedPromptTokens,
+          nonCachedPromptTokens,
+          cacheCreationTokens,
+          completionTokens,
+          totalTokens: promptTokens + completionTokens,
+          creditsConsumed,
+          pricingSnapshot,
+          metadataJson: {
+            billingTarget: billingTargetKey,
+            runtimeSnapshot: state.input.runtimeSnapshot || null,
+          },
+        });
+      } else {
+        throw new Error(`insufficient_credits: 用户 ${userId} 余额不足，无法继续运行`);
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('insufficient_credits:')) {
+        throw error;
+      }
+      if (error instanceof Error && error.message.startsWith('billing_pricing_missing:')) {
+        throw error;
+      }
+      console.error('[Billing] 计费失败:', error);
+      // 非余额不足的计费失败不影响主流程
+    }
   }
 
   private async flushSandboxSkillMemory(
@@ -1275,14 +1409,33 @@ export class AltusRunCoordinator {
     onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
     onAssistantTextDelta?: (deltaText: string, fullText: string) => Promise<void> | void;
     fallbackModel?: string | null;
-  }) {
+    runtimeSnapshot?: AgentRuntimeSnapshot | null;
+    runtimeTokenSource?: string | null;
+  }): Promise<{
+    content?: string | null;
+    tool_calls?: ToolCall[];
+    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens?: number; cache_creation_input_tokens?: number }; cached_tokens?: number; cache_creation_input_tokens?: number };
+  }> {
+    const runtime = input.runtimeSnapshot;
     const baseUrl = `http://127.0.0.1:${process.env.PORT || '4000'}/api/llm-proxy/v1/chat/completions`;
     const projectedMessages = this.budgetService.projectMessagesForModel(input.messages);
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (runtime?.baseUrl) {
+      headers[LLM_PROXY_INTERNAL_OVERRIDE_HEADER] = getLlmProxyInternalOverrideToken();
+      headers['x-oneceo-internal-llm-upstream-base-url'] = runtime.baseUrl;
+    }
+    if (runtime?.apiType) {
+      headers['x-oneceo-internal-llm-upstream-api-type'] = runtime.apiType;
+    }
+    if (input.runtimeTokenSource) {
+      headers[LLM_PROXY_INTERNAL_OVERRIDE_HEADER] = getLlmProxyInternalOverrideToken();
+      headers['x-oneceo-internal-llm-upstream-token-source'] = input.runtimeTokenSource;
+    }
     const response = await fetch(baseUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({
         model: this.getModelName(projectedMessages, input.fallbackModel),
         messages: sanitizeMessagesForModel(projectedMessages),
@@ -1316,9 +1469,10 @@ export class AltusRunCoordinator {
     if (!choice || typeof choice !== 'object') {
       throw new Error('managed_model_empty_choice');
     }
-    return choice as {
-      content?: string | null;
-      tool_calls?: ToolCall[];
+    return {
+      content: choice.content,
+      tool_calls: choice.tool_calls,
+      usage: payload?.usage,
     };
   }
 
@@ -1330,7 +1484,13 @@ export class AltusRunCoordinator {
     onAssistantTextDelta?: (deltaText: string, fullText: string) => Promise<void> | void;
     onRetryableError?: (error: unknown, attempt: number, delayMs: number) => Promise<void> | void;
     fallbackModel?: string | null;
-  }) {
+    runtimeSnapshot?: AgentRuntimeSnapshot | null;
+    runtimeTokenSource?: string | null;
+  }): Promise<{
+    content?: string | null;
+    tool_calls?: ToolCall[];
+    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens?: number; cache_creation_input_tokens?: number }; cached_tokens?: number; cache_creation_input_tokens?: number };
+  }> {
     const maxAttempts = Math.max(1, this.getModelRetryLimit() + 1);
     let lastError: unknown = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -1460,11 +1620,16 @@ export class AltusRunCoordinator {
     signal: AbortSignal;
     onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
     onAssistantTextDelta?: (deltaText: string, fullText: string) => Promise<void> | void;
-  }) {
+  }): Promise<{
+    content?: string | null;
+    tool_calls?: ToolCall[];
+    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens?: number; cache_creation_input_tokens?: number }; cached_tokens?: number; cache_creation_input_tokens?: number };
+  }> {
     const decoder = new TextDecoder();
     let buffer = '';
     let assistantContent = '';
     const toolCallsByIndex = new Map<number, StreamedToolCallState>();
+    let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens?: number; cache_creation_input_tokens?: number }; cached_tokens?: number; cache_creation_input_tokens?: number } | undefined;
 
     const flushBlock = async (rawBlock: string) => {
       const parsed = this.parseSseBlock(rawBlock);
@@ -1474,6 +1639,29 @@ export class AltusRunCoordinator {
       const payload = parsed.payload;
       if (payload?.error && typeof payload.error === 'object') {
         throw new Error(JSON.stringify(payload));
+      }
+
+      // 捕获流式响应中的 usage（部分 provider 在最后一个 chunk 返回）
+      if (payload?.usage && typeof payload.usage === 'object') {
+        const u = payload.usage as any;
+        if (typeof u.prompt_tokens === 'number' && typeof u.completion_tokens === 'number') {
+          usage = {
+            prompt_tokens: u.prompt_tokens,
+            completion_tokens: u.completion_tokens,
+            total_tokens: u.total_tokens ?? u.prompt_tokens + u.completion_tokens,
+          };
+          const cachedTokens = this.readUsageNumber(u.prompt_tokens_details?.cached_tokens) || this.readUsageNumber(u.cached_tokens) || 0;
+          const cacheCreationTokens = this.readUsageNumber(u.prompt_tokens_details?.cache_creation_input_tokens) || this.readUsageNumber(u.cache_creation_input_tokens) || 0;
+          if (cachedTokens > 0 || cacheCreationTokens > 0) {
+            usage.prompt_tokens_details = {
+              ...(cachedTokens > 0 ? { cached_tokens: cachedTokens } : {}),
+              ...(cacheCreationTokens > 0 ? { cache_creation_input_tokens: cacheCreationTokens } : {}),
+            };
+          }
+          if (cacheCreationTokens > 0) {
+            usage.cache_creation_input_tokens = cacheCreationTokens;
+          }
+        }
       }
 
       const choice = payload?.choices?.[0];
@@ -1520,6 +1708,7 @@ export class AltusRunCoordinator {
           return {
             content: assistantContent,
             tool_calls: this.toToolCalls(toolCallsByIndex),
+            usage,
           };
         }
       }
@@ -1533,6 +1722,7 @@ export class AltusRunCoordinator {
     return {
       content: assistantContent,
       tool_calls: this.toToolCalls(toolCallsByIndex),
+      usage,
     };
   }
 
@@ -1718,11 +1908,20 @@ export class AltusRunCoordinator {
       await this.setupService.refreshInlineImageUrls(messages);
 
       const toolProgressLengths = new Map<string, number>();
+      const modelName = this.getModelName(messages, state.input.model);
+      const billingTargetKey = state.input.billingTargetKey || modelName;
+      const activePricing = await pricingService.getActivePricing(billingTargetKey);
+      if (!activePricing) {
+        throw new Error(`billing_pricing_missing:${billingTargetKey}`);
+      }
+
       const assistant = await this.callModelWithRetry({
         messages,
         signal,
         mcpProviders: state.input.mcpProviders,
         fallbackModel: state.input.model,
+        runtimeSnapshot: state.input.runtimeSnapshot || null,
+        runtimeTokenSource: state.input.runtimeTokenSource || null,
         onRetryableError: async (error, attempt, delayMs) => {
           const parsed = this.extractModelError(error);
           await this.syncLoopSnapshot(state, {
@@ -1795,6 +1994,14 @@ export class AltusRunCoordinator {
           );
         },
       });
+
+      // 计费
+      await this.chargeForModelCall(state, {
+        messages,
+        assistant,
+        model: modelName,
+      });
+
       const assistantContent = truncate(asText(assistant.content), 24000);
       const rawToolCalls = Array.isArray(assistant.tool_calls) ? assistant.tool_calls : [];
       const invalidToolCallIds = new Set<string>();
@@ -2457,6 +2664,26 @@ export class AltusRunCoordinator {
         });
         await this.lifecycleService.markWaitingUser(state);
         return;
+      }
+
+      // 余额检查
+      const userId = state.input.userId;
+      if (userId) {
+        const hasEnough = await billingService.hasEnoughCredits(userId, 0);
+        if (!hasEnough) {
+          const credits = await billingService.getUserCredits(userId);
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            userId,
+            'run_status',
+            {
+              status: 'failed',
+              content: `积分不足，无法启动运行。当前余额: ${credits?.balance || 0} 积分`,
+            }
+          );
+          throw new Error(`insufficient_credits: 积分不足，无法启动运行`);
+        }
       }
 
       await this.eventWriter.appendRunEvent(

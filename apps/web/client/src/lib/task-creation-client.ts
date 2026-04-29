@@ -16,8 +16,8 @@ export type TaskCreationSessionSummary = {
   status?: string;
   stage?: string;
   phase?: string;
-  driver?: "altus" | "opencode" | "claudecode" | "codex";
-  executor?: "opencode" | "claudecode" | "codex";
+  driver?: "altus" | "opencode" | "codex";
+  executor?: "opencode" | "codex";
   codexExecutionMode?: "sdk" | "ws";
   updatedAt?: string;
 };
@@ -58,7 +58,7 @@ export type CreateTaskCreationSessionInput = {
   sessionId?: string;
   title?: string;
   mode?: "sandbox" | "altus";
-  executor?: "opencode" | "claudecode" | "codex";
+  executor?: "opencode" | "codex";
   codexExecutionMode?: "sdk" | "ws";
   projectId?: string | null;
   initialMessage?: string;
@@ -494,13 +494,13 @@ export type TaskCreationSessionDetail = {
   status?: string;
   stage?: string;
   phase?: string;
-  driver?: "altus" | "opencode" | "claudecode" | "codex";
-  executor?: "opencode" | "claudecode" | "codex";
+  driver?: "altus" | "opencode" | "codex";
+  executor?: "opencode" | "codex";
   codexExecutionMode?: "sdk" | "ws";
   runtime?: {
     generation?: number;
     orchestratorSessionId?: string;
-    executor?: "opencode" | "claudecode" | "codex";
+    executor?: "opencode" | "codex";
     transport?: "sdk" | "app_server";
     executorSessionId?: string;
     opencodeSessionId?: string;
@@ -575,15 +575,6 @@ export type WorkspaceRawHeadResult = {
   ok: boolean;
   status: number;
   networkError?: boolean;
-};
-
-export type CodexRuntimeConfig = {
-  baseUrl: string;
-  model: string;
-  apiKey: string;
-  configToml: string;
-  authJson: string;
-  updatedAt?: string;
 };
 
 async function fetchJson<T>(url: string, init?: RequestInit, options?: { timeoutMs?: number }): Promise<T> {
@@ -807,36 +798,6 @@ export async function createTaskCreationSession(
   }
   const result = (await response.json()) as { data?: TaskCreationSessionSummary };
   return result?.data || null;
-}
-
-export async function getCodexRuntimeConfig(): Promise<CodexRuntimeConfig> {
-  const url = `${getApiBaseUrl()}/api/task-creation/codex/runtime-config`;
-  const result = await fetchJson<{ data?: CodexRuntimeConfig }>(url);
-  if (result?.data) return result.data;
-  throw new Error("failed to load codex runtime config");
-}
-
-export async function updateCodexRuntimeConfig(input: {
-  baseUrl?: string;
-  model?: string;
-  apiKey?: string;
-  configToml?: string;
-  authJson?: string;
-}): Promise<CodexRuntimeConfig> {
-  const url = `${getApiBaseUrl()}/api/task-creation/codex/runtime-config`;
-  const response = await fetch(url, {
-    method: "PUT",
-    headers: buildClientIdentityHeaders({
-      "Content-Type": "application/json",
-    }),
-    body: JSON.stringify(input || {}),
-  });
-  if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
-  }
-  const result = (await response.json()) as { data?: CodexRuntimeConfig };
-  if (result?.data) return result.data;
-  throw new Error("failed to save codex runtime config");
 }
 
 export async function listTaskCreationMessages(sessionId: string): Promise<TaskCreationHistoryMessage[]> {
@@ -1474,7 +1435,7 @@ export async function interruptTaskCreationRuntime(
 ): Promise<{
   interrupted: boolean;
   phase?: "intent_processing" | "executor_processing";
-  executor?: "opencode" | "claudecode" | "codex";
+  executor?: "opencode" | "codex";
   orchestratorSessionId?: string;
   executorSessionId?: string;
   reason?: string;
@@ -1499,7 +1460,7 @@ export async function interruptTaskCreationRuntime(
     data?: {
       interrupted?: boolean;
       phase?: "intent_processing" | "executor_processing";
-      executor?: "opencode" | "claudecode" | "codex";
+      executor?: "opencode" | "codex";
       orchestratorSessionId?: string;
       executorSessionId?: string;
       reason?: string;

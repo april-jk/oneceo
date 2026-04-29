@@ -4,7 +4,6 @@ function asString(value: unknown): string {
 
 export const DEFAULT_CODEX_BASE_URL = 'https://llmapi.oneceo.ai';
 export const DEFAULT_CODEX_MODEL = 'gpt-5.3-codex';
-export const DEFAULT_CODEX_API_KEY = 'sk-2ea35443a67d931ba178743b155f9627b8e2f81e5bc531d727f53172c3aa5555';
 export const DEFAULT_SANDBOX_OPENAI_BASE_URL = `${DEFAULT_CODEX_BASE_URL}/v1`;
 
 export function resolveCodexPlaywrightCdpEndpoint(): string {
@@ -47,17 +46,22 @@ export function normalizeCodexBaseUrl(value: string | undefined): string {
   return trimmed || DEFAULT_CODEX_BASE_URL;
 }
 
+export function normalizeCodexProviderBaseUrl(value: string | undefined): string {
+  const withoutTrailingSlash = normalizeCodexBaseUrl(value).replace(/\/+$/, '');
+  return withoutTrailingSlash.endsWith('/v1') ? withoutTrailingSlash.slice(0, -3) : withoutTrailingSlash;
+}
+
 export function normalizeCodexModel(value: string | undefined): string {
   const trimmed = asString(value);
   return trimmed || DEFAULT_CODEX_MODEL;
 }
 
 export function normalizeCodexApiKey(value: string | undefined): string {
-  const trimmed = asString(value);
-  return trimmed || DEFAULT_CODEX_API_KEY;
+  return asString(value);
 }
 
 export function buildCodexConfigToml(input: { baseUrl: string; model: string }): string {
+  const providerBaseUrl = normalizeCodexProviderBaseUrl(input.baseUrl);
   return ensurePlaywrightMcpInConfigToml([
     'model_provider = "OpenAI"',
     `model = ${JSON.stringify(input.model)}`,
@@ -71,7 +75,7 @@ export function buildCodexConfigToml(input: { baseUrl: string; model: string }):
     '',
     '[model_providers.OpenAI]',
     'name = "OpenAI"',
-    `base_url = ${JSON.stringify(input.baseUrl)}`,
+    `base_url = ${JSON.stringify(providerBaseUrl)}`,
     'wire_api = "responses"',
     'supports_websockets = true',
     'requires_openai_auth = true',
@@ -83,9 +87,13 @@ export function buildCodexConfigToml(input: { baseUrl: string; model: string }):
 }
 
 export function buildCodexAuthJson(input: { apiKey: string }): string {
+  const apiKey = normalizeCodexApiKey(input.apiKey);
+  if (!apiKey) {
+    throw new Error('Codex API Key 未配置');
+  }
   return JSON.stringify(
     {
-      OPENAI_API_KEY: input.apiKey,
+      OPENAI_API_KEY: apiKey,
     },
     null,
     2

@@ -393,6 +393,10 @@ async function getProjectById(adminToken: string, projectId: string) {
     project?: {
       id?: string;
       name?: string;
+      workspace?: {
+        id?: string;
+        name?: string;
+      } | null;
     } | null;
   }>(
     adminToken,
@@ -401,6 +405,10 @@ async function getProjectById(adminToken: string, projectId: string) {
         project(id: $id) {
           id
           name
+          workspace {
+            id
+            name
+          }
         }
       }
     `,
@@ -412,6 +420,8 @@ async function getProjectById(adminToken: string, projectId: string) {
   return {
     id: asText(result.project?.id),
     name: asText(result.project?.name),
+    workspaceId: asText(result.project?.workspace?.id),
+    workspaceName: asText(result.project?.workspace?.name),
   };
 }
 
@@ -1331,6 +1341,16 @@ export class PlatformDeploymentAccountService {
     return getProjectById(adminToken, projectId);
   }
 
+  private projectBelongsToConfiguredWorkspace(
+    project: Awaited<ReturnType<PlatformDeploymentAccountService['fetchRemoteProjectById']>> | null | undefined,
+    configuredWorkspaceId: string
+  ) {
+    const projectId = asText(project?.id);
+    const workspaceId = asText(project?.workspaceId);
+    const expectedWorkspaceId = asText(configuredWorkspaceId);
+    return Boolean(projectId && workspaceId && expectedWorkspaceId && workspaceId === expectedWorkspaceId);
+  }
+
   private getRailwayWorkspaceId() {
     return requireEnv('RAILWAY_WORKSPACE_ID');
   }
@@ -1401,7 +1421,7 @@ export class PlatformDeploymentAccountService {
       }
       try {
         const remoteProject = await this.fetchRemoteProjectById(adminToken, config.projectId);
-        if (!remoteProject?.id) {
+        if (!this.projectBelongsToConfiguredWorkspace(remoteProject, workspaceId)) {
           continue;
         }
         const projectConfig: UserRailwayProjectConfig = {
@@ -1409,7 +1429,7 @@ export class PlatformDeploymentAccountService {
           supplier: 'railway',
           projectId: remoteProject.id,
           projectName: remoteProject.name || config.projectName,
-          workspaceId,
+          workspaceId: remoteProject.workspaceId,
           createdAt: config.createdAt || new Date().toISOString(),
         };
         await this.persistUserProjectRow(userId, projectConfig);
@@ -1577,14 +1597,11 @@ export class PlatformDeploymentAccountService {
 
     const configuredWorkspaceId = requireEnv('RAILWAY_WORKSPACE_ID');
     const existing = await this.getUserProject(normalizedUserId);
-    if (
-      existing?.projectId &&
-      !shouldRebindUserRailwayProjectToConfiguredWorkspace(existing, configuredWorkspaceId)
-    ) {
+    if (existing?.projectId) {
       const adminToken = requireEnv('RAILWAY_ADMIN_TOKEN');
       try {
         const remoteProject = await this.fetchRemoteProjectById(adminToken, existing.projectId);
-        if (remoteProject.id) {
+        if (this.projectBelongsToConfiguredWorkspace(remoteProject, configuredWorkspaceId)) {
           const sameProjectReusableRows = await this.listReusableAccountRows(normalizedUserId, {
             projectId: existing.projectId,
           });
@@ -1594,18 +1611,22 @@ export class PlatformDeploymentAccountService {
               return recoveredProject;
             }
           }
-          if (remoteProject.name && remoteProject.name !== existing.projectName) {
+          if (
+            remoteProject.name !== existing.projectName ||
+            remoteProject.workspaceId !== existing.workspaceId
+          ) {
             await this.persistUserProjectRow(normalizedUserId, {
               provider: 'platform_managed',
               supplier: 'railway',
               projectId: remoteProject.id,
               projectName: remoteProject.name,
-              workspaceId: configuredWorkspaceId,
+              workspaceId: remoteProject.workspaceId,
               createdAt: existing.createdAt || new Date().toISOString(),
             });
             return {
               ...existing,
               projectName: remoteProject.name,
+              workspaceId: remoteProject.workspaceId,
             };
           }
           return existing;

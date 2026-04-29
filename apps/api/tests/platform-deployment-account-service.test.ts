@@ -13,16 +13,8 @@ afterEach(() => {
   mock.restoreAll();
 });
 
-test('ensureUserProject recovers legacy reusable project when current project has no reusable service slots', async () => {
+test('recoverUserProjectFromReusableAccounts recovers reusable project only from configured workspace', async () => {
   const service = new PlatformDeploymentAccountService();
-
-  const existingProject = {
-    userId: 'user-1',
-    projectId: 'project-current',
-    projectName: 'current-project',
-    workspaceId: 'workspace-current',
-    createdAt: '2026-04-20T00:00:00.000Z',
-  };
 
   const reusableRows = [
     {
@@ -43,37 +35,72 @@ test('ensureUserProject recovers legacy reusable project when current project ha
     },
   ];
 
-  const getUserProjectMock = mock.method(service as any, 'getUserProject', async () => existingProject);
   const fetchRemoteProjectByIdMock = mock.method(
     service as any,
     'fetchRemoteProjectById',
     async (_adminToken: string, projectId: string) => ({
       id: projectId,
       name: projectId === 'project-legacy' ? 'legacy-project' : 'current-project',
+      workspaceId: 'workspace-current',
+      workspaceName: 'oneceo- deployment',
     })
   );
   const listReusableAccountRowsMock = mock.method(
     service as any,
     'listReusableAccountRows',
-    async (_userId: string, options?: { projectId?: string }) =>
-      options?.projectId === 'project-current' ? [] : reusableRows
+    async () => reusableRows
   );
   const persistUserProjectRowMock = mock.method(service as any, 'persistUserProjectRow', async () => undefined);
-  const getRailwayWorkspaceIdMock = mock.method(service as any, 'getRailwayWorkspaceId', () => 'workspace-legacy');
+  const getRailwayWorkspaceIdMock = mock.method(service as any, 'getRailwayWorkspaceId', () => 'workspace-current');
 
   process.env.RAILWAY_ADMIN_TOKEN = process.env.RAILWAY_ADMIN_TOKEN || 'test-admin-token';
-  process.env.RAILWAY_WORKSPACE_ID = process.env.RAILWAY_WORKSPACE_ID || 'workspace-current';
 
-  const result = await service.ensureUserProject('user-1');
+  const result = await (service as any).recoverUserProjectFromReusableAccounts('user-1');
 
   assert.equal(result.projectId, 'project-legacy');
   assert.equal(result.projectName, 'legacy-project');
-  assert.equal(result.workspaceId, 'workspace-legacy');
-  assert.equal(getUserProjectMock.mock.callCount(), 1);
-  assert.equal(fetchRemoteProjectByIdMock.mock.calls.length >= 2, true);
-  assert.equal(listReusableAccountRowsMock.mock.calls.length >= 2, true);
+  assert.equal(result.workspaceId, 'workspace-current');
+  assert.equal(fetchRemoteProjectByIdMock.mock.callCount(), 1);
+  assert.equal(listReusableAccountRowsMock.mock.callCount(), 1);
   assert.equal(persistUserProjectRowMock.mock.callCount(), 1);
   assert.equal(getRailwayWorkspaceIdMock.mock.callCount(), 1);
+});
+
+test('recoverUserProjectFromReusableAccounts skips reusable project from another workspace', async () => {
+  const service = new PlatformDeploymentAccountService();
+
+  mock.method(service as any, 'listReusableAccountRows', async () => [
+    {
+      userId: 'user-1',
+      connectorKey: 'railway_internal:legacy-slot',
+      secretCiphertext: 'encrypted',
+      updatedAt: new Date('2026-04-19T12:00:00.000Z'),
+      configJson: {
+        provider: 'platform_managed',
+        supplier: 'railway',
+        projectKey: 'legacy-slot',
+        projectId: 'project-personal',
+        projectName: 'legacy-personal-project',
+        environmentId: 'env-1',
+        serviceId: 'svc-1',
+      },
+    },
+  ]);
+  mock.method(service as any, 'fetchRemoteProjectById', async (_adminToken: string, projectId: string) => ({
+    id: projectId,
+    name: 'legacy-personal-project',
+    workspaceId: 'workspace-personal',
+    workspaceName: "4pri1's Projects",
+  }));
+  const persistUserProjectRowMock = mock.method(service as any, 'persistUserProjectRow', async () => undefined);
+  mock.method(service as any, 'getRailwayWorkspaceId', () => 'workspace-current');
+
+  process.env.RAILWAY_ADMIN_TOKEN = process.env.RAILWAY_ADMIN_TOKEN || 'test-admin-token';
+
+  const result = await (service as any).recoverUserProjectFromReusableAccounts('user-1');
+
+  assert.equal(result, null);
+  assert.equal(persistUserProjectRowMock.mock.callCount(), 0);
 });
 
 test('shouldRebindUserRailwayProjectToConfiguredWorkspace returns true when persisted workspace differs', () => {

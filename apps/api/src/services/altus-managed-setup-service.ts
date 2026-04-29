@@ -61,138 +61,15 @@ const SPECIFIC_ARTIFACT_KEYWORDS = [
   'crm',
 ] as const;
 const AMBIGUOUS_SOFTWARE_KEYWORDS = ['工具', 'tool', '应用', 'app', '系统', '平台'] as const;
-const TECH_STACK_RESPONSE_KEYWORDS = [
-  'react',
-  'vue',
-  'next',
-  'vite',
-  'typescript',
-  'javascript',
-  'node',
-  'express',
-  'fastify',
-  'python',
-  'fastapi',
-  'flask',
-  'django',
-  'java',
-  'spring',
-  'go',
-  'rust',
-  'php',
-  'laravel',
-  'nestjs',
-];
-const SCOPE_BOUNDARY_RESPONSE_KEYWORDS = [
-  '只要前端',
-  '仅前端',
-  '只需要前端',
-  '前端页面',
-  '前后端',
-  '全栈',
-  'full stack',
-  'full-stack',
-  '后端',
-  '数据库',
-  '登录',
-  '权限',
-  'auth',
-  'api',
-];
-const SCOPE_BOUNDARY_TRIGGER_KEYWORDS = ['后台', 'dashboard', 'admin', 'crm', 'erp', '管理系统'] as const;
-const INTEGRATION_REQUEST_KEYWORDS = ['接入', '打通', '集成', '对接', 'integrate'] as const;
-const INTEGRATION_TARGET_RESPONSE_KEYWORDS = [
-  'github',
-  'notion',
-  'slack',
-  'supabase',
-  'vercel',
-  'stripe',
-  'postgres',
-  'mysql',
-  '数据库',
-  'crm',
-  'erp',
-  'oa',
-  'sap',
-  'api',
-];
-const NO_INTEGRATION_RESPONSE_KEYWORDS = [
-  '不需要接入',
-  '无需接入',
-  '不用接入',
-  '不需要集成',
-  '无需集成',
-  '不用集成',
-  '不需要对接',
-  '独立实现',
-  '不和现有系统打通',
-];
-const CLARIFICATION_DELEGATION_RESPONSE_KEYWORDS = [
-  '按你觉得',
-  '你决定',
-  '你来定',
-  '默认',
-  '没有指定',
-  '没指定',
-  '都可以',
-  '随便',
-  '合适的方式',
-  '仓库现有',
-  '现有技术栈',
-] as const;
-const NEW_TURN_RESPONSE_KEYWORDS = [
-  '帮我',
-  '请帮',
-  '查查',
-  '查一下',
-  '搜索',
-  '检索',
-  '最近',
-  '年报',
-  '报告',
-  '行业',
-  '开发者',
-  '谁开发',
-  '你是谁',
-  '能做什么',
-  '还能做什么',
-  '做什么',
-  '什么？',
-  '什么?',
-  'what',
-  'search',
-  'research',
-  'report',
-] as const;
-const ACCEPTANCE_RESPONSE_KEYWORDS = [
-  '只要源码',
-  '源码',
-  '只要代码',
-  '完整代码',
-  '完成代码',
-  '本地可运行',
-  '本地运行',
-  '测试通过',
-  '测试',
-  '可直接部署',
-  '直接部署',
-  '可部署',
-  '部署上线',
-  '上线',
-  'build',
-  'run',
-];
-const ROOT_STACK_FILES = [
-  'package.json',
-  'pnpm-workspace.yaml',
-  'tsconfig.json',
-  'requirements.txt',
-  'pyproject.toml',
-  'go.mod',
-  'Cargo.toml',
-  'pom.xml',
-] as const;
+const COMPOSIO_BROKERED_RUNTIME_TRANSPORT = 'api_brokered_mcp';
+const COMPOSIO_BROKERED_CONNECTORS = new Set(['notion', 'figma']);
+
+function isSnapshotRuntimeTransportSupported(binding: { connectorKey?: unknown; runtimeTransport?: unknown }) {
+  if (!COMPOSIO_BROKERED_CONNECTORS.has(asText(binding.connectorKey))) {
+    return true;
+  }
+  return asText(binding.runtimeTransport) === COMPOSIO_BROKERED_RUNTIME_TRANSPORT;
+}
 
 type WorkspaceTechStackHints = {
   constrained: boolean;
@@ -876,11 +753,13 @@ export class AltusManagedSetupService {
   }
 
   async captureConnectorSnapshot(sessionId: string, userId: string) {
+    await sessionConnectorService.waitForAttachIdle(sessionId).catch(() => false);
     const memory = await taskCreationFileMemoryStore.getSession(sessionId).catch(() => null);
     const orchestratorSessionId = asText(memory?.runtime?.orchestratorSessionId);
     if (orchestratorSessionId) {
       await sessionMcpRecoveryService.ensureSessionRecovered(sessionId, orchestratorSessionId).catch(() => null);
     }
+    await sessionConnectorService.waitForAttachIdle(sessionId).catch(() => false);
     let statuses = await sessionConnectorService.listSessionConnectors(sessionId, userId).catch(() => []);
     const attached = statuses
       .filter((item) => item.attached)
@@ -903,13 +782,15 @@ export class AltusManagedSetupService {
   }
 
   async captureMcpToolSnapshot(sessionId: string) {
+    await sessionConnectorService.waitForAttachIdle(sessionId).catch(() => false);
     const bindings = await taskSessionConnectorBindingDAO.listByTaskSessionId(sessionId).catch(() => []);
     const providers = bindings
       .filter(
         (item) =>
           item.desiredState === 'attached' &&
           asText(item.runtimeStatus).toLowerCase() === 'connected' &&
-          asText(item.runtimeProviderId)
+          asText(item.runtimeProviderId) &&
+          isSnapshotRuntimeTransportSupported(item)
       )
       .map((item) => ({
         connectorKey: item.connectorKey,

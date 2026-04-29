@@ -5,7 +5,8 @@ export type ConnectorKey =
   | 'supabase'
   | 'figma'
   | 'vercel'
-  | 'postgres';
+  | 'postgres'
+  | 'google_cloud';
 
 export type ConnectorCategory = 'app' | 'custom_api' | 'custom_mcp';
 
@@ -24,7 +25,7 @@ export type ConnectorConfigField = {
 };
 
 export type ConnectorOauthProvider = {
-  provider: 'github' | 'slack' | 'notion' | 'supabase' | 'figma' | 'vercel';
+  provider: 'github' | 'slack' | 'notion' | 'supabase' | 'figma' | 'vercel' | 'composio';
   authorizationMode?: 'oauth' | 'vercel_integration';
   integrationSlug?: string;
   clientId: string;
@@ -39,6 +40,17 @@ export type ConnectorOauthProvider = {
   tokenClientAuth?: 'body' | 'basic';
   tokenExtraParams?: Record<string, string>;
   authorizationExtraParams?: Record<string, string>;
+};
+
+export type ComposioConnectorExtension = {
+  provider: 'composio';
+  toolkitSlugs: string[];
+  authStrategy: 'composio_connect_link';
+  brokerMode: 'api_only';
+  allowTokenInSandbox: false;
+  allowedTools: string[];
+  defaultScopes?: string[];
+  toolNamePrefix: string;
 };
 
 export type ConnectorDefinition = {
@@ -66,7 +78,8 @@ export type ConnectorDefinition = {
     urlEnv?: string;
     urlDefault?: string;
     headersEnv?: string;
-    headerTemplate?: 'bearer-token' | 'supabase' | 'figma' | 'none';
+    headerTemplate?: 'bearer-token' | 'supabase' | 'none';
     transport?: RemoteMcpTransport;
   };
+  composio?: ComposioConnectorExtension;
 };

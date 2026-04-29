@@ -8,7 +8,8 @@ export type ConnectorKey =
   | "supabase"
   | "figma"
   | "vercel"
-  | "postgres";
+  | "postgres"
+  | "google_cloud";
 
 export type ConnectorCategory = "app" | "custom_api" | "custom_mcp";
 

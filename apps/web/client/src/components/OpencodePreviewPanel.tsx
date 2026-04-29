@@ -3243,11 +3243,11 @@ function DeploymentDashboardSection({
   const selectedTimeRangeLabel =
     timeRangeOptions.find((item) => item.value === timeRange)?.label ||
     timeRangeOptions[0].label;
-  const analyticsDescription = analyticsDetailLoading
+  const analyticsStatusDescription = analyticsDetailLoading
     ? i18n.t("previewPanel.deployment.dashboard.analyticsLoading")
     : analyticsDetailError
       ? analyticsDetailError
-      : analyticsDetail?.message || analyticsPresentation.integrationSubtitle;
+      : "";
   const detailPanels = [
     {
       id: "topPages" as const,
@@ -3283,9 +3283,11 @@ function DeploymentDashboardSection({
             <div className="text-base font-medium leading-6 text-foreground">
               {i18n.t("previewPanel.deployment.dashboard.siteAnalytics")}
             </div>
-            <div className="mt-1 text-xs text-muted-foreground">
-              {analyticsDescription}
-            </div>
+            {analyticsStatusDescription ? (
+              <div className="mt-1 text-xs text-muted-foreground">
+                {analyticsStatusDescription}
+              </div>
+            ) : null}
           </div>
           <Button
             variant="outline"

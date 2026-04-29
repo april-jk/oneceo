@@ -1317,6 +1317,7 @@ button.admin-relation-node:hover { border-color: color-mix(in srgb, var(--admin-
   .admin-mobile-card-meta strong { color: var(--text); text-align: right; overflow-wrap: anywhere; }
   .admin-mobile-card-actions { margin-top: 11px; display: flex; gap: 8px; }
   .admin-mobile-card-actions .admin-button { flex: 1; }
+  .admin-mobile-card-unavailable { color: var(--text-faint); font-size: 12px; font-style: italic; margin-top: 10px; }
 }
 
 :root[data-admin-theme='github'],
@@ -15115,6 +15116,92 @@ tbody td,
   color: var(--text-faint);
 }
 
+/* Flat compact layout for pricing detail */
+.pricing-detail-flat {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.pricing-detail-meta-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+
+.pricing-detail-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pricing-detail-meta-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pricing-detail-meta-value {
+  font-size: 13px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pricing-detail-rules,
+.pricing-detail-events {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pricing-detail-rules-title,
+.pricing-detail-events-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pricing-detail-rules-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+}
+
+.pricing-detail-rule {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pricing-detail-rule-label {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.pricing-detail-rule-value {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1.1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.pricing-detail-rule-unit {
+  font-size: 11px;
+  color: var(--text-soft);
+}
+
 .pricing-detail-actions {
   display: flex;
   align-items: center;
@@ -15147,6 +15234,12 @@ tbody td,
   align-items: center;
   justify-content: space-between;
   gap: calc(var(--pricing-live-density) * 12px);
+}
+
+.billing-management-page .pricing-live-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .billing-management-page .pricing-live-title {
@@ -15219,6 +15312,58 @@ tbody td,
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
+}
+
+/* Compact runtime rack for pricing tab */
+.billing-management-page .pricing-live-rack-compact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.billing-management-page .pricing-live-runtime-compact {
+  flex: 1;
+  min-width: 200px;
+  max-width: 320px;
+  padding: 8px 12px;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: 8px;
+  display: grid;
+}
+
+.billing-management-page .pricing-live-runtime-compact .pricing-live-runtime-top {
+  gap: 6px;
+}
+
+.billing-management-page .pricing-live-runtime-compact strong {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.billing-management-page .pricing-live-runtime-compact small {
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.billing-management-page .pricing-live-runtime-compact .runtime-config-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.billing-management-page .pricing-live-runtime-compact .runtime-config-actions .table-btn {
+  font-size: 11px;
+  padding: 3px 8px;
+  height: auto;
+  width: auto;
 }
 
 .billing-management-page .runtime-test-result {
@@ -15594,5 +15739,19 @@ tbody td,
   .admin-auth-layout-single .admin-auth-card {
     padding: 24px;
     border-radius: 20px;
+  }
+
+  .pricing-detail-meta-row {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+
+  .pricing-detail-rules-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+  }
+
+  .pricing-detail-rule-value {
+    font-size: 22px;
   }
 }

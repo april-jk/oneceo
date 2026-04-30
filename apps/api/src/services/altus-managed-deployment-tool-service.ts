@@ -20,6 +20,7 @@ import {
 } from './task-session-project-profile-service';
 import { platformDeploymentAccountService } from './platform-deployment-account-service';
 import { projectStorageResourceService } from './project-storage-resource-service';
+import { taskSessionResourceDeclarationService } from './task-session-resource-declaration-service';
 
 export const ALTUS_MANAGED_DEPLOYMENT_TOOL_NAMES = [
   'deploy_application',
@@ -184,6 +185,7 @@ function buildResourceRequirementRepairResult(
   action: AltusManagedDeploymentToolName,
   baseline: DeploymentTemplateBaselineData,
   requirement: 'database' | 'storage',
+  source: 'manifest' | 'session_declaration' | 'manifest_and_session_declaration',
   extra?: {
     projectProfile?: TaskSessionProjectProfile;
     deploymentFlow?: DeploymentFlowSnapshot;
@@ -209,8 +211,16 @@ function buildResourceRequirementRepairResult(
     status: 'retryable_repair_required',
     summary:
       requirement === 'database'
-        ? '当前模板声明需要数据库，但当前项目还没有就绪的 Railway Postgres 资源。'
-        : '当前模板声明需要对象存储，但当前项目还没有就绪的 Railway Bucket 资源。',
+        ? source === 'manifest'
+          ? '当前 manifest 已明确声明需要数据库，但当前项目还没有就绪的 Railway Postgres 资源。'
+          : source === 'manifest_and_session_declaration'
+            ? '当前 manifest 与当前会话都已明确声明需要数据库，但当前项目还没有就绪的 Railway Postgres 资源。'
+          : '当前会话已显式声明需要数据库，但当前项目还没有就绪的 Railway Postgres 资源。'
+        : source === 'manifest'
+          ? '当前 manifest 已明确声明需要对象存储，但当前项目还没有就绪的 Railway Bucket 资源。'
+          : source === 'manifest_and_session_declaration'
+            ? '当前 manifest 与当前会话都已明确声明需要对象存储，但当前项目还没有就绪的 Railway Bucket 资源。'
+          : '当前会话已显式声明需要对象存储，但当前项目还没有就绪的 Railway Bucket 资源。',
     repair: {
       category: 'deployment_configuration',
       checks,
@@ -523,6 +533,9 @@ export class AltusManagedDeploymentToolService {
       buildDeploymentResponse: typeof buildTaskSessionDeploymentResponse;
       executeDeploymentAction: typeof executeTaskSessionDeploymentAction;
       getErrorMessage: typeof getTaskSessionDeploymentErrorMessage;
+      getProjectAccount?: typeof platformDeploymentAccountService.getProjectAccount;
+      getStorageStatus?: typeof projectStorageResourceService.getStatus;
+      getResourceDeclarations?: typeof taskSessionResourceDeclarationService.getSessionResourceDeclarations;
     } = {
       inspectBaseline: inspectTaskSessionDeploymentTemplate,
       inspectProjectProfile: inspectTaskSessionProjectProfile,
@@ -530,6 +543,14 @@ export class AltusManagedDeploymentToolService {
       buildDeploymentResponse: buildTaskSessionDeploymentResponse,
       executeDeploymentAction: executeTaskSessionDeploymentAction,
       getErrorMessage: getTaskSessionDeploymentErrorMessage,
+      getProjectAccount: platformDeploymentAccountService.getProjectAccount.bind(
+        platformDeploymentAccountService
+      ),
+      getStorageStatus: projectStorageResourceService.getStatus.bind(projectStorageResourceService),
+      getResourceDeclarations:
+        taskSessionResourceDeclarationService.getSessionResourceDeclarations.bind(
+          taskSessionResourceDeclarationService
+        ),
     }
   ) {}
 
@@ -684,32 +705,66 @@ export class AltusManagedDeploymentToolService {
       if (baseline.status !== 'ready') {
         return buildRepairResult(input.action, baseline, undefined, { projectProfile, deploymentFlow });
       }
-      if (baseline.features?.database === 'railway_postgres') {
-        const account = await platformDeploymentAccountService.getProjectAccount(input.userId, input.sessionId);
+      const resourceDeclarations = this.deps.getResourceDeclarations
+        ? await this.deps.getResourceDeclarations(input.sessionId).catch(() => ({
+            database: null,
+            storage: null,
+          }))
+        : { database: null, storage: null };
+      const databaseRequiredByManifest = baseline.features?.database === 'railway_postgres';
+      const databaseRequiredByDeclaration = Boolean(resourceDeclarations.database?.requested);
+      if (databaseRequiredByManifest || databaseRequiredByDeclaration) {
+        const account = this.deps.getProjectAccount
+          ? await this.deps.getProjectAccount(input.userId, input.sessionId)
+          : null;
         if (!account?.databaseServiceId) {
           deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
             type: 'REPAIR_REQUIRED',
             category: 'deployment_configuration',
             checks: ['database_resource_missing'],
           });
-          return buildResourceRequirementRepairResult(input.action, baseline, 'database', {
-            projectProfile,
-            deploymentFlow,
-          });
+          return buildResourceRequirementRepairResult(
+            input.action,
+            baseline,
+            'database',
+            databaseRequiredByManifest && databaseRequiredByDeclaration
+              ? 'manifest_and_session_declaration'
+              : databaseRequiredByManifest
+                ? 'manifest'
+                : 'session_declaration',
+            {
+              projectProfile,
+              deploymentFlow,
+            }
+          );
         }
       }
-      if (baseline.features?.objectStorage) {
-        const storageStatus = await projectStorageResourceService.getStatus(input.userId, input.sessionId);
+      const storageRequiredByManifest = baseline.features?.objectStorage === true;
+      const storageRequiredByDeclaration = Boolean(resourceDeclarations.storage?.requested);
+      if (storageRequiredByManifest || storageRequiredByDeclaration) {
+        const storageStatus = this.deps.getStorageStatus
+          ? await this.deps.getStorageStatus(input.userId, input.sessionId)
+          : ({ configured: false } as Awaited<ReturnType<typeof projectStorageResourceService.getStatus>>);
         if (!storageStatus.configured) {
           deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
             type: 'REPAIR_REQUIRED',
             category: 'deployment_configuration',
             checks: ['object_storage_resource_missing'],
           });
-          return buildResourceRequirementRepairResult(input.action, baseline, 'storage', {
-            projectProfile,
-            deploymentFlow,
-          });
+          return buildResourceRequirementRepairResult(
+            input.action,
+            baseline,
+            'storage',
+            storageRequiredByManifest && storageRequiredByDeclaration
+              ? 'manifest_and_session_declaration'
+              : storageRequiredByManifest
+                ? 'manifest'
+                : 'session_declaration',
+            {
+              projectProfile,
+              deploymentFlow,
+            }
+          );
         }
       }
     }

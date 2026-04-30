@@ -251,7 +251,7 @@ export async function prepareTaskSessionAnalyticsBinding(input: {
   }
 
   const websiteName =
-    existing?.domain === domain &&
+    existing?.websiteId &&
     existing.websiteName &&
     !existing.websiteName.includes('railway.app')
       ? existing.websiteName

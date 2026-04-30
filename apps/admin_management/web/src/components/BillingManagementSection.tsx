@@ -2326,7 +2326,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                 aria-modal="true"
                 aria-labelledby="billing-reference-pricing-title"
                 onClick={(event) => event.stopPropagation()}
-                style={{ maxWidth: '820px' }}
+                style={{ maxWidth: '1100px' }}
               >
                 <div className="pricing-form-modal-header">
                   <div className="pricing-form-modal-heading">
@@ -2371,143 +2371,148 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                 </div>
 
                 <div className="pricing-form-modal-body reference-pricing-body">
-                  <div className="reference-pricing-list">
-                    {(() => {
-                      const filtered = referencePricingDraft.filter((item: any) =>
-                        !referenceSearch ||
-                        item.provider.toLowerCase().includes(referenceSearch.toLowerCase()) ||
-                        item.model.toLowerCase().includes(referenceSearch.toLowerCase())
-                      );
-                      if (filtered.length === 0) {
-                        return (
-                          <div className="reference-pricing-empty">
-                            <div className="reference-pricing-empty-state">
-                              <span className="reference-pricing-empty-icon" aria-hidden="true">📭</span>
-                              <p>{referenceSearch ? '未找到匹配的厂商或模型' : '暂无参考定价数据'}</p>
-                              {referenceSearch && (
-                                <button type="button" className="table-btn" onClick={() => setReferenceSearch('')}>
-                                  清除搜索
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      }
-                      const groups = groupByProvider(filtered);
-                      return groups.map(({ provider, rows }: { provider: string; rows: any[] }, groupIdx: number) => {
-                        const originalIndices = rows.map((row) => referencePricingDraft.indexOf(row));
-                        return (
-                          <div key={`group-${groupIdx}`} className="reference-pricing-group">
-                            <div className="reference-pricing-group-header">
-                              <span className="reference-pricing-group-badge">{provider}</span>
-                              <span className="reference-pricing-group-count">{rows.length} 个模型</span>
-                            </div>
-                            <div className="reference-pricing-cards">
-                              {rows.map((item: any, rowIdx: number) => {
+                  <div className="table-wrap reference-pricing-table-wrap">
+                    <table className="reference-pricing-table-compact">
+                      <thead>
+                        <tr>
+                          <th className="rp-col-provider">厂商</th>
+                          <th className="rp-col-model">模型</th>
+                          <th className="rp-col-price">输入单价</th>
+                          <th className="rp-col-price">输出单价</th>
+                          <th className="rp-col-action"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(() => {
+                          const filtered = referencePricingDraft.filter((item: any) =>
+                            !referenceSearch ||
+                            item.provider.toLowerCase().includes(referenceSearch.toLowerCase()) ||
+                            item.model.toLowerCase().includes(referenceSearch.toLowerCase())
+                          );
+                          if (filtered.length === 0) {
+                            return (
+                              <tr>
+                                <td colSpan={5} className="reference-pricing-empty">
+                                  <div className="reference-pricing-empty-state">
+                                    <span className="reference-pricing-empty-icon" aria-hidden="true">📭</span>
+                                    <p>{referenceSearch ? '未找到匹配的厂商或模型' : '暂无参考定价数据'}</p>
+                                    {referenceSearch && (
+                                      <button type="button" className="table-btn" onClick={() => setReferenceSearch('')}>清除搜索</button>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          }
+                          const groups = groupByProvider(filtered);
+                          return groups.flatMap(({ provider, rows }: { provider: string; rows: any[] }, groupIdx: number) => {
+                            const originalIndices = rows.map((row) => referencePricingDraft.indexOf(row));
+                            return [
+                              <tr key={`g-${groupIdx}`} className="rp-group-header">
+                                <td colSpan={5}>
+                                  <span className="rp-group-name">{provider}</span>
+                                  <span className="rp-group-sep">·</span>
+                                  <span className="rp-group-count">{rows.length} 模型</span>
+                                </td>
+                              </tr>,
+                              ...rows.map((item: any, rowIdx: number) => {
                                 const absoluteIndex = originalIndices[rowIdx];
                                 const isNew = !item.provider && !item.model;
                                 return (
-                                  <div
-                                    key={`card-${absoluteIndex}`}
-                                    className={`reference-pricing-card${isNew ? ' reference-pricing-card-new' : ''}`}
-                                  >
-                                    <div className="reference-pricing-card-header">
-                                      <div className="reference-pricing-card-meta">
-                                        {isNew ? (
-                                          <select
-                                            className="reference-pricing-select"
-                                            value={item.provider}
-                                            onChange={(e) => {
-                                              const val = e.target.value;
-                                              setReferencePricingDraft((prev: any[]) => prev.map((p: any, i: number) =>
-                                                i === absoluteIndex ? { ...p, provider: val } : p
-                                              ));
-                                            }}
-                                          >
-                                            <option value="">选择厂商</option>
-                                            <option value="OpenAI">OpenAI</option>
-                                            <option value="Anthropic">Anthropic</option>
-                                            <option value="Google">Google</option>
-                                            <option value="DeepSeek">DeepSeek</option>
-                                            <option value="阿里云">阿里云</option>
-                                            <option value="xAI">xAI</option>
-                                          </select>
-                                        ) : (
-                                          <span className="reference-pricing-provider-name">{item.provider}</span>
-                                        )}
-                                        <input
-                                          type="text"
-                                          className="reference-pricing-text-input"
-                                          placeholder={isNew ? '例如 gpt-4o' : ''}
-                                          value={item.model}
+                                  <tr key={`r-${absoluteIndex}`} className={`rp-row${isNew ? ' rp-row-new' : ''}`}>
+                                    <td>
+                                      {isNew ? (
+                                        <select
+                                          className="rp-select"
+                                          value={item.provider}
                                           onChange={(e) => {
                                             const val = e.target.value;
                                             setReferencePricingDraft((prev: any[]) => prev.map((p: any, i: number) =>
-                                              i === absoluteIndex ? { ...p, model: val } : p
+                                              i === absoluteIndex ? { ...p, provider: val } : p
+                                            ));
+                                          }}
+                                        >
+                                          <option value="">选择厂商</option>
+                                          <option value="OpenAI">OpenAI</option>
+                                          <option value="Anthropic">Anthropic</option>
+                                          <option value="Google">Google</option>
+                                          <option value="DeepSeek">DeepSeek</option>
+                                          <option value="阿里云">阿里云</option>
+                                          <option value="xAI">xAI</option>
+                                        </select>
+                                      ) : (
+                                        <span className="rp-provider">{item.provider}</span>
+                                      )}
+                                    </td>
+                                    <td>
+                                      <input
+                                        type="text"
+                                        className="rp-input-text"
+                                        placeholder={isNew ? '例如 gpt-4o' : ''}
+                                        value={item.model}
+                                        onChange={(e) => {
+                                          const val = e.target.value;
+                                          setReferencePricingDraft((prev: any[]) => prev.map((p: any, i: number) =>
+                                            i === absoluteIndex ? { ...p, model: val } : p
+                                          ));
+                                        }}
+                                      />
+                                    </td>
+                                    <td>
+                                      <div className="rp-input-money">
+                                        <span>¥</span>
+                                        <input
+                                          type="number"
+                                          step="0.01"
+                                          min="0"
+                                          value={item.inputPrice}
+                                          onChange={(e) => {
+                                            const val = parseFloat(e.target.value) || 0;
+                                            setReferencePricingDraft((prev: any[]) => prev.map((p: any, i: number) =>
+                                              i === absoluteIndex ? { ...p, inputPrice: val } : p
                                             ));
                                           }}
                                         />
                                       </div>
+                                    </td>
+                                    <td>
+                                      <div className="rp-input-money">
+                                        <span>¥</span>
+                                        <input
+                                          type="number"
+                                          step="0.01"
+                                          min="0"
+                                          value={item.outputPrice}
+                                          onChange={(e) => {
+                                            const val = parseFloat(e.target.value) || 0;
+                                            setReferencePricingDraft((prev: any[]) => prev.map((p: any, i: number) =>
+                                              i === absoluteIndex ? { ...p, outputPrice: val } : p
+                                            ));
+                                          }}
+                                        />
+                                      </div>
+                                    </td>
+                                    <td className="rp-col-action">
                                       <button
                                         type="button"
-                                        className="reference-pricing-delete"
+                                        className="rp-delete"
                                         onClick={() => setReferencePricingDraft((prev: any[]) => prev.filter((_: any, i: number) => i !== absoluteIndex))}
                                         aria-label={`删除 ${item.model || '此行'}`}
                                         title="删除"
                                       >
-                                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                        <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
                                           <path d="M3.5 5.5v5a1.5 1.5 0 001.5 1.5h4a1.5 1.5 0 001.5-1.5v-5M5.5 3.5V3a1.5 1.5 0 011.5-1.5h0A1.5 1.5 0 018.5 3v.5M2.5 3.5h9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
                                         </svg>
                                       </button>
-                                    </div>
-                                    <div className="reference-pricing-card-fields">
-                                      <div className="reference-pricing-card-field">
-                                        <label className="reference-pricing-card-label">输入单价</label>
-                                        <div className="reference-pricing-input-wrap">
-                                          <span className="reference-pricing-currency" aria-hidden="true">¥</span>
-                                          <input
-                                            type="number"
-                                            step="0.01"
-                                            min="0"
-                                            className="reference-pricing-number-input"
-                                            value={item.inputPrice}
-                                            onChange={(e) => {
-                                              const val = parseFloat(e.target.value) || 0;
-                                              setReferencePricingDraft((prev: any[]) => prev.map((p: any, i: number) =>
-                                                i === absoluteIndex ? { ...p, inputPrice: val } : p
-                                              ));
-                                            }}
-                                          />
-                                        </div>
-                                      </div>
-                                      <div className="reference-pricing-card-field">
-                                        <label className="reference-pricing-card-label">输出单价</label>
-                                        <div className="reference-pricing-input-wrap">
-                                          <span className="reference-pricing-currency" aria-hidden="true">¥</span>
-                                          <input
-                                            type="number"
-                                            step="0.01"
-                                            min="0"
-                                            className="reference-pricing-number-input"
-                                            value={item.outputPrice}
-                                            onChange={(e) => {
-                                              const val = parseFloat(e.target.value) || 0;
-                                              setReferencePricingDraft((prev: any[]) => prev.map((p: any, i: number) =>
-                                                i === absoluteIndex ? { ...p, outputPrice: val } : p
-                                              ));
-                                            }}
-                                          />
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </div>
+                                    </td>
+                                  </tr>
                                 );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      });
-                    })()}
+                              }),
+                            ];
+                          });
+                        })()}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
 

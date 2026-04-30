@@ -1419,6 +1419,8 @@ export function GlobalSettingsDialogHost() {
     const hasOauthCallbackParams = Boolean(params.get("state"));
     const isNotionCallback =
       callbackPath === "/notion/callback" && hasOauthCallbackParams;
+    const isSupabaseCallback =
+      callbackPath === "/supabase/callback" && hasOauthCallbackParams;
     const isSlackCallback =
       callbackPath === "/slack/callback" && hasOauthCallbackParams;
     const isVercelCallback =
@@ -1431,16 +1433,19 @@ export function GlobalSettingsDialogHost() {
         params.get("settingsTab") === "connectors" ||
         params.get("connector_oauth") === "1" ||
         isNotionCallback ||
+        isSupabaseCallback ||
         isSlackCallback ||
         isVercelCallback ||
         isGoogleCloudCallback,
       settingsTab:
-        isNotionCallback || isSlackCallback || isVercelCallback || isGoogleCloudCallback
+        isNotionCallback || isSupabaseCallback || isSlackCallback || isVercelCallback || isGoogleCloudCallback
           ? "connectors"
           : params.get("settingsTab"),
       targetSessionId: params.get("targetSessionId"),
       connector: isNotionCallback
         ? "notion"
+        : isSupabaseCallback
+          ? "supabase"
         : isSlackCallback
           ? "slack"
           : isVercelCallback

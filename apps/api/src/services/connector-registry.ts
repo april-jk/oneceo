@@ -364,7 +364,7 @@ export class ConnectorRegistry {
     const refreshToken = asText(secret.refreshToken);
     if (connectorKey === 'vercel') {
       if (!accessToken && !refreshToken) {
-        throw new Error('Vercel 杩炴帴鍣ㄧ己灏?access token 鎴?refresh token');
+        throw new Error('Vercel 连接器缺少 access token 或 refresh token');
       }
       return {
         type: 'hosted',

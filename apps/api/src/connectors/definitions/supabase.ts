@@ -1,53 +1,74 @@
 import type { ConnectorDefinition } from './types';
 
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function parseCsvEnv(name: string, fallback: string[] = []): string[] {
+  const raw = asText(process.env[name]);
+  const source = raw ? raw.split(',') : fallback;
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of source) {
+    const value = item.trim();
+    if (!value) continue;
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(value);
+  }
+  return result;
+}
+
+export function resolveSupabaseToolkitSlugs(): string[] {
+  return parseCsvEnv('COMPOSIO_SUPABASE_TOOLKITS', ['supabase']);
+}
+
+export function resolveSupabaseAllowedTools(): string[] {
+  return parseCsvEnv('COMPOSIO_SUPABASE_ALLOWED_TOOLS');
+}
+
 export function buildSupabaseDefinition(): ConnectorDefinition {
+  const toolkitSlugs = resolveSupabaseToolkitSlugs();
+  const available = Boolean(asText(process.env.COMPOSIO_API_KEY)) && toolkitSlugs.length > 0;
+  const availabilityReason = !asText(process.env.COMPOSIO_API_KEY)
+    ? 'COMPOSIO_API_KEY is not configured'
+    : toolkitSlugs.length === 0
+      ? 'COMPOSIO_SUPABASE_TOOLKITS is empty'
+      : undefined;
+
   return {
     key: 'supabase',
     category: 'app',
     name: 'Supabase',
-    description:
-      '独立的 Supabase 连接器，在平台外部保存 access token，并通过 OSAC http_stream 直连 Supabase MCP。',
+    description: '通过 Composio 托管 Supabase 授权与 MCP 工具调用，sandbox 只接收 API broker provider。',
     icon: 'supabase',
     isNew: true,
     featured: true,
     sortOrder: 40,
-    authMode: 'token',
-    available: true,
-    configFields: [
-      {
-        key: 'profileName',
-        label: 'Profile Name',
-        type: 'text',
-        placeholder: 'Supabase Prod',
-        description: '用于区分不同 Supabase 项目配置。',
-      },
-      {
-        key: 'displayName',
-        label: 'Display Name',
-        type: 'text',
-        placeholder: 'Production Project',
-        description: '显示名称。',
-      },
-      {
-        key: 'accessToken',
-        label: 'Personal Access Token',
-        type: 'password',
-        required: true,
-        secret: true,
-        placeholder: 'sbp_...',
-        description: '从 Supabase Account Token 页面生成的 personal access token。',
-      },
-    ],
+    authMode: 'oauth',
+    available,
+    availabilityReason,
+    configFields: [],
     oauth: {
-      supported: false,
+      supported: available,
+      provider: 'composio',
     },
     activityMatcherVerified: true,
     visibleInMenu: true,
     runtime: {
       type: 'remote',
-      urlDefault: 'https://mcp.supabase.com/mcp',
-      headerTemplate: 'supabase',
       transport: 'streamable_http',
+      headerTemplate: 'none',
+    },
+    composio: {
+      provider: 'composio',
+      toolkitSlugs,
+      authStrategy: 'composio_connect_link',
+      brokerMode: 'api_only',
+      allowTokenInSandbox: false,
+      allowedTools: resolveSupabaseAllowedTools(),
+      toolNamePrefix: 'supabase',
     },
   };
 }

@@ -199,6 +199,43 @@ test('captureMcpToolSnapshot exposes only Composio brokered Notion tools', async
   assert.doesNotMatch(JSON.stringify(snapshotMock.mock.calls[0]?.arguments[0]), /notion_list_pages/);
 });
 
+test('captureMcpToolSnapshot exposes only Composio brokered Supabase tools', async () => {
+  mock.method(taskSessionConnectorBindingDAO, 'listByTaskSessionId', async () => [
+    {
+      connectorKey: 'supabase',
+      desiredState: 'attached',
+      runtimeStatus: 'connected',
+      runtimeProviderId: 'provider-supabase-composio',
+      runtimeTransport: 'api_brokered_mcp',
+      runtimeEnvVersion: 1,
+      runtimeAttachedToolsJson: [
+        { providerId: 'provider-supabase-composio', toolName: 'supabase__COMPOSIO_SEARCH_TOOLS' },
+      ],
+    },
+    {
+      connectorKey: 'supabase',
+      desiredState: 'attached',
+      runtimeStatus: 'connected',
+      runtimeProviderId: 'provider-supabase-legacy',
+      runtimeTransport: 'http_stream',
+      runtimeEnvVersion: 1,
+      runtimeAttachedToolsJson: [{ providerId: 'provider-supabase-legacy', toolName: 'supabase_list_projects' }],
+    },
+  ] as any);
+  const snapshotMock = mock.method(taskSessionRunDAO, 'createMcpToolSnapshot', async (input: any) => ({
+    id: 'snapshot-supabase',
+    snapshotJson: input.snapshotJson,
+  }));
+
+  const service = new AltusManagedSetupService();
+  const result = await service.captureMcpToolSnapshot('session-1');
+
+  assert.equal(result.providers.length, 1);
+  assert.equal(result.providers[0]?.providerId, 'provider-supabase-composio');
+  assert.match(JSON.stringify(snapshotMock.mock.calls[0]?.arguments[0]), /supabase__COMPOSIO_SEARCH_TOOLS/);
+  assert.doesNotMatch(JSON.stringify(snapshotMock.mock.calls[0]?.arguments[0]), /supabase_list_projects/);
+});
+
 test('captureConnectorSnapshot forces recovery before reading connector statuses', async () => {
   mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
     id: 'session-1',

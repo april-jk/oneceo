@@ -604,6 +604,8 @@
       "saveProfile": "保存 profile",
       "reconnectNotion": "重新连接 Notion",
       "connectNotion": "连接 Notion",
+      "reconnectConnector": "重新连接 {{name}}",
+      "connectConnector": "连接 {{name}}",
       "reauthorize": "重新授权",
       "startOauth": "发起 OAuth"
     },
@@ -655,28 +657,21 @@
       "directRedirectHint": "如果 GitHub 判断当前 App 已授权，授权页可能会直接回跳到 oneceo，这是 GitHub App 的正常行为。"
     },
     "supabase": {
-      "tokenRequired": "请先输入 Supabase Personal Access Token",
       "connected": "Supabase 已连接",
-      "goToTokenCreation": "前往 Token 创建",
       "mcpDetails": "MCP 详细信息",
-      "description": "与你的 Supabase 项目交互，支持管理数据表、执行 SQL、搜索文档、部署边缘函数与项目设置维护。",
-      "mcpEndpoint": "MCP Endpoint",
+      "description": "通过 Composio 托管授权与 oneceo API broker 使用 Supabase MCP 工具。",
+      "mcpEndpoint": "运行时",
       "authMethod": "认证方式",
-      "personalAccessToken": "Personal Access Token",
+      "composioConnectLink": "Composio Connect Link",
       "defaultProfile": "Supabase Default",
-      "tokenGuideTitle": "从注册到生成 Token",
-      "accessTokensPage": "Access Tokens 页面",
-      "connectHint": "点击上方“连接”，输入 Token 后即可完成 Supabase MCP 挂载。",
+      "connectGuideTitle": "连接流程",
+      "connectHint": "点击上方“连接”并完成 Composio 授权后，即可挂载 Supabase MCP。",
       "connectTitle": "连接 Supabase",
-      "connectDescriptionPrefix": "配置 Supabase 访问令牌以使用该功能。请参阅",
-      "officialDocs": "官方文档",
-      "connectDescriptionSuffix": "获取与管理 Token。",
       "steps": {
-        "signup": "注册账号（已有账号可直接登录）。",
-        "dashboard": "登录后进入 Dashboard，按提示创建或进入任意项目。",
-        "accountSettings": "点击右上角头像，进入 Account Settings（账户设置）。",
-        "createTokenSuffix": "，点击创建新的 Personal Access Token。",
-        "copyToken": "复制新生成的 Token，回到本页面粘贴后点击“连接”。"
+        "connect": "点击连接，打开 Composio/Supabase 授权页。",
+        "authorize": "为目标 Supabase 账号和项目范围完成授权。",
+        "attach": "返回 oneceo 后，系统会保存 profile，并可挂载到当前会话。",
+        "useTools": "会话工具通过 API broker 暴露；sandbox 不接收 Supabase 或 Composio token。"
       }
     },
     "guides": {
@@ -703,27 +698,19 @@
         }
       },
       "slack": {
-        "intro": "Slack 连接器只保留 OAuth 授权路径。当前链路获取的是 Slack User OAuth 授权。",
+        "intro": "Slack 连接器通过 Composio 托管授权和 MCP 工具调用；oneceo 只在 API 服务端保存 broker 所需信息，不会把 Slack token 或 MCP headers 下发到 sandbox。",
         "steps": {
-          "0": "点击连接后，在 Slack 授权页确认你要使用的 workspace 和账号。",
-          "1": "完成授权并返回 oneceo，系统会自动保存默认 profile，并在需要时挂载到当前会话。",
-          "2": "如果读取不到频道或消息，先检查该 Slack 用户本身是否拥有对应访问权限。"
+          "0": "点击连接并在 Composio/Slack 授权页面完成工作区授权。",
+          "1": "返回 oneceo 后，系统会保存 Slack profile 并在需要时挂载到当前会话。",
+          "2": "会话内工具调用会通过 API broker 转发到 Composio MCP，sandbox 不接收 Slack 或 Composio 凭据。"
         },
         "tips": {
-          "0": "如果切换了 workspace、账号或 scopes，需要重新连接，不能继续沿用旧授权。"
+          "0": "旧版 Slack User OAuth profile 需要重新通过 Composio 授权。"
         },
         "links": {
-          "apps": {
-            "label": "Slack Your Apps",
-            "description": "查看当前 Slack App 与 OAuth 配置"
-          },
-          "oauthDocs": {
-            "label": "Slack OAuth 文档",
-            "description": "了解 User OAuth 安装与授权方式"
-          },
-          "mcpDocs": {
-            "label": "Slack MCP 文档",
-            "description": "查看 Slack MCP 的能力和权限要求"
+          "composioToolkit": {
+            "label": "Composio Slack toolkit",
+            "description": "查看 Composio 托管的 Slack toolkit"
           }
         }
       },
@@ -746,20 +733,20 @@
         }
       },
       "supabase": {
-        "intro": "Supabase 是独立连接器，不替代 postgres。请在 sandbox 外配置 access token，平台会在 sandbox 内通过本地桥接挂载 MCP。",
+        "intro": "Supabase 连接器通过 Composio 托管授权和 MCP 工具调用；oneceo 只在 API 服务端保存 broker 所需信息，不会把 token 或 MCP headers 下发到 sandbox。",
         "steps": {
-          "0": "在 account tokens 页面创建或复制 access token。",
-          "1": "把 token 填入连接器配置，sandbox 内会复用该配置访问 Supabase 能力。"
+          "0": "点击连接并在 Composio 授权页面完成 Supabase 授权。",
+          "1": "返回 oneceo 后，系统会保存 Supabase profile 并在需要时挂载到当前会话。",
+          "2": "会话内工具调用会通过 API broker 转发到 Composio MCP，sandbox 不接收 Supabase 或 Composio 凭据。"
         },
         "tips": {
-          "0": "不要把 Supabase 当作 postgres 的替代项；它是独立连接器。",
-          "1": "Profile Name 和 Display Name 都可以留空，系统会自动补齐默认 profile 名称。",
-          "2": "保存后可以附带一个 display name，方便后续在会话里识别。"
+          "0": "旧版 Supabase token profile 需要重新通过 Composio 授权。",
+          "1": "修改 schema、数据、Auth、Storage、Functions 或项目设置前，先确认目标项目。"
         },
         "links": {
-          "tokens": {
-            "label": "Supabase Access Tokens",
-            "description": "创建或管理 access token"
+          "composioToolkit": {
+            "label": "Composio Supabase toolkit",
+            "description": "查看 Composio 托管的 Supabase toolkit"
           }
         }
       },

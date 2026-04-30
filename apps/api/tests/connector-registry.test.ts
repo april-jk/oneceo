@@ -8,11 +8,6 @@ import {
 const envBackup = {
   GITHUB_CONNECTOR_CLIENT_ID: process.env.GITHUB_CONNECTOR_CLIENT_ID,
   GITHUB_CONNECTOR_CLIENT_SECRET: process.env.GITHUB_CONNECTOR_CLIENT_SECRET,
-  SLACK_MCP_REMOTE_URL: process.env.SLACK_MCP_REMOTE_URL,
-  SLACK_MCP_REMOTE_HEADERS_JSON: process.env.SLACK_MCP_REMOTE_HEADERS_JSON,
-  SLACK_CONNECTOR_CLIENT_ID: process.env.SLACK_CONNECTOR_CLIENT_ID,
-  SLACK_CONNECTOR_CLIENT_SECRET: process.env.SLACK_CONNECTOR_CLIENT_SECRET,
-  SLACK_CONNECTOR_REDIRECT_URI: process.env.SLACK_CONNECTOR_REDIRECT_URI,
   NOTION_MCP_REMOTE_URL: process.env.NOTION_MCP_REMOTE_URL,
   NOTION_MCP_REMOTE_HEADERS_JSON: process.env.NOTION_MCP_REMOTE_HEADERS_JSON,
   NOTION_CONNECTOR_CLIENT_ID: process.env.NOTION_CONNECTOR_CLIENT_ID,
@@ -31,16 +26,13 @@ const envBackup = {
   HTTP_PROXY: process.env.HTTP_PROXY,
   HTTPS_PROXY: process.env.HTTPS_PROXY,
   NO_PROXY: process.env.NO_PROXY,
+  COMPOSIO_API_KEY: process.env.COMPOSIO_API_KEY,
+  COMPOSIO_SLACK_TOOLKITS: process.env.COMPOSIO_SLACK_TOOLKITS,
 };
 
 beforeEach(() => {
   process.env.GITHUB_CONNECTOR_CLIENT_ID = 'github-client';
   process.env.GITHUB_CONNECTOR_CLIENT_SECRET = 'github-secret';
-  process.env.SLACK_MCP_REMOTE_URL = 'https://slack-mcp.example.com';
-  process.env.SLACK_MCP_REMOTE_HEADERS_JSON = '{"Authorization":"Bearer ${token}"}';
-  process.env.SLACK_CONNECTOR_CLIENT_ID = 'slack-client';
-  process.env.SLACK_CONNECTOR_CLIENT_SECRET = 'slack-secret';
-  process.env.SLACK_CONNECTOR_REDIRECT_URI = '/slack/callback';
   process.env.NOTION_MCP_REMOTE_URL = 'https://notion-mcp.example.com/sse';
   process.env.NOTION_MCP_REMOTE_HEADERS_JSON = '{"Authorization":"Bearer ${token}"}';
   process.env.NOTION_CONNECTOR_CLIENT_ID = 'notion-client';
@@ -58,6 +50,8 @@ beforeEach(() => {
   process.env.HTTP_PROXY = 'http://127.0.0.1:7890';
   process.env.HTTPS_PROXY = 'http://127.0.0.1:7890';
   process.env.NO_PROXY = 'localhost,127.0.0.1';
+  process.env.COMPOSIO_API_KEY = 'composio-test-key';
+  process.env.COMPOSIO_SLACK_TOOLKITS = 'slack';
 });
 
 afterEach(() => {
@@ -84,21 +78,39 @@ function buildAccount(
   };
 }
 
+function buildComposioAccount(
+  connectorKey: ConnectorAccountMaterial['connectorKey']
+): ConnectorAccountMaterial {
+  return {
+    ...buildAccount(connectorKey, {
+      source: 'composio',
+      composioMcpUrl: 'https://composio.example.com/mcp',
+      composioMcpHeaders: { 'x-api-key': 'test-composio-key' },
+    }),
+    metadataJson: { provider: 'composio' },
+  };
+}
+
 test('connector registry exposes built-in connectors with availability metadata', () => {
   const catalog = connectorRegistry.listCatalog();
   const notionProvider = connectorRegistry.getOauthProvider('notion');
+  const slackProvider = connectorRegistry.getOauthProvider('slack');
   const slack = catalog.find((item) => item.key === 'slack');
   const notion = catalog.find((item) => item.key === 'notion');
-  assert.equal(catalog.length, 7);
-  assert.equal(connectorRegistry.listVisibleCatalog().length, 6);
+  assert.equal(catalog.length, 8);
+  assert.equal(connectorRegistry.listVisibleCatalog().length, 7);
   assert.equal(catalog.find((item) => item.key === 'github')?.oauth?.supported, true);
   assert.equal(slack?.available, true);
   assert.equal(slack?.authMode, 'oauth');
   assert.deepEqual(slack?.configFields, []);
+  assert.equal(slack?.oauth?.provider, 'composio');
+  assert.equal(slackProvider, undefined);
   assert.equal(notion?.available, true);
   assert.equal(notion?.authMode, 'oauth');
   assert.deepEqual(notion?.configFields, []);
-  assert.equal(notionProvider?.redirectUri, 'https://dev.oneceo.ai/notion/callback');
+  assert.equal(notionProvider, undefined);
+  assert.equal(catalog.find((item) => item.key === 'supabase')?.authMode, 'oauth');
+  assert.deepEqual(catalog.find((item) => item.key === 'supabase')?.configFields, []);
   assert.equal(catalog.find((item) => item.key === 'vercel')?.available, true);
   assert.equal(catalog.find((item) => item.key === 'vercel')?.oauth?.supported, true);
   assert.equal(
@@ -130,20 +142,17 @@ test('connector registry materializes local and remote MCP configs', () => {
 
   const slackConfig = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'slack',
-    account: buildAccount('slack', { accessToken: 'slack-token' }),
+    account: buildComposioAccount('slack'),
   });
-  assert.equal(slackConfig.type, 'remote');
-  assert.equal(slackConfig.transport, 'remote_sse');
-  assert.equal(slackConfig.headers?.Authorization, 'Bearer slack-token');
+  assert.equal(slackConfig.type, 'hosted');
+  assert.equal(slackConfig.provider, 'slack');
 
   const notionConfig = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'notion',
-    account: buildAccount('notion', { accessToken: 'notion-token' }),
+    account: buildComposioAccount('notion'),
   });
-  assert.equal(notionConfig.type, 'remote');
-  assert.equal(notionConfig.transport, 'remote_sse');
-  assert.equal(notionConfig.url, 'https://notion-mcp.example.com/sse');
-  assert.equal(notionConfig.headers?.Authorization, 'Bearer notion-token');
+  assert.equal(notionConfig.type, 'hosted');
+  assert.equal(notionConfig.provider, 'notion');
 
   const vercelConfig = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'vercel',
@@ -162,78 +171,46 @@ test('connector registry materializes local and remote MCP configs', () => {
 
   const supabaseConfig = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'supabase',
-    account: {
-      ...buildAccount('supabase', { accessToken: 'supabase-token' }),
-      configJson: { projectUrl: 'https://abc.supabase.co' },
-    },
+    account: buildComposioAccount('supabase'),
   });
-  assert.equal(supabaseConfig.type, 'remote');
-  assert.equal(supabaseConfig.transport, 'streamable_http');
-  assert.equal(supabaseConfig.url, 'https://mcp.supabase.com/mcp');
-  assert.equal(supabaseConfig.headers?.Authorization, 'Bearer supabase-token');
-  assert.equal(supabaseConfig.headers?.['x-supabase-url'], 'https://abc.supabase.co');
+  assert.equal(supabaseConfig.type, 'hosted');
+  assert.equal(supabaseConfig.provider, 'supabase');
 });
 
-test('connector registry falls back to official slack mcp url when remote url env is missing', () => {
-  delete process.env.SLACK_MCP_REMOTE_URL;
+test('connector registry materializes Slack as Composio hosted provider without remote url', () => {
   const catalog = connectorRegistry.listCatalog();
   const slack = catalog.find((item) => item.key === 'slack');
   assert.equal(slack?.available, true);
-  assert.equal(slack?.runtime.urlDefault, 'https://mcp.slack.com/mcp');
+  assert.equal(slack?.runtime.urlDefault, undefined);
+  assert.equal(slack?.runtime.headerTemplate, 'none');
 
   const runtime = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'slack',
-    account: buildAccount('slack', { accessToken: 'slack-token' }),
+    account: buildComposioAccount('slack'),
   });
-  assert.equal(runtime.type, 'remote');
-  assert.equal(new URL(runtime.url || '').origin, 'https://mcp.slack.com');
-  assert.equal(runtime.transport, 'remote_sse');
+  assert.equal(runtime.type, 'hosted');
+  assert.equal(runtime.provider, 'slack');
 });
 
-test('slack catalog is unavailable when oauth client is missing', () => {
-  delete process.env.SLACK_CONNECTOR_CLIENT_ID;
+test('slack catalog is unavailable when Composio API key is missing', () => {
+  delete process.env.COMPOSIO_API_KEY;
   const slack = connectorRegistry.listCatalog().find((item) => item.key === 'slack');
   assert.equal(slack?.available, false);
-  assert.match(String(slack?.availabilityReason || ''), /Slack OAuth client/i);
+  assert.match(String(slack?.availabilityReason || ''), /COMPOSIO_API_KEY/);
 });
 
-test('notion catalog is unavailable when fixed redirect uri is missing', () => {
-  delete process.env.NOTION_CONNECTOR_REDIRECT_URI;
+test('notion catalog is unavailable when Composio API key is missing', () => {
+  delete process.env.COMPOSIO_API_KEY;
   const notion = connectorRegistry.listCatalog().find((item) => item.key === 'notion');
   assert.equal(notion?.available, false);
-  assert.match(String(notion?.availabilityReason || ''), /回调路径/);
+  assert.match(String(notion?.availabilityReason || ''), /COMPOSIO_API_KEY/);
 });
 
-test('notion catalog is unavailable when redirect path is set but frontend base url is missing', () => {
-  delete process.env.FRONTEND_URL;
-  process.env.NOTION_CONNECTOR_REDIRECT_URI = '/notion/callback';
-  const notion = connectorRegistry.listCatalog().find((item) => item.key === 'notion');
-  assert.equal(notion?.available, false);
-  assert.match(String(notion?.availabilityReason || ''), /解析失败/);
-});
-
-test('notion catalog falls back to official sse endpoint when remote url env is missing', () => {
-  delete process.env.NOTION_MCP_REMOTE_URL;
-
-  const notion = connectorRegistry.listCatalog().find((item) => item.key === 'notion');
-  assert.equal(notion?.available, true);
-  assert.equal(notion?.runtime.urlDefault, 'https://mcp.notion.com/sse');
-
-  const runtime = connectorRegistry.materializeRuntimeConfig({
-    connectorKey: 'notion',
-    account: buildAccount('notion', { accessToken: 'notion-token' }),
-  });
-  assert.equal(runtime.type, 'remote');
-  assert.equal(runtime.transport, 'remote_sse');
-  assert.equal(runtime.url, 'https://mcp.notion.com/sse');
-});
-
-test('notion catalog is unavailable when remote url is not an sse endpoint', () => {
-  process.env.NOTION_MCP_REMOTE_URL = 'https://mcp.notion.com/mcp';
-
-  const notion = connectorRegistry.listCatalog().find((item) => item.key === 'notion');
-  assert.equal(notion?.available, false);
-  assert.match(String(notion?.availabilityReason || ''), /SSE.*\/sse/);
+test('supabase catalog is unavailable when Composio API key is missing', () => {
+  delete process.env.COMPOSIO_API_KEY;
+  const supabase = connectorRegistry.listCatalog().find((item) => item.key === 'supabase');
+  assert.equal(supabase?.available, false);
+  assert.match(String(supabase?.availabilityReason || ''), /COMPOSIO_API_KEY/);
 });
 
 test('connector registry materializes vercel as hosted provider without internal mcp url', () => {

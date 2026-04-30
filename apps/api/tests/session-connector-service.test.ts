@@ -16,12 +16,13 @@ const envBackup = {
   NOTION_CONNECTOR_CLIENT_ID: process.env.NOTION_CONNECTOR_CLIENT_ID,
   NOTION_CONNECTOR_CLIENT_SECRET: process.env.NOTION_CONNECTOR_CLIENT_SECRET,
   NOTION_CONNECTOR_REDIRECT_URI: process.env.NOTION_CONNECTOR_REDIRECT_URI,
+  CONNECTOR_SECRET_KEY: process.env.CONNECTOR_SECRET_KEY,
+  FRONTEND_URL: process.env.FRONTEND_URL,
+  COMPOSIO_API_KEY: process.env.COMPOSIO_API_KEY,
   VERCEL_INTEGRATION_CLIENT_ID: process.env.VERCEL_INTEGRATION_CLIENT_ID,
   VERCEL_INTEGRATION_CLIENT_SECRET: process.env.VERCEL_INTEGRATION_CLIENT_SECRET,
   VERCEL_INTEGRATION_REDIRECT_URI: process.env.VERCEL_INTEGRATION_REDIRECT_URI,
   VERCEL_INTEGRATION_SLUG: process.env.VERCEL_INTEGRATION_SLUG,
-  CONNECTOR_SECRET_KEY: process.env.CONNECTOR_SECRET_KEY,
-  FRONTEND_URL: process.env.FRONTEND_URL,
 };
 
 afterEach(() => {
@@ -34,7 +35,12 @@ afterEach(() => {
   }
 });
 
-function buildProfile(connectorKey: 'supabase' | 'vercel' | 'notion' | 'figma') {
+function buildProfile(connectorKey: 'supabase' | 'vercel' | 'notion' | 'slack' | 'figma') {
+  const isComposioConnector =
+    connectorKey === 'figma' ||
+    connectorKey === 'notion' ||
+    connectorKey === 'slack' ||
+    connectorKey === 'supabase';
   return {
     profileId: `profile-${connectorKey}`,
     connectorKey,
@@ -42,14 +48,13 @@ function buildProfile(connectorKey: 'supabase' | 'vercel' | 'notion' | 'figma') 
     authMode: 'token',
     authStatus: 'authorized',
     configJson: {},
-    metadataJson:
-      connectorKey === 'figma'
-        ? {
-            provider: 'composio',
-          }
-        : {},
+    metadataJson: isComposioConnector
+      ? {
+          provider: 'composio',
+        }
+      : {},
     secret: {
-      ...(connectorKey === 'figma'
+      ...(isComposioConnector
         ? {
             source: 'composio',
             composioMcpUrl: 'https://composio.example.com/mcp',
@@ -62,25 +67,20 @@ function buildProfile(connectorKey: 'supabase' | 'vercel' | 'notion' | 'figma') 
   } as any;
 }
 
-test('buildProviderTransport maps supabase streamable HTTP runtime to OSAC http_stream transport', () => {
-  process.env.ONECEO_PROXY_ENABLED = 'true';
-  process.env.HTTP_PROXY = 'http://127.0.0.1:7890';
-  process.env.HTTPS_PROXY = 'http://127.0.0.1:7890';
-  process.env.NO_PROXY = 'localhost,127.0.0.1';
+test('buildProviderTransport materializes Supabase Composio as API-brokered MCP transport', () => {
+  process.env.COMPOSIO_API_KEY = 'composio-test-key';
 
   const serviceAny = sessionConnectorService as any;
-  const result = serviceAny.buildProviderTransport('supabase', buildProfile('supabase'), null);
+  const result = serviceAny.buildProviderTransport('supabase', buildProfile('supabase'), null, {
+    taskSessionId: 'task-supabase',
+    userId: 'user-supabase',
+  });
 
-  assert.equal(result.transport.type, 'http_stream');
-  assert.equal(result.transportName, 'http_stream');
-  assert.equal(result.transport.url, 'https://mcp.supabase.com/mcp');
-  assert.equal(result.transport.headers.Authorization, 'Bearer supabase-token');
-  assert.equal(result.transport.env.HTTP_PROXY, 'http://127.0.0.1:7890');
-  assert.equal(result.transport.env.HTTPS_PROXY, 'http://127.0.0.1:7890');
-  assert.equal(result.transport.env.NO_PROXY, 'localhost,127.0.0.1');
-  assert.equal(result.transport.env.http_proxy, 'http://127.0.0.1:7890');
-  assert.equal(result.transport.env.https_proxy, 'http://127.0.0.1:7890');
-  assert.equal(result.transport.env.no_proxy, 'localhost,127.0.0.1');
+  assert.equal(result.transport.type, 'backend_rpc');
+  assert.equal(result.transport.rpcNamespace, 'mcp');
+  assert.equal(result.transport.backendProvider, 'supabase');
+  assert.deepEqual(result.transport.capabilities, ['initialize', 'tools/list', 'tools/call']);
+  assert.equal(result.transportName, 'api_brokered_mcp');
 });
 
 test('buildProviderTransport materializes vercel as backend rpc transport', () => {
@@ -122,21 +122,36 @@ test('buildProviderTransport materializes Figma Composio as API-brokered MCP tra
   assert.equal(result.transportName, 'api_brokered_mcp');
 });
 
-test('buildProviderTransport honors explicit notion remote transport', () => {
-  process.env.NOTION_MCP_REMOTE_URL = 'https://mcp.notion.com/sse';
-  process.env.NOTION_CONNECTOR_CLIENT_ID = 'notion-client';
-  process.env.NOTION_CONNECTOR_CLIENT_SECRET = 'notion-secret';
-  process.env.NOTION_CONNECTOR_REDIRECT_URI = '/api/connectors/notion/callback';
-  process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
+test('buildProviderTransport materializes Slack Composio as API-brokered MCP transport', () => {
+  process.env.COMPOSIO_API_KEY = 'composio-test-key';
 
   const serviceAny = sessionConnectorService as any;
-  const result = serviceAny.buildProviderTransport('notion', buildProfile('notion'), null);
+  const result = serviceAny.buildProviderTransport('slack', buildProfile('slack'), null, {
+    taskSessionId: 'task-slack',
+    userId: 'user-slack',
+  });
 
-  assert.equal(result.transport.type, 'remote_sse');
-  assert.equal(result.transportName, 'remote_sse');
-  assert.equal(result.transport.url, 'https://mcp.notion.com/sse');
-  assert.deepEqual(result.transport.env, {});
-  assert.equal(result.transport.headers.Authorization, 'Bearer notion-token');
+  assert.equal(result.transport.type, 'backend_rpc');
+  assert.equal(result.transport.rpcNamespace, 'mcp');
+  assert.equal(result.transport.backendProvider, 'slack');
+  assert.deepEqual(result.transport.capabilities, ['initialize', 'tools/list', 'tools/call']);
+  assert.equal(result.transportName, 'api_brokered_mcp');
+});
+
+test('buildProviderTransport materializes Notion Composio as API-brokered MCP transport', () => {
+  process.env.COMPOSIO_API_KEY = 'composio-test-key';
+
+  const serviceAny = sessionConnectorService as any;
+  const result = serviceAny.buildProviderTransport('notion', buildProfile('notion'), null, {
+    taskSessionId: 'task-notion',
+    userId: 'user-notion',
+  });
+
+  assert.equal(result.transport.type, 'backend_rpc');
+  assert.equal(result.transport.rpcNamespace, 'mcp');
+  assert.equal(result.transport.backendProvider, 'notion');
+  assert.deepEqual(result.transport.capabilities, ['initialize', 'tools/list', 'tools/call']);
+  assert.equal(result.transportName, 'api_brokered_mcp');
 });
 
 test('buildProviderTransport maps streamable_http connector config to OSAC http_stream transport', () => {

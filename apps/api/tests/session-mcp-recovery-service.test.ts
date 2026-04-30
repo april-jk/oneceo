@@ -56,6 +56,50 @@ test('isSessionAlreadyRecovered rejects legacy notion remote_sse bindings', asyn
   assert.equal(recovered, false);
 });
 
+test('isSessionAlreadyRecovered accepts Supabase only on the Composio brokered transport', async () => {
+  mock.method(taskSessionConnectorBindingDAO, 'listByTaskSessionId', async () => [
+    {
+      taskSessionId: 'session-1',
+      connectorKey: 'supabase',
+      desiredState: 'attached',
+      orchestratorSessionId: 'orch-1',
+      runtimeStatus: 'connected',
+      runtimeProviderId: 'provider-supabase',
+      runtimeTransport: 'api_brokered_mcp',
+      runtimeAttachedToolsJson: [{ toolName: 'supabase__COMPOSIO_SEARCH_TOOLS' }],
+      recoveryCompletedAt: new Date(),
+    },
+  ] as any);
+  mock.method(taskSessionMcpRecoveryJobDAO, 'listActiveByTaskSession', async () => [] as any);
+
+  const serviceAny = sessionMcpRecoveryService as any;
+  const recovered = await serviceAny.isSessionAlreadyRecovered('session-1', 'orch-1');
+
+  assert.equal(recovered, true);
+});
+
+test('isSessionAlreadyRecovered rejects legacy Supabase remote bindings', async () => {
+  mock.method(taskSessionConnectorBindingDAO, 'listByTaskSessionId', async () => [
+    {
+      taskSessionId: 'session-1',
+      connectorKey: 'supabase',
+      desiredState: 'attached',
+      orchestratorSessionId: 'orch-1',
+      runtimeStatus: 'connected',
+      runtimeProviderId: 'provider-supabase-legacy',
+      runtimeTransport: 'http_stream',
+      runtimeAttachedToolsJson: [{ toolName: 'supabase_list_projects' }],
+      recoveryCompletedAt: new Date(),
+    },
+  ] as any);
+  mock.method(taskSessionMcpRecoveryJobDAO, 'listActiveByTaskSession', async () => [] as any);
+
+  const serviceAny = sessionMcpRecoveryService as any;
+  const recovered = await serviceAny.isSessionAlreadyRecovered('session-1', 'orch-1');
+
+  assert.equal(recovered, false);
+});
+
 test('markPendingRecoverByOrchestratorSessionId does not rewrite Composio notion transport to remote_sse', async () => {
   mock.method(sandboxExecutionEnvironmentDAO, 'getBySessionId', async () => ({
     sessionId: 'orch-1',

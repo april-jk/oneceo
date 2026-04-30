@@ -51,6 +51,7 @@ function Router() {
       <Route path="/manager-node" component={withUserAuth(ManagerNode)} />
       <Route path="/manager-view" component={withUserAuth(ManagerView)} />
       <Route path="/notion/callback" component={withUserAuth(Home)} />
+      <Route path="/supabase/callback" component={withUserAuth(Home)} />
       <Route path="/slack/callback" component={withUserAuth(Home)} />
       <Route path="/vercel/callback" component={withUserAuth(Home)} />
       <Route path="/google-cloud/callback" component={withUserAuth(Home)} />

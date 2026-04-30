@@ -16,6 +16,10 @@ import {
   type AltusManagedDeploymentToolName,
 } from './altus-managed-deployment-tool-service';
 import {
+  altusManagedResourceToolService,
+  type AltusManagedResourceToolName,
+} from './altus-managed-resource-tool-service';
+import {
   asText,
   buildManagedMcpToolName,
   type ManagedCompletionAttachment,
@@ -333,6 +337,16 @@ function isManagedDeploymentToolName(value: string): value is AltusManagedDeploy
     value === 'redeploy_application' ||
     value === 'rollback_application_deployment' ||
     value === 'get_application_deployment_status'
+  );
+}
+
+function isManagedResourceToolName(value: string): value is AltusManagedResourceToolName {
+  return (
+    value === 'ensure_project_database' ||
+    value === 'get_project_database_status' ||
+    value === 'inspect_project_database_schema' ||
+    value === 'ensure_project_storage_bucket' ||
+    value === 'get_project_storage_status'
   );
 }
 
@@ -1293,6 +1307,19 @@ export class AltusManagedToolRuntime {
         sandboxId: this.input.sandboxId,
         workspaceRoot: this.input.workspaceRoot,
         notes: asText(rawArgs.notes),
+      });
+      return {
+        type: 'result',
+        activatedSkills,
+        content: JSON.stringify(result),
+      };
+    }
+
+    if (isManagedResourceToolName(toolName)) {
+      const result = await altusManagedResourceToolService.execute({
+        action: toolName,
+        sessionId: this.input.sessionId,
+        userId: this.input.userId,
       });
       return {
         type: 'result',

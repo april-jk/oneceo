@@ -51,6 +51,7 @@ const REQUIRED_TABLES = [
   'task_session_connector_guides',
   'task_session_mcp_recovery_jobs',
   'task_session_deployment_sync_jobs',
+  'project_storage_resources',
   'connector_auth_requests',
   'platform_runtime_artifact_releases',
   'platform_runtime_artifact_channels',
@@ -132,6 +133,21 @@ const REQUIRED_COLUMNS = [
   ['task_session_deployment_sync_jobs', 'next_retry_at'],
   ['task_session_deployment_sync_jobs', 'started_at'],
   ['task_session_deployment_sync_jobs', 'completed_at'],
+  ['project_storage_resources', 'user_id'],
+  ['project_storage_resources', 'session_id'],
+  ['project_storage_resources', 'project_key'],
+  ['project_storage_resources', 'provider'],
+  ['project_storage_resources', 'railway_bucket_id'],
+  ['project_storage_resources', 'railway_project_id'],
+  ['project_storage_resources', 'railway_environment_id'],
+  ['project_storage_resources', 'bucket_name'],
+  ['project_storage_resources', 'endpoint'],
+  ['project_storage_resources', 'public_url'],
+  ['project_storage_resources', 'access_key_id'],
+  ['project_storage_resources', 'secret_access_key_ciphertext'],
+  ['project_storage_resources', 'access_model'],
+  ['project_storage_resources', 'status'],
+  ['project_storage_resources', 'last_checked_at'],
   ['connector_auth_requests', 'profile_id'],
   ['connector_auth_requests', 'profile_draft_json'],
   ['platform_skills', 'slug'],
@@ -233,6 +249,8 @@ const REQUIRED_INDEXES = [
   'idx_task_session_connector_bindings_session_connector',
   'idx_task_session_mcp_recovery_jobs_recovery_key',
   'idx_task_session_deployment_sync_jobs_sync_key',
+  'idx_project_storage_resources_unique',
+  'idx_project_storage_resources_session',
   'idx_task_session_mcp_tool_snapshots_session_id',
   'idx_task_session_connector_runtime_events_session_id',
   'idx_platform_skills_slug',
@@ -398,6 +416,28 @@ CREATE TABLE IF NOT EXISTS task_session_deployment_sync_jobs (
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS project_storage_resources (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  project_key TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'railway_bucket',
+  railway_bucket_id TEXT NOT NULL,
+  railway_project_id TEXT NOT NULL,
+  railway_environment_id TEXT NOT NULL,
+  bucket_name TEXT NOT NULL,
+  endpoint TEXT NOT NULL,
+  public_url TEXT,
+  access_key_id TEXT NOT NULL,
+  secret_access_key_ciphertext TEXT NOT NULL,
+  access_model TEXT NOT NULL DEFAULT 'public_and_private',
+  status TEXT NOT NULL DEFAULT 'ready',
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_checked_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 -- OAuth 请求事务表
 CREATE TABLE IF NOT EXISTS connector_auth_requests (
   request_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -496,6 +536,10 @@ CREATE INDEX IF NOT EXISTS idx_task_session_deployment_sync_jobs_orchestrator_se
   ON task_session_deployment_sync_jobs(orchestrator_session_id);
 CREATE INDEX IF NOT EXISTS idx_task_session_deployment_sync_jobs_next_retry_at
   ON task_session_deployment_sync_jobs(next_retry_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_storage_resources_unique
+  ON project_storage_resources(user_id, project_key, provider);
+CREATE INDEX IF NOT EXISTS idx_project_storage_resources_session
+  ON project_storage_resources(session_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_auth_requests_state ON connector_auth_requests(state);
 CREATE INDEX IF NOT EXISTS idx_connector_auth_requests_user_id ON connector_auth_requests(user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_runtime_artifacts_type_version

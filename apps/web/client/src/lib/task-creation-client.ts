@@ -454,14 +454,36 @@ export type TaskCreationDatabaseColumn = {
 export type TaskCreationDatabaseInfo = {
   configured: boolean;
   provider: "railway_postgres";
-  serviceId: string;
-  serviceName: string;
+  status?: "not_configured" | "ready" | "error";
+  serviceId?: string;
+  serviceName?: string;
   volumeId?: string;
   volumeName?: string;
   latestDeploymentStatus?: string;
   latestDeploymentAt?: string;
-  connection: TaskCreationDatabaseConnectionInfo;
+  connection?: TaskCreationDatabaseConnectionInfo;
   tables: TaskCreationDatabaseTable[];
+};
+
+export type TaskCreationStorageStatus = {
+  configured: boolean;
+  provider: "railway_bucket";
+  status: "not_configured" | "ready" | "error";
+  projectKey: string;
+  bucket?: {
+    id: string;
+    name: string;
+    endpoint: string;
+    publicUrl?: string;
+    accessKeyId: string;
+    secretAccessKey?: string;
+  };
+  applicationVariables?: {
+    wired: boolean;
+    keys: string[];
+  };
+  accessModel?: string;
+  lastCheckedAt?: string;
 };
 
 export type TaskCreationDatabaseRowLocator = {
@@ -1321,8 +1343,62 @@ export async function getTaskCreationDatabaseInfo(
   sessionId: string
 ): Promise<TaskCreationDatabaseInfo | null> {
   const safeSessionId = encodeURIComponent(sessionId);
-  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/database`;
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/database/status`;
   const result = await fetchJson<{ data?: TaskCreationDatabaseInfo }>(url);
+  return result?.data || null;
+}
+
+export async function ensureTaskCreationDatabase(
+  sessionId: string
+): Promise<TaskCreationDatabaseInfo | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/database/ensure`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({}),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationDatabaseInfo };
+  return result?.data || null;
+}
+
+export async function getTaskCreationStorageStatus(
+  sessionId: string,
+  options?: { revealSecrets?: boolean }
+): Promise<TaskCreationStorageStatus | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const params = new URLSearchParams();
+  if (options?.revealSecrets) params.set("reveal", "1");
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/storage/status${suffix}`;
+  const result = await fetchJson<{ data?: TaskCreationStorageStatus }>(url);
+  return result?.data || null;
+}
+
+export async function ensureTaskCreationStorage(
+  sessionId: string,
+  options?: { revealSecrets?: boolean }
+): Promise<TaskCreationStorageStatus | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/storage/ensure`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      revealSecrets: Boolean(options?.revealSecrets),
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationStorageStatus };
   return result?.data || null;
 }
 

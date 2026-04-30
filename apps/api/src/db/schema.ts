@@ -1033,6 +1033,39 @@ export const taskSessionDeploymentSyncJobs = pgTable(
   })
 );
 
+export const projectStorageResources = pgTable(
+  'project_storage_resources',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id').notNull(),
+    sessionId: text('session_id').notNull(),
+    projectKey: text('project_key').notNull(),
+    provider: text('provider').notNull().default('railway_bucket'),
+    railwayBucketId: text('railway_bucket_id').notNull(),
+    railwayProjectId: text('railway_project_id').notNull(),
+    railwayEnvironmentId: text('railway_environment_id').notNull(),
+    bucketName: text('bucket_name').notNull(),
+    endpoint: text('endpoint').notNull(),
+    publicUrl: text('public_url'),
+    accessKeyId: text('access_key_id').notNull(),
+    secretAccessKeyCiphertext: text('secret_access_key_ciphertext').notNull(),
+    accessModel: text('access_model').notNull().default('public_and_private'),
+    status: text('status').notNull().default('ready'),
+    metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
+    lastCheckedAt: timestamp('last_checked_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userProjectProviderUnique: uniqueIndex('idx_project_storage_resources_unique').on(
+      table.userId,
+      table.projectKey,
+      table.provider
+    ),
+    sessionIdx: index('idx_project_storage_resources_session').on(table.sessionId),
+  })
+);
+
 export const platformRuntimeArtifactReleases = pgTable(
   'platform_runtime_artifact_releases',
   {
@@ -1211,6 +1244,8 @@ export type TaskSessionMcpRecoveryJob = typeof taskSessionMcpRecoveryJobs.$infer
 export type NewTaskSessionMcpRecoveryJob = typeof taskSessionMcpRecoveryJobs.$inferInsert;
 export type TaskSessionDeploymentSyncJob = typeof taskSessionDeploymentSyncJobs.$inferSelect;
 export type NewTaskSessionDeploymentSyncJob = typeof taskSessionDeploymentSyncJobs.$inferInsert;
+export type ProjectStorageResource = typeof projectStorageResources.$inferSelect;
+export type NewProjectStorageResource = typeof projectStorageResources.$inferInsert;
 
 export type PlatformRuntimeArtifactRelease = typeof platformRuntimeArtifactReleases.$inferSelect;
 export type NewPlatformRuntimeArtifactRelease = typeof platformRuntimeArtifactReleases.$inferInsert;

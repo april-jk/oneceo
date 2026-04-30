@@ -7516,6 +7516,8 @@ export default function App() {
           ? true
           : activeSection === 'osacRelease'
             ? true
+      : activeSection === 'billing'
+        ? true
       : activeSection === 'sandbox'
         ? sandboxApi?.online
         : activeSection === 'audit'
@@ -7538,6 +7540,8 @@ export default function App() {
           ? '平台接口'
           : activeSection === 'osacRelease'
             ? '平台接口'
+      : activeSection === 'billing'
+        ? '计费服务'
       : activeSection === 'sandbox'
         ? 'Sandbox 服务'
         : activeSection === 'audit'

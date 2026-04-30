@@ -1,3 +1,4 @@
+import { DeleteObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { createHash } from 'node:crypto';
 
 import { projectStorageResourceDAO } from '../db/dao';
@@ -105,6 +106,11 @@ export type ProjectStorageResourceStatus = {
     wired: boolean;
     keys: string[];
   };
+  files?: Array<{
+    key: string;
+    sizeBytes?: number;
+    lastModifiedAt?: string;
+  }>;
   accessModel?: string;
   lastCheckedAt?: string;
 };
@@ -137,7 +143,8 @@ function buildBucketName(userId: string, projectKey: string) {
 function toStatus(
   row: ProjectStorageResource | null,
   projectKey: string,
-  secretAccessKey?: string | null
+  secretAccessKey?: string | null,
+  files?: ProjectStorageResourceStatus['files']
 ): ProjectStorageResourceStatus {
   if (!row) {
     return {
@@ -172,6 +179,7 @@ function toStatus(
         ...(row.publicUrl ? ['S3_PUBLIC_URL'] : []),
       ],
     },
+    files,
     accessModel: row.accessModel,
     lastCheckedAt: row.lastCheckedAt?.toISOString(),
   };
@@ -190,6 +198,91 @@ function buildStorageVariables(row: Pick<ProjectStorageResource, 'bucketName' | 
     variables.S3_PUBLIC_URL = row.publicUrl;
   }
   return variables;
+}
+
+function buildBucketClient(
+  row: Pick<ProjectStorageResource, 'endpoint' | 'accessKeyId' | 'metadataJson'>,
+  secretAccessKey: string
+) {
+  const metadata: Record<string, unknown> =
+    row.metadataJson && typeof row.metadataJson === 'object'
+      ? (row.metadataJson as Record<string, unknown>)
+      : {};
+  const region =
+    typeof metadata.region === 'string' && metadata.region.trim()
+      ? metadata.region.trim()
+      : 'auto';
+  const urlStyle =
+    typeof metadata.urlStyle === 'string' ? metadata.urlStyle.trim().toLowerCase() : '';
+
+  return new S3Client({
+    region,
+    endpoint: row.endpoint,
+    forcePathStyle: urlStyle === 'path',
+    credentials: {
+      accessKeyId: row.accessKeyId,
+      secretAccessKey,
+    },
+  });
+}
+
+async function listBucketObjects(
+  row: Pick<ProjectStorageResource, 'bucketName' | 'endpoint' | 'accessKeyId' | 'metadataJson'>,
+  secretAccessKey: string
+) {
+  const client = buildBucketClient(row, secretAccessKey);
+  const response = await client.send(
+    new ListObjectsV2Command({
+      Bucket: row.bucketName,
+      MaxKeys: 200,
+    })
+  );
+  return (response.Contents || [])
+    .filter((item) => Boolean(item.Key))
+    .map((item) => ({
+      key: item.Key as string,
+      sizeBytes: typeof item.Size === 'number' ? item.Size : undefined,
+      lastModifiedAt: item.LastModified?.toISOString(),
+    }))
+    .sort((left, right) => {
+      const leftTime = left.lastModifiedAt ? new Date(left.lastModifiedAt).getTime() : 0;
+      const rightTime = right.lastModifiedAt ? new Date(right.lastModifiedAt).getTime() : 0;
+      return rightTime - leftTime;
+    });
+}
+
+async function putBucketObject(
+  row: Pick<ProjectStorageResource, 'bucketName' | 'endpoint' | 'accessKeyId' | 'metadataJson'>,
+  secretAccessKey: string,
+  input: {
+    key: string;
+    body: Buffer;
+    contentType?: string | null;
+  }
+) {
+  const client = buildBucketClient(row, secretAccessKey);
+  await client.send(
+    new PutObjectCommand({
+      Bucket: row.bucketName,
+      Key: input.key,
+      Body: input.body,
+      ContentType: asText(input.contentType) || 'application/octet-stream',
+    })
+  );
+}
+
+async function deleteBucketObject(
+  row: Pick<ProjectStorageResource, 'bucketName' | 'endpoint' | 'accessKeyId' | 'metadataJson'>,
+  secretAccessKey: string,
+  key: string
+) {
+  const client = buildBucketClient(row, secretAccessKey);
+  await client.send(
+    new DeleteObjectCommand({
+      Bucket: row.bucketName,
+      Key: key,
+    })
+  );
 }
 
 function isBucketInstancePendingError(error: unknown) {
@@ -753,11 +846,12 @@ export class ProjectStorageResourceService {
       return toStatus(erroredRow, normalizedProjectKey, secretAccessKey);
     }
     const syncedRow = await syncStoredBucketRow(row, live.credentials);
-    const secretAccessKey = options?.revealSecrets
-      ? asText(live.credentials.secretAccessKey) ||
-        connectorSecretService.decryptToString(syncedRow.secretAccessKeyCiphertext, 'deployment')
-      : null;
-    return toStatus(syncedRow, normalizedProjectKey, secretAccessKey);
+    const bucketSecretAccessKey =
+      asText(live.credentials.secretAccessKey) ||
+      connectorSecretService.decryptToString(syncedRow.secretAccessKeyCiphertext, 'deployment');
+    const files = bucketSecretAccessKey ? await listBucketObjects(syncedRow, bucketSecretAccessKey) : [];
+    const secretAccessKey = options?.revealSecrets ? bucketSecretAccessKey : null;
+    return toStatus(syncedRow, normalizedProjectKey, secretAccessKey, files);
   }
 
   async ensureRailwayBucket(
@@ -792,17 +886,20 @@ export class ProjectStorageResourceService {
         const secretAccessKey =
           asText(live.credentials.secretAccessKey) ||
           connectorSecretService.decryptToString(syncedRow.secretAccessKeyCiphertext, 'deployment');
-        if (secretAccessKey) {
-          await platformDeploymentAccountService.upsertApplicationVariables(
-            account,
-            buildStorageVariables(syncedRow, secretAccessKey),
-            { skipDeploys: true }
-          );
+        if (!secretAccessKey) {
+          throw new Error('Railway Bucket 密钥缺失');
         }
+        const files = await listBucketObjects(syncedRow, secretAccessKey);
+        await platformDeploymentAccountService.upsertApplicationVariables(
+          account,
+          buildStorageVariables(syncedRow, secretAccessKey),
+          { skipDeploys: true }
+        );
         return toStatus(
           syncedRow,
           normalizedProjectKey,
-          options?.revealSecrets ? secretAccessKey : null
+          options?.revealSecrets ? secretAccessKey : null,
+          files
         );
       }
     }
@@ -853,7 +950,12 @@ export class ProjectStorageResourceService {
         { skipDeploys: true }
       );
 
-      return toStatus(row, normalizedProjectKey, options?.revealSecrets ? secretAccessKey : null);
+      return toStatus(
+        row,
+        normalizedProjectKey,
+        options?.revealSecrets ? secretAccessKey : null,
+        []
+      );
     }
   }
 
@@ -875,6 +977,100 @@ export class ProjectStorageResourceService {
 
     await projectStorageResourceDAO.deleteByUserAndProjectKey(userId, normalizedProjectKey);
     return existing;
+  }
+
+  async uploadObject(
+    userId: string,
+    projectKey: string,
+    input: {
+      key: string;
+      body: Buffer;
+      contentType?: string | null;
+    },
+    options?: { revealSecrets?: boolean }
+  ) {
+    const normalizedProjectKey = normalizeProjectKey(projectKey);
+    const row = await projectStorageResourceDAO.getByUserAndProjectKey(userId, normalizedProjectKey);
+    if (!row) {
+      throw new Error('存储桶尚未启用');
+    }
+    const account = await platformDeploymentAccountService.ensureProjectAccount(
+      userId,
+      normalizedProjectKey
+    );
+    const live = await verifyLiveBucket(account, row);
+    if (live.kind === 'missing') {
+      await projectStorageResourceDAO.deleteByUserAndProjectKey(userId, normalizedProjectKey);
+      throw new Error('存储桶尚未启用');
+    }
+    if (live.kind === 'error') {
+      await markStoredBucketRowError(row, live.message);
+      throw new Error(live.message);
+    }
+
+    const syncedRow = await syncStoredBucketRow(row, live.credentials);
+    const secretAccessKey =
+      asText(live.credentials.secretAccessKey) ||
+      connectorSecretService.decryptToString(syncedRow.secretAccessKeyCiphertext, 'deployment');
+    if (!secretAccessKey) {
+      throw new Error('Railway Bucket 密钥缺失');
+    }
+
+    await putBucketObject(syncedRow, secretAccessKey, input);
+    const files = await listBucketObjects(syncedRow, secretAccessKey);
+    return toStatus(
+      syncedRow,
+      normalizedProjectKey,
+      options?.revealSecrets ? secretAccessKey : null,
+      files
+    );
+  }
+
+  async deleteObject(
+    userId: string,
+    projectKey: string,
+    key: string,
+    options?: { revealSecrets?: boolean }
+  ) {
+    const normalizedProjectKey = normalizeProjectKey(projectKey);
+    const objectKey = asText(key);
+    if (!objectKey) {
+      throw new Error('缺少对象 key');
+    }
+    const row = await projectStorageResourceDAO.getByUserAndProjectKey(userId, normalizedProjectKey);
+    if (!row) {
+      throw new Error('存储桶尚未启用');
+    }
+    const account = await platformDeploymentAccountService.ensureProjectAccount(
+      userId,
+      normalizedProjectKey
+    );
+    const live = await verifyLiveBucket(account, row);
+    if (live.kind === 'missing') {
+      await projectStorageResourceDAO.deleteByUserAndProjectKey(userId, normalizedProjectKey);
+      throw new Error('存储桶尚未启用');
+    }
+    if (live.kind === 'error') {
+      await markStoredBucketRowError(row, live.message);
+      throw new Error(live.message);
+    }
+
+    const syncedRow = await syncStoredBucketRow(row, live.credentials);
+    const secretAccessKey =
+      asText(live.credentials.secretAccessKey) ||
+      connectorSecretService.decryptToString(syncedRow.secretAccessKeyCiphertext, 'deployment');
+    if (!secretAccessKey) {
+      throw new Error('Railway Bucket 密钥缺失');
+    }
+
+    await deleteBucketObject(syncedRow, secretAccessKey, objectKey);
+    const files = await listBucketObjects(syncedRow, secretAccessKey);
+    return toStatus(
+      syncedRow,
+      normalizedProjectKey,
+      options?.revealSecrets ? secretAccessKey : null,
+      files
+    );
   }
 }
 

@@ -482,6 +482,11 @@ export type TaskCreationStorageStatus = {
     wired: boolean;
     keys: string[];
   };
+  files?: Array<{
+    key: string;
+    sizeBytes?: number;
+    lastModifiedAt?: string;
+  }>;
   accessModel?: string;
   lastCheckedAt?: string;
 };
@@ -1394,6 +1399,48 @@ export async function ensureTaskCreationStorage(
     body: JSON.stringify({
       revealSecrets: Boolean(options?.revealSecrets),
     }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationStorageStatus };
+  return result?.data || null;
+}
+
+export async function uploadTaskCreationStorageFile(
+  sessionId: string,
+  file: File
+): Promise<TaskCreationStorageStatus | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/storage/files`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": file.type || "application/octet-stream",
+      "X-Attachment-Name": encodeURIComponent(file.name),
+      "X-Attachment-Size": String(file.size),
+    }),
+    body: file,
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationStorageStatus };
+  return result?.data || null;
+}
+
+export async function deleteTaskCreationStorageFile(
+  sessionId: string,
+  key: string
+): Promise<TaskCreationStorageStatus | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/storage/files`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({ key }),
   });
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));

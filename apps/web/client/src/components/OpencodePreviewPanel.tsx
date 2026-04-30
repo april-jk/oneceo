@@ -41,6 +41,7 @@ import {
   RefreshCw,
   Lock,
   Unlock,
+  Upload,
   Rocket,
   ScrollText,
   Settings2,
@@ -83,6 +84,8 @@ import {
   getTaskCreationDeploymentTemplateBaseline,
   getTaskCreationDebugInfo,
   getTaskCreationStorageStatus,
+  deleteTaskCreationStorageFile,
+  uploadTaskCreationStorageFile,
   insertTaskCreationDatabaseRow,
   rotateTaskCreationDeploymentToken,
   startTaskCreationRuntime,
@@ -1423,6 +1426,67 @@ function formatPreviewTimestamp(value?: string | null) {
   const hours = String(date.getHours()).padStart(2, "0");
   const minutes = String(date.getMinutes()).padStart(2, "0");
   return `${hours}:${minutes}`;
+}
+
+function formatFileSize(value?: number) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return "—";
+  }
+  if (value === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let current = value;
+  let unitIndex = 0;
+  while (current >= 1024 && unitIndex < units.length - 1) {
+    current /= 1024;
+    unitIndex += 1;
+  }
+  const digits = current >= 10 || unitIndex === 0 ? 0 : 1;
+  return `${current.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+function getStorageFileIcon(key: string) {
+  const normalized = key.trim().toLowerCase();
+  if (
+    normalized.endsWith(".png") ||
+    normalized.endsWith(".jpg") ||
+    normalized.endsWith(".jpeg") ||
+    normalized.endsWith(".gif") ||
+    normalized.endsWith(".webp") ||
+    normalized.endsWith(".svg")
+  ) {
+    return FileImage;
+  }
+  if (
+    normalized.endsWith(".mp4") ||
+    normalized.endsWith(".mov") ||
+    normalized.endsWith(".webm")
+  ) {
+    return FileVideo;
+  }
+  if (normalized.endsWith(".mp3") || normalized.endsWith(".wav")) {
+    return FileAudio;
+  }
+  if (normalized.endsWith(".json")) {
+    return FileJson2;
+  }
+  if (
+    normalized.endsWith(".ts") ||
+    normalized.endsWith(".tsx") ||
+    normalized.endsWith(".js") ||
+    normalized.endsWith(".jsx") ||
+    normalized.endsWith(".css") ||
+    normalized.endsWith(".html")
+  ) {
+    return FileCode2;
+  }
+  if (
+    normalized.endsWith(".md") ||
+    normalized.endsWith(".txt") ||
+    normalized.endsWith(".csv")
+  ) {
+    return FileText;
+  }
+  return File;
 }
 
 function formatMetricCount(value?: number | null, fallback: string = "--") {
@@ -2926,7 +2990,7 @@ export function DeploymentPreview({
         ) : null}
 
         {section === "storage" ? (
-          <DeploymentStorageSection sessionId={sessionId} info={info} statusMeta={statusMeta} />
+          <DeploymentStorageSection sessionId={sessionId} statusMeta={statusMeta} />
         ) : null}
 
         {section === "settings" ? (
@@ -4577,49 +4641,6 @@ function DeploymentPlaceholderGrid({
   );
 }
 
-function ConnectionInfoField({
-  label,
-  value,
-  copied,
-  onCopy,
-  sensitive = false,
-  revealed = true,
-}: {
-  label: string;
-  value: string;
-  copied: boolean;
-  onCopy: () => void;
-  sensitive?: boolean;
-  revealed?: boolean;
-}) {
-  const displayValue =
-    sensitive && !revealed ? "••••••••••••••••" : value;
-
-  return (
-    <div className="rounded-md border border-border/70 bg-muted/30 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-xs uppercase tracking-[0.08em] text-muted-foreground">
-          {label}
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-7 text-[11px]"
-          onClick={onCopy}
-        >
-          <Copy className="size-3.5" />
-          {copied
-            ? i18n.t("previewPanel.deployment.database.copied")
-            : i18n.t("previewPanel.deployment.database.copy")}
-        </Button>
-      </div>
-      <div className="mt-2 break-all font-mono text-xs text-foreground">
-        {displayValue}
-      </div>
-    </div>
-  );
-}
-
 function ConnectionDialogField({
   label,
   value,
@@ -4823,11 +4844,9 @@ function buildMutationValues(
 
 function DeploymentStorageSection({
   sessionId,
-  info,
   statusMeta,
 }: {
   sessionId?: string | null;
-  info: TaskCreationDeploymentInfo | null;
   statusMeta: DeploymentStatusMeta;
 }) {
   const [storageStatus, setStorageStatus] =
@@ -4835,6 +4854,13 @@ function DeploymentStorageSection({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
+  const [connectionSecretsVisible, setConnectionSecretsVisible] = useState(false);
+  const [selectedFileKey, setSelectedFileKey] = useState<string | null>(null);
+  const [storageActionLoading, setStorageActionLoading] = useState<
+    "upload" | "delete" | null
+  >(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadStorage = useCallback(
     async (revealSecrets = false) => {
@@ -4885,6 +4911,13 @@ function DeploymentStorageSection({
     await loadStorage(true);
   };
 
+  const handleOpenConnectionDialog = async () => {
+    setConnectionDialogOpen(true);
+    if (!storageStatus?.bucket?.secretAccessKey) {
+      await handleRevealSecrets();
+    }
+  };
+
   const handleCopy = async (key: string, value?: string) => {
     if (!value) return;
     try {
@@ -4899,6 +4932,55 @@ function DeploymentStorageSection({
     }
   };
 
+  const handleSelectUpload = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleUploadFile = async (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!sessionId || !file) return;
+    setLoading(true);
+    setError(null);
+    try {
+      setStorageActionLoading("upload");
+      const result = await uploadTaskCreationStorageFile(sessionId, file);
+      setStorageStatus(result);
+    } catch (uploadError) {
+      setError(
+        uploadError instanceof Error
+          ? uploadError.message
+          : i18n.t("previewPanel.deployment.storage.uploadFailed"),
+      );
+    } finally {
+      setStorageActionLoading(null);
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteFile = async () => {
+    if (!sessionId || !selectedFileKey) return;
+    setLoading(true);
+    setStorageActionLoading("delete");
+    setError(null);
+    try {
+      const result = await deleteTaskCreationStorageFile(sessionId, selectedFileKey);
+      setStorageStatus(result);
+      setSelectedFileKey(null);
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : i18n.t("previewPanel.deployment.storage.deleteFailed"),
+      );
+    } finally {
+      setStorageActionLoading(null);
+      setLoading(false);
+    }
+  };
+
   if (!sessionId) {
     return (
       <EmptyState text={i18n.t("previewPanel.deployment.storage.missingSession")} />
@@ -4906,88 +4988,23 @@ function DeploymentStorageSection({
   }
 
   const bucket = storageStatus?.bucket || null;
+  const bucketFiles = storageStatus?.files || [];
+  const selectedFile =
+    bucketFiles.find((fileItem) => fileItem.key === selectedFileKey) || null;
 
   if (!storageStatus?.configured) {
     return (
-      <div className="space-y-4">
-        <DeploymentResourceHeroCard
-          icon={<HardDrive className="size-5" />}
-          title={i18n.t("previewPanel.deployment.storage.notConfiguredTitle")}
-          description={i18n.t(
-            "previewPanel.deployment.storage.notConfiguredDescription",
-          )}
-          action={
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 text-xs"
-                onClick={() => void loadStorage(Boolean(bucket?.secretAccessKey))}
-                disabled={loading}
-              >
-                {loading ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="size-4" />
-                )}
-                {i18n.t("previewPanel.deployment.storage.refresh")}
-              </Button>
-              <Button
-                size="sm"
-                className="h-8 text-xs"
-                onClick={() => void handleEnsureStorage()}
-                disabled={loading}
-              >
-                {loading ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <HardDrive className="size-4" />
-                )}
-                {i18n.t("previewPanel.deployment.storage.enable")}
-              </Button>
+      <section className="rounded-xl border border-border/70 bg-card p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-base font-semibold text-foreground">
+              {i18n.t("previewPanel.deployment.storage.notConfiguredTitle")}
             </div>
-          }
-        >
-          <DeploymentPlaceholderGrid
-            items={[
-              {
-                title: i18n.t("previewPanel.deployment.storage.userUpload"),
-                description: i18n.t(
-                  "previewPanel.deployment.storage.userUploadDescription",
-                ),
-              },
-              {
-                title: i18n.t(
-                  "previewPanel.deployment.storage.buildArtifactSeparation",
-                ),
-                description: i18n.t(
-                  "previewPanel.deployment.storage.buildArtifactSeparationDescription",
-                ),
-              },
-              {
-                title: i18n.t("previewPanel.deployment.storage.accessPolicy"),
-                description: i18n.t(
-                  "previewPanel.deployment.storage.accessPolicyDescription",
-                ),
-              },
-            ]}
-          />
-        </DeploymentResourceHeroCard>
-        {error ? <div className="text-sm text-rose-600">{error}</div> : null}
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-4">
-      <DeploymentResourceHeroCard
-        icon={<HardDrive className="size-5" />}
-        title={i18n.t("previewPanel.deployment.storage.title")}
-        description={i18n.t(
-          "previewPanel.deployment.storage.applicationVariablesDescription",
-        )}
-        action={
-          <div className="flex flex-wrap items-center gap-2">
+            <div className="mt-1 text-sm text-muted-foreground">
+              {i18n.t("previewPanel.deployment.storage.notConfiguredDescription")}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
             <Button
               variant="outline"
               size="sm"
@@ -5002,157 +5019,329 @@ function DeploymentStorageSection({
               )}
               {i18n.t("previewPanel.deployment.storage.refresh")}
             </Button>
-            {!bucket?.secretAccessKey ? (
+            <Button
+              size="sm"
+              className="h-8 text-xs"
+              onClick={() => void handleEnsureStorage()}
+              disabled={loading}
+            >
+              {loading ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <HardDrive className="size-4" />
+              )}
+              {i18n.t("previewPanel.deployment.storage.enable")}
+            </Button>
+          </div>
+        </div>
+        {error ? <div className="mt-4 text-sm text-rose-600">{error}</div> : null}
+      </section>
+    );
+  }
+
+  return (
+    <div className="h-full overflow-hidden rounded-xl border border-border/70 bg-card">
+      <div className="flex h-full items-stretch overflow-hidden">
+        <div className="relative flex h-full w-[220px] shrink-0 flex-col border-r border-border">
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 py-3">
+            <button
+              type="button"
+              title={bucket?.name || i18n.t("previewPanel.deployment.storage.title")}
+              className="flex w-full items-center gap-3 rounded-md bg-muted/60 px-3 py-2 text-left"
+            >
+              <HardDrive className="size-4 shrink-0 text-foreground" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium text-foreground">
+                  {bucket?.name || i18n.t("previewPanel.deployment.storage.title")}
+                </div>
+              </div>
+              <div className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
+                {formatMetricCount(bucketFiles.length, "0")}
+              </div>
+            </button>
+          </div>
+          <div className="border-t border-border px-3 py-4">
+            <Button
+              variant="outline"
+              className="h-8 w-full justify-center text-xs"
+              onClick={() => void handleOpenConnectionDialog()}
+            >
+              <KeyRound className="size-4" />
+              {i18n.t("previewPanel.deployment.storage.manageConnectionTitle")}
+            </Button>
+          </div>
+        </div>
+
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+            <div className="text-[13px] font-normal text-foreground">
+              {i18n.t("previewPanel.deployment.storage.filesTitle")}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="outline"
                 size="sm"
                 className="h-8 text-xs"
-                onClick={() => void handleRevealSecrets()}
+                onClick={handleSelectUpload}
                 disabled={loading}
               >
-                <Unlock className="size-4" />
-                {i18n.t("previewPanel.deployment.storage.revealSecrets")}
-              </Button>
-            ) : null}
-          </div>
-        }
-      >
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <DeploymentMiniStatus
-            label={i18n.t("previewPanel.deployment.storage.storageStatus")}
-            value={i18n.t("previewPanel.deployment.storage.ready")}
-          />
-          <DeploymentMiniStatus
-            label={i18n.t("previewPanel.deployment.storage.appAccess")}
-            value={statusMeta.label}
-          />
-          <DeploymentMiniStatus
-            label={i18n.t("previewPanel.deployment.storage.defaultDomain")}
-            value={
-              info?.domains.length
-                ? i18n.t("previewPanel.deployment.storage.generated")
-                : i18n.t("previewPanel.deployment.storage.pendingPublish")
-            }
-          />
-          <DeploymentMiniStatus
-            label={i18n.t("previewPanel.deployment.storage.bucketName")}
-            value={bucket?.name || "—"}
-          />
-        </div>
-      </DeploymentResourceHeroCard>
-
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.95fr)]">
-        <section className="rounded-lg border border-border/70 bg-card">
-          <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
-            {i18n.t("previewPanel.deployment.storage.title")}
-          </div>
-          <div className="space-y-4 p-4">
-            <div className="grid gap-3">
-              <ConnectionInfoField
-                label={i18n.t("previewPanel.deployment.storage.bucketName")}
-                value={bucket?.name || ""}
-                copied={copiedField === "bucket"}
-                onCopy={() => void handleCopy("bucket", bucket?.name)}
-              />
-              <ConnectionInfoField
-                label={i18n.t("previewPanel.deployment.storage.endpoint")}
-                value={bucket?.endpoint || ""}
-                copied={copiedField === "endpoint"}
-                onCopy={() => void handleCopy("endpoint", bucket?.endpoint)}
-              />
-              {bucket?.publicUrl ? (
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.storage.publicUrl")}
-                  value={bucket.publicUrl}
-                  copied={copiedField === "publicUrl"}
-                  onCopy={() => void handleCopy("publicUrl", bucket.publicUrl)}
-                />
-              ) : null}
-              <ConnectionInfoField
-                label={i18n.t("previewPanel.deployment.storage.accessKeyId")}
-                value={
-                  bucket?.secretAccessKey
-                    ? bucket.accessKeyId
-                    : "••••••••••••••••"
-                }
-                copied={copiedField === "accessKeyId"}
-                onCopy={() =>
-                  void handleCopy(
-                    "accessKeyId",
-                    bucket?.secretAccessKey ? bucket.accessKeyId : undefined,
-                  )
-                }
-                sensitive
-              />
-              <ConnectionInfoField
-                label={i18n.t("previewPanel.deployment.storage.secretAccessKey")}
-                value={bucket?.secretAccessKey || "••••••••••••••••"}
-                copied={copiedField === "secretAccessKey"}
-                onCopy={() =>
-                  void handleCopy("secretAccessKey", bucket?.secretAccessKey)
-                }
-                sensitive
-              />
-            </div>
-
-            <div className="rounded-md border border-border/70 bg-muted/30 p-4">
-              <div className="text-sm font-semibold text-foreground">
-                {i18n.t("previewPanel.deployment.storage.applicationVariables")}
-              </div>
-              <p className="mt-2 text-sm text-muted-foreground">
-                {i18n.t(
-                  "previewPanel.deployment.storage.applicationVariablesDescription",
+                {loading ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Upload className="size-4" />
                 )}
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {(storageStatus?.applicationVariables?.keys || [
-                  "ONECEO_STORAGE_ENABLED",
-                  "S3_ENDPOINT",
-                  "S3_BUCKET_NAME",
-                  "S3_ACCESS_KEY_ID",
-                  "S3_SECRET_ACCESS_KEY",
-                ]).map((key) => (
-                  <span
-                    key={key}
-                    className="rounded-full border border-border bg-background px-2 py-1 text-xs text-muted-foreground"
-                  >
-                    {key}
-                  </span>
-                ))}
-              </div>
+                {i18n.t("previewPanel.deployment.storage.upload")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => void loadStorage(Boolean(bucket?.secretAccessKey))}
+                disabled={loading}
+              >
+                {loading ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-4" />
+                )}
+                {i18n.t("previewPanel.deployment.storage.refresh")}
+              </Button>
             </div>
           </div>
-        </section>
 
-        <section className="rounded-lg border border-border/70 bg-card">
-          <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
-            {i18n.t("previewPanel.deployment.storage.usageGuidance")}
+          {error ? (
+            <div className="px-4 pt-3 text-xs text-rose-600">{error}</div>
+          ) : null}
+
+          <div
+            className="relative min-h-0 flex-1 overflow-auto"
+            onClick={(event) => {
+              if (event.target === event.currentTarget) {
+                setSelectedFileKey(null);
+              }
+            }}
+          >
+            {bucketFiles.length ? (
+              <table className="w-full min-w-[720px] table-auto border-collapse">
+                <thead>
+                  <tr className="border-b border-border bg-muted/20 text-left">
+                    <th className="px-4 py-3 text-xs font-medium text-muted-foreground">
+                      {i18n.t("previewPanel.deployment.storage.fileName")}
+                    </th>
+                    <th className="w-[140px] px-4 py-3 text-xs font-medium text-muted-foreground">
+                      {i18n.t("previewPanel.deployment.storage.fileSize")}
+                    </th>
+                    <th className="w-[120px] px-4 py-3 text-xs font-medium text-muted-foreground">
+                      {i18n.t("previewPanel.deployment.storage.lastModified")}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bucketFiles.map((fileItem) => {
+                    const FileIcon = getStorageFileIcon(fileItem.key);
+                    return (
+                      <tr
+                        key={fileItem.key}
+                        className={cn(
+                          "cursor-pointer border-b border-border/70 transition-colors hover:bg-muted/20",
+                          selectedFileKey === fileItem.key ? "bg-muted/30" : null,
+                        )}
+                        title={fileItem.key}
+                        onClick={() => setSelectedFileKey(fileItem.key)}
+                      >
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-3">
+                            <FileIcon className="size-4 shrink-0 text-muted-foreground" />
+                            <div className="min-w-0 truncate text-sm text-foreground">
+                              {fileItem.key}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-sm text-muted-foreground">
+                          {formatFileSize(fileItem.sizeBytes)}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-muted-foreground">
+                          {formatPreviewTimestamp(fileItem.lastModifiedAt) || "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              <div className="flex h-full min-h-[260px] items-center justify-center px-6 text-sm text-muted-foreground">
+                {i18n.t("previewPanel.deployment.storage.emptyFiles")}
+              </div>
+            )}
           </div>
-          <div className="space-y-3 p-4">
-            <DeploymentPlaceholderCard
-              title={i18n.t("previewPanel.deployment.storage.userUpload")}
-              description={i18n.t(
-                "previewPanel.deployment.storage.userUploadDescription",
-              )}
-            />
-            <DeploymentPlaceholderCard
-              title={i18n.t(
-                "previewPanel.deployment.storage.buildArtifactSeparation",
-              )}
-              description={i18n.t(
-                "previewPanel.deployment.storage.buildArtifactSeparationDescription",
-              )}
-            />
-            <DeploymentPlaceholderCard
-              title={i18n.t("previewPanel.deployment.storage.accessPolicy")}
-              description={i18n.t(
-                "previewPanel.deployment.storage.accessPolicyDescription",
-              )}
-            />
+
+          {selectedFile ? (
+            <div className="border-t border-border bg-muted/10 px-4 py-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-foreground">
+                    {i18n.t("previewPanel.deployment.storage.filePreviewTitle")}
+                  </div>
+                  <div
+                    className="mt-2 truncate text-sm text-foreground"
+                    title={selectedFile.key}
+                  >
+                    {selectedFile.key}
+                  </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                    <DeploymentMiniStatus
+                      label={i18n.t("previewPanel.deployment.storage.fileName")}
+                      value={selectedFile.key}
+                    />
+                    <DeploymentMiniStatus
+                      label={i18n.t("previewPanel.deployment.storage.fileSize")}
+                      value={formatFileSize(selectedFile.sizeBytes)}
+                    />
+                    <DeploymentMiniStatus
+                      label={i18n.t("previewPanel.deployment.storage.lastModified")}
+                      value={selectedFile.lastModifiedAt || "—"}
+                    />
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={() => setSelectedFileKey(null)}
+                  >
+                    {i18n.t("previewPanel.deployment.storage.closePreview")}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs text-rose-600 hover:text-rose-700"
+                    onClick={() => void handleDeleteFile()}
+                    disabled={loading || storageActionLoading === "delete"}
+                  >
+                    {storageActionLoading === "delete" ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="size-4" />
+                    )}
+                    {i18n.t("previewPanel.deployment.storage.deleteFile")}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="flex items-center justify-between border-t border-border px-4 py-3 text-xs text-muted-foreground">
+            <div>
+              {i18n.t("previewPanel.deployment.storage.fileCount", {
+                count: bucketFiles.length,
+              })}
+            </div>
+            <div className="flex items-center gap-2">
+              <span>{i18n.t("previewPanel.deployment.storage.storageStatus")}</span>
+              <span className="text-foreground">{i18n.t("previewPanel.deployment.storage.ready")}</span>
+              <span className="h-1 w-1 rounded-full bg-border" />
+              <span>{statusMeta.label}</span>
+            </div>
           </div>
-        </section>
+        </div>
       </div>
-      {error ? <div className="text-sm text-rose-600">{error}</div> : null}
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        onChange={handleUploadFile}
+      />
+
+      <Dialog
+        open={connectionDialogOpen}
+        onOpenChange={(open) => {
+          setConnectionDialogOpen(open);
+          if (!open) {
+            setConnectionSecretsVisible(false);
+            setStorageStatus((current) =>
+              current?.bucket
+                ? {
+                    ...current,
+                    bucket: {
+                      ...current.bucket,
+                      secretAccessKey: undefined,
+                    },
+                  }
+                : current,
+            );
+          }
+        }}
+      >
+        <DialogContent className="max-w-3xl rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {i18n.t("previewPanel.deployment.storage.manageConnectionTitle")}
+            </DialogTitle>
+            <DialogDescription>
+              {i18n.t("previewPanel.deployment.storage.manageConnectionDescription")}
+            </DialogDescription>
+          </DialogHeader>
+
+          {bucket ? (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-950">
+                {i18n.t("previewPanel.deployment.storage.secretWarning")}
+              </div>
+
+              <div className="rounded-xl border border-border/70 bg-card p-4">
+                <div className="space-y-4">
+                  <ConnectionDialogField
+                    label={i18n.t("previewPanel.deployment.storage.bucketName")}
+                    value={bucket.name}
+                    copied={copiedField === "bucket"}
+                    onCopy={() => void handleCopy("bucket", bucket.name)}
+                  />
+                  <ConnectionDialogField
+                    label={i18n.t("previewPanel.deployment.storage.endpoint")}
+                    value={bucket.endpoint}
+                    copied={copiedField === "endpoint"}
+                    onCopy={() => void handleCopy("endpoint", bucket.endpoint)}
+                  />
+                  {bucket.publicUrl ? (
+                    <ConnectionDialogField
+                      label={i18n.t("previewPanel.deployment.storage.publicUrl")}
+                      value={bucket.publicUrl}
+                      copied={copiedField === "publicUrl"}
+                      onCopy={() => void handleCopy("publicUrl", bucket.publicUrl)}
+                    />
+                  ) : null}
+                  <ConnectionDialogField
+                    label={i18n.t("previewPanel.deployment.storage.accessKeyId")}
+                    value={bucket.accessKeyId}
+                    copied={copiedField === "accessKeyId"}
+                    onCopy={() => void handleCopy("accessKeyId", bucket.accessKeyId)}
+                    sensitive
+                    revealed={connectionSecretsVisible}
+                  />
+                  <ConnectionDialogField
+                    label={i18n.t("previewPanel.deployment.storage.secretAccessKey")}
+                    value={bucket.secretAccessKey || ""}
+                    copied={copiedField === "secretAccessKey"}
+                    onCopy={() =>
+                      void handleCopy("secretAccessKey", bucket.secretAccessKey)
+                    }
+                    sensitive
+                    revealed={connectionSecretsVisible}
+                    onToggleSensitive={() =>
+                      setConnectionSecretsVisible((current) => !current)
+                    }
+                  />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="py-8 text-center text-sm text-muted-foreground">
+              {i18n.t("previewPanel.deployment.storage.waitPanelReady")}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

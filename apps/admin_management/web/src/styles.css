@@ -15835,50 +15835,21 @@ tbody td,
   padding: 0 !important;
 }
 
-.reference-pricing-table-wrap {
-  border: none;
-  border-radius: 0;
+/* Card List Layout */
+.reference-pricing-list {
+  padding: 8px 24px 16px;
 }
 
-.reference-pricing-table {
-  font-size: 13px;
+.reference-pricing-group {
+  margin-bottom: 16px;
 }
 
-.reference-pricing-table thead th {
-  position: sticky;
-  top: 0;
-  background: var(--surface, #fff);
-  z-index: 1;
-  padding: 10px 8px;
-  font-size: 11px;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-soft, #656d76);
-  border-bottom: 1px solid var(--border, #d0d7de);
-  white-space: nowrap;
-}
-
-.ref-col-unit {
-  font-weight: 500;
-  color: var(--text-faint, #8c959f);
-  text-transform: none;
-  letter-spacing: 0;
-}
-
-.ref-col-price {
-  text-align: right;
-}
-
-.ref-col-actions {
-  text-align: center;
-}
-
-/* Group header */
-.reference-pricing-group-header td {
-  padding: 10px 8px 6px;
-  background: var(--surface-muted, #f6f8fa);
-  border-bottom: 1px solid var(--border, #d0d7de);
+.reference-pricing-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  margin-bottom: 8px;
 }
 
 .reference-pricing-group-badge {
@@ -15895,39 +15866,80 @@ tbody td,
 }
 
 .reference-pricing-group-count {
-  margin-left: 8px;
   font-size: 11px;
   color: var(--text-faint, #8c959f);
   font-weight: 600;
 }
 
-/* Data rows */
-.reference-pricing-row {
-  transition: background-color 0.12s ease;
+.reference-pricing-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.reference-pricing-row:hover {
-  background-color: rgba(9, 105, 218, 0.03);
+.reference-pricing-card {
+  padding: 12px 16px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 10px;
+  transition: box-shadow 0.15s, border-color 0.15s;
 }
 
-.reference-pricing-row td {
-  padding: 6px 8px;
-  border-bottom: 1px solid #eaeef2;
-  vertical-align: middle;
+.reference-pricing-card:hover {
+  border-color: var(--border-hover, #c4cdd5);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
-.reference-pricing-row-new {
+.reference-pricing-card-new {
   background-color: rgba(210, 153, 34, 0.04);
+  border-color: rgba(210, 153, 34, 0.25);
 }
 
-.reference-pricing-row-new:hover {
-  background-color: rgba(210, 153, 34, 0.07);
+.reference-pricing-card-new:hover {
+  border-color: rgba(210, 153, 34, 0.4);
+}
+
+.reference-pricing-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.reference-pricing-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
 }
 
 .reference-pricing-provider-name {
   font-weight: 700;
   color: var(--text-soft, #656d76);
   font-size: 12px;
+  flex-shrink: 0;
+}
+
+.reference-pricing-card-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.reference-pricing-card-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.reference-pricing-card-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-faint, #8c959f);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 /* Inputs */
@@ -16011,7 +16023,7 @@ tbody td,
   transition: opacity 0.12s, background-color 0.12s, color 0.12s;
 }
 
-.reference-pricing-row:hover .reference-pricing-delete {
+.reference-pricing-card:hover .reference-pricing-delete {
   opacity: 1;
 }
 
@@ -16051,7 +16063,7 @@ tbody td,
   font-weight: 600;
 }
 
-/* Mobile: always show delete */
+/* Mobile */
 @media (max-width: 640px) {
   .reference-pricing-delete {
     opacity: 1;
@@ -16059,5 +16071,8 @@ tbody td,
   .reference-pricing-toolbar {
     flex-direction: column;
     align-items: stretch;
+  }
+  .reference-pricing-card-fields {
+    grid-template-columns: 1fr;
   }
 }

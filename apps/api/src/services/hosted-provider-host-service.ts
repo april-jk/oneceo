@@ -140,6 +140,8 @@ export class HostedProviderHostService {
       case 'figma':
       case 'google_cloud':
       case 'notion':
+      case 'slack':
+      case 'supabase':
         return this.executeComposio(input, (input.backendProvider || input.connectorKey) as ConnectorKey);
       default:
         throw new Error(`涓嶆敮鎸佺殑 hosted provider: ${input.backendProvider || input.connectorKey}`);

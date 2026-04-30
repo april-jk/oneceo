@@ -638,6 +638,8 @@
       "saveProfile": "Save profile",
       "reconnectNotion": "Reconnect Notion",
       "connectNotion": "Connect Notion",
+      "reconnectConnector": "Reconnect {{name}}",
+      "connectConnector": "Connect {{name}}",
       "reauthorize": "Reauthorize",
       "startOauth": "Start OAuth"
     },
@@ -689,28 +691,21 @@
       "directRedirectHint": "If GitHub decides the app is already authorized, the authorization page may jump directly back to oneceo. This is normal GitHub App behavior."
     },
     "supabase": {
-      "tokenRequired": "Please enter a Supabase Personal Access Token first",
       "connected": "Supabase connected",
-      "goToTokenCreation": "Create token",
       "mcpDetails": "MCP details",
-      "description": "Interact with your Supabase project, including table management, SQL execution, document search, edge function deployment, and project settings maintenance.",
-      "mcpEndpoint": "MCP endpoint",
+      "description": "Use Supabase through Composio managed authorization and oneceo API-brokered MCP tools.",
+      "mcpEndpoint": "Runtime",
       "authMethod": "Authentication",
-      "personalAccessToken": "Personal Access Token",
+      "composioConnectLink": "Composio Connect Link",
       "defaultProfile": "Supabase Default",
-      "tokenGuideTitle": "From signup to token creation",
-      "accessTokensPage": "Access Tokens page",
-      "connectHint": "Click Connect above, enter your token, and the Supabase MCP will be attached.",
+      "connectGuideTitle": "Connection flow",
+      "connectHint": "Click Connect above, finish Composio authorization, and the Supabase MCP can be attached.",
       "connectTitle": "Connect Supabase",
-      "connectDescriptionPrefix": "Configure a Supabase access token to use this feature. Refer to the",
-      "officialDocs": "official docs",
-      "connectDescriptionSuffix": "to get and manage your token.",
       "steps": {
-        "signup": "Create an account, or sign in if you already have one.",
-        "dashboard": "After signing in, open the dashboard and create or enter any project.",
-        "accountSettings": "Click your avatar in the upper-right corner and open Account Settings.",
-        "createTokenSuffix": ", then create a new Personal Access Token.",
-        "copyToken": "Copy the new token, return to this page, paste it in, and click Connect."
+        "connect": "Click Connect to open the Composio/Supabase authorization page.",
+        "authorize": "Finish authorization for the intended Supabase account and project scope.",
+        "attach": "After returning to oneceo, the profile is saved and can be attached to the current session.",
+        "useTools": "Session tools are exposed through the API broker; the sandbox receives no Supabase or Composio tokens."
       }
     },
     "guides": {
@@ -737,27 +732,19 @@
         }
       },
       "slack": {
-        "intro": "The Slack connector only keeps the OAuth path. The current flow uses Slack User OAuth authorization.",
+        "intro": "The Slack connector uses Composio managed authorization and MCP tool calls. oneceo keeps broker data on the API server only, without sending Slack tokens or MCP headers into the sandbox.",
         "steps": {
-          "0": "After clicking connect, confirm which workspace and account you want to use on the Slack authorization page.",
-          "1": "After authorizing and returning to oneceo, the system automatically saves the default profile and mounts it to the current session when needed.",
-          "2": "If channels or messages cannot be read, first verify that the Slack user has access to them."
+          "0": "Click connect and finish workspace authorization on the Composio/Slack authorization page.",
+          "1": "After returning to oneceo, the system saves the Slack profile and mounts it to the current session when needed.",
+          "2": "Session tool calls go through the API broker to Composio MCP; the sandbox receives no Slack or Composio credentials."
         },
         "tips": {
-          "0": "If you switch workspaces, accounts, or scopes, reconnect instead of reusing the old authorization."
+          "0": "Legacy Slack User OAuth profiles must be reconnected through Composio."
         },
         "links": {
-          "apps": {
-            "label": "Slack Your Apps",
-            "description": "Review the current Slack app and OAuth configuration"
-          },
-          "oauthDocs": {
-            "label": "Slack OAuth docs",
-            "description": "Learn how User OAuth installation and authorization work"
-          },
-          "mcpDocs": {
-            "label": "Slack MCP docs",
-            "description": "Review Slack MCP capabilities and permission requirements"
+          "composioToolkit": {
+            "label": "Composio Slack toolkit",
+            "description": "Review the Composio managed Slack toolkit"
           }
         }
       },
@@ -780,20 +767,20 @@
         }
       },
       "supabase": {
-        "intro": "Supabase is an independent connector, not a replacement for postgres. Configure the access token outside the sandbox. The platform mounts MCP inside the sandbox through a local bridge.",
+        "intro": "The Supabase connector uses Composio managed authorization and MCP tool calls. oneceo keeps broker data on the API server only, without sending tokens or MCP headers into the sandbox.",
         "steps": {
-          "0": "Create or copy an access token from the account tokens page.",
-          "1": "Paste the token into the connector configuration. The sandbox reuses it to access Supabase capabilities."
+          "0": "Click connect and finish Supabase authorization on the Composio authorization page.",
+          "1": "After returning to oneceo, the system saves the Supabase profile and mounts it to the current session when needed.",
+          "2": "Session tool calls go through the API broker to Composio MCP; the sandbox receives no Supabase or Composio credentials."
         },
         "tips": {
-          "0": "Do not treat Supabase as a replacement for postgres. It is an independent connector.",
-          "1": "Profile Name and Display Name can both be left empty. The system fills in a default profile name automatically.",
-          "2": "After saving, you can add a display name to make it easier to recognize inside sessions."
+          "0": "Legacy Supabase token profiles must be reconnected through Composio.",
+          "1": "Confirm the target project before schema, data, auth, storage, function, or settings changes."
         },
         "links": {
-          "tokens": {
-            "label": "Supabase Access Tokens",
-            "description": "Create or manage access tokens"
+          "composioToolkit": {
+            "label": "Composio Supabase toolkit",
+            "description": "Review the Composio managed Supabase toolkit"
           }
         }
       },

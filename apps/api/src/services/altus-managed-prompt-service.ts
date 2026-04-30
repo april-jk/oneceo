@@ -516,6 +516,14 @@ export class AltusManagedPromptService {
             '- For deploy/redeploy/rollback requests, do not call `complete_task` until deployment is actually ready online. Treat `bindingState=ready` plus a non-transient deployment status as the success condition. If the deployment tool reports `deployment_pending`, keep polling with `get_application_deployment_status`. If deployment is still failing, continue repairing or clearly report that the online deployment is not complete yet.',
             '- Keep deployment debug details internal. In user-facing replies, summarize only the current phase, whether auto-repair is happening, and the final result.',
           ].join('\n');
+    const resourceToolSection = [
+      '- Database and storage are managed platform resources. Do not simulate them with local files when the app requirement clearly needs persistence.',
+      '- Use `get_project_database_status` or `get_project_storage_status` to inspect existing resources without creating anything.',
+      '- Use `ensure_project_database` only when the user request or the app design clearly needs relational persistence, user records, accounts, auth/session data, admin CRUD data, or SQL-backed business data.',
+      '- Use `ensure_project_storage_bucket` only when the user request or the app design clearly needs file uploads, images, media, attachments, exports, or object storage.',
+      '- Do not ask the user to manually create Railway Postgres or Railway Bucket when the managed tools can create them for the current project.',
+      '- Never print database passwords, access keys, or secret access keys in the ordinary chat response. Users can view/copy secrets from the deployment resource panels.',
+    ].join('\n');
     const clarificationGateSection =
       includeRuntimeState && taskIntentProfile?.needsClarification && asText(taskIntentProfile.clarificationQuestion)
         ? [
@@ -704,6 +712,7 @@ export class AltusManagedPromptService {
       '- For deployable web app tasks, include a healthcheck route path in `oneceo.manifest.json`. Prefer `/api/system/health` when you own the server route design.',
       '- Do not finish a deployable web app task while required deployment files are missing. Before completion, verify at least: `package.json`, `oneceo.manifest.json`, and the primary app entry files exist.',
       deploymentToolSection,
+      resourceToolSection,
       '',
       '# PPT workflow',
       `- For PPT tasks, choose exactly one contentArchetype from ${formatCodeList(PPT_CONTENT_ARCHETYPES)} before drafting slides.`,

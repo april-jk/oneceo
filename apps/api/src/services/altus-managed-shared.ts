@@ -526,6 +526,61 @@ export function buildManagedToolDefinitions() {
     {
       type: 'function',
       function: {
+        name: 'ensure_project_database',
+        description:
+          'Explicitly create or repair a Railway Postgres database for the current user project/session, in the same Railway Environment as the app, and inject database variables into the app service. Use only when the user requirement clearly needs persistent relational data, accounts, records, authentication state, or SQL-backed storage.',
+        parameters: objectSchema({
+          reason: {
+            type: 'string',
+            description: 'Short reason why this project needs a database.',
+          },
+        }),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_project_database_status',
+        description:
+          'Check whether the current project already has Railway Postgres enabled. This never creates resources.',
+        parameters: objectSchema({}),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'inspect_project_database_schema',
+        description:
+          'Read the current Railway Postgres schema and table summary for the project. This never creates resources.',
+        parameters: objectSchema({}),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'ensure_project_storage_bucket',
+        description:
+          'Explicitly create or repair a Railway Bucket for the current user project/session, in the same Railway Environment as the app, and inject S3 variables into the app service. Use only when the user requirement clearly needs file uploads, media, attachments, exports, or object storage.',
+        parameters: objectSchema({
+          reason: {
+            type: 'string',
+            description: 'Short reason why this project needs object storage.',
+          },
+        }),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_project_storage_status',
+        description:
+          'Check whether the current project already has a Railway Bucket enabled. This never creates resources and never returns plaintext secret keys.',
+        parameters: objectSchema({}),
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'read_file',
         description: 'Read a UTF-8 text file from the workspace.',
         parameters: objectSchema(

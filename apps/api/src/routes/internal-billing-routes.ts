@@ -678,6 +678,7 @@ router.get('/pricing', async (req, res) => {
           runtimeConfigAnchor: runtime?.runtimeConfigAnchor || null,
           cacheHitRatio: ratios?.hit || 0,
           cacheCreationRatio: ratios?.creation || 0,
+          multiplier: p.multiplier !== undefined ? Number(parseFloat(String(p.multiplier)).toFixed(4)) : 1.0,
         };
       })
     );
@@ -820,7 +821,7 @@ router.post('/pricing', async (req, res) => {
       modelProvider,
       promptPricePer1mTokens,
       completionPricePer1mTokens,
-      multiplier: multiplier !== undefined ? Number(multiplier) : undefined,
+      multiplier: multiplier !== undefined ? Number(parseFloat(String(multiplier)).toFixed(4)) : undefined,
       effectiveFrom: parsedEffectiveFrom,
     });
 

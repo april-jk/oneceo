@@ -100,6 +100,36 @@ function hasStaleActiveDeploymentDomainMessage(input: {
   );
 }
 
+function hasStaleDeploymentAnalyticsMetadata(input: {
+  analytics?: unknown;
+  publicDomain?: unknown;
+  publicUrl?: unknown;
+  latestStaticUrl?: unknown;
+  latestUrl?: unknown;
+  domains?: unknown;
+}) {
+  const analytics = pickRecord(input.analytics);
+  const analyticsDomain = asText(analytics.domain)
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '');
+  const websiteName = asText(analytics.websiteName);
+  const domains = Array.isArray(input.domains) ? input.domains : [];
+  const canonicalDomain = (
+    asText(input.publicDomain) ||
+    asText(input.publicUrl) ||
+    asText(input.latestStaticUrl) ||
+    asText(input.latestUrl) ||
+    asText(domains[0])
+  )
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '');
+  return (
+    Boolean(canonicalDomain && analyticsDomain && analyticsDomain !== canonicalDomain) ||
+    websiteName.includes('railway.app') ||
+    analyticsDomain.includes('railway.app')
+  );
+}
+
 function deploymentSyncKeyFor(taskSessionId: string) {
   return `deployment_sync:${taskSessionId}`;
 }
@@ -549,6 +579,8 @@ export function shouldCleanupFailedDeploymentResources(input: {
 
 function resolveDeploymentAnalyticsDomain(input: {
   metadata: Record<string, unknown>;
+  accountPublicUrl?: string;
+  accountPublicDomain?: string;
   accountDomain?: string;
   panel?: RailwayDeploymentPanelData | null;
 }) {
@@ -557,6 +589,8 @@ function resolveDeploymentAnalyticsDomain(input: {
     asText(input.panel?.latestStaticUrl) ||
     asText(input.panel?.latestUrl) ||
     asText(input.panel?.domains?.[0]) ||
+    asText(input.accountPublicUrl) ||
+    asText(input.accountPublicDomain) ||
     asText(analytics.domain) ||
     asText(input.accountDomain) ||
     ''
@@ -677,7 +711,19 @@ async function reconcilePublishedAnalyticsMetadata(input: {
     return input.metadata;
   }
   const currentAnalytics = pickRecord(input.metadata.analytics);
-  if (asText(currentAnalytics.websiteId) === publishedWebsiteId) {
+  const canonicalDomain = asText(input.panel.publicDomain) ||
+    asText(input.panel.latestStaticUrl || input.panel.latestUrl || input.panel.domains[0])
+      .replace(/^https?:\/\//, '')
+      .replace(/\/.*$/, '');
+  const publishedDomain = asText(published?.publicDomain)
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '');
+  const shouldKeepCurrentMetadata =
+    asText(currentAnalytics.websiteId) === publishedWebsiteId &&
+    (!canonicalDomain ||
+      asText(currentAnalytics.domain) === canonicalDomain ||
+      publishedDomain === canonicalDomain);
+  if (shouldKeepCurrentMetadata) {
     return input.metadata;
   }
   const nextAnalytics = {
@@ -688,7 +734,8 @@ async function reconcilePublishedAnalyticsMetadata(input: {
     websiteId: publishedWebsiteId,
     tag: asText(published?.tag) || asText(currentAnalytics.tag) || 'production',
     domain:
-      asText(published?.publicDomain) ||
+      canonicalDomain ||
+      publishedDomain ||
       asText(currentAnalytics.domain) ||
       asText(input.panel.latestStaticUrl || input.panel.latestUrl || input.panel.domains[0])
         .replace(/^https?:\/\//, '')
@@ -720,6 +767,8 @@ async function prepareSessionAnalyticsBindingSafely(input: {
       account: input.account,
       domain: resolveDeploymentAnalyticsDomain({
         metadata: pickRecord(input.environmentMetadata),
+        accountPublicUrl: input.account.publicUrl,
+        accountPublicDomain: input.account.publicDomain,
         accountDomain: input.account.serviceDomain,
         panel: input.panel || null,
       }),
@@ -1305,6 +1354,7 @@ export async function buildTaskSessionDeploymentResponse(input: {
       savedPanel?.bindingState === 'provider_error' ||
       isLiveDeploymentDomainRefreshStatus(savedPanel?.domainStatus) ||
       hasStaleActiveDeploymentDomainMessage(savedPanel || {}) ||
+      hasStaleDeploymentAnalyticsMetadata(savedPanel || {}) ||
       savedState?.bindingState === 'provisioning' ||
       savedState?.bindingState === 'provider_error' ||
       isLiveDeploymentDomainRefreshStatus(savedState?.domainStatus) ||

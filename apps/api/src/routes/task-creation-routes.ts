@@ -6709,6 +6709,108 @@ router.post('/sessions/:sessionId/deployment/storage/ensure', async (req, res) =
   }
 });
 
+router.post(
+  '/sessions/:sessionId/deployment/storage/files',
+  express.raw({ type: '*/*', limit: `${TASK_ATTACHMENT_MAX_BYTES}b` }),
+  async (req, res) => {
+    try {
+      const { sessionId } = req.params;
+      const currentUser = currentUserResolver.require(req);
+      await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+      const session = await resolveTaskSessionRecord(sessionId);
+      if (!session) {
+        return res.status(404).json({
+          success: false,
+          error: getPublicErrorMessage('会话不存在'),
+        });
+      }
+
+      const originalName = sanitizeAttachmentName(
+        decodeURIComponent(asText(req.header('X-Attachment-Name')) || 'upload.bin')
+      );
+      const contentType = asText(req.header('Content-Type')) || 'application/octet-stream';
+      const body = Buffer.isBuffer(req.body)
+        ? req.body
+        : Buffer.isBuffer((req as any).body)
+          ? (req as any).body
+          : Buffer.from([]);
+      if (!body.length) {
+        return res.status(400).json({
+          success: false,
+          error: getPublicErrorMessage('上传文件为空'),
+        });
+      }
+
+      const data = await projectStorageResourceService.uploadObject(
+        currentUser.userId,
+        sessionId,
+        {
+          key: originalName,
+          body,
+          contentType,
+        }
+      );
+      return res.json({
+        success: true,
+        data,
+      });
+    } catch (error: any) {
+      const authError = resolveCurrentUserError(error);
+      const ownershipError = resolveSessionConnectorOwnershipError(error);
+      console.error('上传存储桶文件失败:', error);
+      return res.status(authError?.status || ownershipError?.status || 400).json({
+        success: false,
+        error: getPublicErrorMessage(
+          authError?.message || ownershipError?.message || error?.message || '上传存储桶文件失败'
+        ),
+      });
+    }
+  }
+);
+
+router.delete('/sessions/:sessionId/deployment/storage/files', express.json(), async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const key = asText(req.body?.key);
+    if (!key) {
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage('缺少文件 key'),
+      });
+    }
+
+    const data = await projectStorageResourceService.deleteObject(
+      currentUser.userId,
+      sessionId,
+      key
+    );
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('删除存储桶文件失败:', error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(
+        authError?.message || ownershipError?.message || error?.message || '删除存储桶文件失败'
+      ),
+    });
+  }
+});
+
 /**
  * GET /api/task-creation/sessions/:sessionId/workspace/dir
  * 分页获取指定目录的直接子项（用于前端渐进式加载文件树）

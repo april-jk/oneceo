@@ -86,6 +86,101 @@ function pickObject(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    const text = asText(value);
+    if (text) return text;
+  }
+  return '';
+}
+
+function collectRepositoryNames(value: unknown, seen = new Set<unknown>()): string[] {
+  if (!value || typeof value !== 'object' || seen.has(value)) return [];
+  seen.add(value);
+  if (Array.isArray(value)) {
+    const result: string[] = [];
+    for (const item of value) {
+      const record = pickObject(item);
+      const fullName = firstText(
+        record.full_name,
+        record.fullName,
+        record.name_with_owner,
+        record.nameWithOwner,
+        record.repository,
+        record.repo
+      );
+      const owner = firstText(pickObject(record.owner).login, record.owner_login, record.owner);
+      const name = firstText(record.name);
+      const label = fullName || (owner && name ? `${owner}/${name}` : '');
+      if (label && label.includes('/')) result.push(label);
+      result.push(...collectRepositoryNames(item, seen));
+    }
+    return [...new Set(result)];
+  }
+
+  const record = pickObject(value);
+  const result: string[] = [];
+  for (const key of [
+    'repositories',
+    'repos',
+    'selected_repositories',
+    'selectedRepositories',
+    'accessible_repositories',
+    'accessibleRepositories',
+  ]) {
+    result.push(...collectRepositoryNames(record[key], seen));
+  }
+  for (const child of Object.values(record)) {
+    result.push(...collectRepositoryNames(child, seen));
+  }
+  return [...new Set(result)];
+}
+
+function resolveConnectionDisplayName(input: {
+  connection: Record<string, unknown>;
+  connectedAccount: Record<string, unknown>;
+  connectedAccountId: string;
+}): string {
+  const accountData = pickObject(input.connectedAccount.data);
+  const connectionData = pickObject(input.connection.data);
+  return firstText(
+    input.connectedAccount.display_name,
+    input.connectedAccount.displayName,
+    input.connectedAccount.name,
+    input.connectedAccount.login,
+    input.connectedAccount.email,
+    accountData.login,
+    accountData.name,
+    accountData.email,
+    input.connection.display_name,
+    input.connection.displayName,
+    input.connection.name,
+    connectionData.login,
+    connectionData.name
+  );
+}
+
+function isToolkitConnectionActive(
+  connection: Record<string, unknown>,
+  connectedAccountId: string
+): boolean {
+  return (
+    connection.is_active === true ||
+    connection.active === true ||
+    asText(connection.status).toLowerCase() === 'active' ||
+    Boolean(connectedAccountId)
+  );
+}
+
+function isConnectionPendingError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /not connected yet|connection.*pending|account.*pending/i.test(message);
+}
+
 function composioUserId(userId: string): string {
   return `oneceo_app_user_${userId}`;
 }
@@ -297,16 +392,6 @@ export class ComposioConnectorService {
     return composioUserId(userId);
   }
 
-  async startGoogleCloudAuthorization(input: {
-    userId: string;
-    callbackUrl: string;
-    catalogItem: ConnectorCatalogItem;
-  }) {
-    return this.startAuthorization({
-      connectorKey: 'google_cloud',
-      ...input,
-    });
-  }
 
   async startAuthorization(input: {
     connectorKey: ConnectorKey;
@@ -373,19 +458,80 @@ export class ComposioConnectorService {
     return composioFetch(`/api/v3.1/tool_router/session/${encodeURIComponent(sessionId)}/toolkits`);
   }
 
-  async confirmGoogleCloudAuthorization(input: {
+  async getToolkitConnectionSummary(input: {
+    sessionId: string;
+    toolkitSlug: string;
+    connectedAccountId?: string | null;
+  }) {
+    const toolkits = await this.getSessionToolkits(input.sessionId);
+    const toolkitItems = Array.isArray(toolkits.items)
+      ? toolkits.items
+      : Array.isArray(toolkits.toolkits)
+        ? toolkits.toolkits
+        : [];
+    const toolkit = toolkitItems
+      .map((item) => (item && typeof item === 'object' ? (item as Record<string, unknown>) : null))
+      .find((item) => {
+        if (!item) return false;
+        return asText(item.slug || item.name || item.toolkit) === input.toolkitSlug;
+      });
+    if (!toolkit) {
+      throw new Error(`Composio toolkit is missing from tool router session: ${input.toolkitSlug}`);
+    }
+    const connection = pickObject(toolkit.connection);
+    const connectedAccount = pickObject(connection.connected_account || connection.connectedAccount);
+    const connectedAccountId =
+      asText(connectedAccount.id) ||
+      asText(connection.connected_account_id || connection.connectedAccountId) ||
+      asText(input.connectedAccountId);
+    return {
+      toolkit,
+      connection,
+      connectedAccount,
+      connectedAccountId,
+      connected: isToolkitConnectionActive(connection, connectedAccountId),
+      repositoryNames: collectRepositoryNames({
+        toolkit,
+        connection,
+        connectedAccount,
+      }),
+      displayName: resolveConnectionDisplayName({
+        connection,
+        connectedAccount,
+        connectedAccountId,
+      }),
+    };
+  }
+
+
+  async confirmAuthorization(input: {
+    connectorKey: ConnectorKey;
     userId: string;
     catalogItem: ConnectorCatalogItem;
     metadata: Record<string, unknown>;
     secret: ConnectorAccountSecret | null;
   }) {
-    return this.confirmAuthorization({
-      connectorKey: 'google_cloud',
-      ...input,
-    });
+    const timeoutMs = Number(process.env.COMPOSIO_CONNECT_CONFIRM_TIMEOUT_MS || 12000);
+    const intervalMs = Number(process.env.COMPOSIO_CONNECT_CONFIRM_INTERVAL_MS || 1200);
+    const startedAt = Date.now();
+    let lastError: unknown = null;
+    while (Date.now() - startedAt <= timeoutMs) {
+      try {
+        return await this.confirmAuthorizationOnce(input);
+      } catch (error) {
+        lastError = error;
+        if (!isConnectionPendingError(error)) {
+          throw error;
+        }
+        await wait(Math.max(200, intervalMs));
+      }
+    }
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(String(lastError || 'Composio account is not connected yet'));
   }
 
-  async confirmAuthorization(input: {
+  private async confirmAuthorizationOnce(input: {
     connectorKey: ConnectorKey;
     userId: string;
     catalogItem: ConnectorCatalogItem;
@@ -397,31 +543,13 @@ export class ComposioConnectorService {
       throw new Error('Composio session id is missing from OAuth request metadata');
     }
     const session = await this.getSession(sessionId);
-    const toolkits = await this.getSessionToolkits(sessionId);
     const primaryToolkit = input.catalogItem.composio?.toolkitSlugs?.[0] || '';
-    const toolkitItems = Array.isArray(toolkits.items)
-      ? toolkits.items
-      : Array.isArray(toolkits.toolkits)
-        ? toolkits.toolkits
-        : [];
-    const toolkit = toolkitItems
-      .map((item) => (item && typeof item === 'object' ? (item as Record<string, unknown>) : null))
-      .find((item) => {
-        if (!item) return false;
-        return asText(item.slug || item.name || item.toolkit) === primaryToolkit;
-      });
-    const connection = pickObject(toolkit?.connection);
-    const connectedAccount = pickObject(connection.connected_account || connection.connectedAccount);
-    const connectedAccountId =
-      asText(connectedAccount.id) ||
-      asText(connection.connected_account_id || connection.connectedAccountId) ||
-      asText(input.metadata.composioConnectedAccountId);
-    const connected =
-      connection.is_active === true ||
-      connection.active === true ||
-      asText(connection.status).toLowerCase() === 'active' ||
-      Boolean(connectedAccountId);
-    if (!toolkit || !connected) {
+    const connectionSummary = await this.getToolkitConnectionSummary({
+      sessionId,
+      toolkitSlug: primaryToolkit,
+      connectedAccountId: asText(input.metadata.composioConnectedAccountId) || null,
+    });
+    if (!connectionSummary.connected) {
       throw new Error(`Composio ${input.catalogItem.name} account is not connected yet`);
     }
     const mcpUrl = resolveMcpUrl(session) || asText(input.secret?.composioMcpUrl);
@@ -434,7 +562,9 @@ export class ComposioConnectorService {
         composioUserId: composioUserId(input.userId),
         composioSessionId: sessionId,
         composioToolkitSlugs: input.catalogItem.composio?.toolkitSlugs || [],
-        composioConnectedAccountId: connectedAccountId || null,
+        composioConnectedAccountId: connectionSummary.connectedAccountId || null,
+        composioDisplayName: connectionSummary.displayName || null,
+        composioRepositoryNames: connectionSummary.repositoryNames,
         connectionStatus: 'active',
         lastConnectionCheckAt: new Date().toISOString(),
       },

@@ -35,8 +35,9 @@ afterEach(() => {
   }
 });
 
-function buildProfile(connectorKey: 'supabase' | 'vercel' | 'notion' | 'slack' | 'figma') {
+function buildProfile(connectorKey: 'github' | 'supabase' | 'vercel' | 'notion' | 'slack' | 'figma') {
   const isComposioConnector =
+    connectorKey === 'github' ||
     connectorKey === 'figma' ||
     connectorKey === 'notion' ||
     connectorKey === 'slack' ||
@@ -79,6 +80,22 @@ test('buildProviderTransport materializes Supabase Composio as API-brokered MCP 
   assert.equal(result.transport.type, 'backend_rpc');
   assert.equal(result.transport.rpcNamespace, 'mcp');
   assert.equal(result.transport.backendProvider, 'supabase');
+  assert.deepEqual(result.transport.capabilities, ['initialize', 'tools/list', 'tools/call']);
+  assert.equal(result.transportName, 'api_brokered_mcp');
+});
+
+test('buildProviderTransport materializes GitHub Composio as API-brokered MCP transport', () => {
+  process.env.COMPOSIO_API_KEY = 'composio-test-key';
+
+  const serviceAny = sessionConnectorService as any;
+  const result = serviceAny.buildProviderTransport('github', buildProfile('github'), null, {
+    taskSessionId: 'task-github',
+    userId: 'user-github',
+  });
+
+  assert.equal(result.transport.type, 'backend_rpc');
+  assert.equal(result.transport.rpcNamespace, 'mcp');
+  assert.equal(result.transport.backendProvider, 'github');
   assert.deepEqual(result.transport.capabilities, ['initialize', 'tools/list', 'tools/call']);
   assert.equal(result.transportName, 'api_brokered_mcp');
 });

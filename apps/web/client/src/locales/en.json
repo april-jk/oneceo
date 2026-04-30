@@ -790,22 +790,6 @@
           }
         }
       },
-      "google_cloud": {
-        "intro": "The Google Cloud connector uses Composio managed OAuth. Click connect to authorize externally; oneceo keeps the MCP URL and headers on the API server only.",
-        "steps": {
-          "0": "Click connect and finish the Composio Google Cloud authorization flow.",
-          "1": "After returning to oneceo, the system saves the default connection and mounts it to the current session when needed."
-        },
-        "tips": {
-          "0": "No Google token, Composio API key, or MCP header is sent into the sandbox."
-        },
-        "links": {
-          "composioDocs": {
-            "label": "Composio Tool Router",
-            "description": "Review the OAuth link session API used by this connector"
-          }
-        }
-      },
       "postgres": {
         "intro": "The Postgres connector is temporarily deprecated and does not appear in the stage-one connector menu. This compatibility guide remains only to avoid rendering failures for old data.",
         "steps": {

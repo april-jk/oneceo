@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   cleanupConnectorQuery,
+  GITHUB_FIXED_CALLBACK_PATH,
   normalizeEditableProfileId,
+  resolveAuthorizedRepositoryLabel,
   resolveConnectorOauthCallbackContext,
   SLACK_FIXED_CALLBACK_PATH,
   VERCEL_FIXED_CALLBACK_PATH,
@@ -19,12 +21,12 @@ describe("connector center panel profile id normalization", () => {
     expect(normalizeEditableProfileId("profile-123")).toBe("profile-123");
   });
 
-  it("uses connector-level OAuth for Notion, Figma, Slack, and Vercel", () => {
+  it("uses connector-level OAuth for GitHub, Notion, Figma, Slack, and Vercel", () => {
+    expect(shouldUseConnectorLevelOauth("github")).toBe(true);
     expect(shouldUseConnectorLevelOauth("notion")).toBe(true);
     expect(shouldUseConnectorLevelOauth("figma")).toBe(true);
     expect(shouldUseConnectorLevelOauth("slack")).toBe(true);
     expect(shouldUseConnectorLevelOauth("vercel")).toBe(true);
-    expect(shouldUseConnectorLevelOauth("github")).toBe(false);
   });
 
   it("uses the unified OAuth card layout for GitHub, Slack, and Notion", () => {
@@ -33,11 +35,15 @@ describe("connector center panel profile id normalization", () => {
     expect(shouldUseUnifiedConnectorCard("notion")).toBe(true);
     expect(shouldUseUnifiedConnectorCard("figma")).toBe(true);
     expect(shouldUseUnifiedConnectorCard("vercel")).toBe(true);
-    expect(shouldUseUnifiedConnectorCard("supabase")).toBe(false);
+    expect(shouldUseUnifiedConnectorCard("supabase")).toBe(true);
   });
 
   it("uses the fixed Slack callback path", () => {
     expect(SLACK_FIXED_CALLBACK_PATH).toBe("/slack/callback");
+  });
+
+  it("uses the fixed GitHub callback path", () => {
+    expect(GITHUB_FIXED_CALLBACK_PATH).toBe("/github/callback");
   });
 
   it("uses the fixed Vercel callback path", () => {
@@ -49,6 +55,15 @@ describe("connector center panel profile id normalization", () => {
     const callback = resolveConnectorOauthCallbackContext("http://localhost/slack/callback", params);
 
     expect(callback.connector).toBe("slack");
+    expect(callback.isFixedCallback).toBe(true);
+    expect(callback.shouldHandle).toBe(true);
+  });
+
+  it("recognizes GitHub fixed callback pages as connector OAuth callbacks", () => {
+    const params = new URLSearchParams("code=oauth-code&state=oauth-state");
+    const callback = resolveConnectorOauthCallbackContext("http://localhost/github/callback", params);
+
+    expect(callback.connector).toBe("github");
     expect(callback.isFixedCallback).toBe(true);
     expect(callback.shouldHandle).toBe(true);
   });
@@ -74,11 +89,36 @@ describe("connector center panel profile id normalization", () => {
     expect(cleanupConnectorQuery("/slack/callback", "?code=oauth-code&state=oauth-state")).toBe("/home");
   });
 
+  it("redirects GitHub callback pages back to the target session after cleanup", () => {
+    expect(
+      cleanupConnectorQuery("/github/callback", "?code=oauth-code&state=oauth-state", {
+        targetSessionId: "session-github-1",
+      })
+    ).toBe("/session/session-github-1");
+  });
+
   it("redirects Vercel callback pages back to the target session after cleanup", () => {
     expect(
       cleanupConnectorQuery("/vercel/callback", "?code=oauth-code&state=oauth-state", {
         targetSessionId: "session-vercel-1",
       })
     ).toBe("/session/session-vercel-1");
+  });
+
+  it("shows the selected GitHub repository name when profile config has repositories", () => {
+    expect(
+      resolveAuthorizedRepositoryLabel({
+        profileId: "profile-github",
+        connectorKey: "github",
+        profileName: "GitHub Default",
+        displayName: "octocat",
+        authMode: "oauth",
+        authStatus: "authorized",
+        config: {
+          repositories: ["octocat/hello-world", "octocat/private-repo"],
+        },
+        isDefault: true,
+      })
+    ).toBe("octocat/hello-world +1");
   });
 });

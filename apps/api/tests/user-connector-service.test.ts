@@ -8,21 +8,15 @@ import { userConnectorService } from '../src/services/user-connector-service';
 
 const originalFetch = global.fetch;
 const originalConnectorSecretKey = process.env.CONNECTOR_SECRET_KEY;
-const originalVercelClientId = process.env.VERCEL_INTEGRATION_CLIENT_ID;
-const originalVercelClientSecret = process.env.VERCEL_INTEGRATION_CLIENT_SECRET;
-const originalVercelRedirectUri = process.env.VERCEL_INTEGRATION_REDIRECT_URI;
 const originalNotionClientId = process.env.NOTION_CONNECTOR_CLIENT_ID;
 const originalNotionClientSecret = process.env.NOTION_CONNECTOR_CLIENT_SECRET;
 const originalNotionRedirectUri = process.env.NOTION_CONNECTOR_REDIRECT_URI;
-const originalSlackClientId = process.env.SLACK_CONNECTOR_CLIENT_ID;
-const originalSlackClientSecret = process.env.SLACK_CONNECTOR_CLIENT_SECRET;
-const originalSlackRedirectUri = process.env.SLACK_CONNECTOR_REDIRECT_URI;
-const originalSlackUserScopes = process.env.SLACK_CONNECTOR_USER_SCOPES;
-const originalSlackAuthorizeUrl = process.env.SLACK_CONNECTOR_AUTHORIZE_URL;
-const originalSlackTokenUrl = process.env.SLACK_CONNECTOR_TOKEN_URL;
 const originalSupabaseSecretKey = process.env.SUPABASE_CONNECTOR_SECRET_KEY;
 const originalComposioApiKey = process.env.COMPOSIO_API_KEY;
+const originalComposioSlackToolkits = process.env.COMPOSIO_SLACK_TOOLKITS;
 const originalComposioFigmaToolkits = process.env.COMPOSIO_FIGMA_TOOLKITS;
+const originalVercelClientId = process.env.VERCEL_INTEGRATION_CLIENT_ID;
+const originalVercelClientSecret = process.env.VERCEL_INTEGRATION_CLIENT_SECRET;
 const originalFrontendUrl = process.env.FRONTEND_URL;
 
 afterEach(() => {
@@ -32,21 +26,6 @@ afterEach(() => {
     delete process.env.CONNECTOR_SECRET_KEY;
   } else {
     process.env.CONNECTOR_SECRET_KEY = originalConnectorSecretKey;
-  }
-  if (originalVercelClientId === undefined) {
-    delete process.env.VERCEL_INTEGRATION_CLIENT_ID;
-  } else {
-    process.env.VERCEL_INTEGRATION_CLIENT_ID = originalVercelClientId;
-  }
-  if (originalVercelClientSecret === undefined) {
-    delete process.env.VERCEL_INTEGRATION_CLIENT_SECRET;
-  } else {
-    process.env.VERCEL_INTEGRATION_CLIENT_SECRET = originalVercelClientSecret;
-  }
-  if (originalVercelRedirectUri === undefined) {
-    delete process.env.VERCEL_INTEGRATION_REDIRECT_URI;
-  } else {
-    process.env.VERCEL_INTEGRATION_REDIRECT_URI = originalVercelRedirectUri;
   }
   if (originalNotionClientId === undefined) {
     delete process.env.NOTION_CONNECTOR_CLIENT_ID;
@@ -63,36 +42,6 @@ afterEach(() => {
   } else {
     process.env.NOTION_CONNECTOR_REDIRECT_URI = originalNotionRedirectUri;
   }
-  if (originalSlackClientId === undefined) {
-    delete process.env.SLACK_CONNECTOR_CLIENT_ID;
-  } else {
-    process.env.SLACK_CONNECTOR_CLIENT_ID = originalSlackClientId;
-  }
-  if (originalSlackClientSecret === undefined) {
-    delete process.env.SLACK_CONNECTOR_CLIENT_SECRET;
-  } else {
-    process.env.SLACK_CONNECTOR_CLIENT_SECRET = originalSlackClientSecret;
-  }
-  if (originalSlackRedirectUri === undefined) {
-    delete process.env.SLACK_CONNECTOR_REDIRECT_URI;
-  } else {
-    process.env.SLACK_CONNECTOR_REDIRECT_URI = originalSlackRedirectUri;
-  }
-  if (originalSlackUserScopes === undefined) {
-    delete process.env.SLACK_CONNECTOR_USER_SCOPES;
-  } else {
-    process.env.SLACK_CONNECTOR_USER_SCOPES = originalSlackUserScopes;
-  }
-  if (originalSlackAuthorizeUrl === undefined) {
-    delete process.env.SLACK_CONNECTOR_AUTHORIZE_URL;
-  } else {
-    process.env.SLACK_CONNECTOR_AUTHORIZE_URL = originalSlackAuthorizeUrl;
-  }
-  if (originalSlackTokenUrl === undefined) {
-    delete process.env.SLACK_CONNECTOR_TOKEN_URL;
-  } else {
-    process.env.SLACK_CONNECTOR_TOKEN_URL = originalSlackTokenUrl;
-  }
   if (originalSupabaseSecretKey === undefined) {
     delete process.env.SUPABASE_CONNECTOR_SECRET_KEY;
   } else {
@@ -103,10 +52,25 @@ afterEach(() => {
   } else {
     process.env.COMPOSIO_API_KEY = originalComposioApiKey;
   }
+  if (originalComposioSlackToolkits === undefined) {
+    delete process.env.COMPOSIO_SLACK_TOOLKITS;
+  } else {
+    process.env.COMPOSIO_SLACK_TOOLKITS = originalComposioSlackToolkits;
+  }
   if (originalComposioFigmaToolkits === undefined) {
     delete process.env.COMPOSIO_FIGMA_TOOLKITS;
   } else {
     process.env.COMPOSIO_FIGMA_TOOLKITS = originalComposioFigmaToolkits;
+  }
+  if (originalVercelClientId === undefined) {
+    delete process.env.VERCEL_INTEGRATION_CLIENT_ID;
+  } else {
+    process.env.VERCEL_INTEGRATION_CLIENT_ID = originalVercelClientId;
+  }
+  if (originalVercelClientSecret === undefined) {
+    delete process.env.VERCEL_INTEGRATION_CLIENT_SECRET;
+  } else {
+    process.env.VERCEL_INTEGRATION_CLIENT_SECRET = originalVercelClientSecret;
   }
   if (originalFrontendUrl === undefined) {
     delete process.env.FRONTEND_URL;
@@ -190,7 +154,7 @@ test('saveUserConnector rejects invalid GitHub token before persisting', async (
   assert.equal(createMock.mock.callCount(), 0);
 });
 
-test('createProfile allows Supabase token-only save with empty profile/display names', async () => {
+test('createProfile does not authorize Supabase from a user-supplied access token', async () => {
   process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
   process.env.SUPABASE_CONNECTOR_SECRET_KEY = 'unit-test-supabase-secret';
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
@@ -220,16 +184,10 @@ test('createProfile allows Supabase token-only save with empty profile/display n
 
   assert.equal(saved.profileName, 'Supabase Default');
   assert.equal(saved.displayName, null);
-  assert.equal(saved.authStatus, 'authorized');
+  assert.equal(saved.authStatus, 'needs_auth');
   assert.equal(capturedCreate?.profileName, 'Supabase Default');
   assert.equal(capturedCreate?.displayName, null);
-  assert.equal(
-    connectorSecretService.decryptJson<{ accessToken?: string }>(
-      String(capturedCreate?.secretCiphertext || ''),
-      'supabase'
-    )?.accessToken,
-    'sbp-token-only'
-  );
+  assert.equal(capturedCreate?.secretCiphertext, null);
 });
 
 test('createProfile does not authorize Figma from a user-supplied access token', async () => {
@@ -266,145 +224,6 @@ test('createProfile does not authorize Figma from a user-supplied access token',
   assert.equal(capturedCreate?.authMode, 'oauth');
   assert.equal(capturedCreate?.secretCiphertext, null);
   assert.equal(capturedCreate?.lastAuthAt, null);
-});
-
-test('startOAuthForProfile starts vercel integration install without PKCE', async () => {
-  process.env.VERCEL_INTEGRATION_SLUG = 'oneceo';
-  process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
-  process.env.VERCEL_INTEGRATION_CLIENT_ID = 'vercel-client';
-  process.env.VERCEL_INTEGRATION_CLIENT_SECRET = 'vercel-secret';
-  process.env.VERCEL_INTEGRATION_REDIRECT_URI = 'https://dev.oneceo.ai/vercel/callback';
-
-  mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
-  mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
-    id: 'profile-vercel',
-    userId: 'user-1',
-    connectorKey: 'vercel',
-    profileName: 'Vercel Default',
-    authMode: 'oauth',
-    authStatus: 'needs_auth',
-  }) as any);
-  let capturedCreate: Record<string, unknown> | null = null;
-  mock.method(connectorAuthRequestDAO, 'create', async (input: any) => {
-    capturedCreate = input;
-    return input;
-  });
-
-  const result = await userConnectorService.startOAuthForProfile('user-1', 'profile-vercel', {
-    redirectUri: 'http://oneceo.ai:3000/callback',
-  });
-
-  assert.ok(result.authUrl.startsWith('https://vercel.com/integrations/oneceo/new?'));
-  const authUrl = new URL(result.authUrl);
-  assert.equal(authUrl.searchParams.get('state'), result.state);
-  assert.equal(authUrl.searchParams.get('client_id'), null);
-  assert.equal(authUrl.searchParams.get('redirect_uri'), null);
-  assert.equal(authUrl.searchParams.get('response_type'), null);
-  assert.equal(authUrl.searchParams.get('code_challenge_method'), null);
-  assert.equal(String(capturedCreate?.provider || ''), 'vercel');
-  assert.equal(capturedCreate?.codeVerifier, null);
-});
-
-test('completeOAuthByProfile stores vercel integration installation context', async () => {
-  process.env.VERCEL_INTEGRATION_SLUG = 'oneceo';
-  process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
-  process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
-  process.env.VERCEL_INTEGRATION_CLIENT_ID = 'vercel-client';
-  process.env.VERCEL_INTEGRATION_CLIENT_SECRET = 'vercel-secret';
-  process.env.VERCEL_INTEGRATION_REDIRECT_URI = 'https://dev.oneceo.ai/vercel/callback';
-
-  mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
-  mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
-    id: 'profile-vercel',
-    userId: 'user-1',
-    connectorKey: 'vercel',
-    profileName: 'Vercel Default',
-    displayName: null,
-  }) as any);
-  mock.method(connectorAuthRequestDAO, 'getByState', async () => ({
-    requestId: 'request-1',
-    userId: 'user-1',
-    connectorKey: 'vercel',
-    profileId: 'profile-vercel',
-    state: 'state-1',
-    codeVerifier: 'pkce-verifier-123',
-    expiresAt: new Date(Date.now() + 60_000),
-  }) as any);
-  mock.method(connectorAuthRequestDAO, 'markCompleted', async () => ({}) as any);
-  let capturedUpdate: Record<string, unknown> | null = null;
-  mock.method(userConnectorProfileDAO, 'update', async (_profileId: string, _userId: string, input: any) => {
-    capturedUpdate = input;
-    return {
-      id: 'profile-vercel',
-      userId: 'user-1',
-      connectorKey: 'vercel',
-      profileName: input.profileName,
-      authMode: input.authMode,
-      authStatus: input.authStatus,
-      displayName: input.displayName,
-      configJson: {},
-      metadataJson: {},
-      secretCiphertext: input.secretCiphertext,
-      isDefault: true,
-      lastAuthAt: input.lastAuthAt,
-      updatedAt: new Date('2026-04-03T00:00:00.000Z'),
-      lastError: input.lastError,
-    } as any;
-  });
-
-  let fetchCount = 0;
-  global.fetch = mock.fn(async (input: string | URL | Request, init?: RequestInit) => {
-    fetchCount += 1;
-    assert.equal(String(input), 'https://api.vercel.com/v2/oauth/access_token');
-    assert.doesNotMatch(String(init?.body || ''), /code_verifier=/);
-    assert.match(String(init?.body || ''), /code=auth-code-1/);
-    assert.match(
-      String(init?.body || ''),
-      /redirect_uri=https%3A%2F%2Fdev.oneceo.ai%2Fvercel%2Fcallback/
-    );
-    return new Response(
-      JSON.stringify({
-        access_token: 'vercel-access-token',
-        token_type: 'Bearer',
-      }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } }
-    );
-  }) as typeof fetch;
-
-  const result = await userConnectorService.completeOAuthByProfile('user-1', 'profile-vercel', {
-    state: 'state-1',
-    code: 'auth-code-1',
-    redirectUri: 'http://oneceo.ai:3000/callback',
-    teamId: 'team_123',
-    configurationId: 'icfg_123',
-    source: 'marketplace',
-    next: '/dashboard',
-  });
-
-  assert.equal(result.profile.authStatus, 'authorized');
-  assert.equal(result.profile.displayName, 'team_123');
-  assert.equal(capturedUpdate?.profileName, 'team_123');
-  assert.equal(fetchCount, 1);
-  assert.deepEqual(capturedUpdate?.configJson, {
-    vercelAuthMode: 'integration',
-    teamId: 'team_123',
-    configurationId: 'icfg_123',
-    installationSource: 'marketplace',
-  });
-  assert.equal((capturedUpdate?.metadataJson as any)?.vercelIntegrationSlug, 'oneceo');
-  assert.equal((capturedUpdate?.metadataJson as any)?.next, '/dashboard');
-  assert.equal(
-    connectorSecretService.decryptJson<{ accessToken?: string }>(
-      String(capturedUpdate?.secretCiphertext || '')
-    )?.accessToken,
-    'vercel-access-token'
-  );
-  assert.equal(
-    connectorSecretService.decryptJson<{ source?: string }>(
-      String(capturedUpdate?.secretCiphertext || '')
-    )?.source,
-    'vercel_integration'
-  );
 });
 
 test('clearProfileAuth clears local vercel integration auth without remote revoke', async () => {
@@ -648,7 +467,7 @@ test('getMeSnapshot downgrades unreadable Supabase secret to needs_auth with rec
 
   assert.equal(snapshot.profiles.length, 1);
   assert.equal(snapshot.profiles[0]?.authStatus, 'needs_auth');
-  assert.equal(snapshot.profiles[0]?.lastError, 'Supabase connector 授权已过期，请重新连接。');
+  assert.equal(snapshot.profiles[0]?.lastError, 'Supabase connector now requires Composio OAuth. Reconnect Supabase through Composio.');
   assert.equal(snapshot.profiles[0]?.secretSummary, null);
   assert.equal(capturedUpdate?.authStatus, 'needs_auth');
   assert.equal(capturedUpdate?.secretCiphertext, null);
@@ -706,7 +525,7 @@ test('getProfileMaterial downgrades unreadable Supabase secret before runtime us
   assert.equal(material?.authStatus, 'needs_auth');
   assert.equal(material?.secret, null);
   assert.equal(capturedUpdate?.authStatus, 'needs_auth');
-  assert.equal(capturedUpdate?.lastError, 'Supabase connector 授权已过期，请重新连接。');
+  assert.equal(capturedUpdate?.lastError, 'Supabase connector now requires Composio OAuth. Reconnect Supabase through Composio.');
 });
 
 test('updateProfile invalidates connectors me cache after persistence', async () => {
@@ -783,10 +602,9 @@ test('setDefaultProfile invalidates connectors me cache after persistence', asyn
   assert.equal(invalidatedUserId, 'user-default-cache');
 });
 
-test('startOAuthForProfile uses fixed redirect uri and state payload for notion', async () => {
-  process.env.NOTION_CONNECTOR_CLIENT_ID = 'notion-client';
-  process.env.NOTION_CONNECTOR_CLIENT_SECRET = 'notion-secret';
-  process.env.NOTION_CONNECTOR_REDIRECT_URI = 'https://dev.oneceo.ai/notion/callback';
+test('startOAuthForProfile starts Notion Composio Connect Link authorization', async () => {
+  process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
+  process.env.COMPOSIO_API_KEY = 'unit-test-composio-key';
 
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
@@ -802,23 +620,64 @@ test('startOAuthForProfile uses fixed redirect uri and state payload for notion'
     capturedCreate = input;
     return input;
   });
+  let capturedUpdate: Record<string, unknown> | null = null;
+  mock.method(userConnectorProfileDAO, 'update', async (_profileId: string, _userId: string, input: any) => {
+    capturedUpdate = input;
+    return {
+      id: 'profile-notion',
+      userId: 'user-1',
+      connectorKey: 'notion',
+      profileName: 'Notion Default',
+      authMode: input.authMode,
+      authStatus: input.authStatus,
+      displayName: null,
+      configJson: {},
+      metadataJson: input.metadataJson,
+      secretCiphertext: input.secretCiphertext,
+      isDefault: true,
+      lastAuthAt: null,
+      updatedAt: new Date('2026-04-30T00:00:00.000Z'),
+      lastError: input.lastError,
+    } as any;
+  });
+  global.fetch = mock.fn(async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith('/api/v3.1/tool_router/session')) {
+      return new Response(
+        JSON.stringify({
+          session_id: 'trs_notion_1',
+          mcp: { url: 'https://composio.example.com/notion/mcp' },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (url.endsWith('/api/v3.1/tool_router/session/trs_notion_1/link')) {
+      return new Response(
+        JSON.stringify({
+          redirect_url: 'https://composio.example.com/connect/notion',
+          connected_account_id: 'ca_notion_pending',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    throw new Error(`unexpected composio request: ${url}`);
+  }) as typeof fetch;
 
   const result = await userConnectorService.startOAuthForProfile('user-1', 'profile-notion', {
     redirectUri: 'https://unexpected.example.com/callback',
     returnToSessionId: 'session-xyz',
   });
 
-  const authUrl = new URL(result.authUrl);
-  assert.equal(authUrl.searchParams.get('redirect_uri'), 'https://dev.oneceo.ai/notion/callback');
+  assert.equal(result.authUrl, 'https://composio.example.com/connect/notion');
   assert.equal(capturedCreate?.returnToSessionId, 'session-xyz');
-  assert.match(String(result.state), /^oneceo_notion_v1\./);
   assert.equal(result.state, capturedCreate?.state);
+  assert.equal(capturedCreate?.provider, 'composio');
+  assert.equal((capturedUpdate?.metadataJson as any)?.provider, 'composio');
+  assert.equal((capturedUpdate?.metadataJson as any)?.composioSessionId, 'trs_notion_1');
 });
 
-test('completeOAuthByProfile rejects notion oauth when state payload does not match request session', async () => {
-  process.env.NOTION_CONNECTOR_CLIENT_ID = 'notion-client';
-  process.env.NOTION_CONNECTOR_CLIENT_SECRET = 'notion-secret';
-  process.env.NOTION_CONNECTOR_REDIRECT_URI = 'https://dev.oneceo.ai/notion/callback';
+test('completeOAuthByProfile marks Notion Composio callback failed when metadata is missing', async () => {
+  process.env.COMPOSIO_API_KEY = 'unit-test-composio-key';
 
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
@@ -851,6 +710,22 @@ test('completeOAuthByProfile rejects notion oauth when state payload does not ma
     'markFailedByState',
     async () => ({}) as any
   );
+  mock.method(userConnectorProfileDAO, 'update', async () => ({
+    id: 'profile-notion',
+    userId: 'user-1',
+    connectorKey: 'notion',
+    profileName: 'Notion Default',
+    authMode: 'oauth',
+    authStatus: 'needs_auth',
+    displayName: null,
+    configJson: {},
+    metadataJson: {},
+    secretCiphertext: null,
+    isDefault: true,
+    lastAuthAt: null,
+    updatedAt: new Date('2026-04-30T00:00:00.000Z'),
+    lastError: 'Composio session id is missing from OAuth request metadata',
+  }) as any);
 
   await assert.rejects(
     () =>
@@ -859,18 +734,15 @@ test('completeOAuthByProfile rejects notion oauth when state payload does not ma
         code: 'code-1',
         redirectUri: 'https://unexpected.example.com/callback',
       }),
-    /OAuth state 校验失败/
+    /Composio session id is missing/
   );
   assert.equal(markFailedMock.mock.callCount(), 1);
 });
 
-test('startOAuthForProfile uses fixed redirect uri and state payload for slack', async () => {
-  process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
-  process.env.SLACK_CONNECTOR_CLIENT_ID = 'slack-client';
-  process.env.SLACK_CONNECTOR_CLIENT_SECRET = 'slack-secret';
-  process.env.SLACK_CONNECTOR_REDIRECT_URI = '/slack/callback';
-  process.env.SLACK_CONNECTOR_USER_SCOPES = 'channels:history chat:write';
-  process.env.SLACK_CONNECTOR_AUTHORIZE_URL = 'https://slack.com/oauth/v2/authorize';
+test('startOAuthForProfile starts Slack Composio Connect Link authorization', async () => {
+  process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
+  process.env.COMPOSIO_API_KEY = 'unit-test-composio-key';
+  process.env.COMPOSIO_SLACK_TOOLKITS = 'slack';
 
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
@@ -886,28 +758,76 @@ test('startOAuthForProfile uses fixed redirect uri and state payload for slack',
     capturedCreate = input;
     return input;
   });
+  let capturedUpdate: Record<string, unknown> | null = null;
+  mock.method(userConnectorProfileDAO, 'update', async (_profileId: string, _userId: string, input: any) => {
+    capturedUpdate = input;
+    return {
+      id: 'profile-slack',
+      userId: 'user-1',
+      connectorKey: 'slack',
+      profileName: 'Slack Default',
+      authMode: input.authMode,
+      authStatus: input.authStatus,
+      displayName: null,
+      configJson: {},
+      metadataJson: input.metadataJson,
+      secretCiphertext: input.secretCiphertext,
+      isDefault: true,
+      lastAuthAt: null,
+      updatedAt: new Date('2026-04-30T00:00:00.000Z'),
+      lastError: input.lastError,
+    } as any;
+  });
+  global.fetch = mock.fn(async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith('/api/v3.1/tool_router/session')) {
+      return new Response(
+        JSON.stringify({
+          session_id: 'trs_slack_1',
+          mcp: { url: 'https://composio.example.com/slack/mcp' },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (url.endsWith('/api/v3.1/tool_router/session/trs_slack_1/link')) {
+      return new Response(
+        JSON.stringify({
+          redirect_url: 'https://composio.example.com/connect/slack',
+          connected_account_id: 'ca_slack_pending',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    throw new Error(`unexpected composio request: ${url}`);
+  }) as typeof fetch;
 
   const result = await userConnectorService.startOAuthForProfile('user-1', 'profile-slack', {
     redirectUri: 'https://unexpected.example.com/callback',
     returnToSessionId: 'session-slack-1',
   });
 
-  const authUrl = new URL(result.authUrl);
-  assert.equal(authUrl.origin + authUrl.pathname, 'https://slack.com/oauth/v2/authorize');
-  assert.equal(authUrl.searchParams.get('redirect_uri'), 'https://dev.oneceo.ai/slack/callback');
-  assert.equal(authUrl.searchParams.get('user_scope'), 'channels:history chat:write');
+  assert.equal(result.authUrl, 'https://composio.example.com/connect/slack');
   assert.equal(capturedCreate?.returnToSessionId, 'session-slack-1');
-  assert.match(String(result.state), /^oneceo_slack_v1\./);
   assert.equal(result.state, capturedCreate?.state);
+  assert.equal(capturedCreate?.provider, 'composio');
+  assert.equal((capturedUpdate?.metadataJson as any)?.provider, 'composio');
+  assert.equal((capturedUpdate?.metadataJson as any)?.composioSessionId, 'trs_slack_1');
+  assert.ok(capturedUpdate?.secretCiphertext);
 });
 
-test('completeOAuthByProfile returns returnToSessionId and fixed redirect uri for slack', async () => {
+test('completeOAuthByProfile confirms Slack Composio authorization', async () => {
   process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
-  process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
-  process.env.SLACK_CONNECTOR_CLIENT_ID = 'slack-client';
-  process.env.SLACK_CONNECTOR_CLIENT_SECRET = 'slack-secret';
-  process.env.SLACK_CONNECTOR_REDIRECT_URI = '/slack/callback';
-  process.env.SLACK_CONNECTOR_TOKEN_URL = 'https://slack.com/api/oauth.v2.access';
+  process.env.COMPOSIO_API_KEY = 'unit-test-composio-key';
+  process.env.COMPOSIO_SLACK_TOOLKITS = 'slack';
+
+  const pendingSecret = connectorSecretService.encrypt(
+    {
+      source: 'composio',
+      composioMcpUrl: 'https://composio.example.com/slack/mcp',
+      composioMcpHeaders: { 'x-api-key': 'unit-test-composio-key' },
+    },
+    'slack'
+  );
 
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
@@ -916,14 +836,15 @@ test('completeOAuthByProfile returns returnToSessionId and fixed redirect uri fo
     connectorKey: 'slack',
     profileName: 'Slack Default',
     displayName: null,
+    metadataJson: {
+      provider: 'composio',
+      composioSessionId: 'trs_slack_1',
+      composioConnectedAccountId: 'ca_slack_1',
+    },
+    secretCiphertext: pendingSecret,
   }) as any);
 
-  const state = `oneceo_slack_v1.${encodeStatePayload({
-    rid: 'request-slack-1',
-    sid: 'session-slack-1',
-    ts: Date.now(),
-    nonce: 'nonce-slack-1',
-  })}`;
+  const state = 'state-slack-composio-1';
 
   mock.method(connectorAuthRequestDAO, 'getByState', async () => ({
     requestId: 'request-slack-1',
@@ -956,59 +877,55 @@ test('completeOAuthByProfile returns returnToSessionId and fixed redirect uri fo
     } as any;
   });
 
-  global.fetch = mock.fn(async (input: string | URL | Request, init?: RequestInit) => {
-    assert.equal(String(input), 'https://slack.com/api/oauth.v2.access');
-    assert.match(String(init?.body || ''), /redirect_uri=https%3A%2F%2Fdev.oneceo.ai%2Fslack%2Fcallback/);
-    return new Response(
-      JSON.stringify({
-        ok: true,
-        authed_user: {
-          id: 'U12345',
-          access_token: 'xoxp-user-token',
-          token_type: 'user',
-        },
-        team: { id: 'T12345' },
-      }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } }
-    );
+  global.fetch = mock.fn(async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith('/api/v3.1/tool_router/session/trs_slack_1')) {
+      return new Response(
+        JSON.stringify({ session_id: 'trs_slack_1', mcp: { url: 'https://composio.example.com/slack/mcp' } }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (url.endsWith('/api/v3.1/tool_router/session/trs_slack_1/toolkits')) {
+      return new Response(
+        JSON.stringify({
+          items: [
+            {
+              slug: 'slack',
+              connection: {
+                status: 'ACTIVE',
+                connected_account: { id: 'ca_slack_1' },
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    throw new Error(`unexpected composio request: ${url}`);
   }) as typeof fetch;
 
   const result = await userConnectorService.completeOAuthByProfile('user-1', 'profile-slack', {
     state,
-    code: 'code-slack-1',
+    code: '',
     redirectUri: 'https://unexpected.example.com/callback',
   });
 
   assert.equal(result.returnToSessionId, 'session-slack-1');
   assert.equal(result.profile.authStatus, 'authorized');
-  assert.equal(result.profile.displayName, 'U12345');
+  assert.equal(result.profile.displayName, 'Slack');
   assert.equal(
-    connectorSecretService.decryptJson<{ accessToken?: string; tokenType?: string }>(
+    connectorSecretService.decryptJson<{ source?: string; composioMcpUrl?: string }>(
       String(capturedUpdate?.secretCiphertext || ''),
       'slack'
-    )?.accessToken,
-    'xoxp-user-token'
+    )?.source,
+    'composio'
   );
-  assert.equal(
-    connectorSecretService.decryptJson<{ accessToken?: string; tokenType?: string }>(
-      String(capturedUpdate?.secretCiphertext || ''),
-      'slack'
-    )?.tokenType,
-    'user'
-  );
-  assert.deepEqual(capturedUpdate?.metadataJson, {
-    slackAuthMode: 'user_oauth',
-    slackTokenType: 'user',
-    slackUserId: 'U12345',
-    slackTeamId: 'T12345',
-  });
+  assert.equal((capturedUpdate?.metadataJson as any)?.provider, 'composio');
+  assert.equal((capturedUpdate?.metadataJson as any)?.connectionStatus, 'active');
 });
 
-test('completeOAuthByProfile surfaces slack oauth errors instead of generic access token failures', async () => {
-  process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
-  process.env.SLACK_CONNECTOR_CLIENT_ID = 'slack-client';
-  process.env.SLACK_CONNECTOR_CLIENT_SECRET = 'slack-secret';
-  process.env.SLACK_CONNECTOR_REDIRECT_URI = '/slack/callback';
+test('completeOAuthByProfile marks Slack Composio callback failed when metadata is missing', async () => {
+  process.env.COMPOSIO_API_KEY = 'unit-test-composio-key';
 
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
@@ -1019,12 +936,7 @@ test('completeOAuthByProfile surfaces slack oauth errors instead of generic acce
     displayName: null,
   }) as any);
 
-  const state = `oneceo_slack_v1.${encodeStatePayload({
-    rid: 'request-slack-error-1',
-    sid: '',
-    ts: Date.now(),
-    nonce: 'nonce-slack-error-1',
-  })}`;
+  const state = 'state-slack-missing-composio-session';
 
   mock.method(connectorAuthRequestDAO, 'getByState', async () => ({
     requestId: 'request-slack-error-1',
@@ -1042,23 +954,17 @@ test('completeOAuthByProfile surfaces slack oauth errors instead of generic acce
   );
 
   global.fetch = mock.fn(async () =>
-    new Response(
-      JSON.stringify({
-        ok: false,
-        error: 'bad_redirect_uri',
-      }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } }
-    )
+    new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } })
   ) as typeof fetch;
 
   await assert.rejects(
     () =>
       userConnectorService.completeOAuthByProfile('user-1', 'profile-slack', {
         state,
-        code: 'code-slack-error-1',
+        code: '',
         redirectUri: 'https://unexpected.example.com/callback',
       }),
-    /bad_redirect_uri/
+    /Composio session id is missing/
   );
   assert.equal(markFailedMock.mock.callCount(), 1);
 });
@@ -1115,16 +1021,14 @@ test('getProfileMaterial invalidates legacy Slack bot token profiles before runt
 
   assert.equal(capturedUpdate?.authStatus, 'needs_auth');
   assert.equal(capturedUpdate?.secretCiphertext, null);
-  assert.equal(capturedUpdate?.lastError, 'Slack connector 已切换为 User OAuth Token，请重新连接。');
+  assert.equal(capturedUpdate?.lastError, 'Slack connector now requires Composio OAuth. Reconnect Slack through Composio.');
   assert.equal(material?.authStatus, 'needs_auth');
   assert.equal(material?.secret, null);
 });
 
-test('completeOAuthByProfile rejects slack oauth when state payload does not match request session', async () => {
+test('completeOAuthByProfile requires Slack Composio metadata instead of legacy OAuth state', async () => {
   process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
-  process.env.SLACK_CONNECTOR_CLIENT_ID = 'slack-client';
-  process.env.SLACK_CONNECTOR_CLIENT_SECRET = 'slack-secret';
-  process.env.SLACK_CONNECTOR_REDIRECT_URI = '/slack/callback';
+  process.env.COMPOSIO_API_KEY = 'unit-test-composio-key';
 
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
@@ -1135,12 +1039,7 @@ test('completeOAuthByProfile rejects slack oauth when state payload does not mat
     displayName: null,
   }) as any);
 
-  const state = `oneceo_slack_v1.${encodeStatePayload({
-    rid: 'request-slack-1',
-    sid: 'session-from-state',
-    ts: Date.now(),
-    nonce: 'nonce-slack-1',
-  })}`;
+  const state = 'state-slack-composio-missing-metadata';
 
   mock.method(connectorAuthRequestDAO, 'getByState', async () => ({
     requestId: 'request-slack-1',
@@ -1164,16 +1063,14 @@ test('completeOAuthByProfile rejects slack oauth when state payload does not mat
         code: 'code-slack-1',
         redirectUri: 'https://unexpected.example.com/callback',
       }),
-    (error: unknown) => error instanceof Error && error.message.includes('OAuth state')
+    /Composio session id is missing/
   );
   assert.equal(markFailedMock.mock.callCount(), 1);
 });
 
-test('completeOAuthByProfile marks expired slack oauth request as failed', async () => {
+test('completeOAuthByProfile marks expired Slack Composio OAuth request as failed', async () => {
   process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
-  process.env.SLACK_CONNECTOR_CLIENT_ID = 'slack-client';
-  process.env.SLACK_CONNECTOR_CLIENT_SECRET = 'slack-secret';
-  process.env.SLACK_CONNECTOR_REDIRECT_URI = '/slack/callback';
+  process.env.COMPOSIO_API_KEY = 'unit-test-composio-key';
 
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({

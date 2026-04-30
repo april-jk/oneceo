@@ -138,36 +138,6 @@ async function fetchJson(url: string, init: RequestInit): Promise<Record<string,
   return payload;
 }
 
-function assertSlackOauthPayload(tokenPayload: Record<string, unknown>) {
-  if (tokenPayload.ok === false) {
-    throw new Error(asText(tokenPayload.error) || 'slack_oauth_failed');
-  }
-}
-
-function resolveSlackUserOauthSecret(tokenPayload: Record<string, unknown>): ConnectorAccountSecret {
-  const authedUser = pickObject(tokenPayload.authed_user);
-  const accessToken =
-    asText(authedUser.access_token) ||
-    (asText(tokenPayload.token_type) === SLACK_USER_TOKEN_TYPE ? asText(tokenPayload.access_token) : '');
-  const tokenType = asText(authedUser.token_type) || asText(tokenPayload.token_type) || undefined;
-  const refreshToken = asText(authedUser.refresh_token) || asText(tokenPayload.refresh_token) || undefined;
-  const scope = asText(authedUser.scope) || asText(tokenPayload.scope) || undefined;
-
-  if (!accessToken) {
-    throw new Error('Slack OAuth 未返回 user access token');
-  }
-  if (tokenType !== SLACK_USER_TOKEN_TYPE) {
-    throw new Error('Slack OAuth 未返回 user token');
-  }
-
-  return {
-    accessToken,
-    refreshToken,
-    tokenType,
-    scope,
-  };
-}
-
 function buildProfileView(
   row: {
     id: string;
@@ -438,22 +408,6 @@ function buildDefaultProfileName(connectorKey: ConnectorKey, catalogName: string
   return `${catalogName} Default`;
 }
 
-const SLACK_STATE_VERSION = 'oneceo_slack_v1';
-
-function parseBase64UrlJson(value: string): Record<string, unknown> | null {
-  const raw = asText(value);
-  if (!raw) return null;
-  const normalized = raw.replace(/-/g, '+').replace(/_/g, '/');
-  const padded = normalized + '==='.slice((normalized.length + 3) % 4);
-  try {
-    const decoded = Buffer.from(padded, 'base64').toString('utf8');
-    const parsed = JSON.parse(decoded);
-    return pickObject(parsed);
-  } catch {
-    return null;
-  }
-}
-
 type UserConnectorProfileRow = {
   id: string;
   userId?: string;
@@ -471,12 +425,10 @@ type UserConnectorProfileRow = {
   updatedAt: Date;
 };
 
-const SLACK_USER_OAUTH_MODE = 'user_oauth';
-const SLACK_USER_TOKEN_TYPE = 'user';
-const SLACK_USER_TOKEN_REAUTH_MESSAGE =
-  'Slack connector 已切换为 User OAuth Token，请重新连接。';
+const SLACK_COMPOSIO_REAUTH_MESSAGE =
+  'Slack connector now requires Composio OAuth. Reconnect Slack through Composio.';
 const SUPABASE_SECRET_REAUTH_MESSAGE =
-  'Supabase connector 授权已过期，请重新连接。';
+  'Supabase connector now requires Composio OAuth. Reconnect Supabase through Composio.';
 
 function mergeMetadata(
   current: Record<string, unknown> | null | undefined,
@@ -486,31 +438,6 @@ function mergeMetadata(
     ...pickObject(current),
     ...patch,
   };
-}
-
-function buildSlackUserOauthMetadata(tokenPayload: Record<string, unknown>): Record<string, unknown> {
-  const authedUser = pickObject(tokenPayload.authed_user);
-  const team = pickObject(tokenPayload.team);
-  const enterprise = pickObject(tokenPayload.enterprise);
-  const metadata: Record<string, unknown> = {
-    slackAuthMode: SLACK_USER_OAUTH_MODE,
-    slackTokenType: SLACK_USER_TOKEN_TYPE,
-  };
-  const slackUserId = asText(authedUser.id);
-  const slackTeamId = asText(team.id);
-  const slackEnterpriseId =
-    asText(enterprise.id) || asText(authedUser.enterprise_id) || asText(tokenPayload.enterprise_id);
-
-  if (slackUserId) {
-    metadata.slackUserId = slackUserId;
-  }
-  if (slackTeamId) {
-    metadata.slackTeamId = slackTeamId;
-  }
-  if (slackEnterpriseId) {
-    metadata.slackEnterpriseId = slackEnterpriseId;
-  }
-  return metadata;
 }
 
 function decryptProfileSecret(row: UserConnectorProfileRow): ConnectorAccountSecret | null {
@@ -525,16 +452,16 @@ function decryptProfileSecret(row: UserConnectorProfileRow): ConnectorAccountSec
   }
 }
 
-function shouldForceSlackUserOauthReconnect(row: UserConnectorProfileRow): boolean {
+function shouldForceSlackComposioReconnect(row: UserConnectorProfileRow): boolean {
   if (row.connectorKey !== 'slack' || !row.secretCiphertext) {
     return false;
   }
   const metadata = pickObject(row.metadataJson);
   const secret = decryptProfileSecret(row);
   return !(
-    asText(metadata.slackAuthMode) === SLACK_USER_OAUTH_MODE &&
-    asText(metadata.slackTokenType) === SLACK_USER_TOKEN_TYPE &&
-    asText(secret?.tokenType) === SLACK_USER_TOKEN_TYPE
+    asText(metadata.provider) === 'composio' &&
+    asText(secret?.source) === 'composio' &&
+    asText(secret?.composioMcpUrl)
   );
 }
 
@@ -542,7 +469,13 @@ function shouldForceSupabaseReconnect(row: UserConnectorProfileRow): boolean {
   if (row.connectorKey !== 'supabase' || !row.secretCiphertext) {
     return false;
   }
-  return !decryptProfileSecret(row);
+  const metadata = pickObject(row.metadataJson);
+  const secret = decryptProfileSecret(row);
+  return !(
+    asText(metadata.provider) === 'composio' &&
+    asText(secret?.source) === 'composio' &&
+    asText(secret?.composioMcpUrl)
+  );
 }
 
 function shouldForceFigmaComposioReconnect(row: UserConnectorProfileRow): boolean {
@@ -558,42 +491,12 @@ function shouldForceFigmaComposioReconnect(row: UserConnectorProfileRow): boolea
   );
 }
 
-function buildSlackOauthState(input: {
-  requestId: string;
-  returnToSessionId: string | null;
-}): string {
-  const payload = {
-    rid: asText(input.requestId),
-    sid: asText(input.returnToSessionId),
-    ts: Date.now(),
-    nonce: base64Url(randomBytes(12)),
-  };
-  const encoded = base64Url(Buffer.from(JSON.stringify(payload), 'utf8'));
-  return `${SLACK_STATE_VERSION}.${encoded}`;
-}
-
-function parseSlackOauthState(state: string): { requestId: string; sessionId: string | null } | null {
-  const text = asText(state);
-  if (!text) return null;
-  const [version, encodedPayload] = text.split('.', 2);
-  if (version !== SLACK_STATE_VERSION || !encodedPayload) return null;
-  const payload = parseBase64UrlJson(encodedPayload);
-  if (!payload) return null;
-  const requestId = asText(payload.rid);
-  const sessionId = asText(payload.sid) || null;
-  if (!requestId) return null;
-  return {
-    requestId,
-    sessionId,
-  };
-}
-
 function resolveOauthRedirectUri(
   connectorKey: ConnectorKey,
   provider: { redirectUri?: string },
   inputRedirectUri: string
 ): string {
-  if (connectorKey === 'slack' || connectorKey === 'vercel') {
+  if (connectorKey === 'vercel') {
     const fixedRedirectUri = asText(provider.redirectUri);
     if (!fixedRedirectUri) {
       throw new Error(`${connectorKey} OAuth fixed redirect URI is not configured`);
@@ -634,7 +537,7 @@ export class UserConnectorService {
     userId: string,
     row: UserConnectorProfileRow | null
   ): Promise<{ row: UserConnectorProfileRow | null; mutated: boolean }> {
-    if (!row || !shouldForceSlackUserOauthReconnect(row)) {
+    if (!row || !shouldForceSlackComposioReconnect(row)) {
       return { row, mutated: false };
     }
 
@@ -643,7 +546,7 @@ export class UserConnectorService {
       authStatus: 'needs_auth',
       secretCiphertext: null,
       lastAuthAt: null,
-      lastError: SLACK_USER_TOKEN_REAUTH_MESSAGE,
+      lastError: SLACK_COMPOSIO_REAUTH_MESSAGE,
     } as any);
 
     return {
@@ -655,7 +558,7 @@ export class UserConnectorService {
           authStatus: 'needs_auth',
           secretCiphertext: null,
           lastAuthAt: null,
-          lastError: SLACK_USER_TOKEN_REAUTH_MESSAGE,
+          lastError: SLACK_COMPOSIO_REAUTH_MESSAGE,
         } as UserConnectorProfileRow),
       mutated: true,
     };
@@ -670,6 +573,7 @@ export class UserConnectorService {
     }
 
     const saved = await userConnectorProfileDAO.update(row.id, userId, {
+      authMode: 'oauth',
       authStatus: 'needs_auth',
       secretCiphertext: null,
       lastAuthAt: null,
@@ -681,6 +585,7 @@ export class UserConnectorService {
         (saved as UserConnectorProfileRow | undefined) ||
         ({
           ...row,
+          authMode: 'oauth',
           authStatus: 'needs_auth',
           secretCiphertext: null,
           lastAuthAt: null,
@@ -1159,16 +1064,13 @@ export class UserConnectorService {
 
   async startOAuthForProfile(userId: string, profileId: string, input: StartOauthInput) {
     await connectorStorageBootstrap.ensureReady();
-    const normalized = await this.normalizeSlackProfileForRead(
-      userId,
-      (await userConnectorProfileDAO.getByIdAndUser(profileId, userId)) as UserConnectorProfileRow | null
-    );
-    const profile = normalized.row;
+    const currentProfile = (await userConnectorProfileDAO.getByIdAndUser(
+      profileId,
+      userId
+    )) as UserConnectorProfileRow | null;
+    const [profile] = await this.normalizeRowsForRead(userId, currentProfile ? [currentProfile] : []);
     if (!profile) {
       throw new Error('Connector profile does not exist');
-    }
-    if (normalized.mutated) {
-      await this.invalidateMeCache(userId);
     }
     const connectorKey = profile.connectorKey as ConnectorKey;
     const catalogItem = connectorRegistry.getCatalogItem(connectorKey);
@@ -1238,10 +1140,7 @@ export class UserConnectorService {
     }
     const requestId = randomUUID();
     const returnToSessionId = asText(input.returnToSessionId) || null;
-    const state =
-      connectorKey === 'slack'
-        ? buildSlackOauthState({ requestId, returnToSessionId })
-        : randomUUID();
+    const state = randomUUID();
     const pkce = provider.pkceMethod === 'S256' ? createPkcePair() : null;
     const redirectUri = resolveOauthRedirectUri(connectorKey, provider, input.redirectUri);
     await connectorAuthRequestDAO.create({
@@ -1372,15 +1271,6 @@ export class UserConnectorService {
     }
 
     try {
-      if (connectorKey === 'slack') {
-        const parsedState =
-          parseSlackOauthState(input.state);
-        const storedSessionId = asText(request.returnToSessionId) || null;
-        if (!parsedState || parsedState.requestId !== request.requestId || parsedState.sessionId !== storedSessionId) {
-          throw new Error('OAuth state 校验失败');
-        }
-      }
-
       const redirectUri = resolveOauthRedirectUri(connectorKey, provider, input.redirectUri);
       const body: Record<string, string> = {
         code: input.code,
@@ -1424,11 +1314,8 @@ export class UserConnectorService {
         headers,
         body: payload,
       });
-      if (connectorKey === 'slack') {
-        assertSlackOauthPayload(tokenPayload);
-      }
       let accessToken = asText(tokenPayload.access_token);
-      if (!accessToken && connectorKey !== 'slack') {
+      if (!accessToken) {
         throw new Error('OAuth callback did not return access_token');
       }
       let metadataJson = pickObject(profile.metadataJson);
@@ -1445,14 +1332,12 @@ export class UserConnectorService {
           : buildDefaultProfileName(connectorKey, catalogItem.name));
 
       const secret: ConnectorAccountSecret =
-        connectorKey === 'slack'
-          ? resolveSlackUserOauthSecret(tokenPayload)
-          : connectorKey === 'vercel' && isVercelIntegrationProvider(provider)
-            ? {
-                source: 'vercel_integration',
-                accessToken,
-                tokenType: asText(tokenPayload.token_type) || 'Bearer',
-              }
+        connectorKey === 'vercel' && isVercelIntegrationProvider(provider)
+          ? {
+              source: 'vercel_integration',
+              accessToken,
+              tokenType: asText(tokenPayload.token_type) || 'Bearer',
+            }
           : {
               accessToken,
               refreshToken: asText(tokenPayload.refresh_token) || undefined,
@@ -1514,19 +1399,6 @@ export class UserConnectorService {
         if (!asText(profile.profileName) || profile.profileName === 'Vercel Default' || profile.profileName === 'Vercel') {
           profileName = displayName || 'Vercel';
         }
-      } else if (connectorKey === 'slack') {
-        if (secret.tokenType !== SLACK_USER_TOKEN_TYPE) {
-          throw new Error('Slack OAuth 未返回 user token');
-        }
-        const slackAuthedUser = pickObject(tokenPayload.authed_user);
-        const slackTeam = pickObject(tokenPayload.team);
-        displayName =
-          asText(profile.displayName) ||
-          asText(slackTeam.name) ||
-          asText(slackAuthedUser.id) ||
-          displayName;
-        profileName = asText(profile.profileName) || buildDefaultProfileName(connectorKey, catalogItem.name);
-        metadataJson = mergeMetadata(metadataJson, buildSlackUserOauthMetadata(tokenPayload));
       }
 
       await connectorAuthRequestDAO.markCompleted(request.requestId, 'completed');

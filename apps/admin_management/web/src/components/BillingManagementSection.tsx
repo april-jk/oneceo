@@ -5,6 +5,20 @@ import { BillingDebugPanel } from './BillingDebugPanel';
 import { getBillingErrorMessage, readBillingResponseError, type BillingNotify } from './billing-feedback';
 import { AdminButton, AdminDetailShell, AdminTabs, AuditTimeline, DangerConfirmDialog, DiffDrawer, IdToken, StatusBadge, getAdminActionIcon, getAdminModuleIcon } from './admin-ui';
 
+function groupByProvider(items: any[]) {
+  const groups: Record<string, any[]> = {};
+  const seen: string[] = [];
+  items.forEach((item) => {
+    const key = item.provider || '未分类';
+    if (!groups[key]) {
+      groups[key] = [];
+      seen.push(key);
+    }
+    groups[key].push(item);
+  });
+  return seen.map((provider) => ({ provider, rows: groups[provider] }));
+}
+
 interface Pricing {
   id: string;
   model: string;
@@ -240,6 +254,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
     ];
   });
   const [referencePricingDraft, setReferencePricingDraft] = useState(referencePricingData);
+  const [referenceSearch, setReferenceSearch] = useState('');
 
   // Cache config state
   const [cacheConfigs, setCacheConfigs] = useState<CacheConfig[]>([]);
@@ -2306,84 +2321,224 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
           {referencePricingOpen && (
             <div className="modal-backdrop" onClick={() => setReferencePricingOpen(false)}>
               <aside
-                className="pricing-form-modal"
+                className="pricing-form-modal reference-pricing-modal"
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="billing-reference-pricing-title"
                 onClick={(event) => event.stopPropagation()}
-                style={{ maxWidth: '960px' }}
+                style={{ maxWidth: '820px' }}
               >
                 <div className="pricing-form-modal-header">
                   <div className="pricing-form-modal-heading">
                     <p className="section-tag">定价参考</p>
-                    <h2 id="billing-reference-pricing-title">主流模型市场参考定价</h2>
-                    <p className="panel-caption">单位：人民币 ¥ / 1M tokens · 按 1 USD = 7.2 CNY 换算 · 修改后需二次确认</p>
+                    <h2 id="billing-reference-pricing-title">市场参考定价表</h2>
+                    <p className="panel-caption">
+                      {referencePricingDraft.length} 条记录 · 单位：人民币 ¥ / 1M tokens · 按 1 USD = 7.2 CNY 换算
+                    </p>
                   </div>
                   <button type="button" className="pricing-form-modal-close" onClick={() => setReferencePricingOpen(false)} aria-label="关闭">×</button>
                 </div>
-                <div className="pricing-form-modal-body" style={{ padding: '16px 24px' }}>
-                  <div className="table-wrap user-management-table-wrap">
-                    <table className="user-management-table" style={{ fontSize: '14px' }}>
+
+                <div className="reference-pricing-toolbar">
+                  <div className="reference-pricing-search">
+                    <span className="reference-pricing-search-icon" aria-hidden="true">🔍</span>
+                    <input
+                      type="text"
+                      placeholder="搜索厂商或模型…"
+                      value={referenceSearch}
+                      onChange={(e) => setReferenceSearch(e.target.value)}
+                      className="reference-pricing-search-input"
+                    />
+                    {referenceSearch && (
+                      <button
+                        type="button"
+                        className="reference-pricing-search-clear"
+                        onClick={() => setReferenceSearch('')}
+                        aria-label="清除搜索"
+                      >×</button>
+                    )}
+                  </div>
+                  <span className="reference-pricing-count">
+                    {(() => {
+                      const filtered = referencePricingDraft.filter((item: any) =>
+                        !referenceSearch ||
+                        item.provider.toLowerCase().includes(referenceSearch.toLowerCase()) ||
+                        item.model.toLowerCase().includes(referenceSearch.toLowerCase())
+                      );
+                      return `显示 ${filtered.length} / ${referencePricingDraft.length}`;
+                    })()}
+                  </span>
+                </div>
+
+                <div className="pricing-form-modal-body reference-pricing-body">
+                  <div className="table-wrap user-management-table-wrap reference-pricing-table-wrap">
+                    <table className="user-management-table reference-pricing-table">
+                      <colgroup>
+                        <col style={{ width: '110px' }} />
+                        <col style={{ minWidth: '200px' }} />
+                        <col style={{ width: '150px' }} />
+                        <col style={{ width: '150px' }} />
+                        <col style={{ width: '56px' }} />
+                      </colgroup>
                       <thead>
                         <tr>
-                          <th style={{ width: '15%' }}>厂商</th>
-                          <th style={{ width: '25%' }}>模型</th>
-                          <th style={{ width: '20%' }}>Input (¥/1M)</th>
-                          <th style={{ width: '20%' }}>Output (¥/1M)</th>
-                          <th style={{ width: '20%' }}>操作</th>
+                          <th className="ref-col-provider">厂商</th>
+                          <th className="ref-col-model">模型</th>
+                          <th className="ref-col-price">输入单价 <small className="ref-col-unit">¥/1M</small></th>
+                          <th className="ref-col-price">输出单价 <small className="ref-col-unit">¥/1M</small></th>
+                          <th className="ref-col-actions" aria-label="操作"></th>
                         </tr>
                       </thead>
                       <tbody>
-                        {referencePricingDraft.map((item: any, index: number) => (
-                          <tr key={index}>
-                            <td>{item.provider}</td>
-                            <td>{item.model}</td>
-                            <td>
-                              <input
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                value={item.inputPrice}
-                                onChange={(e) => {
-                                  const val = parseFloat(e.target.value) || 0;
-                                  setReferencePricingDraft((prev: any) => prev.map((p: any, i: number) => i === index ? { ...p, inputPrice: val } : p));
-                                }}
-                                style={{ width: '100%', padding: '4px 8px', border: '1px solid #d0d7de', borderRadius: '6px' }}
-                              />
-                            </td>
-                            <td>
-                              <input
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                value={item.outputPrice}
-                                onChange={(e) => {
-                                  const val = parseFloat(e.target.value) || 0;
-                                  setReferencePricingDraft((prev: any) => prev.map((p: any, i: number) => i === index ? { ...p, outputPrice: val } : p));
-                                }}
-                                style={{ width: '100%', padding: '4px 8px', border: '1px solid #d0d7de', borderRadius: '6px' }}
-                              />
-                            </td>
-                            <td>
-                              <button
-                                type="button"
-                                className="table-btn"
-                                onClick={() => setReferencePricingDraft((prev: any) => prev.filter((_: any, i: number) => i !== index))}
-                              >删除</button>
-                            </td>
-                          </tr>
-                        ))}
+                        {(() => {
+                          const filtered = referencePricingDraft.filter((item: any) =>
+                            !referenceSearch ||
+                            item.provider.toLowerCase().includes(referenceSearch.toLowerCase()) ||
+                            item.model.toLowerCase().includes(referenceSearch.toLowerCase())
+                          );
+                          if (filtered.length === 0) {
+                            return (
+                              <tr>
+                                <td colSpan={5} className="reference-pricing-empty">
+                                  <div className="reference-pricing-empty-state">
+                                    <span className="reference-pricing-empty-icon" aria-hidden="true">📭</span>
+                                    <p>{referenceSearch ? '未找到匹配的厂商或模型' : '暂无参考定价数据'}</p>
+                                    {referenceSearch && (
+                                      <button type="button" className="table-btn" onClick={() => setReferenceSearch('')}>
+                                        清除搜索
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          }
+                          const groups = groupByProvider(filtered);
+                          return groups.flatMap(({ provider, rows }: { provider: string; rows: any[] }, groupIdx: number) => {
+                            const originalIndices = rows.map((row) => referencePricingDraft.indexOf(row));
+                            return [
+                              <tr key={`group-${groupIdx}`} className="reference-pricing-group-header">
+                                <td colSpan={5}>
+                                  <span className="reference-pricing-group-badge">{provider}</span>
+                                  <span className="reference-pricing-group-count">{rows.length} 个模型</span>
+                                </td>
+                              </tr>,
+                              ...rows.map((item: any, rowIdx: number) => {
+                                const absoluteIndex = originalIndices[rowIdx];
+                                const isNew = !item.provider && !item.model;
+                                return (
+                                  <tr
+                                    key={`row-${absoluteIndex}`}
+                                    className={`reference-pricing-row${isNew ? ' reference-pricing-row-new' : ''}`}
+                                  >
+                                    <td>
+                                      {isNew ? (
+                                        <select
+                                          className="reference-pricing-select"
+                                          value={item.provider}
+                                          onChange={(e) => {
+                                            const val = e.target.value;
+                                            setReferencePricingDraft((prev: any[]) => prev.map((p: any, i: number) =>
+                                              i === absoluteIndex ? { ...p, provider: val } : p
+                                            ));
+                                          }}
+                                        >
+                                          <option value="">选择厂商</option>
+                                          <option value="OpenAI">OpenAI</option>
+                                          <option value="Anthropic">Anthropic</option>
+                                          <option value="Google">Google</option>
+                                          <option value="DeepSeek">DeepSeek</option>
+                                          <option value="阿里云">阿里云</option>
+                                          <option value="xAI">xAI</option>
+                                        </select>
+                                      ) : (
+                                        <span className="reference-pricing-provider-name">{item.provider}</span>
+                                      )}
+                                    </td>
+                                    <td>
+                                      <input
+                                        type="text"
+                                        className="reference-pricing-text-input"
+                                        placeholder={isNew ? '例如 gpt-4o' : ''}
+                                        value={item.model}
+                                        onChange={(e) => {
+                                          const val = e.target.value;
+                                          setReferencePricingDraft((prev: any[]) => prev.map((p: any, i: number) =>
+                                            i === absoluteIndex ? { ...p, model: val } : p
+                                          ));
+                                        }}
+                                      />
+                                    </td>
+                                    <td>
+                                      <div className="reference-pricing-input-wrap">
+                                        <span className="reference-pricing-currency" aria-hidden="true">¥</span>
+                                        <input
+                                          type="number"
+                                          step="0.01"
+                                          min="0"
+                                          className="reference-pricing-number-input"
+                                          value={item.inputPrice}
+                                          onChange={(e) => {
+                                            const val = parseFloat(e.target.value) || 0;
+                                            setReferencePricingDraft((prev: any[]) => prev.map((p: any, i: number) =>
+                                              i === absoluteIndex ? { ...p, inputPrice: val } : p
+                                            ));
+                                          }}
+                                        />
+                                      </div>
+                                    </td>
+                                    <td>
+                                      <div className="reference-pricing-input-wrap">
+                                        <span className="reference-pricing-currency" aria-hidden="true">¥</span>
+                                        <input
+                                          type="number"
+                                          step="0.01"
+                                          min="0"
+                                          className="reference-pricing-number-input"
+                                          value={item.outputPrice}
+                                          onChange={(e) => {
+                                            const val = parseFloat(e.target.value) || 0;
+                                            setReferencePricingDraft((prev: any[]) => prev.map((p: any, i: number) =>
+                                              i === absoluteIndex ? { ...p, outputPrice: val } : p
+                                            ));
+                                          }}
+                                        />
+                                      </div>
+                                    </td>
+                                    <td className="ref-col-actions">
+                                      <button
+                                        type="button"
+                                        className="reference-pricing-delete"
+                                        onClick={() => setReferencePricingDraft((prev: any[]) => prev.filter((_: any, i: number) => i !== absoluteIndex))}
+                                        aria-label={`删除 ${item.model || '此行'}`}
+                                        title="删除"
+                                      >
+                                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                          <path d="M3.5 5.5v5a1.5 1.5 0 001.5 1.5h4a1.5 1.5 0 001.5-1.5v-5M5.5 3.5V3a1.5 1.5 0 011.5-1.5h0A1.5 1.5 0 018.5 3v.5M2.5 3.5h9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                                        </svg>
+                                      </button>
+                                    </td>
+                                  </tr>
+                                );
+                              }),
+                            ];
+                          });
+                        })()}
                       </tbody>
                     </table>
                   </div>
-                  <div style={{ marginTop: '16px', textAlign: 'center' }}>
-                    <button
-                      type="button"
-                      className="table-btn"
-                      onClick={() => setReferencePricingDraft((prev: any) => [...prev, { provider: '', model: '', inputPrice: 0, outputPrice: 0 }])}
-                    >+ 添加新行</button>
-                  </div>
                 </div>
+
+                <div className="reference-pricing-add-bar">
+                  <AdminButton
+                    variant="secondary"
+                    onClick={() => setReferencePricingDraft((prev: any[]) => [...prev, { provider: '', model: '', inputPrice: 0, outputPrice: 0 }])}
+                  >
+                    <span aria-hidden="true" style={{ marginRight: '6px', fontSize: '16px', lineHeight: 1 }}>+</span>
+                    添加参考定价
+                  </AdminButton>
+                </div>
+
                 <div className="pricing-form-modal-footer">
                   <AdminButton variant="secondary" onClick={() => setReferencePricingOpen(false)}>取消</AdminButton>
                   <AdminButton variant="primary" onClick={() => setReferencePricingConfirmOpen(true)}>保存修改</AdminButton>

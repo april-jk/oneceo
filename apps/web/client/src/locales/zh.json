@@ -824,22 +824,6 @@
           }
         }
       },
-      "google_cloud": {
-        "intro": "Google Cloud 连接器使用 Composio managed OAuth。点击连接后进入外部授权；oneceo 只在 API 服务端保存 MCP URL 和 headers。",
-        "steps": {
-          "0": "点击连接并完成 Composio Google Cloud 授权流程。",
-          "1": "返回 oneceo 后，系统会保存默认连接，并在需要时挂载到当前会话。"
-        },
-        "tips": {
-          "0": "Google token、Composio API Key 和 MCP headers 都不会下发到 sandbox。"
-        },
-        "links": {
-          "composioDocs": {
-            "label": "Composio Tool Router",
-            "description": "查看本连接器使用的 OAuth link session API"
-          }
-        }
-      },
       "postgres": {
         "intro": "Postgres 连接器已暂时弃用，不会出现在阶段一连接器菜单中；这里只保留兼容说明，避免旧数据渲染失败。",
         "steps": {

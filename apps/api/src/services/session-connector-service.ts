@@ -879,7 +879,7 @@ export class SessionConnectorService {
       });
     }
     const normalizedSessionConfig = normalizeSessionConfig(connectorKey, sessionConfig);
-    if (connectorKey === 'github') {
+    if (connectorKey === 'github' && catalogItem.composio?.provider !== 'composio') {
       await githubConnectorRepositoryService.assertProfileAuthorized(userId, profileId);
       const repositories = normalizedSessionConfig?.repositories || [];
       // 移除必须至少选择一个仓库的限制，允许先开启开关再选仓库

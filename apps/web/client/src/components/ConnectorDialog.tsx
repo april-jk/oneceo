@@ -122,6 +122,69 @@ function summarizeRepositoryLabel(fullName: string | null | undefined) {
   return parts.length > 1 ? parts[parts.length - 1] : fullName;
 }
 
+function normalizeRepositoryFullName(value: unknown) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text) return "";
+  const parts = text
+    .split("/")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (parts.length !== 2) return "";
+  return `${parts[0]}/${parts[1]}`;
+}
+
+function asStringArray(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value) {
+    const normalized = normalizeRepositoryFullName(item);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(normalized);
+  }
+  return result;
+}
+
+export function resolveGithubRepositoryOptions(input: {
+  fetched?: GithubConnectorRepository[];
+  profile?: ConnectorProfile | null;
+  session?: SessionConnectorStatus;
+}) {
+  const fetched = Array.isArray(input.fetched) ? input.fetched : [];
+  if (fetched.length > 0) {
+    return fetched;
+  }
+
+  const fallbackNames = [
+    ...asStringArray(input.profile?.config?.repositories),
+    ...asStringArray(input.profile?.metadata?.composioRepositoryNames),
+    ...asStringArray(input.session?.authorizedRepositories),
+  ];
+  const seen = new Set<string>();
+  const result: GithubConnectorRepository[] = [];
+  fallbackNames.forEach((fullName, index) => {
+    const key = fullName.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    const [owner, name] = fullName.split("/");
+    result.push({
+      id: index + 1,
+      owner,
+      name,
+      fullName,
+      private: false,
+      defaultBranch: null,
+      permissions: {
+        pull: true,
+      },
+    });
+  });
+  return result;
+}
+
 function splitSelectedRepositoriesSummary(
   repositories: string[],
   t: ReturnType<typeof useTranslation>["t"]
@@ -1017,8 +1080,15 @@ export default function ConnectorDialog({
                     githubSelectedRepositories[githubRepoSelectionKey] ||
                     attachedAuthorizedRepositories ||
                     [];
+                  const githubRepositoryOptions = isGithubDetail
+                    ? resolveGithubRepositoryOptions({
+                        fetched: githubRepositories[selectedProfileId || ""],
+                        profile: selectedProfile,
+                        session,
+                      })
+                    : [];
                   const filteredRepositories = isGithubDetail
-                    ? (githubRepositories[selectedProfileId || ""] || []).filter((repository) => {
+                    ? githubRepositoryOptions.filter((repository) => {
                         const keyword = (
                           githubRepositorySearch[githubRepoSelectionKey] || ""
                         ).trim().toLowerCase();
@@ -1073,7 +1143,7 @@ export default function ConnectorDialog({
                                 <Loader2 className="h-3 w-3 animate-spin" />
                                 {t("connectors.dialog.github.loading")}
                               </div>
-                            ) : (githubRepositories[selectedProfileId] || []).length === 0 ? (
+                            ) : githubRepositoryOptions.length === 0 ? (
                               <div className="px-2 py-2 text-[11px] text-muted-foreground">
                                 {t("connectors.dialog.github.noReadableRepositories")}
                               </div>

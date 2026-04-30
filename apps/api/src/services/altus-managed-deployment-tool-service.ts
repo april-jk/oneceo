@@ -18,6 +18,8 @@ import {
   inspectTaskSessionProjectProfile,
   type TaskSessionProjectProfile,
 } from './task-session-project-profile-service';
+import { platformDeploymentAccountService } from './platform-deployment-account-service';
+import { projectStorageResourceService } from './project-storage-resource-service';
 
 export const ALTUS_MANAGED_DEPLOYMENT_TOOL_NAMES = [
   'deploy_application',
@@ -172,6 +174,52 @@ function buildRepairResult(
     deploymentFlow: extra?.deploymentFlow,
     debug: {
       rawError: asText(rawError) || undefined,
+      baselineStatus: baseline.status,
+      baselineErrors: baseline.errors,
+    },
+  };
+}
+
+function buildResourceRequirementRepairResult(
+  action: AltusManagedDeploymentToolName,
+  baseline: DeploymentTemplateBaselineData,
+  requirement: 'database' | 'storage',
+  extra?: {
+    projectProfile?: TaskSessionProjectProfile;
+    deploymentFlow?: DeploymentFlowSnapshot;
+  }
+): AltusManagedDeploymentToolResult {
+  const checks =
+    requirement === 'database'
+      ? ['database_resource_missing']
+      : ['object_storage_resource_missing'];
+  const suggestedActions =
+    requirement === 'database'
+      ? [
+          '先调用 ensure_project_database，为当前项目创建或修复 Railway Postgres',
+          '数据库资源 ready 后，再重新调用 deploy_application 或 redeploy_application',
+        ]
+      : [
+          '先调用 ensure_project_storage_bucket，为当前项目创建或修复 Railway Bucket',
+          '存储桶资源 ready 后，再重新调用 deploy_application 或 redeploy_application',
+        ];
+  return {
+    action,
+    phase: 'repair_required',
+    status: 'retryable_repair_required',
+    summary:
+      requirement === 'database'
+        ? '当前模板声明需要数据库，但当前项目还没有就绪的 Railway Postgres 资源。'
+        : '当前模板声明需要对象存储，但当前项目还没有就绪的 Railway Bucket 资源。',
+    repair: {
+      category: 'deployment_configuration',
+      checks,
+      suggestedActions,
+    },
+    baseline,
+    projectProfile: extra?.projectProfile,
+    deploymentFlow: extra?.deploymentFlow,
+    debug: {
       baselineStatus: baseline.status,
       baselineErrors: baseline.errors,
     },
@@ -635,6 +683,34 @@ export class AltusManagedDeploymentToolService {
       });
       if (baseline.status !== 'ready') {
         return buildRepairResult(input.action, baseline, undefined, { projectProfile, deploymentFlow });
+      }
+      if (baseline.features?.database === 'railway_postgres') {
+        const account = await platformDeploymentAccountService.getProjectAccount(input.userId, input.sessionId);
+        if (!account?.databaseServiceId) {
+          deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
+            type: 'REPAIR_REQUIRED',
+            category: 'deployment_configuration',
+            checks: ['database_resource_missing'],
+          });
+          return buildResourceRequirementRepairResult(input.action, baseline, 'database', {
+            projectProfile,
+            deploymentFlow,
+          });
+        }
+      }
+      if (baseline.features?.objectStorage) {
+        const storageStatus = await projectStorageResourceService.getStatus(input.userId, input.sessionId);
+        if (!storageStatus.configured) {
+          deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
+            type: 'REPAIR_REQUIRED',
+            category: 'deployment_configuration',
+            checks: ['object_storage_resource_missing'],
+          });
+          return buildResourceRequirementRepairResult(input.action, baseline, 'storage', {
+            projectProfile,
+            deploymentFlow,
+          });
+        }
       }
     }
 

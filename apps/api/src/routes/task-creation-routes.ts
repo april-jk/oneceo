@@ -39,6 +39,7 @@ import {
   type RailwayDatabaseRowLocator,
 } from '../services/railway-database-service';
 import { platformDeploymentAccountService } from '../services/platform-deployment-account-service';
+import { projectStorageResourceService } from '../services/project-storage-resource-service';
 import { inspectTaskSessionDeploymentTemplate } from '../services/task-creation-deployment-source-service';
 import {
   buildTaskSessionDeploymentResponse,
@@ -6321,9 +6322,91 @@ router.post('/sessions/:sessionId/deployment/rollback', async (req, res) => {
 
 /**
  * GET /api/task-creation/sessions/:sessionId/deployment/database
- * 获取数据库总览与连接信息
+ * 获取数据库总览与连接信息。读取状态不自动创建 Railway 数据库。
  */
 router.get('/sessions/:sessionId/deployment/database', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const account = await platformDeploymentAccountService.getProjectAccount(currentUser.userId, sessionId);
+    const data = account?.databaseServiceId
+      ? await railwayDatabaseService.getSummary(account)
+      : {
+          configured: false,
+          provider: 'railway_postgres',
+          status: 'not_configured',
+          tables: [],
+        };
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('获取数据库信息失败:', error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '获取数据库信息失败'),
+    });
+  }
+});
+
+/**
+ * GET /api/task-creation/sessions/:sessionId/deployment/database/status
+ * 获取数据库状态。等同 database 状态读取入口，保留给新前端使用。
+ */
+router.get('/sessions/:sessionId/deployment/database/status', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const account = await platformDeploymentAccountService.getProjectAccount(currentUser.userId, sessionId);
+    const data = account?.databaseServiceId
+      ? await railwayDatabaseService.getSummary(account)
+      : {
+          configured: false,
+          provider: 'railway_postgres',
+          status: 'not_configured',
+          tables: [],
+        };
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('获取数据库状态失败:', error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '获取数据库状态失败'),
+    });
+  }
+});
+
+/**
+ * POST /api/task-creation/sessions/:sessionId/deployment/database/ensure
+ * 显式创建或修复 Railway Postgres，并注入应用变量。
+ */
+router.post('/sessions/:sessionId/deployment/database/ensure', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
@@ -6348,10 +6431,10 @@ router.get('/sessions/:sessionId/deployment/database', async (req, res) => {
   } catch (error: any) {
     const authError = resolveCurrentUserError(error);
     const ownershipError = resolveSessionConnectorOwnershipError(error);
-    console.error('获取数据库信息失败:', error);
+    console.error('启用数据库失败:', error);
     return res.status(authError?.status || ownershipError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '获取数据库信息失败'),
+      error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '启用数据库失败'),
     });
   }
 });
@@ -6383,10 +6466,13 @@ router.get('/sessions/:sessionId/deployment/database/rows', async (req, res) => 
 
     const page = clampNumber(Number(req.query.page || 1), 1, 10_000);
     const pageSize = clampNumber(Number(req.query.pageSize || 50), 10, 200);
-    const account = await platformDeploymentAccountService.ensureProjectDatabaseResources(
-      currentUser.userId,
-      sessionId
-    );
+    const account = await platformDeploymentAccountService.getProjectAccount(currentUser.userId, sessionId);
+    if (!account?.databaseServiceId) {
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('数据库尚未启用'),
+      });
+    }
     const data = await railwayDatabaseService.getRows(account, table, page, pageSize);
     return res.json({
       success: true,
@@ -6429,10 +6515,13 @@ router.post('/sessions/:sessionId/deployment/database/rows', async (req, res) =>
       });
     }
 
-    const account = await platformDeploymentAccountService.ensureProjectDatabaseResources(
-      currentUser.userId,
-      sessionId
-    );
+    const account = await platformDeploymentAccountService.getProjectAccount(currentUser.userId, sessionId);
+    if (!account?.databaseServiceId) {
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('数据库尚未启用'),
+      });
+    }
     const data = await railwayDatabaseService.insertRow(account, table, values);
     return res.json({
       success: true,
@@ -6476,10 +6565,13 @@ router.patch('/sessions/:sessionId/deployment/database/rows', async (req, res) =
       });
     }
 
-    const account = await platformDeploymentAccountService.ensureProjectDatabaseResources(
-      currentUser.userId,
-      sessionId
-    );
+    const account = await platformDeploymentAccountService.getProjectAccount(currentUser.userId, sessionId);
+    if (!account?.databaseServiceId) {
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('数据库尚未启用'),
+      });
+    }
     const data = await railwayDatabaseService.updateRow(account, table, locator, values);
     return res.json({
       success: true,
@@ -6522,10 +6614,13 @@ router.delete('/sessions/:sessionId/deployment/database/rows', async (req, res) 
       });
     }
 
-    const account = await platformDeploymentAccountService.ensureProjectDatabaseResources(
-      currentUser.userId,
-      sessionId
-    );
+    const account = await platformDeploymentAccountService.getProjectAccount(currentUser.userId, sessionId);
+    if (!account?.databaseServiceId) {
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('数据库尚未启用'),
+      });
+    }
     const data = await railwayDatabaseService.deleteRow(account, table, locator);
     return res.json({
       success: true,
@@ -6538,6 +6633,78 @@ router.delete('/sessions/:sessionId/deployment/database/rows', async (req, res) 
     return res.status(authError?.status || ownershipError?.status || 400).json({
       success: false,
       error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '删除数据库记录失败'),
+    });
+  }
+});
+
+/**
+ * GET /api/task-creation/sessions/:sessionId/deployment/storage/status
+ * 获取 Railway Bucket 状态。读取状态不自动创建 Bucket。
+ */
+router.get('/sessions/:sessionId/deployment/storage/status', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const revealSecrets = asText(req.query.reveal) === '1' || asText(req.query.reveal) === 'true';
+    const data = await projectStorageResourceService.getStatus(currentUser.userId, sessionId, {
+      revealSecrets,
+    });
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('获取存储桶状态失败:', error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '获取存储桶状态失败'),
+    });
+  }
+});
+
+/**
+ * POST /api/task-creation/sessions/:sessionId/deployment/storage/ensure
+ * 显式创建或修复 Railway Bucket，并注入应用变量。
+ */
+router.post('/sessions/:sessionId/deployment/storage/ensure', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const revealSecrets = Boolean(req.body?.revealSecrets);
+    const data = await projectStorageResourceService.ensureRailwayBucket(currentUser.userId, sessionId, {
+      revealSecrets,
+    });
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('启用存储桶失败:', error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '启用存储桶失败'),
     });
   }
 });

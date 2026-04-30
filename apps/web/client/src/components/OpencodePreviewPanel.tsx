@@ -64,12 +64,15 @@ import {
 import { Streamdown } from "streamdown";
 import {
   deleteTaskCreationDatabaseRow,
+  ensureTaskCreationDatabase,
+  ensureTaskCreationStorage,
   getTaskCreationDatabaseInfo,
   getTaskCreationDatabaseRows,
   getTaskCreationDeploymentAnalytics,
   getTaskCreationDeploymentInfo,
   getTaskCreationDeploymentTemplateBaseline,
   getTaskCreationDebugInfo,
+  getTaskCreationStorageStatus,
   insertTaskCreationDatabaseRow,
   rotateTaskCreationDeploymentToken,
   startTaskCreationRuntime,
@@ -85,6 +88,7 @@ import {
   type TaskCreationDeploymentAnalyticsOverview,
   type TaskCreationDeploymentTemplateBaseline,
   type TaskCreationDebugInfo,
+  type TaskCreationStorageStatus,
   type WorkspaceFile,
   type WorkspaceTree,
   type WorkspaceTreeItem,
@@ -2912,7 +2916,7 @@ export function DeploymentPreview({
         ) : null}
 
         {section === "storage" ? (
-          <DeploymentStorageSection info={info} statusMeta={statusMeta} />
+          <DeploymentStorageSection sessionId={sessionId} info={info} statusMeta={statusMeta} />
         ) : null}
 
         {section === "settings" ? (
@@ -3659,6 +3663,7 @@ function DeploymentDatabaseSection({
     databaseInfo?.tables.find((table) => table.id === activeTableId) ||
     databaseInfo?.tables[0] ||
     null;
+  const databaseConnection = databaseInfo?.connection || null;
   const editorColumns = rowsPage?.columns || [];
 
   const handleRefresh = async () => {
@@ -3686,6 +3691,26 @@ function DeploymentDatabaseSection({
     } finally {
       setDatabaseLoading(false);
       setRowsLoading(false);
+    }
+  };
+
+  const handleEnableDatabase = async () => {
+    if (!sessionId) return;
+    setDatabaseLoading(true);
+    setDatabaseError(null);
+    try {
+      const result = await ensureTaskCreationDatabase(sessionId);
+      setDatabaseInfo(result);
+      setActiveTableId(result?.tables[0]?.id || null);
+      setPanelMode("settings");
+    } catch (error) {
+      setDatabaseError(
+        error instanceof Error
+          ? error.message
+          : i18n.t("previewPanel.deployment.database.enableFailed"),
+      );
+    } finally {
+      setDatabaseLoading(false);
     }
   };
 
@@ -3806,6 +3831,35 @@ function DeploymentDatabaseSection({
   if (!sessionId) {
     return (
       <EmptyState text={i18n.t("previewPanel.deployment.database.missingSession")} />
+    );
+  }
+
+  if (databaseInfo && !databaseInfo.configured) {
+    return (
+      <section className="rounded-lg border border-border/70 bg-card p-6">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+              <Database className="size-4" />
+              {i18n.t("previewPanel.deployment.database.notConfiguredTitle")}
+            </div>
+            <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+              {i18n.t("previewPanel.deployment.database.notConfiguredDescription")}
+            </p>
+          </div>
+          <Button
+            onClick={() => void handleEnableDatabase()}
+            disabled={databaseLoading}
+            className="shrink-0"
+          >
+            {databaseLoading ? <Loader2 className="size-4 animate-spin" /> : <Database className="size-4" />}
+            {i18n.t("previewPanel.deployment.database.enable")}
+          </Button>
+        </div>
+        {databaseError ? (
+          <div className="mt-4 text-sm text-rose-600">{databaseError}</div>
+        ) : null}
+      </section>
     );
   }
 
@@ -4064,71 +4118,71 @@ function DeploymentDatabaseSection({
         </div>
 
         <div className="space-y-4 p-4">
-          {panelMode === "settings" && databaseInfo ? (
+          {panelMode === "settings" && databaseConnection ? (
             <>
               <div className="grid gap-3">
                 <ConnectionInfoField
                   label={i18n.t("previewPanel.deployment.database.connectionUrl")}
                   value={
-                    databaseInfo.connection.publicConnectionUrl ||
-                    databaseInfo.connection.connectionUrl
+                    databaseConnection.publicConnectionUrl ||
+                    databaseConnection.connectionUrl
                   }
                   copied={copiedField === "url"}
                   onCopy={() =>
                     void handleCopy(
                       "url",
-                      databaseInfo.connection.publicConnectionUrl ||
-                        databaseInfo.connection.connectionUrl,
+                      databaseConnection.publicConnectionUrl ||
+                        databaseConnection.connectionUrl,
                     )
                   }
                 />
                 <ConnectionInfoField
                   label={i18n.t("previewPanel.deployment.database.host")}
-                  value={databaseInfo.connection.host}
+                  value={databaseConnection.host}
                   copied={copiedField === "host"}
                   onCopy={() =>
-                    void handleCopy("host", databaseInfo.connection.host)
+                    void handleCopy("host", databaseConnection.host)
                   }
                 />
                 <ConnectionInfoField
                   label={i18n.t("previewPanel.deployment.database.port")}
-                  value={databaseInfo.connection.port}
+                  value={databaseConnection.port}
                   copied={copiedField === "port"}
                   onCopy={() =>
-                    void handleCopy("port", databaseInfo.connection.port)
+                    void handleCopy("port", databaseConnection.port)
                   }
                 />
                 <ConnectionInfoField
                   label={i18n.t("previewPanel.deployment.database.username")}
-                  value={databaseInfo.connection.username}
+                  value={databaseConnection.username}
                   copied={copiedField === "username"}
                   onCopy={() =>
                     void handleCopy(
                       "username",
-                      databaseInfo.connection.username,
+                      databaseConnection.username,
                     )
                   }
                 />
                 <ConnectionInfoField
                   label={i18n.t("previewPanel.deployment.database.password")}
-                  value={databaseInfo.connection.password}
+                  value={databaseConnection.password}
                   copied={copiedField === "password"}
                   onCopy={() =>
                     void handleCopy(
                       "password",
-                      databaseInfo.connection.password,
+                      databaseConnection.password,
                     )
                   }
                   sensitive
                 />
                 <ConnectionInfoField
                   label={i18n.t("previewPanel.deployment.database.databaseName")}
-                  value={databaseInfo.connection.database}
+                  value={databaseConnection.database}
                   copied={copiedField === "database"}
                   onCopy={() =>
                     void handleCopy(
                       "database",
-                      databaseInfo.connection.database,
+                      databaseConnection.database,
                     )
                   }
                 />
@@ -4137,16 +4191,16 @@ function DeploymentDatabaseSection({
               <div className="grid gap-3 md:grid-cols-2">
                 <DeploymentMiniStatus
                   label={i18n.t("previewPanel.deployment.database.databaseStatus")}
-                  value={databaseInfo.latestDeploymentStatus || "UNKNOWN"}
+                  value={databaseInfo?.latestDeploymentStatus || "UNKNOWN"}
                 />
                 <DeploymentMiniStatus
                   label={i18n.t("previewPanel.deployment.database.connectionMode")}
-                  value={databaseInfo.connection.sslMode.toUpperCase()}
+                  value={databaseConnection.sslMode.toUpperCase()}
                 />
                 <DeploymentMiniStatus
                   label={i18n.t("previewPanel.deployment.database.volumeLabel")}
                   value={
-                    databaseInfo.volumeName ||
+                    databaseInfo?.volumeName ||
                     i18n.t("previewPanel.deployment.database.mounted")
                   }
                 />
@@ -4492,56 +4546,232 @@ function buildMutationValues(
 }
 
 function DeploymentStorageSection({
+  sessionId,
   info,
   statusMeta,
 }: {
+  sessionId?: string | null;
   info: TaskCreationDeploymentInfo | null;
   statusMeta: DeploymentStatusMeta;
 }) {
+  const [storageStatus, setStorageStatus] =
+    useState<TaskCreationStorageStatus | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  const loadStorage = useCallback(
+    async (revealSecrets = false) => {
+      if (!sessionId) return;
+      setLoading(true);
+      setError(null);
+      try {
+        const result = await getTaskCreationStorageStatus(sessionId, {
+          revealSecrets,
+        });
+        setStorageStatus(result);
+      } catch (loadError) {
+        setError(
+          loadError instanceof Error
+            ? loadError.message
+            : i18n.t("previewPanel.deployment.storage.loadFailed"),
+        );
+      } finally {
+        setLoading(false);
+      }
+    },
+    [sessionId],
+  );
+
+  useEffect(() => {
+    void loadStorage(false);
+  }, [loadStorage]);
+
+  const handleEnsureStorage = async () => {
+    if (!sessionId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await ensureTaskCreationStorage(sessionId);
+      setStorageStatus(result);
+    } catch (ensureError) {
+      setError(
+        ensureError instanceof Error
+          ? ensureError.message
+          : i18n.t("previewPanel.deployment.storage.enableFailed"),
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRevealSecrets = async () => {
+    await loadStorage(true);
+  };
+
+  const handleCopy = async (key: string, value?: string) => {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedField(key);
+      window.setTimeout(
+        () => setCopiedField((current) => (current === key ? null : current)),
+        1200,
+      );
+    } catch {
+      // ignore clipboard errors in preview panel
+    }
+  };
+
+  if (!sessionId) {
+    return (
+      <EmptyState text={i18n.t("previewPanel.deployment.storage.missingSession")} />
+    );
+  }
+
+  const bucket = storageStatus?.bucket || null;
+
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
       <section className="rounded-lg border border-border/70 bg-card">
-        <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
-          {i18n.t("previewPanel.deployment.storage.title")}
+        <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+          <div className="text-sm font-semibold text-foreground">
+            {i18n.t("previewPanel.deployment.storage.title")}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={() => void loadStorage(Boolean(bucket?.secretAccessKey))}
+              disabled={loading}
+            >
+              {loading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+              {i18n.t("previewPanel.deployment.storage.refresh")}
+            </Button>
+            {!storageStatus?.configured ? (
+              <Button
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => void handleEnsureStorage()}
+                disabled={loading}
+              >
+                {loading ? <Loader2 className="size-4 animate-spin" /> : <HardDrive className="size-4" />}
+                {i18n.t("previewPanel.deployment.storage.enable")}
+              </Button>
+            ) : null}
+          </div>
         </div>
-        <div className="grid gap-3 p-4 md:grid-cols-2">
-          <DeploymentMetricCard
-            title={i18n.t("previewPanel.deployment.storage.storageStatus")}
-            value={i18n.t("previewPanel.deployment.storage.reservedEntry")}
-            subtitle={i18n.t(
-              "previewPanel.deployment.storage.reservedEntryDescription",
-            )}
-          />
-          <DeploymentMetricCard
-            title={i18n.t("previewPanel.deployment.storage.recommendedUsage")}
-            value={i18n.t(
-              "previewPanel.deployment.storage.recommendedUsageValue",
-            )}
-            subtitle={i18n.t(
-              "previewPanel.deployment.storage.recommendedUsageDescription",
-            )}
-          />
-          <div className="rounded-md border border-border/70 bg-muted/30 p-4 md:col-span-2">
-            <div className="text-sm font-semibold text-foreground">
-              {i18n.t("previewPanel.deployment.storage.visibleState")}
+        <div className="space-y-4 p-4">
+          {!storageStatus?.configured ? (
+            <div className="rounded-md border border-dashed border-border px-4 py-8 text-center">
+              <div className="text-sm font-medium text-foreground">
+                {i18n.t("previewPanel.deployment.storage.notConfiguredTitle")}
+              </div>
+              <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">
+                {i18n.t("previewPanel.deployment.storage.notConfiguredDescription")}
+              </p>
             </div>
-            <div className="mt-2 grid gap-3 md:grid-cols-3">
-              <DeploymentMiniStatus
-                label={i18n.t("previewPanel.deployment.storage.appAccess")}
-                value={statusMeta.label}
-              />
-              <DeploymentMiniStatus
-                label={i18n.t("previewPanel.deployment.storage.defaultDomain")}
-                value={
-                  info?.domains.length
-                    ? i18n.t("previewPanel.deployment.storage.generated")
-                    : i18n.t("previewPanel.deployment.storage.pendingPublish")
-                }
-              />
-              <DeploymentMiniStatus
-                label={i18n.t("previewPanel.deployment.storage.objectStorage")}
-                value={i18n.t("previewPanel.deployment.storage.futurePlan")}
-              />
+          ) : (
+            <>
+              <div className="grid gap-3 md:grid-cols-3">
+                <DeploymentMiniStatus
+                  label={i18n.t("previewPanel.deployment.storage.storageStatus")}
+                  value={i18n.t("previewPanel.deployment.storage.ready")}
+                />
+                <DeploymentMiniStatus
+                  label={i18n.t("previewPanel.deployment.storage.appAccess")}
+                  value={statusMeta.label}
+                />
+                <DeploymentMiniStatus
+                  label={i18n.t("previewPanel.deployment.storage.defaultDomain")}
+                  value={
+                    info?.domains.length
+                      ? i18n.t("previewPanel.deployment.storage.generated")
+                      : i18n.t("previewPanel.deployment.storage.pendingPublish")
+                  }
+                />
+              </div>
+              <div className="grid gap-3">
+                <ConnectionInfoField
+                  label={i18n.t("previewPanel.deployment.storage.bucketName")}
+                  value={bucket?.name || ""}
+                  copied={copiedField === "bucket"}
+                  onCopy={() => void handleCopy("bucket", bucket?.name)}
+                />
+                <ConnectionInfoField
+                  label={i18n.t("previewPanel.deployment.storage.endpoint")}
+                  value={bucket?.endpoint || ""}
+                  copied={copiedField === "endpoint"}
+                  onCopy={() => void handleCopy("endpoint", bucket?.endpoint)}
+                />
+                {bucket?.publicUrl ? (
+                  <ConnectionInfoField
+                    label={i18n.t("previewPanel.deployment.storage.publicUrl")}
+                    value={bucket.publicUrl}
+                    copied={copiedField === "publicUrl"}
+                    onCopy={() => void handleCopy("publicUrl", bucket.publicUrl)}
+                  />
+                ) : null}
+                <ConnectionInfoField
+                  label={i18n.t("previewPanel.deployment.storage.accessKeyId")}
+                  value={bucket?.secretAccessKey ? bucket.accessKeyId : "••••••••••••••••"}
+                  copied={copiedField === "accessKeyId"}
+                  onCopy={() =>
+                    void handleCopy(
+                      "accessKeyId",
+                      bucket?.secretAccessKey ? bucket.accessKeyId : undefined,
+                    )
+                  }
+                  sensitive
+                />
+                <ConnectionInfoField
+                  label={i18n.t("previewPanel.deployment.storage.secretAccessKey")}
+                  value={bucket?.secretAccessKey || "••••••••••••••••"}
+                  copied={copiedField === "secretAccessKey"}
+                  onCopy={() => void handleCopy("secretAccessKey", bucket?.secretAccessKey)}
+                  sensitive
+                />
+              </div>
+              {!bucket?.secretAccessKey ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => void handleRevealSecrets()}
+                  disabled={loading}
+                >
+                  <Unlock className="size-4" />
+                  {i18n.t("previewPanel.deployment.storage.revealSecrets")}
+                </Button>
+              ) : null}
+            </>
+          )}
+          {error ? (
+            <div className="text-sm text-rose-600">{error}</div>
+          ) : null}
+          <div className="rounded-md border border-border/70 bg-muted/30 p-4">
+            <div className="text-sm font-semibold text-foreground">
+              {i18n.t("previewPanel.deployment.storage.applicationVariables")}
+            </div>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {i18n.t("previewPanel.deployment.storage.applicationVariablesDescription")}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {(storageStatus?.applicationVariables?.keys || [
+                "ONECEO_STORAGE_ENABLED",
+                "S3_ENDPOINT",
+                "S3_BUCKET_NAME",
+                "S3_ACCESS_KEY_ID",
+                "S3_SECRET_ACCESS_KEY",
+              ]).map((key) => (
+                <span
+                  key={key}
+                  className="rounded-full border border-border bg-background px-2 py-1 text-xs text-muted-foreground"
+                >
+                  {key}
+                </span>
+              ))}
             </div>
           </div>
         </div>
@@ -4549,7 +4779,7 @@ function DeploymentStorageSection({
 
       <section className="rounded-lg border border-border/70 bg-card">
         <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
-          {i18n.t("previewPanel.deployment.storage.scenarioPlanning")}
+          {i18n.t("previewPanel.deployment.storage.usageGuidance")}
         </div>
         <div className="space-y-3 p-4">
           <DeploymentPlaceholderCard

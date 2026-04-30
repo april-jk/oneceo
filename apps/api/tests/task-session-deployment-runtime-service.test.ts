@@ -25,11 +25,32 @@ function createPanel(overrides: Partial<RailwayDeploymentPanelData> = {}): Railw
   };
 }
 
-test('validateTaskSessionDeploymentPublicReadiness marks terminal success with unreachable public url as provider_error', async () => {
+test('validateTaskSessionDeploymentPublicReadiness enters public_settling before the timeout window elapses', async () => {
   const panel = createPanel({
     bindingState: 'ready',
     latestStatus: 'SUCCESS',
     latestStaticUrl: 'https://example.com',
+  });
+
+  const result = await validateTaskSessionDeploymentPublicReadiness({
+    panel,
+    probe: async () => {
+      throw new Error('部署已完成，但公网地址尚未就绪: https://example.com/ -> 404');
+    },
+  });
+
+  assert.equal(result.bindingState, 'public_settling');
+  assert.equal(result.activeDeploymentPending, true);
+  assert.equal(result.providerErrorCode, undefined);
+  assert.match(result.message || '', /发布完成，正在等待公网生效/);
+});
+
+test('validateTaskSessionDeploymentPublicReadiness marks terminal success with unreachable public url as provider_error after the timeout window', async () => {
+  const panel = createPanel({
+    bindingState: 'public_settling',
+    latestStatus: 'SUCCESS',
+    latestStaticUrl: 'https://example.com',
+    publicReachabilityStartedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
   });
 
   const result = await validateTaskSessionDeploymentPublicReadiness({

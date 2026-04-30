@@ -61,6 +61,7 @@ export type AltusManagedDeploymentToolResult = {
   phase: 'completed' | 'repair_required' | 'failed';
   status: 'success' | 'retryable_repair_required' | 'fatal_error';
   summary: string;
+  bindingState?: string;
   deploymentStatus?: string;
   url?: string;
   deploymentId?: string;
@@ -280,12 +281,17 @@ function buildPendingResult(
 ): AltusManagedDeploymentToolResult {
   const deploymentStatus = asText(panel.latestStatus);
   const url = asText(panel.latestStaticUrl || panel.latestUrl);
+  const bindingState = asText(panel.bindingState);
+  const waitingForPublicReadiness = bindingState === 'public_settling';
   return {
     action,
     phase: 'repair_required',
     status: 'retryable_repair_required',
+    bindingState: bindingState || undefined,
     summary:
-      panel.message ||
+      (waitingForPublicReadiness
+        ? '发布完成，正在等待公网生效。'
+        : panel.message) ||
       (deploymentStatus
         ? `部署仍在进行中，当前状态 ${deploymentStatus}。`
         : '部署仍在进行中，后台正在同步最新状态。'),
@@ -294,7 +300,7 @@ function buildPendingResult(
     deploymentId: asText(panel.deploymentId) || undefined,
     repair: {
       category: 'deployment_pending',
-      checks: [asText(panel.bindingState) || 'provisioning', deploymentStatus || 'unknown'].filter(Boolean),
+      checks: [bindingState || 'provisioning', deploymentStatus || 'unknown'].filter(Boolean),
       suggestedActions: [
         '继续调用 get_application_deployment_status，直到 bindingState=ready 且部署状态不再是 BUILDING/DEPLOYING/INITIALIZING/QUEUED/WAITING',
         '在 deployment_pending 阶段不要继续修改工作区文件，除非后续返回新的模板或配置修复项',
@@ -311,6 +317,7 @@ function buildPendingResult(
 }
 
 const DEPLOYMENT_FAILED_STATUSES = new Set(['failed', 'crashed', 'removed']);
+const DEPLOYMENT_PENDING_BINDING_STATES = new Set(['provisioning', 'public_settling']);
 
 function normalizeDeploymentStatus(value: unknown): string {
   return asText(value).toLowerCase();
@@ -458,6 +465,7 @@ function buildSuccessResult(input: {
       action: input.action,
       phase: 'completed',
       status: 'success',
+      bindingState: asText(input.panel.bindingState) || undefined,
       summary: input.fallbackSummary || input.panel.message || '已获取当前部署状态。',
       deploymentStatus: deploymentStatus || undefined,
       url: url || undefined,
@@ -491,6 +499,7 @@ function buildSuccessResult(input: {
     action: input.action,
     phase: 'completed',
     status: 'success',
+    bindingState: asText(input.panel.bindingState) || undefined,
     summary: summaryParts.join('，') || input.fallbackSummary || input.panel.message || '部署完成',
     deploymentStatus: deploymentStatus || undefined,
     url: url || undefined,
@@ -647,7 +656,10 @@ export class AltusManagedDeploymentToolService {
           session,
           resolvedOrchestratorSessionId: input.sandboxId,
         });
-        if (panel.activeDeploymentPending || asText(panel.bindingState) === 'provisioning') {
+        if (
+          panel.activeDeploymentPending ||
+          DEPLOYMENT_PENDING_BINDING_STATES.has(asText(panel.bindingState))
+        ) {
           deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
             type: 'PROVIDER_STATUS',
             status: asText(panel.latestStatus) || 'pending',
@@ -784,7 +796,10 @@ export class AltusManagedDeploymentToolService {
         type: 'PUBLISH_STARTED',
         deploymentId: asText(result.panel.deploymentId) || undefined,
       });
-      if (result.panel.activeDeploymentPending || asText(result.panel.bindingState) === 'provisioning') {
+      if (
+        result.panel.activeDeploymentPending ||
+        DEPLOYMENT_PENDING_BINDING_STATES.has(asText(result.panel.bindingState))
+      ) {
         deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
           type: 'PROVIDER_STATUS',
           status: asText(result.panel.latestStatus) || 'pending',

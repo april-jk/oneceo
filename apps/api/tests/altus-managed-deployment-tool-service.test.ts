@@ -360,6 +360,42 @@ test('deploy_application returns deployment_pending while Railway is still provi
   assert.equal(result.url, 'https://demo.oneceo.app');
 });
 
+test('get_application_deployment_status keeps public_settling as deployment_pending instead of success', async () => {
+  const service = new AltusManagedDeploymentToolService({
+    inspectBaseline: async () => createReadyBaseline(),
+    resolveSession: async () => ({
+      id: 'session-1',
+      messages: [],
+    } as any),
+    buildDeploymentResponse: async () => ({
+      bindingState: 'public_settling',
+      activeDeploymentPending: true,
+      latestStatus: 'SUCCESS',
+      latestUrl: 'https://demo.oneceo.app',
+      deploymentId: 'dep_123',
+      message: '发布完成，正在等待公网生效。',
+    } as any),
+    executeDeploymentAction: async () => {
+      throw new Error('should_not_execute_action');
+    },
+    getErrorMessage: (error) => String((error as Error)?.message || error),
+  });
+
+  const result = await service.execute({
+    action: 'get_application_deployment_status',
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+  });
+
+  assert.equal(result.status, 'retryable_repair_required');
+  assert.equal(result.repair?.category, 'deployment_pending');
+  assert.equal(result.bindingState, 'public_settling');
+  assert.equal(result.deploymentStatus, 'SUCCESS');
+  assert.match(result.summary, /等待公网生效/);
+});
+
 test('get_application_deployment_status returns structured success payload', async () => {
   const service = new AltusManagedDeploymentToolService({
     inspectBaseline: async () => createReadyBaseline(),

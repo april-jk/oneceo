@@ -49,6 +49,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
@@ -3585,6 +3586,7 @@ function DeploymentDatabaseSection({
   const [selectedRowValues, setSelectedRowValues] = useState<
     Record<string, string>
   >({});
+  const [visibleColumnNames, setVisibleColumnNames] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
@@ -3673,6 +3675,21 @@ function DeploymentDatabaseSection({
     };
   }, [sessionId, activeTableId, page]);
 
+  useEffect(() => {
+    if (!rowsPage?.columns.length) {
+      setVisibleColumnNames([]);
+      return;
+    }
+    setVisibleColumnNames((current) => {
+      if (!current.length) {
+        return rowsPage.columns.map((column) => column.name);
+      }
+      const available = new Set(rowsPage.columns.map((column) => column.name));
+      const next = current.filter((name) => available.has(name));
+      return next.length ? next : rowsPage.columns.map((column) => column.name);
+    });
+  }, [rowsPage?.columns]);
+
   const activeTable =
     databaseInfo?.tables.find((table) => table.id === activeTableId) ||
     databaseInfo?.tables[0] ||
@@ -3681,6 +3698,15 @@ function DeploymentDatabaseSection({
   const editorColumns = rowsPage?.columns || [];
   const shouldShowRecordDetail =
     panelMode === "insert" || (panelMode === "record" && Boolean(selectedRowLocator));
+  const visibleColumns = useMemo(() => {
+    if (!rowsPage?.columns.length) return [];
+    if (!visibleColumnNames.length) return rowsPage.columns;
+    const visibleSet = new Set(visibleColumnNames);
+    const filtered = rowsPage.columns.filter((column) =>
+      visibleSet.has(column.name),
+    );
+    return filtered.length ? filtered : rowsPage.columns;
+  }, [rowsPage?.columns, visibleColumnNames]);
 
   const handleRefresh = async () => {
     if (!sessionId) return;
@@ -3750,8 +3776,9 @@ function DeploymentDatabaseSection({
   };
 
   const handleHideRecordDetail = useCallback(() => {
-    if (panelMode !== "record") return;
+    if (panelMode !== "record" && panelMode !== "insert") return;
     setSelectedRowLocator(null);
+    setPanelMode("record");
   }, [panelMode]);
 
   const handleCopy = async (key: string, value: string) => {
@@ -3949,7 +3976,7 @@ function DeploymentDatabaseSection({
                     : "text-foreground hover:bg-muted/30",
                 )}
               >
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 flex-1" title={table.name}>
                   <div
                     className={cn(
                       "truncate text-sm",
@@ -3959,11 +3986,6 @@ function DeploymentDatabaseSection({
                     {table.name}
                   </div>
                 </div>
-                {table.sourceLabel ? (
-                  <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
-                    {table.sourceLabel}
-                  </span>
-                ) : null}
               </button>
             ))}
             {!databaseLoading && !databaseInfo?.tables.length ? (
@@ -3992,12 +4014,56 @@ function DeploymentDatabaseSection({
                 : i18n.t("previewPanel.deployment.database.database")}
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Button variant="outline" size="sm" className="h-8 text-xs">
-                <TableProperties className="size-4" />
-                {i18n.t("previewPanel.deployment.database.columnCount", {
-                  count: rowsPage?.columns.length || 0,
-                })}
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" className="h-8 text-xs">
+                    <TableProperties className="size-4" />
+                    {i18n.t("previewPanel.deployment.database.columnCount", {
+                      count: visibleColumns.length || 0,
+                    })}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-56 rounded-2xl p-2">
+                  <div className="space-y-1">
+                    {rowsPage?.columns.map((column) => {
+                      const checked = visibleColumnNames.includes(column.name);
+                      const canHide =
+                        checked && visibleColumnNames.length > 1;
+                      return (
+                        <div
+                          key={column.name}
+                          className="flex items-center justify-between gap-3 rounded-lg px-3 py-2"
+                        >
+                          <div className="min-w-0 flex-1 text-sm text-foreground">
+                            <span className="truncate">{column.name}</span>
+                          </div>
+                          <Switch
+                            checked={checked}
+                            onCheckedChange={(nextChecked) => {
+                              setVisibleColumnNames((current) => {
+                                if (nextChecked) {
+                                  if (current.includes(column.name)) {
+                                    return current;
+                                  }
+                                  const ordered =
+                                    rowsPage?.columns
+                                      .map((item) => item.name)
+                                      .filter((name) =>
+                                        name === column.name || current.includes(name),
+                                      ) || [];
+                                  return ordered;
+                                }
+                                if (!canHide) return current;
+                                return current.filter((name) => name !== column.name);
+                              });
+                            }}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Button
                 variant="outline"
                 size="sm"
@@ -4040,7 +4106,13 @@ function DeploymentDatabaseSection({
                 <div
                   className="relative flex-1 overflow-auto"
                   onClick={(event) => {
-                    if (!selectedRowLocator || panelMode !== "record") return;
+                    if (
+                      panelMode !== "record" &&
+                      panelMode !== "insert"
+                    ) {
+                      return;
+                    }
+                    if (panelMode === "record" && !selectedRowLocator) return;
                     const target = event.target as HTMLElement;
                     if (
                       target.closest("tbody tr") ||
@@ -4057,7 +4129,7 @@ function DeploymentDatabaseSection({
                   <table className="min-w-full border-separate border-spacing-0 text-sm">
                     <thead className="sticky top-0 z-10 bg-card">
                       <tr>
-                        {rowsPage.columns.map((column) => (
+                        {visibleColumns.map((column) => (
                           <th
                             key={column.name}
                             className="border-b border-border px-3 py-2 text-left font-medium text-muted-foreground"
@@ -4076,7 +4148,7 @@ function DeploymentDatabaseSection({
                       {rowsLoading ? (
                         <tr>
                           <td
-                            colSpan={Math.max(rowsPage.columns.length, 1)}
+                            colSpan={Math.max(visibleColumns.length, 1)}
                             className="px-4 py-16 text-center text-muted-foreground"
                           >
                             {i18n.t("previewPanel.deployment.database.loadingData")}
@@ -4101,7 +4173,7 @@ function DeploymentDatabaseSection({
                               )}
                               onClick={() => handleSelectRow(row)}
                             >
-                              {rowsPage.columns.map((column) => (
+                              {visibleColumns.map((column) => (
                                 <td
                                   key={column.name}
                                   className="border-b border-border/70 px-3 py-2 align-top text-foreground"
@@ -4117,7 +4189,7 @@ function DeploymentDatabaseSection({
                       ) : (
                         <tr>
                           <td
-                            colSpan={Math.max(rowsPage.columns.length, 1)}
+                            colSpan={Math.max(visibleColumns.length, 1)}
                             className="px-4 py-16 text-center text-muted-foreground"
                           >
                             {i18n.t("previewPanel.deployment.database.noTableData")}

@@ -62,7 +62,7 @@ const SPECIFIC_ARTIFACT_KEYWORDS = [
 ] as const;
 const AMBIGUOUS_SOFTWARE_KEYWORDS = ['工具', 'tool', '应用', 'app', '系统', '平台'] as const;
 const COMPOSIO_BROKERED_RUNTIME_TRANSPORT = 'api_brokered_mcp';
-const COMPOSIO_BROKERED_CONNECTORS = new Set(['notion', 'slack', 'figma', 'supabase']);
+const COMPOSIO_BROKERED_CONNECTORS = new Set(['github', 'notion', 'slack', 'figma', 'supabase']);
 
 function isSnapshotRuntimeTransportSupported(binding: { connectorKey?: unknown; runtimeTransport?: unknown }) {
   if (!COMPOSIO_BROKERED_CONNECTORS.has(asText(binding.connectorKey))) {

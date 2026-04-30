@@ -138,7 +138,7 @@ export class HostedProviderHostService {
       case 'vercel':
         return this.executeVercel(input);
       case 'figma':
-      case 'google_cloud':
+      case 'github':
       case 'notion':
       case 'slack':
       case 'supabase':

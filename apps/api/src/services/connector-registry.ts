@@ -1,4 +1,4 @@
-﻿import {
+import {
   CONNECTOR_KEYS,
   buildConnectorDefinitions,
   resolveOauthProvider,
@@ -83,32 +83,6 @@ function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function normalizeRepositoryFullName(value: unknown): string {
-  const text = asText(value);
-  if (!text) return '';
-  const parts = text
-    .split('/')
-    .map((item) => item.trim())
-    .filter(Boolean);
-  if (parts.length !== 2) return '';
-  return `${parts[0]}/${parts[1]}`;
-}
-
-function normalizeGithubRepositories(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const item of value) {
-    const normalized = normalizeRepositoryFullName(item);
-    if (!normalized) continue;
-    const key = normalized.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(normalized);
-  }
-  return result;
-}
-
 function parseHeadersTemplate(value: string | undefined): Record<string, string> {
   const raw = asText(value);
   if (!raw) return {};
@@ -141,108 +115,12 @@ function renderHeaders(
   return result;
 }
 
-function buildGithubStdioWrapperCommand(): string {
-  return [
-    "const readline = require('node:readline');",
-    "const { spawn } = require('node:child_process');",
-    "const allowedRepositories = (() => {",
-    "  try {",
-    "    const parsed = JSON.parse(process.env.ONECEO_GITHUB_ALLOWED_REPOSITORIES || '[]');",
-    "    if (!Array.isArray(parsed)) return new Set();",
-    "    return new Set(parsed.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean));",
-    "  } catch {",
-    "    return new Set();",
-    "  }",
-    "})();",
-    "const parseRepository = (value) => {",
-    "  const text = String(value || '').trim();",
-    "  if (!text) return '';",
-    "  const parts = text.split('/').map((part) => part.trim()).filter(Boolean);",
-    "  if (parts.length !== 2) return '';",
-    "  return `${parts[0]}/${parts[1]}`;",
-    "};",
-    "const collectRepositories = (value, target = new Set()) => {",
-    "  if (!value) return target;",
-    "  if (Array.isArray(value)) {",
-    "    for (const item of value) collectRepositories(item, target);",
-    "    return target;",
-    "  }",
-    "  if (typeof value !== 'object') return target;",
-    "  const record = value;",
-    "  const owner = typeof record.owner === 'string' ? record.owner : '';",
-    "  const repo = typeof record.repo === 'string' ? record.repo : '';",
-    "  const combined = parseRepository(owner && repo ? `${owner}/${repo}` : '');",
-    "  if (combined) target.add(combined);",
-    "  const directKeys = ['repository', 'repo', 'full_name'];",
-    "  for (const key of directKeys) {",
-    "    const normalized = parseRepository(record[key]);",
-    "    if (normalized) target.add(normalized);",
-    "  }",
-    "  for (const nested of Object.values(record)) collectRepositories(nested, target);",
-    "  return target;",
-    "};",
-    "const writeMessage = (message) => process.stdout.write(`${JSON.stringify(message)}\\n`);",
-    "const child = spawn('npx', ['-y', '@modelcontextprotocol/server-github'], {",
-    "  stdio: ['pipe', 'pipe', 'inherit'],",
-    "  env: {",
-    "    ...process.env,",
-    "    NPM_CONFIG_LOGLEVEL: process.env.NPM_CONFIG_LOGLEVEL || 'silent',",
-    '  },',
-    '});',
-    'let skippedBanner = false;',
-    "const childOutput = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });",
-    "childOutput.on('line', (line) => {",
-    "  if (!skippedBanner && line.trim() === 'GitHub MCP Server running on stdio') {",
-    '    skippedBanner = true;',
-    '    return;',
-    '  }',
-    '  skippedBanner = true;',
-    "  process.stdout.write(`${line}\\n`);",
-    '});',
-    "const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });",
-    "input.on('line', (line) => {",
-    '  if (!line) return;',
-    '  try {',
-    '    const message = JSON.parse(line);',
-    "    if (message && message.method === 'tools/call' && message.params && typeof message.params === 'object') {",
-    "      const args = message.params.arguments && typeof message.params.arguments === 'object' ? message.params.arguments : {};",
-    '      const repositories = Array.from(collectRepositories(args));',
-    '      const disallowed = repositories.filter((repo) => allowedRepositories.size > 0 && !allowedRepositories.has(String(repo).toLowerCase()));',
-    '      if (disallowed.length > 0) {',
-    "        writeMessage({",
-    "          jsonrpc: '2.0',",
-    '          id: message.id ?? null,',
-    "          error: { code: -32000, message: `GitHub repository access denied for this session: ${disallowed.join(', ')}` },",
-    '        });',
-    '        return;',
-    '      }',
-    '    }',
-    "    child.stdin.write(`${JSON.stringify(message)}\\n`);",
-    '  } catch {',
-    "    child.stdin.write(`${line}\\n`);",
-    '  }',
-    '});',
-    "input.on('close', () => child.stdin.end());",
-    "child.on('exit', (code, signal) => {",
-    '  if (signal) {',
-    '    process.kill(process.pid, signal);',
-    '    return;',
-    '  }',
-    '  process.exit(code ?? 0);',
-    '});',
-  ].join('\n');
-}
-
 function buildRemoteHeaders(
-  connectorKey: ConnectorKey,
   item: ConnectorCatalogItem,
   input: {
     accessToken?: string;
     teamId?: string;
     projectUrl?: string;
-    taskSessionId?: string;
-    userId?: string;
-    profileId?: string;
   }
 ): Record<string, string> {
   const template = item.runtime.headersEnv
@@ -274,12 +152,7 @@ function buildRemoteHeaders(
   return {};
 }
 
-function buildRemoteUrl(
-  item: ConnectorCatalogItem,
-  _input: {
-    connectorKey: ConnectorKey;
-  }
-): string {
+function buildRemoteUrl(item: ConnectorCatalogItem): string {
   const configured = item.runtime.urlEnv ? asText(process.env[item.runtime.urlEnv]) : '';
   const baseUrl = configured || asText(item.runtime.urlDefault);
   if (!baseUrl) {
@@ -301,7 +174,7 @@ export class ConnectorRegistry {
   getCatalogItem(connectorKey: string): ConnectorCatalogItem {
     const item = this.listCatalog().find((entry) => entry.key === connectorKey);
     if (!item) {
-      throw new Error(`鏈煡杩炴帴鍣? ${connectorKey}`);
+      throw new Error(`Unknown connector: ${connectorKey}`);
     }
     return item;
   }
@@ -323,35 +196,11 @@ export class ConnectorRegistry {
     const item = this.getCatalogItem(connectorKey);
     const secret = account.secret || {};
     const configJson = account.configJson || {};
-    const sessionConfig = input.sessionConfig || {};
-
-    if (connectorKey === 'github') {
-      const accessToken = asText(secret.accessToken);
-      if (!accessToken) {
-        throw new Error('GitHub 杩炴帴鍣ㄧ己灏?access token');
-      }
-      const repositories = normalizeGithubRepositories(
-        (sessionConfig as Record<string, unknown>).repositories
-      );
-      return {
-        type: 'local',
-        enabled: true,
-        command: ['node', '-e', buildGithubStdioWrapperCommand()],
-        environment: {
-          GITHUB_PERSONAL_ACCESS_TOKEN: accessToken,
-          GITHUB_TOKEN: accessToken,
-          GH_TOKEN: accessToken,
-          ONECEO_GITHUB_ALLOWED_REPOSITORIES: JSON.stringify(repositories),
-          NPM_CONFIG_LOGLEVEL: 'silent',
-          NPM_CONFIG_YES: 'true',
-        },
-      };
-    }
 
     if (connectorKey === 'postgres') {
       const dsn = asText(secret.dsn);
       if (!dsn) {
-        throw new Error('Postgres 杩炴帴鍣ㄧ己灏?DSN');
+        throw new Error('Postgres connector requires DSN');
       }
       return {
         type: 'local',
@@ -364,7 +213,7 @@ export class ConnectorRegistry {
     const refreshToken = asText(secret.refreshToken);
     if (connectorKey === 'vercel') {
       if (!accessToken && !refreshToken) {
-        throw new Error('Vercel 连接器缺少 access token 或 refresh token');
+        throw new Error('Vercel connector requires access token or refresh token');
       }
       return {
         type: 'hosted',
@@ -389,22 +238,18 @@ export class ConnectorRegistry {
         provider: connectorKey,
         capabilities: ['initialize', 'tools/list', 'tools/call'],
       };
-    } else if (!accessToken) {
-      throw new Error(`${item.name} 杩炴帴鍣ㄧ己灏?access token`);
+    }
+    if (!accessToken) {
+      throw new Error(`${item.name} connector requires access token`);
     }
     const url =
       connectorKey === 'supabase' && asText(configJson.mcpUrl)
         ? new URL(asText(configJson.mcpUrl)).toString()
-        : buildRemoteUrl(item, {
-            connectorKey,
-          });
-    const headers = buildRemoteHeaders(connectorKey, item, {
+        : buildRemoteUrl(item);
+    const headers = buildRemoteHeaders(item, {
       accessToken,
       teamId: asText(configJson.teamId),
       projectUrl: asText(configJson.projectUrl) || asText(configJson.supabaseUrl),
-      taskSessionId: asText(input.runtimeContext?.taskSessionId),
-      userId: asText(input.runtimeContext?.userId),
-      profileId: asText(account.profileId),
     });
     return {
       type: 'remote',
@@ -433,8 +278,6 @@ export class ConnectorRegistry {
         return normalized.includes('vercel');
       case 'postgres':
         return normalized.includes('postgres');
-      case 'google_cloud':
-        return normalized.includes('google_cloud') || normalized.includes('googlecloud');
       default:
         return false;
     }

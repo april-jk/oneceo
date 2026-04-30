@@ -84,7 +84,10 @@ import {
   getTaskCreationDeploymentTemplateBaseline,
   getTaskCreationDebugInfo,
   getTaskCreationStorageStatus,
+  createTaskCreationStorageUploadTarget,
+  TASK_CREATION_STORAGE_UPLOAD_MAX_BYTES,
   deleteTaskCreationStorageFile,
+  getTaskCreationStorageFileDownloadUrl,
   uploadTaskCreationStorageFile,
   insertTaskCreationDatabaseRow,
   rotateTaskCreationDeploymentToken,
@@ -4860,6 +4863,7 @@ function DeploymentStorageSection({
   const [storageActionLoading, setStorageActionLoading] = useState<
     "upload" | "delete" | null
   >(null);
+  const [uploadingFile, setUploadingFile] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadStorage = useCallback(
@@ -4936,18 +4940,46 @@ function DeploymentStorageSection({
     fileInputRef.current?.click();
   };
 
+  const waitForUploadedFile = useCallback(
+    async (fileKey: string) => {
+      if (!sessionId) return null;
+      const deadline = Date.now() + 15000;
+      let latest: TaskCreationStorageStatus | null = null;
+      while (Date.now() < deadline) {
+        latest = await getTaskCreationStorageStatus(sessionId);
+        if (latest?.files?.some((item) => item.key === fileKey)) {
+          return latest;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 800));
+      }
+      return latest;
+    },
+    [sessionId],
+  );
+
   const handleUploadFile = async (
     event: React.ChangeEvent<HTMLInputElement>,
   ) => {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!sessionId || !file) return;
+    if (file.size > TASK_CREATION_STORAGE_UPLOAD_MAX_BYTES) {
+      setError(i18n.t("previewPanel.deployment.storage.uploadTooLarge"));
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
       setStorageActionLoading("upload");
-      const result = await uploadTaskCreationStorageFile(sessionId, file);
-      setStorageStatus(result);
+      setUploadingFile(true);
+      const uploadTarget = await createTaskCreationStorageUploadTarget(sessionId, file);
+      await uploadTaskCreationStorageFile(uploadTarget, file);
+      const refreshed = await waitForUploadedFile(uploadTarget.key);
+      if (refreshed) {
+        setStorageStatus(refreshed);
+      } else {
+        await loadStorage(false);
+      }
     } catch (uploadError) {
       setError(
         uploadError instanceof Error
@@ -4955,6 +4987,7 @@ function DeploymentStorageSection({
           : i18n.t("previewPanel.deployment.storage.uploadFailed"),
       );
     } finally {
+      setUploadingFile(false);
       setStorageActionLoading(null);
       setLoading(false);
     }
@@ -4979,6 +5012,15 @@ function DeploymentStorageSection({
       setStorageActionLoading(null);
       setLoading(false);
     }
+  };
+
+  const handleDownloadFile = () => {
+    if (!sessionId || !selectedFile) return;
+    const link = document.createElement("a");
+    link.href = getTaskCreationStorageFileDownloadUrl(sessionId, selectedFile.key);
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.click();
   };
 
   if (!sessionId) {
@@ -5113,6 +5155,15 @@ function DeploymentStorageSection({
             <div className="px-4 pt-3 text-xs text-rose-600">{error}</div>
           ) : null}
 
+          {uploadingFile ? (
+            <div className="border-b border-border px-4 py-3">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" />
+                <span>{i18n.t("previewPanel.deployment.storage.uploading")}</span>
+              </div>
+            </div>
+          ) : null}
+
           <div
             className="relative min-h-0 flex-1 overflow-auto"
             onClick={(event) => {
@@ -5211,6 +5262,14 @@ function DeploymentStorageSection({
                     onClick={() => setSelectedFileKey(null)}
                   >
                     {i18n.t("previewPanel.deployment.storage.closePreview")}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={handleDownloadFile}
+                  >
+                    {i18n.t("previewPanel.deployment.storage.downloadFile")}
                   </Button>
                   <Button
                     variant="outline"

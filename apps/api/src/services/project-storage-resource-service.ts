@@ -1,5 +1,6 @@
-import { DeleteObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { createHash } from 'node:crypto';
+import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
+import { createHash, createHmac } from 'node:crypto';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 import { projectStorageResourceDAO } from '../db/dao';
 import type { ProjectStorageResource } from '../db/schema';
@@ -115,6 +116,16 @@ export type ProjectStorageResourceStatus = {
   lastCheckedAt?: string;
 };
 
+export type ProjectStorageDirectUploadTarget = {
+  key: string;
+  method: 'POST';
+  url: string;
+  fields: Record<string, string>;
+  expiresInSeconds: number;
+};
+
+export const TASK_CREATION_STORAGE_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -154,6 +165,10 @@ function toStatus(
       projectKey,
     };
   }
+  const metadata: Record<string, unknown> =
+    row.metadataJson && typeof row.metadataJson === 'object'
+      ? (row.metadataJson as Record<string, unknown>)
+      : {};
   return {
     configured: true,
     provider: 'railway_bucket',
@@ -226,6 +241,40 @@ function buildBucketClient(
   });
 }
 
+function buildDirectUploadActionUrl(
+  row: Pick<ProjectStorageResource, 'bucketName' | 'endpoint' | 'metadataJson'>
+) {
+  const endpoint = new URL(row.endpoint);
+  const metadata: Record<string, unknown> =
+    row.metadataJson && typeof row.metadataJson === 'object'
+      ? (row.metadataJson as Record<string, unknown>)
+      : {};
+  const urlStyle =
+    typeof metadata.urlStyle === 'string' ? metadata.urlStyle.trim().toLowerCase() : '';
+  if (urlStyle === 'path') {
+    endpoint.pathname = `/${row.bucketName}`;
+    return endpoint.toString();
+  }
+  endpoint.hostname = `${row.bucketName}.${endpoint.hostname}`;
+  endpoint.pathname = '/';
+  return endpoint.toString();
+}
+
+function getAwsV4SigningKey(secretAccessKey: string, dateStamp: string, region: string, service: string) {
+  const kDate = createHmac('sha256', Buffer.from(`AWS4${secretAccessKey}`, 'utf8'))
+    .update(dateStamp)
+    .digest();
+  const kRegion = createHmac('sha256', kDate).update(region).digest();
+  const kService = createHmac('sha256', kRegion).update(service).digest();
+  return createHmac('sha256', kService).update('aws4_request').digest();
+}
+
+function encodeRFC5987ValueChars(value: string) {
+  return encodeURIComponent(value)
+    .replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
+    .replace(/%(7C|60|5E)/g, (match) => match.toLowerCase());
+}
+
 async function listBucketObjects(
   row: Pick<ProjectStorageResource, 'bucketName' | 'endpoint' | 'accessKeyId' | 'metadataJson'>,
   secretAccessKey: string
@@ -249,26 +298,6 @@ async function listBucketObjects(
       const rightTime = right.lastModifiedAt ? new Date(right.lastModifiedAt).getTime() : 0;
       return rightTime - leftTime;
     });
-}
-
-async function putBucketObject(
-  row: Pick<ProjectStorageResource, 'bucketName' | 'endpoint' | 'accessKeyId' | 'metadataJson'>,
-  secretAccessKey: string,
-  input: {
-    key: string;
-    body: Buffer;
-    contentType?: string | null;
-  }
-) {
-  const client = buildBucketClient(row, secretAccessKey);
-  await client.send(
-    new PutObjectCommand({
-      Bucket: row.bucketName,
-      Key: input.key,
-      Body: input.body,
-      ContentType: asText(input.contentType) || 'application/octet-stream',
-    })
-  );
 }
 
 async function deleteBucketObject(
@@ -979,16 +1008,15 @@ export class ProjectStorageResourceService {
     return existing;
   }
 
-  async uploadObject(
+  async createDirectUploadTarget(
     userId: string,
     projectKey: string,
     input: {
-      key: string;
-      body: Buffer;
+      fileName: string;
+      fileSize?: number | null;
       contentType?: string | null;
-    },
-    options?: { revealSecrets?: boolean }
-  ) {
+    }
+  ): Promise<ProjectStorageDirectUploadTarget> {
     const normalizedProjectKey = normalizeProjectKey(projectKey);
     const row = await projectStorageResourceDAO.getByUserAndProjectKey(userId, normalizedProjectKey);
     if (!row) {
@@ -1016,13 +1044,110 @@ export class ProjectStorageResourceService {
       throw new Error('Railway Bucket 密钥缺失');
     }
 
-    await putBucketObject(syncedRow, secretAccessKey, input);
-    const files = await listBucketObjects(syncedRow, secretAccessKey);
-    return toStatus(
-      syncedRow,
-      normalizedProjectKey,
-      options?.revealSecrets ? secretAccessKey : null,
-      files
+    const fileName = asText(input.fileName);
+    if (!fileName) {
+      throw new Error('缺少文件名');
+    }
+    const fileSize = typeof input.fileSize === 'number' && Number.isFinite(input.fileSize)
+      ? Math.max(0, Math.floor(input.fileSize))
+      : null;
+    if (fileSize !== null && fileSize > TASK_CREATION_STORAGE_UPLOAD_MAX_BYTES) {
+      throw new Error(`文件过大，最大仅支持 ${Math.floor(TASK_CREATION_STORAGE_UPLOAD_MAX_BYTES / (1024 * 1024))}MB`);
+    }
+
+    const contentType = asText(input.contentType) || 'application/octet-stream';
+    const expiresInSeconds = 900;
+    const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
+    const amzDate = expiresAt.toISOString().replace(/[:-]|\.\d{3}/g, '');
+    const dateStamp = amzDate.slice(0, 8);
+    const metadata: Record<string, unknown> =
+      syncedRow.metadataJson && typeof syncedRow.metadataJson === 'object'
+        ? (syncedRow.metadataJson as Record<string, unknown>)
+        : {};
+    const region =
+      typeof metadata.region === 'string' && metadata.region.trim()
+        ? metadata.region.trim()
+        : 'auto';
+    const credentialScope = `${dateStamp}/${region}/s3/aws4_request`;
+    const credential = `${syncedRow.accessKeyId}/${credentialScope}`;
+    const targetUrl = buildDirectUploadActionUrl(syncedRow);
+    const policy = Buffer.from(
+      JSON.stringify({
+        expiration: expiresAt.toISOString(),
+        conditions: [
+          { bucket: syncedRow.bucketName },
+          ['eq', '$key', fileName],
+          ['eq', '$Content-Type', contentType],
+          ['content-length-range', 0, TASK_CREATION_STORAGE_UPLOAD_MAX_BYTES],
+          { 'x-amz-algorithm': 'AWS4-HMAC-SHA256' },
+          { 'x-amz-credential': credential },
+          { 'x-amz-date': amzDate },
+          { success_action_status: '201' },
+        ],
+      })
+    ).toString('base64');
+    const signingKey = getAwsV4SigningKey(secretAccessKey, dateStamp, region, 's3');
+    const signature = createHmac('sha256', signingKey).update(policy).digest('hex');
+
+    return {
+      key: fileName,
+      method: 'POST',
+      url: targetUrl,
+      fields: {
+        key: fileName,
+        'Content-Type': contentType,
+        Policy: policy,
+        'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+        'X-Amz-Credential': credential,
+        'X-Amz-Date': amzDate,
+        'X-Amz-Signature': signature,
+        success_action_status: '201',
+      },
+      expiresInSeconds,
+    };
+  }
+
+  async createDirectDownloadUrl(userId: string, projectKey: string, key: string): Promise<string> {
+    const normalizedProjectKey = normalizeProjectKey(projectKey);
+    const objectKey = asText(key);
+    if (!objectKey) {
+      throw new Error('缺少文件 key');
+    }
+    const row = await projectStorageResourceDAO.getByUserAndProjectKey(userId, normalizedProjectKey);
+    if (!row) {
+      throw new Error('存储桶尚未启用');
+    }
+    const account = await platformDeploymentAccountService.ensureProjectAccount(
+      userId,
+      normalizedProjectKey
+    );
+    const live = await verifyLiveBucket(account, row);
+    if (live.kind === 'missing') {
+      await projectStorageResourceDAO.deleteByUserAndProjectKey(userId, normalizedProjectKey);
+      throw new Error('存储桶尚未启用');
+    }
+    if (live.kind === 'error') {
+      await markStoredBucketRowError(row, live.message);
+      throw new Error(live.message);
+    }
+
+    const syncedRow = await syncStoredBucketRow(row, live.credentials);
+    const secretAccessKey =
+      asText(live.credentials.secretAccessKey) ||
+      connectorSecretService.decryptToString(syncedRow.secretAccessKeyCiphertext, 'deployment');
+    if (!secretAccessKey) {
+      throw new Error('Railway Bucket 密钥缺失');
+    }
+
+    const client = buildBucketClient(syncedRow, secretAccessKey);
+    return getSignedUrl(
+      client,
+      new GetObjectCommand({
+        Bucket: syncedRow.bucketName,
+        Key: objectKey,
+        ResponseContentDisposition: `attachment; filename*=UTF-8''${encodeRFC5987ValueChars(objectKey)}`,
+      }),
+      { expiresIn: 900 }
     );
   }
 

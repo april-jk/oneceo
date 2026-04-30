@@ -491,6 +491,16 @@ export type TaskCreationStorageStatus = {
   lastCheckedAt?: string;
 };
 
+export type TaskCreationStorageUploadTarget = {
+  key: string;
+  method: "POST";
+  url: string;
+  fields: Record<string, string>;
+  expiresInSeconds: number;
+};
+
+export const TASK_CREATION_STORAGE_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+
 export type TaskCreationDatabaseRowLocator = {
   ctid?: string;
   primaryKey?: Record<string, unknown>;
@@ -1407,26 +1417,53 @@ export async function ensureTaskCreationStorage(
   return result?.data || null;
 }
 
-export async function uploadTaskCreationStorageFile(
+export async function createTaskCreationStorageUploadTarget(
   sessionId: string,
   file: File
-): Promise<TaskCreationStorageStatus | null> {
+): Promise<TaskCreationStorageUploadTarget> {
+  if (file.size > TASK_CREATION_STORAGE_UPLOAD_MAX_BYTES) {
+    throw new Error(`file too large: max ${Math.floor(TASK_CREATION_STORAGE_UPLOAD_MAX_BYTES / (1024 * 1024))}MB`);
+  }
   const safeSessionId = encodeURIComponent(sessionId);
-  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/storage/files`;
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/storage/upload-target`;
   const response = await fetch(url, {
     method: "POST",
     headers: buildClientIdentityHeaders({
-      "Content-Type": file.type || "application/octet-stream",
-      "X-Attachment-Name": encodeURIComponent(file.name),
-      "X-Attachment-Size": String(file.size),
+      "Content-Type": "application/json",
     }),
-    body: file,
+    body: JSON.stringify({
+      fileName: file.name,
+      fileSize: file.size,
+      contentType: file.type || "application/octet-stream",
+    }),
   });
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));
   }
-  const result = (await response.json()) as { data?: TaskCreationStorageStatus };
-  return result?.data || null;
+  const result = (await response.json()) as { data?: TaskCreationStorageUploadTarget };
+  if (!result?.data) {
+    throw new Error("upload target empty");
+  }
+  return result.data;
+}
+
+export async function uploadTaskCreationStorageFile(
+  target: TaskCreationStorageUploadTarget,
+  file: File
+): Promise<void> {
+  const formData = new FormData();
+  Object.entries(target.fields || {}).forEach(([key, value]) => {
+    formData.append(key, value);
+  });
+  formData.append("file", file, file.name);
+
+  await fetch(target.url, {
+    method: target.method,
+    body: formData,
+    mode: "no-cors",
+  }).catch((error) => {
+    throw error instanceof Error ? error : new Error("network error");
+  });
 }
 
 export async function deleteTaskCreationStorageFile(
@@ -1447,6 +1484,15 @@ export async function deleteTaskCreationStorageFile(
   }
   const result = (await response.json()) as { data?: TaskCreationStorageStatus };
   return result?.data || null;
+}
+
+export function getTaskCreationStorageFileDownloadUrl(
+  sessionId: string,
+  key: string
+): string {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const params = new URLSearchParams({ key });
+  return `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/storage/files/download?${params.toString()}`;
 }
 
 export async function getTaskCreationDatabaseRows(

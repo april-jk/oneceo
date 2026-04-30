@@ -250,7 +250,12 @@ export async function prepareTaskSessionAnalyticsBinding(input: {
     };
   }
 
-  const websiteName = existing?.websiteName || buildWebsiteName(input.sessionId, domain);
+  const websiteName =
+    existing?.domain === domain &&
+    existing.websiteName &&
+    !existing.websiteName.includes('railway.app')
+      ? existing.websiteName
+      : buildWebsiteName(input.sessionId, domain);
   const website = await umamiAnalyticsService.ensureWebsiteBinding({
     scope: 'deployment',
     websiteId: existing?.websiteId,
@@ -510,7 +515,6 @@ export async function buildTaskSessionDeploymentAnalyticsOverview(
       referrers: referrersResult,
       regions: regionsResult,
       devices: devicesResult,
-      message: '已按所选时间范围读取 Umami 统计数据',
     };
   } catch (error: any) {
     return {

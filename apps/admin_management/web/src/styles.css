@@ -15755,3 +15755,309 @@ tbody td,
     font-size: 22px;
   }
 }
+
+/* ===== Reference Pricing Modal Enhancements ===== */
+.reference-pricing-modal {
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh;
+}
+
+.reference-pricing-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border, #d0d7de);
+  background: var(--surface, #fff);
+}
+
+.reference-pricing-search {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.reference-pricing-search-icon {
+  position: absolute;
+  left: 10px;
+  font-size: 12px;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.reference-pricing-search-input {
+  width: 100%;
+  height: 34px;
+  padding: 0 28px 0 32px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  font-size: 13px;
+  color: var(--text, #1f2328);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.reference-pricing-search-input:focus {
+  outline: none;
+  border-color: var(--primary, #0969da);
+  box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.1);
+}
+
+.reference-pricing-search-clear {
+  position: absolute;
+  right: 8px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: var(--surface-muted, #f6f8fa);
+  border-radius: 50%;
+  color: var(--text-soft, #656d76);
+  font-size: 12px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.reference-pricing-count {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-faint, #8c959f);
+  white-space: nowrap;
+}
+
+.reference-pricing-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 !important;
+}
+
+.reference-pricing-table-wrap {
+  border: none;
+  border-radius: 0;
+}
+
+.reference-pricing-table {
+  font-size: 13px;
+}
+
+.reference-pricing-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface, #fff);
+  z-index: 1;
+  padding: 10px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-soft, #656d76);
+  border-bottom: 1px solid var(--border, #d0d7de);
+  white-space: nowrap;
+}
+
+.ref-col-unit {
+  font-weight: 500;
+  color: var(--text-faint, #8c959f);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.ref-col-price {
+  text-align: right;
+}
+
+.ref-col-actions {
+  text-align: center;
+}
+
+/* Group header */
+.reference-pricing-group-header td {
+  padding: 10px 8px 6px;
+  background: var(--surface-muted, #f6f8fa);
+  border-bottom: 1px solid var(--border, #d0d7de);
+}
+
+.reference-pricing-group-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 10px;
+  background: rgba(9, 105, 218, 0.08);
+  color: var(--primary, #0969da);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+}
+
+.reference-pricing-group-count {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--text-faint, #8c959f);
+  font-weight: 600;
+}
+
+/* Data rows */
+.reference-pricing-row {
+  transition: background-color 0.12s ease;
+}
+
+.reference-pricing-row:hover {
+  background-color: rgba(9, 105, 218, 0.03);
+}
+
+.reference-pricing-row td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #eaeef2;
+  vertical-align: middle;
+}
+
+.reference-pricing-row-new {
+  background-color: rgba(210, 153, 34, 0.04);
+}
+
+.reference-pricing-row-new:hover {
+  background-color: rgba(210, 153, 34, 0.07);
+}
+
+.reference-pricing-provider-name {
+  font-weight: 700;
+  color: var(--text-soft, #656d76);
+  font-size: 12px;
+}
+
+/* Inputs */
+.reference-pricing-select,
+.reference-pricing-text-input {
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 6px;
+  background: var(--surface, #fff);
+  font-size: 13px;
+  color: var(--text, #1f2328);
+  transition: border-color 0.15s, box-shadow 0.15s, background-color 0.15s;
+}
+
+.reference-pricing-text-input::placeholder {
+  color: var(--text-faint, #8c959f);
+}
+
+.reference-pricing-select:focus,
+.reference-pricing-text-input:focus {
+  outline: none;
+  border-color: var(--primary, #0969da);
+  box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.12);
+  background: var(--surface, #fff);
+}
+
+.reference-pricing-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 0 0 8px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 6px;
+  background: var(--surface, #fff);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.reference-pricing-input-wrap:focus-within {
+  border-color: var(--primary, #0969da);
+  box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.12);
+}
+
+.reference-pricing-currency {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-faint, #8c959f);
+  user-select: none;
+}
+
+.reference-pricing-number-input {
+  flex: 1;
+  height: 32px;
+  padding: 0 8px 0 2px;
+  border: none;
+  background: transparent;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text, #1f2328);
+  text-align: right;
+}
+
+.reference-pricing-number-input:focus {
+  outline: none;
+}
+
+/* Delete button */
+.reference-pricing-delete {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint, #8c959f);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, background-color 0.12s, color 0.12s;
+}
+
+.reference-pricing-row:hover .reference-pricing-delete {
+  opacity: 1;
+}
+
+.reference-pricing-delete:hover {
+  background: rgba(207, 34, 46, 0.08);
+  color: var(--danger-red, #cf222e);
+}
+
+/* Add bar */
+.reference-pricing-add-bar {
+  padding: 12px 24px;
+  border-top: 1px solid var(--border, #d0d7de);
+  background: var(--surface, #fff);
+}
+
+/* Empty state */
+.reference-pricing-empty {
+  padding: 40px 24px;
+}
+
+.reference-pricing-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-faint, #8c959f);
+}
+
+.reference-pricing-empty-icon {
+  font-size: 24px;
+  opacity: 0.5;
+}
+
+.reference-pricing-empty p {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Mobile: always show delete */
+@media (max-width: 640px) {
+  .reference-pricing-delete {
+    opacity: 1;
+  }
+  .reference-pricing-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

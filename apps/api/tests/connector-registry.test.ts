@@ -6,8 +6,6 @@ import {
 } from '../src/services/connector-registry';
 
 const envBackup = {
-  GITHUB_CONNECTOR_CLIENT_ID: process.env.GITHUB_CONNECTOR_CLIENT_ID,
-  GITHUB_CONNECTOR_CLIENT_SECRET: process.env.GITHUB_CONNECTOR_CLIENT_SECRET,
   NOTION_MCP_REMOTE_URL: process.env.NOTION_MCP_REMOTE_URL,
   NOTION_MCP_REMOTE_HEADERS_JSON: process.env.NOTION_MCP_REMOTE_HEADERS_JSON,
   NOTION_CONNECTOR_CLIENT_ID: process.env.NOTION_CONNECTOR_CLIENT_ID,
@@ -27,12 +25,11 @@ const envBackup = {
   HTTPS_PROXY: process.env.HTTPS_PROXY,
   NO_PROXY: process.env.NO_PROXY,
   COMPOSIO_API_KEY: process.env.COMPOSIO_API_KEY,
+  COMPOSIO_GITHUB_TOOLKITS: process.env.COMPOSIO_GITHUB_TOOLKITS,
   COMPOSIO_SLACK_TOOLKITS: process.env.COMPOSIO_SLACK_TOOLKITS,
 };
 
 beforeEach(() => {
-  process.env.GITHUB_CONNECTOR_CLIENT_ID = 'github-client';
-  process.env.GITHUB_CONNECTOR_CLIENT_SECRET = 'github-secret';
   process.env.NOTION_MCP_REMOTE_URL = 'https://notion-mcp.example.com/sse';
   process.env.NOTION_MCP_REMOTE_HEADERS_JSON = '{"Authorization":"Bearer ${token}"}';
   process.env.NOTION_CONNECTOR_CLIENT_ID = 'notion-client';
@@ -51,6 +48,7 @@ beforeEach(() => {
   process.env.HTTPS_PROXY = 'http://127.0.0.1:7890';
   process.env.NO_PROXY = 'localhost,127.0.0.1';
   process.env.COMPOSIO_API_KEY = 'composio-test-key';
+  process.env.COMPOSIO_GITHUB_TOOLKITS = 'github';
   process.env.COMPOSIO_SLACK_TOOLKITS = 'slack';
 });
 
@@ -95,11 +93,17 @@ test('connector registry exposes built-in connectors with availability metadata'
   const catalog = connectorRegistry.listCatalog();
   const notionProvider = connectorRegistry.getOauthProvider('notion');
   const slackProvider = connectorRegistry.getOauthProvider('slack');
+  const githubProvider = connectorRegistry.getOauthProvider('github');
+  const github = catalog.find((item) => item.key === 'github');
   const slack = catalog.find((item) => item.key === 'slack');
   const notion = catalog.find((item) => item.key === 'notion');
-  assert.equal(catalog.length, 8);
-  assert.equal(connectorRegistry.listVisibleCatalog().length, 7);
-  assert.equal(catalog.find((item) => item.key === 'github')?.oauth?.supported, true);
+  assert.equal(catalog.length, 7);
+  assert.equal(connectorRegistry.listVisibleCatalog().length, 6);
+  assert.equal(github?.available, true);
+  assert.equal(github?.authMode, 'oauth');
+  assert.deepEqual(github?.configFields, []);
+  assert.equal(github?.oauth?.provider, 'composio');
+  assert.equal(githubProvider, undefined);
   assert.equal(slack?.available, true);
   assert.equal(slack?.authMode, 'oauth');
   assert.deepEqual(slack?.configFields, []);
@@ -123,13 +127,10 @@ test('connector registry exposes built-in connectors with availability metadata'
 test('connector registry materializes local and remote MCP configs', () => {
   const githubConfig = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'github',
-    account: buildAccount('github', { accessToken: 'gh-token' }),
+    account: buildComposioAccount('github'),
   });
-  assert.equal(githubConfig.type, 'local');
-  assert.equal(githubConfig.command[0], 'node');
-  assert.equal(githubConfig.command[1], '-e');
-  assert.match(githubConfig.command[2], /server-github/);
-  assert.equal(githubConfig.environment?.GITHUB_PERSONAL_ACCESS_TOKEN, 'gh-token');
+  assert.equal(githubConfig.type, 'hosted');
+  assert.equal(githubConfig.provider, 'github');
 
   const postgresConfig = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'postgres',
@@ -204,6 +205,13 @@ test('notion catalog is unavailable when Composio API key is missing', () => {
   const notion = connectorRegistry.listCatalog().find((item) => item.key === 'notion');
   assert.equal(notion?.available, false);
   assert.match(String(notion?.availabilityReason || ''), /COMPOSIO_API_KEY/);
+});
+
+test('github catalog is unavailable when Composio API key is missing', () => {
+  delete process.env.COMPOSIO_API_KEY;
+  const github = connectorRegistry.listCatalog().find((item) => item.key === 'github');
+  assert.equal(github?.available, false);
+  assert.match(String(github?.availabilityReason || ''), /COMPOSIO_API_KEY/);
 });
 
 test('supabase catalog is unavailable when Composio API key is missing', () => {

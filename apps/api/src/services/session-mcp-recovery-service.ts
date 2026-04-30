@@ -25,7 +25,7 @@ function recoveryKeyFor(taskSessionId: string, orchestratorSessionId: string) {
 }
 
 const COMPOSIO_BROKERED_RUNTIME_TRANSPORT = 'api_brokered_mcp';
-const COMPOSIO_BROKERED_CONNECTORS = new Set(['notion', 'slack', 'figma', 'supabase']);
+const COMPOSIO_BROKERED_CONNECTORS = new Set(['github', 'notion', 'slack', 'figma', 'supabase']);
 
 function isRecoveredRuntimeTransportSupported(binding: Record<string, unknown>) {
   const connectorKey = asText(binding.connectorKey);

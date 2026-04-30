@@ -42,3 +42,9 @@
 - 做了什么：按用户要求将 VercelMcp 从 Composio 方案退回 Vercel Integration + oneceo internal MCP wrapper；新增 `docs/features/connectors/vercel_internal_mcp_wrapper_oauth_only_rollback_doc_[20260430-1341已采用].md`，并把 Vercel Composio 文档标记为已替换。
 - 遇到什么：当前分支同时有 Slack/Supabase Composio 改动，本次只回退 Vercel 相关 definition、hosted provider、registry、env、guide 和测试，避免影响其他连接器。
 - 计划如何解决：跑 Vercel 定向测试与 API/Web 静态检查，确认 `VERCEL_INTEGRATION_*` 主链路恢复。
+
+## GitHub Composio 回调与挂载修复
+
+- 做了什么：修正 GitHub Composio hosted provider 分发，避免授权后 attach 时被判定为不支持的 `github` provider；同时为 Composio 回调确认增加短轮询，并让授权卡片优先显示真实账号/仓库名称。
+- 遇到什么：当前工作区已有 GitHub 改走 Composio 的未提交改动，本次在该方案基础上补齐回调、挂载和展示缺口，不回退旧 PAT/OAuth App 路径。
+- 计划如何解决：完成 API/Web 定向测试后，真实联调需配置 `COMPOSIO_API_KEY` 与 `COMPOSIO_GITHUB_TOOLKITS=github`，再验证 GitHub 授权、自动挂载和 `github__COMPOSIO_SEARCH_TOOLS` 调用。

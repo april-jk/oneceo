@@ -408,6 +408,35 @@ function buildDefaultProfileName(connectorKey: ConnectorKey, catalogName: string
   return `${catalogName} Default`;
 }
 
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value) {
+    const text = asText(item);
+    if (!text) continue;
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(text);
+  }
+  return result;
+}
+
+function mergeComposioConfig(
+  connectorKey: ConnectorKey,
+  currentConfig: Record<string, unknown>,
+  metadata: Record<string, unknown>
+): Record<string, unknown> {
+  if (connectorKey !== 'github') return currentConfig;
+  const repositories = asStringArray(metadata.composioRepositoryNames);
+  if (repositories.length === 0) return currentConfig;
+  return {
+    ...currentConfig,
+    repositories,
+  };
+}
+
 type UserConnectorProfileRow = {
   id: string;
   userId?: string;
@@ -427,6 +456,8 @@ type UserConnectorProfileRow = {
 
 const SLACK_COMPOSIO_REAUTH_MESSAGE =
   'Slack connector now requires Composio OAuth. Reconnect Slack through Composio.';
+const GITHUB_COMPOSIO_REAUTH_MESSAGE =
+  'GitHub connector now requires Composio OAuth. Reconnect GitHub through Composio.';
 const SUPABASE_SECRET_REAUTH_MESSAGE =
   'Supabase connector now requires Composio OAuth. Reconnect Supabase through Composio.';
 
@@ -454,6 +485,19 @@ function decryptProfileSecret(row: UserConnectorProfileRow): ConnectorAccountSec
 
 function shouldForceSlackComposioReconnect(row: UserConnectorProfileRow): boolean {
   if (row.connectorKey !== 'slack' || !row.secretCiphertext) {
+    return false;
+  }
+  const metadata = pickObject(row.metadataJson);
+  const secret = decryptProfileSecret(row);
+  return !(
+    asText(metadata.provider) === 'composio' &&
+    asText(secret?.source) === 'composio' &&
+    asText(secret?.composioMcpUrl)
+  );
+}
+
+function shouldForceGithubComposioReconnect(row: UserConnectorProfileRow): boolean {
+  if (row.connectorKey !== 'github' || !row.secretCiphertext) {
     return false;
   }
   const metadata = pickObject(row.metadataJson);
@@ -627,6 +671,37 @@ export class UserConnectorService {
     };
   }
 
+  private async normalizeGithubProfileForRead(
+    userId: string,
+    row: UserConnectorProfileRow | null
+  ): Promise<{ row: UserConnectorProfileRow | null; mutated: boolean }> {
+    if (!row || !shouldForceGithubComposioReconnect(row)) {
+      return { row, mutated: false };
+    }
+
+    const saved = await userConnectorProfileDAO.update(row.id, userId, {
+      authMode: 'oauth',
+      authStatus: 'needs_auth',
+      secretCiphertext: null,
+      lastAuthAt: null,
+      lastError: GITHUB_COMPOSIO_REAUTH_MESSAGE,
+    } as any);
+
+    return {
+      row:
+        (saved as UserConnectorProfileRow | undefined) ||
+        ({
+          ...row,
+          authMode: 'oauth',
+          authStatus: 'needs_auth',
+          secretCiphertext: null,
+          lastAuthAt: null,
+          lastError: GITHUB_COMPOSIO_REAUTH_MESSAGE,
+        } as UserConnectorProfileRow),
+      mutated: true,
+    };
+  }
+
   private async normalizeRowsForRead(
     userId: string,
     rows: UserConnectorProfileRow[]
@@ -638,19 +713,32 @@ export class UserConnectorService {
     const normalized: UserConnectorProfileRow[] = [];
     let mutated = false;
     for (const row of rows) {
-      const slackNormalized = await this.normalizeSlackProfileForRead(userId, row);
+      const githubNormalized = await this.normalizeGithubProfileForRead(userId, row);
+      const slackNormalized = await this.normalizeSlackProfileForRead(
+        userId,
+        (githubNormalized.row || row) as UserConnectorProfileRow
+      );
       const supabaseNormalized = await this.normalizeSupabaseProfileForRead(
         userId,
-        (slackNormalized.row || row) as UserConnectorProfileRow
+        (slackNormalized.row || githubNormalized.row || row) as UserConnectorProfileRow
       );
       const figmaNormalized = await this.normalizeFigmaProfileForRead(
         userId,
         (supabaseNormalized.row || slackNormalized.row || row) as UserConnectorProfileRow
       );
       normalized.push(
-        (figmaNormalized.row || supabaseNormalized.row || slackNormalized.row || row) as UserConnectorProfileRow
+        (figmaNormalized.row ||
+          supabaseNormalized.row ||
+          slackNormalized.row ||
+          githubNormalized.row ||
+          row) as UserConnectorProfileRow
       );
-      mutated = mutated || slackNormalized.mutated || supabaseNormalized.mutated || figmaNormalized.mutated;
+      mutated =
+        mutated ||
+        githubNormalized.mutated ||
+        slackNormalized.mutated ||
+        supabaseNormalized.mutated ||
+        figmaNormalized.mutated;
     }
     if (mutated) {
       await this.invalidateMeCache(userId);
@@ -1224,14 +1312,22 @@ export class UserConnectorService {
           secret: currentSecret,
         });
         await connectorAuthRequestDAO.markCompleted(request.requestId, 'completed');
+        const confirmedMetadata = mergeMetadata(pickObject(profile.metadataJson), confirmed.metadata);
+        const displayName =
+          asText(confirmed.metadata.composioDisplayName) ||
+          asText(profile.displayName) ||
+          catalogItem.name;
         const saved = await userConnectorProfileDAO.update(profileId, userId, {
-          profileName: asText(profile.profileName) || buildDefaultProfileName(connectorKey, catalogItem.name),
+          profileName:
+            connectorKey === 'github' && (!asText(profile.profileName) || profile.profileName === 'GitHub Default')
+              ? buildGithubProfileName(displayName)
+              : asText(profile.profileName) || buildDefaultProfileName(connectorKey, catalogItem.name),
           authMode: 'oauth',
           authStatus: 'authorized',
-          displayName: asText(profile.displayName) || catalogItem.name,
-          configJson: pickObject(profile.configJson),
+          displayName,
+          configJson: mergeComposioConfig(connectorKey, pickObject(profile.configJson), confirmedMetadata),
           secretCiphertext: connectorSecretService.encrypt(confirmed.secret, connectorKey),
-          metadataJson: mergeMetadata(pickObject(profile.metadataJson), confirmed.metadata),
+          metadataJson: confirmedMetadata,
           lastAuthAt: new Date(),
           lastError: null,
         } as any);

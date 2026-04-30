@@ -1320,6 +1320,7 @@ export class AltusManagedToolRuntime {
         action: toolName,
         sessionId: this.input.sessionId,
         userId: this.input.userId,
+        reason: asText(rawArgs.reason),
       });
       return {
         type: 'result',

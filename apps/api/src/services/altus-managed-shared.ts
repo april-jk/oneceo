@@ -528,7 +528,7 @@ export function buildManagedToolDefinitions() {
       function: {
         name: 'ensure_project_database',
         description:
-          'Explicitly create or repair a Railway Postgres database for the current user project/session, in the same Railway Environment as the app, and inject database variables into the app service. Use only when the user requirement clearly needs persistent relational data, accounts, records, authentication state, or SQL-backed storage.',
+          'Explicitly create or repair the fixed managed Railway Postgres database for the current user project/session, in the same Railway Environment as the app, inject database variables into the app service, and record an explicit database requirement for this session. Database engine selection is not part of this flow and should never be asked here. Use only when the user requirement clearly needs persistent relational data, accounts, records, authentication state, or SQL-backed storage.',
         parameters: objectSchema({
           reason: {
             type: 'string',
@@ -560,7 +560,7 @@ export function buildManagedToolDefinitions() {
       function: {
         name: 'ensure_project_storage_bucket',
         description:
-          'Explicitly create or repair a Railway Bucket for the current user project/session, in the same Railway Environment as the app, and inject S3 variables into the app service. Use only when the user requirement clearly needs file uploads, media, attachments, exports, or object storage.',
+          'Explicitly create or repair the fixed managed Railway Bucket for the current user project/session, in the same Railway Environment as the app, inject S3 variables into the app service, and record an explicit object-storage requirement for this session. Object-storage engine selection is not part of this flow and should never be asked here. Use only when the user requirement clearly needs file uploads, media, attachments, exports, or object storage.',
         parameters: objectSchema({
           reason: {
             type: 'string',

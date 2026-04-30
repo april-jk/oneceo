@@ -1,6 +1,7 @@
 import { platformDeploymentAccountService } from './platform-deployment-account-service';
 import { railwayDatabaseService } from './railway-database-service';
 import { projectStorageResourceService } from './project-storage-resource-service';
+import { taskSessionResourceDeclarationService } from './task-session-resource-declaration-service';
 
 export const ALTUS_MANAGED_RESOURCE_TOOL_NAMES = [
   'ensure_project_database',
@@ -45,17 +46,49 @@ function safeDatabaseSummary(summary: Awaited<ReturnType<typeof railwayDatabaseS
 }
 
 export class AltusManagedResourceToolService {
+  constructor(
+    private readonly deps: {
+      ensureProjectDatabaseResources: typeof platformDeploymentAccountService.ensureProjectDatabaseResources;
+      getProjectAccount: typeof platformDeploymentAccountService.getProjectAccount;
+      getDatabaseSummary: typeof railwayDatabaseService.getSummary;
+      getDatabaseSchemaSummary: typeof railwayDatabaseService.getSchemaSummary;
+      ensureRailwayBucket: typeof projectStorageResourceService.ensureRailwayBucket;
+      getStorageStatus: typeof projectStorageResourceService.getStatus;
+      markResourceProvisioned: typeof taskSessionResourceDeclarationService.markProvisioned;
+    } = {
+      ensureProjectDatabaseResources: platformDeploymentAccountService.ensureProjectDatabaseResources.bind(
+        platformDeploymentAccountService
+      ),
+      getProjectAccount: platformDeploymentAccountService.getProjectAccount.bind(
+        platformDeploymentAccountService
+      ),
+      getDatabaseSummary: railwayDatabaseService.getSummary.bind(railwayDatabaseService),
+      getDatabaseSchemaSummary: railwayDatabaseService.getSchemaSummary.bind(railwayDatabaseService),
+      ensureRailwayBucket: projectStorageResourceService.ensureRailwayBucket.bind(
+        projectStorageResourceService
+      ),
+      getStorageStatus: projectStorageResourceService.getStatus.bind(projectStorageResourceService),
+      markResourceProvisioned: taskSessionResourceDeclarationService.markProvisioned.bind(
+        taskSessionResourceDeclarationService
+      ),
+    }
+  ) {}
+
   async execute(input: {
     action: AltusManagedResourceToolName;
     sessionId: string;
     userId: string;
+    reason?: string;
   }): Promise<AltusManagedResourceToolResult> {
     if (input.action === 'ensure_project_database') {
-      const account = await platformDeploymentAccountService.ensureProjectDatabaseResources(
-        input.userId,
-        input.sessionId
-      );
-      const summary = await railwayDatabaseService.getSummary(account);
+      const account = await this.deps.ensureProjectDatabaseResources(input.userId, input.sessionId);
+      const summary = await this.deps.getDatabaseSummary(account);
+      await this.deps.markResourceProvisioned({
+        sessionId: input.sessionId,
+        resource: 'database',
+        toolName: input.action,
+        reason: input.reason,
+      });
       return {
         action: input.action,
         phase: 'completed',
@@ -67,10 +100,7 @@ export class AltusManagedResourceToolService {
     }
 
     if (input.action === 'get_project_database_status' || input.action === 'inspect_project_database_schema') {
-      const account = await platformDeploymentAccountService.getProjectAccount(
-        input.userId,
-        input.sessionId
-      );
+      const account = await this.deps.getProjectAccount(input.userId, input.sessionId);
       if (!account?.databaseServiceId) {
         return {
           action: input.action,
@@ -85,7 +115,7 @@ export class AltusManagedResourceToolService {
         };
       }
       if (input.action === 'inspect_project_database_schema') {
-        const schemaSummary = await railwayDatabaseService.getSchemaSummary(account);
+        const schemaSummary = await this.deps.getDatabaseSchemaSummary(account);
         return {
           action: input.action,
           phase: 'completed',
@@ -96,7 +126,7 @@ export class AltusManagedResourceToolService {
         };
       }
 
-      const summary = await railwayDatabaseService.getSummary(account);
+      const summary = await this.deps.getDatabaseSummary(account);
       return {
         action: input.action,
         phase: 'completed',
@@ -108,10 +138,13 @@ export class AltusManagedResourceToolService {
     }
 
     if (input.action === 'ensure_project_storage_bucket') {
-      const status = await projectStorageResourceService.ensureRailwayBucket(
-        input.userId,
-        input.sessionId
-      );
+      const status = await this.deps.ensureRailwayBucket(input.userId, input.sessionId);
+      await this.deps.markResourceProvisioned({
+        sessionId: input.sessionId,
+        resource: 'storage',
+        toolName: input.action,
+        reason: input.reason,
+      });
       return {
         action: input.action,
         phase: 'completed',
@@ -123,7 +156,7 @@ export class AltusManagedResourceToolService {
     }
 
     if (input.action === 'get_project_storage_status') {
-      const status = await projectStorageResourceService.getStatus(input.userId, input.sessionId);
+      const status = await this.deps.getStorageStatus(input.userId, input.sessionId);
       return {
         action: input.action,
         phase: status.configured ? 'completed' : 'not_configured',

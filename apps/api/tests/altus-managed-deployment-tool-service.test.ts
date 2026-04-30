@@ -186,6 +186,137 @@ test('deploy_application returns project profile and succeeded deployment flow o
   assert.equal(result.deploymentFlow?.profile?.runtimeFamily, 'frontend_dist');
 });
 
+test('deploy_application does not require database when session has no explicit declaration', async () => {
+  let executed = false;
+  const baseline = createReadyBaseline();
+  baseline.features.database = false;
+  const service = new AltusManagedDeploymentToolService({
+    inspectBaseline: async () => baseline,
+    resolveSession: async () => ({
+      id: 'session-1',
+      messages: [],
+    } as any),
+    getProjectAccount: async () => {
+      throw new Error('should_not_check_project_account');
+    },
+    getStorageStatus: async () => {
+      throw new Error('should_not_check_storage_status');
+    },
+    getResourceDeclarations: async () => ({
+      database: null,
+      storage: null,
+    }),
+    buildDeploymentResponse: async () => {
+      throw new Error('should_not_build_response');
+    },
+    executeDeploymentAction: async () => {
+      executed = true;
+      return {
+        panel: {
+          latestStatus: 'SUCCESS',
+          latestUrl: 'https://demo.oneceo.app',
+          deploymentId: 'dep_123',
+        },
+        actionResult: {
+          action: 'deploy',
+          deploymentId: 'dep_123',
+        },
+      } as any;
+    },
+    getErrorMessage: (error) => String((error as Error)?.message || error),
+  });
+
+  const result = await service.execute({
+    action: 'deploy_application',
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+  });
+
+  assert.equal(executed, true);
+  assert.equal(result.status, 'success');
+});
+
+test('deploy_application requires database only after explicit session declaration', async () => {
+  const service = new AltusManagedDeploymentToolService({
+    inspectBaseline: async () => createReadyBaseline(),
+    resolveSession: async () => ({
+      id: 'session-1',
+      messages: [],
+    } as any),
+    getProjectAccount: async () => null,
+    getResourceDeclarations: async () => ({
+      database: {
+        requested: true,
+        provisioned: true,
+        source: 'tool',
+        toolName: 'ensure_project_database',
+        updatedAt: new Date().toISOString(),
+      },
+      storage: null,
+    }),
+    buildDeploymentResponse: async () => {
+      throw new Error('should_not_build_response');
+    },
+    executeDeploymentAction: async () => {
+      throw new Error('should_not_execute_action');
+    },
+    getErrorMessage: (error) => String((error as Error)?.message || error),
+  });
+
+  const result = await service.execute({
+    action: 'deploy_application',
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+  });
+
+  assert.equal(result.status, 'retryable_repair_required');
+  assert.equal(result.phase, 'repair_required');
+  assert.equal(result.repair?.category, 'deployment_configuration');
+  assert.deepEqual(result.repair?.checks, ['database_resource_missing']);
+  assert.match(result.summary, /当前会话已显式声明需要数据库/);
+});
+
+test('deploy_application requires storage when manifest explicitly enables object storage', async () => {
+  const baseline = createReadyBaseline();
+  baseline.features.objectStorage = true;
+  const service = new AltusManagedDeploymentToolService({
+    inspectBaseline: async () => baseline,
+    resolveSession: async () => ({
+      id: 'session-1',
+      messages: [],
+    } as any),
+    getStorageStatus: async () => ({ configured: false }) as any,
+    getResourceDeclarations: async () => ({
+      database: null,
+      storage: null,
+    }),
+    buildDeploymentResponse: async () => {
+      throw new Error('should_not_build_response');
+    },
+    executeDeploymentAction: async () => {
+      throw new Error('should_not_execute_action');
+    },
+    getErrorMessage: (error) => String((error as Error)?.message || error),
+  });
+
+  const result = await service.execute({
+    action: 'deploy_application',
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+  });
+
+  assert.equal(result.status, 'retryable_repair_required');
+  assert.equal(result.phase, 'repair_required');
+  assert.deepEqual(result.repair?.checks, ['object_storage_resource_missing']);
+  assert.match(result.summary, /manifest 已明确声明需要对象存储/);
+});
+
 test('deploy_application returns deployment_pending while Railway is still provisioning', async () => {
   const service = new AltusManagedDeploymentToolService({
     inspectBaseline: async () => createReadyBaseline(),

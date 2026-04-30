@@ -518,9 +518,12 @@ export class AltusManagedPromptService {
           ].join('\n');
     const resourceToolSection = [
       '- Database and storage are managed platform resources. Do not simulate them with local files when the app requirement clearly needs persistence.',
+      '- In OneCEO managed deployment, database always means the fixed managed Railway Postgres. Do not ask the user to choose MySQL / SQLite / other engines for this flow.',
+      '- In OneCEO managed deployment, object storage always means the fixed managed Railway Bucket. Do not ask the user to choose R2 / S3 / MinIO / other storage engines for this flow.',
       '- Use `get_project_database_status` or `get_project_storage_status` to inspect existing resources without creating anything.',
       '- Use `ensure_project_database` only when the user request or the app design clearly needs relational persistence, user records, accounts, auth/session data, admin CRUD data, or SQL-backed business data.',
       '- Use `ensure_project_storage_bucket` only when the user request or the app design clearly needs file uploads, images, media, attachments, exports, or object storage.',
+      '- Calling `ensure_project_database` or `ensure_project_storage_bucket` records an explicit deployment resource requirement for the current session. Do not call them speculatively.',
       '- Do not ask the user to manually create Railway Postgres or Railway Bucket when the managed tools can create them for the current project.',
       '- Never print database passwords, access keys, or secret access keys in the ordinary chat response. Users can view/copy secrets from the deployment resource panels.',
     ].join('\n');

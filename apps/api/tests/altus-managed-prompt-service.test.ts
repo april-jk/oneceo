@@ -227,6 +227,30 @@ test('managed prompt requires deployment tools and auto-repair loop for publish 
   assert.match(prompt, /keep deployment debug details internal/i);
 });
 
+test('managed prompt fixes managed database engine to Railway Postgres', () => {
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-db-fixed-test',
+    sessionTitle: 'db fixed contract',
+    workspaceRoot: '/workspace/session-db-fixed-test',
+    connectors: [],
+  });
+
+  assert.match(prompt, /database always means the fixed managed Railway Postgres/i);
+  assert.match(prompt, /do not ask the user to choose mysql \/ sqlite \/ other engines/i);
+});
+
+test('managed prompt fixes managed storage engine to Railway Bucket', () => {
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-storage-fixed-test',
+    sessionTitle: 'storage fixed contract',
+    workspaceRoot: '/workspace/session-storage-fixed-test',
+    connectors: [],
+  });
+
+  assert.match(prompt, /object storage always means the fixed managed Railway Bucket/i);
+  assert.match(prompt, /do not ask the user to choose r2 \/ s3 \/ minio \/ other storage engines/i);
+});
+
 test('managed prompt derives non-deployable artifact intent and emits a hard no-deploy contract', () => {
   const profile = deriveManagedTaskIntentProfile([
     '请帮我写一个 HTML 邮件模板，用于报价通知邮件。只需要输出源码文件，不需要做网站，也不要部署。',

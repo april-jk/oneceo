@@ -212,6 +212,35 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
   const [updateConfirmOpen, setUpdateConfirmOpen] = useState(false);
   const [pricingDiffOpen, setPricingDiffOpen] = useState(false);
 
+  // Reference pricing state
+  const [referencePricingOpen, setReferencePricingOpen] = useState(false);
+  const [referencePricingConfirmOpen, setReferencePricingConfirmOpen] = useState(false);
+  const [referencePricingData, setReferencePricingData] = useState(() => {
+    const saved = localStorage.getItem('oneceo_reference_pricing');
+    if (saved) {
+      try { return JSON.parse(saved); } catch { /* fallthrough */ }
+    }
+    return [
+      { provider: 'OpenAI', model: 'GPT-4o', inputPrice: 18.00, outputPrice: 72.00 },
+      { provider: 'OpenAI', model: 'GPT-4o-mini', inputPrice: 1.08, outputPrice: 4.32 },
+      { provider: 'OpenAI', model: 'o1', inputPrice: 108.00, outputPrice: 432.00 },
+      { provider: 'OpenAI', model: 'o3', inputPrice: 14.40, outputPrice: 57.60 },
+      { provider: 'OpenAI', model: 'o4-mini', inputPrice: 7.92, outputPrice: 31.68 },
+      { provider: 'Anthropic', model: 'Claude Opus 4.7', inputPrice: 36.00, outputPrice: 180.00 },
+      { provider: 'Anthropic', model: 'Claude Sonnet 4.6', inputPrice: 21.60, outputPrice: 108.00 },
+      { provider: 'Anthropic', model: 'Claude Haiku 4.5', inputPrice: 7.20, outputPrice: 36.00 },
+      { provider: 'Anthropic', model: 'Claude Haiku 3.5', inputPrice: 5.76, outputPrice: 28.80 },
+      { provider: 'Google', model: 'Gemini 3.1 Pro', inputPrice: 14.40, outputPrice: 86.40 },
+      { provider: 'Google', model: 'Gemini 3.1 Flash-Lite', inputPrice: 1.80, outputPrice: 10.80 },
+      { provider: 'Google', model: 'Gemini 2.5 Flash-Lite', inputPrice: 0.72, outputPrice: 2.88 },
+      { provider: 'DeepSeek', model: 'DeepSeek-V4-Flash', inputPrice: 1.01, outputPrice: 2.02 },
+      { provider: '阿里云', model: 'qwen3-max', inputPrice: 1.50, outputPrice: 60.00 },
+      { provider: '阿里云', model: 'qwen3-coder-plus', inputPrice: 1.00, outputPrice: 40.00 },
+      { provider: '阿里云', model: 'qwen3-vl-plus', inputPrice: 3.00, outputPrice: 120.00 },
+    ];
+  });
+  const [referencePricingDraft, setReferencePricingDraft] = useState(referencePricingData);
+
   // Cache config state
   const [cacheConfigs, setCacheConfigs] = useState<CacheConfig[]>([]);
   const [cacheConfigForm, setCacheConfigForm] = useState<Record<string, { hitRatio: string; creationRatio: string }>>({
@@ -375,6 +404,14 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
     if (sortConfig?.key !== key) return null;
     return sortConfig.direction === 'asc' ? ' ↑' : ' ↓';
   };
+  const handleSaveReferencePricing = useCallback(() => {
+    setReferencePricingData(referencePricingDraft);
+    localStorage.setItem('oneceo_reference_pricing', JSON.stringify(referencePricingDraft));
+    setReferencePricingConfirmOpen(false);
+    setReferencePricingOpen(false);
+    onNotify?.('success', '已保存', '市场参考定价已更新');
+  }, [referencePricingDraft, onNotify]);
+
   const handleUserIdClick = useCallback((userId: string) => {
     if (onOpenUser) {
       onOpenUser(userId);
@@ -731,7 +768,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
       {activeTab === 'pricing' && (
         <>
           <section className="sub-panel user-management-list-panel pricing-live">
-            <div className="pricing-live-head"><div className="pricing-live-title"><p className="section-tag">定价配置</p><p className="panel-caption">运行配置决定模型与接口，SKU 定价决定扣积分规则。修改运行配置只影响后续新任务。</p></div><div className="pricing-live-actions"><AdminButton variant="primary" onClick={() => openPricingForm()}>新建定价</AdminButton><AdminButton variant="secondary" onClick={async () => { await fetchRuntimeConfig(); await fetchPricing(); onNotify?.('success', '已刷新', '运行配置与定价数据已更新'); }} loading={runtimeConfigLoading}>{runtimeConfigLoading ? '刷新中...' : '刷新配置'}</AdminButton></div></div>
+            <div className="pricing-live-head"><div className="pricing-live-title"><p className="section-tag">定价配置</p><p className="panel-caption">运行配置决定模型与接口，SKU 定价决定扣积分规则。修改运行配置只影响后续新任务。</p></div><div className="pricing-live-actions"><AdminButton variant="primary" onClick={() => openPricingForm()}>新建定价</AdminButton><AdminButton variant="secondary" onClick={() => { setReferencePricingDraft(referencePricingData); setReferencePricingOpen(true); }}>市场参考定价</AdminButton><AdminButton variant="secondary" onClick={async () => { await fetchRuntimeConfig(); await fetchPricing(); onNotify?.('success', '已刷新', '运行配置与定价数据已更新'); }} loading={runtimeConfigLoading}>{runtimeConfigLoading ? '刷新中...' : '刷新配置'}</AdminButton></div></div>
             <div className="pricing-live-rack-compact" aria-busy={runtimeConfigLoading}>{runtimeItems.map((item) => { const testResult = runtimeTestResults[item.key]; const isTesting = runtimeTestingKey === item.key; return (<section key={item.key} id={item.runtimeConfigAnchor} className="pricing-live-runtime-compact"><div className="pricing-live-runtime-top"><span className="pricing-detail-label">{item.kind === 'agent' ? 'Agent' : 'Sandbox'}</span><StatusBadge tone={tokenStateTone(item.tokenState)}>{tokenStateLabel(item.tokenState)}</StatusBadge></div><strong title={item.displayName}>{item.displayName}</strong><small title={`${item.model || '未配置模型'} · ${item.baseUrlHost || '未配置接口'} · ${item.apiType || '-'}`}>{item.model || '未配置模型'}</small>{testResult ? (<button type="button" className={`runtime-test-result runtime-test-result-${testResult.status}`} onClick={() => { setRuntimeTestModalTarget(item); setRuntimeTestModalOpen(true); }} title={`${testResult.latencyMs}ms · ${testResult.model || item.model || '未配置模型'} · ${testResult.baseUrlHost || item.baseUrlHost || '未配置接口'}`}><StatusBadge tone={runtimeTestTone(testResult)}>{testResult.status === 'success' ? '通过' : '失败'}</StatusBadge></button>) : null}<div className="runtime-config-actions"><button type="button" className="table-btn" onClick={() => openRuntimeForm(item)}>调整运行配置</button><button type="button" className="table-btn" onClick={() => void testRuntimeConfig(item)} disabled={isTesting}>{isTesting ? '...' : '测试'}</button></div></section>); })}</div>
             <div className="pricing-live-notice"><span className="pricing-form-tip-icon">ℹ</span><span>运行配置和定价分层展示，先确认执行入口，再处理扣费规则。</span></div>
             <div className="table-wrap user-management-table-wrap pricing-live-table-wrap" aria-live="polite"><table className="user-management-table pricing-live-table"><colgroup><col style={{ width: '20%' }} /><col style={{ width: '10%' }} /><col style={{ width: '10%' }} /><col style={{ width: '8%' }} /><col style={{ width: '14%' }} /><col style={{ width: '12%' }} /><col style={{ width: '12%' }} /><col style={{ width: '14%' }} /></colgroup><thead><tr><th onClick={() => handleSort('model')} style={{cursor:'pointer'}}><span className="runtime-th-label">计费对象{sortIndicator('model')}</span></th><th onClick={() => handleSort('promptPrice')} style={{cursor:'pointer'}}><span className="runtime-th-label">输入单价{sortIndicator('promptPrice')}</span></th><th onClick={() => handleSort('completionPrice')} style={{cursor:'pointer'}}><span className="runtime-th-label">输出单价{sortIndicator('completionPrice')}</span></th><th onClick={() => handleSort('multiplier')} style={{cursor:'pointer'}}><span className="runtime-th-label">倍率{sortIndicator('multiplier')}</span></th><th><span className="runtime-th-label">缓存比例</span></th><th onClick={() => handleSort('status')} style={{cursor:'pointer'}}><span className="runtime-th-label">运行状态{sortIndicator('status')}</span></th><th><span className="runtime-th-label">生效时间</span></th><th className="runtime-col-actions"><span className="runtime-th-label">操作</span></th></tr></thead><tbody>{pricingTargets.length === 0 ? (<tr><td colSpan={8} className="empty">暂无定价数据</td></tr>) : (pricingTargets.map((p) => { const normalizedProvider = normalizePricingProvider(p.model, p.modelProvider); const configured = p.isActive && p.promptPricePer1mTokens > 0 && p.completionPricePer1mTokens > 0; return (<tr key={p.id}><td><div className="user-management-table-user"><div className="user-management-table-user-head"><strong>{p.displayName || p.model}</strong></div><small>{p.billingTargetKey || p.model}</small>{p.actualModel && p.actualModel !== p.model ? (<small className="pricing-runtime-hint" title={`${p.actualModel} · ${p.baseUrlHost || '未配置接口'} · ${p.apiType || '-'}`}>{p.actualModel} · {p.baseUrlHost || '未配置接口'}</small>) : null}</div></td><td><div className="user-management-table-cell-stack user-management-table-metric"><strong>{p.promptPricePer1mTokens}</strong><small>/ 1M tokens</small>{(p.multiplier ?? 1.0) !== 1.0 && p.promptPricePer1mTokens > 0 ? <small className="pricing-effective-price" style={{color: '#0969da', fontWeight: 600}}>实际 {(p.promptPricePer1mTokens * (p.multiplier ?? 1.0)).toFixed(0)}</small> : null}</div></td><td><div className="user-management-table-cell-stack user-management-table-metric"><strong>{p.completionPricePer1mTokens}</strong><small>/ 1M tokens</small>{(p.multiplier ?? 1.0) !== 1.0 && p.completionPricePer1mTokens > 0 ? <small className="pricing-effective-price" style={{color: '#0969da', fontWeight: 600}}>实际 {(p.completionPricePer1mTokens * (p.multiplier ?? 1.0)).toFixed(0)}</small> : null}</div></td><td><div className="user-management-table-cell-stack user-management-table-metric"><strong>{(p.multiplier ?? 1.0).toFixed(2)}</strong><small>×</small></div></td><td><div className="user-management-table-cell-stack">{p.cacheHitRatio > 0 && (<span>命中 {(p.cacheHitRatio * 100).toFixed(0)}%</span>)}{p.cacheCreationRatio > 0 && (<span>创建 {(p.cacheCreationRatio * 100).toFixed(0)}%</span>)}</div></td><td><StatusBadge tone={tokenStateTone(p.tokenState)}>{tokenStateLabel(p.tokenState)}</StatusBadge></td><td><div className="user-management-table-cell-stack">{p.effectiveFrom ? (<small>{new Date(p.effectiveFrom).toLocaleDateString('zh-CN')}</small>) : (<small>-</small>)}</div></td><td><div className="user-management-table-actions"><button type="button" className="table-btn" onClick={() => configured ? openPricingDetail(p) : openPricingForm({ model: p.model, modelProvider: normalizedProvider }, 'create')}>{configured ? '详情' : '配置'}</button></div></td></tr>);}))}</tbody></table></div>
@@ -2264,6 +2301,111 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
           )}
           <DangerConfirmDialog open={Boolean(deletePricingTarget)} title="删除模型定价" objectLabel="模型定价" objectId={deletePricingTarget?.id} objectName={deletePricingTarget?.model} actionLabel="删除定价" confirmText="DELETE" reasonRequired loading={deletePricingLoading} reversibility="partially_reversible" impactItems={["该规则不再参与新请求计费", "历史账单不会回写"]} nonImpactItems={["不会删除历史使用明细"]} onCancel={() => setDeletePricingTarget(null)} onConfirm={() => void handleDeletePricing()} />
           <DangerConfirmDialog open={updateConfirmOpen} title="确认更新模型定价" objectLabel="模型定价" objectName={pricingForm.model} actionLabel="保存新版本" confirmText="UPDATE" reasonRequired={false} loading={pricingFormLoading} reversibility="partially_reversible" objectMeta={[{ label: '输入单价', value: `${selectedPricing?.promptPricePer1mTokens ?? '-'} → ${promptPrice}` }, { label: '输出单价', value: `${selectedPricing?.completionPricePer1mTokens ?? '-'} → ${completionPrice}` }, { label: '倍率', value: `${(selectedPricing?.multiplier ?? 1.0).toFixed(2)} → ${(Number(pricingForm.multiplier) || 1.0).toFixed(2)}` }, { label: '缓存命中', value: `${selectedPricing ? formatPercentInput(selectedPricing.cacheHitRatio * 100) : '-'}% → ${cacheHitPercent}%` }, { label: '缓存创建', value: `${selectedPricing ? formatPercentInput(selectedPricing.cacheCreationRatio * 100) : '-'}% → ${cacheCreationPercent}%` }]} impactItems={["将创建新的定价版本", "历史 usage 不回写"]} onCancel={() => setUpdateConfirmOpen(false)} onConfirm={async () => { setUpdateConfirmOpen(false); await submitPricing(); }} />
+
+          {/* Reference Pricing Modal */}
+          {referencePricingOpen && (
+            <div className="modal-backdrop" onClick={() => setReferencePricingOpen(false)}>
+              <aside
+                className="pricing-form-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="billing-reference-pricing-title"
+                onClick={(event) => event.stopPropagation()}
+                style={{ maxWidth: '960px' }}
+              >
+                <div className="pricing-form-modal-header">
+                  <div className="pricing-form-modal-heading">
+                    <p className="section-tag">定价参考</p>
+                    <h2 id="billing-reference-pricing-title">主流模型市场参考定价</h2>
+                    <p className="panel-caption">单位：人民币 ¥ / 1M tokens · 按 1 USD = 7.2 CNY 换算 · 修改后需二次确认</p>
+                  </div>
+                  <button type="button" className="pricing-form-modal-close" onClick={() => setReferencePricingOpen(false)} aria-label="关闭">×</button>
+                </div>
+                <div className="pricing-form-modal-body" style={{ padding: '16px 24px' }}>
+                  <div className="table-wrap user-management-table-wrap">
+                    <table className="user-management-table" style={{ fontSize: '14px' }}>
+                      <thead>
+                        <tr>
+                          <th style={{ width: '15%' }}>厂商</th>
+                          <th style={{ width: '25%' }}>模型</th>
+                          <th style={{ width: '20%' }}>Input (¥/1M)</th>
+                          <th style={{ width: '20%' }}>Output (¥/1M)</th>
+                          <th style={{ width: '20%' }}>操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {referencePricingDraft.map((item: any, index: number) => (
+                          <tr key={index}>
+                            <td>{item.provider}</td>
+                            <td>{item.model}</td>
+                            <td>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={item.inputPrice}
+                                onChange={(e) => {
+                                  const val = parseFloat(e.target.value) || 0;
+                                  setReferencePricingDraft((prev: any) => prev.map((p: any, i: number) => i === index ? { ...p, inputPrice: val } : p));
+                                }}
+                                style={{ width: '100%', padding: '4px 8px', border: '1px solid #d0d7de', borderRadius: '6px' }}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={item.outputPrice}
+                                onChange={(e) => {
+                                  const val = parseFloat(e.target.value) || 0;
+                                  setReferencePricingDraft((prev: any) => prev.map((p: any, i: number) => i === index ? { ...p, outputPrice: val } : p));
+                                }}
+                                style={{ width: '100%', padding: '4px 8px', border: '1px solid #d0d7de', borderRadius: '6px' }}
+                              />
+                            </td>
+                            <td>
+                              <button
+                                type="button"
+                                className="table-btn"
+                                onClick={() => setReferencePricingDraft((prev: any) => prev.filter((_: any, i: number) => i !== index))}
+                              >删除</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ marginTop: '16px', textAlign: 'center' }}>
+                    <button
+                      type="button"
+                      className="table-btn"
+                      onClick={() => setReferencePricingDraft((prev: any) => [...prev, { provider: '', model: '', inputPrice: 0, outputPrice: 0 }])}
+                    >+ 添加新行</button>
+                  </div>
+                </div>
+                <div className="pricing-form-modal-footer">
+                  <AdminButton variant="secondary" onClick={() => setReferencePricingOpen(false)}>取消</AdminButton>
+                  <AdminButton variant="primary" onClick={() => setReferencePricingConfirmOpen(true)}>保存修改</AdminButton>
+                </div>
+              </aside>
+            </div>
+          )}
+
+          {/* Reference Pricing Save Confirmation */}
+          <DangerConfirmDialog
+            open={referencePricingConfirmOpen}
+            title="确认修改市场参考定价"
+            objectLabel="市场参考定价表"
+            objectName={`共 ${referencePricingDraft.length} 条记录`}
+            actionLabel="确认保存"
+            confirmText="UPDATE"
+            reasonRequired={false}
+            reversibility="reversible"
+            impactItems={["将覆盖本地保存的市场参考定价数据", "仅影响定价决策参考，不影响实际计费规则"]}
+            onCancel={() => setReferencePricingConfirmOpen(false)}
+            onConfirm={() => void handleSaveReferencePricing()}
+          />
         </>
       )}
 

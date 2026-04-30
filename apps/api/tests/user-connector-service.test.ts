@@ -83,8 +83,9 @@ function encodeStatePayload(payload: Record<string, unknown>): string {
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
 }
 
-test('saveUserConnector validates GitHub token and persists resolved profile name', async () => {
+test('createProfile does not authorize GitHub from a user-supplied access token', async () => {
   process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
+  process.env.COMPOSIO_API_KEY = 'unit-test-composio-key';
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   mock.method(userConnectorProfileDAO, 'listByUserAndConnectorKey', async () => []);
   let capturedCreate: Record<string, unknown> | null = null;
@@ -99,59 +100,93 @@ test('saveUserConnector validates GitHub token and persists resolved profile nam
       isDefault: true,
     } as any;
   });
-  global.fetch = mock.fn(async () =>
-    new Response(JSON.stringify({ login: 'april-jk' }), {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    })
-  ) as typeof fetch;
 
-  const saved = await userConnectorService.saveUserConnector('user-1', 'github', {
+  const saved = await userConnectorService.createProfile('user-1', 'github', {
     profileName: 'GitHub Main',
     credentials: {
-      accessToken: 'ghp-valid-token',
+      accessToken: 'ghp-user-supplied-token',
     },
   });
 
-  assert.equal(saved.authStatus, 'authorized');
-  assert.equal(saved.displayName, 'april-jk');
-  assert.equal(capturedCreate?.displayName, 'april-jk');
-  assert.equal(
-    connectorSecretService.decryptJson<{ accessToken?: string }>(
-      String(capturedCreate?.secretCiphertext || '')
-    )?.accessToken,
-    'ghp-valid-token'
-  );
+  assert.equal(saved.authStatus, 'needs_auth');
+  assert.equal(saved.displayName, null);
+  assert.equal(capturedCreate?.displayName, null);
+  assert.equal(capturedCreate?.secretCiphertext, null);
 });
 
-test('saveUserConnector rejects invalid GitHub token before persisting', async () => {
-  mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
-  mock.method(userConnectorProfileDAO, 'listByUserAndConnectorKey', async () => []);
-  const createMock = mock.method(userConnectorProfileDAO, 'create', async () => {
-    throw new Error('should not persist invalid github token');
-  });
-  global.fetch = mock.fn(async () =>
-    new Response(JSON.stringify({ message: 'Bad credentials' }), {
-      status: 401,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    })
-  ) as typeof fetch;
+test('startOAuthForProfile starts GitHub Composio Connect Link authorization', async () => {
+  process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
+  process.env.COMPOSIO_API_KEY = 'unit-test-composio-key';
 
-  await assert.rejects(
-    () =>
-      userConnectorService.saveUserConnector('user-1', 'github', {
-        profileName: 'GitHub Main',
-        credentials: {
-          accessToken: 'ghp-invalid-token',
-        },
-      }),
-    /Bad credentials/
-  );
-  assert.equal(createMock.mock.callCount(), 0);
+  mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
+  mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
+    id: 'profile-github',
+    userId: 'user-1',
+    connectorKey: 'github',
+    profileName: 'GitHub Default',
+    authMode: 'oauth',
+    authStatus: 'needs_auth',
+  }) as any);
+  let capturedCreate: Record<string, unknown> | null = null;
+  mock.method(connectorAuthRequestDAO, 'create', async (input: any) => {
+    capturedCreate = input;
+    return input;
+  });
+  let capturedUpdate: Record<string, unknown> | null = null;
+  mock.method(userConnectorProfileDAO, 'update', async (_profileId: string, _userId: string, input: any) => {
+    capturedUpdate = input;
+    return {
+      id: 'profile-github',
+      userId: 'user-1',
+      connectorKey: 'github',
+      profileName: 'GitHub Default',
+      authMode: input.authMode,
+      authStatus: input.authStatus,
+      displayName: null,
+      configJson: {},
+      metadataJson: input.metadataJson,
+      secretCiphertext: input.secretCiphertext,
+      isDefault: true,
+      lastAuthAt: null,
+      updatedAt: new Date('2026-04-30T00:00:00.000Z'),
+      lastError: input.lastError,
+    } as any;
+  });
+  global.fetch = mock.fn(async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith('/api/v3.1/tool_router/session')) {
+      return new Response(
+        JSON.stringify({
+          session_id: 'trs_github_1',
+          mcp: { url: 'https://composio.example.com/github/mcp' },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (url.endsWith('/api/v3.1/tool_router/session/trs_github_1/link')) {
+      return new Response(
+        JSON.stringify({
+          redirect_url: 'https://composio.example.com/connect/github',
+          connected_account_id: 'ca_github_pending',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    throw new Error(`unexpected composio request: ${url}`);
+  }) as typeof fetch;
+
+  const result = await userConnectorService.startOAuthForProfile('user-1', 'profile-github', {
+    redirectUri: 'https://unexpected.example.com/callback',
+    returnToSessionId: 'session-github-1',
+  });
+
+  assert.equal(result.authUrl, 'https://composio.example.com/connect/github');
+  assert.equal(capturedCreate?.returnToSessionId, 'session-github-1');
+  assert.equal(result.state, capturedCreate?.state);
+  assert.equal(capturedCreate?.provider, 'composio');
+  assert.equal((capturedUpdate?.metadataJson as any)?.provider, 'composio');
+  assert.equal((capturedUpdate?.metadataJson as any)?.composioSessionId, 'trs_github_1');
+  assert.ok(capturedUpdate?.secretCiphertext);
 });
 
 test('createProfile does not authorize Supabase from a user-supplied access token', async () => {

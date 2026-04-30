@@ -83,6 +83,7 @@ export type DeploymentResourceBindingData = {
 export type RailwayDeploymentBindingState =
   | 'uninitialized'
   | 'provisioning'
+  | 'public_settling'
   | 'ready'
   | 'repair_required'
   | 'provider_error';
@@ -98,6 +99,8 @@ export type RailwayDeploymentProvisioningPhase =
   | string;
 
 export type RailwayDeploymentProviderErrorCode =
+  | 'deployment_preflight_not_ready'
+  | 'deployment_public_unreachable'
   | 'railway_project_not_found'
   | 'railway_environment_not_found'
   | 'railway_service_not_found'
@@ -129,6 +132,7 @@ export type RailwayDeploymentPanelData = {
   domainStatus?: string;
   domainStatusMessage?: string;
   activeDeploymentPending: boolean;
+  publicReachabilityStartedAt?: string;
   domains: string[];
   deployments: RailwayDeploymentListItem[];
   logs: RailwayDeploymentLogEntry[];
@@ -188,6 +192,14 @@ export function classifyRailwayDeploymentError(message: string): {
   bindingState: RailwayDeploymentBindingState;
   userMessage: string;
 } {
+  if (message.startsWith('deployment_preflight_not_ready:')) {
+    const detail = asText(message.slice('deployment_preflight_not_ready:'.length));
+    return {
+      code: 'deployment_preflight_not_ready',
+      bindingState: 'repair_required',
+      userMessage: detail || '当前项目缺少稳定发布所需的部署基线，需先修复后再继续发布。',
+    };
+  }
   const normalized = asText(message).toLowerCase();
   if (normalized.includes('project not found')) {
     return {

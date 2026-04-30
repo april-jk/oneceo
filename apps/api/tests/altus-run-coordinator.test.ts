@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { afterEach, mock, test } from 'node:test';
+import { afterEach, beforeEach, mock, test } from 'node:test';
 import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-memory-store';
 import {
   AltusRunCoordinator,
@@ -13,6 +13,8 @@ import { osacAgentService } from '../src/services/osac-agent-service';
 import { sandboxSkillSyncService } from '../src/services/sandbox-skill-sync-service';
 import { taskSessionAltusMemoryService } from '../src/services/task-session-altus-memory-service';
 import { taskSessionSkillStateService } from '../src/services/task-session-skill-state-service';
+import { billingService } from '../src/services/billing-service';
+import { pricingService } from '../src/services/pricing-service';
 
 const originalFetch = global.fetch;
 
@@ -20,6 +22,37 @@ const originalFetch = global.fetch;
   instructionsSection: '',
   reminderSection: '',
   attachedConnectorKeys: [],
+});
+
+beforeEach(() => {
+  mock.method(billingService, 'hasEnoughCredits', async () => true);
+  mock.method(billingService, 'deductCredits', async () => ({
+    success: true,
+    balanceAfter: 1000,
+    transactionId: 'tx_test',
+  }));
+  mock.method(billingService, 'logTokenUsage', async () => undefined);
+  mock.method(pricingService, 'getActivePricing', async (model: string) => ({
+    id: 'pricing_test',
+    model,
+    modelProvider: 'agent',
+    promptPricePer1kTokens: 1,
+    completionPricePer1kTokens: 1,
+    isActive: true,
+    effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+    effectiveUntil: null,
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+  } as any));
+  mock.method(pricingService, 'getCacheRatiosForPricing', async () => ({
+    hit: 0.5,
+    creation: 0,
+  }));
+  mock.method(taskSessionSkillStateService, 'saveSandboxFileMemoryToDb', async () => undefined);
+  mock.method(taskSessionSkillStateService, 'markResidentSkillsMaterialized', async () => undefined);
+  mock.method(taskSessionAltusMemoryService, 'saveTimelineDerivedMemory', async () => null as any);
+  mock.method(taskSessionAltusMemoryService, 'markMaterialized', async (input: any) => input.state || null);
+  mock.method(taskSessionAltusMemoryService, 'saveSandboxFileMemoryToDb', async () => null as any);
 });
 
 afterEach(() => {
@@ -1943,6 +1976,181 @@ test('execute does not complete on plain assistant text and continues until comp
   assert.equal(eventCalls[2]?.payload.transitionReason, 'plain_text_continuation_prompted');
 });
 
+test('execute does not accept plain-text completion when the task still has an explicit deployment goal', async () => {
+  const state = createState(
+    'run-coordinator-deploy-plain-text-blocked',
+    'session-coordinator-deploy-plain-text-blocked',
+    '请直接构建并部署当前项目'
+  );
+  state.input.taskIntentProfile = {
+    ...state.input.taskIntentProfile,
+    mode: 'deployable_web_app',
+    reason: 'latest_deployable_request',
+    deployRequested: true,
+    deploymentAllowed: true,
+    platformCapabilityIntent: {
+      mode: 'execute',
+      intentKind: 'explicit_action',
+      topic: 'deployment',
+      capabilityKind: 'deploy',
+      directModeCapabilityId: 'deploy_session_website',
+      shouldExecute: true,
+      confidence: 0.92,
+      reason: '用户明确要求执行部署',
+    },
+  };
+
+  const lifecycleCalls: string[] = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-deploy-plain-text-blocked',
+      workspaceRoot: '/workspace/session-coordinator-deploy-plain-text-blocked',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => undefined),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return { sequence: eventCalls.length, payload };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => lifecycleCalls.push('running')),
+    markWaitingUser: mock.fn(async () => lifecycleCalls.push('waiting_user')),
+    markCompleted: mock.fn(async () => lifecycleCalls.push('completed')),
+    markFailed: mock.fn(async () => lifecycleCalls.push('failed')),
+    markStopped: mock.fn(async () => lifecycleCalls.push('stopped')),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    fetchCount += 1;
+    const payload = init?.body ? JSON.parse(String(init.body)) : null;
+    if (fetchCount === 2) {
+      const messages = Array.isArray(payload?.messages) ? payload.messages : [];
+      assert.equal(messages.at(-1)?.role, 'user');
+      assert.match(String(messages.at(-1)?.content || ''), /explicit deployment goal/i);
+    }
+    if (fetchCount === 1) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '项目已经准备好了，我现在总结一下。',
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (fetchCount === 2) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-deploy-after-plain-text',
+                    type: 'function',
+                    function: {
+                      name: 'deploy_application',
+                      arguments: JSON.stringify({}),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-complete-after-ready',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '应用已完成线上发布。',
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const executedTools: string[] = [];
+  mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    executedTools.push(toolName);
+    if (toolName === 'deploy_application') {
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({
+          toolName,
+          status: 'success',
+          bindingState: 'ready',
+          summary: '发布完成',
+          deploymentStatus: 'SUCCESS',
+          url: 'https://example.oneceo.space',
+          deploymentFlow: {
+            state: 'succeeded',
+          },
+        }),
+      };
+    }
+    return {
+      type: 'complete' as const,
+      summary: '应用已完成线上发布。',
+    };
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(fetchCount, 3);
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+  assert.deepEqual(executedTools, ['deploy_application', 'complete_task']);
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'run_status' &&
+        entry.payload.transitionReason === 'plain_text_continuation_prompted'
+    ),
+    true
+  );
+});
+
 test('execute accepts plain assistant text for pure memory identity questions', async () => {
   const state = createState('run-coordinator-memory-chat', 'session-coordinator-memory-chat');
   state.input.userInput = '我是谁';
@@ -3315,6 +3523,7 @@ test('execute switches to vision model when conversation contains image blocks',
   process.env.ALTUS_MANAGED_VISION_MODEL = 'qwen3-vl-plus';
   try {
     const state = createState('run-coordinator-vision', 'session-coordinator-vision');
+    state.input.model = '';
 
     const setupService = {
       ensureSandbox: mock.fn(async () => ({

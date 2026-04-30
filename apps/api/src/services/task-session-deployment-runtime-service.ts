@@ -23,6 +23,7 @@ import {
 } from './railway-deployment-service';
 import {
   uploadTaskSessionWorkspaceToRailway,
+  inspectTaskSessionDeploymentTemplate,
   type DeploymentTemplateBaselineData,
   type DeploymentWorkspacePublishReport,
 } from './task-creation-deployment-source-service';
@@ -66,6 +67,7 @@ type TaskSessionDeploymentState = {
   publicDomain?: string;
   domainStatus?: string;
   domainStatusMessage?: string;
+  publicReachabilityStartedAt?: string;
   resourceBinding?: DeploymentResourceBindingData;
 };
 
@@ -79,6 +81,10 @@ let deploymentSyncTimer: NodeJS.Timeout | null = null;
 let deploymentSyncRunning = false;
 const deploymentSyncRunningSessions = new Set<string>();
 const terminalSuccessDeploymentStatuses = new Set(['SUCCESS', 'DEPLOYED', 'ACTIVE']);
+const PUBLIC_REACHABILITY_SETTLING_TIMEOUT_MS = Math.max(
+  60_000,
+  Number(process.env.TASK_SESSION_DEPLOYMENT_PUBLIC_SETTLING_TIMEOUT_MS || 180_000)
+);
 
 function isLiveDeploymentDomainRefreshStatus(value: unknown) {
   const status = asText(value).toLowerCase();
@@ -452,7 +458,9 @@ function buildStoredSnapshotFromState(
   const base = panel || buildStoredDeploymentStatePanel(state, analytics);
   const bindingState = state.bindingState || base.bindingState;
   const shouldKeepProvisioningPhase =
-    bindingState === 'provisioning' || base.activeDeploymentPending === true;
+    bindingState === 'provisioning' ||
+    bindingState === 'public_settling' ||
+    base.activeDeploymentPending === true;
   const shouldKeepProviderError = bindingState === 'repair_required' || bindingState === 'provider_error';
   return {
     ...base,
@@ -477,6 +485,8 @@ function buildStoredSnapshotFromState(
     publicDomain: state.publicDomain || base.publicDomain,
     domainStatus: state.domainStatus || base.domainStatus,
     domainStatusMessage: state.domainStatusMessage || base.domainStatusMessage,
+    publicReachabilityStartedAt:
+      state.publicReachabilityStartedAt || base.publicReachabilityStartedAt,
     message: state.message || base.message,
     resourceBinding: state.resourceBinding || base.resourceBinding,
     analytics: analytics || base.analytics,
@@ -524,7 +534,9 @@ function buildStoredDeploymentStatePanel(
     publicDomain: state.publicDomain,
     domainStatus: state.domainStatus,
     domainStatusMessage: state.domainStatusMessage,
-    activeDeploymentPending: bindingState === 'provisioning',
+    activeDeploymentPending:
+      bindingState === 'provisioning' || bindingState === 'public_settling',
+    publicReachabilityStartedAt: state.publicReachabilityStartedAt,
     domains: state.publicUrl ? [state.publicUrl] : [],
     deployments: [],
     logs: [],
@@ -844,6 +856,7 @@ function shouldFollowupTaskSessionDeploymentSync(panel: RailwayDeploymentPanelDa
   return (
     panel.activeDeploymentPending ||
     panel.bindingState === 'provisioning' ||
+    panel.bindingState === 'public_settling' ||
     (panel.analytics?.status === 'pending_domain' &&
       Boolean(panel.latestStaticUrl || panel.latestUrl || panel.domains[0]))
   );
@@ -889,6 +902,7 @@ async function recoverTaskSessionDeploymentSyncBacklog() {
     const panel = pickTaskSessionDeploymentPanelSnapshot(metadata.deploymentPanel);
     const shouldSync =
       (state?.bindingState === 'provisioning') ||
+      (state?.bindingState === 'public_settling') ||
       (state?.bindingState === 'repair_required') ||
       (!panel && (Boolean(state?.projectId) || Boolean(state?.serviceId)));
     if (!shouldSync) continue;
@@ -966,6 +980,24 @@ async function waitForTaskSessionPublicReachabilityAndRefresh(input: {
   }
 }
 
+function buildTaskSessionPublicReachabilitySettlingPanel(
+  panel: RailwayDeploymentPanelData,
+  message: string
+): RailwayDeploymentPanelData {
+  const startedAt = asText(panel.publicReachabilityStartedAt) || new Date().toISOString();
+  return {
+    ...panel,
+    bindingState: 'public_settling',
+    provisioningPhase: 'public_reachability',
+    providerErrorCode: undefined,
+    providerErrorMessage: undefined,
+    message: `发布完成，正在等待公网生效。${message}`,
+    lastVerifiedAt: new Date().toISOString(),
+    activeDeploymentPending: true,
+    publicReachabilityStartedAt: startedAt,
+  };
+}
+
 function buildTaskSessionPublicReachabilityFailurePanel(
   panel: RailwayDeploymentPanelData,
   message: string
@@ -979,6 +1011,7 @@ function buildTaskSessionPublicReachabilityFailurePanel(
     message,
     lastVerifiedAt: new Date().toISOString(),
     activeDeploymentPending: false,
+    publicReachabilityStartedAt: panel.publicReachabilityStartedAt,
   };
 }
 
@@ -1002,6 +1035,7 @@ function promoteTaskSessionSuccessfulLiveDeployment(
     message: undefined,
     lastVerifiedAt: new Date().toISOString(),
     activeDeploymentPending: false,
+    publicReachabilityStartedAt: undefined,
   };
 }
 
@@ -1025,6 +1059,7 @@ export async function validateTaskSessionDeploymentPublicReadiness(input: {
     Boolean(publicUrl) &&
     !publicDomainStillActivating &&
     (asText(input.panel.bindingState) === 'ready' ||
+      asText(input.panel.bindingState) === 'public_settling' ||
       terminalSuccessDeploymentStatuses.has(latestStatus));
   const shouldPromoteSuccessfulLiveDeployment =
     Boolean(publicUrl) &&
@@ -1057,6 +1092,14 @@ export async function validateTaskSessionDeploymentPublicReadiness(input: {
       return input.panel;
     }
     const reason = error instanceof Error ? error.message : String(error);
+    const startedAt = asText(input.panel.publicReachabilityStartedAt) || new Date().toISOString();
+    const settlingElapsedMs = Math.max(0, Date.now() - Date.parse(startedAt || new Date().toISOString()));
+    if (settlingElapsedMs < PUBLIC_REACHABILITY_SETTLING_TIMEOUT_MS) {
+      return buildTaskSessionPublicReachabilitySettlingPanel(
+        input.panel,
+        '平台正在等待域名、证书和健康检查全部收敛。'
+      );
+    }
     return buildTaskSessionPublicReachabilityFailurePanel(
       input.panel,
       `部署平台已返回成功状态，但公网访问验证失败。${reason}`
@@ -1281,7 +1324,9 @@ async function resolveLiveTaskSessionDeploymentPanel(input: {
   const analytics = await buildTaskSessionAnalyticsPanel(metadata);
   const bindingState = panel.bindingState || savedState?.bindingState || 'ready';
   const shouldKeepProvisioningPhase =
-    bindingState === 'provisioning' || panel.activeDeploymentPending === true;
+    bindingState === 'provisioning' ||
+    bindingState === 'public_settling' ||
+    panel.activeDeploymentPending === true;
   const shouldKeepProviderError = bindingState === 'repair_required' || bindingState === 'provider_error';
   return {
     ...panel,
@@ -1351,11 +1396,13 @@ export async function buildTaskSessionDeploymentResponse(input: {
       (!savedPanel && savedState?.bindingState && savedState.bindingState !== 'uninitialized') ||
       savedPanel?.activeDeploymentPending === true ||
       savedPanel?.bindingState === 'provisioning' ||
+      savedPanel?.bindingState === 'public_settling' ||
       savedPanel?.bindingState === 'provider_error' ||
       isLiveDeploymentDomainRefreshStatus(savedPanel?.domainStatus) ||
       hasStaleActiveDeploymentDomainMessage(savedPanel || {}) ||
       hasStaleDeploymentAnalyticsMetadata(savedPanel || {}) ||
       savedState?.bindingState === 'provisioning' ||
+      savedState?.bindingState === 'public_settling' ||
       savedState?.bindingState === 'provider_error' ||
       isLiveDeploymentDomainRefreshStatus(savedState?.domainStatus) ||
       hasStaleActiveDeploymentDomainMessage(savedState || {}) ||
@@ -1441,6 +1488,7 @@ function buildDeploymentStatePatchFromPanel(
     publicDomain: panel.publicDomain,
     domainStatus: panel.domainStatus,
     domainStatusMessage: panel.domainStatusMessage,
+    publicReachabilityStartedAt: panel.publicReachabilityStartedAt,
     resourceBinding: resourceBinding || panel.resourceBinding,
   };
 }
@@ -1563,14 +1611,13 @@ export async function executeTaskSessionDeploymentAction(
       panel: savedPanel,
     });
 
+  currentPhase = 'workspace_publish';
   savedState = await persistTaskSessionDeploymentState(orchestratorSessionId, savedState, {
     bindingState: 'provisioning',
     provisioningPhase: currentPhase,
     providerErrorCode: undefined,
     providerErrorMessage: undefined,
-    message: shouldRecycleFailedRedeploy
-      ? '检测到上次部署失败，平台正在回收旧的 Railway 服务并重新准备部署资源。'
-      : '平台正在准备 Railway 部署资源。',
+    message: '平台正在检查部署基线并准备发布当前工作区。',
     projectId: userProject?.projectId,
     projectName: userProject?.projectName,
     lastVerifiedAt: new Date().toISOString(),
@@ -1578,6 +1625,29 @@ export async function executeTaskSessionDeploymentAction(
   });
 
   try {
+    if (input.action !== 'rollback') {
+      const workspaceRoot =
+        asText(environmentMetadata.opencodeWorkspaceRoot) ||
+        asText(input.workspacePath) ||
+        resolveOpencodeWorkspacePath(input.taskSessionId);
+      if (!orchestratorSessionId || !workspaceRoot) {
+        throw new Error('deployment_preflight_not_ready:未找到可部署的工作区，请先生成项目文件');
+      }
+      const baseline = await inspectTaskSessionDeploymentTemplate({
+        orchestratorSessionId,
+        workspaceRoot,
+      });
+      await setSandboxMetadata(orchestratorSessionId, {
+        deploymentTemplateBaseline: baseline,
+      });
+      if (baseline.status !== 'ready') {
+        throw new Error(
+          `deployment_preflight_not_ready:${
+            baseline.errors.join('；') || '当前项目缺少稳定发布所需的部署基线'
+          }`
+        );
+      }
+    }
     account = shouldRecycleFailedRedeploy
       ? await platformDeploymentAccountService.recycleProjectService(input.userId, deploymentProjectKey)
       : await platformDeploymentAccountService.ensureProjectAccount(input.userId, deploymentProjectKey);

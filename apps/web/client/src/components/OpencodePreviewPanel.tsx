@@ -3836,35 +3836,124 @@ function DeploymentDatabaseSection({
 
   if (databaseInfo && !databaseInfo.configured) {
     return (
-      <section className="rounded-lg border border-border/70 bg-card p-6">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-              <Database className="size-4" />
-              {i18n.t("previewPanel.deployment.database.notConfiguredTitle")}
-            </div>
-            <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-              {i18n.t("previewPanel.deployment.database.notConfiguredDescription")}
-            </p>
-          </div>
-          <Button
-            onClick={() => void handleEnableDatabase()}
-            disabled={databaseLoading}
-            className="shrink-0"
-          >
-            {databaseLoading ? <Loader2 className="size-4 animate-spin" /> : <Database className="size-4" />}
-            {i18n.t("previewPanel.deployment.database.enable")}
-          </Button>
-        </div>
+      <div className="space-y-4">
+        <DeploymentResourceHeroCard
+          icon={<Database className="size-5" />}
+          title={i18n.t("previewPanel.deployment.database.notConfiguredTitle")}
+          description={i18n.t(
+            "previewPanel.deployment.database.notConfiguredDescription",
+          )}
+          action={
+            <Button
+              onClick={() => void handleEnableDatabase()}
+              disabled={databaseLoading}
+              className="shrink-0"
+            >
+              {databaseLoading ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Database className="size-4" />
+              )}
+              {i18n.t("previewPanel.deployment.database.enable")}
+            </Button>
+          }
+        >
+          <DeploymentPlaceholderGrid
+            items={[
+              {
+                title: i18n.t(
+                  "previewPanel.deployment.database.databaseStatus",
+                ),
+                description: i18n.t(
+                  "previewPanel.deployment.database.notConfiguredDescription",
+                ),
+              },
+              {
+                title: i18n.t(
+                  "previewPanel.deployment.database.connectionInfo",
+                ),
+                description: i18n.t(
+                  "previewPanel.deployment.database.canCopyToClient",
+                ),
+              },
+              {
+                title: i18n.t(
+                  "previewPanel.deployment.database.settings",
+                ),
+                description: i18n.t(
+                  "previewPanel.deployment.database.readyNoTables",
+                ),
+              },
+            ]}
+          />
+        </DeploymentResourceHeroCard>
         {databaseError ? (
-          <div className="mt-4 text-sm text-rose-600">{databaseError}</div>
+          <div className="text-sm text-rose-600">{databaseError}</div>
         ) : null}
-      </section>
+      </div>
     );
   }
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[180px_minmax(0,1fr)_320px]">
+    <div className="space-y-4">
+      <DeploymentResourceHeroCard
+        icon={<Database className="size-5" />}
+        title={i18n.t("previewPanel.deployment.database.database")}
+        description={i18n.t(
+          "previewPanel.deployment.database.canCopyToClient",
+        )}
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={() => void handleRefresh()}
+            >
+              <RefreshCw className="size-4" />
+              {i18n.t("previewPanel.deployment.database.refresh")}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={() => setPanelMode("settings")}
+            >
+              <TableProperties className="size-4" />
+              {i18n.t("previewPanel.deployment.database.connectionInfo")}
+            </Button>
+          </div>
+        }
+      >
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <DeploymentMiniStatus
+            label={i18n.t("previewPanel.deployment.database.databaseStatus")}
+            value={databaseInfo?.latestDeploymentStatus || "UNKNOWN"}
+          />
+          <DeploymentMiniStatus
+            label={i18n.t("previewPanel.deployment.database.columnCount", {
+              count: rowsPage?.columns.length || 0,
+            })}
+            value={String(databaseInfo?.tables.length || 0)}
+          />
+          <DeploymentMiniStatus
+            label={i18n.t("previewPanel.deployment.database.connectionMode")}
+            value={databaseConnection?.sslMode.toUpperCase() || "REQUIRE"}
+          />
+          <DeploymentMiniStatus
+            label={i18n.t("previewPanel.deployment.database.appDeployment")}
+            value={
+              info?.configured
+                ? statusMeta.label
+                : i18n.t(
+                    "previewPanel.deployment.database.deploymentPreparing",
+                  )
+            }
+          />
+        </div>
+      </DeploymentResourceHeroCard>
+
+      <div className="grid gap-4 xl:grid-cols-[180px_minmax(0,1fr)_320px]">
       <section className="rounded-lg border border-border/70 bg-card">
         <div className="relative flex h-full flex-col">
           <div
@@ -4316,6 +4405,7 @@ function DeploymentDatabaseSection({
           )}
         </div>
       </section>
+      </div>
     </div>
   );
 }
@@ -4366,6 +4456,66 @@ function InsightCard({
       <p className="mt-2 text-sm leading-6 text-muted-foreground">
         {description}
       </p>
+    </div>
+  );
+}
+
+function DeploymentResourceHeroCard({
+  icon,
+  title,
+  description,
+  action,
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+  action?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <section className="rounded-lg border border-border/70 bg-card p-5">
+      <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start gap-4">
+            <div className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/30 text-foreground">
+              {icon}
+            </div>
+            <div className="min-w-0">
+              <div className="text-base font-semibold text-foreground">
+                {title}
+              </div>
+              <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
+                {description}
+              </p>
+            </div>
+          </div>
+        </div>
+        {action ? (
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {action}
+          </div>
+        ) : null}
+      </div>
+      {children ? <div className="mt-5">{children}</div> : null}
+    </section>
+  );
+}
+
+function DeploymentPlaceholderGrid({
+  items,
+}: {
+  items: Array<{ title: string; description: string }>;
+}) {
+  return (
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {items.map((item) => (
+        <DeploymentPlaceholderCard
+          key={item.title}
+          title={item.title}
+          description={item.description}
+        />
+      ))}
     </div>
   );
 }
@@ -4631,14 +4781,87 @@ function DeploymentStorageSection({
 
   const bucket = storageStatus?.bucket || null;
 
+  if (!storageStatus?.configured) {
+    return (
+      <div className="space-y-4">
+        <DeploymentResourceHeroCard
+          icon={<HardDrive className="size-5" />}
+          title={i18n.t("previewPanel.deployment.storage.notConfiguredTitle")}
+          description={i18n.t(
+            "previewPanel.deployment.storage.notConfiguredDescription",
+          )}
+          action={
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => void loadStorage(Boolean(bucket?.secretAccessKey))}
+                disabled={loading}
+              >
+                {loading ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-4" />
+                )}
+                {i18n.t("previewPanel.deployment.storage.refresh")}
+              </Button>
+              <Button
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => void handleEnsureStorage()}
+                disabled={loading}
+              >
+                {loading ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <HardDrive className="size-4" />
+                )}
+                {i18n.t("previewPanel.deployment.storage.enable")}
+              </Button>
+            </div>
+          }
+        >
+          <DeploymentPlaceholderGrid
+            items={[
+              {
+                title: i18n.t("previewPanel.deployment.storage.userUpload"),
+                description: i18n.t(
+                  "previewPanel.deployment.storage.userUploadDescription",
+                ),
+              },
+              {
+                title: i18n.t(
+                  "previewPanel.deployment.storage.buildArtifactSeparation",
+                ),
+                description: i18n.t(
+                  "previewPanel.deployment.storage.buildArtifactSeparationDescription",
+                ),
+              },
+              {
+                title: i18n.t("previewPanel.deployment.storage.accessPolicy"),
+                description: i18n.t(
+                  "previewPanel.deployment.storage.accessPolicyDescription",
+                ),
+              },
+            ]}
+          />
+        </DeploymentResourceHeroCard>
+        {error ? <div className="text-sm text-rose-600">{error}</div> : null}
+      </div>
+    );
+  }
+
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-          <div className="text-sm font-semibold text-foreground">
-            {i18n.t("previewPanel.deployment.storage.title")}
-          </div>
-          <div className="flex items-center gap-2">
+    <div className="space-y-4">
+      <DeploymentResourceHeroCard
+        icon={<HardDrive className="size-5" />}
+        title={i18n.t("previewPanel.deployment.storage.title")}
+        description={i18n.t(
+          "previewPanel.deployment.storage.applicationVariablesDescription",
+        )}
+        action={
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="outline"
               size="sm"
@@ -4646,164 +4869,164 @@ function DeploymentStorageSection({
               onClick={() => void loadStorage(Boolean(bucket?.secretAccessKey))}
               disabled={loading}
             >
-              {loading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+              {loading ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <RefreshCw className="size-4" />
+              )}
               {i18n.t("previewPanel.deployment.storage.refresh")}
             </Button>
-            {!storageStatus?.configured ? (
+            {!bucket?.secretAccessKey ? (
               <Button
+                variant="outline"
                 size="sm"
                 className="h-8 text-xs"
-                onClick={() => void handleEnsureStorage()}
+                onClick={() => void handleRevealSecrets()}
                 disabled={loading}
               >
-                {loading ? <Loader2 className="size-4 animate-spin" /> : <HardDrive className="size-4" />}
-                {i18n.t("previewPanel.deployment.storage.enable")}
+                <Unlock className="size-4" />
+                {i18n.t("previewPanel.deployment.storage.revealSecrets")}
               </Button>
             ) : null}
           </div>
+        }
+      >
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <DeploymentMiniStatus
+            label={i18n.t("previewPanel.deployment.storage.storageStatus")}
+            value={i18n.t("previewPanel.deployment.storage.ready")}
+          />
+          <DeploymentMiniStatus
+            label={i18n.t("previewPanel.deployment.storage.appAccess")}
+            value={statusMeta.label}
+          />
+          <DeploymentMiniStatus
+            label={i18n.t("previewPanel.deployment.storage.defaultDomain")}
+            value={
+              info?.domains.length
+                ? i18n.t("previewPanel.deployment.storage.generated")
+                : i18n.t("previewPanel.deployment.storage.pendingPublish")
+            }
+          />
+          <DeploymentMiniStatus
+            label={i18n.t("previewPanel.deployment.storage.bucketName")}
+            value={bucket?.name || "—"}
+          />
         </div>
-        <div className="space-y-4 p-4">
-          {!storageStatus?.configured ? (
-            <div className="rounded-md border border-dashed border-border px-4 py-8 text-center">
-              <div className="text-sm font-medium text-foreground">
-                {i18n.t("previewPanel.deployment.storage.notConfiguredTitle")}
-              </div>
-              <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">
-                {i18n.t("previewPanel.deployment.storage.notConfiguredDescription")}
-              </p>
-            </div>
-          ) : (
-            <>
-              <div className="grid gap-3 md:grid-cols-3">
-                <DeploymentMiniStatus
-                  label={i18n.t("previewPanel.deployment.storage.storageStatus")}
-                  value={i18n.t("previewPanel.deployment.storage.ready")}
-                />
-                <DeploymentMiniStatus
-                  label={i18n.t("previewPanel.deployment.storage.appAccess")}
-                  value={statusMeta.label}
-                />
-                <DeploymentMiniStatus
-                  label={i18n.t("previewPanel.deployment.storage.defaultDomain")}
-                  value={
-                    info?.domains.length
-                      ? i18n.t("previewPanel.deployment.storage.generated")
-                      : i18n.t("previewPanel.deployment.storage.pendingPublish")
-                  }
-                />
-              </div>
-              <div className="grid gap-3">
+      </DeploymentResourceHeroCard>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.95fr)]">
+        <section className="rounded-lg border border-border/70 bg-card">
+          <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
+            {i18n.t("previewPanel.deployment.storage.title")}
+          </div>
+          <div className="space-y-4 p-4">
+            <div className="grid gap-3">
+              <ConnectionInfoField
+                label={i18n.t("previewPanel.deployment.storage.bucketName")}
+                value={bucket?.name || ""}
+                copied={copiedField === "bucket"}
+                onCopy={() => void handleCopy("bucket", bucket?.name)}
+              />
+              <ConnectionInfoField
+                label={i18n.t("previewPanel.deployment.storage.endpoint")}
+                value={bucket?.endpoint || ""}
+                copied={copiedField === "endpoint"}
+                onCopy={() => void handleCopy("endpoint", bucket?.endpoint)}
+              />
+              {bucket?.publicUrl ? (
                 <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.storage.bucketName")}
-                  value={bucket?.name || ""}
-                  copied={copiedField === "bucket"}
-                  onCopy={() => void handleCopy("bucket", bucket?.name)}
+                  label={i18n.t("previewPanel.deployment.storage.publicUrl")}
+                  value={bucket.publicUrl}
+                  copied={copiedField === "publicUrl"}
+                  onCopy={() => void handleCopy("publicUrl", bucket.publicUrl)}
                 />
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.storage.endpoint")}
-                  value={bucket?.endpoint || ""}
-                  copied={copiedField === "endpoint"}
-                  onCopy={() => void handleCopy("endpoint", bucket?.endpoint)}
-                />
-                {bucket?.publicUrl ? (
-                  <ConnectionInfoField
-                    label={i18n.t("previewPanel.deployment.storage.publicUrl")}
-                    value={bucket.publicUrl}
-                    copied={copiedField === "publicUrl"}
-                    onCopy={() => void handleCopy("publicUrl", bucket.publicUrl)}
-                  />
-                ) : null}
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.storage.accessKeyId")}
-                  value={bucket?.secretAccessKey ? bucket.accessKeyId : "••••••••••••••••"}
-                  copied={copiedField === "accessKeyId"}
-                  onCopy={() =>
-                    void handleCopy(
-                      "accessKeyId",
-                      bucket?.secretAccessKey ? bucket.accessKeyId : undefined,
-                    )
-                  }
-                  sensitive
-                />
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.storage.secretAccessKey")}
-                  value={bucket?.secretAccessKey || "••••••••••••••••"}
-                  copied={copiedField === "secretAccessKey"}
-                  onCopy={() => void handleCopy("secretAccessKey", bucket?.secretAccessKey)}
-                  sensitive
-                />
-              </div>
-              {!bucket?.secretAccessKey ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 text-xs"
-                  onClick={() => void handleRevealSecrets()}
-                  disabled={loading}
-                >
-                  <Unlock className="size-4" />
-                  {i18n.t("previewPanel.deployment.storage.revealSecrets")}
-                </Button>
               ) : null}
-            </>
-          )}
-          {error ? (
-            <div className="text-sm text-rose-600">{error}</div>
-          ) : null}
-          <div className="rounded-md border border-border/70 bg-muted/30 p-4">
-            <div className="text-sm font-semibold text-foreground">
-              {i18n.t("previewPanel.deployment.storage.applicationVariables")}
+              <ConnectionInfoField
+                label={i18n.t("previewPanel.deployment.storage.accessKeyId")}
+                value={
+                  bucket?.secretAccessKey
+                    ? bucket.accessKeyId
+                    : "••••••••••••••••"
+                }
+                copied={copiedField === "accessKeyId"}
+                onCopy={() =>
+                  void handleCopy(
+                    "accessKeyId",
+                    bucket?.secretAccessKey ? bucket.accessKeyId : undefined,
+                  )
+                }
+                sensitive
+              />
+              <ConnectionInfoField
+                label={i18n.t("previewPanel.deployment.storage.secretAccessKey")}
+                value={bucket?.secretAccessKey || "••••••••••••••••"}
+                copied={copiedField === "secretAccessKey"}
+                onCopy={() =>
+                  void handleCopy("secretAccessKey", bucket?.secretAccessKey)
+                }
+                sensitive
+              />
             </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              {i18n.t("previewPanel.deployment.storage.applicationVariablesDescription")}
-            </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {(storageStatus?.applicationVariables?.keys || [
-                "ONECEO_STORAGE_ENABLED",
-                "S3_ENDPOINT",
-                "S3_BUCKET_NAME",
-                "S3_ACCESS_KEY_ID",
-                "S3_SECRET_ACCESS_KEY",
-              ]).map((key) => (
-                <span
-                  key={key}
-                  className="rounded-full border border-border bg-background px-2 py-1 text-xs text-muted-foreground"
-                >
-                  {key}
-                </span>
-              ))}
+
+            <div className="rounded-md border border-border/70 bg-muted/30 p-4">
+              <div className="text-sm font-semibold text-foreground">
+                {i18n.t("previewPanel.deployment.storage.applicationVariables")}
+              </div>
+              <p className="mt-2 text-sm text-muted-foreground">
+                {i18n.t(
+                  "previewPanel.deployment.storage.applicationVariablesDescription",
+                )}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {(storageStatus?.applicationVariables?.keys || [
+                  "ONECEO_STORAGE_ENABLED",
+                  "S3_ENDPOINT",
+                  "S3_BUCKET_NAME",
+                  "S3_ACCESS_KEY_ID",
+                  "S3_SECRET_ACCESS_KEY",
+                ]).map((key) => (
+                  <span
+                    key={key}
+                    className="rounded-full border border-border bg-background px-2 py-1 text-xs text-muted-foreground"
+                  >
+                    {key}
+                  </span>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
-          {i18n.t("previewPanel.deployment.storage.usageGuidance")}
-        </div>
-        <div className="space-y-3 p-4">
-          <DeploymentPlaceholderCard
-            title={i18n.t("previewPanel.deployment.storage.userUpload")}
-            description={i18n.t(
-              "previewPanel.deployment.storage.userUploadDescription",
-            )}
-          />
-          <DeploymentPlaceholderCard
-            title={i18n.t(
-              "previewPanel.deployment.storage.buildArtifactSeparation",
-            )}
-            description={i18n.t(
-              "previewPanel.deployment.storage.buildArtifactSeparationDescription",
-            )}
-          />
-          <DeploymentPlaceholderCard
-            title={i18n.t("previewPanel.deployment.storage.accessPolicy")}
-            description={i18n.t(
-              "previewPanel.deployment.storage.accessPolicyDescription",
-            )}
-          />
-        </div>
-      </section>
+        <section className="rounded-lg border border-border/70 bg-card">
+          <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
+            {i18n.t("previewPanel.deployment.storage.usageGuidance")}
+          </div>
+          <div className="space-y-3 p-4">
+            <DeploymentPlaceholderCard
+              title={i18n.t("previewPanel.deployment.storage.userUpload")}
+              description={i18n.t(
+                "previewPanel.deployment.storage.userUploadDescription",
+              )}
+            />
+            <DeploymentPlaceholderCard
+              title={i18n.t(
+                "previewPanel.deployment.storage.buildArtifactSeparation",
+              )}
+              description={i18n.t(
+                "previewPanel.deployment.storage.buildArtifactSeparationDescription",
+              )}
+            />
+            <DeploymentPlaceholderCard
+              title={i18n.t("previewPanel.deployment.storage.accessPolicy")}
+              description={i18n.t(
+                "previewPanel.deployment.storage.accessPolicyDescription",
+              )}
+            />
+          </div>
+        </section>
+      </div>
+      {error ? <div className="text-sm text-rose-600">{error}</div> : null}
     </div>
   );
 }

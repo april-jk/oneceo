@@ -50,19 +50,9 @@ export function getConnectorGuides(t: TFunction): Record<ConnectorKey, Connector
       intro: t("connectors.guides.slack.intro"),
       quickLinks: [
         {
-          label: t("connectors.guides.slack.links.apps.label"),
-          href: "https://api.slack.com/apps/",
-          description: t("connectors.guides.slack.links.apps.description"),
-        },
-        {
-          label: t("connectors.guides.slack.links.oauthDocs.label"),
-          href: "https://docs.slack.dev/authentication/installing-with-oauth/",
-          description: t("connectors.guides.slack.links.oauthDocs.description"),
-        },
-        {
-          label: t("connectors.guides.slack.links.mcpDocs.label"),
-          href: "https://docs.slack.dev/ai/slack-mcp-server/",
-          description: t("connectors.guides.slack.links.mcpDocs.description"),
+          label: t("connectors.guides.slack.links.composioToolkit.label"),
+          href: "https://docs.composio.dev/toolkits/slack",
+          description: t("connectors.guides.slack.links.composioToolkit.description"),
         },
       ],
       steps: [
@@ -95,19 +85,19 @@ export function getConnectorGuides(t: TFunction): Record<ConnectorKey, Connector
       intro: t("connectors.guides.supabase.intro"),
       quickLinks: [
         {
-          label: t("connectors.guides.supabase.links.tokens.label"),
-          href: "https://supabase.com/dashboard/account/tokens",
-          description: t("connectors.guides.supabase.links.tokens.description"),
+          label: t("connectors.guides.supabase.links.composioToolkit.label"),
+          href: "https://docs.composio.dev/toolkits/supabase",
+          description: t("connectors.guides.supabase.links.composioToolkit.description"),
         },
       ],
       steps: [
         t("connectors.guides.supabase.steps.0"),
         t("connectors.guides.supabase.steps.1"),
+        t("connectors.guides.supabase.steps.2"),
       ],
       tips: [
         t("connectors.guides.supabase.tips.0"),
         t("connectors.guides.supabase.tips.1"),
-        t("connectors.guides.supabase.tips.2"),
       ],
     },
     figma: {

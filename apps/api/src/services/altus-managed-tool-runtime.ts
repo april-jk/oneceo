@@ -445,6 +445,33 @@ function isLegacyFigmaMcpShellCommand(value: string) {
   );
 }
 
+function isLegacySupabaseMcpShellCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('supabase-mcp') ||
+    normalized.includes('supabase mcp') ||
+    (normalized.includes('@composio/cli add') && normalized.includes('supabase')) ||
+    normalized.includes('mcp.supabase.com') ||
+    normalized.includes('supabase_access_token') ||
+    normalized.includes('supabase personal access token')
+  );
+}
+
+function isLegacySlackMcpShellCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('slack-mcp') ||
+    normalized.includes('slack mcp') ||
+    (normalized.includes('@composio/cli add') && normalized.includes('slack')) ||
+    normalized.includes('mcp.slack.com') ||
+    normalized.includes('slack_access_token') ||
+    normalized.includes('slack bot token') ||
+    normalized.includes('slack user token')
+  );
+}
+
 function extractLeadingCdTarget(value: string) {
   const raw = asText(value).trim();
   if (!raw.toLowerCase().startsWith('cd ')) {
@@ -1144,6 +1171,30 @@ export class AltusManagedToolRuntime {
             'figma_legacy_mcp_shell_blocked: Figma is attached through oneceo API broker + Composio Tool Router.',
             'Do not install or run local Figma MCP tooling, and do not place Figma tokens in the sandbox.',
             'Call load_connector_guide(connectorKey=figma), then use the attached figma__COMPOSIO_SEARCH_TOOLS and related Figma router tools.',
+          ].join('\n')
+        );
+      }
+      if (
+        isLegacySupabaseMcpShellCommand(command) &&
+        (await connectorGuideService.getActiveGuideForConnector(this.input.sessionId, 'supabase'))
+      ) {
+        throw new Error(
+          [
+            'supabase_legacy_mcp_shell_blocked: Supabase is attached through oneceo API broker + Composio Tool Router.',
+            'Do not install or run local Supabase MCP tooling, and do not place Supabase or Composio tokens in the sandbox.',
+            'Call load_connector_guide(connectorKey=supabase), then use the attached supabase__COMPOSIO_SEARCH_TOOLS and related Supabase router tools.',
+          ].join('\n')
+        );
+      }
+      if (
+        isLegacySlackMcpShellCommand(command) &&
+        (await connectorGuideService.getActiveGuideForConnector(this.input.sessionId, 'slack'))
+      ) {
+        throw new Error(
+          [
+            'slack_legacy_mcp_shell_blocked: Slack is attached through oneceo API broker + Composio Tool Router.',
+            'Do not install or run local Slack MCP tooling, and do not place Slack or Composio tokens in the sandbox.',
+            'Call load_connector_guide(connectorKey=slack), then use the attached slack__COMPOSIO_SEARCH_TOOLS and related Slack router tools.',
           ].join('\n')
         );
       }

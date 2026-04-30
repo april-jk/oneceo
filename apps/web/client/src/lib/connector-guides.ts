@@ -143,21 +143,6 @@ export function getConnectorGuides(t: TFunction): Record<ConnectorKey, Connector
         t("connectors.guides.vercel.tips.1"),
       ],
     },
-    google_cloud: {
-      intro: t("connectors.guides.google_cloud.intro"),
-      quickLinks: [
-        {
-          label: t("connectors.guides.google_cloud.links.composioDocs.label"),
-          href: "https://docs.composio.dev/reference/api-reference/tool-router/postToolRouterSessionBySessionIdLink",
-          description: t("connectors.guides.google_cloud.links.composioDocs.description"),
-        },
-      ],
-      steps: [
-        t("connectors.guides.google_cloud.steps.0"),
-        t("connectors.guides.google_cloud.steps.1"),
-      ],
-      tips: [t("connectors.guides.google_cloud.tips.0")],
-    },
     postgres: {
       intro: t("connectors.guides.postgres.intro"),
       quickLinks: [

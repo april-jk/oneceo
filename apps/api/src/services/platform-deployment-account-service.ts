@@ -3,6 +3,10 @@ import { createHash } from 'node:crypto';
 import { userConnectorAccountDAO } from '../db/dao';
 import { connectorSecretService } from './connector-secret-service';
 import { connectorStorageBootstrap } from './connector-storage-bootstrap';
+import {
+  ensureDeploymentPublicDomain,
+  type DeploymentPublicDomainBinding,
+} from './deployment-domain-service';
 import { requestRailwayGraphql, type RailwayAuthKind } from './railway-graphql-client';
 
 const INTERNAL_DEPLOYMENT_CONNECTOR_KEY = 'railway_internal';
@@ -27,6 +31,17 @@ type DeploymentConfig = {
   serviceId: string;
   serviceName?: string;
   serviceDomain?: string;
+  publicDomain?: string;
+  publicUrl?: string;
+  publicDomainProvider?: DeploymentPublicDomainBinding['publicDomainProvider'];
+  railwayCustomDomainId?: string;
+  railwayCnameTarget?: string;
+  cloudflareZoneId?: string;
+  cloudflareDnsRecords?: DeploymentPublicDomainBinding['cloudflareDnsRecords'];
+  domainStatus?: DeploymentPublicDomainBinding['domainStatus'];
+  domainStatusMessage?: string;
+  domainLastCheckedAt?: string;
+  domainActivatedAt?: string;
   tokenId?: string;
   tokenRotatedAt?: string;
   createdAt?: string;
@@ -76,6 +91,17 @@ export type UserPlatformDeploymentAccount = {
   serviceId: string;
   serviceName?: string;
   serviceDomain?: string;
+  publicDomain?: string;
+  publicUrl?: string;
+  publicDomainProvider?: DeploymentPublicDomainBinding['publicDomainProvider'];
+  railwayCustomDomainId?: string;
+  railwayCnameTarget?: string;
+  cloudflareZoneId?: string;
+  cloudflareDnsRecords?: DeploymentPublicDomainBinding['cloudflareDnsRecords'];
+  domainStatus?: DeploymentPublicDomainBinding['domainStatus'];
+  domainStatusMessage?: string;
+  domainLastCheckedAt?: string;
+  domainActivatedAt?: string;
   accessToken: string;
   tokenKind: 'project';
   tokenId?: string;
@@ -254,6 +280,23 @@ function toDeploymentConfig(value: unknown): DeploymentConfig {
     serviceId: asText(record.serviceId),
     serviceName: asText(record.serviceName) || undefined,
     serviceDomain: asText(record.serviceDomain) || undefined,
+    publicDomain: asText(record.publicDomain) || undefined,
+    publicUrl: asText(record.publicUrl) || undefined,
+    publicDomainProvider:
+      asText(record.publicDomainProvider) === 'cloudflare_railway_custom_domain'
+        ? 'cloudflare_railway_custom_domain'
+        : undefined,
+    railwayCustomDomainId: asText(record.railwayCustomDomainId) || undefined,
+    railwayCnameTarget: asText(record.railwayCnameTarget) || undefined,
+    cloudflareZoneId: asText(record.cloudflareZoneId) || undefined,
+    cloudflareDnsRecords: Array.isArray(record.cloudflareDnsRecords)
+      ? (record.cloudflareDnsRecords as DeploymentConfig['cloudflareDnsRecords'])
+      : undefined,
+    domainStatus:
+      (asText(record.domainStatus) as DeploymentConfig['domainStatus']) || undefined,
+    domainStatusMessage: asText(record.domainStatusMessage) || undefined,
+    domainLastCheckedAt: asText(record.domainLastCheckedAt) || undefined,
+    domainActivatedAt: asText(record.domainActivatedAt) || undefined,
     tokenId: asText(record.tokenId) || undefined,
     tokenRotatedAt: asText(record.tokenRotatedAt) || undefined,
     createdAt: asText(record.createdAt) || undefined,
@@ -1176,6 +1219,7 @@ function buildConfigFromState(input: {
   serviceId: string;
   serviceName?: string;
   serviceDomain?: string;
+  publicDomainBinding?: Partial<DeploymentPublicDomainBinding>;
   repo?: {
     owner?: string;
     name?: string;
@@ -1202,6 +1246,24 @@ function buildConfigFromState(input: {
     serviceId: input.serviceId,
     serviceName: input.serviceName,
     serviceDomain: input.serviceDomain || input.current?.serviceDomain,
+    publicDomain: input.publicDomainBinding?.publicDomain || input.current?.publicDomain,
+    publicUrl: input.publicDomainBinding?.publicUrl || input.current?.publicUrl,
+    publicDomainProvider:
+      input.publicDomainBinding?.publicDomainProvider || input.current?.publicDomainProvider,
+    railwayCustomDomainId:
+      input.publicDomainBinding?.railwayCustomDomainId || input.current?.railwayCustomDomainId,
+    railwayCnameTarget:
+      input.publicDomainBinding?.railwayCnameTarget || input.current?.railwayCnameTarget,
+    cloudflareZoneId: input.publicDomainBinding?.cloudflareZoneId || input.current?.cloudflareZoneId,
+    cloudflareDnsRecords:
+      input.publicDomainBinding?.cloudflareDnsRecords || input.current?.cloudflareDnsRecords,
+    domainStatus: input.publicDomainBinding?.domainStatus || input.current?.domainStatus,
+    domainStatusMessage:
+      input.publicDomainBinding?.domainStatusMessage || input.current?.domainStatusMessage,
+    domainLastCheckedAt:
+      input.publicDomainBinding?.domainLastCheckedAt || input.current?.domainLastCheckedAt,
+    domainActivatedAt:
+      input.publicDomainBinding?.domainActivatedAt || input.current?.domainActivatedAt,
     tokenId: input.tokenId || input.current?.tokenId,
     tokenRotatedAt: input.tokenRotatedAt || input.current?.tokenRotatedAt,
     createdAt: input.current?.createdAt || input.createdAt || new Date().toISOString(),
@@ -1238,6 +1300,17 @@ function toAccount(row: DeploymentAccountRow | null): UserPlatformDeploymentAcco
     serviceId: config.serviceId,
     serviceName: config.serviceName,
     serviceDomain: config.serviceDomain,
+    publicDomain: config.publicDomain,
+    publicUrl: config.publicUrl,
+    publicDomainProvider: config.publicDomainProvider,
+    railwayCustomDomainId: config.railwayCustomDomainId,
+    railwayCnameTarget: config.railwayCnameTarget,
+    cloudflareZoneId: config.cloudflareZoneId,
+    cloudflareDnsRecords: config.cloudflareDnsRecords,
+    domainStatus: config.domainStatus,
+    domainStatusMessage: config.domainStatusMessage,
+    domainLastCheckedAt: config.domainLastCheckedAt,
+    domainActivatedAt: config.domainActivatedAt,
     accessToken,
     tokenKind: 'project',
     tokenId: asText(secret?.tokenId || config.tokenId) || undefined,
@@ -1591,6 +1664,7 @@ export class PlatformDeploymentAccountService {
     const existingRow = await this.getAccountRow(normalizedUserId, normalizedProjectKey);
     const existingAccount = toAccount(existingRow);
     if (
+      existingRow &&
       existingAccount?.serviceId &&
       existingAccount.serviceDomain &&
       existingAccount.projectKey === normalizedProjectKey &&
@@ -1603,6 +1677,60 @@ export class PlatformDeploymentAccountService {
         existingAccount.environmentId,
         existingAccount.serviceId
       );
+      const config = toDeploymentConfig(existingRow.configJson);
+      const publicDomainBinding = await ensureDeploymentPublicDomain({
+        token: adminToken,
+        tokenKind: 'bearer',
+        projectKey: normalizedProjectKey,
+        projectName: existingAccount.serviceName || existingAccount.environmentName || normalizedProjectKey,
+        projectId: existingAccount.projectId,
+        environmentId: existingAccount.environmentId,
+        serviceId: existingAccount.serviceId,
+        existing: config,
+      });
+      if (
+        publicDomainBinding.publicUrl !== config.publicUrl ||
+        publicDomainBinding.railwayCustomDomainId !== config.railwayCustomDomainId ||
+        publicDomainBinding.railwayCnameTarget !== config.railwayCnameTarget ||
+        JSON.stringify(publicDomainBinding.cloudflareDnsRecords || []) !==
+          JSON.stringify(config.cloudflareDnsRecords || []) ||
+        publicDomainBinding.domainStatus !== config.domainStatus ||
+        publicDomainBinding.domainStatusMessage !== config.domainStatusMessage
+      ) {
+        await this.persistAccountRow(
+          normalizedUserId,
+          buildConfigFromState({
+            current: config,
+            projectKey: normalizedProjectKey,
+            projectId: existingAccount.projectId,
+            projectName: existingAccount.projectName,
+            environmentId: existingAccount.environmentId,
+            environmentName: existingAccount.environmentName,
+            serviceId: existingAccount.serviceId,
+            serviceName: existingAccount.serviceName,
+            serviceDomain: existingAccount.serviceDomain,
+            publicDomainBinding,
+            repo: {
+              owner: existingAccount.githubRepoOwner || '',
+              name: existingAccount.githubRepoName || '',
+              fullName: existingAccount.githubRepoFullName || '',
+              htmlUrl: existingAccount.githubRepoUrl || '',
+              defaultBranch: existingAccount.githubDefaultBranch || 'main',
+            },
+            tokenId: existingAccount.tokenId,
+            tokenRotatedAt: existingAccount.tokenRotatedAt,
+            databaseServiceId: existingAccount.databaseServiceId,
+            databaseServiceName: existingAccount.databaseServiceName,
+            databaseVolumeId: existingAccount.databaseVolumeId,
+            databaseVolumeName: existingAccount.databaseVolumeName,
+          }),
+          existingRow.secretCiphertext
+        );
+        const updatedAccount = await this.getProjectAccount(normalizedUserId, normalizedProjectKey);
+        if (updatedAccount) {
+          return updatedAccount;
+        }
+      }
       return existingAccount;
     }
 
@@ -1917,6 +2045,16 @@ export class PlatformDeploymentAccountService {
       environment.environmentId,
       service.serviceId
     );
+    const publicDomainBinding = await ensureDeploymentPublicDomain({
+      token: adminToken,
+      tokenKind: 'bearer',
+      projectKey: normalizedProjectKey,
+      projectName: service.serviceName || environment.environmentName || normalizedProjectKey,
+      projectId: config.projectId,
+      environmentId: environment.environmentId,
+      serviceId: service.serviceId,
+      existing: config,
+    });
     await waitForEnvironmentServiceInstance(
       adminToken,
       environment.environmentId,
@@ -1956,6 +2094,7 @@ export class PlatformDeploymentAccountService {
         serviceId: service.serviceId,
         serviceName: service.serviceName,
         serviceDomain,
+        publicDomainBinding,
         tokenId,
         tokenRotatedAt,
       }),
@@ -2004,6 +2143,15 @@ export class PlatformDeploymentAccountService {
       environment.environmentId,
       service.serviceId
     );
+    const publicDomainBinding = await ensureDeploymentPublicDomain({
+      token: adminToken,
+      tokenKind: 'bearer',
+      projectKey: normalizedProjectKey,
+      projectName: service.serviceName || environment.environmentName || normalizedProjectKey,
+      projectId: userProject.projectId,
+      environmentId: environment.environmentId,
+      serviceId: service.serviceId,
+    });
     await waitForEnvironmentServiceInstance(
       adminToken,
       environment.environmentId,
@@ -2029,6 +2177,7 @@ export class PlatformDeploymentAccountService {
         serviceId: service.serviceId,
         serviceName: service.serviceName,
         serviceDomain,
+        publicDomainBinding,
         tokenId: projectToken.tokenId,
         tokenRotatedAt,
         createdAt: new Date().toISOString(),

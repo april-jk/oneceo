@@ -62,6 +62,10 @@ type TaskSessionDeploymentState = {
   environmentName?: string;
   serviceId?: string;
   serviceName?: string;
+  publicUrl?: string;
+  publicDomain?: string;
+  domainStatus?: string;
+  domainStatusMessage?: string;
   resourceBinding?: DeploymentResourceBindingData;
 };
 
@@ -75,6 +79,26 @@ let deploymentSyncTimer: NodeJS.Timeout | null = null;
 let deploymentSyncRunning = false;
 const deploymentSyncRunningSessions = new Set<string>();
 const terminalSuccessDeploymentStatuses = new Set(['SUCCESS', 'DEPLOYED', 'ACTIVE']);
+
+function isLiveDeploymentDomainRefreshStatus(value: unknown) {
+  const status = asText(value).toLowerCase();
+  return (
+    status === 'failed' ||
+    status === 'repair_required' ||
+    status === 'pending_dns' ||
+    status === 'pending_certificate'
+  );
+}
+
+function hasStaleActiveDeploymentDomainMessage(input: {
+  domainStatus?: unknown;
+  domainStatusMessage?: unknown;
+}) {
+  return (
+    asText(input.domainStatus).toLowerCase() === 'active' &&
+    asText(input.domainStatusMessage).includes('等待 DNS 或证书生效')
+  );
+}
 
 function deploymentSyncKeyFor(taskSessionId: string) {
   return `deployment_sync:${taskSessionId}`;
@@ -171,6 +195,10 @@ function pickTaskSessionDeploymentPanelSnapshot(metadataRaw: unknown): RailwayDe
     latestStatus: asText(record.latestStatus) || undefined,
     latestUrl: asText(record.latestUrl) || undefined,
     latestStaticUrl: asText(record.latestStaticUrl) || undefined,
+    publicUrl: asText(record.publicUrl) || undefined,
+    publicDomain: asText(record.publicDomain) || undefined,
+    domainStatus: asText(record.domainStatus) || undefined,
+    domainStatusMessage: asText(record.domainStatusMessage) || undefined,
     activeDeploymentPending: record.activeDeploymentPending === true,
     domains,
     deployments: deployments as RailwayDeploymentPanelData['deployments'],
@@ -357,6 +385,10 @@ function pickTaskSessionDeploymentState(metadataRaw: unknown): TaskSessionDeploy
     environmentName: asText(record.environmentName) || undefined,
     serviceId: asText(record.serviceId) || undefined,
     serviceName: asText(record.serviceName) || undefined,
+    publicUrl: asText(record.publicUrl) || undefined,
+    publicDomain: asText(record.publicDomain) || undefined,
+    domainStatus: asText(record.domainStatus) || undefined,
+    domainStatusMessage: asText(record.domainStatusMessage) || undefined,
     resourceBinding,
   };
 }
@@ -411,6 +443,10 @@ function buildStoredSnapshotFromState(
     environmentName: state.environmentName || base.environmentName,
     serviceId: state.serviceId || base.serviceId,
     serviceName: state.serviceName || base.serviceName,
+    publicUrl: state.publicUrl || base.publicUrl,
+    publicDomain: state.publicDomain || base.publicDomain,
+    domainStatus: state.domainStatus || base.domainStatus,
+    domainStatusMessage: state.domainStatusMessage || base.domainStatusMessage,
     message: state.message || base.message,
     resourceBinding: state.resourceBinding || base.resourceBinding,
     analytics: analytics || base.analytics,
@@ -452,8 +488,14 @@ function buildStoredDeploymentStatePanel(
     environmentName: state.environmentName,
     serviceId: state.serviceId,
     serviceName: state.serviceName,
+    latestUrl: state.publicUrl,
+    latestStaticUrl: state.publicUrl,
+    publicUrl: state.publicUrl,
+    publicDomain: state.publicDomain,
+    domainStatus: state.domainStatus,
+    domainStatusMessage: state.domainStatusMessage,
     activeDeploymentPending: bindingState === 'provisioning',
-    domains: [],
+    domains: state.publicUrl ? [state.publicUrl] : [],
     deployments: [],
     logs: [],
     missing: [],
@@ -824,8 +866,12 @@ async function waitForTaskSessionPublicReachabilityAndRefresh(input: {
     asText(input.panel.latestUrl) ||
     asText(input.panel.domains[0]);
   const latestStatus = asText(input.panel.latestStatus).toUpperCase();
+  const domainStatus = asText(input.panel.domainStatus).toLowerCase();
+  const publicDomainStillActivating =
+    domainStatus === 'pending_dns' || domainStatus === 'pending_certificate';
   const shouldProbe =
     Boolean(publicUrl) &&
+    !publicDomainStillActivating &&
     (input.panel.activeDeploymentPending === true ||
       asText(input.panel.bindingState) === 'ready' ||
       terminalSuccessDeploymentStatuses.has(latestStatus));
@@ -923,8 +969,12 @@ export async function validateTaskSessionDeploymentPublicReadiness(input: {
     asText(input.panel.latestUrl) ||
     asText(input.panel.domains[0]);
   const latestStatus = asText(input.panel.latestStatus).toUpperCase();
+  const domainStatus = asText(input.panel.domainStatus).toLowerCase();
+  const publicDomainStillActivating =
+    domainStatus === 'pending_dns' || domainStatus === 'pending_certificate';
   const shouldValidateTerminalSuccess =
     Boolean(publicUrl) &&
+    !publicDomainStillActivating &&
     (asText(input.panel.bindingState) === 'ready' ||
       terminalSuccessDeploymentStatuses.has(latestStatus));
   const shouldPromoteSuccessfulLiveDeployment =
@@ -1097,6 +1147,10 @@ function buildPlatformDeployment(
     environmentName: account.environmentName,
     serviceId: account.serviceId,
     serviceName: account.serviceName,
+    publicUrl: account.publicUrl,
+    publicDomain: account.publicDomain,
+    domainStatus: account.domainStatus,
+    domainStatusMessage: account.domainStatusMessage,
     repository: account.githubRepoFullName,
   };
 }
@@ -1136,7 +1190,18 @@ async function resolveLiveTaskSessionDeploymentPanel(input: {
   });
   const metadata = pickRecord(environment?.metadata);
   const savedState = pickTaskSessionDeploymentState(metadata.deploymentState);
-  const account = await platformDeploymentAccountService.getProjectAccount(input.userId, projectKey);
+  let account = await platformDeploymentAccountService.getProjectAccount(input.userId, projectKey);
+  if (
+    account?.serviceId &&
+    (!asText(account.publicUrl) ||
+      !asText(account.domainStatus) ||
+      asText(account.domainStatus) === 'failed' ||
+      asText(account.domainStatus) === 'repair_required' ||
+      asText(account.domainStatus) === 'pending_dns' ||
+      asText(account.domainStatus) === 'pending_certificate')
+  ) {
+    account = await platformDeploymentAccountService.ensureProjectAccount(input.userId, projectKey);
+  }
   if (!account) {
     const analytics = await buildTaskSessionAnalyticsPanel(metadata);
     if (savedState?.bindingState && savedState.bindingState !== 'uninitialized') {
@@ -1237,7 +1302,13 @@ export async function buildTaskSessionDeploymentResponse(input: {
       (!savedPanel && savedState?.bindingState && savedState.bindingState !== 'uninitialized') ||
       savedPanel?.activeDeploymentPending === true ||
       savedPanel?.bindingState === 'provisioning' ||
+      savedPanel?.bindingState === 'provider_error' ||
+      isLiveDeploymentDomainRefreshStatus(savedPanel?.domainStatus) ||
+      hasStaleActiveDeploymentDomainMessage(savedPanel || {}) ||
       savedState?.bindingState === 'provisioning' ||
+      savedState?.bindingState === 'provider_error' ||
+      isLiveDeploymentDomainRefreshStatus(savedState?.domainStatus) ||
+      hasStaleActiveDeploymentDomainMessage(savedState || {}) ||
       savedState?.bindingState === 'repair_required'
     );
   if (shouldRefreshLiveSnapshot) {
@@ -1316,6 +1387,10 @@ function buildDeploymentStatePatchFromPanel(
     environmentName: panel.environmentName,
     serviceId: panel.serviceId,
     serviceName: panel.serviceName,
+    publicUrl: panel.publicUrl,
+    publicDomain: panel.publicDomain,
+    domainStatus: panel.domainStatus,
+    domainStatusMessage: panel.domainStatusMessage,
     resourceBinding: resourceBinding || panel.resourceBinding,
   };
 }

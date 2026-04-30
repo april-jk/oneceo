@@ -6,6 +6,10 @@
 - 当前不继续设计具体子条目
 - 等后续由你统一规划后再重新展开设计
 
+例外专题：
+
+- `oneceo.space` 默认域名绑定已进入方案设计阶段，用于解决部署后不再向用户暴露 Railway 域名的问题。当前状态：`[20260429-2331已采用]`。
+
 ## 当前子模块
 
 - 通用
@@ -42,6 +46,7 @@
 - [05_SEO.md](/Users/eunice/codingProject/oneceo/docs/部署工作台功能设计/05_设置/05_SEO.md)
 - [06_密钥.md](/Users/eunice/codingProject/oneceo/docs/部署工作台功能设计/05_设置/06_密钥.md)
 - [07_GitHub.md](/Users/eunice/codingProject/oneceo/docs/部署工作台功能设计/05_设置/07_GitHub.md)
+- [08_oneceo_space默认域名绑定方案_[20260429-2331已采用].md](./08_oneceo_space默认域名绑定方案_%5B20260429-2331已采用%5D.md)
 
 ## 审核点
 

@@ -75,11 +75,11 @@ type ConnectorCenterTab = ConnectorCategory;
 type ConnectorFormValues = Record<string, string>;
 
 const NEW_PROFILE_ID = "__new__";
+export const GITHUB_FIXED_CALLBACK_PATH = "/github/callback";
 export const NOTION_FIXED_CALLBACK_PATH = "/notion/callback";
 export const SUPABASE_FIXED_CALLBACK_PATH = "/supabase/callback";
 export const SLACK_FIXED_CALLBACK_PATH = "/slack/callback";
 export const VERCEL_FIXED_CALLBACK_PATH = "/vercel/callback";
-export const GOOGLE_CLOUD_FIXED_CALLBACK_PATH = "/google-cloud/callback";
 const GITHUB_APP_AUTHORIZATIONS_URL = "https://github.com/settings/apps/authorizations";
 const GITHUB_APP_INSTALLATIONS_URL = "https://github.com/settings/installations";
 const GITHUB_INSTALLATION_MISSING_PATTERN = /没有任何可用安装|未安装到任何账号|installation/i;
@@ -186,11 +186,11 @@ function buildConnectorRedirectUri(
 
 function isFixedConnectorCallbackPath(pathname: string) {
   return (
+    pathname === GITHUB_FIXED_CALLBACK_PATH ||
     pathname === NOTION_FIXED_CALLBACK_PATH ||
     pathname === SUPABASE_FIXED_CALLBACK_PATH ||
     pathname === SLACK_FIXED_CALLBACK_PATH ||
-    pathname === VERCEL_FIXED_CALLBACK_PATH ||
-    pathname === GOOGLE_CLOUD_FIXED_CALLBACK_PATH
+    pathname === VERCEL_FIXED_CALLBACK_PATH
   );
 }
 
@@ -198,7 +198,9 @@ export function resolveConnectorOauthCallbackContext(location: string, params: U
   const currentPath = new URL(location, resolveBrowserOrigin()).pathname;
   const hasOauthCallbackParams = Boolean(params.get("code")) && Boolean(params.get("state"));
   const fixedPathConnector =
-    currentPath === NOTION_FIXED_CALLBACK_PATH
+    currentPath === GITHUB_FIXED_CALLBACK_PATH
+      ? "github"
+      : currentPath === NOTION_FIXED_CALLBACK_PATH
       ? "notion"
       : currentPath === SUPABASE_FIXED_CALLBACK_PATH
         ? "supabase"
@@ -206,8 +208,6 @@ export function resolveConnectorOauthCallbackContext(location: string, params: U
         ? "slack"
         : currentPath === VERCEL_FIXED_CALLBACK_PATH
           ? "vercel"
-          : currentPath === GOOGLE_CLOUD_FIXED_CALLBACK_PATH
-            ? "google_cloud"
           : null;
   const connector =
     (params.get("connector") as ConnectorKey | null) ||
@@ -369,12 +369,12 @@ function isGithubConnector(item: ConnectorCatalogItem | null | undefined) {
 
 export function shouldUseConnectorLevelOauth(connectorKey: ConnectorKey | null | undefined) {
   return (
+    connectorKey === "github" ||
     connectorKey === "notion" ||
     connectorKey === "supabase" ||
     connectorKey === "figma" ||
     connectorKey === "slack" ||
-    connectorKey === "vercel" ||
-    connectorKey === "google_cloud"
+    connectorKey === "vercel"
   );
 }
 
@@ -384,6 +384,28 @@ export function shouldUseUnifiedConnectorCard(connectorKey: ConnectorKey | null 
 
 function getGithubAppReauthHint() {
   return i18n.t("connectors.github.reauthHint");
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value) {
+    const text = asText(item);
+    if (!text) continue;
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(text);
+  }
+  return result;
+}
+
+export function resolveAuthorizedRepositoryLabel(profile: ConnectorProfile | null | undefined) {
+  const repositories = asStringArray(profile?.config?.repositories);
+  if (repositories.length === 1) return repositories[0];
+  if (repositories.length > 1) return `${repositories[0]} +${repositories.length - 1}`;
+  return asText(profile?.displayName) || asText(profile?.profileName) || i18n.t("connectors.authorizedRepo");
 }
 
 export function ConnectorCenterPanel({
@@ -488,7 +510,7 @@ export function ConnectorCenterPanel({
     const useConnectorLevelCallback = useConnectorLevelOauth;
     if (!callbackContext.shouldHandle) return;
     if (!state || !connector) return;
-    if (!code && connector !== "google_cloud" && connector !== "notion" && connector !== "slack" && connector !== "figma" && connector !== "supabase") return;
+    if (!code && connector !== "github" && connector !== "notion" && connector !== "slack" && connector !== "figma" && connector !== "supabase") return;
     if (!useConnectorLevelCallback && !profileId) return;
     if (callbackHandled.current) return;
     callbackHandled.current = true;
@@ -515,23 +537,23 @@ export function ConnectorCenterPanel({
             ? {
                 callbackPath: NOTION_FIXED_CALLBACK_PATH,
               }
+            : connector === "github"
+              ? {
+                  callbackPath: GITHUB_FIXED_CALLBACK_PATH,
+                }
             : connector === "supabase"
               ? {
                   callbackPath: SUPABASE_FIXED_CALLBACK_PATH,
                 }
-            : connector === "slack"
-              ? {
-                  callbackPath: SLACK_FIXED_CALLBACK_PATH,
-                }
-              : connector === "google_cloud"
+              : connector === "slack"
                 ? {
-                    callbackPath: GOOGLE_CLOUD_FIXED_CALLBACK_PATH,
+                    callbackPath: SLACK_FIXED_CALLBACK_PATH,
                   }
               : connector === "vercel"
                 ? {
                     callbackPath: VERCEL_FIXED_CALLBACK_PATH,
                   }
-            : undefined
+                : undefined
         );
         let completedProfileId = profileId || null;
         let attachTarget: string | null | undefined = effectiveTargetSessionId;
@@ -785,7 +807,7 @@ export function ConnectorCenterPanel({
         const redirectUri =
           detailItem.key === "slack"
             ? new URL(SLACK_FIXED_CALLBACK_PATH, resolveBrowserOrigin()).toString()
-            : detailItem.key === "google_cloud"
+            : detailItem.key === "github"
               ? buildConnectorRedirectUri(
                   location,
                   "",
@@ -793,7 +815,7 @@ export function ConnectorCenterPanel({
                   null,
                   effectiveTargetSessionId,
                   {
-                    callbackPath: GOOGLE_CLOUD_FIXED_CALLBACK_PATH,
+                    callbackPath: GITHUB_FIXED_CALLBACK_PATH,
                   }
                 )
             : buildConnectorRedirectUri(
@@ -802,7 +824,11 @@ export function ConnectorCenterPanel({
                 detailItem.key,
                 null,
                 effectiveTargetSessionId,
-                detailItem.key === "notion"
+                detailItem.key === "github"
+                  ? {
+                      callbackPath: GITHUB_FIXED_CALLBACK_PATH,
+                    }
+                  : detailItem.key === "notion"
                   ? {
                       callbackPath: NOTION_FIXED_CALLBACK_PATH,
                     }
@@ -1077,6 +1103,13 @@ export function ConnectorCenterPanel({
         : showGithubInstallationMissingWarning
           ? t("connectors.github.installationMissing")
           : getGithubAppReauthHint();
+    const authorizedAccountLabel =
+      asText(selectedDetailProfile?.displayName) ||
+      asText(selectedDetailProfile?.profileName) ||
+      t("connectors.authorizedAccount");
+    const authorizedRepositoryLabel = githubConnector
+      ? resolveAuthorizedRepositoryLabel(selectedDetailProfile)
+      : t("connectors.authorizedRepo");
 
     const isSupabaseConnector = detailItem.key === "supabase";
     const isSupabaseAuthorized =
@@ -1152,12 +1185,16 @@ export function ConnectorCenterPanel({
                       <div className="flex items-center justify-center gap-[8px]">
                         <div className="flex items-center gap-[4px]">
                           <CheckCircle2 className="h-4 w-4 text-emerald-500 fill-emerald-500/20" />
-                          <span className="text-muted-foreground text-center text-sm">{t("connectors.authorizedAccount")}</span>
+                          <span className="max-w-[220px] truncate text-center text-sm text-muted-foreground" title={authorizedAccountLabel}>
+                            {authorizedAccountLabel}
+                          </span>
                         </div>
                         <div className="h-[1px] w-[16px] bg-muted-foreground/30"></div>
                         <div className="flex items-center gap-[4px]">
                           <ShieldCheck className="h-4 w-4 text-muted-foreground" />
-                          <span className="text-muted-foreground text-center text-sm">{t("connectors.authorizedRepo")}</span>
+                          <span className="max-w-[260px] truncate text-center text-sm text-muted-foreground" title={authorizedRepositoryLabel}>
+                            {authorizedRepositoryLabel}
+                          </span>
                         </div>
                       </div>
                       

@@ -24,7 +24,7 @@ const INLINE_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif',
 const INLINE_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 const INLINE_IMAGE_MAX_COUNT = 4;
 const COMPOSIO_BROKERED_RUNTIME_TRANSPORT = 'api_brokered_mcp';
-const COMPOSIO_BROKERED_CONNECTORS = new Set(['notion', 'slack', 'figma', 'supabase']);
+const COMPOSIO_BROKERED_CONNECTORS = new Set(['github', 'notion', 'slack', 'figma', 'supabase']);
 
 function isSnapshotRuntimeTransportSupported(binding: { connectorKey?: unknown; runtimeTransport?: unknown }) {
   if (!COMPOSIO_BROKERED_CONNECTORS.has(asText(binding.connectorKey))) {

@@ -1652,8 +1652,8 @@ export function GlobalSettingsDialogHost() {
       callbackPath === "/slack/callback" && hasOauthCallbackParams;
     const isVercelCallback =
       callbackPath === "/vercel/callback" && hasOauthCallbackParams;
-    const isGoogleCloudCallback =
-      callbackPath === "/google-cloud/callback" && hasOauthCallbackParams;
+    const isGithubCallback =
+      callbackPath === "/github/callback" && hasOauthCallbackParams;
     return {
       shouldOpen:
         params.get("settings") === "open" ||
@@ -1663,13 +1663,19 @@ export function GlobalSettingsDialogHost() {
         isSupabaseCallback ||
         isSlackCallback ||
         isVercelCallback ||
-        isGoogleCloudCallback,
+        isGithubCallback,
       settingsTab:
-        isNotionCallback || isSupabaseCallback || isSlackCallback || isVercelCallback || isGoogleCloudCallback
+        isNotionCallback ||
+        isSupabaseCallback ||
+        isSlackCallback ||
+        isVercelCallback ||
+        isGithubCallback
           ? "connectors"
           : params.get("settingsTab"),
       targetSessionId: params.get("targetSessionId"),
-      connector: isNotionCallback
+      connector: isGithubCallback
+        ? "github"
+        : isNotionCallback
         ? "notion"
         : isSupabaseCallback
           ? "supabase"
@@ -1677,8 +1683,6 @@ export function GlobalSettingsDialogHost() {
           ? "slack"
           : isVercelCallback
             ? "vercel"
-            : isGoogleCloudCallback
-              ? "google_cloud"
             : params.get("connector"),
     };
   }, [location, search]);

@@ -6709,64 +6709,97 @@ router.post('/sessions/:sessionId/deployment/storage/ensure', async (req, res) =
   }
 });
 
-router.post(
-  '/sessions/:sessionId/deployment/storage/files',
-  express.raw({ type: '*/*', limit: `${TASK_ATTACHMENT_MAX_BYTES}b` }),
-  async (req, res) => {
-    try {
-      const { sessionId } = req.params;
-      const currentUser = currentUserResolver.require(req);
-      await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
-      const session = await resolveTaskSessionRecord(sessionId);
-      if (!session) {
-        return res.status(404).json({
-          success: false,
-          error: getPublicErrorMessage('会话不存在'),
-        });
-      }
-
-      const originalName = sanitizeAttachmentName(
-        decodeURIComponent(asText(req.header('X-Attachment-Name')) || 'upload.bin')
-      );
-      const contentType = asText(req.header('Content-Type')) || 'application/octet-stream';
-      const body = Buffer.isBuffer(req.body)
-        ? req.body
-        : Buffer.isBuffer((req as any).body)
-          ? (req as any).body
-          : Buffer.from([]);
-      if (!body.length) {
-        return res.status(400).json({
-          success: false,
-          error: getPublicErrorMessage('上传文件为空'),
-        });
-      }
-
-      const data = await projectStorageResourceService.uploadObject(
-        currentUser.userId,
-        sessionId,
-        {
-          key: originalName,
-          body,
-          contentType,
-        }
-      );
-      return res.json({
-        success: true,
-        data,
-      });
-    } catch (error: any) {
-      const authError = resolveCurrentUserError(error);
-      const ownershipError = resolveSessionConnectorOwnershipError(error);
-      console.error('上传存储桶文件失败:', error);
-      return res.status(authError?.status || ownershipError?.status || 400).json({
+router.post('/sessions/:sessionId/deployment/storage/upload-target', express.json(), async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
         success: false,
-        error: getPublicErrorMessage(
-          authError?.message || ownershipError?.message || error?.message || '上传存储桶文件失败'
-        ),
+        error: getPublicErrorMessage('会话不存在'),
       });
     }
+
+    const fileName = asText(req.body?.fileName);
+    const fileSize =
+      typeof req.body?.fileSize === 'number' && Number.isFinite(req.body.fileSize)
+        ? req.body.fileSize
+        : null;
+    const contentType = asText(req.body?.contentType) || 'application/octet-stream';
+    if (!fileName) {
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage('缺少文件名'),
+      });
+    }
+
+    const data = await projectStorageResourceService.createDirectUploadTarget(
+      currentUser.userId,
+      sessionId,
+      {
+        fileName,
+        fileSize,
+        contentType,
+      }
+    );
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('创建存储桶上传目标失败:', error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(
+        authError?.message || ownershipError?.message || error?.message || '创建存储桶上传目标失败'
+      ),
+    });
   }
-);
+});
+
+router.get('/sessions/:sessionId/deployment/storage/files/download', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const key = asText(req.query?.key);
+    if (!key) {
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage('缺少文件 key'),
+      });
+    }
+
+    const url = await projectStorageResourceService.createDirectDownloadUrl(
+      currentUser.userId,
+      sessionId,
+      key
+    );
+    return res.redirect(302, url);
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('创建存储桶下载地址失败:', error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(
+        authError?.message || ownershipError?.message || error?.message || '创建存储桶下载地址失败'
+      ),
+    });
+  }
+});
 
 router.delete('/sessions/:sessionId/deployment/storage/files', express.json(), async (req, res) => {
   try {

@@ -1,0 +1,634 @@
+# Altus 数据库与存储桶工具化接入方案 [尚未采用]
+
+## 1. 背景
+
+当前 OneCEO 已经把部署主链收敛到 Railway，并且在工作台中保留了“数据库”和“存储桶”入口：
+
+- 数据库已有 Railway Postgres 创建、连接信息读取、表结构与行数据读取的后端基础能力。
+- 存储桶目前仍是产品占位。现有 Cloudflare R2 客户端只服务 OneCEO 平台自身工件链路，不能作为用户部署项目的存储资源。
+- Altus managed tools 已经覆盖部署、调试、工作区文件、Web 访问等能力，但还没有“数据库 / 存储桶”这类资源型工具。
+
+这会带来三个问题：
+
+1. 如果用户要求做用户系统、订单系统、CMS、文件上传等应用，Altus 只能靠代码生成猜测数据库和对象存储，不能稳定创建真实资源。
+2. 现有数据库工作台接口存在“打开页面即创建 Railway Postgres”的倾向，资源创建是有成本的，不应该由只读页面访问隐式触发。
+3. 存储桶能力如果混用平台侧 Cloudflare / R2，会破坏“用户部署资源全部在 Railway”的边界，也会让后续回收、审计、权限控制变得不可控。
+
+本方案的目标是：参照部署工具化方案，把数据库和存储桶也设计成 Altus 可裁决、平台可审计、资源可回收的 managed tools。
+
+## 2. 设计目标
+
+### 2.1 必须实现
+
+- 当用户项目明确需要关系型数据库时，Altus 通过工具创建或复用 Railway Postgres。
+- 数据库服务必须位于该用户 Railway project 下、当前用户项目对应的 environment 中，和应用 service 保持同环境。
+- 数据库连接变量必须由平台注入应用 service，应用读取标准 `DATABASE_URL` / `PG*` 变量。
+- Altus Actions 增加“数据库”动作分组，能展示数据库创建、检查、连接变量注入、表结构读取等过程。
+- 当用户项目明确需要文件上传、媒体、附件、对象存储时，Altus 通过工具启用项目存储桶能力。
+- 存储桶第一阶段采用 Railway Bucket。Bucket 归属于用户 Railway project，OneCEO 通过 `projectKey` 创建唯一 bucket 并绑定到当前用户项目。
+- Cloudflare / R2 只允许作为 OneCEO 平台侧工件、截图、OSAC、归档等内部基础设施，不进入用户项目部署资源。
+- 数据库和存储桶工具必须幂等，重复调用不得创建重复资源。
+- 资源状态必须可被工作台读取，且可参与部署前检查和交付验收。
+
+### 2.2 明确不做
+
+- 不把“消息里出现数据库、上传、文件”等关键词作为硬触发条件。
+- 不在打开数据库页面、存储桶页面时自动创建付费资源。
+- 不在第一阶段提供任意 SQL 执行工具给 Altus 自由调用。
+- 不把 Cloudflare / R2 管理密钥注入到 Railway 应用或 sandbox。
+- 不为用户项目创建或复用 Cloudflare R2 bucket；用户侧部署资源统一走 Railway。
+
+## 3. 核心原则
+
+### 3.1 资源创建必须是显式工具动作
+
+部署、数据库、存储桶都属于会产生外部资源或成本的能力。它们应统一满足：
+
+- 由 Altus tool call 触发。
+- tool result 有稳定结构。
+- 前端 Altus Actions 能展示过程。
+- 后端能审计谁、在哪个 session、因为什么创建了资源。
+- 重试时先检查现有资源，再决定是否创建。
+
+### 3.2 LLM 裁决，后端守住资源边界
+
+Altus 负责判断“这个项目是否需要数据库 / 存储桶”，但后端不应完全相信自然语言判断。
+
+后端只做资源边界守卫：
+
+- 用户只能操作自己的 session / projectKey。
+- Railway Postgres 只能创建在该用户的 Railway project 和当前 environment 下。
+- Railway Bucket 只能创建在该用户的 Railway project 和当前 environment 下，必须和当前部署应用处于同一个 environment。
+- 工具重复调用只能复用或修复，不允许跨项目借用资源。
+- 危险动作必须使用更窄的专用工具，不允许混在 ensure 工具里。
+
+这里的边界不是“硬编码业务意图”，而是“资源归属、幂等、权限、成本”的平台安全边界。
+
+### 3.3 数据库和 Bucket 都跟随 Railway environment
+
+用户项目资源模型：
+
+```text
+Railway workspace
+└── oneceo-deployment workspace
+    └── user railway project
+        └── project environment / session projectKey
+            ├── app service
+            └── postgres service
+            └── bucket: oneceo-{projectKeyHash}
+```
+
+数据库和 Bucket 都是用户应用运行时资源，必须贴近应用 service，并和当前部署项目处于同一个 Railway environment。
+
+因此 OneCEO 的资源归属模型是：
+
+- 一个用户对应一个 Railway project。
+- 一个用户项目 / 会话对应一个 Railway environment。
+- 该用户项目的 app service、Postgres service、Bucket 都位于同一个 environment。
+- 每个用户项目创建一个唯一命名 Bucket，例如 `oneceo-{projectKeyHash}`。
+- bucketId、访问凭证、projectKey、environmentId 绑定关系必须持久化。
+- 应用 service 只注入同 environment 下当前 Bucket 的变量。
+- 删除用户项目时按持久化的 bucketId 精确删除。
+
+Cloudflare / R2 只能用于 OneCEO 平台自身的内部对象存储，不参与用户项目运行时。
+
+## 4. 数据库工具设计
+
+### 4.1 `ensure_project_database`
+
+用途：为当前用户项目创建或复用 Railway Postgres，并把连接变量注入应用 service。
+
+触发条件：
+
+- 用户明确要求做用户系统、登录注册、订单、后台管理、CMS、表单数据留存等需要持久化关系数据的项目。
+- 项目 manifest 或代码依赖显示 `features.database = "railway_postgres"`。
+- Altus 在实现过程中已经选择了 `pg` / `drizzle-orm` / Prisma 等需要 Postgres 的栈。
+
+不应触发：
+
+- 用户只是询问“是否支持数据库”。
+- 用户只是做静态页面、小游戏、展示页。
+- 用户要求“先想方案”“先解释怎么做”。
+
+输入建议：
+
+```json
+{
+  "reason": "用户管理系统需要持久化用户、角色和权限数据",
+  "requestedFeature": "railway_postgres",
+  "schemaPlan": "users, roles, user_roles, audit_logs",
+  "wireApplication": true
+}
+```
+
+输出建议：
+
+```json
+{
+  "action": "ensure_project_database",
+  "phase": "database_ready",
+  "status": "ready",
+  "provider": "railway_postgres",
+  "projectKey": "session-id",
+  "resource": {
+    "serviceId": "railway-service-id",
+    "serviceName": "postgres-session-hash",
+    "environmentId": "railway-environment-id"
+  },
+  "connection": {
+    "hasDatabaseUrl": true,
+    "host": "masked",
+    "port": "5432",
+    "database": "railway",
+    "sslMode": "require"
+  },
+  "applicationVariables": {
+    "wired": true,
+    "keys": ["DATABASE_URL", "PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE"]
+  },
+  "summary": "Railway Postgres 已创建并注入当前应用运行环境"
+}
+```
+
+实现锚点：
+
+- 复用 `platformDeploymentAccountService.ensureProjectDatabaseResources(userId, projectKey)`。
+- 复用 `railwayDatabaseService.getSummary(account)` 作为状态读取。
+- 修正 `waitForDatabaseService` 必须按当前 `projectKey` 对应的 database service name 等待，不能只等默认名称。
+- 工具层返回连接状态时默认脱敏，完整密码只在用户主动进入数据库设置页时展示。
+
+### 4.2 `get_project_database_status`
+
+用途：只读查询数据库是否已启用、是否可连接、是否已注入应用环境。
+
+触发条件：
+
+- 用户询问数据库状态。
+- 部署前检查发现 manifest 声明数据库能力。
+- ensure 工具返回 pending / repairable 时轮询。
+
+行为要求：
+
+- 不创建数据库。
+- 不修改 Railway 变量。
+- 如果数据库不存在，返回 `status=not_configured`。
+
+### 4.3 `inspect_project_database_schema`
+
+用途：读取表、字段、行数概览，服务于 Altus Actions - 数据库和交付说明。
+
+行为要求：
+
+- 只读。
+- 默认最多返回表概览和列结构。
+- 不读取大量业务数据。
+- 对空库返回清晰状态，而不是失败。
+
+### 4.4 暂不开放的高风险工具
+
+以下能力不进入第一阶段：
+
+- `execute_project_database_sql`
+- `drop_project_database_table`
+- `reset_project_database`
+
+如果后续需要迁移能力，应优先让 Altus 修改项目内迁移文件，再通过应用启动或部署流程执行，而不是让 LLM 直接执行自由 SQL。
+
+## 5. 存储桶工具设计
+
+### 5.1 `ensure_project_storage_bucket`
+
+用途：为当前用户项目在 Railway 中启用 Bucket 对象存储能力。
+
+第一阶段不使用 Cloudflare / R2。平台应通过 Railway `bucketCreate` 为当前 user project / environment 创建或复用与 `projectKey` 绑定的 Bucket，并把 Railway 返回的 S3 兼容访问变量注入同 environment 下的应用 service。
+
+资源绑定建议：
+
+- `bucketProvider = "railway_bucket"`
+- `projectId = account.projectId`
+- `environmentId = account.environmentId`
+- `bucketId = railwayBucketId`
+- `bucketName = oneceo-{projectKeyHash}`
+- `endpoint = railwayBucketEndpoint`
+- `publicUrl = railwayBucketPublicUrl`
+- `accessKeyId` 和 `secretAccessKey` 来自 `bucketCreate`，管理页允许用户主动点击后查看和复制完整明文值；默认展示为掩码。
+
+输入建议：
+
+```json
+{
+  "reason": "用户头像和附件上传需要对象存储",
+  "accessModel": "public_and_private",
+  "wireApplication": true
+}
+```
+
+输出建议：
+
+```json
+{
+  "action": "ensure_project_storage_bucket",
+  "phase": "storage_ready",
+  "status": "ready",
+  "provider": "railway_bucket",
+  "binding": {
+    "projectKey": "session-id",
+    "bucketId": "railway-bucket-id",
+    "bucketName": "oneceo-project-hash",
+    "environmentId": "railway-environment-id"
+  },
+  "applicationVariables": {
+    "wired": true,
+    "keys": [
+      "ONECEO_STORAGE_ENABLED",
+      "S3_ENDPOINT",
+      "S3_BUCKET_NAME",
+      "S3_ACCESS_KEY_ID",
+      "S3_SECRET_ACCESS_KEY",
+      "S3_PUBLIC_URL"
+    ]
+  },
+  "summary": "Railway Bucket 已创建并注入当前应用运行环境"
+}
+```
+
+### 5.2 `get_project_storage_status`
+
+用途：只读查询 Railway Bucket 是否已启用、bucket 是否存在、连接变量是否已注入应用 service。
+
+行为要求：
+
+- 不创建绑定。
+- 不向前端或 Altus 返回完整存储密钥。
+- 对不存在状态返回 `not_configured`。
+
+### 5.3 应用侧访问契约与用户管理自由度
+
+第一阶段应用运行时直接使用 Railway 注入的 S3 兼容存储连接变量，而不是调用 OneCEO 平台 R2，也不是依赖 OneCEO 工作台登录态。
+
+这里必须区分两类接口：
+
+1. 工作台管理接口：给 OneCEO 前端和 Altus Actions 使用，按 `sessionId` 和当前登录用户鉴权，用于查看 Railway Bucket 状态、连接变量脱敏信息、对象列表概览。
+2. 部署应用运行时：给已经部署到 Railway 的应用使用，读取 Railway 注入的 S3 兼容变量，由应用后端完成上传、下载、签名或公开 URL 逻辑。
+
+工作台管理接口：
+
+```text
+GET  /api/task-creation/sessions/:sessionId/storage/status
+GET  /api/task-creation/sessions/:sessionId/storage/variables
+GET  /api/task-creation/sessions/:sessionId/storage/objects
+```
+
+部署应用运行时环境变量：
+
+```text
+ONECEO_STORAGE_ENABLED=true
+S3_ENDPOINT={railwayBucketEndpoint}
+S3_BUCKET_NAME={railwayBucketName}
+S3_ACCESS_KEY_ID={railwayBucketAccessKeyId}
+S3_SECRET_ACCESS_KEY={railwayBucketSecretAccessKey}
+S3_PUBLIC_URL={railwayBucketPublicUrl}
+```
+
+OneCEO 可以额外注入 `ONECEO_STORAGE_PROVIDER=railway_bucket` 作为平台识别字段，但应用运行时应优先使用标准 S3 变量。
+
+存储访问密钥只能注入到 Railway 应用后端运行时，不能进入浏览器端代码、静态 HTML 或前端构建产物。
+
+纯前端静态应用不能直接持有可写存储密钥。若项目需要用户上传文件，Altus 必须生成后端 API 层来代理上传签名，或者明确把上传能力降级为不可用，不能声称纯前端静态页面已经具备安全上传能力。
+
+用户应拥有足够的外部管理自由度：
+
+- 数据库页面提供连接 URL、host、port、username、password、database、sslMode 的清晰字段。
+- 存储桶页面提供 endpoint、bucket name、accessKeyId、secretAccessKey、publicUrl 的清晰字段。
+- 所有敏感值默认掩码。
+- 用户主动点击“显示密钥 / 显示密码 / 显示连接信息”后，可以查看并复制完整明文值，用于 DBeaver、DataGrip、S3 客户端、外部脚本或其他第三方工具。
+- 显示行为应被记录审计事件，但不应阻止用户复制。
+
+这样可以保证：
+
+- 用户项目不持有 Cloudflare / R2 管理密钥。
+- 用户项目的数据库和存储桶都落在 Railway。
+- 后续可在 provider 层扩展 Railway Volume 等其他存储类型，而不改变 Altus tool 语义。
+- 项目删除时通过持久化的 bucketId 清理 Railway Bucket。
+
+## 6. Altus Actions 页面设计
+
+### 6.1 数据库页
+
+Altus Actions - 数据库需要从“页面访问即创建”改成“状态优先，动作显式”：
+
+- 默认进入页面：只读取状态。
+- 未启用：显示“当前项目未启用数据库”，并给出“启用数据库”按钮。
+- Altus 调用 `ensure_project_database` 后：显示创建 / 复用 / 变量注入 / 连接检查过程。
+- 已启用：显示 Postgres 服务、连接状态、表数量、最近检查时间、进入设置页按钮。
+
+用户主动点击“启用数据库”时，前端调用显式 ensure 接口；Altus 执行时通过 managed tool 调用同一后端服务。
+
+### 6.2 存储桶页
+
+存储桶页从“暂不开发占位”升级为项目资源页：
+
+- 未启用：显示适用场景和“启用存储桶”按钮。
+- 已启用：显示 provider、Railway bucket、连接状态、变量注入状态、对象数量概览。
+- 默认掩码显示完整存储 access key / secret，用户主动点击显示后可查看和复制明文值。
+- 提供上传测试和复制公开 URL 的轻量验证能力。
+- 上传测试由 OneCEO 后端使用加密持久化的 Railway Bucket 凭证完成，不把写凭证暴露给浏览器。
+
+数据库页同样需要提供完整连接信息查看区：
+
+- 默认掩码展示 `DATABASE_URL`、`PGPASSWORD` 等敏感字段。
+- 用户主动点击显示后可查看和复制明文连接 URL、用户名、密码和数据库名。
+- 该能力是用户管理自己数据库的正式能力，不视为泄漏。
+
+### 6.3 动作卡片
+
+Altus action card 文案必须描述真实工具动作，不使用泛泛的“我继续处理下一步”：
+
+- “创建 Railway Postgres”
+- “复用已有 Postgres 服务”
+- “注入 DATABASE_URL 到应用服务”
+- “读取 public schema 表结构”
+- “创建 Railway Bucket”
+- “注入存储连接变量到应用服务”
+- “校验 Railway Bucket 连接状态”
+
+## 7. 后端实现分层
+
+### 7.1 新增服务
+
+建议新增：
+
+- `apps/api/src/services/altus-managed-database-tool-service.ts`
+- `apps/api/src/services/altus-managed-storage-tool-service.ts`
+- `apps/api/src/services/project-storage-resource-service.ts`
+
+职责划分：
+
+- `altus-managed-*-tool-service` 负责 managed tool 输入输出、summary、phase、repair 建议。
+- `platformDeploymentAccountService` 继续负责 Railway project / environment / service / DB 创建和变量注入。
+- `railwayDatabaseService` 继续负责数据库连接、表结构、行数据读取。
+- `project-storage-resource-service` 负责 Railway Bucket 绑定、凭证加密持久化、变量注入、连接检查、对象列表概览和清理。
+
+### 7.2 Tool registry
+
+`ManagedToolDescriptor.category` 增加：
+
+```ts
+'database' | 'storage'
+```
+
+新增工具：
+
+```text
+ensure_project_database
+get_project_database_status
+inspect_project_database_schema
+ensure_project_storage_bucket
+get_project_storage_status
+```
+
+资源型工具的 `requiresExplicitDeploymentIntent` 应为 `false`，因为用户可能只要求“做一个用户系统”，并没有要求现在部署。但它们需要新的资源意图守卫字段，例如：
+
+```ts
+requiresExplicitResourceNeed: 'database' | 'storage' | false
+```
+
+这表示：不要求用户说“部署”，但要求当前上下文明确需要这个资源。
+
+### 7.3 Prompt contract
+
+Altus system prompt 需要增加资源工具契约：
+
+- 当项目需要持久化关系数据时，调用数据库工具。
+- 当项目需要上传、附件、媒体、对象文件时，调用存储工具。
+- 询问能力、讨论方案、比较供应商时只回答，不调用工具。
+- 资源工具结果为 `not_configured` 时，不要声称数据库或存储已经可用。
+- 资源工具结果为 `ready` 后，生成代码必须使用 Railway 注入的数据库或存储环境变量。
+- 若当前项目是纯前端静态应用但需求包含文件上传，必须先补后端代理层，不能把 Railway 存储写密钥暴露给浏览器端代码。
+
+### 7.4 API 路由语义调整
+
+现有数据库路由建议调整为：
+
+```text
+GET  /deployment/database/status       只读，不创建
+POST /deployment/database/ensure       显式创建或修复
+GET  /deployment/database              兼容旧 UI，但内部应迁移到 status
+GET  /deployment/database/rows         只读，需要已存在数据库
+POST /deployment/database/rows         数据写入，需要已存在数据库
+```
+
+存储桶新增：
+
+```text
+GET  /deployment/storage/status        只读，不创建
+POST /deployment/storage/ensure        显式启用
+GET  /deployment/storage/variables     读取脱敏后的 Railway Bucket 连接变量
+GET  /deployment/storage/objects       列出项目对象概览
+DELETE /deployment/storage/objects     删除项目对象，第一阶段可暂不开放
+```
+
+不新增 OneCEO 运行时存储代理接口。用户部署应用运行时直接使用 Railway Bucket 的 S3 兼容变量。
+
+## 8. 部署基线与 manifest 接入
+
+`oneceo.manifest.json` 已有：
+
+```json
+{
+  "features": {
+    "database": "railway_postgres",
+    "objectStorage": true
+  }
+}
+```
+
+后续规则：
+
+- `features.database = "railway_postgres"` 时，部署前检查必须确认数据库资源 ready 或提示 Altus 调用 `ensure_project_database`。
+- `features.objectStorage = true` 时，部署前检查必须确认 bucket binding ready 或提示 Altus 调用 `ensure_project_storage_bucket`。
+- 模板合规检查只负责发现需求，不直接创建外部资源。
+- 部署工具可以读取资源状态，但不应在没有明确资源需求时偷偷创建数据库或存储桶。
+- 当前模板合规逻辑默认 `objectStorage=false`，实施阶段必须补充对象存储需求来源：manifest 显式声明、Altus 工具裁决、或代码依赖/上传场景检测；不能只依赖默认值。
+
+## 9. 数据模型建议
+
+数据库资源可以继续先落在 deployment account config：
+
+```json
+{
+  "databaseServiceId": "...",
+  "databaseServiceName": "...",
+  "databaseVolumeId": "...",
+  "databaseVolumeName": "..."
+}
+```
+
+存储资源建议新增独立表，避免把对象存储状态塞进 Railway deployment config：
+
+```text
+project_storage_resources
+```
+
+字段建议：
+
+- `id`
+- `user_id`
+- `session_id`
+- `project_key`
+- `provider`
+- `railway_bucket_id`
+- `railway_project_id`
+- `railway_environment_id`
+- `bucket_name`
+- `endpoint`
+- `public_url`
+- `access_key_id`
+- `secret_access_key_ciphertext`
+- `access_model`
+- `status`
+- `created_at`
+- `updated_at`
+- `last_checked_at`
+
+唯一约束：
+
+```text
+(user_id, project_key, provider)
+```
+
+## 10. 成本与清理策略
+
+数据库：
+
+- 只在明确需要时创建。
+- 同一 projectKey 重复调用复用已有 Postgres。
+- 会话 / 项目删除时，跟随当前 Railway environment 清理。
+- 如果部署失败，不应立即删除数据库；应等待用户明确删除项目或平台回收任务判断资源不再被引用。
+
+存储桶：
+
+- 第一阶段只在明确需要时创建 Railway Bucket。
+- Railway Bucket 必须绑定当前用户项目 environment；删除用户项目时必须按 `project_storage_resources.railway_bucket_id` 显式调用 `bucketDelete`。
+- 不允许跨 projectKey 复用 Railway Bucket，即使它们属于同一个用户 Railway project。
+- 存储访问密钥只能注入后端运行时，不能进入前端构建产物。
+
+## 11. 渐进实施阶段
+
+### 第一阶段：文档与工具契约
+
+- 明确数据库 / 存储桶 managed tools 名称、输入、输出和触发边界。
+- 调整 Altus prompt 设计，避免能力咨询误触发资源创建。
+- 确认工作台页面从“访问即创建”改为“状态优先”。
+
+验收条件：
+
+- 文档通过评审。
+- 工具清单、路由语义、UI 状态模型明确。
+
+### 第二阶段：数据库工具落地
+
+- 新增 `altus-managed-database-tool-service`。
+- registry / shared tool schema / runtime dispatch 接入数据库工具。
+- 修复数据库 service name 等待逻辑，确保按 projectKey 查找。
+- 新增数据库 status-only API。
+- Altus Actions - 数据库展示工具动作。
+
+验收条件：
+
+- 用户项目需要数据库时，Altus 能创建 Railway Postgres。
+- 重复调用不产生第二个 Postgres。
+- 应用 service 中存在标准 DB 环境变量。
+- 数据库页面能读取连接状态和表结构。
+
+### 第三阶段：存储桶工具落地
+
+- 新增 `project-storage-resource-service`。
+- 新增 storage status / ensure / variables API。
+- registry / shared tool schema / runtime dispatch 接入存储工具。
+- 存储桶页面从占位升级为真实状态页。
+
+验收条件：
+
+- 用户项目需要上传时，Altus 能启用 bucket binding。
+- 应用不持有 Cloudflare / R2 密钥。
+- Railway 应用后端能使用注入的 S3 变量上传并读取测试对象。
+- 纯前端项目不会收到可写 storage secret；需要上传时必须生成后端代理。
+- 重复调用不产生重复 binding。
+
+### 第四阶段：部署前资源协同
+
+- 模板合规检查发现 database / objectStorage 需求后，给出资源工具建议。
+- 部署工具在发布前读取资源状态，缺失时返回 `retryable_repair_required`，由 Altus 调用资源工具修复。
+- 资源 ready 后再进入部署。
+
+验收条件：
+
+- DB 项目不会部署出缺失 `DATABASE_URL` 的线上服务。
+- 上传项目不会部署出缺失 Railway Bucket 连接变量的线上服务。
+- 静态站点不会被创建数据库或存储桶。
+
+### 第五阶段：回收、审计与高级能力
+
+- 资源创建记录纳入 Altus run event。
+- 项目删除时清理 Railway DB 和 Railway Bucket。
+- 数据库高级能力再评估：迁移执行、seed 数据、备份、只读 SQL。
+
+验收条件：
+
+- 可以追溯每次资源创建来自哪个 run / tool call。
+- 删除项目后资源不继续计费。
+- 高风险数据库动作有单独权限和审计。
+
+## 12. 测试计划
+
+### 12.1 单元测试
+
+- 工具 schema 校验。
+- resource need 判断不因普通能力咨询触发。
+- Railway Bucket 绑定关系稳定且不跨用户 / 项目。
+- database ensure 幂等。
+
+### 12.2 集成测试
+
+- Mock Railway GraphQL：首次创建、已有服务复用、变量注入失败、等待超时。
+- Mock Railway Bucket：bucketCreate、凭证加密持久化、变量注入、对象列表、跨 projectKey 隔离。
+- API 权限：非 session owner 不能读取或创建资源。
+
+### 12.3 真实链路测试
+
+成本可控地跑三类会话：
+
+1. 静态页面：不创建 DB / storage。
+2. 用户管理系统：创建 Railway Postgres，部署后应用能连接数据库。
+3. 头像上传应用：创建 Railway Bucket，部署后应用后端能上传对象并读取。
+
+真实测试必须记录：
+
+- sessionId
+- runId
+- Railway project / environment / service
+- DB service 是否复用
+- Railway Bucket 是否复用
+- 上传和读取测试结果
+- 清理结果
+
+## 13. 风险与待确认点
+
+- Railway Postgres 模板创建有外部配额和异步延迟，需要继续使用 pending / polling 结果模型。
+- 现有数据库 GET 路由会隐式创建资源，实施阶段必须改成 status-first，否则成本不可控。
+- Railway Bucket 必须创建并绑定到当前 environment；实施阶段需要通过 Railway API / CLI 验证 `environmentId` 与变量注入行为是否符合该模型。
+- Railway Bucket 的 `secretAccessKey` 应在创建时持久化，页面允许用户主动查看和复制明文；默认状态、普通列表、日志和 action card 必须保持掩码。
+- Railway Bucket 的公开访问方式、对象列表和删除对象能力需要在实施阶段通过 Railway API / S3 SDK 实测确认。
+- Railway Bucket 凭证不能出现在 Altus tool result、普通前端列表响应、日志、action card、构建产物或 `VITE_*` 变量中；只有用户主动点击显示密钥的管理接口可以返回明文。
+- Railway Bucket 是否受当前 Railway 账号、workspace、套餐或区域限制影响，需要在代码实现前通过 Railway CLI / API 做一次真实创建验证。
+- 如果用户项目是纯前端静态应用，上传能力需要后端代理参与，不能把 Railway 存储写密钥放到浏览器端。
+- 后续如果要支持用户自带数据库或自带对象存储，需要在 provider 层扩展，而不是改 Altus 工具语义。
+
+## 14. 审核问题
+
+1. 是否同意第一阶段数据库固定 Railway Postgres。
+2. 是否同意存储桶第一阶段固定使用 Railway Bucket，不接入 Cloudflare / R2。
+3. 是否同意数据库 / 存储桶资源创建都必须通过显式 managed tool 或用户按钮触发。
+4. 是否同意部署工具只检查资源状态，不在没有明确需求时自动创建资源。
+5. 是否同意数据库页面改成状态优先，避免打开页面即创建付费资源。

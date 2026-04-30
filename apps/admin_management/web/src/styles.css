@@ -16076,3 +16076,169 @@ tbody td,
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Compact reference pricing table ── */
+.reference-pricing-table-wrap {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--color-bg);
+}
+
+.reference-pricing-table-compact {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.reference-pricing-table-compact thead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.reference-pricing-table-compact th {
+  text-align: left;
+  padding: 10px 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  background: var(--color-surface-elevated);
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.reference-pricing-table-compact td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  vertical-align: middle;
+}
+
+.reference-pricing-table-compact tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.rp-col-provider { width: 110px; }
+.rp-col-model    { width: auto; min-width: 140px; }
+.rp-col-price    { width: 120px; text-align: right !important; }
+.rp-col-action   { width: 36px; text-align: center; }
+
+.rp-group-header td {
+  background: var(--color-surface-elevated);
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.rp-group-name  { color: var(--color-text-primary); }
+.rp-group-sep   { margin: 0 6px; opacity: 0.4; }
+.rp-group-count { font-weight: 400; opacity: 0.7; }
+
+.rp-row:hover td {
+  background: var(--color-hover-bg);
+}
+
+.rp-row-new td {
+  background: rgba(59, 130, 246, 0.04);
+}
+
+.rp-provider {
+  font-weight: 500;
+  color: var(--color-text-primary);
+  font-size: 12px;
+}
+
+.rp-select,
+.rp-input-text {
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 13px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.rp-select:focus,
+.rp-input-text:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-ghost);
+}
+
+.rp-input-money {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
+.rp-input-money input {
+  width: 80px;
+  padding: 5px 8px;
+  font-size: 13px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  outline: none;
+  text-align: right;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.rp-input-money input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-ghost);
+}
+
+.rp-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+
+.rp-row:hover .rp-delete {
+  opacity: 1;
+}
+
+.rp-delete:hover {
+  background: var(--color-danger-ghost);
+  color: var(--color-danger);
+}
+
+@media (max-width: 768px) {
+  .reference-pricing-table-compact {
+    font-size: 12px;
+  }
+  .reference-pricing-table-compact th,
+  .reference-pricing-table-compact td {
+    padding: 6px 8px;
+  }
+  .rp-col-provider { width: 80px; }
+  .rp-col-price    { width: 90px; }
+  .rp-input-money input {
+    width: 60px;
+    padding: 4px 6px;
+  }
+  .rp-delete {
+    opacity: 1;
+    width: 24px;
+    height: 24px;
+  }
+}

@@ -67,6 +67,55 @@ test('deployment template baseline marks manifest generation and platform analyt
   }
 });
 
+test('deployment template baseline does not auto-declare railway_postgres from pg dependency alone', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-pg-infer-test-'));
+  try {
+    await mkdir(join(workspace, 'client'), { recursive: true });
+    await mkdir(join(workspace, 'server'), { recursive: true });
+    await writeFile(
+      join(workspace, 'package.json'),
+      JSON.stringify({
+        name: 'baseline-pg-demo',
+        dependencies: {
+          pg: '^8.11.0',
+        },
+        scripts: {
+          build: 'vite build',
+          start: 'node dist/server.js',
+        },
+      }),
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'client/index.html'),
+      '<!doctype html><html><body><div id="root"></div></body></html>',
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'server/index.ts'),
+      "app.get('/api/system/health', (_req, res) => res.json({ ok: true }));\n",
+      'utf-8'
+    );
+
+    const bootstrap = await ensureDeploymentTemplateBootstrap(workspace);
+    const compliance = await ensureTemplateCompliance(workspace);
+    const baseline = buildDeploymentTemplateBaseline({
+      workspaceDetected: true,
+      bootstrap,
+      compliance,
+    });
+
+    assert.equal(compliance.ok, true);
+    assert.equal(compliance.manifest.features.database, false);
+    assert.equal(compliance.checks.databaseDependencyDetected, null);
+    assert.equal(baseline.status, 'ready');
+    assert.equal(baseline.features.database, false);
+    assert.equal(baseline.checks.database, null);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('deployment template baseline highlights missing railway database dependency', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-db-test-'));
   try {

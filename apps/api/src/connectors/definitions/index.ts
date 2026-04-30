@@ -3,7 +3,7 @@ import { buildGithubDefinition, resolveGithubOauthProvider } from './github';
 import { buildGoogleCloudDefinition } from './google-cloud';
 import { buildNotionDefinition } from './notion';
 import { buildPostgresDefinition } from './postgres';
-import { buildSlackDefinition, resolveSlackOauthProvider } from './slack';
+import { buildSlackDefinition } from './slack';
 import { buildSupabaseDefinition } from './supabase';
 import type {
   ConnectorDefinition,
@@ -46,7 +46,6 @@ export function buildConnectorDefinitions(): ConnectorDefinition[] {
 
 export function resolveOauthProvider(connectorKey: ConnectorKey): ConnectorOauthProvider | undefined {
   if (connectorKey === 'github') return resolveGithubOauthProvider();
-  if (connectorKey === 'slack') return resolveSlackOauthProvider();
   if (connectorKey === 'vercel') return resolveVercelOauthProvider();
   return undefined;
 }

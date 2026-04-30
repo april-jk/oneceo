@@ -18,6 +18,8 @@ import {
   Copy,
   Database,
   Download,
+  Eye,
+  EyeOff,
   ExternalLink,
   File,
   FileAudio,
@@ -48,6 +50,13 @@ import {
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -3564,6 +3573,8 @@ function DeploymentDatabaseSection({
     "insert" | "update" | "delete" | null
   >(null);
   const [databaseError, setDatabaseError] = useState<string | null>(null);
+  const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
+  const [connectionSecretsVisible, setConnectionSecretsVisible] = useState(false);
   const [rowsError, setRowsError] = useState<string | null>(null);
   const [activeTableId, setActiveTableId] = useState<string | null>(null);
   const [panelMode, setPanelMode] = useState<"record" | "insert" | "settings">(
@@ -3634,11 +3645,14 @@ function DeploymentDatabaseSection({
               matchRowLocator(row, selectedRowLocator, result.columns),
             )
           : null;
-        const nextRow = currentRow || result.rows[0];
-        const nextLocator = buildRowLocator(nextRow, result.columns);
-        setSelectedRowLocator(nextLocator);
-        if (panelMode === "record") {
-          setSelectedRowValues(buildEditorValues(result.columns, nextRow));
+        if (currentRow) {
+          const nextLocator = buildRowLocator(currentRow, result.columns);
+          setSelectedRowLocator(nextLocator);
+          if (panelMode === "record") {
+            setSelectedRowValues(buildEditorValues(result.columns, currentRow));
+          }
+        } else if (panelMode === "record") {
+          setSelectedRowLocator(null);
         }
       } catch (error) {
         if (cancelled) return;
@@ -3665,6 +3679,8 @@ function DeploymentDatabaseSection({
     null;
   const databaseConnection = databaseInfo?.connection || null;
   const editorColumns = rowsPage?.columns || [];
+  const shouldShowRecordDetail =
+    panelMode === "insert" || (panelMode === "record" && Boolean(selectedRowLocator));
 
   const handleRefresh = async () => {
     if (!sessionId) return;
@@ -3693,6 +3709,10 @@ function DeploymentDatabaseSection({
       setRowsLoading(false);
     }
   };
+
+  const openConnectionDialog = useCallback(() => {
+    setConnectionDialogOpen(true);
+  }, []);
 
   const handleEnableDatabase = async () => {
     if (!sessionId) return;
@@ -3728,6 +3748,11 @@ function DeploymentDatabaseSection({
     setSelectedRowLocator(null);
     setSelectedRowValues(buildEditorValues(rowsPage.columns));
   };
+
+  const handleHideRecordDetail = useCallback(() => {
+    if (panelMode !== "record") return;
+    setSelectedRowLocator(null);
+  }, [panelMode]);
 
   const handleCopy = async (key: string, value: string) => {
     try {
@@ -3895,72 +3920,14 @@ function DeploymentDatabaseSection({
   }
 
   return (
-    <div className="space-y-4">
-      <DeploymentResourceHeroCard
-        icon={<Database className="size-5" />}
-        title={i18n.t("previewPanel.deployment.database.database")}
-        description={i18n.t(
-          "previewPanel.deployment.database.canCopyToClient",
-        )}
-        action={
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 text-xs"
-              onClick={() => void handleRefresh()}
-            >
-              <RefreshCw className="size-4" />
-              {i18n.t("previewPanel.deployment.database.refresh")}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 text-xs"
-              onClick={() => setPanelMode("settings")}
-            >
-              <TableProperties className="size-4" />
-              {i18n.t("previewPanel.deployment.database.connectionInfo")}
-            </Button>
-          </div>
-        }
-      >
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <DeploymentMiniStatus
-            label={i18n.t("previewPanel.deployment.database.databaseStatus")}
-            value={databaseInfo?.latestDeploymentStatus || "UNKNOWN"}
-          />
-          <DeploymentMiniStatus
-            label={i18n.t("previewPanel.deployment.database.columnCount", {
-              count: rowsPage?.columns.length || 0,
-            })}
-            value={String(databaseInfo?.tables.length || 0)}
-          />
-          <DeploymentMiniStatus
-            label={i18n.t("previewPanel.deployment.database.connectionMode")}
-            value={databaseConnection?.sslMode.toUpperCase() || "REQUIRE"}
-          />
-          <DeploymentMiniStatus
-            label={i18n.t("previewPanel.deployment.database.appDeployment")}
-            value={
-              info?.configured
-                ? statusMeta.label
-                : i18n.t(
-                    "previewPanel.deployment.database.deploymentPreparing",
-                  )
-            }
-          />
-        </div>
-      </DeploymentResourceHeroCard>
-
-      <div className="grid gap-4 xl:grid-cols-[180px_minmax(0,1fr)_320px]">
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="relative flex h-full flex-col">
+    <div className="h-full overflow-hidden rounded-xl border border-border/70 bg-card">
+      <div className="flex h-full items-stretch overflow-hidden">
+        <section className="relative flex h-full w-[180px] shrink-0 flex-col px-2 pb-0 pt-3">
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 right-0 border-r border-border"
+            className="pointer-events-none absolute inset-0 border-r border-border"
           />
-          <div className="flex-1 space-y-2 overflow-y-auto overscroll-contain p-3">
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain">
             {databaseLoading && !databaseInfo ? (
               <div className="px-3 py-2 text-sm text-muted-foreground">
                 {i18n.t("previewPanel.deployment.database.preparing")}
@@ -3976,20 +3943,27 @@ function DeploymentDatabaseSection({
                   setPanelMode("record");
                 }}
                 className={cn(
-                  "flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left transition-colors",
+                  "flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left transition-colors",
                   activeTableId === table.id
-                    ? "bg-muted/50 text-foreground"
+                    ? "bg-muted/60 text-foreground"
                     : "text-foreground hover:bg-muted/30",
                 )}
               >
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium">
+                  <div
+                    className={cn(
+                      "truncate text-sm",
+                      activeTableId === table.id ? "font-medium" : "font-normal",
+                    )}
+                  >
                     {table.name}
                   </div>
                 </div>
-                <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
-                  {table.sourceLabel}
-                </span>
+                {table.sourceLabel ? (
+                  <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
+                    {table.sourceLabel}
+                  </span>
+                ) : null}
               </button>
             ))}
             {!databaseLoading && !databaseInfo?.tables.length ? (
@@ -3998,26 +3972,226 @@ function DeploymentDatabaseSection({
               </div>
             ) : null}
           </div>
-          <div className="border-t border-border p-3">
+          <div className="px-2 py-4">
             <Button
               variant="outline"
-              className="w-full justify-center text-sm"
-              onClick={() => setPanelMode("settings")}
+              className="h-8 w-full justify-center text-sm"
+              onClick={openConnectionDialog}
             >
-              <TableProperties className="size-4" />
+              <Database className="size-4" />
               {i18n.t("previewPanel.deployment.database.settings")}
             </Button>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-          <div>
-            <div className="text-sm font-semibold text-foreground">
+        <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <div className="flex items-center justify-between gap-3 px-4 py-3">
+            <div className="text-[13px] font-normal text-foreground">
               {activeTable
                 ? activeTable.name
                 : i18n.t("previewPanel.deployment.database.database")}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" className="h-8 text-xs">
+                <TableProperties className="size-4" />
+                {i18n.t("previewPanel.deployment.database.columnCount", {
+                  count: rowsPage?.columns.length || 0,
+                })}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => void handleRefresh()}
+              >
+                <RefreshCw className="size-4" />
+                {i18n.t("previewPanel.deployment.database.refresh")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={handleCreateNew}
+              >
+                <Plus className="size-4" />
+                {i18n.t("previewPanel.deployment.database.newRecord")}
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                className="size-8"
+                onClick={openConnectionDialog}
+              >
+                <TableProperties className="size-4" />
+              </Button>
+            </div>
+          </div>
+
+          {databaseError ? (
+            <div className="px-4 pb-2 text-xs text-rose-600">{databaseError}</div>
+          ) : null}
+          {rowsError ? (
+            <div className="px-4 pb-2 text-xs text-rose-600">{rowsError}</div>
+          ) : null}
+
+          <div className="flex min-h-0 flex-1 flex-col pb-12">
+            {activeTable && rowsPage ? (
+              <>
+                <div
+                  className="relative flex-1 overflow-auto"
+                  onClick={(event) => {
+                    if (!selectedRowLocator || panelMode !== "record") return;
+                    const target = event.target as HTMLElement;
+                    if (
+                      target.closest("tbody tr") ||
+                      target.closest("button") ||
+                      target.closest("input") ||
+                      target.closest("textarea") ||
+                      target.closest("select")
+                    ) {
+                      return;
+                    }
+                    handleHideRecordDetail();
+                  }}
+                >
+                  <table className="min-w-full border-separate border-spacing-0 text-sm">
+                    <thead className="sticky top-0 z-10 bg-card">
+                      <tr>
+                        {rowsPage.columns.map((column) => (
+                          <th
+                            key={column.name}
+                            className="border-b border-border px-3 py-2 text-left font-medium text-muted-foreground"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span>{column.name}</span>
+                              {column.isPrimaryKey ? (
+                                <KeyRound className="size-3.5 text-muted-foreground" />
+                              ) : null}
+                            </div>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rowsLoading ? (
+                        <tr>
+                          <td
+                            colSpan={Math.max(rowsPage.columns.length, 1)}
+                            className="px-4 py-16 text-center text-muted-foreground"
+                          >
+                            {i18n.t("previewPanel.deployment.database.loadingData")}
+                          </td>
+                        </tr>
+                      ) : rowsPage.rows.length ? (
+                        rowsPage.rows.map((row, index) => {
+                          const locator = buildRowLocator(row, rowsPage.columns);
+                          const active = selectedRowLocator
+                            ? matchRowLocator(
+                                row,
+                                selectedRowLocator,
+                                rowsPage.columns,
+                              )
+                            : false;
+                          return (
+                            <tr
+                              key={String(row._oneceo_ctid || index)}
+                              className={cn(
+                                "cursor-pointer transition-colors",
+                                active ? "bg-muted/30" : "hover:bg-muted/40",
+                              )}
+                              onClick={() => handleSelectRow(row)}
+                            >
+                              {rowsPage.columns.map((column) => (
+                                <td
+                                  key={column.name}
+                                  className="border-b border-border/70 px-3 py-2 align-top text-foreground"
+                                >
+                                  <div className="max-w-[220px] truncate">
+                                    {formatDatabaseCell(row[column.name])}
+                                  </div>
+                                </td>
+                              ))}
+                            </tr>
+                          );
+                        })
+                      ) : (
+                        <tr>
+                          <td
+                            colSpan={Math.max(rowsPage.columns.length, 1)}
+                            className="px-4 py-16 text-center text-muted-foreground"
+                          >
+                            {i18n.t("previewPanel.deployment.database.noTableData")}
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <span>
+                        {i18n.t("previewPanel.deployment.database.rows", {
+                          count: rowsPage.total,
+                        })}
+                      </span>
+                      <span className="size-1 rounded-full bg-slate-300" />
+                      <span>
+                        {i18n.t("previewPanel.deployment.database.rowsPerPage", {
+                          count: rowsPage.pageSize,
+                        })}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        disabled={rowsPage.page <= 1}
+                        onClick={() =>
+                          setPage((current) => Math.max(1, current - 1))
+                        }
+                      >
+                        <ChevronLeft className="size-4" />
+                        {i18n.t("previewPanel.deployment.database.previousPage")}
+                      </Button>
+                      <span>
+                        {i18n.t("previewPanel.deployment.database.pageIndicator", {
+                          page: rowsPage.page,
+                          total: rowsPage.totalPages,
+                        })}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        disabled={rowsPage.page >= rowsPage.totalPages}
+                        onClick={() => setPage((current) => current + 1)}
+                      >
+                        {i18n.t("previewPanel.deployment.database.nextPage")}
+                        <ChevronRight className="size-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="px-4 py-20 text-center text-sm text-muted-foreground">
+                {databaseLoading
+                  ? i18n.t("previewPanel.deployment.database.connecting")
+                  : i18n.t("previewPanel.deployment.database.selectTableHint")}
+              </div>
+            )}
+          </div>
+        </section>
+
+        {shouldShowRecordDetail ? (
+        <section className="w-[320px] shrink-0 border-l border-border bg-card">
+          <div className="border-b border-border px-4 py-3">
+            <div className="text-sm font-semibold text-foreground">
+              {panelMode === "insert"
+                ? i18n.t("previewPanel.deployment.database.newRecord")
+                : i18n.t("previewPanel.deployment.database.recordDetail")}
             </div>
             <div className="mt-1 text-xs text-muted-foreground">
               {activeTable
@@ -4025,295 +4199,16 @@ function DeploymentDatabaseSection({
                 : i18n.t("previewPanel.deployment.database.waitSelectTable")}
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" className="h-8 text-xs">
-              <TableProperties className="size-4" />
-              {i18n.t("previewPanel.deployment.database.columnCount", {
-                count: rowsPage?.columns.length || 0,
-              })}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 text-xs"
-              onClick={() => void handleRefresh()}
-            >
-              <RefreshCw className="size-4" />
-              {i18n.t("previewPanel.deployment.database.refresh")}
-            </Button>
-            <Button size="sm" className="h-8 text-xs" onClick={handleCreateNew}>
-              <Plus className="size-4" />
-              {i18n.t("previewPanel.deployment.database.newRecord")}
-            </Button>
-          </div>
-        </div>
 
-        {databaseError ? (
-          <div className="px-4 pt-3 text-xs text-rose-600">{databaseError}</div>
-        ) : null}
-        {rowsError ? (
-          <div className="px-4 pt-3 text-xs text-rose-600">{rowsError}</div>
-        ) : null}
-
-        <div className="min-h-0">
-          {activeTable && rowsPage ? (
-            <>
-              <div className="max-h-[520px] overflow-auto">
-                <table className="min-w-full border-separate border-spacing-0 text-sm">
-                  <thead className="sticky top-0 z-10 bg-card">
-                    <tr>
-                      {rowsPage.columns.map((column) => (
-                        <th
-                          key={column.name}
-                          className="border-b border-border px-3 py-2 text-left font-medium text-muted-foreground"
-                        >
-                          <div className="flex items-center gap-2">
-                            <span>{column.name}</span>
-                            {column.isPrimaryKey ? (
-                              <KeyRound className="size-3.5 text-muted-foreground" />
-                            ) : null}
-                          </div>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rowsLoading ? (
-                      <tr>
-                        <td
-                          colSpan={Math.max(rowsPage.columns.length, 1)}
-                          className="px-4 py-16 text-center text-muted-foreground"
-                        >
-                          {i18n.t("previewPanel.deployment.database.loadingData")}
-                        </td>
-                      </tr>
-                    ) : rowsPage.rows.length ? (
-                      rowsPage.rows.map((row, index) => {
-                        const locator = buildRowLocator(row, rowsPage.columns);
-                        const active = selectedRowLocator
-                          ? matchRowLocator(
-                              row,
-                              selectedRowLocator,
-                              rowsPage.columns,
-                            )
-                          : index === 0;
-                        return (
-                          <tr
-                            key={String(row._oneceo_ctid || index)}
-                            className={cn(
-                              "cursor-pointer transition-colors",
-                              active ? "bg-muted/30" : "hover:bg-muted/40",
-                            )}
-                            onClick={() => handleSelectRow(row)}
-                          >
-                            {rowsPage.columns.map((column) => (
-                              <td
-                                key={column.name}
-                                className="border-b border-border/70 px-3 py-2 align-top text-foreground"
-                              >
-                                <div className="max-w-[220px] truncate">
-                                  {formatDatabaseCell(row[column.name])}
-                                </div>
-                              </td>
-                            ))}
-                          </tr>
-                        );
-                      })
-                    ) : (
-                      <tr>
-                        <td
-                          colSpan={Math.max(rowsPage.columns.length, 1)}
-                          className="px-4 py-16 text-center text-muted-foreground"
-                        >
-                          {i18n.t("previewPanel.deployment.database.noTableData")}
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3 text-xs text-muted-foreground">
-                <div className="flex items-center gap-2">
-                  <span>
-                    {i18n.t("previewPanel.deployment.database.rows", {
-                      count: rowsPage.total,
-                    })}
-                  </span>
-                  <span className="size-1 rounded-full bg-slate-300" />
-                  <span>
-                    {i18n.t("previewPanel.deployment.database.rowsPerPage", {
-                      count: rowsPage.pageSize,
-                    })}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 text-xs"
-                    disabled={rowsPage.page <= 1}
-                    onClick={() =>
-                      setPage((current) => Math.max(1, current - 1))
-                    }
-                  >
-                    <ChevronLeft className="size-4" />
-                    {i18n.t("previewPanel.deployment.database.previousPage")}
-                  </Button>
-                  <span>
-                    {i18n.t("previewPanel.deployment.database.pageIndicator", {
-                      page: rowsPage.page,
-                      total: rowsPage.totalPages,
-                    })}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 text-xs"
-                    disabled={rowsPage.page >= rowsPage.totalPages}
-                    onClick={() => setPage((current) => current + 1)}
-                  >
-                    {i18n.t("previewPanel.deployment.database.nextPage")}
-                    <ChevronRight className="size-4" />
-                  </Button>
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="px-4 py-20 text-center text-sm text-muted-foreground">
-              {databaseLoading
-                ? i18n.t("previewPanel.deployment.database.connecting")
-                : i18n.t("previewPanel.deployment.database.selectTableHint")}
-            </div>
-          )}
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="border-b border-border px-4 py-3">
-          <div className="text-sm font-semibold text-foreground">
-            {panelMode === "settings"
-              ? i18n.t("previewPanel.deployment.database.connectionInfo")
-              : panelMode === "insert"
-                ? i18n.t("previewPanel.deployment.database.newRecord")
-                : i18n.t("previewPanel.deployment.database.recordDetail")}
-          </div>
-          <div className="mt-1 text-xs text-muted-foreground">
-            {panelMode === "settings"
-              ? i18n.t("previewPanel.deployment.database.canCopyToClient")
-              : activeTable
-                ? `${activeTable.schema}.${activeTable.name}`
-                : i18n.t("previewPanel.deployment.database.waitSelectTable")}
-          </div>
-        </div>
-
-        <div className="space-y-4 p-4">
-          {panelMode === "settings" && databaseConnection ? (
-            <>
-              <div className="grid gap-3">
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.database.connectionUrl")}
-                  value={
-                    databaseConnection.publicConnectionUrl ||
-                    databaseConnection.connectionUrl
-                  }
-                  copied={copiedField === "url"}
-                  onCopy={() =>
-                    void handleCopy(
-                      "url",
-                      databaseConnection.publicConnectionUrl ||
-                        databaseConnection.connectionUrl,
-                    )
-                  }
-                />
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.database.host")}
-                  value={databaseConnection.host}
-                  copied={copiedField === "host"}
-                  onCopy={() =>
-                    void handleCopy("host", databaseConnection.host)
-                  }
-                />
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.database.port")}
-                  value={databaseConnection.port}
-                  copied={copiedField === "port"}
-                  onCopy={() =>
-                    void handleCopy("port", databaseConnection.port)
-                  }
-                />
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.database.username")}
-                  value={databaseConnection.username}
-                  copied={copiedField === "username"}
-                  onCopy={() =>
-                    void handleCopy(
-                      "username",
-                      databaseConnection.username,
-                    )
-                  }
-                />
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.database.password")}
-                  value={databaseConnection.password}
-                  copied={copiedField === "password"}
-                  onCopy={() =>
-                    void handleCopy(
-                      "password",
-                      databaseConnection.password,
-                    )
-                  }
-                  sensitive
-                />
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.database.databaseName")}
-                  value={databaseConnection.database}
-                  copied={copiedField === "database"}
-                  onCopy={() =>
-                    void handleCopy(
-                      "database",
-                      databaseConnection.database,
-                    )
-                  }
-                />
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-2">
-                <DeploymentMiniStatus
-                  label={i18n.t("previewPanel.deployment.database.databaseStatus")}
-                  value={databaseInfo?.latestDeploymentStatus || "UNKNOWN"}
-                />
-                <DeploymentMiniStatus
-                  label={i18n.t("previewPanel.deployment.database.connectionMode")}
-                  value={databaseConnection.sslMode.toUpperCase()}
-                />
-                <DeploymentMiniStatus
-                  label={i18n.t("previewPanel.deployment.database.volumeLabel")}
-                  value={
-                    databaseInfo?.volumeName ||
-                    i18n.t("previewPanel.deployment.database.mounted")
-                  }
-                />
-                <DeploymentMiniStatus
-                  label={i18n.t("previewPanel.deployment.database.appDeployment")}
-                  value={
-                    info?.configured
-                      ? statusMeta.label
-                      : i18n.t(
-                          "previewPanel.deployment.database.deploymentPreparing",
-                        )
-                  }
-                />
-              </div>
-            </>
-          ) : rowsPage ? (
-            <>
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-sm font-medium text-foreground">
-                  {panelMode === "insert"
-                    ? i18n.t("previewPanel.deployment.database.prepareInsert")
-                    : i18n.t("previewPanel.deployment.database.selectedRecord")}
-                </div>
-                {panelMode !== "settings" ? (
+          <div className="space-y-4 p-4">
+            {rowsPage ? (
+              <>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm font-medium text-foreground">
+                    {panelMode === "insert"
+                      ? i18n.t("previewPanel.deployment.database.prepareInsert")
+                      : i18n.t("previewPanel.deployment.database.selectedRecord")}
+                  </div>
                   <div className="flex items-center gap-2">
                     {panelMode === "record" ? (
                       <Button
@@ -4350,62 +4245,152 @@ function DeploymentDatabaseSection({
                       </Button>
                     ) : null}
                   </div>
-                ) : null}
+                </div>
+
+                <div className="space-y-3">
+                  {editorColumns.map((column) => (
+                    <DatabaseFieldEditor
+                      key={column.name}
+                      column={column}
+                      value={selectedRowValues[column.name] || ""}
+                      disabled={
+                        panelMode === "record" ? column.isPrimaryKey : false
+                      }
+                      onChange={(nextValue) =>
+                        setSelectedRowValues((current) => ({
+                          ...current,
+                          [column.name]: nextValue,
+                        }))
+                      }
+                    />
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-2 pt-2">
+                  <Button
+                    size="sm"
+                    className="h-8 text-xs"
+                    disabled={Boolean(actionLoading)}
+                    onClick={() => void handleSave()}
+                  >
+                    {actionLoading === "insert" || actionLoading === "update" ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : null}
+                    {panelMode === "insert"
+                      ? i18n.t("previewPanel.deployment.database.writeRecord")
+                      : i18n.t("previewPanel.deployment.database.saveChanges")}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <div className="py-10 text-center text-sm text-muted-foreground">
+                {databaseLoading
+                  ? i18n.t("previewPanel.deployment.database.preparingPanel")
+                  : i18n.t("previewPanel.deployment.database.waitPanelReady")}
+              </div>
+            )}
+          </div>
+        </section>
+        ) : null}
+      </div>
+
+      <Dialog
+        open={connectionDialogOpen}
+        onOpenChange={(open) => {
+          setConnectionDialogOpen(open);
+          if (!open) {
+            setConnectionSecretsVisible(false);
+          }
+        }}
+      >
+        <DialogContent className="max-w-3xl rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {i18n.t("previewPanel.deployment.database.manageConnectionTitle")}
+            </DialogTitle>
+            <DialogDescription>
+              {i18n.t(
+                "previewPanel.deployment.database.manageConnectionDescription",
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          {databaseConnection ? (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-950">
+                {i18n.t("previewPanel.deployment.database.secretWarning")}
               </div>
 
-              <div className="space-y-3">
-                {editorColumns.map((column) => (
-                  <DatabaseFieldEditor
-                    key={column.name}
-                    column={column}
-                    value={selectedRowValues[column.name] || ""}
-                    disabled={
-                      panelMode === "record" ? column.isPrimaryKey : false
-                    }
-                    onChange={(nextValue) =>
-                      setSelectedRowValues((current) => ({
-                        ...current,
-                        [column.name]: nextValue,
-                      }))
-                    }
+              <div className="rounded-xl border border-border/70 bg-card p-4">
+                <div className="space-y-4">
+                  <ConnectionDialogField
+                  label={i18n.t("previewPanel.deployment.database.connectionUrl")}
+                  value={
+                    databaseConnection.publicConnectionUrl ||
+                    databaseConnection.connectionUrl
+                  }
+                  copied={copiedField === "url"}
+                  onCopy={() =>
+                    void handleCopy(
+                      "url",
+                      databaseConnection.publicConnectionUrl ||
+                        databaseConnection.connectionUrl,
+                    )
+                  }
+                  sensitive
+                  revealed={connectionSecretsVisible}
                   />
-                ))}
+                  <ConnectionDialogField
+                  label={i18n.t("previewPanel.deployment.database.host")}
+                  value={databaseConnection.host}
+                  copied={copiedField === "host"}
+                  onCopy={() => void handleCopy("host", databaseConnection.host)}
+                  />
+                  <ConnectionDialogField
+                  label={i18n.t("previewPanel.deployment.database.port")}
+                  value={databaseConnection.port}
+                  copied={copiedField === "port"}
+                  onCopy={() => void handleCopy("port", databaseConnection.port)}
+                  />
+                  <ConnectionDialogField
+                  label={i18n.t("previewPanel.deployment.database.username")}
+                  value={databaseConnection.username}
+                  copied={copiedField === "username"}
+                  onCopy={() =>
+                    void handleCopy("username", databaseConnection.username)
+                  }
+                  />
+                  <ConnectionDialogField
+                  label={i18n.t("previewPanel.deployment.database.password")}
+                  value={databaseConnection.password}
+                  copied={copiedField === "password"}
+                  onCopy={() =>
+                    void handleCopy("password", databaseConnection.password)
+                  }
+                  sensitive
+                  revealed={connectionSecretsVisible}
+                  onToggleSensitive={() =>
+                    setConnectionSecretsVisible((current) => !current)
+                  }
+                />
+                  <ConnectionDialogField
+                  label={i18n.t("previewPanel.deployment.database.databaseName")}
+                  value={databaseConnection.database}
+                  copied={copiedField === "database"}
+                  onCopy={() =>
+                    void handleCopy("database", databaseConnection.database)
+                  }
+                  />
+                </div>
               </div>
-
-              <div className="flex items-center gap-2 pt-2">
-                <Button
-                  size="sm"
-                  className="h-8 text-xs"
-                  disabled={Boolean(actionLoading)}
-                  onClick={() => void handleSave()}
-                >
-                  {actionLoading === "insert" || actionLoading === "update" ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : null}
-                  {panelMode === "insert"
-                    ? i18n.t("previewPanel.deployment.database.writeRecord")
-                    : i18n.t("previewPanel.deployment.database.saveChanges")}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 text-xs"
-                  onClick={() => setPanelMode("settings")}
-                >
-                  {i18n.t("previewPanel.deployment.database.viewConnectionInfo")}
-                </Button>
-              </div>
-            </>
+            </div>
           ) : (
-            <div className="py-10 text-center text-sm text-muted-foreground">
-              {databaseLoading
-                ? i18n.t("previewPanel.deployment.database.preparingPanel")
-                : i18n.t("previewPanel.deployment.database.waitPanelReady")}
+            <div className="py-8 text-center text-sm text-muted-foreground">
+              {i18n.t("previewPanel.deployment.database.waitPanelReady")}
             </div>
           )}
-        </div>
-      </section>
-      </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -4526,13 +4511,18 @@ function ConnectionInfoField({
   copied,
   onCopy,
   sensitive = false,
+  revealed = true,
 }: {
   label: string;
   value: string;
   copied: boolean;
   onCopy: () => void;
   sensitive?: boolean;
+  revealed?: boolean;
 }) {
+  const displayValue =
+    sensitive && !revealed ? "••••••••••••••••" : value;
+
   return (
     <div className="rounded-md border border-border/70 bg-muted/30 p-3">
       <div className="flex items-center justify-between gap-3">
@@ -4552,7 +4542,71 @@ function ConnectionInfoField({
         </Button>
       </div>
       <div className="mt-2 break-all font-mono text-xs text-foreground">
-        {sensitive ? value : value}
+        {displayValue}
+      </div>
+    </div>
+  );
+}
+
+function ConnectionDialogField({
+  label,
+  value,
+  copied,
+  onCopy,
+  sensitive = false,
+  revealed = true,
+  onToggleSensitive,
+}: {
+  label: string;
+  value: string;
+  copied: boolean;
+  onCopy: () => void;
+  sensitive?: boolean;
+  revealed?: boolean;
+  onToggleSensitive?: () => void;
+}) {
+  const displayValue =
+    sensitive && !revealed ? "••••••••••••••••" : value;
+
+  return (
+    <div className="space-y-2">
+      <div className="text-sm font-medium text-foreground">{label}</div>
+      <div className="flex items-center gap-2 rounded-lg border border-border/70 bg-muted/30 px-3 py-3">
+        <div className="min-w-0 flex-1 break-all font-mono text-xs text-foreground">
+          {displayValue}
+        </div>
+        {sensitive && onToggleSensitive ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8 shrink-0"
+            onClick={onToggleSensitive}
+            aria-label={
+              revealed
+                ? i18n.t("previewPanel.deployment.database.hideSensitive")
+                : i18n.t("previewPanel.deployment.database.showSensitive")
+            }
+          >
+            {revealed ? (
+              <EyeOff className="size-4" />
+            ) : (
+              <Eye className="size-4" />
+            )}
+          </Button>
+        ) : null}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-8 shrink-0"
+          onClick={onCopy}
+          aria-label={
+            copied
+              ? i18n.t("previewPanel.deployment.database.copied")
+              : i18n.t("previewPanel.deployment.database.copy")
+          }
+        >
+          <Copy className="size-4" />
+        </Button>
       </div>
     </div>
   );

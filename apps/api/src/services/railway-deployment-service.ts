@@ -124,6 +124,10 @@ export type RailwayDeploymentPanelData = {
   latestStatus?: RailwayDeploymentStatus;
   latestUrl?: string;
   latestStaticUrl?: string;
+  publicUrl?: string;
+  publicDomain?: string;
+  domainStatus?: string;
+  domainStatusMessage?: string;
   activeDeploymentPending: boolean;
   domains: string[];
   deployments: RailwayDeploymentListItem[];
@@ -147,6 +151,10 @@ type RailwayBinding = {
   projectName?: string;
   environmentName?: string;
   serviceName?: string;
+  publicUrl?: string;
+  publicDomain?: string;
+  domainStatus?: string;
+  domainStatusMessage?: string;
   lastDeploymentId?: string;
 };
 
@@ -283,6 +291,14 @@ function firstText(...values: unknown[]) {
   return '';
 }
 
+function normalizeDomainStatusMessage(status: unknown, message: unknown) {
+  const normalizedStatus = asText(status).toLowerCase();
+  if (normalizedStatus === 'active') {
+    return 'oneceo.space 默认域名已生效';
+  }
+  return asText(message) || undefined;
+}
+
 function toIso(value: unknown): string | undefined {
   if (!value) return undefined;
   if (value instanceof Date) return value.toISOString();
@@ -377,6 +393,14 @@ function resolveBinding(metadata: Record<string, unknown>): {
         railway.serviceName,
         metadata.railwayServiceName,
         process.env.RAILWAY_SERVICE_NAME
+      ),
+      publicUrl: firstText(platformDeployment.publicUrl, railway.publicUrl, metadata.publicUrl),
+      publicDomain: firstText(platformDeployment.publicDomain, railway.publicDomain, metadata.publicDomain),
+      domainStatus: firstText(platformDeployment.domainStatus, railway.domainStatus, metadata.domainStatus),
+      domainStatusMessage: firstText(
+        platformDeployment.domainStatusMessage,
+        railway.domainStatusMessage,
+        metadata.domainStatusMessage
       ),
       lastDeploymentId: firstText(railway.lastDeploymentId, metadata.railwayLastDeploymentId),
     },
@@ -737,17 +761,22 @@ export async function getRailwayDeploymentPanel(
   }
 
   const activeStatus = asText(detail?.status) || selectedDeployment?.status || '';
-  const latestUrl = toPublicUrl(detail?.url);
-  const latestStaticUrl = toPublicUrl(detail?.staticUrl);
+  const providerLatestUrl = toPublicUrl(detail?.url);
+  const providerLatestStaticUrl = toPublicUrl(detail?.staticUrl);
+  const canonicalPublicUrl =
+    toPublicUrl(binding.publicUrl) ||
+    toPublicUrl(binding.publicDomain);
   const canDeploy = Boolean(binding.serviceId);
   const missingForDeploy = canDeploy ? [] : ['serviceId'];
-  const domains = [
+  const providerDomains = [
     ...(domainsResult.domains?.serviceDomains || []),
     ...(domainsResult.domains?.customDomains || []),
   ]
     .map((entry) => toPublicUrl(entry.domain) || '')
     .filter(Boolean);
-  const resolvedStaticUrl = latestStaticUrl || domains[0] || undefined;
+  const domains = canonicalPublicUrl ? [canonicalPublicUrl] : providerDomains;
+  const latestUrl = canonicalPublicUrl || providerLatestUrl;
+  const resolvedStaticUrl = canonicalPublicUrl || providerLatestStaticUrl || providerDomains[0] || undefined;
 
   return {
     configured: true,
@@ -774,6 +803,10 @@ export async function getRailwayDeploymentPanel(
     latestStatus: activeStatus || undefined,
     latestUrl: latestUrl || undefined,
     latestStaticUrl: resolvedStaticUrl,
+    publicUrl: canonicalPublicUrl || undefined,
+    publicDomain: binding.publicDomain || undefined,
+    domainStatus: binding.domainStatus || undefined,
+    domainStatusMessage: normalizeDomainStatusMessage(binding.domainStatus, binding.domainStatusMessage),
     activeDeploymentPending: DEPLOYMENT_TRANSIENT_STATUSES.has(activeStatus),
     domains,
     deployments: deployments.map((item) =>

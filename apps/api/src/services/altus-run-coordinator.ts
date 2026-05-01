@@ -442,6 +442,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
     let cacheCreationTokens = 0;
     let billingTargetKey = '';
     let creditsConsumed = 0;
+    let pricingSnapshot: Record<string, unknown> | undefined;
 
     try {
 
@@ -479,7 +480,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
         throw new Error(`billing_pricing_missing:${billingTargetKey}`);
       }
       const cacheRatio = await pricingService.getCacheRatiosForPricing(pricing);
-      const pricingSnapshot = {
+      pricingSnapshot = {
         ...pricing,
         billingTarget: billingTargetKey,
         actualModel: input.model,
@@ -513,29 +514,36 @@ private async chargeForModelCall(state: AltusRunState, input: {
         },
       });
 
-      if (result.success) {
+      const isBilled = result.success;
+      if (isBilled) {
         console.log(`[Billing] 扣费成功: ${creditsConsumed} 积分, 余额: ${result.balanceAfter}, run: ${runId}`);
-
-        // 记录 token 使用日志
-        await billingService.logTokenUsage({
-          userId,
-          sessionId,
-          runId,
-          model: input.model,
-          promptTokens,
-          cachedPromptTokens,
-          nonCachedPromptTokens,
-          cacheCreationTokens,
-          completionTokens,
-          totalTokens: promptTokens + completionTokens,
-          creditsConsumed,
-          pricingSnapshot,
-          metadataJson: {
-            billingTarget: billingTargetKey,
-            runtimeSnapshot: state.input.runtimeSnapshot || null,
-          },
-        });
       } else {
+        console.error(`[Billing] 扣费失败（余额不足），仍记录 token 使用日志: ${creditsConsumed} 积分, run: ${runId}`);
+      }
+
+      // 无论扣费成功与否，都记录 token 使用日志（止血：避免漏费无记录）
+      await billingService.logTokenUsage({
+        userId,
+        sessionId,
+        runId,
+        model: input.model,
+        promptTokens,
+        cachedPromptTokens,
+        nonCachedPromptTokens,
+        cacheCreationTokens,
+        completionTokens,
+        totalTokens: promptTokens + completionTokens,
+        creditsConsumed,
+        pricingSnapshot,
+        metadataJson: {
+          billingTarget: billingTargetKey,
+          runtimeSnapshot: state.input.runtimeSnapshot || null,
+          billed: isBilled,
+          ...(isBilled ? {} : { unbilledReason: 'insufficient_credits' }),
+        },
+      });
+
+      if (!isBilled) {
         throw new Error(`insufficient_credits: 用户 ${userId} 余额不足，无法继续运行`);
       }
     } catch (error) {
@@ -564,12 +572,55 @@ private async chargeForModelCall(state: AltusRunState, input: {
           });
           if (retryResult.success) {
             console.info('[Billing] 计费重试成功');
+            // 重试成功，记录 token 使用日志
+            await billingService.logTokenUsage({
+              userId,
+              sessionId,
+              runId,
+              model: input.model,
+              promptTokens: promptTokens!,
+              cachedPromptTokens,
+              nonCachedPromptTokens: Math.max(0, promptTokens! - cachedPromptTokens - cacheCreationTokens),
+              cacheCreationTokens,
+              completionTokens: completionTokens!,
+              totalTokens: promptTokens! + completionTokens!,
+              creditsConsumed,
+              pricingSnapshot,
+              metadataJson: {
+                billingTarget: billingTargetKey,
+                runtimeSnapshot: state.input.runtimeSnapshot || null,
+                billed: true,
+                retry: true,
+              },
+            });
           } else {
             console.error('[Billing] 计费重试返回余额不足，用户可能漏费:', {
               userId,
               creditsConsumed,
               model: billingTargetKey,
               sessionId: state.input.sessionId,
+            });
+            // 重试也余额不足，仍记录 token 使用日志（止血）
+            await billingService.logTokenUsage({
+              userId,
+              sessionId,
+              runId,
+              model: input.model,
+              promptTokens: promptTokens!,
+              cachedPromptTokens,
+              nonCachedPromptTokens: Math.max(0, promptTokens! - cachedPromptTokens - cacheCreationTokens),
+              cacheCreationTokens,
+              completionTokens: completionTokens!,
+              totalTokens: promptTokens! + completionTokens!,
+              creditsConsumed,
+              pricingSnapshot,
+              metadataJson: {
+                billingTarget: billingTargetKey,
+                runtimeSnapshot: state.input.runtimeSnapshot || null,
+                billed: false,
+                unbilledReason: 'insufficient_credits',
+                retryFailed: true,
+              },
             });
           }
         } catch (retryError) {
@@ -581,6 +632,31 @@ private async chargeForModelCall(state: AltusRunState, input: {
             sessionId: state.input.sessionId,
             originalError: error instanceof Error ? error.message : String(error),
             retryError: retryError instanceof Error ? retryError.message : String(retryError),
+          });
+          // 重试异常，仍记录 token 使用日志（止血）
+          await billingService.logTokenUsage({
+            userId,
+            sessionId,
+            runId,
+            model: input.model,
+            promptTokens: promptTokens!,
+            cachedPromptTokens,
+            nonCachedPromptTokens: Math.max(0, promptTokens! - cachedPromptTokens - cacheCreationTokens),
+            cacheCreationTokens,
+            completionTokens: completionTokens!,
+            totalTokens: promptTokens! + completionTokens!,
+            creditsConsumed,
+            pricingSnapshot,
+            metadataJson: {
+              billingTarget: billingTargetKey,
+              runtimeSnapshot: state.input.runtimeSnapshot || null,
+              billed: false,
+              unbilledReason: 'deduct_retry_error',
+              retryFailed: true,
+              retryError: retryError instanceof Error ? retryError.message : String(retryError),
+            },
+          }).catch(logErr => {
+            console.error('[Billing] 重试路径 token 日志写入失败:', logErr instanceof Error ? logErr.message : String(logErr));
           });
         }
       } else {
@@ -1919,6 +1995,26 @@ private async chargeForModelCall(state: AltusRunState, input: {
     for (let round = 0; round < maxToolRounds; round += 1) {
       if (signal.aborted) {
         throw new Error('managed_run_aborted');
+      }
+
+      // 每轮循环前余额预检（止损：避免余额耗尽后白调 LLM）
+      const loopUserId = state.input.userId;
+      if (loopUserId) {
+        const hasEnough = await billingService.hasEnoughCredits(loopUserId, 0);
+        if (!hasEnough) {
+          const credits = await billingService.getUserCredits(loopUserId);
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            loopUserId,
+            'run_status',
+            {
+              status: 'failed',
+              content: `积分不足，无法继续运行。当前余额: ${credits?.balance || 0} 积分`,
+            }
+          );
+          throw new Error(`insufficient_credits: 积分不足，无法继续运行`);
+        }
       }
 
       const currentRound = round + 1;

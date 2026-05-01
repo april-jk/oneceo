@@ -78,7 +78,9 @@ function deploymentStatusCategory(input: {
   const bindingState = asText(input.bindingState).toLowerCase();
   const latestStatus = asText(input.latestStatus).toUpperCase();
 
-  if (input.activeDeploymentPending || bindingState === 'provisioning') return 'pending';
+  if (input.activeDeploymentPending || bindingState === 'provisioning' || bindingState === 'public_settling') {
+    return 'pending';
+  }
   if (bindingState === 'repair_required' || bindingState === 'provider_error') return 'failed';
   if (
     latestStatus.includes('FAIL') ||

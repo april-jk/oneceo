@@ -347,7 +347,7 @@ export type TaskCreationDeploymentResourceBinding = {
   projectKey: string;
   isolationMode: "session" | "default";
   projectModel: "per_user";
-  environmentModel: "per_session";
+  environmentModel: "per_user_project" | "per_session";
   tokenKind: "project";
   tokenScope: "railway_project_environment";
   tokenManagedBy: "oneceo_platform";
@@ -454,15 +454,52 @@ export type TaskCreationDatabaseColumn = {
 export type TaskCreationDatabaseInfo = {
   configured: boolean;
   provider: "railway_postgres";
-  serviceId: string;
-  serviceName: string;
+  status?: "not_configured" | "ready" | "error";
+  serviceId?: string;
+  serviceName?: string;
   volumeId?: string;
   volumeName?: string;
   latestDeploymentStatus?: string;
   latestDeploymentAt?: string;
-  connection: TaskCreationDatabaseConnectionInfo;
+  connection?: TaskCreationDatabaseConnectionInfo;
   tables: TaskCreationDatabaseTable[];
 };
+
+export type TaskCreationStorageStatus = {
+  configured: boolean;
+  provider: "railway_bucket";
+  status: "not_configured" | "ready" | "error";
+  projectKey: string;
+  bucket?: {
+    id: string;
+    name: string;
+    endpoint: string;
+    publicUrl?: string;
+    accessKeyId: string;
+    secretAccessKey?: string;
+  };
+  applicationVariables?: {
+    wired: boolean;
+    keys: string[];
+  };
+  files?: Array<{
+    key: string;
+    sizeBytes?: number;
+    lastModifiedAt?: string;
+  }>;
+  accessModel?: string;
+  lastCheckedAt?: string;
+};
+
+export type TaskCreationStorageUploadTarget = {
+  key: string;
+  method: "POST";
+  url: string;
+  fields: Record<string, string>;
+  expiresInSeconds: number;
+};
+
+export const TASK_CREATION_STORAGE_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
 
 export type TaskCreationDatabaseRowLocator = {
   ctid?: string;
@@ -1321,9 +1358,141 @@ export async function getTaskCreationDatabaseInfo(
   sessionId: string
 ): Promise<TaskCreationDatabaseInfo | null> {
   const safeSessionId = encodeURIComponent(sessionId);
-  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/database`;
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/database/status`;
   const result = await fetchJson<{ data?: TaskCreationDatabaseInfo }>(url);
   return result?.data || null;
+}
+
+export async function ensureTaskCreationDatabase(
+  sessionId: string
+): Promise<TaskCreationDatabaseInfo | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/database/ensure`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({}),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationDatabaseInfo };
+  return result?.data || null;
+}
+
+export async function getTaskCreationStorageStatus(
+  sessionId: string,
+  options?: { revealSecrets?: boolean }
+): Promise<TaskCreationStorageStatus | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const params = new URLSearchParams();
+  if (options?.revealSecrets) params.set("reveal", "1");
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/storage/status${suffix}`;
+  const result = await fetchJson<{ data?: TaskCreationStorageStatus }>(url);
+  return result?.data || null;
+}
+
+export async function ensureTaskCreationStorage(
+  sessionId: string,
+  options?: { revealSecrets?: boolean }
+): Promise<TaskCreationStorageStatus | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/storage/ensure`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      revealSecrets: Boolean(options?.revealSecrets),
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationStorageStatus };
+  return result?.data || null;
+}
+
+export async function createTaskCreationStorageUploadTarget(
+  sessionId: string,
+  file: File
+): Promise<TaskCreationStorageUploadTarget> {
+  if (file.size > TASK_CREATION_STORAGE_UPLOAD_MAX_BYTES) {
+    throw new Error(`file too large: max ${Math.floor(TASK_CREATION_STORAGE_UPLOAD_MAX_BYTES / (1024 * 1024))}MB`);
+  }
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/storage/upload-target`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      fileName: file.name,
+      fileSize: file.size,
+      contentType: file.type || "application/octet-stream",
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationStorageUploadTarget };
+  if (!result?.data) {
+    throw new Error("upload target empty");
+  }
+  return result.data;
+}
+
+export async function uploadTaskCreationStorageFile(
+  target: TaskCreationStorageUploadTarget,
+  file: File
+): Promise<void> {
+  const formData = new FormData();
+  Object.entries(target.fields || {}).forEach(([key, value]) => {
+    formData.append(key, value);
+  });
+  formData.append("file", file, file.name);
+
+  await fetch(target.url, {
+    method: target.method,
+    body: formData,
+    mode: "no-cors",
+  }).catch((error) => {
+    throw error instanceof Error ? error : new Error("network error");
+  });
+}
+
+export async function deleteTaskCreationStorageFile(
+  sessionId: string,
+  key: string
+): Promise<TaskCreationStorageStatus | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/storage/files`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({ key }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationStorageStatus };
+  return result?.data || null;
+}
+
+export function getTaskCreationStorageFileDownloadUrl(
+  sessionId: string,
+  key: string
+): string {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const params = new URLSearchParams({ key });
+  return `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/storage/files/download?${params.toString()}`;
 }
 
 export async function getTaskCreationDatabaseRows(

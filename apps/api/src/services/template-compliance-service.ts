@@ -205,13 +205,6 @@ function inferTransport(packageJson: Record<string, unknown>): string {
   return 'http';
 }
 
-function inferDatabaseFeature(packageJson: Record<string, unknown>): 'railway_postgres' | false {
-  if (hasDependency(packageJson, 'pg') || hasDependency(packageJson, 'drizzle-orm')) {
-    return 'railway_postgres';
-  }
-  return false;
-}
-
 function inferBuildOutputDir(packageJson: Record<string, unknown>): string {
   const scripts = asObject(packageJson.scripts);
   const buildCommand = asText(scripts.build);
@@ -332,7 +325,6 @@ function buildDefaultManifest(input: {
   healthcheckPath: string;
 }): OneCeoDeploymentManifest {
   const scripts = asObject(input.packageJson.scripts);
-  const database = inferDatabaseFeature(input.packageJson);
 
   return {
     templateVersion: '1.0.0',
@@ -352,7 +344,7 @@ function buildDefaultManifest(input: {
     features: {
       analytics: true,
       userTracking: true,
-      database,
+      database: false,
       auth: 'optional',
       objectStorage: false,
     },

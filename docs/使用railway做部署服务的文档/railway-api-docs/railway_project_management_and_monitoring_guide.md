@@ -390,12 +390,17 @@ mutation($input: CustomDomainCreateInput!) {
   customDomainCreate(input: $input) {
     id
     domain
-    cnameTarget
     status {
+      verified
+      certificateStatus
+      certificateErrorMessage
       dnsRecords {
-        type
-        name
-        value
+        recordType
+        fqdn
+        hostlabel
+        requiredValue
+        currentValue
+        status
       }
     }
   }
@@ -414,7 +419,7 @@ mutation($input: CustomDomainCreateInput!) {
 }
 ```
 
-创建后，返回的 `cnameTarget` 即为客户需要在其 DNS 服务商处配置的 CNAME 目标值。
+创建后，`status.dnsRecords[].requiredValue` 即为客户需要在其 DNS 服务商处配置的目标值。
 
 ### 5.3 查询域名列表 `domains`
 
@@ -429,10 +434,16 @@ query($projectId: String!, $serviceId: String!, $environmentId: String!) {
       id
       domain
       status {
+        verified
+        certificateStatus
+        certificateErrorMessage
         dnsRecords {
-          type
-          name
-          value
+          recordType
+          fqdn
+          hostlabel
+          requiredValue
+          currentValue
+          status
         }
       }
     }

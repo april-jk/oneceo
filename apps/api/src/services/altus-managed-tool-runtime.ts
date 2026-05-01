@@ -16,6 +16,10 @@ import {
   type AltusManagedDeploymentToolName,
 } from './altus-managed-deployment-tool-service';
 import {
+  altusManagedResourceToolService,
+  type AltusManagedResourceToolName,
+} from './altus-managed-resource-tool-service';
+import {
   asText,
   buildManagedMcpToolName,
   type ManagedCompletionAttachment,
@@ -336,6 +340,16 @@ function isManagedDeploymentToolName(value: string): value is AltusManagedDeploy
   );
 }
 
+function isManagedResourceToolName(value: string): value is AltusManagedResourceToolName {
+  return (
+    value === 'ensure_project_database' ||
+    value === 'get_project_database_status' ||
+    value === 'inspect_project_database_schema' ||
+    value === 'ensure_project_storage_bucket' ||
+    value === 'get_project_storage_status'
+  );
+}
+
 function normalizeCommandForMatch(value: string) {
   return asText(value).toLowerCase().replace(/\s+/g, ' ');
 }
@@ -405,6 +419,57 @@ function inferServicePort(command: string) {
     return 5173;
   }
   return 0;
+}
+
+function isLegacyNotionMcpShellCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('@notionhq/mcp-cli') ||
+    normalized.includes('notion-mcp') ||
+    normalized.includes('mcp.notion.com') ||
+    normalized.includes('notion mcp cli')
+  );
+}
+
+function isLegacyFigmaMcpShellCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('figma-mcp') ||
+    normalized.includes('figma mcp') ||
+    normalized.includes('@composio/cli add') && normalized.includes('figma') ||
+    normalized.includes('x-figma-token') ||
+    normalized.includes('figma_personal_access_token') ||
+    normalized.includes('figma access token')
+  );
+}
+
+function isLegacySupabaseMcpShellCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('supabase-mcp') ||
+    normalized.includes('supabase mcp') ||
+    (normalized.includes('@composio/cli add') && normalized.includes('supabase')) ||
+    normalized.includes('mcp.supabase.com') ||
+    normalized.includes('supabase_access_token') ||
+    normalized.includes('supabase personal access token')
+  );
+}
+
+function isLegacySlackMcpShellCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('slack-mcp') ||
+    normalized.includes('slack mcp') ||
+    (normalized.includes('@composio/cli add') && normalized.includes('slack')) ||
+    normalized.includes('mcp.slack.com') ||
+    normalized.includes('slack_access_token') ||
+    normalized.includes('slack bot token') ||
+    normalized.includes('slack user token')
+  );
 }
 
 function extractLeadingCdTarget(value: string) {
@@ -477,6 +542,40 @@ export class AltusManagedToolRuntime {
         ]
       >
     );
+  }
+
+  private buildRawMcpToolMap() {
+    const providers = Array.isArray(this.input.mcpProviders) ? this.input.mcpProviders : [];
+    const singletons = new Map<
+      string,
+      { providerId: string; toolName: string; displayName: string; connectorKey: string | null }
+    >();
+    const duplicates = new Set<string>();
+
+    for (const provider of providers) {
+      for (const tool of Array.isArray(provider.tools) ? provider.tools : []) {
+        const rawToolName = asText(tool.toolName);
+        if (!rawToolName) {
+          continue;
+        }
+        if (duplicates.has(rawToolName)) {
+          continue;
+        }
+        if (singletons.has(rawToolName)) {
+          singletons.delete(rawToolName);
+          duplicates.add(rawToolName);
+          continue;
+        }
+        singletons.set(rawToolName, {
+          providerId: provider.providerId,
+          toolName: rawToolName,
+          displayName: tool.title || rawToolName,
+          connectorKey: asText(provider.connectorKey) || null,
+        });
+      }
+    }
+
+    return singletons;
   }
 
   private normalizeMcpFailureMessage(input: {
@@ -816,6 +915,15 @@ export class AltusManagedToolRuntime {
   private findAutoAttachableSkillsForTool(toolName: string) {
     const normalizedToolName = asText(toolName).toLowerCase();
     if (!normalizedToolName) return [];
+    const toolNameCandidates = new Set([normalizedToolName]);
+    const managedMcpMatch = normalizedToolName.match(/^mcp__(.+)__[a-f0-9]{12}$/);
+    if (managedMcpMatch?.[1]) {
+      toolNameCandidates.add(managedMcpMatch[1]);
+    }
+    const managedMcpTool = this.buildMcpToolMap().get(normalizedToolName);
+    if (managedMcpTool?.toolName) {
+      toolNameCandidates.add(asText(managedMcpTool.toolName).toLowerCase());
+    }
     const activeKeys = new Set(
       this.input.activeSkills.map((item) => `${item.sourceType}:${item.skillId}:${item.revisionId}`)
     );
@@ -823,7 +931,9 @@ export class AltusManagedToolRuntime {
     return availableSkills.filter((skill) => {
       const governance = skill.governance;
       if (!governance?.autoActivation?.enabled) return false;
-      if (!governance.autoActivation.toolNames.includes(normalizedToolName)) return false;
+      if (!governance.autoActivation.toolNames.some((name) => toolNameCandidates.has(asText(name).toLowerCase()))) {
+        return false;
+      }
       const key = `${skill.sourceType}:${skill.skillId}:${skill.revisionId}`;
       return !activeKeys.has(key);
     });
@@ -975,7 +1085,8 @@ export class AltusManagedToolRuntime {
       };
     }
 
-    const mcpTool = this.buildMcpToolMap().get(toolName);
+    const mcpTool =
+      this.buildMcpToolMap().get(toolName) || this.buildRawMcpToolMap().get(toolName);
     if (mcpTool) {
       if (mcpTool.connectorKey) {
         const activeGuide = await connectorGuideService.getActiveGuideForConnector(
@@ -1039,6 +1150,54 @@ export class AltusManagedToolRuntime {
         throw new Error('shell_execute_missing_command');
       }
       const runMode = normalizeShellRunMode(rawArgs.runMode);
+      if (
+        isLegacyNotionMcpShellCommand(command) &&
+        (await connectorGuideService.getActiveGuideForConnector(this.input.sessionId, 'notion'))
+      ) {
+        throw new Error(
+          [
+            'notion_legacy_mcp_shell_blocked:当前会话的 Notion 已通过 oneceo API broker + Composio Tool Router 挂载。',
+            '禁止在 sandbox 内安装或运行 @notionhq/mcp-cli / notion-mcp / mcp.notion.com。',
+            '请先调用 load_connector_guide(connectorKey=notion)，然后使用已挂载的 notion__COMPOSIO_SEARCH_TOOLS、notion__COMPOSIO_GET_TOOL_SCHEMAS、notion__COMPOSIO_MULTI_EXECUTE_TOOL。',
+          ].join('\n')
+        );
+      }
+      if (
+        isLegacyFigmaMcpShellCommand(command) &&
+        (await connectorGuideService.getActiveGuideForConnector(this.input.sessionId, 'figma'))
+      ) {
+        throw new Error(
+          [
+            'figma_legacy_mcp_shell_blocked: Figma is attached through oneceo API broker + Composio Tool Router.',
+            'Do not install or run local Figma MCP tooling, and do not place Figma tokens in the sandbox.',
+            'Call load_connector_guide(connectorKey=figma), then use the attached figma__COMPOSIO_SEARCH_TOOLS and related Figma router tools.',
+          ].join('\n')
+        );
+      }
+      if (
+        isLegacySupabaseMcpShellCommand(command) &&
+        (await connectorGuideService.getActiveGuideForConnector(this.input.sessionId, 'supabase'))
+      ) {
+        throw new Error(
+          [
+            'supabase_legacy_mcp_shell_blocked: Supabase is attached through oneceo API broker + Composio Tool Router.',
+            'Do not install or run local Supabase MCP tooling, and do not place Supabase or Composio tokens in the sandbox.',
+            'Call load_connector_guide(connectorKey=supabase), then use the attached supabase__COMPOSIO_SEARCH_TOOLS and related Supabase router tools.',
+          ].join('\n')
+        );
+      }
+      if (
+        isLegacySlackMcpShellCommand(command) &&
+        (await connectorGuideService.getActiveGuideForConnector(this.input.sessionId, 'slack'))
+      ) {
+        throw new Error(
+          [
+            'slack_legacy_mcp_shell_blocked: Slack is attached through oneceo API broker + Composio Tool Router.',
+            'Do not install or run local Slack MCP tooling, and do not place Slack or Composio tokens in the sandbox.',
+            'Call load_connector_guide(connectorKey=slack), then use the attached slack__COMPOSIO_SEARCH_TOOLS and related Slack router tools.',
+          ].join('\n')
+        );
+      }
       if (
         this.hasActiveSkill('deployment-orchestrator') &&
         isLocalPreviewOrDevCommand(command)
@@ -1293,6 +1452,20 @@ export class AltusManagedToolRuntime {
         sandboxId: this.input.sandboxId,
         workspaceRoot: this.input.workspaceRoot,
         notes: asText(rawArgs.notes),
+      });
+      return {
+        type: 'result',
+        activatedSkills,
+        content: JSON.stringify(result),
+      };
+    }
+
+    if (isManagedResourceToolName(toolName)) {
+      const result = await altusManagedResourceToolService.execute({
+        action: toolName,
+        sessionId: this.input.sessionId,
+        userId: this.input.userId,
+        reason: asText(rawArgs.reason),
       });
       return {
         type: 'result',

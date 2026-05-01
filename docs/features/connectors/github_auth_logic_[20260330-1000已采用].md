@@ -69,3 +69,6 @@
 *(相关 Todo 将同步提取至 todos.md)*
 - [ ] 根据此文档重构 `ConnectorCenterPanel.tsx` 中针对 GitHub 的特殊渲染逻辑，隐藏不必要的 Profile 选单。
 - [ ] 确保 OAuth 回调逻辑能够无缝支持自动创建的默认 Profile。
+# 已被替换说明 [20260430-1356已替换]
+
+> 已被 `docs/features/connectors/github_composio_notion_style_mcp_oauth_doc_[20260430-1356已采用].md` 替换，本文档保留历史记录。

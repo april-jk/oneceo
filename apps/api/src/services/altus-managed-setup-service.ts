@@ -193,6 +193,15 @@ const ROOT_STACK_FILES = [
   'Cargo.toml',
   'pom.xml',
 ] as const;
+const COMPOSIO_BROKERED_RUNTIME_TRANSPORT = 'api_brokered_mcp';
+const COMPOSIO_BROKERED_CONNECTORS = new Set(['github', 'notion', 'slack', 'figma', 'supabase']);
+
+function isSnapshotRuntimeTransportSupported(binding: { connectorKey?: unknown; runtimeTransport?: unknown }) {
+  if (!COMPOSIO_BROKERED_CONNECTORS.has(asText(binding.connectorKey))) {
+    return true;
+  }
+  return asText(binding.runtimeTransport) === COMPOSIO_BROKERED_RUNTIME_TRANSPORT;
+}
 
 type WorkspaceTechStackHints = {
   constrained: boolean;
@@ -876,6 +885,13 @@ export class AltusManagedSetupService {
   }
 
   async captureConnectorSnapshot(sessionId: string, userId: string) {
+    await sessionConnectorService.waitForAttachIdle(sessionId).catch(() => false);
+    const memory = await taskCreationFileMemoryStore.getSession(sessionId).catch(() => null);
+    const orchestratorSessionId = asText(memory?.runtime?.orchestratorSessionId);
+    if (orchestratorSessionId) {
+      await sessionMcpRecoveryService.ensureSessionRecovered(sessionId, orchestratorSessionId).catch(() => null);
+    }
+    await sessionConnectorService.waitForAttachIdle(sessionId).catch(() => false);
     let statuses = await sessionConnectorService.listSessionConnectors(sessionId, userId).catch(() => []);
     const attached = statuses
       .filter((item) => item.attached)
@@ -898,13 +914,15 @@ export class AltusManagedSetupService {
   }
 
   async captureMcpToolSnapshot(sessionId: string) {
+    await sessionConnectorService.waitForAttachIdle(sessionId).catch(() => false);
     const bindings = await taskSessionConnectorBindingDAO.listByTaskSessionId(sessionId).catch(() => []);
     const providers = bindings
       .filter(
         (item) =>
           item.desiredState === 'attached' &&
           asText(item.runtimeStatus).toLowerCase() === 'connected' &&
-          asText(item.runtimeProviderId)
+          asText(item.runtimeProviderId) &&
+          isSnapshotRuntimeTransportSupported(item)
       )
       .map((item) => ({
         connectorKey: item.connectorKey,

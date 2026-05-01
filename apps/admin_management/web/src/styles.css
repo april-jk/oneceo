@@ -15793,13 +15793,8 @@ tbody td,
   align-items: center;
   justify-content: space-between;
   padding: 12px 18px;
-  width: 100%;
-  border: none;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
   cursor: pointer;
+  outline: none;
   transition: background 150ms;
   user-select: none;
 }
@@ -15830,28 +15825,19 @@ tbody td,
 }
 
 .rp-inline-panel-toggle {
-  width: 28px;
-  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 28px;
+  height: 28px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text-soft);
-  cursor: pointer;
+  pointer-events: none;
   transition: background 150ms, color 150ms;
 }
 
-.rp-inline-panel-toggle:hover {
-  background: var(--surface-muted);
-  color: var(--text);
-}
-
-.rp-inline-panel-toggle:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
-}
 
 .rp-inline-panel-expanded .rp-inline-panel-header {
   border-bottom: 1px solid var(--border);
@@ -16207,7 +16193,7 @@ tbody td,
 
 .rp-undo-btn:hover {
   background: var(--primary);
-  color: #fff;
+  color: var(--primary-btn-text);
 }
 
 .rp-confirm-bar {
@@ -16255,7 +16241,7 @@ tbody td,
 .rp-confirm-ok {
   border: 1px solid var(--primary);
   background: var(--primary);
-  color: #fff;
+  color: var(--primary-btn-text);
 }
 
 .rp-confirm-ok:hover {
@@ -16275,4 +16261,36 @@ tbody td,
 
 .rp-input-money input:invalid {
   border-color: var(--danger);
+}
+
+.rp-header-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-faint);
+}
+
+.rp-header-count {
+  font-weight: 700;
+  color: var(--text-soft);
+}
+
+.rp-header-delta {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  color: var(--primary);
+  font-weight: 700;
+  font-size: 11px;
+}
+
+.rp-header-unit {
+  color: var(--text-faint);
+}
+
+.rp-header-fx {
+  color: var(--text-faint);
+  opacity: 0.7;
 }

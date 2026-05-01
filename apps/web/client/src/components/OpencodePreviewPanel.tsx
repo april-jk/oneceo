@@ -2954,7 +2954,13 @@ export function DeploymentPreview({
         </Button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-auto overscroll-contain px-4 py-4 space-y-4">
+      <div
+        className={cn(
+          "flex-1 min-h-0 overflow-auto overscroll-contain px-4 py-4 space-y-4",
+          section === "settings" &&
+            "[scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden",
+        )}
+      >
         {error ? <div className="text-xs text-rose-600">{error}</div> : null}
         {info?.message ? (
           <div className="text-xs text-muted-foreground">{info.message}</div>
@@ -5579,7 +5585,7 @@ function DeploymentSettingsSectionPanel({
   return (
     <div className="grid gap-4 xl:grid-cols-[200px_minmax(0,1fr)] xl:items-start">
       <section className="xl:sticky xl:top-4 xl:self-start">
-        <div className="flex gap-2 overflow-x-auto p-2 xl:flex-col xl:overflow-visible">
+        <div className="flex gap-2 overflow-x-auto p-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden xl:flex-col xl:overflow-visible">
           {settingAnchors.map((item) => (
             <DeploymentSettingsButton
               key={item.key}
@@ -5594,7 +5600,7 @@ function DeploymentSettingsSectionPanel({
       <section className="overflow-hidden bg-transparent">
         <div
           ref={contentContainerRef}
-          className="space-y-4 overflow-auto px-1 pb-1 pt-10 xl:max-h-[calc(100vh-240px)]"
+          className="space-y-4 overflow-auto px-1 pb-1 pt-10 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden xl:max-h-[calc(100vh-240px)]"
         >
           <DeploymentSettingsAnchorSection
             ref={(node: HTMLDivElement | null) => {

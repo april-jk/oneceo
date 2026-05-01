@@ -15793,9 +15793,20 @@ tbody td,
   align-items: center;
   justify-content: space-between;
   padding: 12px 18px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
   transition: background 150ms;
   user-select: none;
+}
+
+.rp-inline-panel-header:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
 }
 
 .rp-inline-panel-header:hover {
@@ -15882,8 +15893,9 @@ tbody td,
 .reference-pricing-search-icon {
   position: absolute;
   left: 10px;
-  font-size: 12px;
-  opacity: 0.5;
+  width: 14px;
+  height: 14px;
+  color: var(--text-soft);
   pointer-events: none;
 }
 
@@ -15902,7 +15914,7 @@ tbody td,
 .reference-pricing-search-input:focus {
   outline: none;
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.12);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 12%, transparent);
 }
 
 .reference-pricing-search-clear {
@@ -16002,14 +16014,14 @@ tbody td,
 
 .rp-group-name  { color: var(--text); }
 .rp-group-sep   { margin: 0 6px; opacity: 0.4; }
-.rp-group-count { font-weight: 400; opacity: 0.7; }
+.rp-group-count { font-weight: 400; }
 
 .rp-row:hover td {
   background: var(--surface-muted);
 }
 
 .rp-row-new td {
-  background: rgba(59, 130, 246, 0.04);
+  background: color-mix(in srgb, var(--primary) 4%, transparent);
 }
 
 .rp-provider {
@@ -16034,13 +16046,13 @@ tbody td,
 .rp-select:focus,
 .rp-input-text:focus {
   border-color: var(--primary);
-  box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.12);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 12%, transparent);
 }
 
 .rp-select:focus-visible,
 .rp-input-text:focus-visible {
   border-color: var(--primary);
-  box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.12);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 12%, transparent);
 }
 
 .rp-input-money {
@@ -16058,7 +16070,7 @@ tbody td,
 
 .rp-input-money:focus-within {
   border-color: var(--primary);
-  box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.12);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 12%, transparent);
 }
 
 .rp-input-money span {
@@ -16101,7 +16113,7 @@ tbody td,
 }
 
 .rp-delete:hover {
-  background: rgba(207, 34, 46, 0.08);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
   color: var(--danger);
 }
 
@@ -16109,6 +16121,12 @@ tbody td,
   opacity: 1;
   outline: 2px solid var(--primary);
   outline-offset: 2px;
+}
+
+.rp-add-icon {
+  margin-right: 6px;
+  font-size: 16px;
+  line-height: 1;
 }
 
 /* Contrast fix: ensure reference pricing small text meets WCAG AA */
@@ -16122,8 +16140,14 @@ tbody td,
   color: var(--text-soft);
 }
 
+.reference-pricing-empty-icon {
+  width: 24px;
+  height: 24px;
+  color: var(--text-faint);
+}
+
 .rp-row-new td:first-child {
-  border-left: 1px solid rgba(9, 105, 218, 0.3);
+  border-left: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
 }
 
 @media (max-width: 768px) {
@@ -16184,6 +16208,64 @@ tbody td,
 .rp-undo-btn:hover {
   background: var(--primary);
   color: #fff;
+}
+
+.rp-confirm-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 10px 18px;
+  background: color-mix(in srgb, var(--surface-muted) 70%, var(--primary) 30%);
+  border-top: 1px solid var(--border);
+  animation: rp-undo-slide 180ms ease-out;
+}
+
+.rp-confirm-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.rp-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.rp-confirm-cancel,
+.rp-confirm-ok {
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 150ms, color 150ms;
+}
+
+.rp-confirm-cancel {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-soft);
+}
+
+.rp-confirm-cancel:hover {
+  background: var(--surface-muted);
+}
+
+.rp-confirm-ok {
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+
+.rp-confirm-ok:hover {
+  background: var(--primary-strong);
+}
+
+.rp-confirm-cancel:focus-visible,
+.rp-confirm-ok:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 
 @keyframes rp-undo-slide {

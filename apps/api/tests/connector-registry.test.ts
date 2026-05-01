@@ -6,14 +6,8 @@ import {
 } from '../src/services/connector-registry';
 
 const envBackup = {
-  NOTION_MCP_REMOTE_URL: process.env.NOTION_MCP_REMOTE_URL,
-  NOTION_MCP_REMOTE_HEADERS_JSON: process.env.NOTION_MCP_REMOTE_HEADERS_JSON,
-  NOTION_CONNECTOR_CLIENT_ID: process.env.NOTION_CONNECTOR_CLIENT_ID,
-  NOTION_CONNECTOR_CLIENT_SECRET: process.env.NOTION_CONNECTOR_CLIENT_SECRET,
-  NOTION_CONNECTOR_REDIRECT_URI: process.env.NOTION_CONNECTOR_REDIRECT_URI,
   FRONTEND_URL: process.env.FRONTEND_URL,
   ONECEO_API_PUBLIC_URL: process.env.ONECEO_API_PUBLIC_URL,
-  VERCEL_MCP_REMOTE_HEADERS_JSON: process.env.VERCEL_MCP_REMOTE_HEADERS_JSON,
   VERCEL_INTEGRATION_SLUG: process.env.VERCEL_INTEGRATION_SLUG,
   VERCEL_INTEGRATION_CLIENT_ID: process.env.VERCEL_INTEGRATION_CLIENT_ID,
   VERCEL_INTEGRATION_CLIENT_SECRET: process.env.VERCEL_INTEGRATION_CLIENT_SECRET,
@@ -30,12 +24,7 @@ const envBackup = {
 };
 
 beforeEach(() => {
-  process.env.NOTION_MCP_REMOTE_URL = 'https://notion-mcp.example.com/sse';
-  process.env.NOTION_MCP_REMOTE_HEADERS_JSON = '{"Authorization":"Bearer ${token}"}';
-  process.env.NOTION_CONNECTOR_CLIENT_ID = 'notion-client';
-  process.env.NOTION_CONNECTOR_CLIENT_SECRET = 'notion-secret';
   process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
-  process.env.NOTION_CONNECTOR_REDIRECT_URI = '/notion/callback';
   delete process.env.ONECEO_API_PUBLIC_URL;
   process.env.VERCEL_INTEGRATION_SLUG = 'oneceo';
   process.env.VERCEL_INTEGRATION_REDIRECT_URI = 'https://dev.oneceo.ai/vercel/callback';
@@ -124,7 +113,7 @@ test('connector registry exposes built-in connectors with availability metadata'
   assert.equal(catalog.find((item) => item.key === 'postgres')?.visibleInMenu, false);
 });
 
-test('connector registry materializes local and remote MCP configs', () => {
+test('connector registry materializes current MCP connector runtimes', () => {
   const githubConfig = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'github',
     account: buildComposioAccount('github'),

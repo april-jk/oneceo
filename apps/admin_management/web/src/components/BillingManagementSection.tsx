@@ -2370,29 +2370,46 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
 
           {/* Reference Pricing Inline Panel */}
           <section className={`rp-inline-panel${referencePricingOpen ? ' rp-inline-panel-expanded' : ''}`}>
-            <button type="button" className="rp-inline-panel-header" onClick={() => {
-              if (referencePricingOpen && referencePricingIsDirty) {
-                setConfirmAction('collapse');
-                return;
-              }
-              if (!referencePricingOpen) {
-                setReferencePricingDraft(referencePricingData);
-              }
-              setReferencePricingOpen(!referencePricingOpen);
-            }}>
+            <div
+              className="rp-inline-panel-header"
+              role="button"
+              tabIndex={0}
+              aria-expanded={referencePricingOpen}
+              onClick={() => {
+                if (referencePricingOpen && referencePricingIsDirty) {
+                  setConfirmAction('collapse');
+                  return;
+                }
+                if (!referencePricingOpen) {
+                  setReferencePricingDraft(referencePricingData);
+                }
+                setReferencePricingOpen(!referencePricingOpen);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  (e.target as HTMLElement).click();
+                }
+              }}
+            >
               <div className="rp-inline-panel-heading">
                 <p className="section-tag">定价参考</p>
                 <h3 className="rp-inline-panel-title">市场参考定价</h3>
-                <p className="panel-caption">
-                  {referencePricingData.length} 条记录{referencePricingIsDirty ? ` · ${referencePricingDraft.length > referencePricingData.length ? '+' : ''}${referencePricingDraft.length - referencePricingData.length} 项未保存` : ''} · ¥ / 1M tokens · 1 USD = 7.2 CNY
-                </p>
+                <div className="rp-header-meta">
+                  <span className="rp-header-count">{referencePricingData.length} 条记录</span>
+                  {referencePricingIsDirty && (
+                    <span className="rp-header-delta">{referencePricingDraft.length > referencePricingData.length ? '+' : ''}{referencePricingDraft.length - referencePricingData.length} 项未保存</span>
+                  )}
+                  <span className="rp-header-unit">¥ / 1M tokens</span>
+                  <span className="rp-header-fx">1 USD = 7.2 CNY</span>
+                </div>
               </div>
-              <button type="button" className="rp-inline-panel-toggle" aria-label={referencePricingOpen ? '收起参考定价' : '展开参考定价'} aria-expanded={referencePricingOpen}>
+              <span className="rp-inline-panel-toggle" aria-hidden="true">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                   <path d={referencePricingOpen ? "M4 10L8 6L12 10" : "M4 6L8 10L12 6"} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
-              </button>
-            </button>
+              </span>
+            </div>
 
             {referencePricingOpen && (
               <div className="rp-inline-panel-body">
@@ -2581,6 +2598,12 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                     <span aria-hidden="true" className="rp-add-icon">+</span>
                     添加参考定价
                   </AdminButton>
+                  {referencePricingIsDirty && (
+                    <AdminButton variant="secondary" onClick={() => {
+                      setReferencePricingDraft(referencePricingData);
+                      setRecentlyDeleted(null);
+                    }}>放弃修改</AdminButton>
+                  )}
                   <AdminButton variant="primary" onClick={() => setConfirmAction('save')} disabled={!referencePricingIsDirty}>保存修改</AdminButton>
                 </div>
 
@@ -2592,7 +2615,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                 )}
 
                 {confirmAction && (
-                  <div className="rp-confirm-bar" role="alertdialog" aria-label="确认操作">
+                  <div className="rp-confirm-bar" role="status" aria-live="polite">
                     <span className="rp-confirm-text">
                       {confirmAction === 'save' ? '确认保存？将覆盖本地参考定价数据。' : '有未保存的修改，确定收起？'}
                     </span>

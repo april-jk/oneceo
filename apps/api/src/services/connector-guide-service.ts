@@ -110,7 +110,7 @@ const BUILTIN_CONNECTOR_GUIDES: Record<string, BuiltinConnectorGuide> = {
       'Notion is connected through oneceo API broker and Composio Tool Router, not through a sandbox-installed Notion MCP CLI.',
       'Never install, curl, run, ping, or configure `@notionhq/mcp-cli`, `notion-mcp`, `mcp.notion.com`, or any local Notion MCP server inside the sandbox.',
       'Use the attached Notion MCP router tools exposed in this session. Start with `notion__COMPOSIO_SEARCH_TOOLS` to find Notion actions, then use `notion__COMPOSIO_GET_TOOL_SCHEMAS` and `notion__COMPOSIO_MULTI_EXECUTE_TOOL` for execution.',
-      'Call `notion__COMPOSIO_SEARCH_TOOLS` with `queries`, for example `{ "queries": [{ "use_case": "search Notion pages by title" }], "session": { "generate_id": true } }`. Do not pass `toolkits` or `NOTION_MCP_OAUTH` to this search tool.',
+      'Call `notion__COMPOSIO_SEARCH_TOOLS` with `queries`, for example `{ "queries": [{ "use_case": "search Notion pages by title" }], "session": { "generate_id": true } }`. Do not pass direct MCP/OAuth configuration fields to this search tool.',
       'Treat Notion as a workspace-scoped knowledge connector and confirm the current workspace/page/database target before writes.',
       'Prefer reading page structure, database schema, and access scope before create/update/archive operations.',
       'When the user asks to organize or update Notion content, inspect the existing hierarchy first instead of assuming naming or parent page structure.',

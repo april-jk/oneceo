@@ -122,13 +122,13 @@ test('ensureSandbox provisions through sandboxAgentProvisionService to enforce p
 test('captureMcpToolSnapshot only exposes connected bindings with live provider ids', async () => {
   mock.method(taskSessionConnectorBindingDAO, 'listByTaskSessionId', async () => [
     {
-      connectorKey: 'github',
+      connectorKey: 'vercel',
       desiredState: 'attached',
       runtimeStatus: 'connected',
       runtimeProviderId: 'provider-connected',
-      runtimeTransport: 'remote_sse',
+      runtimeTransport: 'backend_rpc',
       runtimeEnvVersion: 1,
-      runtimeAttachedToolsJson: [{ providerId: 'provider-connected', toolName: 'github_list_repos' }],
+      runtimeAttachedToolsJson: [{ providerId: 'provider-connected', toolName: 'vercel_list_projects' }],
     },
     {
       connectorKey: 'notion',
@@ -160,7 +160,7 @@ test('captureMcpToolSnapshot only exposes connected bindings with live provider 
   assert.equal(snapshotMock.mock.callCount(), 1);
   assert.equal(result.providers.length, 1);
   assert.equal(result.providers[0]?.providerId, 'provider-connected');
-  assert.match(JSON.stringify(snapshotMock.mock.calls[0]?.arguments[0]), /github_list_repos/);
+  assert.match(JSON.stringify(snapshotMock.mock.calls[0]?.arguments[0]), /vercel_list_projects/);
   assert.doesNotMatch(JSON.stringify(snapshotMock.mock.calls[0]?.arguments[0]), /notion_list_pages/);
 });
 

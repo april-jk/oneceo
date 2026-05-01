@@ -19,23 +19,6 @@ function groupByProvider(items: ReferencePricingItem[]) {
   return seen.map((provider) => ({ provider, rows: groups[provider] }));
 }
 
-function fuzzyMatchModel(query: string, items: ReferencePricingItem[]) {
-  if (!query.trim()) return [];
-  const q = query.toLowerCase().replace(/[-_.\s/]+/g, '');
-  return items
-    .filter(item => {
-      const m = item.model.toLowerCase().replace(/[-_.\s/]+/g, '');
-      const p = item.provider.toLowerCase().replace(/[-_.\s/]+/g, '');
-      return m.includes(q) || p.includes(q) || `${p}${m}`.includes(q);
-    })
-    .map(item => ({
-      ...item,
-      inputCredits: Math.round(item.inputPrice * 10),
-      outputCredits: Math.round(item.outputPrice * 10),
-    }))
-    .slice(0, 8);
-}
-
 interface ReferencePricingItem {
   provider: string;
   model: string;
@@ -245,8 +228,6 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
   });
   const [pricingFormLoading, setPricingFormLoading] = useState(false);
   const [pricingFormTouched, setPricingFormTouched] = useState<Record<string, boolean>>({});
-  const [pricingSuggestions, setPricingSuggestions] = useState<Array<{ provider: string; model: string; inputPrice: number; outputPrice: number; inputCredits: number; outputCredits: number }>>([]);
-  const [pricingSuggestionsVisible, setPricingSuggestionsVisible] = useState(false);
   const [deletePricingTarget, setDeletePricingTarget] = useState<Pricing | null>(null);
   const [deletePricingLoading, setDeletePricingLoading] = useState(false);
   const [updateConfirmOpen, setUpdateConfirmOpen] = useState(false);
@@ -1935,84 +1916,27 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                         </select>
                         </div>
                         ) : null}
-                         <div className={`pricing-form-field pricing-form-field-with-suggest ${shouldShowPricingFieldError('model') ? 'has-error' : ''}`}>
-                         <span className="pricing-form-field-label">模型名称</span>
-                         <input
-                         type="text"
-                         placeholder="如 gpt-4o"
-                         list="billing-model-candidates"
-                         value={pricingForm.model}
-                         readOnly={pricingFormMode === 'update'}
-                         onChange={(e) => {
-                         markPricingFieldTouched('model');
-                         const val = e.target.value;
-                         setPricingForm({ ...pricingForm, model: val });
-                         if (pricingFormMode === 'create') {
-                           setPricingSuggestions(fuzzyMatchModel(val, referencePricingData));
-                           setPricingSuggestionsVisible(val.trim().length > 0);
-                         }
-                         }}
-                         onFocus={() => {
-                           if (pricingFormMode === 'create' && pricingForm.model.trim()) {
-                             setPricingSuggestions(fuzzyMatchModel(pricingForm.model, referencePricingData));
-                             setPricingSuggestionsVisible(true);
-                           }
-                         }}
-                         onBlur={() => {
-                           markPricingFieldTouched('model');
-                           setTimeout(() => setPricingSuggestionsVisible(false), 200);
-                         }}
-                         autoComplete="off"
-                         />
-                         <datalist id="billing-model-candidates">
-                         {modelCandidates.map((candidate) => (
-                         <option key={candidate.model} value={candidate.model} />
-                         ))}
-                         </datalist>
-                         {pricingFormMode === 'create' && pricingSuggestionsVisible && pricingSuggestions.length > 0 && (
-                         <div className="pricing-suggestion-dropdown">
-                           <div className="pricing-suggestion-header">
-                             <span>参考定价推荐</span>
-                             <span className="pricing-suggestion-hint">选填，点击自动填入</span>
-                           </div>
-                           {pricingSuggestions.map((suggestion, idx) => (
-                           <button
-                             key={idx}
-                             type="button"
-                             className="pricing-suggestion-item"
-                             onMouseDown={(e) => {
-                               e.preventDefault();
-                               const normalizedProvider = normalizePricingProvider(suggestion.model, suggestion.provider);
-                               const nextCache = getCacheFormForProvider(normalizedProvider);
-                               setPricingForm({
-                                 ...pricingForm,
-                                 model: suggestion.model,
-                                 modelProvider: normalizedProvider,
-                                 promptPricePer1mTokens: String(suggestion.inputCredits),
-                                 completionPricePer1mTokens: String(suggestion.outputCredits),
-                                 cacheHitRatio: nextCache.hitRatio,
-                                 cacheCreationRatio: nextCache.creationRatio,
-                               });
-                               markPricingFieldTouched('model');
-                               markPricingFieldTouched('promptPricePer1mTokens');
-                               markPricingFieldTouched('completionPricePer1mTokens');
-                               setPricingSuggestionsVisible(false);
-                             }}
-                           >
-                             <span className="pricing-suggestion-model">{suggestion.model}</span>
-                             <span className="pricing-suggestion-provider">{suggestion.provider}</span>
-                             <span className="pricing-suggestion-prices">
-                               <span>输入 {suggestion.inputCredits}</span>
-                               <span className="pricing-suggestion-sep">/</span>
-                               <span>输出 {suggestion.outputCredits}</span>
-                               <span className="pricing-suggestion-unit">credits/1M</span>
-                             </span>
-                           </button>
-                           ))}
-                         </div>
-                         )}
-                         {pricingFormMode === 'create' && shouldShowPricingFieldError('model') && <span className="pricing-form-field-error">{pricingFieldErrors.model}</span>}
-                         </div>
+                        <div className={`pricing-form-field ${shouldShowPricingFieldError('model') ? 'has-error' : ''}`}>
+                        <span className="pricing-form-field-label">模型名称</span>
+                        <input
+                        type="text"
+                        placeholder="如 gpt-4o"
+                        list="billing-model-candidates"
+                        value={pricingForm.model}
+                        readOnly={pricingFormMode === 'update'}
+                        onChange={(e) => {
+                        markPricingFieldTouched('model');
+                        setPricingForm({ ...pricingForm, model: e.target.value });
+                        }}
+                        onBlur={() => markPricingFieldTouched('model')}
+                        />
+                        <datalist id="billing-model-candidates">
+                        {modelCandidates.map((candidate) => (
+                        <option key={candidate.model} value={candidate.model} />
+                        ))}
+                        </datalist>
+                        {pricingFormMode === 'create' && shouldShowPricingFieldError('model') && <span className="pricing-form-field-error">{pricingFieldErrors.model}</span>}
+                        </div>
                         <div className="pricing-form-field">
                         <span className="pricing-form-field-label">提供商</span>
                         <select

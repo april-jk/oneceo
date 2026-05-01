@@ -1,5 +1,6 @@
 import {
   default as React,
+  forwardRef,
   useCallback,
   useEffect,
   useMemo,
@@ -5442,74 +5443,159 @@ function DeploymentSettingsSectionPanel({
     i18n.t("previewPanel.deployment.settings.managedRepoMissing");
   const repositoryBranch =
     resourceBinding?.repositoryBranch || "main";
+  const contentContainerRef = useRef<HTMLDivElement | null>(null);
+  const programmaticScrollRef = useRef(false);
+  const programmaticScrollTimerRef = useRef<number | null>(null);
+  const sectionRefs = useRef<
+    Record<DeploymentSettingsSection, HTMLDivElement | null>
+  >({
+    general: null,
+    domain: null,
+    notifications: null,
+    payment: null,
+    seo: null,
+    keys: null,
+    github: null,
+  });
+  const settingAnchors: Array<{
+    key: DeploymentSettingsSection;
+    label: string;
+  }> = [
+    {
+      key: "general",
+      label: i18n.t("previewPanel.deployment.settings.general"),
+    },
+    {
+      key: "domain",
+      label: i18n.t("previewPanel.deployment.settings.domain"),
+    },
+    {
+      key: "notifications",
+      label: i18n.t("previewPanel.deployment.settings.notifications"),
+    },
+    {
+      key: "payment",
+      label: i18n.t("previewPanel.deployment.settings.payment"),
+    },
+    { key: "seo", label: "SEO" },
+    {
+      key: "keys",
+      label: i18n.t("previewPanel.deployment.settings.keys"),
+    },
+    { key: "github", label: "GitHub" },
+  ];
+
+  const scrollToSettingsSection = useCallback(
+    (value: DeploymentSettingsSection) => {
+      onSettingsSectionChange(value);
+      const node = sectionRefs.current[value];
+      if (!node) return;
+      const container = contentContainerRef.current;
+      if (!container) {
+        node.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
+      programmaticScrollRef.current = true;
+      if (programmaticScrollTimerRef.current !== null) {
+        window.clearTimeout(programmaticScrollTimerRef.current);
+      }
+      container.scrollTo({
+        top: Math.max(0, node.offsetTop - 16),
+        behavior: "smooth",
+      });
+      programmaticScrollTimerRef.current = window.setTimeout(() => {
+        programmaticScrollRef.current = false;
+        programmaticScrollTimerRef.current = null;
+      }, 450);
+    },
+    [onSettingsSectionChange],
+  );
+
+  useEffect(() => {
+    const node = sectionRefs.current[settingsSection];
+    const container = contentContainerRef.current;
+    if (!node || !container) return;
+    const targetTop = Math.max(0, node.offsetTop - 16);
+    if (Math.abs(container.scrollTop - targetTop) < 8) return;
+    container.scrollTo({ top: targetTop });
+  }, [settingsSection]);
+
+  useEffect(() => {
+    const container = contentContainerRef.current;
+    if (!container) return;
+
+    const syncActiveAnchor = () => {
+      if (programmaticScrollRef.current) return;
+      const sections = settingAnchors
+        .map((item) => ({
+          key: item.key,
+          node: sectionRefs.current[item.key],
+        }))
+        .filter(
+          (
+            item,
+          ): item is {
+            key: DeploymentSettingsSection;
+            node: HTMLDivElement;
+          } => Boolean(item.node),
+        );
+      if (!sections.length) return;
+
+      const anchorLine = container.scrollTop + 24;
+      let activeKey = sections[0].key;
+      for (const section of sections) {
+        if (section.node.offsetTop <= anchorLine) {
+          activeKey = section.key;
+        } else {
+          break;
+        }
+      }
+
+      if (activeKey !== settingsSection) {
+        onSettingsSectionChange(activeKey);
+      }
+    };
+
+    container.addEventListener("scroll", syncActiveAnchor, {
+      passive: true,
+    });
+    syncActiveAnchor();
+
+    return () => {
+      container.removeEventListener("scroll", syncActiveAnchor);
+      if (programmaticScrollTimerRef.current !== null) {
+        window.clearTimeout(programmaticScrollTimerRef.current);
+        programmaticScrollTimerRef.current = null;
+      }
+    };
+  }, [onSettingsSectionChange, settingAnchors, settingsSection]);
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)]">
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
-          {i18n.t("previewPanel.deployment.sections.settings")}
-        </div>
-        <div className="flex gap-2 overflow-x-auto p-3 xl:flex-col xl:overflow-visible">
-          <DeploymentSettingsButton
-            active={settingsSection === "general"}
-            label={i18n.t("previewPanel.deployment.settings.general")}
-            onClick={() => onSettingsSectionChange("general")}
-          />
-          <DeploymentSettingsButton
-            active={settingsSection === "domain"}
-            label={i18n.t("previewPanel.deployment.settings.domain")}
-            onClick={() => onSettingsSectionChange("domain")}
-          />
-          <DeploymentSettingsButton
-            active={settingsSection === "notifications"}
-            label={i18n.t("previewPanel.deployment.settings.notifications")}
-            onClick={() => onSettingsSectionChange("notifications")}
-          />
-          <DeploymentSettingsButton
-            active={settingsSection === "payment"}
-            label={i18n.t("previewPanel.deployment.settings.payment")}
-            onClick={() => onSettingsSectionChange("payment")}
-          />
-          <DeploymentSettingsButton
-            active={settingsSection === "seo"}
-            label="SEO"
-            onClick={() => onSettingsSectionChange("seo")}
-          />
-          <DeploymentSettingsButton
-            active={settingsSection === "keys"}
-            label={i18n.t("previewPanel.deployment.settings.keys")}
-            onClick={() => onSettingsSectionChange("keys")}
-          />
-          <DeploymentSettingsButton
-            active={settingsSection === "github"}
-            label="GitHub"
-            onClick={() => onSettingsSectionChange("github")}
-          />
+    <div className="grid gap-4 xl:grid-cols-[200px_minmax(0,1fr)] xl:items-start">
+      <section className="xl:sticky xl:top-4 xl:self-start">
+        <div className="flex gap-2 overflow-x-auto p-2 xl:flex-col xl:overflow-visible">
+          {settingAnchors.map((item) => (
+            <DeploymentSettingsButton
+              key={item.key}
+              active={settingsSection === item.key}
+              label={item.label}
+              onClick={() => scrollToSettingsSection(item.key)}
+            />
+          ))}
         </div>
       </section>
 
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
-          {settingsSection === "general"
-            ? i18n.t("previewPanel.deployment.settings.general")
-            : null}
-          {settingsSection === "domain"
-            ? i18n.t("previewPanel.deployment.settings.domain")
-            : null}
-          {settingsSection === "notifications"
-            ? i18n.t("previewPanel.deployment.settings.notifications")
-            : null}
-          {settingsSection === "payment"
-            ? i18n.t("previewPanel.deployment.settings.payment")
-            : null}
-          {settingsSection === "seo" ? "SEO" : null}
-          {settingsSection === "keys"
-            ? i18n.t("previewPanel.deployment.settings.keys")
-            : null}
-          {settingsSection === "github" ? "GitHub" : null}
-        </div>
-        <div className="p-4">
-          {settingsSection === "general" ? (
+      <section className="overflow-hidden bg-transparent">
+        <div
+          ref={contentContainerRef}
+          className="space-y-4 overflow-auto p-1 xl:max-h-[calc(100vh-240px)]"
+        >
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.general = node;
+            }}
+            title={i18n.t("previewPanel.deployment.settings.general")}
+          >
             <div className="grid gap-3 md:grid-cols-2">
               <DeploymentInfoCard
                 title={i18n.t("previewPanel.deployment.settings.siteName")}
@@ -5548,9 +5634,14 @@ function DeploymentSettingsSectionPanel({
                 }
               />
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
 
-          {settingsSection === "domain" ? (
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.domain = node;
+            }}
+            title={i18n.t("previewPanel.deployment.settings.domain")}
+          >
             <div className="space-y-3">
               <DeploymentInfoCard
                 title={i18n.t("previewPanel.deployment.settings.primaryAccessUrl")}
@@ -5585,9 +5676,14 @@ function DeploymentSettingsSectionPanel({
                 )}
               </div>
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
 
-          {settingsSection === "notifications" ? (
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.notifications = node;
+            }}
+            title={i18n.t("previewPanel.deployment.settings.notifications")}
+          >
             <div className="grid gap-3 md:grid-cols-2">
               <DeploymentInfoCard
                 title={i18n.t(
@@ -5624,9 +5720,14 @@ function DeploymentSettingsSectionPanel({
                 )}
               />
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
 
-          {settingsSection === "payment" ? (
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.payment = node;
+            }}
+            title={i18n.t("previewPanel.deployment.settings.payment")}
+          >
             <div className="grid gap-3 md:grid-cols-2">
               <DeploymentInfoCard
                 title={i18n.t("previewPanel.deployment.settings.billingMode")}
@@ -5643,9 +5744,7 @@ function DeploymentSettingsSectionPanel({
               <DeploymentInfoCard
                 title={i18n.t("previewPanel.deployment.settings.usageAlert")}
                 value={i18n.t("previewPanel.deployment.settings.comingSoon")}
-                extra={i18n.t(
-                  "previewPanel.deployment.settings.comingSoon",
-                )}
+                extra={i18n.t("previewPanel.deployment.settings.comingSoon")}
               />
               <DeploymentInfoCard
                 title={i18n.t(
@@ -5657,9 +5756,14 @@ function DeploymentSettingsSectionPanel({
                 )}
               />
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
 
-          {settingsSection === "seo" ? (
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.seo = node;
+            }}
+            title="SEO"
+          >
             <div className="grid gap-3 md:grid-cols-2">
               <DeploymentInfoCard
                 title={i18n.t("previewPanel.deployment.settings.siteTitle")}
@@ -5695,9 +5799,14 @@ function DeploymentSettingsSectionPanel({
                 extra={i18n.t("previewPanel.deployment.settings.siteMapDescription")}
               />
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
 
-          {settingsSection === "keys" ? (
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.keys = node;
+            }}
+            title={i18n.t("previewPanel.deployment.settings.keys")}
+          >
             <div className="space-y-3">
               <div className="grid gap-3 md:grid-cols-2">
                 <DeploymentInfoCard
@@ -5794,9 +5903,14 @@ function DeploymentSettingsSectionPanel({
                 </Button>
               </div>
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
 
-          {settingsSection === "github" ? (
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.github = node;
+            }}
+            title="GitHub"
+          >
             <div className="space-y-3">
               <div className="grid gap-3 md:grid-cols-2">
                 <DeploymentInfoCard
@@ -5860,12 +5974,36 @@ function DeploymentSettingsSectionPanel({
                 />
               )}
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
         </div>
       </section>
     </div>
   );
 }
+
+const DeploymentSettingsAnchorSection = forwardRef<
+  HTMLDivElement,
+  {
+    title: string;
+    children: ReactNode;
+  }
+>(function DeploymentSettingsAnchorSection(
+  { title, children },
+  ref,
+) {
+  return (
+    <div
+      ref={ref}
+      className="scroll-mt-4 rounded-xl border border-border/60 bg-transparent p-4 md:p-5"
+    >
+      <div className="mb-4 flex items-center gap-3">
+        <div className="h-8 w-1 rounded-full bg-foreground/85" />
+        <div className="text-sm font-semibold text-foreground">{title}</div>
+      </div>
+      {children}
+    </div>
+  );
+});
 
 function DeploymentMenuButton({
   active,
@@ -5909,13 +6047,19 @@ function DeploymentSettingsButton({
       type="button"
       onClick={onClick}
       className={cn(
-        "rounded-md border px-3 py-2 text-left text-sm transition-colors whitespace-nowrap",
+        "group relative rounded-lg border px-3 py-2.5 text-left text-sm transition-all whitespace-nowrap",
         active
-          ? "border-border bg-muted/50 text-foreground"
-          : "border-transparent bg-transparent text-muted-foreground hover:border-border hover:bg-muted/30",
+          ? "border-border/80 bg-transparent text-foreground"
+          : "border-transparent bg-transparent text-muted-foreground hover:border-border/60 hover:text-foreground",
       )}
     >
-      {label}
+      <span
+        className={cn(
+          "absolute inset-y-2 left-1 w-1 rounded-full transition-colors",
+          active ? "bg-foreground/90" : "bg-transparent group-hover:bg-border",
+        )}
+      />
+      <span className="block truncate pl-3">{label}</span>
     </button>
   );
 }

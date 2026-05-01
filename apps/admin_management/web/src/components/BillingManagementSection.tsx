@@ -262,6 +262,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
   const [referencePricingDraft, setReferencePricingDraft] = useState<ReferencePricingItem[]>(referencePricingData);
   const [referenceSearch, setReferenceSearch] = useState('');
   const [recentlyDeleted, setRecentlyDeleted] = useState<{ item: ReferencePricingItem; index: number } | null>(null);
+  const [confirmAction, setConfirmAction] = useState<'save' | 'collapse' | null>(null);
   const recentlyDeletedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const referencePricingIsDirty = useMemo(() =>
     JSON.stringify(referencePricingDraft) !== JSON.stringify(referencePricingData),
@@ -442,14 +443,24 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
     return sortConfig.direction === 'asc' ? ' ↑' : ' ↓';
   };
   const handleSaveReferencePricing = useCallback(() => {
+    const cleaned = referencePricingDraft.map(item => ({
+      ...item,
+      model: item.model.trim(),
+      provider: item.provider.trim(),
+    }));
+
+    // Filter out empty rows (no provider AND no model)
+    const validItems = cleaned.filter(item => item.provider || item.model);
+    const emptyCount = cleaned.length - validItems.length;
+
+    if (emptyCount > 0) {
+      onNotify?.('warning', '已过滤空行', `${emptyCount} 条空记录已跳过`);
+    }
+
     try {
-      const cleaned = referencePricingDraft.map(item => ({
-        ...item,
-        model: item.model.trim(),
-        provider: item.provider.trim(),
-      }));
-      localStorage.setItem('oneceo_reference_pricing', JSON.stringify(cleaned));
-      setReferencePricingData(cleaned);
+      localStorage.setItem('oneceo_reference_pricing', JSON.stringify(validItems));
+      setReferencePricingData(validItems);
+      setReferencePricingDraft(validItems);
       onNotify?.('success', '已保存', '市场参考定价已更新');
     } catch (err) {
       onNotify?.('error', '保存失败', '浏览器存储不可用');
@@ -2359,9 +2370,10 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
 
           {/* Reference Pricing Inline Panel */}
           <section className={`rp-inline-panel${referencePricingOpen ? ' rp-inline-panel-expanded' : ''}`}>
-            <div className="rp-inline-panel-header" onClick={() => {
+            <button type="button" className="rp-inline-panel-header" onClick={() => {
               if (referencePricingOpen && referencePricingIsDirty) {
-                if (!window.confirm('有未保存的修改，确定收起？')) return;
+                setConfirmAction('collapse');
+                return;
               }
               if (!referencePricingOpen) {
                 setReferencePricingDraft(referencePricingData);
@@ -2372,7 +2384,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                 <p className="section-tag">定价参考</p>
                 <h3 className="rp-inline-panel-title">市场参考定价</h3>
                 <p className="panel-caption">
-                  {referencePricingDraft.length} 条记录 · ¥ / 1M tokens · 1 USD = 7.2 CNY
+                  {referencePricingData.length} 条记录{referencePricingIsDirty ? ` · ${referencePricingDraft.length > referencePricingData.length ? '+' : ''}${referencePricingDraft.length - referencePricingData.length} 项未保存` : ''} · ¥ / 1M tokens · 1 USD = 7.2 CNY
                 </p>
               </div>
               <button type="button" className="rp-inline-panel-toggle" aria-label={referencePricingOpen ? '收起参考定价' : '展开参考定价'} aria-expanded={referencePricingOpen}>
@@ -2380,13 +2392,16 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                   <path d={referencePricingOpen ? "M4 10L8 6L12 10" : "M4 6L8 10L12 6"} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               </button>
-            </div>
+            </button>
 
             {referencePricingOpen && (
               <div className="rp-inline-panel-body">
                 <div className="reference-pricing-toolbar">
                   <div className="reference-pricing-search">
-                    <span className="reference-pricing-search-icon" aria-hidden="true">🔍</span>
+                    <svg className="reference-pricing-search-icon" aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none">
+                      <circle cx="6.5" cy="6.5" r="5.5" stroke="currentColor" strokeWidth="1.5"/>
+                      <line x1="10.5" y1="10.5" x2="15" y2="15" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                    </svg>
                     <input
                       type="text"
                       placeholder="搜索厂商或模型…"
@@ -2426,7 +2441,11 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                           <tr>
                             <td colSpan={5} className="reference-pricing-empty">
                               <div className="reference-pricing-empty-state">
-                                <span className="reference-pricing-empty-icon" aria-hidden="true">📭</span>
+                                <svg className="reference-pricing-empty-icon" aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none">
+                                  <rect x="3" y="6" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.5"/>
+                                  <path d="M3 8L12 14L21 8" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+                                  <line x1="3" y1="6" x2="21" y2="6" stroke="currentColor" strokeWidth="1.5"/>
+                                </svg>
                                 <p>{referenceSearch ? '未找到匹配的厂商或模型' : '暂无参考定价数据'}</p>
                                 {referenceSearch && (
                                   <button type="button" className="table-btn" onClick={() => setReferenceSearch('')}>清除搜索</button>
@@ -2559,20 +2578,35 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
 
                 <div className="rp-inline-actions">
                   <AdminButton variant="secondary" onClick={() => setReferencePricingDraft((prev: ReferencePricingItem[]) => [...prev, { provider: '', model: '', inputPrice: 0, outputPrice: 0 }])}>
-                    <span aria-hidden="true" style={{ marginRight: '6px', fontSize: '16px', lineHeight: 1 }}>+</span>
+                    <span aria-hidden="true" className="rp-add-icon">+</span>
                     添加参考定价
                   </AdminButton>
-                  <AdminButton variant="primary" onClick={() => {
-                    if (window.confirm('确认保存市场参考定价？此操作将覆盖本地保存的数据。')) {
-                      handleSaveReferencePricing();
-                    }
-                  }} disabled={!referencePricingIsDirty}>保存修改</AdminButton>
+                  <AdminButton variant="primary" onClick={() => setConfirmAction('save')} disabled={!referencePricingIsDirty}>保存修改</AdminButton>
                 </div>
 
                 {recentlyDeleted && (
                   <div className="rp-undo-bar" role="status" aria-live="polite">
                     <span>已删除 {recentlyDeleted.item.model || '此行'}</span>
                     <button type="button" className="rp-undo-btn" onClick={handleUndoDelete}>撤销</button>
+                  </div>
+                )}
+
+                {confirmAction && (
+                  <div className="rp-confirm-bar" role="alertdialog" aria-label="确认操作">
+                    <span className="rp-confirm-text">
+                      {confirmAction === 'save' ? '确认保存？将覆盖本地参考定价数据。' : '有未保存的修改，确定收起？'}
+                    </span>
+                    <div className="rp-confirm-actions">
+                      <button type="button" className="rp-confirm-cancel" onClick={() => setConfirmAction(null)}>取消</button>
+                      <button type="button" className="rp-confirm-ok" onClick={() => {
+                        if (confirmAction === 'save') {
+                          handleSaveReferencePricing();
+                        } else {
+                          setReferencePricingOpen(false);
+                        }
+                        setConfirmAction(null);
+                      }}>确认</button>
+                    </div>
                   </div>
                 )}
               </div>

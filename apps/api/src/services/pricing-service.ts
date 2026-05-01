@@ -1,4 +1,4 @@
-import { eq, and, desc, lte, or, gt, isNull } from 'drizzle-orm';
+import { eq, and, desc, lte, or, gt, isNull, sql } from 'drizzle-orm';
 import { db } from '../config/database';
 import { modelPricing, cachePricingConfig } from '../db/schema';
 import type { ModelPricing } from '../db/schema';
@@ -17,17 +17,16 @@ export class PricingService {
    * 获取模型的生效中定价
    */
   async getActivePricing(model: string): Promise<ModelPricing | null> {
-    const now = new Date();
     const result = await db
       .select()
       .from(modelPricing)
       .where(and(
         eq(modelPricing.model, model),
         eq(modelPricing.isActive, true),
-        lte(modelPricing.effectiveFrom, now),
+        lte(modelPricing.effectiveFrom, sql`now()`),
         or(
           isNull(modelPricing.effectiveUntil),
-          gt(modelPricing.effectiveUntil, now)
+          gt(modelPricing.effectiveUntil, sql`now()`)
         )
       ))
       .orderBy(desc(modelPricing.effectiveFrom))
@@ -48,14 +47,13 @@ export class PricingService {
    * 列出所有生效中的定价
    */
   async listActivePricing(): Promise<ModelPricing[]> {
-    const now = new Date();
     return await db
       .select()
       .from(modelPricing)
       .where(and(
         eq(modelPricing.isActive, true),
-        lte(modelPricing.effectiveFrom, now),
-        or(isNull(modelPricing.effectiveUntil), gt(modelPricing.effectiveUntil, now))
+        lte(modelPricing.effectiveFrom, sql`now()`),
+        or(isNull(modelPricing.effectiveUntil), gt(modelPricing.effectiveUntil, sql`now()`))
       ))
       .orderBy(modelPricing.model);
   }

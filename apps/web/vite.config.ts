@@ -10,12 +10,42 @@ function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
+function splitEnvList(value: string | undefined): string[] {
+  if (!value) return [];
+  return value
+    .split(/[,\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function uniqueHosts(hosts: string[]): string[] {
+  return Array.from(new Set(hosts.filter(Boolean)));
+}
+
+function hostFromUrl(value: string | undefined): string {
+  if (!value) return "";
+  try {
+    return new URL(value).hostname;
+  } catch {
+    return "";
+  }
+}
+
 export default defineConfig(({ mode }) => {
   const envDir = path.resolve(import.meta.dirname, "..");
   const env = loadEnv(mode, envDir, "");
   const apiTarget = trimTrailingSlash(
     env.WEB_BFF_API_TARGET || env.ONECEO_API_URL || "http://localhost:4000"
   );
+  const allowedHosts = uniqueHosts([
+    "oneceo.ai",
+    "www.oneceo.ai",
+    "localhost",
+    "127.0.0.1",
+    hostFromUrl(env.FRONTEND_URL),
+    hostFromUrl(env.ONECEO_API_PUBLIC_URL),
+    ...splitEnvList(env.WEB_DEV_ALLOWED_HOSTS),
+  ]);
 
   return {
     plugins,
@@ -36,7 +66,7 @@ export default defineConfig(({ mode }) => {
       port: 3000,
       strictPort: true,
       host: true,
-      allowedHosts: ["oneceo.ai", "www.oneceo.ai", "localhost", "127.0.0.1"],
+      allowedHosts,
       fs: {
         strict: true,
         deny: ["**/.*"],

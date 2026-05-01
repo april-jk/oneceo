@@ -1,5 +1,6 @@
 import {
   default as React,
+  forwardRef,
   useCallback,
   useEffect,
   useMemo,
@@ -18,6 +19,8 @@ import {
   Copy,
   Database,
   Download,
+  Eye,
+  EyeOff,
   ExternalLink,
   File,
   FileAudio,
@@ -39,6 +42,7 @@ import {
   RefreshCw,
   Lock,
   Unlock,
+  Upload,
   Rocket,
   ScrollText,
   Settings2,
@@ -47,7 +51,15 @@ import {
   Trash2,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -64,12 +76,20 @@ import {
 import { Streamdown } from "streamdown";
 import {
   deleteTaskCreationDatabaseRow,
+  ensureTaskCreationDatabase,
+  ensureTaskCreationStorage,
   getTaskCreationDatabaseInfo,
   getTaskCreationDatabaseRows,
   getTaskCreationDeploymentAnalytics,
   getTaskCreationDeploymentInfo,
   getTaskCreationDeploymentTemplateBaseline,
   getTaskCreationDebugInfo,
+  getTaskCreationStorageStatus,
+  createTaskCreationStorageUploadTarget,
+  TASK_CREATION_STORAGE_UPLOAD_MAX_BYTES,
+  deleteTaskCreationStorageFile,
+  getTaskCreationStorageFileDownloadUrl,
+  uploadTaskCreationStorageFile,
   insertTaskCreationDatabaseRow,
   rotateTaskCreationDeploymentToken,
   startTaskCreationRuntime,
@@ -85,6 +105,7 @@ import {
   type TaskCreationDeploymentAnalyticsOverview,
   type TaskCreationDeploymentTemplateBaseline,
   type TaskCreationDebugInfo,
+  type TaskCreationStorageStatus,
   type WorkspaceFile,
   type WorkspaceTree,
   type WorkspaceTreeItem,
@@ -1409,6 +1430,67 @@ function formatPreviewTimestamp(value?: string | null) {
   const hours = String(date.getHours()).padStart(2, "0");
   const minutes = String(date.getMinutes()).padStart(2, "0");
   return `${hours}:${minutes}`;
+}
+
+function formatFileSize(value?: number) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return "—";
+  }
+  if (value === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let current = value;
+  let unitIndex = 0;
+  while (current >= 1024 && unitIndex < units.length - 1) {
+    current /= 1024;
+    unitIndex += 1;
+  }
+  const digits = current >= 10 || unitIndex === 0 ? 0 : 1;
+  return `${current.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+function getStorageFileIcon(key: string) {
+  const normalized = key.trim().toLowerCase();
+  if (
+    normalized.endsWith(".png") ||
+    normalized.endsWith(".jpg") ||
+    normalized.endsWith(".jpeg") ||
+    normalized.endsWith(".gif") ||
+    normalized.endsWith(".webp") ||
+    normalized.endsWith(".svg")
+  ) {
+    return FileImage;
+  }
+  if (
+    normalized.endsWith(".mp4") ||
+    normalized.endsWith(".mov") ||
+    normalized.endsWith(".webm")
+  ) {
+    return FileVideo;
+  }
+  if (normalized.endsWith(".mp3") || normalized.endsWith(".wav")) {
+    return FileAudio;
+  }
+  if (normalized.endsWith(".json")) {
+    return FileJson2;
+  }
+  if (
+    normalized.endsWith(".ts") ||
+    normalized.endsWith(".tsx") ||
+    normalized.endsWith(".js") ||
+    normalized.endsWith(".jsx") ||
+    normalized.endsWith(".css") ||
+    normalized.endsWith(".html")
+  ) {
+    return FileCode2;
+  }
+  if (
+    normalized.endsWith(".md") ||
+    normalized.endsWith(".txt") ||
+    normalized.endsWith(".csv")
+  ) {
+    return FileText;
+  }
+  return File;
 }
 
 function formatMetricCount(value?: number | null, fallback: string = "--") {
@@ -2872,7 +2954,13 @@ export function DeploymentPreview({
         </Button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-auto overscroll-contain px-4 py-4 space-y-4">
+      <div
+        className={cn(
+          "flex-1 min-h-0 overflow-auto overscroll-contain px-4 py-4 space-y-4",
+          section === "settings" &&
+            "[scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden",
+        )}
+      >
         {error ? <div className="text-xs text-rose-600">{error}</div> : null}
         {info?.message ? (
           <div className="text-xs text-muted-foreground">{info.message}</div>
@@ -2912,7 +3000,7 @@ export function DeploymentPreview({
         ) : null}
 
         {section === "storage" ? (
-          <DeploymentStorageSection info={info} statusMeta={statusMeta} />
+          <DeploymentStorageSection sessionId={sessionId} statusMeta={statusMeta} />
         ) : null}
 
         {section === "settings" ? (
@@ -3560,6 +3648,8 @@ function DeploymentDatabaseSection({
     "insert" | "update" | "delete" | null
   >(null);
   const [databaseError, setDatabaseError] = useState<string | null>(null);
+  const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
+  const [connectionSecretsVisible, setConnectionSecretsVisible] = useState(false);
   const [rowsError, setRowsError] = useState<string | null>(null);
   const [activeTableId, setActiveTableId] = useState<string | null>(null);
   const [panelMode, setPanelMode] = useState<"record" | "insert" | "settings">(
@@ -3570,6 +3660,7 @@ function DeploymentDatabaseSection({
   const [selectedRowValues, setSelectedRowValues] = useState<
     Record<string, string>
   >({});
+  const [visibleColumnNames, setVisibleColumnNames] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
@@ -3630,11 +3721,14 @@ function DeploymentDatabaseSection({
               matchRowLocator(row, selectedRowLocator, result.columns),
             )
           : null;
-        const nextRow = currentRow || result.rows[0];
-        const nextLocator = buildRowLocator(nextRow, result.columns);
-        setSelectedRowLocator(nextLocator);
-        if (panelMode === "record") {
-          setSelectedRowValues(buildEditorValues(result.columns, nextRow));
+        if (currentRow) {
+          const nextLocator = buildRowLocator(currentRow, result.columns);
+          setSelectedRowLocator(nextLocator);
+          if (panelMode === "record") {
+            setSelectedRowValues(buildEditorValues(result.columns, currentRow));
+          }
+        } else if (panelMode === "record") {
+          setSelectedRowLocator(null);
         }
       } catch (error) {
         if (cancelled) return;
@@ -3655,11 +3749,38 @@ function DeploymentDatabaseSection({
     };
   }, [sessionId, activeTableId, page]);
 
+  useEffect(() => {
+    if (!rowsPage?.columns.length) {
+      setVisibleColumnNames([]);
+      return;
+    }
+    setVisibleColumnNames((current) => {
+      if (!current.length) {
+        return rowsPage.columns.map((column) => column.name);
+      }
+      const available = new Set(rowsPage.columns.map((column) => column.name));
+      const next = current.filter((name) => available.has(name));
+      return next.length ? next : rowsPage.columns.map((column) => column.name);
+    });
+  }, [rowsPage?.columns]);
+
   const activeTable =
     databaseInfo?.tables.find((table) => table.id === activeTableId) ||
     databaseInfo?.tables[0] ||
     null;
+  const databaseConnection = databaseInfo?.connection || null;
   const editorColumns = rowsPage?.columns || [];
+  const shouldShowRecordDetail =
+    panelMode === "insert" || (panelMode === "record" && Boolean(selectedRowLocator));
+  const visibleColumns = useMemo(() => {
+    if (!rowsPage?.columns.length) return [];
+    if (!visibleColumnNames.length) return rowsPage.columns;
+    const visibleSet = new Set(visibleColumnNames);
+    const filtered = rowsPage.columns.filter((column) =>
+      visibleSet.has(column.name),
+    );
+    return filtered.length ? filtered : rowsPage.columns;
+  }, [rowsPage?.columns, visibleColumnNames]);
 
   const handleRefresh = async () => {
     if (!sessionId) return;
@@ -3689,6 +3810,30 @@ function DeploymentDatabaseSection({
     }
   };
 
+  const openConnectionDialog = useCallback(() => {
+    setConnectionDialogOpen(true);
+  }, []);
+
+  const handleEnableDatabase = async () => {
+    if (!sessionId) return;
+    setDatabaseLoading(true);
+    setDatabaseError(null);
+    try {
+      const result = await ensureTaskCreationDatabase(sessionId);
+      setDatabaseInfo(result);
+      setActiveTableId(result?.tables[0]?.id || null);
+      setPanelMode("settings");
+    } catch (error) {
+      setDatabaseError(
+        error instanceof Error
+          ? error.message
+          : i18n.t("previewPanel.deployment.database.enableFailed"),
+      );
+    } finally {
+      setDatabaseLoading(false);
+    }
+  };
+
   const handleSelectRow = (row: Record<string, unknown>) => {
     if (!rowsPage) return;
     const locator = buildRowLocator(row, rowsPage.columns);
@@ -3703,6 +3848,12 @@ function DeploymentDatabaseSection({
     setSelectedRowLocator(null);
     setSelectedRowValues(buildEditorValues(rowsPage.columns));
   };
+
+  const handleHideRecordDetail = useCallback(() => {
+    if (panelMode !== "record" && panelMode !== "insert") return;
+    setSelectedRowLocator(null);
+    setPanelMode("record");
+  }, [panelMode]);
 
   const handleCopy = async (key: string, value: string) => {
     try {
@@ -3809,15 +3960,75 @@ function DeploymentDatabaseSection({
     );
   }
 
+  if (databaseInfo && !databaseInfo.configured) {
+    return (
+      <div className="space-y-4">
+        <DeploymentResourceHeroCard
+          icon={<Database className="size-5" />}
+          title={i18n.t("previewPanel.deployment.database.notConfiguredTitle")}
+          description={i18n.t(
+            "previewPanel.deployment.database.notConfiguredDescription",
+          )}
+          action={
+            <Button
+              onClick={() => void handleEnableDatabase()}
+              disabled={databaseLoading}
+              className="shrink-0"
+            >
+              {databaseLoading ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Database className="size-4" />
+              )}
+              {i18n.t("previewPanel.deployment.database.enable")}
+            </Button>
+          }
+        >
+          <DeploymentPlaceholderGrid
+            items={[
+              {
+                title: i18n.t(
+                  "previewPanel.deployment.database.databaseStatus",
+                ),
+                description: i18n.t(
+                  "previewPanel.deployment.database.notConfiguredDescription",
+                ),
+              },
+              {
+                title: i18n.t(
+                  "previewPanel.deployment.database.connectionInfo",
+                ),
+                description: i18n.t(
+                  "previewPanel.deployment.database.canCopyToClient",
+                ),
+              },
+              {
+                title: i18n.t(
+                  "previewPanel.deployment.database.settings",
+                ),
+                description: i18n.t(
+                  "previewPanel.deployment.database.readyNoTables",
+                ),
+              },
+            ]}
+          />
+        </DeploymentResourceHeroCard>
+        {databaseError ? (
+          <div className="text-sm text-rose-600">{databaseError}</div>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
-    <div className="grid gap-4 xl:grid-cols-[180px_minmax(0,1fr)_320px]">
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="relative flex h-full flex-col">
+    <div className="h-full overflow-hidden rounded-xl border border-border/70 bg-card">
+      <div className="flex h-full items-stretch overflow-hidden">
+        <section className="relative flex h-full w-[180px] shrink-0 flex-col px-2 pb-0 pt-3">
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 right-0 border-r border-border"
+            className="pointer-events-none absolute inset-0 border-r border-border"
           />
-          <div className="flex-1 space-y-2 overflow-y-auto overscroll-contain p-3">
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain">
             {databaseLoading && !databaseInfo ? (
               <div className="px-3 py-2 text-sm text-muted-foreground">
                 {i18n.t("previewPanel.deployment.database.preparing")}
@@ -3833,20 +4044,22 @@ function DeploymentDatabaseSection({
                   setPanelMode("record");
                 }}
                 className={cn(
-                  "flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left transition-colors",
+                  "flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left transition-colors",
                   activeTableId === table.id
-                    ? "bg-muted/50 text-foreground"
+                    ? "bg-muted/60 text-foreground"
                     : "text-foreground hover:bg-muted/30",
                 )}
               >
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium">
+                <div className="min-w-0 flex-1" title={table.name}>
+                  <div
+                    className={cn(
+                      "truncate text-sm",
+                      activeTableId === table.id ? "font-medium" : "font-normal",
+                    )}
+                  >
                     {table.name}
                   </div>
                 </div>
-                <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
-                  {table.sourceLabel}
-                </span>
               </button>
             ))}
             {!databaseLoading && !databaseInfo?.tables.length ? (
@@ -3855,26 +4068,276 @@ function DeploymentDatabaseSection({
               </div>
             ) : null}
           </div>
-          <div className="border-t border-border p-3">
+          <div className="px-2 py-4">
             <Button
               variant="outline"
-              className="w-full justify-center text-sm"
-              onClick={() => setPanelMode("settings")}
+              className="h-8 w-full justify-center text-sm"
+              onClick={openConnectionDialog}
             >
-              <TableProperties className="size-4" />
+              <Database className="size-4" />
               {i18n.t("previewPanel.deployment.database.settings")}
             </Button>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-          <div>
-            <div className="text-sm font-semibold text-foreground">
+        <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <div className="flex items-center justify-between gap-3 px-4 py-3">
+            <div className="text-[13px] font-normal text-foreground">
               {activeTable
                 ? activeTable.name
                 : i18n.t("previewPanel.deployment.database.database")}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" className="h-8 text-xs">
+                    <TableProperties className="size-4" />
+                    {i18n.t("previewPanel.deployment.database.columnCount", {
+                      count: visibleColumns.length || 0,
+                    })}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-56 rounded-2xl p-2">
+                  <div className="space-y-1">
+                    {rowsPage?.columns.map((column) => {
+                      const checked = visibleColumnNames.includes(column.name);
+                      const canHide =
+                        checked && visibleColumnNames.length > 1;
+                      return (
+                        <div
+                          key={column.name}
+                          className="flex items-center justify-between gap-3 rounded-lg px-3 py-2"
+                        >
+                          <div className="min-w-0 flex-1 text-sm text-foreground">
+                            <span className="truncate">{column.name}</span>
+                          </div>
+                          <Switch
+                            checked={checked}
+                            onCheckedChange={(nextChecked) => {
+                              setVisibleColumnNames((current) => {
+                                if (nextChecked) {
+                                  if (current.includes(column.name)) {
+                                    return current;
+                                  }
+                                  const ordered =
+                                    rowsPage?.columns
+                                      .map((item) => item.name)
+                                      .filter((name) =>
+                                        name === column.name || current.includes(name),
+                                      ) || [];
+                                  return ordered;
+                                }
+                                if (!canHide) return current;
+                                return current.filter((name) => name !== column.name);
+                              });
+                            }}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => void handleRefresh()}
+              >
+                <RefreshCw className="size-4" />
+                {i18n.t("previewPanel.deployment.database.refresh")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={handleCreateNew}
+              >
+                <Plus className="size-4" />
+                {i18n.t("previewPanel.deployment.database.newRecord")}
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                className="size-8"
+                onClick={openConnectionDialog}
+              >
+                <TableProperties className="size-4" />
+              </Button>
+            </div>
+          </div>
+
+          {databaseError ? (
+            <div className="px-4 pb-2 text-xs text-rose-600">{databaseError}</div>
+          ) : null}
+          {rowsError ? (
+            <div className="px-4 pb-2 text-xs text-rose-600">{rowsError}</div>
+          ) : null}
+
+          <div className="flex min-h-0 flex-1 flex-col pb-12">
+            {activeTable && rowsPage ? (
+              <>
+                <div
+                  className="relative flex-1 overflow-auto"
+                  onClick={(event) => {
+                    if (
+                      panelMode !== "record" &&
+                      panelMode !== "insert"
+                    ) {
+                      return;
+                    }
+                    if (panelMode === "record" && !selectedRowLocator) return;
+                    const target = event.target as HTMLElement;
+                    if (
+                      target.closest("tbody tr") ||
+                      target.closest("button") ||
+                      target.closest("input") ||
+                      target.closest("textarea") ||
+                      target.closest("select")
+                    ) {
+                      return;
+                    }
+                    handleHideRecordDetail();
+                  }}
+                >
+                  <table className="min-w-full border-separate border-spacing-0 text-sm">
+                    <thead className="sticky top-0 z-10 bg-card">
+                      <tr>
+                        {visibleColumns.map((column) => (
+                          <th
+                            key={column.name}
+                            className="border-b border-border px-3 py-2 text-left font-medium text-muted-foreground"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span>{column.name}</span>
+                              {column.isPrimaryKey ? (
+                                <KeyRound className="size-3.5 text-muted-foreground" />
+                              ) : null}
+                            </div>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rowsLoading ? (
+                        <tr>
+                          <td
+                            colSpan={Math.max(visibleColumns.length, 1)}
+                            className="px-4 py-16 text-center text-muted-foreground"
+                          >
+                            {i18n.t("previewPanel.deployment.database.loadingData")}
+                          </td>
+                        </tr>
+                      ) : rowsPage.rows.length ? (
+                        rowsPage.rows.map((row, index) => {
+                          const locator = buildRowLocator(row, rowsPage.columns);
+                          const active = selectedRowLocator
+                            ? matchRowLocator(
+                                row,
+                                selectedRowLocator,
+                                rowsPage.columns,
+                              )
+                            : false;
+                          return (
+                            <tr
+                              key={String(row._oneceo_ctid || index)}
+                              className={cn(
+                                "cursor-pointer transition-colors",
+                                active ? "bg-muted/30" : "hover:bg-muted/40",
+                              )}
+                              onClick={() => handleSelectRow(row)}
+                            >
+                              {visibleColumns.map((column) => (
+                                <td
+                                  key={column.name}
+                                  className="border-b border-border/70 px-3 py-2 align-top text-foreground"
+                                >
+                                  <div className="max-w-[220px] truncate">
+                                    {formatDatabaseCell(row[column.name])}
+                                  </div>
+                                </td>
+                              ))}
+                            </tr>
+                          );
+                        })
+                      ) : (
+                        <tr>
+                          <td
+                            colSpan={Math.max(visibleColumns.length, 1)}
+                            className="px-4 py-16 text-center text-muted-foreground"
+                          >
+                            {i18n.t("previewPanel.deployment.database.noTableData")}
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <span>
+                        {i18n.t("previewPanel.deployment.database.rows", {
+                          count: rowsPage.total,
+                        })}
+                      </span>
+                      <span className="size-1 rounded-full bg-slate-300" />
+                      <span>
+                        {i18n.t("previewPanel.deployment.database.rowsPerPage", {
+                          count: rowsPage.pageSize,
+                        })}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        disabled={rowsPage.page <= 1}
+                        onClick={() =>
+                          setPage((current) => Math.max(1, current - 1))
+                        }
+                      >
+                        <ChevronLeft className="size-4" />
+                        {i18n.t("previewPanel.deployment.database.previousPage")}
+                      </Button>
+                      <span>
+                        {i18n.t("previewPanel.deployment.database.pageIndicator", {
+                          page: rowsPage.page,
+                          total: rowsPage.totalPages,
+                        })}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        disabled={rowsPage.page >= rowsPage.totalPages}
+                        onClick={() => setPage((current) => current + 1)}
+                      >
+                        {i18n.t("previewPanel.deployment.database.nextPage")}
+                        <ChevronRight className="size-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="px-4 py-20 text-center text-sm text-muted-foreground">
+                {databaseLoading
+                  ? i18n.t("previewPanel.deployment.database.connecting")
+                  : i18n.t("previewPanel.deployment.database.selectTableHint")}
+              </div>
+            )}
+          </div>
+        </section>
+
+        {shouldShowRecordDetail ? (
+        <section className="w-[320px] shrink-0 border-l border-border bg-card">
+          <div className="border-b border-border px-4 py-3">
+            <div className="text-sm font-semibold text-foreground">
+              {panelMode === "insert"
+                ? i18n.t("previewPanel.deployment.database.newRecord")
+                : i18n.t("previewPanel.deployment.database.recordDetail")}
             </div>
             <div className="mt-1 text-xs text-muted-foreground">
               {activeTable
@@ -3882,295 +4345,16 @@ function DeploymentDatabaseSection({
                 : i18n.t("previewPanel.deployment.database.waitSelectTable")}
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" className="h-8 text-xs">
-              <TableProperties className="size-4" />
-              {i18n.t("previewPanel.deployment.database.columnCount", {
-                count: rowsPage?.columns.length || 0,
-              })}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 text-xs"
-              onClick={() => void handleRefresh()}
-            >
-              <RefreshCw className="size-4" />
-              {i18n.t("previewPanel.deployment.database.refresh")}
-            </Button>
-            <Button size="sm" className="h-8 text-xs" onClick={handleCreateNew}>
-              <Plus className="size-4" />
-              {i18n.t("previewPanel.deployment.database.newRecord")}
-            </Button>
-          </div>
-        </div>
 
-        {databaseError ? (
-          <div className="px-4 pt-3 text-xs text-rose-600">{databaseError}</div>
-        ) : null}
-        {rowsError ? (
-          <div className="px-4 pt-3 text-xs text-rose-600">{rowsError}</div>
-        ) : null}
-
-        <div className="min-h-0">
-          {activeTable && rowsPage ? (
-            <>
-              <div className="max-h-[520px] overflow-auto">
-                <table className="min-w-full border-separate border-spacing-0 text-sm">
-                  <thead className="sticky top-0 z-10 bg-card">
-                    <tr>
-                      {rowsPage.columns.map((column) => (
-                        <th
-                          key={column.name}
-                          className="border-b border-border px-3 py-2 text-left font-medium text-muted-foreground"
-                        >
-                          <div className="flex items-center gap-2">
-                            <span>{column.name}</span>
-                            {column.isPrimaryKey ? (
-                              <KeyRound className="size-3.5 text-muted-foreground" />
-                            ) : null}
-                          </div>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rowsLoading ? (
-                      <tr>
-                        <td
-                          colSpan={Math.max(rowsPage.columns.length, 1)}
-                          className="px-4 py-16 text-center text-muted-foreground"
-                        >
-                          {i18n.t("previewPanel.deployment.database.loadingData")}
-                        </td>
-                      </tr>
-                    ) : rowsPage.rows.length ? (
-                      rowsPage.rows.map((row, index) => {
-                        const locator = buildRowLocator(row, rowsPage.columns);
-                        const active = selectedRowLocator
-                          ? matchRowLocator(
-                              row,
-                              selectedRowLocator,
-                              rowsPage.columns,
-                            )
-                          : index === 0;
-                        return (
-                          <tr
-                            key={String(row._oneceo_ctid || index)}
-                            className={cn(
-                              "cursor-pointer transition-colors",
-                              active ? "bg-muted/30" : "hover:bg-muted/40",
-                            )}
-                            onClick={() => handleSelectRow(row)}
-                          >
-                            {rowsPage.columns.map((column) => (
-                              <td
-                                key={column.name}
-                                className="border-b border-border/70 px-3 py-2 align-top text-foreground"
-                              >
-                                <div className="max-w-[220px] truncate">
-                                  {formatDatabaseCell(row[column.name])}
-                                </div>
-                              </td>
-                            ))}
-                          </tr>
-                        );
-                      })
-                    ) : (
-                      <tr>
-                        <td
-                          colSpan={Math.max(rowsPage.columns.length, 1)}
-                          className="px-4 py-16 text-center text-muted-foreground"
-                        >
-                          {i18n.t("previewPanel.deployment.database.noTableData")}
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3 text-xs text-muted-foreground">
-                <div className="flex items-center gap-2">
-                  <span>
-                    {i18n.t("previewPanel.deployment.database.rows", {
-                      count: rowsPage.total,
-                    })}
-                  </span>
-                  <span className="size-1 rounded-full bg-slate-300" />
-                  <span>
-                    {i18n.t("previewPanel.deployment.database.rowsPerPage", {
-                      count: rowsPage.pageSize,
-                    })}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 text-xs"
-                    disabled={rowsPage.page <= 1}
-                    onClick={() =>
-                      setPage((current) => Math.max(1, current - 1))
-                    }
-                  >
-                    <ChevronLeft className="size-4" />
-                    {i18n.t("previewPanel.deployment.database.previousPage")}
-                  </Button>
-                  <span>
-                    {i18n.t("previewPanel.deployment.database.pageIndicator", {
-                      page: rowsPage.page,
-                      total: rowsPage.totalPages,
-                    })}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 text-xs"
-                    disabled={rowsPage.page >= rowsPage.totalPages}
-                    onClick={() => setPage((current) => current + 1)}
-                  >
-                    {i18n.t("previewPanel.deployment.database.nextPage")}
-                    <ChevronRight className="size-4" />
-                  </Button>
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="px-4 py-20 text-center text-sm text-muted-foreground">
-              {databaseLoading
-                ? i18n.t("previewPanel.deployment.database.connecting")
-                : i18n.t("previewPanel.deployment.database.selectTableHint")}
-            </div>
-          )}
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="border-b border-border px-4 py-3">
-          <div className="text-sm font-semibold text-foreground">
-            {panelMode === "settings"
-              ? i18n.t("previewPanel.deployment.database.connectionInfo")
-              : panelMode === "insert"
-                ? i18n.t("previewPanel.deployment.database.newRecord")
-                : i18n.t("previewPanel.deployment.database.recordDetail")}
-          </div>
-          <div className="mt-1 text-xs text-muted-foreground">
-            {panelMode === "settings"
-              ? i18n.t("previewPanel.deployment.database.canCopyToClient")
-              : activeTable
-                ? `${activeTable.schema}.${activeTable.name}`
-                : i18n.t("previewPanel.deployment.database.waitSelectTable")}
-          </div>
-        </div>
-
-        <div className="space-y-4 p-4">
-          {panelMode === "settings" && databaseInfo ? (
-            <>
-              <div className="grid gap-3">
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.database.connectionUrl")}
-                  value={
-                    databaseInfo.connection.publicConnectionUrl ||
-                    databaseInfo.connection.connectionUrl
-                  }
-                  copied={copiedField === "url"}
-                  onCopy={() =>
-                    void handleCopy(
-                      "url",
-                      databaseInfo.connection.publicConnectionUrl ||
-                        databaseInfo.connection.connectionUrl,
-                    )
-                  }
-                />
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.database.host")}
-                  value={databaseInfo.connection.host}
-                  copied={copiedField === "host"}
-                  onCopy={() =>
-                    void handleCopy("host", databaseInfo.connection.host)
-                  }
-                />
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.database.port")}
-                  value={databaseInfo.connection.port}
-                  copied={copiedField === "port"}
-                  onCopy={() =>
-                    void handleCopy("port", databaseInfo.connection.port)
-                  }
-                />
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.database.username")}
-                  value={databaseInfo.connection.username}
-                  copied={copiedField === "username"}
-                  onCopy={() =>
-                    void handleCopy(
-                      "username",
-                      databaseInfo.connection.username,
-                    )
-                  }
-                />
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.database.password")}
-                  value={databaseInfo.connection.password}
-                  copied={copiedField === "password"}
-                  onCopy={() =>
-                    void handleCopy(
-                      "password",
-                      databaseInfo.connection.password,
-                    )
-                  }
-                  sensitive
-                />
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.database.databaseName")}
-                  value={databaseInfo.connection.database}
-                  copied={copiedField === "database"}
-                  onCopy={() =>
-                    void handleCopy(
-                      "database",
-                      databaseInfo.connection.database,
-                    )
-                  }
-                />
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-2">
-                <DeploymentMiniStatus
-                  label={i18n.t("previewPanel.deployment.database.databaseStatus")}
-                  value={databaseInfo.latestDeploymentStatus || "UNKNOWN"}
-                />
-                <DeploymentMiniStatus
-                  label={i18n.t("previewPanel.deployment.database.connectionMode")}
-                  value={databaseInfo.connection.sslMode.toUpperCase()}
-                />
-                <DeploymentMiniStatus
-                  label={i18n.t("previewPanel.deployment.database.volumeLabel")}
-                  value={
-                    databaseInfo.volumeName ||
-                    i18n.t("previewPanel.deployment.database.mounted")
-                  }
-                />
-                <DeploymentMiniStatus
-                  label={i18n.t("previewPanel.deployment.database.appDeployment")}
-                  value={
-                    info?.configured
-                      ? statusMeta.label
-                      : i18n.t(
-                          "previewPanel.deployment.database.deploymentPreparing",
-                        )
-                  }
-                />
-              </div>
-            </>
-          ) : rowsPage ? (
-            <>
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-sm font-medium text-foreground">
-                  {panelMode === "insert"
-                    ? i18n.t("previewPanel.deployment.database.prepareInsert")
-                    : i18n.t("previewPanel.deployment.database.selectedRecord")}
-                </div>
-                {panelMode !== "settings" ? (
+          <div className="space-y-4 p-4">
+            {rowsPage ? (
+              <>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm font-medium text-foreground">
+                    {panelMode === "insert"
+                      ? i18n.t("previewPanel.deployment.database.prepareInsert")
+                      : i18n.t("previewPanel.deployment.database.selectedRecord")}
+                  </div>
                   <div className="flex items-center gap-2">
                     {panelMode === "record" ? (
                       <Button
@@ -4207,61 +4391,152 @@ function DeploymentDatabaseSection({
                       </Button>
                     ) : null}
                   </div>
-                ) : null}
+                </div>
+
+                <div className="space-y-3">
+                  {editorColumns.map((column) => (
+                    <DatabaseFieldEditor
+                      key={column.name}
+                      column={column}
+                      value={selectedRowValues[column.name] || ""}
+                      disabled={
+                        panelMode === "record" ? column.isPrimaryKey : false
+                      }
+                      onChange={(nextValue) =>
+                        setSelectedRowValues((current) => ({
+                          ...current,
+                          [column.name]: nextValue,
+                        }))
+                      }
+                    />
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-2 pt-2">
+                  <Button
+                    size="sm"
+                    className="h-8 text-xs"
+                    disabled={Boolean(actionLoading)}
+                    onClick={() => void handleSave()}
+                  >
+                    {actionLoading === "insert" || actionLoading === "update" ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : null}
+                    {panelMode === "insert"
+                      ? i18n.t("previewPanel.deployment.database.writeRecord")
+                      : i18n.t("previewPanel.deployment.database.saveChanges")}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <div className="py-10 text-center text-sm text-muted-foreground">
+                {databaseLoading
+                  ? i18n.t("previewPanel.deployment.database.preparingPanel")
+                  : i18n.t("previewPanel.deployment.database.waitPanelReady")}
+              </div>
+            )}
+          </div>
+        </section>
+        ) : null}
+      </div>
+
+      <Dialog
+        open={connectionDialogOpen}
+        onOpenChange={(open) => {
+          setConnectionDialogOpen(open);
+          if (!open) {
+            setConnectionSecretsVisible(false);
+          }
+        }}
+      >
+        <DialogContent className="max-w-3xl rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {i18n.t("previewPanel.deployment.database.manageConnectionTitle")}
+            </DialogTitle>
+            <DialogDescription>
+              {i18n.t(
+                "previewPanel.deployment.database.manageConnectionDescription",
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          {databaseConnection ? (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-950">
+                {i18n.t("previewPanel.deployment.database.secretWarning")}
               </div>
 
-              <div className="space-y-3">
-                {editorColumns.map((column) => (
-                  <DatabaseFieldEditor
-                    key={column.name}
-                    column={column}
-                    value={selectedRowValues[column.name] || ""}
-                    disabled={
-                      panelMode === "record" ? column.isPrimaryKey : false
-                    }
-                    onChange={(nextValue) =>
-                      setSelectedRowValues((current) => ({
-                        ...current,
-                        [column.name]: nextValue,
-                      }))
-                    }
+              <div className="rounded-xl border border-border/70 bg-card p-4">
+                <div className="space-y-4">
+                  <ConnectionDialogField
+                  label={i18n.t("previewPanel.deployment.database.connectionUrl")}
+                  value={
+                    databaseConnection.publicConnectionUrl ||
+                    databaseConnection.connectionUrl
+                  }
+                  copied={copiedField === "url"}
+                  onCopy={() =>
+                    void handleCopy(
+                      "url",
+                      databaseConnection.publicConnectionUrl ||
+                        databaseConnection.connectionUrl,
+                    )
+                  }
+                  sensitive
+                  revealed={connectionSecretsVisible}
                   />
-                ))}
+                  <ConnectionDialogField
+                  label={i18n.t("previewPanel.deployment.database.host")}
+                  value={databaseConnection.host}
+                  copied={copiedField === "host"}
+                  onCopy={() => void handleCopy("host", databaseConnection.host)}
+                  />
+                  <ConnectionDialogField
+                  label={i18n.t("previewPanel.deployment.database.port")}
+                  value={databaseConnection.port}
+                  copied={copiedField === "port"}
+                  onCopy={() => void handleCopy("port", databaseConnection.port)}
+                  />
+                  <ConnectionDialogField
+                  label={i18n.t("previewPanel.deployment.database.username")}
+                  value={databaseConnection.username}
+                  copied={copiedField === "username"}
+                  onCopy={() =>
+                    void handleCopy("username", databaseConnection.username)
+                  }
+                  />
+                  <ConnectionDialogField
+                  label={i18n.t("previewPanel.deployment.database.password")}
+                  value={databaseConnection.password}
+                  copied={copiedField === "password"}
+                  onCopy={() =>
+                    void handleCopy("password", databaseConnection.password)
+                  }
+                  sensitive
+                  revealed={connectionSecretsVisible}
+                  onToggleSensitive={() =>
+                    setConnectionSecretsVisible((current) => !current)
+                  }
+                />
+                  <ConnectionDialogField
+                  label={i18n.t("previewPanel.deployment.database.databaseName")}
+                  value={databaseConnection.database}
+                  copied={copiedField === "database"}
+                  onCopy={() =>
+                    void handleCopy("database", databaseConnection.database)
+                  }
+                  />
+                </div>
               </div>
-
-              <div className="flex items-center gap-2 pt-2">
-                <Button
-                  size="sm"
-                  className="h-8 text-xs"
-                  disabled={Boolean(actionLoading)}
-                  onClick={() => void handleSave()}
-                >
-                  {actionLoading === "insert" || actionLoading === "update" ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : null}
-                  {panelMode === "insert"
-                    ? i18n.t("previewPanel.deployment.database.writeRecord")
-                    : i18n.t("previewPanel.deployment.database.saveChanges")}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 text-xs"
-                  onClick={() => setPanelMode("settings")}
-                >
-                  {i18n.t("previewPanel.deployment.database.viewConnectionInfo")}
-                </Button>
-              </div>
-            </>
+            </div>
           ) : (
-            <div className="py-10 text-center text-sm text-muted-foreground">
-              {databaseLoading
-                ? i18n.t("previewPanel.deployment.database.preparingPanel")
-                : i18n.t("previewPanel.deployment.database.waitPanelReady")}
+            <div className="py-8 text-center text-sm text-muted-foreground">
+              {i18n.t("previewPanel.deployment.database.waitPanelReady")}
             </div>
           )}
-        </div>
-      </section>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -4316,39 +4591,125 @@ function InsightCard({
   );
 }
 
-function ConnectionInfoField({
+function DeploymentResourceHeroCard({
+  icon,
+  title,
+  description,
+  action,
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+  action?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <section className="rounded-lg border border-border/70 bg-card p-5">
+      <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start gap-4">
+            <div className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/30 text-foreground">
+              {icon}
+            </div>
+            <div className="min-w-0">
+              <div className="text-base font-semibold text-foreground">
+                {title}
+              </div>
+              <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
+                {description}
+              </p>
+            </div>
+          </div>
+        </div>
+        {action ? (
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {action}
+          </div>
+        ) : null}
+      </div>
+      {children ? <div className="mt-5">{children}</div> : null}
+    </section>
+  );
+}
+
+function DeploymentPlaceholderGrid({
+  items,
+}: {
+  items: Array<{ title: string; description: string }>;
+}) {
+  return (
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {items.map((item) => (
+        <DeploymentPlaceholderCard
+          key={item.title}
+          title={item.title}
+          description={item.description}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ConnectionDialogField({
   label,
   value,
   copied,
   onCopy,
   sensitive = false,
+  revealed = true,
+  onToggleSensitive,
 }: {
   label: string;
   value: string;
   copied: boolean;
   onCopy: () => void;
   sensitive?: boolean;
+  revealed?: boolean;
+  onToggleSensitive?: () => void;
 }) {
+  const displayValue =
+    sensitive && !revealed ? "••••••••••••••••" : value;
+
   return (
-    <div className="rounded-md border border-border/70 bg-muted/30 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-xs uppercase tracking-[0.08em] text-muted-foreground">
-          {label}
+    <div className="space-y-2">
+      <div className="text-sm font-medium text-foreground">{label}</div>
+      <div className="flex items-center gap-2 rounded-lg border border-border/70 bg-muted/30 px-3 py-3">
+        <div className="min-w-0 flex-1 break-all font-mono text-xs text-foreground">
+          {displayValue}
         </div>
+        {sensitive && onToggleSensitive ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8 shrink-0"
+            onClick={onToggleSensitive}
+            aria-label={
+              revealed
+                ? i18n.t("previewPanel.deployment.database.hideSensitive")
+                : i18n.t("previewPanel.deployment.database.showSensitive")
+            }
+          >
+            {revealed ? (
+              <EyeOff className="size-4" />
+            ) : (
+              <Eye className="size-4" />
+            )}
+          </Button>
+        ) : null}
         <Button
-          variant="outline"
-          size="sm"
-          className="h-7 text-[11px]"
+          variant="ghost"
+          size="icon"
+          className="size-8 shrink-0"
           onClick={onCopy}
+          aria-label={
+            copied
+              ? i18n.t("previewPanel.deployment.database.copied")
+              : i18n.t("previewPanel.deployment.database.copy")
+          }
         >
-          <Copy className="size-3.5" />
-          {copied
-            ? i18n.t("previewPanel.deployment.database.copied")
-            : i18n.t("previewPanel.deployment.database.copy")}
+          <Copy className="size-4" />
         </Button>
-      </div>
-      <div className="mt-2 break-all font-mono text-xs text-foreground">
-        {sensitive ? value : value}
       </div>
     </div>
   );
@@ -4492,88 +4853,561 @@ function buildMutationValues(
 }
 
 function DeploymentStorageSection({
-  info,
+  sessionId,
   statusMeta,
 }: {
-  info: TaskCreationDeploymentInfo | null;
+  sessionId?: string | null;
   statusMeta: DeploymentStatusMeta;
 }) {
-  return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
-          {i18n.t("previewPanel.deployment.storage.title")}
-        </div>
-        <div className="grid gap-3 p-4 md:grid-cols-2">
-          <DeploymentMetricCard
-            title={i18n.t("previewPanel.deployment.storage.storageStatus")}
-            value={i18n.t("previewPanel.deployment.storage.reservedEntry")}
-            subtitle={i18n.t(
-              "previewPanel.deployment.storage.reservedEntryDescription",
-            )}
-          />
-          <DeploymentMetricCard
-            title={i18n.t("previewPanel.deployment.storage.recommendedUsage")}
-            value={i18n.t(
-              "previewPanel.deployment.storage.recommendedUsageValue",
-            )}
-            subtitle={i18n.t(
-              "previewPanel.deployment.storage.recommendedUsageDescription",
-            )}
-          />
-          <div className="rounded-md border border-border/70 bg-muted/30 p-4 md:col-span-2">
-            <div className="text-sm font-semibold text-foreground">
-              {i18n.t("previewPanel.deployment.storage.visibleState")}
+  const [storageStatus, setStorageStatus] =
+    useState<TaskCreationStorageStatus | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
+  const [connectionSecretsVisible, setConnectionSecretsVisible] = useState(false);
+  const [selectedFileKey, setSelectedFileKey] = useState<string | null>(null);
+  const [storageActionLoading, setStorageActionLoading] = useState<
+    "upload" | "delete" | null
+  >(null);
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const loadStorage = useCallback(
+    async (revealSecrets = false) => {
+      if (!sessionId) return;
+      setLoading(true);
+      setError(null);
+      try {
+        const result = await getTaskCreationStorageStatus(sessionId, {
+          revealSecrets,
+        });
+        setStorageStatus(result);
+      } catch (loadError) {
+        setError(
+          loadError instanceof Error
+            ? loadError.message
+            : i18n.t("previewPanel.deployment.storage.loadFailed"),
+        );
+      } finally {
+        setLoading(false);
+      }
+    },
+    [sessionId],
+  );
+
+  useEffect(() => {
+    void loadStorage(false);
+  }, [loadStorage]);
+
+  const handleEnsureStorage = async () => {
+    if (!sessionId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await ensureTaskCreationStorage(sessionId);
+      setStorageStatus(result);
+    } catch (ensureError) {
+      setError(
+        ensureError instanceof Error
+          ? ensureError.message
+          : i18n.t("previewPanel.deployment.storage.enableFailed"),
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRevealSecrets = async () => {
+    await loadStorage(true);
+  };
+
+  const handleOpenConnectionDialog = async () => {
+    setConnectionDialogOpen(true);
+    if (!storageStatus?.bucket?.secretAccessKey) {
+      await handleRevealSecrets();
+    }
+  };
+
+  const handleCopy = async (key: string, value?: string) => {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedField(key);
+      window.setTimeout(
+        () => setCopiedField((current) => (current === key ? null : current)),
+        1200,
+      );
+    } catch {
+      // ignore clipboard errors in preview panel
+    }
+  };
+
+  const handleSelectUpload = () => {
+    fileInputRef.current?.click();
+  };
+
+  const waitForUploadedFile = useCallback(
+    async (fileKey: string) => {
+      if (!sessionId) return null;
+      const deadline = Date.now() + 15000;
+      let latest: TaskCreationStorageStatus | null = null;
+      while (Date.now() < deadline) {
+        latest = await getTaskCreationStorageStatus(sessionId);
+        if (latest?.files?.some((item) => item.key === fileKey)) {
+          return latest;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 800));
+      }
+      return latest;
+    },
+    [sessionId],
+  );
+
+  const handleUploadFile = async (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!sessionId || !file) return;
+    if (file.size > TASK_CREATION_STORAGE_UPLOAD_MAX_BYTES) {
+      setError(i18n.t("previewPanel.deployment.storage.uploadTooLarge"));
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      setStorageActionLoading("upload");
+      setUploadingFile(true);
+      const uploadTarget = await createTaskCreationStorageUploadTarget(sessionId, file);
+      await uploadTaskCreationStorageFile(uploadTarget, file);
+      const refreshed = await waitForUploadedFile(uploadTarget.key);
+      if (refreshed) {
+        setStorageStatus(refreshed);
+      } else {
+        await loadStorage(false);
+      }
+    } catch (uploadError) {
+      setError(
+        uploadError instanceof Error
+          ? uploadError.message
+          : i18n.t("previewPanel.deployment.storage.uploadFailed"),
+      );
+    } finally {
+      setUploadingFile(false);
+      setStorageActionLoading(null);
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteFile = async () => {
+    if (!sessionId || !selectedFileKey) return;
+    setLoading(true);
+    setStorageActionLoading("delete");
+    setError(null);
+    try {
+      const result = await deleteTaskCreationStorageFile(sessionId, selectedFileKey);
+      setStorageStatus(result);
+      setSelectedFileKey(null);
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : i18n.t("previewPanel.deployment.storage.deleteFailed"),
+      );
+    } finally {
+      setStorageActionLoading(null);
+      setLoading(false);
+    }
+  };
+
+  const handleDownloadFile = () => {
+    if (!sessionId || !selectedFile) return;
+    const link = document.createElement("a");
+    link.href = getTaskCreationStorageFileDownloadUrl(sessionId, selectedFile.key);
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.click();
+  };
+
+  if (!sessionId) {
+    return (
+      <EmptyState text={i18n.t("previewPanel.deployment.storage.missingSession")} />
+    );
+  }
+
+  const bucket = storageStatus?.bucket || null;
+  const bucketFiles = storageStatus?.files || [];
+  const selectedFile =
+    bucketFiles.find((fileItem) => fileItem.key === selectedFileKey) || null;
+
+  if (!storageStatus?.configured) {
+    return (
+      <section className="rounded-xl border border-border/70 bg-card p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-base font-semibold text-foreground">
+              {i18n.t("previewPanel.deployment.storage.notConfiguredTitle")}
             </div>
-            <div className="mt-2 grid gap-3 md:grid-cols-3">
-              <DeploymentMiniStatus
-                label={i18n.t("previewPanel.deployment.storage.appAccess")}
-                value={statusMeta.label}
-              />
-              <DeploymentMiniStatus
-                label={i18n.t("previewPanel.deployment.storage.defaultDomain")}
-                value={
-                  info?.domains.length
-                    ? i18n.t("previewPanel.deployment.storage.generated")
-                    : i18n.t("previewPanel.deployment.storage.pendingPublish")
-                }
-              />
-              <DeploymentMiniStatus
-                label={i18n.t("previewPanel.deployment.storage.objectStorage")}
-                value={i18n.t("previewPanel.deployment.storage.futurePlan")}
-              />
+            <div className="mt-1 text-sm text-muted-foreground">
+              {i18n.t("previewPanel.deployment.storage.notConfiguredDescription")}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={() => void loadStorage(Boolean(bucket?.secretAccessKey))}
+              disabled={loading}
+            >
+              {loading ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <RefreshCw className="size-4" />
+              )}
+              {i18n.t("previewPanel.deployment.storage.refresh")}
+            </Button>
+            <Button
+              size="sm"
+              className="h-8 text-xs"
+              onClick={() => void handleEnsureStorage()}
+              disabled={loading}
+            >
+              {loading ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <HardDrive className="size-4" />
+              )}
+              {i18n.t("previewPanel.deployment.storage.enable")}
+            </Button>
+          </div>
+        </div>
+        {error ? <div className="mt-4 text-sm text-rose-600">{error}</div> : null}
+      </section>
+    );
+  }
+
+  return (
+    <div className="h-full overflow-hidden rounded-xl border border-border/70 bg-card">
+      <div className="flex h-full items-stretch overflow-hidden">
+        <div className="relative flex h-full w-[220px] shrink-0 flex-col border-r border-border">
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 py-3">
+            <button
+              type="button"
+              title={bucket?.name || i18n.t("previewPanel.deployment.storage.title")}
+              className="flex w-full items-center gap-3 rounded-md bg-muted/60 px-3 py-2 text-left"
+            >
+              <HardDrive className="size-4 shrink-0 text-foreground" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium text-foreground">
+                  {bucket?.name || i18n.t("previewPanel.deployment.storage.title")}
+                </div>
+              </div>
+              <div className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
+                {formatMetricCount(bucketFiles.length, "0")}
+              </div>
+            </button>
+          </div>
+          <div className="border-t border-border px-3 py-4">
+            <Button
+              variant="outline"
+              className="h-8 w-full justify-center text-xs"
+              onClick={() => void handleOpenConnectionDialog()}
+            >
+              <KeyRound className="size-4" />
+              {i18n.t("previewPanel.deployment.storage.manageConnectionTitle")}
+            </Button>
+          </div>
+        </div>
+
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+            <div className="text-[13px] font-normal text-foreground">
+              {i18n.t("previewPanel.deployment.storage.filesTitle")}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={handleSelectUpload}
+                disabled={loading}
+              >
+                {loading ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Upload className="size-4" />
+                )}
+                {i18n.t("previewPanel.deployment.storage.upload")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => void loadStorage(Boolean(bucket?.secretAccessKey))}
+                disabled={loading}
+              >
+                {loading ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-4" />
+                )}
+                {i18n.t("previewPanel.deployment.storage.refresh")}
+              </Button>
+            </div>
+          </div>
+
+          {error ? (
+            <div className="px-4 pt-3 text-xs text-rose-600">{error}</div>
+          ) : null}
+
+          {uploadingFile ? (
+            <div className="border-b border-border px-4 py-3">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" />
+                <span>{i18n.t("previewPanel.deployment.storage.uploading")}</span>
+              </div>
+            </div>
+          ) : null}
+
+          <div
+            className="relative min-h-0 flex-1 overflow-auto"
+            onClick={(event) => {
+              if (event.target === event.currentTarget) {
+                setSelectedFileKey(null);
+              }
+            }}
+          >
+            {bucketFiles.length ? (
+              <table className="w-full min-w-[720px] table-auto border-collapse">
+                <thead>
+                  <tr className="border-b border-border bg-muted/20 text-left">
+                    <th className="px-4 py-3 text-xs font-medium text-muted-foreground">
+                      {i18n.t("previewPanel.deployment.storage.fileName")}
+                    </th>
+                    <th className="w-[140px] px-4 py-3 text-xs font-medium text-muted-foreground">
+                      {i18n.t("previewPanel.deployment.storage.fileSize")}
+                    </th>
+                    <th className="w-[120px] px-4 py-3 text-xs font-medium text-muted-foreground">
+                      {i18n.t("previewPanel.deployment.storage.lastModified")}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bucketFiles.map((fileItem) => {
+                    const FileIcon = getStorageFileIcon(fileItem.key);
+                    return (
+                      <tr
+                        key={fileItem.key}
+                        className={cn(
+                          "cursor-pointer border-b border-border/70 transition-colors hover:bg-muted/20",
+                          selectedFileKey === fileItem.key ? "bg-muted/30" : null,
+                        )}
+                        title={fileItem.key}
+                        onClick={() => setSelectedFileKey(fileItem.key)}
+                      >
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-3">
+                            <FileIcon className="size-4 shrink-0 text-muted-foreground" />
+                            <div className="min-w-0 truncate text-sm text-foreground">
+                              {fileItem.key}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-sm text-muted-foreground">
+                          {formatFileSize(fileItem.sizeBytes)}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-muted-foreground">
+                          {formatPreviewTimestamp(fileItem.lastModifiedAt) || "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              <div className="flex h-full min-h-[260px] items-center justify-center px-6 text-sm text-muted-foreground">
+                {i18n.t("previewPanel.deployment.storage.emptyFiles")}
+              </div>
+            )}
+          </div>
+
+          {selectedFile ? (
+            <div className="border-t border-border bg-muted/10 px-4 py-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-foreground">
+                    {i18n.t("previewPanel.deployment.storage.filePreviewTitle")}
+                  </div>
+                  <div
+                    className="mt-2 truncate text-sm text-foreground"
+                    title={selectedFile.key}
+                  >
+                    {selectedFile.key}
+                  </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                    <DeploymentMiniStatus
+                      label={i18n.t("previewPanel.deployment.storage.fileName")}
+                      value={selectedFile.key}
+                    />
+                    <DeploymentMiniStatus
+                      label={i18n.t("previewPanel.deployment.storage.fileSize")}
+                      value={formatFileSize(selectedFile.sizeBytes)}
+                    />
+                    <DeploymentMiniStatus
+                      label={i18n.t("previewPanel.deployment.storage.lastModified")}
+                      value={selectedFile.lastModifiedAt || "—"}
+                    />
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={() => setSelectedFileKey(null)}
+                  >
+                    {i18n.t("previewPanel.deployment.storage.closePreview")}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={handleDownloadFile}
+                  >
+                    {i18n.t("previewPanel.deployment.storage.downloadFile")}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs text-rose-600 hover:text-rose-700"
+                    onClick={() => void handleDeleteFile()}
+                    disabled={loading || storageActionLoading === "delete"}
+                  >
+                    {storageActionLoading === "delete" ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="size-4" />
+                    )}
+                    {i18n.t("previewPanel.deployment.storage.deleteFile")}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="flex items-center justify-between border-t border-border px-4 py-3 text-xs text-muted-foreground">
+            <div>
+              {i18n.t("previewPanel.deployment.storage.fileCount", {
+                count: bucketFiles.length,
+              })}
+            </div>
+            <div className="flex items-center gap-2">
+              <span>{i18n.t("previewPanel.deployment.storage.storageStatus")}</span>
+              <span className="text-foreground">{i18n.t("previewPanel.deployment.storage.ready")}</span>
+              <span className="h-1 w-1 rounded-full bg-border" />
+              <span>{statusMeta.label}</span>
             </div>
           </div>
         </div>
-      </section>
+      </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        onChange={handleUploadFile}
+      />
 
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
-          {i18n.t("previewPanel.deployment.storage.scenarioPlanning")}
-        </div>
-        <div className="space-y-3 p-4">
-          <DeploymentPlaceholderCard
-            title={i18n.t("previewPanel.deployment.storage.userUpload")}
-            description={i18n.t(
-              "previewPanel.deployment.storage.userUploadDescription",
-            )}
-          />
-          <DeploymentPlaceholderCard
-            title={i18n.t(
-              "previewPanel.deployment.storage.buildArtifactSeparation",
-            )}
-            description={i18n.t(
-              "previewPanel.deployment.storage.buildArtifactSeparationDescription",
-            )}
-          />
-          <DeploymentPlaceholderCard
-            title={i18n.t("previewPanel.deployment.storage.accessPolicy")}
-            description={i18n.t(
-              "previewPanel.deployment.storage.accessPolicyDescription",
-            )}
-          />
-        </div>
-      </section>
+      <Dialog
+        open={connectionDialogOpen}
+        onOpenChange={(open) => {
+          setConnectionDialogOpen(open);
+          if (!open) {
+            setConnectionSecretsVisible(false);
+            setStorageStatus((current) =>
+              current?.bucket
+                ? {
+                    ...current,
+                    bucket: {
+                      ...current.bucket,
+                      secretAccessKey: undefined,
+                    },
+                  }
+                : current,
+            );
+          }
+        }}
+      >
+        <DialogContent className="max-w-3xl rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {i18n.t("previewPanel.deployment.storage.manageConnectionTitle")}
+            </DialogTitle>
+            <DialogDescription>
+              {i18n.t("previewPanel.deployment.storage.manageConnectionDescription")}
+            </DialogDescription>
+          </DialogHeader>
+
+          {bucket ? (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-950">
+                {i18n.t("previewPanel.deployment.storage.secretWarning")}
+              </div>
+
+              <div className="rounded-xl border border-border/70 bg-card p-4">
+                <div className="space-y-4">
+                  <ConnectionDialogField
+                    label={i18n.t("previewPanel.deployment.storage.bucketName")}
+                    value={bucket.name}
+                    copied={copiedField === "bucket"}
+                    onCopy={() => void handleCopy("bucket", bucket.name)}
+                  />
+                  <ConnectionDialogField
+                    label={i18n.t("previewPanel.deployment.storage.endpoint")}
+                    value={bucket.endpoint}
+                    copied={copiedField === "endpoint"}
+                    onCopy={() => void handleCopy("endpoint", bucket.endpoint)}
+                  />
+                  {bucket.publicUrl ? (
+                    <ConnectionDialogField
+                      label={i18n.t("previewPanel.deployment.storage.publicUrl")}
+                      value={bucket.publicUrl}
+                      copied={copiedField === "publicUrl"}
+                      onCopy={() => void handleCopy("publicUrl", bucket.publicUrl)}
+                    />
+                  ) : null}
+                  <ConnectionDialogField
+                    label={i18n.t("previewPanel.deployment.storage.accessKeyId")}
+                    value={bucket.accessKeyId}
+                    copied={copiedField === "accessKeyId"}
+                    onCopy={() => void handleCopy("accessKeyId", bucket.accessKeyId)}
+                    sensitive
+                    revealed={connectionSecretsVisible}
+                  />
+                  <ConnectionDialogField
+                    label={i18n.t("previewPanel.deployment.storage.secretAccessKey")}
+                    value={bucket.secretAccessKey || ""}
+                    copied={copiedField === "secretAccessKey"}
+                    onCopy={() =>
+                      void handleCopy("secretAccessKey", bucket.secretAccessKey)
+                    }
+                    sensitive
+                    revealed={connectionSecretsVisible}
+                    onToggleSensitive={() =>
+                      setConnectionSecretsVisible((current) => !current)
+                    }
+                  />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="py-8 text-center text-sm text-muted-foreground">
+              {i18n.t("previewPanel.deployment.storage.waitPanelReady")}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -4615,74 +5449,165 @@ function DeploymentSettingsSectionPanel({
     i18n.t("previewPanel.deployment.settings.managedRepoMissing");
   const repositoryBranch =
     resourceBinding?.repositoryBranch || "main";
+  const settingsScrollOffset = 228;
+  const contentContainerRef = useRef<HTMLDivElement | null>(null);
+  const programmaticScrollRef = useRef(false);
+  const programmaticScrollTimerRef = useRef<number | null>(null);
+  const sectionRefs = useRef<
+    Record<DeploymentSettingsSection, HTMLDivElement | null>
+  >({
+    general: null,
+    domain: null,
+    notifications: null,
+    payment: null,
+    seo: null,
+    keys: null,
+    github: null,
+  });
+  const settingAnchors: Array<{
+    key: DeploymentSettingsSection;
+    label: string;
+  }> = [
+    {
+      key: "general",
+      label: i18n.t("previewPanel.deployment.settings.general"),
+    },
+    {
+      key: "domain",
+      label: i18n.t("previewPanel.deployment.settings.domain"),
+    },
+    {
+      key: "notifications",
+      label: i18n.t("previewPanel.deployment.settings.notifications"),
+    },
+    {
+      key: "payment",
+      label: i18n.t("previewPanel.deployment.settings.payment"),
+    },
+    { key: "seo", label: "SEO" },
+    {
+      key: "keys",
+      label: i18n.t("previewPanel.deployment.settings.keys"),
+    },
+    { key: "github", label: "GitHub" },
+  ];
+
+  const scrollToSettingsSection = useCallback(
+    (value: DeploymentSettingsSection) => {
+      onSettingsSectionChange(value);
+      const node = sectionRefs.current[value];
+      if (!node) return;
+      const container = contentContainerRef.current;
+      if (!container) {
+        node.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
+      programmaticScrollRef.current = true;
+      if (programmaticScrollTimerRef.current !== null) {
+        window.clearTimeout(programmaticScrollTimerRef.current);
+      }
+      container.scrollTo({
+        top: Math.max(0, node.offsetTop - settingsScrollOffset),
+        behavior: "smooth",
+      });
+      programmaticScrollTimerRef.current = window.setTimeout(() => {
+        programmaticScrollRef.current = false;
+        programmaticScrollTimerRef.current = null;
+      }, 450);
+    },
+    [onSettingsSectionChange],
+  );
+
+  useEffect(() => {
+    const node = sectionRefs.current[settingsSection];
+    const container = contentContainerRef.current;
+    if (!node || !container) return;
+    const targetTop = Math.max(0, node.offsetTop - settingsScrollOffset);
+    if (Math.abs(container.scrollTop - targetTop) < 8) return;
+    container.scrollTo({ top: targetTop });
+  }, [settingsScrollOffset, settingsSection]);
+
+  useEffect(() => {
+    const container = contentContainerRef.current;
+    if (!container) return;
+
+    const syncActiveAnchor = () => {
+      if (programmaticScrollRef.current) return;
+      const sections = settingAnchors
+        .map((item) => ({
+          key: item.key,
+          node: sectionRefs.current[item.key],
+        }))
+        .filter(
+          (
+            item,
+          ): item is {
+            key: DeploymentSettingsSection;
+            node: HTMLDivElement;
+          } => Boolean(item.node),
+        );
+      if (!sections.length) return;
+
+      const anchorLine = container.scrollTop + settingsScrollOffset;
+      let activeKey = sections[0].key;
+      for (const section of sections) {
+        if (section.node.offsetTop <= anchorLine) {
+          activeKey = section.key;
+        } else {
+          break;
+        }
+      }
+
+      if (activeKey !== settingsSection) {
+        onSettingsSectionChange(activeKey);
+      }
+    };
+
+    container.addEventListener("scroll", syncActiveAnchor, {
+      passive: true,
+    });
+    syncActiveAnchor();
+
+    return () => {
+      container.removeEventListener("scroll", syncActiveAnchor);
+      if (programmaticScrollTimerRef.current !== null) {
+        window.clearTimeout(programmaticScrollTimerRef.current);
+        programmaticScrollTimerRef.current = null;
+      }
+    };
+  }, [
+    onSettingsSectionChange,
+    settingAnchors,
+    settingsScrollOffset,
+    settingsSection,
+  ]);
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)]">
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
-          {i18n.t("previewPanel.deployment.sections.settings")}
-        </div>
-        <div className="flex gap-2 overflow-x-auto p-3 xl:flex-col xl:overflow-visible">
-          <DeploymentSettingsButton
-            active={settingsSection === "general"}
-            label={i18n.t("previewPanel.deployment.settings.general")}
-            onClick={() => onSettingsSectionChange("general")}
-          />
-          <DeploymentSettingsButton
-            active={settingsSection === "domain"}
-            label={i18n.t("previewPanel.deployment.settings.domain")}
-            onClick={() => onSettingsSectionChange("domain")}
-          />
-          <DeploymentSettingsButton
-            active={settingsSection === "notifications"}
-            label={i18n.t("previewPanel.deployment.settings.notifications")}
-            onClick={() => onSettingsSectionChange("notifications")}
-          />
-          <DeploymentSettingsButton
-            active={settingsSection === "payment"}
-            label={i18n.t("previewPanel.deployment.settings.payment")}
-            onClick={() => onSettingsSectionChange("payment")}
-          />
-          <DeploymentSettingsButton
-            active={settingsSection === "seo"}
-            label="SEO"
-            onClick={() => onSettingsSectionChange("seo")}
-          />
-          <DeploymentSettingsButton
-            active={settingsSection === "keys"}
-            label={i18n.t("previewPanel.deployment.settings.keys")}
-            onClick={() => onSettingsSectionChange("keys")}
-          />
-          <DeploymentSettingsButton
-            active={settingsSection === "github"}
-            label="GitHub"
-            onClick={() => onSettingsSectionChange("github")}
-          />
+    <div className="grid gap-4 xl:grid-cols-[200px_minmax(0,1fr)] xl:items-start">
+      <section className="xl:sticky xl:top-4 xl:self-start">
+        <div className="flex gap-2 overflow-x-auto p-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden xl:flex-col xl:overflow-visible">
+          {settingAnchors.map((item) => (
+            <DeploymentSettingsButton
+              key={item.key}
+              active={settingsSection === item.key}
+              label={item.label}
+              onClick={() => scrollToSettingsSection(item.key)}
+            />
+          ))}
         </div>
       </section>
 
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
-          {settingsSection === "general"
-            ? i18n.t("previewPanel.deployment.settings.general")
-            : null}
-          {settingsSection === "domain"
-            ? i18n.t("previewPanel.deployment.settings.domain")
-            : null}
-          {settingsSection === "notifications"
-            ? i18n.t("previewPanel.deployment.settings.notifications")
-            : null}
-          {settingsSection === "payment"
-            ? i18n.t("previewPanel.deployment.settings.payment")
-            : null}
-          {settingsSection === "seo" ? "SEO" : null}
-          {settingsSection === "keys"
-            ? i18n.t("previewPanel.deployment.settings.keys")
-            : null}
-          {settingsSection === "github" ? "GitHub" : null}
-        </div>
-        <div className="p-4">
-          {settingsSection === "general" ? (
+      <section className="overflow-hidden bg-transparent">
+        <div
+          ref={contentContainerRef}
+          className="space-y-4 overflow-auto px-1 pb-1 pt-10 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden xl:max-h-[calc(100vh-240px)]"
+        >
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.general = node;
+            }}
+            title={i18n.t("previewPanel.deployment.settings.general")}
+          >
             <div className="grid gap-3 md:grid-cols-2">
               <DeploymentInfoCard
                 title={i18n.t("previewPanel.deployment.settings.siteName")}
@@ -4721,9 +5646,14 @@ function DeploymentSettingsSectionPanel({
                 }
               />
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
 
-          {settingsSection === "domain" ? (
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.domain = node;
+            }}
+            title={i18n.t("previewPanel.deployment.settings.domain")}
+          >
             <div className="space-y-3">
               <DeploymentInfoCard
                 title={i18n.t("previewPanel.deployment.settings.primaryAccessUrl")}
@@ -4758,9 +5688,14 @@ function DeploymentSettingsSectionPanel({
                 )}
               </div>
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
 
-          {settingsSection === "notifications" ? (
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.notifications = node;
+            }}
+            title={i18n.t("previewPanel.deployment.settings.notifications")}
+          >
             <div className="grid gap-3 md:grid-cols-2">
               <DeploymentInfoCard
                 title={i18n.t(
@@ -4797,9 +5732,14 @@ function DeploymentSettingsSectionPanel({
                 )}
               />
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
 
-          {settingsSection === "payment" ? (
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.payment = node;
+            }}
+            title={i18n.t("previewPanel.deployment.settings.payment")}
+          >
             <div className="grid gap-3 md:grid-cols-2">
               <DeploymentInfoCard
                 title={i18n.t("previewPanel.deployment.settings.billingMode")}
@@ -4816,9 +5756,7 @@ function DeploymentSettingsSectionPanel({
               <DeploymentInfoCard
                 title={i18n.t("previewPanel.deployment.settings.usageAlert")}
                 value={i18n.t("previewPanel.deployment.settings.comingSoon")}
-                extra={i18n.t(
-                  "previewPanel.deployment.settings.comingSoon",
-                )}
+                extra={i18n.t("previewPanel.deployment.settings.comingSoon")}
               />
               <DeploymentInfoCard
                 title={i18n.t(
@@ -4830,9 +5768,14 @@ function DeploymentSettingsSectionPanel({
                 )}
               />
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
 
-          {settingsSection === "seo" ? (
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.seo = node;
+            }}
+            title="SEO"
+          >
             <div className="grid gap-3 md:grid-cols-2">
               <DeploymentInfoCard
                 title={i18n.t("previewPanel.deployment.settings.siteTitle")}
@@ -4868,9 +5811,14 @@ function DeploymentSettingsSectionPanel({
                 extra={i18n.t("previewPanel.deployment.settings.siteMapDescription")}
               />
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
 
-          {settingsSection === "keys" ? (
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.keys = node;
+            }}
+            title={i18n.t("previewPanel.deployment.settings.keys")}
+          >
             <div className="space-y-3">
               <div className="grid gap-3 md:grid-cols-2">
                 <DeploymentInfoCard
@@ -4967,9 +5915,14 @@ function DeploymentSettingsSectionPanel({
                 </Button>
               </div>
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
 
-          {settingsSection === "github" ? (
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.github = node;
+            }}
+            title="GitHub"
+          >
             <div className="space-y-3">
               <div className="grid gap-3 md:grid-cols-2">
                 <DeploymentInfoCard
@@ -5033,12 +5986,36 @@ function DeploymentSettingsSectionPanel({
                 />
               )}
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
         </div>
       </section>
     </div>
   );
 }
+
+const DeploymentSettingsAnchorSection = forwardRef<
+  HTMLDivElement,
+  {
+    title: string;
+    children: ReactNode;
+  }
+>(function DeploymentSettingsAnchorSection(
+  { title, children },
+  ref,
+) {
+  return (
+    <div
+      ref={ref}
+      className="scroll-mt-56 rounded-xl border border-border/60 bg-transparent p-4 md:p-5"
+    >
+      <div className="mb-4 flex items-center gap-3">
+        <div className="h-8 w-1 rounded-full bg-foreground/85" />
+        <div className="text-sm font-semibold text-foreground">{title}</div>
+      </div>
+      {children}
+    </div>
+  );
+});
 
 function DeploymentMenuButton({
   active,
@@ -5082,13 +6059,19 @@ function DeploymentSettingsButton({
       type="button"
       onClick={onClick}
       className={cn(
-        "rounded-md border px-3 py-2 text-left text-sm transition-colors whitespace-nowrap",
+        "group relative rounded-lg border px-3 py-2.5 text-left text-sm transition-all whitespace-nowrap",
         active
-          ? "border-border bg-muted/50 text-foreground"
-          : "border-transparent bg-transparent text-muted-foreground hover:border-border hover:bg-muted/30",
+          ? "border-border/80 bg-transparent text-foreground"
+          : "border-transparent bg-transparent text-muted-foreground hover:border-border/60 hover:text-foreground",
       )}
     >
-      {label}
+      <span
+        className={cn(
+          "absolute inset-y-2 left-1 w-1 rounded-full transition-colors",
+          active ? "bg-foreground/90" : "bg-transparent group-hover:bg-border",
+        )}
+      />
+      <span className="block truncate pl-3">{label}</span>
     </button>
   );
 }

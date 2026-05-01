@@ -1,8 +1,12 @@
 import { createHash } from 'node:crypto';
 
-import { userConnectorAccountDAO } from '../db/dao';
+import { projectStorageResourceDAO, userConnectorAccountDAO } from '../db/dao';
 import { connectorSecretService } from './connector-secret-service';
 import { connectorStorageBootstrap } from './connector-storage-bootstrap';
+import {
+  ensureDeploymentPublicDomain,
+  type DeploymentPublicDomainBinding,
+} from './deployment-domain-service';
 import { requestRailwayGraphql, type RailwayAuthKind } from './railway-graphql-client';
 
 const INTERNAL_DEPLOYMENT_CONNECTOR_KEY = 'railway_internal';
@@ -27,6 +31,17 @@ type DeploymentConfig = {
   serviceId: string;
   serviceName?: string;
   serviceDomain?: string;
+  publicDomain?: string;
+  publicUrl?: string;
+  publicDomainProvider?: DeploymentPublicDomainBinding['publicDomainProvider'];
+  railwayCustomDomainId?: string;
+  railwayCnameTarget?: string;
+  cloudflareZoneId?: string;
+  cloudflareDnsRecords?: DeploymentPublicDomainBinding['cloudflareDnsRecords'];
+  domainStatus?: DeploymentPublicDomainBinding['domainStatus'];
+  domainStatusMessage?: string;
+  domainLastCheckedAt?: string;
+  domainActivatedAt?: string;
   tokenId?: string;
   tokenRotatedAt?: string;
   createdAt?: string;
@@ -76,6 +91,17 @@ export type UserPlatformDeploymentAccount = {
   serviceId: string;
   serviceName?: string;
   serviceDomain?: string;
+  publicDomain?: string;
+  publicUrl?: string;
+  publicDomainProvider?: DeploymentPublicDomainBinding['publicDomainProvider'];
+  railwayCustomDomainId?: string;
+  railwayCnameTarget?: string;
+  cloudflareZoneId?: string;
+  cloudflareDnsRecords?: DeploymentPublicDomainBinding['cloudflareDnsRecords'];
+  domainStatus?: DeploymentPublicDomainBinding['domainStatus'];
+  domainStatusMessage?: string;
+  domainLastCheckedAt?: string;
+  domainActivatedAt?: string;
   accessToken: string;
   tokenKind: 'project';
   tokenId?: string;
@@ -153,6 +179,20 @@ function isRailwayServiceCreationLimitError(message: string) {
   );
 }
 
+function isRailwayOperationInProgressError(message: string) {
+  const normalized = asText(message).toLowerCase();
+  return (
+    normalized.includes('operation is already in progress') ||
+    normalized.includes('cannot delete tcp proxies')
+  );
+}
+
+function buildServiceCreationLimitIsolationError() {
+  return new Error(
+    'Railway 已达到每日服务创建配额。为避免覆盖其他会话的线上服务，平台不会复用其他项目的部署资源；请稍后重试，或先下线明确不再需要的部署资源。'
+  );
+}
+
 function sanitizeNameSegment(value: string, maxLength: number) {
   return (
     value
@@ -221,20 +261,6 @@ function buildReplacementServiceName(projectKey = DEFAULT_DEPLOYMENT_PROJECT_KEY
   return `${base}-${suffix}`.slice(0, 32);
 }
 
-function buildDatabaseServiceName(projectKey = DEFAULT_DEPLOYMENT_PROJECT_KEY) {
-  const prefix = sanitizeNameSegment(
-    asText(process.env.RAILWAY_DATABASE_SERVICE_NAME) || 'postgres',
-    12
-  );
-  const normalizedProjectKey = normalizeProjectKey(projectKey);
-  if (normalizedProjectKey === DEFAULT_DEPLOYMENT_PROJECT_KEY) {
-    return prefix;
-  }
-  const projectSegment = sanitizeNameSegment(normalizedProjectKey, 12);
-  const projectHash = createHash('sha1').update(normalizedProjectKey).digest('hex').slice(0, 6);
-  return `${prefix}-${projectSegment}-${projectHash}`.slice(0, 32);
-}
-
 function toDeploymentConfig(value: unknown): DeploymentConfig {
   const record = pickRecord(value);
   return {
@@ -248,6 +274,23 @@ function toDeploymentConfig(value: unknown): DeploymentConfig {
     serviceId: asText(record.serviceId),
     serviceName: asText(record.serviceName) || undefined,
     serviceDomain: asText(record.serviceDomain) || undefined,
+    publicDomain: asText(record.publicDomain) || undefined,
+    publicUrl: asText(record.publicUrl) || undefined,
+    publicDomainProvider:
+      asText(record.publicDomainProvider) === 'cloudflare_railway_custom_domain'
+        ? 'cloudflare_railway_custom_domain'
+        : undefined,
+    railwayCustomDomainId: asText(record.railwayCustomDomainId) || undefined,
+    railwayCnameTarget: asText(record.railwayCnameTarget) || undefined,
+    cloudflareZoneId: asText(record.cloudflareZoneId) || undefined,
+    cloudflareDnsRecords: Array.isArray(record.cloudflareDnsRecords)
+      ? (record.cloudflareDnsRecords as DeploymentConfig['cloudflareDnsRecords'])
+      : undefined,
+    domainStatus:
+      (asText(record.domainStatus) as DeploymentConfig['domainStatus']) || undefined,
+    domainStatusMessage: asText(record.domainStatusMessage) || undefined,
+    domainLastCheckedAt: asText(record.domainLastCheckedAt) || undefined,
+    domainActivatedAt: asText(record.domainActivatedAt) || undefined,
     tokenId: asText(record.tokenId) || undefined,
     tokenRotatedAt: asText(record.tokenRotatedAt) || undefined,
     createdAt: asText(record.createdAt) || undefined,
@@ -795,6 +838,47 @@ async function ensureServiceDomain(
   return asText(created.serviceDomainCreate?.domain) || undefined;
 }
 
+async function getEnvironmentServiceIds(
+  adminToken: string,
+  environmentId: string
+) {
+  const result = await executeRailwayGraphql<{
+    environment?: {
+      serviceInstances?: {
+        edges?: Array<{
+          node?: {
+            serviceId?: string;
+          };
+        }>;
+      };
+    } | null;
+  }>(
+    adminToken,
+    `
+      query InspectEnvironmentServiceInstances($id: String!) {
+        environment(id: $id) {
+          serviceInstances {
+            edges {
+              node {
+                serviceId
+              }
+            }
+          }
+        }
+      }
+    `,
+    {
+      id: environmentId,
+    }
+  );
+
+  return (
+    result.environment?.serviceInstances?.edges
+      ?.map((edge) => asText(edge?.node?.serviceId))
+      .filter(Boolean) || []
+  );
+}
+
 async function waitForEnvironmentServiceInstance(
   adminToken: string,
   environmentId: string,
@@ -803,39 +887,8 @@ async function waitForEnvironmentServiceInstance(
   const deadline = Date.now() + 60_000;
 
   while (Date.now() < deadline) {
-    const result = await executeRailwayGraphql<{
-      environment?: {
-        serviceInstances?: {
-          edges?: Array<{
-            node?: {
-              serviceId?: string;
-            };
-          }>;
-        };
-      } | null;
-    }>(
-      adminToken,
-      `
-        query WaitForEnvironmentServiceInstance($id: String!) {
-          environment(id: $id) {
-            serviceInstances {
-              edges {
-                node {
-                  serviceId
-                }
-              }
-            }
-          }
-        }
-      `,
-      {
-        id: environmentId,
-      }
-    );
-
-    const attached = result.environment?.serviceInstances?.edges?.some(
-      (edge) => asText(edge?.node?.serviceId) === serviceId
-    );
+    const serviceIds = await getEnvironmentServiceIds(adminToken, environmentId);
+    const attached = serviceIds.includes(serviceId);
     if (attached) {
       return;
     }
@@ -880,40 +933,116 @@ async function createProjectToken(
   };
 }
 
-async function deleteRailwayService(
-  adminToken: string,
-  serviceId: string,
-  environmentId: string
-) {
-  await executeRailwayGraphql(
-    adminToken,
-    `
-      mutation DeletePlatformService($id: String!, $environmentId: String) {
-        serviceDelete(id: $id, environmentId: $environmentId)
+async function deleteRailwayService(adminToken: string, serviceId: string) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      await executeRailwayGraphql(
+        adminToken,
+        `
+          mutation DeletePlatformService($id: String!) {
+            serviceDelete(id: $id)
+          }
+        `,
+        {
+          id: serviceId,
+        }
+      );
+      return;
+    } catch (error: any) {
+      lastError = error;
+      if (!isRailwayOperationInProgressError(error?.message || '') || attempt === 7) {
+        throw error;
       }
-    `,
-    {
-      id: serviceId,
-      environmentId,
+      await sleep(3_000 * (attempt + 1));
     }
-  );
+  }
+  throw lastError instanceof Error ? lastError : new Error('删除 Railway 服务失败');
 }
 
 async function deleteRailwayEnvironment(
   adminToken: string,
+  projectId: string,
   environmentId: string
 ) {
-  await executeRailwayGraphql(
-    adminToken,
-    `
-      mutation DeletePlatformEnvironment($id: String!) {
-        environmentDelete(id: $id)
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      await executeRailwayGraphql(
+        adminToken,
+        `
+          mutation DeletePlatformEnvironment($id: String!) {
+            environmentDelete(id: $id)
+          }
+        `,
+        {
+          id: environmentId,
+        }
+      );
+      const removed = await waitForEnvironmentRemoval(adminToken, projectId, environmentId);
+      if (!removed) {
+        throw new Error('Railway 环境删除后仍保留在项目中');
       }
-    `,
-    {
-      id: environmentId,
+      return;
+    } catch (error: any) {
+      lastError = error;
+      if (!isRailwayOperationInProgressError(error?.message || '') || attempt === 7) {
+        throw error;
+      }
+      await sleep(3_000 * (attempt + 1));
     }
-  );
+  }
+  throw lastError instanceof Error ? lastError : new Error('删除 Railway 环境失败');
+}
+
+async function waitForEnvironmentRemoval(
+  adminToken: string,
+  projectId: string,
+  environmentId: string,
+  timeoutMs = 30_000
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await executeRailwayGraphql<{
+      project?: {
+        environments?: {
+          edges?: Array<{
+            node?: {
+              id?: string | null;
+            } | null;
+          }>;
+        } | null;
+      } | null;
+    }>(
+      adminToken,
+      `
+        query InspectProjectEnvironments($id: String!) {
+          project(id: $id) {
+            environments {
+              edges {
+                node {
+                  id
+                }
+              }
+            }
+          }
+        }
+      `,
+      {
+        id: projectId,
+      }
+    );
+    const stillPresent = Boolean(
+      result.project?.environments?.edges?.some(
+        (edge) => asText(edge?.node?.id) === environmentId
+      )
+    );
+    if (!stillPresent) {
+      return true;
+    }
+    await sleep(2_000);
+  }
+  return false;
 }
 
 async function getProjectService(adminToken: string, projectId: string, serviceName: string) {
@@ -1053,24 +1182,80 @@ async function getServiceVariables(
 async function waitForDatabaseService(
   adminToken: string,
   projectId: string,
-  environmentId: string
+  environmentId: string,
+  applicationServiceId?: string
 ) {
-  const databaseServiceName = buildDatabaseServiceName();
   const deadline = Date.now() + 120_000;
   let lastServiceId = '';
+  let lastServiceName = '';
 
-  while (Date.now() < deadline) {
-    const service = await getProjectService(adminToken, projectId, databaseServiceName);
-    if (service?.id) {
-      lastServiceId = service.id;
+  const findDatabaseService = async () => {
+    const [attachedServiceIds, projectServices] = await Promise.all([
+      getEnvironmentServiceIds(adminToken, environmentId),
+      executeRailwayGraphql<{
+        project?: {
+          services?: {
+            edges?: Array<{
+              node?: {
+                id?: string;
+                name?: string;
+              };
+            }>;
+          };
+        } | null;
+      }>(
+        adminToken,
+        `
+          query FindProjectServices($projectId: String!) {
+            project(id: $projectId) {
+              services {
+                edges {
+                  node {
+                    id
+                    name
+                  }
+                }
+              }
+            }
+          }
+        `,
+        { projectId }
+      ),
+    ]);
+
+    for (const serviceId of attachedServiceIds) {
+      if (!serviceId || serviceId === applicationServiceId) {
+        continue;
+      }
+      const service = projectServices.project?.services?.edges
+        ?.map((edge) => ({
+          id: asText(edge?.node?.id),
+          name: asText(edge?.node?.name),
+        }))
+        .find((item) => item.id === serviceId);
+      if (!service?.id) {
+        continue;
+      }
       const variables = await getServiceVariables(adminToken, projectId, environmentId, service.id);
-      const publicUrl = asText(variables.DATABASE_PUBLIC_URL);
-      if (publicUrl) {
+      if (asText(variables.DATABASE_URL) || asText(variables.DATABASE_PUBLIC_URL)) {
         return {
           serviceId: service.id,
-          serviceName: service.name || databaseServiceName,
+          serviceName: service.name || 'postgres',
           variables,
         };
+      }
+    }
+
+    return null;
+  };
+
+  while (Date.now() < deadline) {
+    const databaseService = await findDatabaseService();
+    if (databaseService?.serviceId) {
+      lastServiceId = databaseService.serviceId;
+      lastServiceName = databaseService.serviceName;
+      if (asText(databaseService.variables.DATABASE_PUBLIC_URL)) {
+        return databaseService;
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 4_000));
@@ -1080,7 +1265,7 @@ async function waitForDatabaseService(
     const variables = await getServiceVariables(adminToken, projectId, environmentId, lastServiceId);
     return {
       serviceId: lastServiceId,
-      serviceName: databaseServiceName,
+      serviceName: lastServiceName || 'postgres',
       variables,
     };
   }
@@ -1160,6 +1345,110 @@ async function upsertServiceVariables(
   );
 }
 
+async function deleteRailwayBucketById(
+  adminToken: string,
+  projectId: string,
+  environmentId: string,
+  bucketId: string
+) {
+  const normalizedBucketId = asText(bucketId);
+  const normalizedProjectId = asText(projectId);
+  const normalizedEnvironmentId = asText(environmentId);
+  if (!normalizedBucketId || !normalizedEnvironmentId || !normalizedProjectId) return;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      await requestRailwayGraphql<{ environmentPatchCommit?: string | null }>(
+        adminToken,
+        `
+          mutation DeleteBucketFromEnvironment(
+            $environmentId: String!,
+            $patch: EnvironmentConfig!,
+            $commitMessage: String
+          ) {
+            environmentPatchCommit(
+              environmentId: $environmentId,
+              patch: $patch,
+              commitMessage: $commitMessage
+            )
+          }
+        `,
+        {
+          environmentId: normalizedEnvironmentId,
+          patch: {
+            buckets: {
+              [normalizedBucketId]: {
+                isDeleted: true,
+              },
+            },
+          },
+          commitMessage: `Delete bucket ${normalizedBucketId}`,
+        }
+      );
+      const removed = await waitForBucketRemoval(adminToken, normalizedProjectId, normalizedBucketId);
+      if (!removed) {
+        throw new Error('Railway Bucket 删除后仍保留在项目中');
+      }
+      return;
+    } catch (error: any) {
+      lastError = error;
+      if (!isRailwayOperationInProgressError(error?.message || '') || attempt === 7) {
+        throw error;
+      }
+      await sleep(3_000 * (attempt + 1));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('删除 Railway Bucket 失败');
+}
+
+async function waitForBucketRemoval(
+  adminToken: string,
+  projectId: string,
+  bucketId: string,
+  timeoutMs = 30_000
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await executeRailwayGraphql<{
+      project?: {
+        buckets?: {
+          edges?: Array<{
+            node?: {
+              id?: string | null;
+            } | null;
+          }>;
+        } | null;
+      } | null;
+    }>(
+      adminToken,
+      `
+        query InspectProjectBuckets($id: String!) {
+          project(id: $id) {
+            buckets {
+              edges {
+                node {
+                  id
+                }
+              }
+            }
+          }
+        }
+      `,
+      {
+        id: projectId,
+      }
+    );
+    const stillPresent = Boolean(
+      result.project?.buckets?.edges?.some((edge) => asText(edge?.node?.id) === bucketId)
+    );
+    if (!stillPresent) {
+      return true;
+    }
+    await sleep(2_000);
+  }
+  return false;
+}
+
 function buildConfigFromState(input: {
   current?: DeploymentConfig;
   projectKey?: string;
@@ -1170,6 +1459,7 @@ function buildConfigFromState(input: {
   serviceId: string;
   serviceName?: string;
   serviceDomain?: string;
+  publicDomainBinding?: Partial<DeploymentPublicDomainBinding>;
   repo?: {
     owner?: string;
     name?: string;
@@ -1196,6 +1486,24 @@ function buildConfigFromState(input: {
     serviceId: input.serviceId,
     serviceName: input.serviceName,
     serviceDomain: input.serviceDomain || input.current?.serviceDomain,
+    publicDomain: input.publicDomainBinding?.publicDomain || input.current?.publicDomain,
+    publicUrl: input.publicDomainBinding?.publicUrl || input.current?.publicUrl,
+    publicDomainProvider:
+      input.publicDomainBinding?.publicDomainProvider || input.current?.publicDomainProvider,
+    railwayCustomDomainId:
+      input.publicDomainBinding?.railwayCustomDomainId || input.current?.railwayCustomDomainId,
+    railwayCnameTarget:
+      input.publicDomainBinding?.railwayCnameTarget || input.current?.railwayCnameTarget,
+    cloudflareZoneId: input.publicDomainBinding?.cloudflareZoneId || input.current?.cloudflareZoneId,
+    cloudflareDnsRecords:
+      input.publicDomainBinding?.cloudflareDnsRecords || input.current?.cloudflareDnsRecords,
+    domainStatus: input.publicDomainBinding?.domainStatus || input.current?.domainStatus,
+    domainStatusMessage:
+      input.publicDomainBinding?.domainStatusMessage || input.current?.domainStatusMessage,
+    domainLastCheckedAt:
+      input.publicDomainBinding?.domainLastCheckedAt || input.current?.domainLastCheckedAt,
+    domainActivatedAt:
+      input.publicDomainBinding?.domainActivatedAt || input.current?.domainActivatedAt,
     tokenId: input.tokenId || input.current?.tokenId,
     tokenRotatedAt: input.tokenRotatedAt || input.current?.tokenRotatedAt,
     createdAt: input.current?.createdAt || input.createdAt || new Date().toISOString(),
@@ -1232,6 +1540,17 @@ function toAccount(row: DeploymentAccountRow | null): UserPlatformDeploymentAcco
     serviceId: config.serviceId,
     serviceName: config.serviceName,
     serviceDomain: config.serviceDomain,
+    publicDomain: config.publicDomain,
+    publicUrl: config.publicUrl,
+    publicDomainProvider: config.publicDomainProvider,
+    railwayCustomDomainId: config.railwayCustomDomainId,
+    railwayCnameTarget: config.railwayCnameTarget,
+    cloudflareZoneId: config.cloudflareZoneId,
+    cloudflareDnsRecords: config.cloudflareDnsRecords,
+    domainStatus: config.domainStatus,
+    domainStatusMessage: config.domainStatusMessage,
+    domainLastCheckedAt: config.domainLastCheckedAt,
+    domainActivatedAt: config.domainActivatedAt,
     accessToken,
     tokenKind: 'project',
     tokenId: asText(secret?.tokenId || config.tokenId) || undefined,
@@ -1357,12 +1676,13 @@ export class PlatformDeploymentAccountService {
 
   private async deleteProjectServiceBinding(serviceId: string, environmentId: string) {
     const adminToken = requireEnv('RAILWAY_ADMIN_TOKEN');
-    await deleteRailwayService(adminToken, serviceId, environmentId);
+    void environmentId;
+    await deleteRailwayService(adminToken, serviceId);
   }
 
-  private async deleteProjectEnvironmentBinding(environmentId: string) {
+  private async deleteProjectEnvironmentBinding(projectId: string, environmentId: string) {
     const adminToken = requireEnv('RAILWAY_ADMIN_TOKEN');
-    await deleteRailwayEnvironment(adminToken, environmentId);
+    await deleteRailwayEnvironment(adminToken, projectId, environmentId);
   }
 
   private async listReusableAccountRows(
@@ -1448,98 +1768,6 @@ export class PlatformDeploymentAccountService {
     }
 
     return null;
-  }
-
-  private async reuseExistingServiceSlot(input: {
-    userId: string;
-    projectKey: string;
-    projectId: string;
-    projectName?: string;
-    displayName?: string;
-  }): Promise<UserPlatformDeploymentAccount> {
-    const candidates = await this.listReusableAccountRows(input.userId, {
-      excludeProjectKey: input.projectKey,
-      projectId: input.projectId,
-    });
-    if (candidates.length === 0) {
-      throw new Error('Railway 已达到每日服务创建配额，且当前账号没有可复用的既有部署服务。');
-    }
-
-    const adminToken = requireEnv('RAILWAY_ADMIN_TOKEN');
-    let lastError: unknown = null;
-
-    for (const candidate of candidates) {
-      const config = toDeploymentConfig(candidate.configJson);
-      if (!config.serviceId || !config.environmentId || !config.projectId) {
-        continue;
-      }
-
-      try {
-        const reusedEnvironmentId = config.environmentId;
-        const reusedEnvironmentName = config.environmentName || undefined;
-
-        await configureServiceInstance(adminToken, reusedEnvironmentId, config.serviceId);
-        const serviceDomain = await ensureServiceDomain(
-          adminToken,
-          config.projectId,
-          reusedEnvironmentId,
-          config.serviceId
-        );
-        await waitForEnvironmentServiceInstance(
-          adminToken,
-          reusedEnvironmentId,
-          config.serviceId
-        );
-        const tokenRotatedAt = new Date().toISOString();
-        const projectToken = await createProjectToken(
-          adminToken,
-          input.userId,
-          config.projectId,
-          reusedEnvironmentId,
-          input.projectKey
-        );
-
-        await this.persistAccountRow(
-          input.userId,
-          buildConfigFromState({
-            projectKey: input.projectKey,
-            projectId: config.projectId,
-            projectName: input.projectName || config.projectName,
-            environmentId: reusedEnvironmentId,
-            environmentName: reusedEnvironmentName,
-            serviceId: config.serviceId,
-            serviceName: config.serviceName,
-            serviceDomain,
-            tokenId: projectToken.tokenId,
-            tokenRotatedAt,
-            createdAt: new Date().toISOString(),
-            databaseServiceId: config.databaseServiceId,
-            databaseServiceName: config.databaseServiceName,
-            databaseVolumeId: config.databaseVolumeId,
-            databaseVolumeName: config.databaseVolumeName,
-          }),
-          connectorSecretService.encrypt({
-            accessToken: projectToken.token,
-            tokenKind: 'project',
-            tokenId: projectToken.tokenId,
-            tokenRotatedAt,
-          } satisfies DeploymentSecret),
-          input.displayName
-        );
-
-        const account = await this.getProjectAccount(input.userId, input.projectKey);
-        if (account) {
-          return account;
-        }
-      } catch (error: any) {
-        lastError = error;
-      }
-    }
-
-    if (lastError instanceof Error) {
-      throw lastError;
-    }
-    throw new Error('Railway 已达到每日服务创建配额，且复用既有部署服务失败。');
   }
 
   async getUserAccount(userId: string): Promise<UserPlatformDeploymentAccount | null> {
@@ -1677,6 +1905,7 @@ export class PlatformDeploymentAccountService {
     const existingRow = await this.getAccountRow(normalizedUserId, normalizedProjectKey);
     const existingAccount = toAccount(existingRow);
     if (
+      existingRow &&
       existingAccount?.serviceId &&
       existingAccount.serviceDomain &&
       existingAccount.projectKey === normalizedProjectKey &&
@@ -1689,6 +1918,60 @@ export class PlatformDeploymentAccountService {
         existingAccount.environmentId,
         existingAccount.serviceId
       );
+      const config = toDeploymentConfig(existingRow.configJson);
+      const publicDomainBinding = await ensureDeploymentPublicDomain({
+        token: adminToken,
+        tokenKind: 'bearer',
+        projectKey: normalizedProjectKey,
+        projectName: existingAccount.serviceName || existingAccount.environmentName || normalizedProjectKey,
+        projectId: existingAccount.projectId,
+        environmentId: existingAccount.environmentId,
+        serviceId: existingAccount.serviceId,
+        existing: config,
+      });
+      if (
+        publicDomainBinding.publicUrl !== config.publicUrl ||
+        publicDomainBinding.railwayCustomDomainId !== config.railwayCustomDomainId ||
+        publicDomainBinding.railwayCnameTarget !== config.railwayCnameTarget ||
+        JSON.stringify(publicDomainBinding.cloudflareDnsRecords || []) !==
+          JSON.stringify(config.cloudflareDnsRecords || []) ||
+        publicDomainBinding.domainStatus !== config.domainStatus ||
+        publicDomainBinding.domainStatusMessage !== config.domainStatusMessage
+      ) {
+        await this.persistAccountRow(
+          normalizedUserId,
+          buildConfigFromState({
+            current: config,
+            projectKey: normalizedProjectKey,
+            projectId: existingAccount.projectId,
+            projectName: existingAccount.projectName,
+            environmentId: existingAccount.environmentId,
+            environmentName: existingAccount.environmentName,
+            serviceId: existingAccount.serviceId,
+            serviceName: existingAccount.serviceName,
+            serviceDomain: existingAccount.serviceDomain,
+            publicDomainBinding,
+            repo: {
+              owner: existingAccount.githubRepoOwner || '',
+              name: existingAccount.githubRepoName || '',
+              fullName: existingAccount.githubRepoFullName || '',
+              htmlUrl: existingAccount.githubRepoUrl || '',
+              defaultBranch: existingAccount.githubDefaultBranch || 'main',
+            },
+            tokenId: existingAccount.tokenId,
+            tokenRotatedAt: existingAccount.tokenRotatedAt,
+            databaseServiceId: existingAccount.databaseServiceId,
+            databaseServiceName: existingAccount.databaseServiceName,
+            databaseVolumeId: existingAccount.databaseVolumeId,
+            databaseVolumeName: existingAccount.databaseVolumeName,
+          }),
+          existingRow.secretCiphertext
+        );
+        const updatedAccount = await this.getProjectAccount(normalizedUserId, normalizedProjectKey);
+        if (updatedAccount) {
+          return updatedAccount;
+        }
+      }
       return existingAccount;
     }
 
@@ -1727,16 +2010,22 @@ export class PlatformDeploymentAccountService {
 
     const config = toDeploymentConfig(row.configJson);
     const adminToken = requireEnv('RAILWAY_ADMIN_TOKEN');
-    const existingDatabaseService = await getProjectService(
+    const existingDatabaseService = await waitForDatabaseService(
       adminToken,
       account.projectId,
-      config.databaseServiceName || buildDatabaseServiceName(normalizedProjectKey)
-    );
-    if (!existingDatabaseService?.id) {
+      account.environmentId,
+      account.serviceId
+    ).catch(() => null);
+    if (!existingDatabaseService?.serviceId) {
       await deployPostgresTemplate(adminToken, account.projectId, account.environmentId);
     }
 
-    const database = await waitForDatabaseService(adminToken, account.projectId, account.environmentId);
+    const database = await waitForDatabaseService(
+      adminToken,
+      account.projectId,
+      account.environmentId,
+      account.serviceId
+    );
     const variables = database.variables;
     await wireApplicationDatabaseVariables(
       adminToken,
@@ -1905,6 +2194,26 @@ export class PlatformDeploymentAccountService {
     const userId = asText(row.userId);
     const connectorKey = asText(row.connectorKey);
     const config = toDeploymentConfig(row.configJson);
+    const projectKey = normalizeProjectKey(config.projectKey || DEFAULT_DEPLOYMENT_PROJECT_KEY);
+    const adminToken = requireEnv('RAILWAY_ADMIN_TOKEN');
+    const storageResource = await projectStorageResourceDAO.getByUserAndProjectKey(userId, projectKey);
+    if (storageResource?.railwayBucketId) {
+      try {
+        await deleteRailwayBucketById(
+          adminToken,
+          storageResource.railwayProjectId || config.projectId,
+          storageResource.railwayEnvironmentId || config.environmentId,
+          storageResource.railwayBucketId
+        );
+      } catch (error: any) {
+        const message = asText(error?.message || '');
+        if (!message.toLowerCase().includes('not found')) {
+          throw error;
+        }
+      } finally {
+        await projectStorageResourceDAO.deleteByUserAndProjectKey(userId, projectKey);
+      }
+    }
     if (config.databaseServiceId && config.environmentId) {
       try {
         await this.deleteProjectServiceBinding(config.databaseServiceId, config.environmentId);
@@ -1925,7 +2234,7 @@ export class PlatformDeploymentAccountService {
     }
     if (config.environmentId) {
       try {
-        await this.deleteProjectEnvironmentBinding(config.environmentId);
+        await this.deleteProjectEnvironmentBinding(config.projectId, config.environmentId);
       } catch (error: any) {
         if (!isRailwayServiceBindingNotFoundError(error?.message || '')) {
           throw error;
@@ -1951,28 +2260,6 @@ export class PlatformDeploymentAccountService {
       return;
     }
     await this.purgeProjectAccountRowResources(row);
-  }
-
-  async pruneSupersededProjectResources(
-    userId: string,
-    keepProjectKey: string,
-    projectId: string
-  ): Promise<void> {
-    const normalizedUserId = asText(userId);
-    const normalizedKeepProjectKey = normalizeProjectKey(keepProjectKey);
-    const normalizedProjectId = asText(projectId);
-    if (!normalizedUserId || !normalizedProjectId) {
-      return;
-    }
-
-    const rows = await this.listReusableAccountRows(normalizedUserId, {
-      excludeProjectKey: normalizedKeepProjectKey,
-      projectId: normalizedProjectId,
-    });
-
-    for (const row of rows) {
-      await this.purgeProjectAccountRowResources(row);
-    }
   }
 
   private async repairExistingAccount(
@@ -2005,12 +2292,7 @@ export class PlatformDeploymentAccountService {
       );
     } catch (error: any) {
       if (isRailwayServiceCreationLimitError(error?.message || '')) {
-        return this.reuseExistingServiceSlot({
-          userId,
-          projectKey: normalizedProjectKey,
-          projectId: config.projectId,
-          projectName: config.projectName,
-        });
+        throw buildServiceCreationLimitIsolationError();
       }
       throw error;
     }
@@ -2030,6 +2312,16 @@ export class PlatformDeploymentAccountService {
       environment.environmentId,
       service.serviceId
     );
+    const publicDomainBinding = await ensureDeploymentPublicDomain({
+      token: adminToken,
+      tokenKind: 'bearer',
+      projectKey: normalizedProjectKey,
+      projectName: service.serviceName || environment.environmentName || normalizedProjectKey,
+      projectId: config.projectId,
+      environmentId: environment.environmentId,
+      serviceId: service.serviceId,
+      existing: config,
+    });
     await waitForEnvironmentServiceInstance(
       adminToken,
       environment.environmentId,
@@ -2069,6 +2361,7 @@ export class PlatformDeploymentAccountService {
         serviceId: service.serviceId,
         serviceName: service.serviceName,
         serviceDomain,
+        publicDomainBinding,
         tokenId,
         tokenRotatedAt,
       }),
@@ -2106,12 +2399,7 @@ export class PlatformDeploymentAccountService {
       );
     } catch (error: any) {
       if (isRailwayServiceCreationLimitError(error?.message || '')) {
-        return this.reuseExistingServiceSlot({
-          userId,
-          projectKey: normalizedProjectKey,
-          projectId: userProject.projectId,
-          projectName: userProject.projectName,
-        });
+        throw buildServiceCreationLimitIsolationError();
       }
       throw error;
     }
@@ -2122,6 +2410,15 @@ export class PlatformDeploymentAccountService {
       environment.environmentId,
       service.serviceId
     );
+    const publicDomainBinding = await ensureDeploymentPublicDomain({
+      token: adminToken,
+      tokenKind: 'bearer',
+      projectKey: normalizedProjectKey,
+      projectName: service.serviceName || environment.environmentName || normalizedProjectKey,
+      projectId: userProject.projectId,
+      environmentId: environment.environmentId,
+      serviceId: service.serviceId,
+    });
     await waitForEnvironmentServiceInstance(
       adminToken,
       environment.environmentId,
@@ -2147,6 +2444,7 @@ export class PlatformDeploymentAccountService {
         serviceId: service.serviceId,
         serviceName: service.serviceName,
         serviceDomain,
+        publicDomainBinding,
         tokenId: projectToken.tokenId,
         tokenRotatedAt,
         createdAt: new Date().toISOString(),

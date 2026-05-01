@@ -1,89 +1,73 @@
-import type { ConnectorDefinition, ConnectorOauthProvider } from './types';
+import type { ConnectorDefinition } from './types';
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function parseScopes(value: string | undefined, fallback: string[]): string[] {
-  const raw = asText(value);
-  if (!raw) return fallback;
-  return raw
-    .split(/[,\s]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+function parseCsvEnv(name: string, fallback: string[] = []): string[] {
+  const raw = asText(process.env[name]);
+  const source = raw ? raw.split(',') : fallback;
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of source) {
+    const value = item.trim();
+    if (!value) continue;
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(value);
+  }
+  return result;
 }
 
-export function resolveGithubOauthProvider(): ConnectorOauthProvider | undefined {
-  const clientId = asText(process.env.GITHUB_CONNECTOR_CLIENT_ID);
-  const clientSecret = asText(process.env.GITHUB_CONNECTOR_CLIENT_SECRET);
-  if (!clientId || !clientSecret) return undefined;
-  return {
-    provider: 'github',
-    clientId,
-    clientSecret,
-    authorizationUrl: 'https://github.com/login/oauth/authorize',
-    tokenUrl:
-      asText(process.env.GITHUB_CONNECTOR_TOKEN_URL) ||
-      'https://github.com/login/oauth/access_token',
-    scopeParam: 'scope',
-    // 对于 GitHub App，不需要请求 OAuth App 的 repo scope。如果环境变量没传，则默认为空。
-    scopes: parseScopes(process.env.GITHUB_CONNECTOR_SCOPES, []),
-    authorizationExtraParams: {
-      // 保持与 Manus 等平台一致的行为，有些通用 OAuth 客户端会要求此参数
-      access_type: 'offline',
-    },
-    tokenRequestBodyFormat: 'form',
-    tokenClientAuth: 'body',
-  };
+export function resolveGithubToolkitSlugs(): string[] {
+  return parseCsvEnv('COMPOSIO_GITHUB_TOOLKITS', ['github']);
+}
+
+export function resolveGithubAllowedTools(): string[] {
+  return parseCsvEnv('COMPOSIO_GITHUB_ALLOWED_TOOLS');
 }
 
 export function buildGithubDefinition(): ConnectorDefinition {
-  const oauth = resolveGithubOauthProvider();
+  const toolkitSlugs = resolveGithubToolkitSlugs();
+  const available = Boolean(asText(process.env.COMPOSIO_API_KEY)) && toolkitSlugs.length > 0;
+  const availabilityReason = !asText(process.env.COMPOSIO_API_KEY)
+    ? 'COMPOSIO_API_KEY is not configured'
+    : toolkitSlugs.length === 0
+      ? 'COMPOSIO_GITHUB_TOOLKITS is empty'
+      : undefined;
+
   return {
     key: 'github',
     category: 'app',
     name: 'GitHub',
-    description: '在平台外部保存 GitHub 授权态，并在 sandbox 内按会话挂载仓库工具。',
+    description: 'Use GitHub through Composio managed authorization and oneceo API-brokered MCP tools.',
     icon: 'github',
     featured: true,
     sortOrder: 10,
-    authMode: oauth ? 'oauth' : 'token',
-    available: true,
-    configFields: [
-      {
-        key: 'profileName',
-        label: 'Profile Name',
-        type: 'text',
-        placeholder: 'GitHub Main',
-        description: '可选。留空时平台会自动按授权账号生成名称。',
-      },
-      {
-        key: 'displayName',
-        label: 'Display Name',
-        type: 'text',
-        placeholder: 'Engineering Org',
-        description: '可选。留空时平台会自动回填 GitHub 账号名。',
-      },
-      {
-        key: 'accessToken',
-        label: oauth ? 'Personal Access Token (Optional)' : 'Personal Access Token',
-        type: 'password',
-        required: !oauth,
-        secret: true,
-        placeholder: 'ghp_xxx',
-        description: oauth
-          ? '推荐优先走 GitHub OAuth；如已有 PAT，也可以直接粘贴保存。'
-          : '从 GitHub Personal Access Token 页面复制 fine-grained PAT。',
-      },
-    ],
+    authMode: 'oauth',
+    available,
+    availabilityReason,
+    configFields: [],
     oauth: {
-      supported: Boolean(oauth),
-      provider: oauth?.provider,
+      supported: available,
+      provider: 'composio',
     },
     activityMatcherVerified: true,
     visibleInMenu: true,
     runtime: {
-      type: 'local',
+      type: 'remote',
+      transport: 'streamable_http',
+      headerTemplate: 'none',
+    },
+    composio: {
+      provider: 'composio',
+      toolkitSlugs,
+      authStrategy: 'composio_connect_link',
+      brokerMode: 'api_only',
+      allowTokenInSandbox: false,
+      allowedTools: resolveGithubAllowedTools(),
+      toolNamePrefix: 'github',
     },
   };
 }

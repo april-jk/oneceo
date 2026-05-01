@@ -36,7 +36,6 @@ import {
 import {
   connectorRegistry,
   type ConnectorKey,
-  type ConnectorRuntimeConfig,
 } from './connector-registry';
 import { userConnectorService } from './user-connector-service';
 import { connectorStorageBootstrap } from './connector-storage-bootstrap';
@@ -537,16 +536,6 @@ function connectorServerName(connectorKey: ConnectorKey, taskSessionId: string) 
   return `${connectorKey}--${taskSessionId}`;
 }
 
-function buildGithubProcessEnv(runtimeConfig: Extract<ConnectorRuntimeConfig, { type: 'local' }>) {
-  const token = runtimeConfig.environment?.GITHUB_PERSONAL_ACCESS_TOKEN?.trim();
-  if (!token) return {};
-  return {
-    GITHUB_PERSONAL_ACCESS_TOKEN: token,
-    GH_TOKEN: token,
-    GITHUB_TOKEN: token,
-  };
-}
-
 async function resolveAttachedConnectorBootstrap(
   taskSessionId?: string
 ): Promise<ResolvedConnectorBootstrap> {
@@ -599,12 +588,13 @@ async function resolveAttachedConnectorBootstrap(
           !Array.isArray(binding.sessionConfigJson)
             ? (binding.sessionConfigJson as Record<string, unknown>)
             : null,
+        runtimeContext: {
+          taskSessionId,
+          userId,
+        },
       });
       const serverName = binding.serverName || connectorServerName(connectorKey, taskSessionId);
       mcpEntries[serverName] = runtimeConfig;
-      if (connectorKey === 'github' && runtimeConfig.type === 'local') {
-        Object.assign(processEnvs, buildGithubProcessEnv(runtimeConfig));
-      }
     } catch (error) {
       console.warn('[OPENCODE_CONNECTOR_BOOTSTRAP_SKIP]', {
         taskSessionId,

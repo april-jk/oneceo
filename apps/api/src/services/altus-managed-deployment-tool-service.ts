@@ -18,6 +18,9 @@ import {
   inspectTaskSessionProjectProfile,
   type TaskSessionProjectProfile,
 } from './task-session-project-profile-service';
+import { platformDeploymentAccountService } from './platform-deployment-account-service';
+import { projectStorageResourceService } from './project-storage-resource-service';
+import { taskSessionResourceDeclarationService } from './task-session-resource-declaration-service';
 
 export const ALTUS_MANAGED_DEPLOYMENT_TOOL_NAMES = [
   'deploy_application',
@@ -58,6 +61,7 @@ export type AltusManagedDeploymentToolResult = {
   phase: 'completed' | 'repair_required' | 'failed';
   status: 'success' | 'retryable_repair_required' | 'fatal_error';
   summary: string;
+  bindingState?: string;
   deploymentStatus?: string;
   url?: string;
   deploymentId?: string;
@@ -178,6 +182,61 @@ function buildRepairResult(
   };
 }
 
+function buildResourceRequirementRepairResult(
+  action: AltusManagedDeploymentToolName,
+  baseline: DeploymentTemplateBaselineData,
+  requirement: 'database' | 'storage',
+  source: 'manifest' | 'session_declaration' | 'manifest_and_session_declaration',
+  extra?: {
+    projectProfile?: TaskSessionProjectProfile;
+    deploymentFlow?: DeploymentFlowSnapshot;
+  }
+): AltusManagedDeploymentToolResult {
+  const checks =
+    requirement === 'database'
+      ? ['database_resource_missing']
+      : ['object_storage_resource_missing'];
+  const suggestedActions =
+    requirement === 'database'
+      ? [
+          '先调用 ensure_project_database，为当前项目创建或修复 Railway Postgres',
+          '数据库资源 ready 后，再重新调用 deploy_application 或 redeploy_application',
+        ]
+      : [
+          '先调用 ensure_project_storage_bucket，为当前项目创建或修复 Railway Bucket',
+          '存储桶资源 ready 后，再重新调用 deploy_application 或 redeploy_application',
+        ];
+  return {
+    action,
+    phase: 'repair_required',
+    status: 'retryable_repair_required',
+    summary:
+      requirement === 'database'
+        ? source === 'manifest'
+          ? '当前 manifest 已明确声明需要数据库，但当前项目还没有就绪的 Railway Postgres 资源。'
+          : source === 'manifest_and_session_declaration'
+            ? '当前 manifest 与当前会话都已明确声明需要数据库，但当前项目还没有就绪的 Railway Postgres 资源。'
+          : '当前会话已显式声明需要数据库，但当前项目还没有就绪的 Railway Postgres 资源。'
+        : source === 'manifest'
+          ? '当前 manifest 已明确声明需要对象存储，但当前项目还没有就绪的 Railway Bucket 资源。'
+          : source === 'manifest_and_session_declaration'
+            ? '当前 manifest 与当前会话都已明确声明需要对象存储，但当前项目还没有就绪的 Railway Bucket 资源。'
+          : '当前会话已显式声明需要对象存储，但当前项目还没有就绪的 Railway Bucket 资源。',
+    repair: {
+      category: 'deployment_configuration',
+      checks,
+      suggestedActions,
+    },
+    baseline,
+    projectProfile: extra?.projectProfile,
+    deploymentFlow: extra?.deploymentFlow,
+    debug: {
+      baselineStatus: baseline.status,
+      baselineErrors: baseline.errors,
+    },
+  };
+}
+
 function buildResourceBindingRepairResult(
   action: AltusManagedDeploymentToolName,
   rawError: string,
@@ -222,12 +281,17 @@ function buildPendingResult(
 ): AltusManagedDeploymentToolResult {
   const deploymentStatus = asText(panel.latestStatus);
   const url = asText(panel.latestStaticUrl || panel.latestUrl);
+  const bindingState = asText(panel.bindingState);
+  const waitingForPublicReadiness = bindingState === 'public_settling';
   return {
     action,
     phase: 'repair_required',
     status: 'retryable_repair_required',
+    bindingState: bindingState || undefined,
     summary:
-      panel.message ||
+      (waitingForPublicReadiness
+        ? '发布完成，正在等待公网生效。'
+        : panel.message) ||
       (deploymentStatus
         ? `部署仍在进行中，当前状态 ${deploymentStatus}。`
         : '部署仍在进行中，后台正在同步最新状态。'),
@@ -236,7 +300,7 @@ function buildPendingResult(
     deploymentId: asText(panel.deploymentId) || undefined,
     repair: {
       category: 'deployment_pending',
-      checks: [asText(panel.bindingState) || 'provisioning', deploymentStatus || 'unknown'].filter(Boolean),
+      checks: [bindingState || 'provisioning', deploymentStatus || 'unknown'].filter(Boolean),
       suggestedActions: [
         '继续调用 get_application_deployment_status，直到 bindingState=ready 且部署状态不再是 BUILDING/DEPLOYING/INITIALIZING/QUEUED/WAITING',
         '在 deployment_pending 阶段不要继续修改工作区文件，除非后续返回新的模板或配置修复项',
@@ -253,6 +317,7 @@ function buildPendingResult(
 }
 
 const DEPLOYMENT_FAILED_STATUSES = new Set(['failed', 'crashed', 'removed']);
+const DEPLOYMENT_PENDING_BINDING_STATES = new Set(['provisioning', 'public_settling']);
 
 function normalizeDeploymentStatus(value: unknown): string {
   return asText(value).toLowerCase();
@@ -400,6 +465,7 @@ function buildSuccessResult(input: {
       action: input.action,
       phase: 'completed',
       status: 'success',
+      bindingState: asText(input.panel.bindingState) || undefined,
       summary: input.fallbackSummary || input.panel.message || '已获取当前部署状态。',
       deploymentStatus: deploymentStatus || undefined,
       url: url || undefined,
@@ -433,6 +499,7 @@ function buildSuccessResult(input: {
     action: input.action,
     phase: 'completed',
     status: 'success',
+    bindingState: asText(input.panel.bindingState) || undefined,
     summary: summaryParts.join('，') || input.fallbackSummary || input.panel.message || '部署完成',
     deploymentStatus: deploymentStatus || undefined,
     url: url || undefined,
@@ -475,6 +542,9 @@ export class AltusManagedDeploymentToolService {
       buildDeploymentResponse: typeof buildTaskSessionDeploymentResponse;
       executeDeploymentAction: typeof executeTaskSessionDeploymentAction;
       getErrorMessage: typeof getTaskSessionDeploymentErrorMessage;
+      getProjectAccount?: typeof platformDeploymentAccountService.getProjectAccount;
+      getStorageStatus?: typeof projectStorageResourceService.getStatus;
+      getResourceDeclarations?: typeof taskSessionResourceDeclarationService.getSessionResourceDeclarations;
     } = {
       inspectBaseline: inspectTaskSessionDeploymentTemplate,
       inspectProjectProfile: inspectTaskSessionProjectProfile,
@@ -482,6 +552,14 @@ export class AltusManagedDeploymentToolService {
       buildDeploymentResponse: buildTaskSessionDeploymentResponse,
       executeDeploymentAction: executeTaskSessionDeploymentAction,
       getErrorMessage: getTaskSessionDeploymentErrorMessage,
+      getProjectAccount: platformDeploymentAccountService.getProjectAccount.bind(
+        platformDeploymentAccountService
+      ),
+      getStorageStatus: projectStorageResourceService.getStatus.bind(projectStorageResourceService),
+      getResourceDeclarations:
+        taskSessionResourceDeclarationService.getSessionResourceDeclarations.bind(
+          taskSessionResourceDeclarationService
+        ),
     }
   ) {}
 
@@ -578,7 +656,10 @@ export class AltusManagedDeploymentToolService {
           session,
           resolvedOrchestratorSessionId: input.sandboxId,
         });
-        if (panel.activeDeploymentPending || asText(panel.bindingState) === 'provisioning') {
+        if (
+          panel.activeDeploymentPending ||
+          DEPLOYMENT_PENDING_BINDING_STATES.has(asText(panel.bindingState))
+        ) {
           deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
             type: 'PROVIDER_STATUS',
             status: asText(panel.latestStatus) || 'pending',
@@ -636,6 +717,68 @@ export class AltusManagedDeploymentToolService {
       if (baseline.status !== 'ready') {
         return buildRepairResult(input.action, baseline, undefined, { projectProfile, deploymentFlow });
       }
+      const resourceDeclarations = this.deps.getResourceDeclarations
+        ? await this.deps.getResourceDeclarations(input.sessionId).catch(() => ({
+            database: null,
+            storage: null,
+          }))
+        : { database: null, storage: null };
+      const databaseRequiredByManifest = baseline.features?.database === 'railway_postgres';
+      const databaseRequiredByDeclaration = Boolean(resourceDeclarations.database?.requested);
+      if (databaseRequiredByManifest || databaseRequiredByDeclaration) {
+        const account = this.deps.getProjectAccount
+          ? await this.deps.getProjectAccount(input.userId, input.sessionId)
+          : null;
+        if (!account?.databaseServiceId) {
+          deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
+            type: 'REPAIR_REQUIRED',
+            category: 'deployment_configuration',
+            checks: ['database_resource_missing'],
+          });
+          return buildResourceRequirementRepairResult(
+            input.action,
+            baseline,
+            'database',
+            databaseRequiredByManifest && databaseRequiredByDeclaration
+              ? 'manifest_and_session_declaration'
+              : databaseRequiredByManifest
+                ? 'manifest'
+                : 'session_declaration',
+            {
+              projectProfile,
+              deploymentFlow,
+            }
+          );
+        }
+      }
+      const storageRequiredByManifest = baseline.features?.objectStorage === true;
+      const storageRequiredByDeclaration = Boolean(resourceDeclarations.storage?.requested);
+      if (storageRequiredByManifest || storageRequiredByDeclaration) {
+        const storageStatus = this.deps.getStorageStatus
+          ? await this.deps.getStorageStatus(input.userId, input.sessionId)
+          : ({ configured: false } as Awaited<ReturnType<typeof projectStorageResourceService.getStatus>>);
+        if (!storageStatus.configured) {
+          deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
+            type: 'REPAIR_REQUIRED',
+            category: 'deployment_configuration',
+            checks: ['object_storage_resource_missing'],
+          });
+          return buildResourceRequirementRepairResult(
+            input.action,
+            baseline,
+            'storage',
+            storageRequiredByManifest && storageRequiredByDeclaration
+              ? 'manifest_and_session_declaration'
+              : storageRequiredByManifest
+                ? 'manifest'
+                : 'session_declaration',
+            {
+              projectProfile,
+              deploymentFlow,
+            }
+          );
+        }
+      }
     }
 
     try {
@@ -653,7 +796,10 @@ export class AltusManagedDeploymentToolService {
         type: 'PUBLISH_STARTED',
         deploymentId: asText(result.panel.deploymentId) || undefined,
       });
-      if (result.panel.activeDeploymentPending || asText(result.panel.bindingState) === 'provisioning') {
+      if (
+        result.panel.activeDeploymentPending ||
+        DEPLOYMENT_PENDING_BINDING_STATES.has(asText(result.panel.bindingState))
+      ) {
         deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
           type: 'PROVIDER_STATUS',
           status: asText(result.panel.latestStatus) || 'pending',

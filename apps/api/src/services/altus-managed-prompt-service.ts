@@ -507,15 +507,27 @@ export class AltusManagedPromptService {
             '- When the user asks to deploy, publish, go live, 上线, redeploy, rollback deployment, or check deployment status for the current app, use the managed deployment tools instead of replying with plain text.',
             '- In deploy/redeploy/status flows, do not run local preview/dev commands such as `vite preview`, `npm run preview`, `vite dev`, `npm run dev`, or `react-scripts start` to decide whether Railway deployment is healthy.',
             '- In deploy/redeploy/status flows, do not infer the public deployment start command from the raw workspace `package.json` or an outdated `oneceo.manifest.json`. The platform will normalize the deployable source before publishing.',
+            '- Before the first deploy attempt, make sure the workspace already satisfies the deployable baseline: build/start contract, healthcheck path, analytics entry, and recognizable public entrypoint. If the deployment tool returns `template_compliance`, `deployment_configuration`, or `workspace_missing`, treat that as a pre-deploy baseline gate and fix the workspace before trying to publish again.',
             '- Use `deploy_application` for first publish or publishing the latest workspace changes.',
             '- Use `redeploy_application` when the user wants the latest code changes published again.',
             '- Use `rollback_application_deployment` only when the user explicitly asks to rollback or revert the deployment.',
             '- Use `get_application_deployment_status` when the user asks for deployment progress, current URL, or deployment health.',
-            '- If `deploy_application`, `redeploy_application`, or `get_application_deployment_status` returns `status=retryable_repair_required`, inspect `repair.category` first. For `template_compliance`, `deployment_configuration`, or `workspace_missing`, repair the workspace baseline with file/code tools and then call the deployment tool again. For `deployment_failed`, read deployment status/log evidence and repair runtime/start/healthcheck/entry configuration before redeploying. For `resource_binding`, do not keep editing workspace files; continue with deployment/status tools until the platform resource binding is repaired or a clear blocker is surfaced. For `deployment_pending`, do not edit workspace files; keep calling `get_application_deployment_status` until the deployment becomes ready.',
+            '- If `deploy_application`, `redeploy_application`, or `get_application_deployment_status` returns `status=retryable_repair_required`, inspect `repair.category` first. For `template_compliance`, `deployment_configuration`, or `workspace_missing`, repair the workspace baseline with file/code tools and then call the deployment tool again. For `deployment_failed`, read deployment status/log evidence and repair runtime/start/healthcheck/entry configuration before redeploying. For `resource_binding`, do not keep editing workspace files; continue with deployment/status tools until the platform resource binding is repaired or a clear blocker is surfaced. For `deployment_pending`, do not edit workspace files; keep calling `get_application_deployment_status` until the deployment becomes ready or the public-settling window clearly times out.',
             '- `debug_open_page` only proves a local debug preview is reachable. It never proves that the managed public deployment succeeded.',
             '- For deploy/redeploy/rollback requests, do not call `complete_task` until deployment is actually ready online. Treat `bindingState=ready` plus a non-transient deployment status as the success condition. If the deployment tool reports `deployment_pending`, keep polling with `get_application_deployment_status`. If deployment is still failing, continue repairing or clearly report that the online deployment is not complete yet.',
             '- Keep deployment debug details internal. In user-facing replies, summarize only the current phase, whether auto-repair is happening, and the final result.',
           ].join('\n');
+    const resourceToolSection = [
+      '- Database and storage are managed platform resources. Do not simulate them with local files when the app requirement clearly needs persistence.',
+      '- In OneCEO managed deployment, database always means the fixed managed Railway Postgres. Do not ask the user to choose MySQL / SQLite / other engines for this flow.',
+      '- In OneCEO managed deployment, object storage always means the fixed managed Railway Bucket. Do not ask the user to choose R2 / S3 / MinIO / other storage engines for this flow.',
+      '- Use `get_project_database_status` or `get_project_storage_status` to inspect existing resources without creating anything.',
+      '- Use `ensure_project_database` only when the user request or the app design clearly needs relational persistence, user records, accounts, auth/session data, admin CRUD data, or SQL-backed business data.',
+      '- Use `ensure_project_storage_bucket` only when the user request or the app design clearly needs file uploads, images, media, attachments, exports, or object storage.',
+      '- Calling `ensure_project_database` or `ensure_project_storage_bucket` records an explicit deployment resource requirement for the current session. Do not call them speculatively.',
+      '- Do not ask the user to manually create Railway Postgres or Railway Bucket when the managed tools can create them for the current project.',
+      '- Never print database passwords, access keys, or secret access keys in the ordinary chat response. Users can view/copy secrets from the deployment resource panels.',
+    ].join('\n');
     const clarificationGateSection =
       includeRuntimeState && taskIntentProfile?.needsClarification && asText(taskIntentProfile.clarificationQuestion)
         ? [
@@ -704,6 +716,7 @@ export class AltusManagedPromptService {
       '- For deployable web app tasks, include a healthcheck route path in `oneceo.manifest.json`. Prefer `/api/system/health` when you own the server route design.',
       '- Do not finish a deployable web app task while required deployment files are missing. Before completion, verify at least: `package.json`, `oneceo.manifest.json`, and the primary app entry files exist.',
       deploymentToolSection,
+      resourceToolSection,
       '',
       '# PPT workflow',
       `- For PPT tasks, choose exactly one contentArchetype from ${formatCodeList(PPT_CONTENT_ARCHETYPES)} before drafting slides.`,

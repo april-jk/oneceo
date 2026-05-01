@@ -39,6 +39,7 @@ import {
   type RailwayDatabaseRowLocator,
 } from '../services/railway-database-service';
 import { platformDeploymentAccountService } from '../services/platform-deployment-account-service';
+import { projectStorageResourceService } from '../services/project-storage-resource-service';
 import { inspectTaskSessionDeploymentTemplate } from '../services/task-creation-deployment-source-service';
 import {
   buildTaskSessionDeploymentResponse,
@@ -55,6 +56,7 @@ import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registr
 import { resolveAttachConnectorError, sessionConnectorService } from '../services/session-connector-service';
 import { sessionConnectorDraftService } from '../services/session-connector-draft-service';
 import { connectorGuideService } from '../services/connector-guide-service';
+import { sessionMcpRecoveryService } from '../services/session-mcp-recovery-service';
 import { taskSessionCacheFacade } from '../services/task-session-cache-facade';
 import {
   inferFilenameFromResponse,
@@ -74,6 +76,7 @@ import { userSkillService } from '../services/user-skill-service';
 import { altusMemoryContextService } from '../services/altus-memory-context-service';
 import { projectDefaultConnectorService } from '../services/project-default-connector-service';
 import { taskCreationProjectRedisCacheService } from '../services/task-creation-project-redis-cache-service';
+import { taskSessionDeploymentRedisCacheService } from '../services/task-session-deployment-redis-cache-service';
 import { isLegacyClientUserId, isSameUserId, normalizeUserId } from '../utils/user-id';
 
 const router = express.Router();
@@ -724,6 +727,28 @@ function parseConnectorKey(value: string): ConnectorKey {
     return value as ConnectorKey;
   }
   throw new Error(`未知连接器: ${value}`);
+}
+
+async function ensureSessionConnectorRecoveryIfNeeded(
+  taskSessionId: string,
+  orchestratorSessionId: string | undefined,
+  context: string
+) {
+  const runtimeSessionId = asText(orchestratorSessionId);
+  if (!runtimeSessionId) return;
+  try {
+    await sessionMcpRecoveryService.ensureSessionRecovered(taskSessionId, runtimeSessionId);
+  } catch (error) {
+    writeConnectorDebugLog(
+      `[${context}]`,
+      {
+        taskSessionId,
+        orchestratorSessionId: runtimeSessionId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      'warn'
+    );
+  }
 }
 
 function toIso(value: Date | string | null | undefined): string {
@@ -3375,6 +3400,11 @@ function pickRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
+async function invalidateTaskSessionDeploymentReads(userId: string, sessionId: string) {
+  if (!taskSessionDeploymentRedisCacheService.isEnabled()) return;
+  await taskSessionDeploymentRedisCacheService.invalidateSessionReads(userId, sessionId);
+}
+
 function isSandboxNotFoundError(error: unknown): boolean {
   if (!error) return false;
   const message = error instanceof Error ? error.message : String(error);
@@ -4810,6 +4840,11 @@ router.get('/sessions/:sessionId', async (req, res) => {
     }
 
     const runtimeStatus = await resolveRuntimeStatus(sessionData.runtime?.orchestratorSessionId);
+    await ensureSessionConnectorRecoveryIfNeeded(
+      sessionId,
+      asText(sessionData.runtime?.orchestratorSessionId) || undefined,
+      'TASK_SESSION_RECOVERY_ON_SESSION_GET_FAILED'
+    );
     let connectorsSummary: ReturnType<typeof sessionConnectorService.summarizeStatuses> | null = null;
     try {
       const statuses = await sessionConnectorService.listSessionConnectors(sessionId, currentUser.userId);
@@ -5546,6 +5581,12 @@ router.get('/sessions/:sessionId/connectors', async (req, res) => {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
     await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    await ensureSessionConnectorRecoveryIfNeeded(
+      sessionId,
+      asText(session?.runtime?.orchestratorSessionId) || undefined,
+      'TASK_SESSION_RECOVERY_ON_CONNECTORS_GET_FAILED'
+    );
     await connectorGuideService.ensureSessionGuidesUpToDate(sessionId).catch((error) => {
       writeConnectorDebugLog(
         '[CONNECTOR_GUIDE_ON_DEMAND_RECOMPUTE_FAILED]',
@@ -5614,10 +5655,22 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, 
       sessionConfig,
       runtimeOrchestratorSessionId
     );
+    let nextStatus = status;
+    if (status?.runtimeStatus === 'pending_recover') {
+      await ensureSessionConnectorRecoveryIfNeeded(
+        sessionId,
+        runtimeOrchestratorSessionId,
+        'TASK_SESSION_RECOVERY_ON_ATTACH_FAILED'
+      );
+      nextStatus =
+        (await sessionConnectorService.listSessionConnectors(sessionId, currentUser.userId)).find(
+          (item) => item.connectorKey === connectorKey
+        ) || status;
+    }
     return res.json({
       success: true,
       data: {
-        connector: status,
+        connector: nextStatus,
       },
     });
   } catch (error: any) {
@@ -6023,6 +6076,17 @@ router.get('/sessions/:sessionId/deployment', async (req, res) => {
 
     const runtimeContext = await resolveTaskSessionRuntimeReadContext(sessionId, session);
     const deploymentId = asText(req.query.deploymentId);
+    const cached = await taskSessionDeploymentRedisCacheService.getDeploymentInfo<Awaited<ReturnType<typeof buildTaskSessionDeploymentResponse>>>(
+      currentUser.userId,
+      sessionId,
+      deploymentId || undefined
+    );
+    if (cached) {
+      return res.json({
+        success: true,
+        data: cached,
+      });
+    }
     const data = await buildTaskSessionDeploymentResponse({
       userId: currentUser.userId,
       session,
@@ -6030,6 +6094,12 @@ router.get('/sessions/:sessionId/deployment', async (req, res) => {
       resolvedEnvironment: runtimeContext.environment || undefined,
       resolvedOrchestratorSessionId: runtimeContext.orchestratorSessionId || undefined,
     });
+    await taskSessionDeploymentRedisCacheService.setDeploymentInfo(
+      currentUser.userId,
+      sessionId,
+      data,
+      deploymentId || undefined
+    );
     return res.json({
       success: true,
       data,
@@ -6063,9 +6133,27 @@ router.get('/sessions/:sessionId/deployment/analytics', async (req, res) => {
     }
 
     const runtimeContext = await resolveTaskSessionRuntimeReadContext(sessionId, session);
+    const range = asText(req.query.range) || undefined;
+    const cached = await taskSessionDeploymentRedisCacheService.getDeploymentAnalytics<Awaited<ReturnType<typeof buildTaskSessionDeploymentAnalyticsOverview>>>(
+      currentUser.userId,
+      sessionId,
+      range
+    );
+    if (cached) {
+      return res.json({
+        success: true,
+        data: cached,
+      });
+    }
     const data = await buildTaskSessionDeploymentAnalyticsOverview(
       runtimeContext.environment?.metadata,
       req.query.range
+    );
+    await taskSessionDeploymentRedisCacheService.setDeploymentAnalytics(
+      currentUser.userId,
+      sessionId,
+      data,
+      range
     );
     return res.json({
       success: true,
@@ -6100,11 +6188,26 @@ router.get('/sessions/:sessionId/deployment/template', async (req, res) => {
     }
 
     const runtimeContext = await resolveTaskSessionRuntimeReadContext(sessionId, session);
+    const cached = await taskSessionDeploymentRedisCacheService.getDeploymentTemplate<Awaited<ReturnType<typeof inspectTaskSessionDeploymentTemplate>>>(
+      currentUser.userId,
+      sessionId
+    );
+    if (cached) {
+      return res.json({
+        success: true,
+        data: cached,
+      });
+    }
 
     const data = await inspectTaskSessionDeploymentTemplate({
       orchestratorSessionId: runtimeContext.orchestratorSessionId,
       workspaceRoot: runtimeContext.workspaceRoot,
     });
+    await taskSessionDeploymentRedisCacheService.setDeploymentTemplate(
+      currentUser.userId,
+      sessionId,
+      data
+    );
     return res.json({
       success: true,
       data,
@@ -6143,6 +6246,7 @@ router.post('/sessions/:sessionId/deployment/token/rotate', async (req, res) => 
     }
 
     await platformDeploymentAccountService.rotateProjectToken(currentUser.userId, sessionId);
+    await invalidateTaskSessionDeploymentReads(currentUser.userId, sessionId);
     const runtimeContext = await resolveTaskSessionRuntimeReadContext(sessionId, session);
     const data = await buildTaskSessionDeploymentResponse({
       userId: currentUser.userId,
@@ -6203,6 +6307,7 @@ router.post('/sessions/:sessionId/deployment/deploy', async (req, res) => {
       resolvedOrchestratorSessionId: orchestratorSessionId,
       resolvedEnvironment: environment,
     });
+    await invalidateTaskSessionDeploymentReads(currentUser.userId, sessionId);
     return res.json({
       success: true,
       data: result.panel,
@@ -6247,6 +6352,7 @@ router.post('/sessions/:sessionId/deployment/redeploy', async (req, res) => {
       session,
       deploymentId,
     });
+    await invalidateTaskSessionDeploymentReads(currentUser.userId, sessionId);
     return res.json({
       success: true,
       data: result.panel,
@@ -6299,6 +6405,7 @@ router.post('/sessions/:sessionId/deployment/rollback', async (req, res) => {
       session,
       deploymentId,
     });
+    await invalidateTaskSessionDeploymentReads(currentUser.userId, sessionId);
     return res.json({
       success: true,
       data: result.panel,
@@ -6321,9 +6428,121 @@ router.post('/sessions/:sessionId/deployment/rollback', async (req, res) => {
 
 /**
  * GET /api/task-creation/sessions/:sessionId/deployment/database
- * 获取数据库总览与连接信息
+ * 获取数据库总览与连接信息。读取状态不自动创建 Railway 数据库。
  */
 router.get('/sessions/:sessionId/deployment/database', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const cached = await taskSessionDeploymentRedisCacheService.getDatabaseStatus<Record<string, unknown>>(
+      currentUser.userId,
+      sessionId
+    );
+    if (cached) {
+      return res.json({
+        success: true,
+        data: cached,
+      });
+    }
+    const account = await platformDeploymentAccountService.getProjectAccount(currentUser.userId, sessionId);
+    const data = account?.databaseServiceId
+      ? await railwayDatabaseService.getSummary(account)
+      : {
+          configured: false,
+          provider: 'railway_postgres',
+          status: 'not_configured',
+          tables: [],
+        };
+    await taskSessionDeploymentRedisCacheService.setDatabaseStatus(
+      currentUser.userId,
+      sessionId,
+      data
+    );
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('获取数据库信息失败:', error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '获取数据库信息失败'),
+    });
+  }
+});
+
+/**
+ * GET /api/task-creation/sessions/:sessionId/deployment/database/status
+ * 获取数据库状态。等同 database 状态读取入口，保留给新前端使用。
+ */
+router.get('/sessions/:sessionId/deployment/database/status', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const cached = await taskSessionDeploymentRedisCacheService.getDatabaseStatus<Record<string, unknown>>(
+      currentUser.userId,
+      sessionId
+    );
+    if (cached) {
+      return res.json({
+        success: true,
+        data: cached,
+      });
+    }
+    const account = await platformDeploymentAccountService.getProjectAccount(currentUser.userId, sessionId);
+    const data = account?.databaseServiceId
+      ? await railwayDatabaseService.getSummary(account)
+      : {
+          configured: false,
+          provider: 'railway_postgres',
+          status: 'not_configured',
+          tables: [],
+        };
+    await taskSessionDeploymentRedisCacheService.setDatabaseStatus(
+      currentUser.userId,
+      sessionId,
+      data
+    );
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('获取数据库状态失败:', error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '获取数据库状态失败'),
+    });
+  }
+});
+
+/**
+ * POST /api/task-creation/sessions/:sessionId/deployment/database/ensure
+ * 显式创建或修复 Railway Postgres，并注入应用变量。
+ */
+router.post('/sessions/:sessionId/deployment/database/ensure', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
@@ -6341,6 +6560,7 @@ router.get('/sessions/:sessionId/deployment/database', async (req, res) => {
       sessionId
     );
     const data = await railwayDatabaseService.getSummary(account);
+    await invalidateTaskSessionDeploymentReads(currentUser.userId, sessionId);
     return res.json({
       success: true,
       data,
@@ -6348,10 +6568,10 @@ router.get('/sessions/:sessionId/deployment/database', async (req, res) => {
   } catch (error: any) {
     const authError = resolveCurrentUserError(error);
     const ownershipError = resolveSessionConnectorOwnershipError(error);
-    console.error('获取数据库信息失败:', error);
+    console.error('启用数据库失败:', error);
     return res.status(authError?.status || ownershipError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '获取数据库信息失败'),
+      error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '启用数据库失败'),
     });
   }
 });
@@ -6383,11 +6603,35 @@ router.get('/sessions/:sessionId/deployment/database/rows', async (req, res) => 
 
     const page = clampNumber(Number(req.query.page || 1), 1, 10_000);
     const pageSize = clampNumber(Number(req.query.pageSize || 50), 10, 200);
-    const account = await platformDeploymentAccountService.ensureProjectDatabaseResources(
+    const cached = await taskSessionDeploymentRedisCacheService.getDatabaseRows<Record<string, unknown>>(
       currentUser.userId,
-      sessionId
+      sessionId,
+      table,
+      page,
+      pageSize
     );
+    if (cached) {
+      return res.json({
+        success: true,
+        data: cached,
+      });
+    }
+    const account = await platformDeploymentAccountService.getProjectAccount(currentUser.userId, sessionId);
+    if (!account?.databaseServiceId) {
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('数据库尚未启用'),
+      });
+    }
     const data = await railwayDatabaseService.getRows(account, table, page, pageSize);
+    await taskSessionDeploymentRedisCacheService.setDatabaseRows(
+      currentUser.userId,
+      sessionId,
+      table,
+      page,
+      pageSize,
+      data
+    );
     return res.json({
       success: true,
       data,
@@ -6429,11 +6673,15 @@ router.post('/sessions/:sessionId/deployment/database/rows', async (req, res) =>
       });
     }
 
-    const account = await platformDeploymentAccountService.ensureProjectDatabaseResources(
-      currentUser.userId,
-      sessionId
-    );
+    const account = await platformDeploymentAccountService.getProjectAccount(currentUser.userId, sessionId);
+    if (!account?.databaseServiceId) {
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('数据库尚未启用'),
+      });
+    }
     const data = await railwayDatabaseService.insertRow(account, table, values);
+    await invalidateTaskSessionDeploymentReads(currentUser.userId, sessionId);
     return res.json({
       success: true,
       data,
@@ -6476,11 +6724,15 @@ router.patch('/sessions/:sessionId/deployment/database/rows', async (req, res) =
       });
     }
 
-    const account = await platformDeploymentAccountService.ensureProjectDatabaseResources(
-      currentUser.userId,
-      sessionId
-    );
+    const account = await platformDeploymentAccountService.getProjectAccount(currentUser.userId, sessionId);
+    if (!account?.databaseServiceId) {
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('数据库尚未启用'),
+      });
+    }
     const data = await railwayDatabaseService.updateRow(account, table, locator, values);
+    await invalidateTaskSessionDeploymentReads(currentUser.userId, sessionId);
     return res.json({
       success: true,
       data,
@@ -6522,11 +6774,15 @@ router.delete('/sessions/:sessionId/deployment/database/rows', async (req, res) 
       });
     }
 
-    const account = await platformDeploymentAccountService.ensureProjectDatabaseResources(
-      currentUser.userId,
-      sessionId
-    );
+    const account = await platformDeploymentAccountService.getProjectAccount(currentUser.userId, sessionId);
+    if (!account?.databaseServiceId) {
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('数据库尚未启用'),
+      });
+    }
     const data = await railwayDatabaseService.deleteRow(account, table, locator);
+    await invalidateTaskSessionDeploymentReads(currentUser.userId, sessionId);
     return res.json({
       success: true,
       data,
@@ -6538,6 +6794,232 @@ router.delete('/sessions/:sessionId/deployment/database/rows', async (req, res) 
     return res.status(authError?.status || ownershipError?.status || 400).json({
       success: false,
       error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '删除数据库记录失败'),
+    });
+  }
+});
+
+/**
+ * GET /api/task-creation/sessions/:sessionId/deployment/storage/status
+ * 获取 Railway Bucket 状态。读取状态不自动创建 Bucket。
+ */
+router.get('/sessions/:sessionId/deployment/storage/status', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const revealSecrets = asText(req.query.reveal) === '1' || asText(req.query.reveal) === 'true';
+    const cached = await taskSessionDeploymentRedisCacheService.getStorageStatus<Record<string, unknown>>(
+      currentUser.userId,
+      sessionId,
+      revealSecrets
+    );
+    if (cached) {
+      return res.json({
+        success: true,
+        data: cached,
+      });
+    }
+    const data = await projectStorageResourceService.getStatus(currentUser.userId, sessionId, {
+      revealSecrets,
+    });
+    await taskSessionDeploymentRedisCacheService.setStorageStatus(
+      currentUser.userId,
+      sessionId,
+      revealSecrets,
+      data
+    );
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('获取存储桶状态失败:', error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '获取存储桶状态失败'),
+    });
+  }
+});
+
+/**
+ * POST /api/task-creation/sessions/:sessionId/deployment/storage/ensure
+ * 显式创建或修复 Railway Bucket，并注入应用变量。
+ */
+router.post('/sessions/:sessionId/deployment/storage/ensure', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const revealSecrets = Boolean(req.body?.revealSecrets);
+    const data = await projectStorageResourceService.ensureRailwayBucket(currentUser.userId, sessionId, {
+      revealSecrets,
+    });
+    await invalidateTaskSessionDeploymentReads(currentUser.userId, sessionId);
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('启用存储桶失败:', error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '启用存储桶失败'),
+    });
+  }
+});
+
+router.post('/sessions/:sessionId/deployment/storage/upload-target', express.json(), async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const fileName = asText(req.body?.fileName);
+    const fileSize =
+      typeof req.body?.fileSize === 'number' && Number.isFinite(req.body.fileSize)
+        ? req.body.fileSize
+        : null;
+    const contentType = asText(req.body?.contentType) || 'application/octet-stream';
+    if (!fileName) {
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage('缺少文件名'),
+      });
+    }
+
+    const data = await projectStorageResourceService.createDirectUploadTarget(
+      currentUser.userId,
+      sessionId,
+      {
+        fileName,
+        fileSize,
+        contentType,
+      }
+    );
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('创建存储桶上传目标失败:', error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(
+        authError?.message || ownershipError?.message || error?.message || '创建存储桶上传目标失败'
+      ),
+    });
+  }
+});
+
+router.get('/sessions/:sessionId/deployment/storage/files/download', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const key = asText(req.query?.key);
+    if (!key) {
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage('缺少文件 key'),
+      });
+    }
+
+    const url = await projectStorageResourceService.createDirectDownloadUrl(
+      currentUser.userId,
+      sessionId,
+      key
+    );
+    return res.redirect(302, url);
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('创建存储桶下载地址失败:', error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(
+        authError?.message || ownershipError?.message || error?.message || '创建存储桶下载地址失败'
+      ),
+    });
+  }
+});
+
+router.delete('/sessions/:sessionId/deployment/storage/files', express.json(), async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const key = asText(req.body?.key);
+    if (!key) {
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage('缺少文件 key'),
+      });
+    }
+
+    const data = await projectStorageResourceService.deleteObject(
+      currentUser.userId,
+      sessionId,
+      key
+    );
+    await invalidateTaskSessionDeploymentReads(currentUser.userId, sessionId);
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('删除存储桶文件失败:', error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(
+        authError?.message || ownershipError?.message || error?.message || '删除存储桶文件失败'
+      ),
     });
   }
 });

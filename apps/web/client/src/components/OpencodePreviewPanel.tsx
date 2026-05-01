@@ -5443,6 +5443,7 @@ function DeploymentSettingsSectionPanel({
     i18n.t("previewPanel.deployment.settings.managedRepoMissing");
   const repositoryBranch =
     resourceBinding?.repositoryBranch || "main";
+  const settingsScrollOffset = 228;
   const contentContainerRef = useRef<HTMLDivElement | null>(null);
   const programmaticScrollRef = useRef(false);
   const programmaticScrollTimerRef = useRef<number | null>(null);
@@ -5500,7 +5501,7 @@ function DeploymentSettingsSectionPanel({
         window.clearTimeout(programmaticScrollTimerRef.current);
       }
       container.scrollTo({
-        top: Math.max(0, node.offsetTop - 16),
+        top: Math.max(0, node.offsetTop - settingsScrollOffset),
         behavior: "smooth",
       });
       programmaticScrollTimerRef.current = window.setTimeout(() => {
@@ -5515,10 +5516,10 @@ function DeploymentSettingsSectionPanel({
     const node = sectionRefs.current[settingsSection];
     const container = contentContainerRef.current;
     if (!node || !container) return;
-    const targetTop = Math.max(0, node.offsetTop - 16);
+    const targetTop = Math.max(0, node.offsetTop - settingsScrollOffset);
     if (Math.abs(container.scrollTop - targetTop) < 8) return;
     container.scrollTo({ top: targetTop });
-  }, [settingsSection]);
+  }, [settingsScrollOffset, settingsSection]);
 
   useEffect(() => {
     const container = contentContainerRef.current;
@@ -5541,7 +5542,7 @@ function DeploymentSettingsSectionPanel({
         );
       if (!sections.length) return;
 
-      const anchorLine = container.scrollTop + 24;
+      const anchorLine = container.scrollTop + settingsScrollOffset;
       let activeKey = sections[0].key;
       for (const section of sections) {
         if (section.node.offsetTop <= anchorLine) {
@@ -5568,7 +5569,12 @@ function DeploymentSettingsSectionPanel({
         programmaticScrollTimerRef.current = null;
       }
     };
-  }, [onSettingsSectionChange, settingAnchors, settingsSection]);
+  }, [
+    onSettingsSectionChange,
+    settingAnchors,
+    settingsScrollOffset,
+    settingsSection,
+  ]);
 
   return (
     <div className="grid gap-4 xl:grid-cols-[200px_minmax(0,1fr)] xl:items-start">
@@ -5588,7 +5594,7 @@ function DeploymentSettingsSectionPanel({
       <section className="overflow-hidden bg-transparent">
         <div
           ref={contentContainerRef}
-          className="space-y-4 overflow-auto p-1 xl:max-h-[calc(100vh-240px)]"
+          className="space-y-4 overflow-auto px-1 pb-1 pt-10 xl:max-h-[calc(100vh-240px)]"
         >
           <DeploymentSettingsAnchorSection
             ref={(node: HTMLDivElement | null) => {
@@ -5994,7 +6000,7 @@ const DeploymentSettingsAnchorSection = forwardRef<
   return (
     <div
       ref={ref}
-      className="scroll-mt-4 rounded-xl border border-border/60 bg-transparent p-4 md:p-5"
+      className="scroll-mt-56 rounded-xl border border-border/60 bg-transparent p-4 md:p-5"
     >
       <div className="mb-4 flex items-center gap-3">
         <div className="h-8 w-1 rounded-full bg-foreground/85" />

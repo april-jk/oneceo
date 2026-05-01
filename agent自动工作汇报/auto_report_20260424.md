@@ -45,7 +45,13 @@
 
 ## 网站交付物重新加载预览 CSS 丢失修复
 
-- 排查网站交付卡片点击“重新加载预览”后 CSS 偶发丢失问题，定位为前端只等待 HTML raw 文件 ready，未等待 HTML 引用的本地 CSS/JS 资源恢复。
+- 排查网站交付卡片点击"重新加载预览"后 CSS 偶发丢失问题，定位为前端只等待 HTML raw 文件 ready，未等待 HTML 引用的本地 CSS/JS 资源恢复。
 - 在共享 workspace preview 工具中增加 HTML 本地资源提取与 ready 检查：读取 HTML 后提取 `stylesheet` 和 `script` 本地路径，并逐个执行 raw `HEAD`，触发后端按需重建缺失资源。
 - 将 `AltusArtifactPreviewCard` 和右侧文件 HTML 预览统一切到新的 HTML ready / wait 逻辑，避免两个预览入口行为不一致。
 - 补充回归测试，覆盖相对路径 CSS/JS、外部 CDN 和 favicon 不阻塞预览恢复的路径提取规则。
+
+## Vercel MCP 桥接能力收口
+
+- 做了什么：按 Vercel `streamable_http -> local_stdio bridge` 方案开始落地实现，补齐本地 bridge、registry 物化切换和相关测试。
+- 遇到什么：当前工作区里已有未提交的 Vercel/OAuth 相关改动，需要在不覆盖现有修改的前提下增量实现。
+- 计划如何解决：继续以最小改动收口到 `connector-registry`、bridge 与测试层，并用 API 最小测试集确认 transport 已切换为 `local_stdio`。

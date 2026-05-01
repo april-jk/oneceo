@@ -12,6 +12,7 @@ import { altusClarificationTransitionAgent } from '../src/services/altus-clarifi
 import { sandboxAgentProvisionService } from '../src/services/sandbox-agent-provision-service';
 import { sessionMcpRecoveryService } from '../src/services/session-mcp-recovery-service';
 import { resolveOpencodeWorkspacePath } from '../src/utils/opencode-workspace';
+import { sessionConnectorService } from '../src/services/session-connector-service';
 
 process.env.ALTUS_CLARIFICATION_TRANSITION_DISABLED = 'true';
 
@@ -172,13 +173,13 @@ test('ensureSandbox provisions through sandboxAgentProvisionService to enforce p
 test('captureMcpToolSnapshot only exposes connected bindings with live provider ids', async () => {
   mock.method(taskSessionConnectorBindingDAO, 'listByTaskSessionId', async () => [
     {
-      connectorKey: 'github',
+      connectorKey: 'vercel',
       desiredState: 'attached',
       runtimeStatus: 'connected',
       runtimeProviderId: 'provider-connected',
-      runtimeTransport: 'remote_sse',
+      runtimeTransport: 'backend_rpc',
       runtimeEnvVersion: 1,
-      runtimeAttachedToolsJson: [{ providerId: 'provider-connected', toolName: 'github_list_repos' }],
+      runtimeAttachedToolsJson: [{ providerId: 'provider-connected', toolName: 'vercel_list_projects' }],
     },
     {
       connectorKey: 'notion',
@@ -210,7 +211,7 @@ test('captureMcpToolSnapshot only exposes connected bindings with live provider 
   assert.equal(snapshotMock.mock.callCount(), 1);
   assert.equal(result.providers.length, 1);
   assert.equal(result.providers[0]?.providerId, 'provider-connected');
-  assert.match(JSON.stringify(snapshotMock.mock.calls[0]?.arguments[0]), /github_list_repos/);
+  assert.match(JSON.stringify(snapshotMock.mock.calls[0]?.arguments[0]), /vercel_list_projects/);
   assert.doesNotMatch(JSON.stringify(snapshotMock.mock.calls[0]?.arguments[0]), /notion_list_pages/);
 });
 
@@ -693,4 +694,109 @@ test('buildTaskIntentProfile routes protected capability delegation to user conf
   assert.equal(profile.clarificationType, 'acceptance_requirement');
   assert.match(profile.clarificationQuestion, /生产环境/);
   assert.equal(profile.clarificationTransition?.nextState, 'risk_confirmation');
+});
+
+test('captureMcpToolSnapshot exposes only Composio brokered Notion tools', async () => {
+  mock.method(taskSessionConnectorBindingDAO, 'listByTaskSessionId', async () => [
+    {
+      connectorKey: 'notion',
+      desiredState: 'attached',
+      runtimeStatus: 'connected',
+      runtimeProviderId: 'provider-notion-composio',
+      runtimeTransport: 'api_brokered_mcp',
+      runtimeEnvVersion: 1,
+      runtimeAttachedToolsJson: [{ providerId: 'provider-notion-composio', toolName: 'notion__COMPOSIO_SEARCH_TOOLS' }],
+    },
+    {
+      connectorKey: 'notion',
+      desiredState: 'attached',
+      runtimeStatus: 'connected',
+      runtimeProviderId: 'provider-notion-legacy',
+      runtimeTransport: 'remote_sse',
+      runtimeEnvVersion: 1,
+      runtimeAttachedToolsJson: [{ providerId: 'provider-notion-legacy', toolName: 'notion_list_pages' }],
+    },
+  ] as any);
+  const snapshotMock = mock.method(taskSessionRunDAO, 'createMcpToolSnapshot', async (input: any) => ({
+    id: 'snapshot-notion',
+    snapshotJson: input.snapshotJson,
+  }));
+
+  const service = new AltusManagedSetupService();
+  const result = await service.captureMcpToolSnapshot('session-1');
+
+  assert.equal(result.providers.length, 1);
+  assert.equal(result.providers[0]?.providerId, 'provider-notion-composio');
+  assert.match(JSON.stringify(snapshotMock.mock.calls[0]?.arguments[0]), /notion__COMPOSIO_SEARCH_TOOLS/);
+  assert.doesNotMatch(JSON.stringify(snapshotMock.mock.calls[0]?.arguments[0]), /notion_list_pages/);
+});
+
+test('captureMcpToolSnapshot exposes only Composio brokered Supabase tools', async () => {
+  mock.method(taskSessionConnectorBindingDAO, 'listByTaskSessionId', async () => [
+    {
+      connectorKey: 'supabase',
+      desiredState: 'attached',
+      runtimeStatus: 'connected',
+      runtimeProviderId: 'provider-supabase-composio',
+      runtimeTransport: 'api_brokered_mcp',
+      runtimeEnvVersion: 1,
+      runtimeAttachedToolsJson: [
+        { providerId: 'provider-supabase-composio', toolName: 'supabase__COMPOSIO_SEARCH_TOOLS' },
+      ],
+    },
+    {
+      connectorKey: 'supabase',
+      desiredState: 'attached',
+      runtimeStatus: 'connected',
+      runtimeProviderId: 'provider-supabase-legacy',
+      runtimeTransport: 'http_stream',
+      runtimeEnvVersion: 1,
+      runtimeAttachedToolsJson: [{ providerId: 'provider-supabase-legacy', toolName: 'supabase_list_projects' }],
+    },
+  ] as any);
+  const snapshotMock = mock.method(taskSessionRunDAO, 'createMcpToolSnapshot', async (input: any) => ({
+    id: 'snapshot-supabase',
+    snapshotJson: input.snapshotJson,
+  }));
+
+  const service = new AltusManagedSetupService();
+  const result = await service.captureMcpToolSnapshot('session-1');
+
+  assert.equal(result.providers.length, 1);
+  assert.equal(result.providers[0]?.providerId, 'provider-supabase-composio');
+  assert.match(JSON.stringify(snapshotMock.mock.calls[0]?.arguments[0]), /supabase__COMPOSIO_SEARCH_TOOLS/);
+  assert.doesNotMatch(JSON.stringify(snapshotMock.mock.calls[0]?.arguments[0]), /supabase_list_projects/);
+});
+
+test('captureConnectorSnapshot forces recovery before reading connector statuses', async () => {
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    id: 'session-1',
+    runtime: {
+      orchestratorSessionId: 'orch-1',
+    },
+  }) as any);
+  const recoverMock = mock.method(sessionMcpRecoveryService, 'ensureSessionRecovered', async () => true);
+  const listMock = mock.method(sessionConnectorService, 'listSessionConnectors', async () => [
+    {
+      connectorKey: 'vercel',
+      attached: true,
+      attachedProfileName: 'Vercel Default',
+      selectedProfileName: 'Vercel Default',
+      authorizedRepositories: [],
+      runtimeStatus: 'connected',
+    },
+  ] as any);
+  const snapshotMock = mock.method(taskSessionRunDAO, 'createConnectorSnapshot', async (input: any) => ({
+    id: 'snapshot-connector-1',
+    snapshotJson: input.snapshotJson,
+  }));
+
+  const service = new AltusManagedSetupService();
+  const result = await service.captureConnectorSnapshot('session-1', 'user-1');
+
+  assert.equal(recoverMock.mock.callCount(), 1);
+  assert.deepEqual(recoverMock.mock.calls[0]?.arguments, ['session-1', 'orch-1']);
+  assert.equal(listMock.mock.callCount(), 1);
+  assert.equal(snapshotMock.mock.callCount(), 1);
+  assert.equal(result.statuses[0]?.runtimeStatus, 'connected');
 });

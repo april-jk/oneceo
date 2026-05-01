@@ -239,6 +239,440 @@ test('vercel mcp tool call is blocked until active vercel connector guide is loa
   assert.ok(guideMock.mock.callCount() >= 3);
 });
 
+test('raw vercel mcp tool name is accepted as an alias of the managed tool name', async () => {
+  const guideMock = mock.method(
+    connectorGuideService,
+    'getActiveGuideForConnector',
+    async (_sessionId, connectorKey) => {
+      if (connectorKey !== 'vercel') return null;
+      return {
+        connectorKey: 'vercel',
+        policyId: 'policy-vercel',
+        revisionId: 'rev-vercel-raw-1',
+        triggerMode: 'on_attach',
+        serverInstructionsMarkdown: 'Inspect vercel project target first.',
+        guideReminderMarkdown: 'Vercel guide active.',
+        blockingRulesMarkdown: 'Do not touch production without explicit target.',
+      };
+    }
+  );
+  const mcpMock = mock.method(osacAgentService, 'callSessionMcpTool', async () => ({
+    providerId: 'provider-vercel',
+    toolName: 'vercel_list_projects',
+    result: { projects: [{ name: 'huiduabs-projects' }] },
+    isError: false,
+  }));
+
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-vercel-raw',
+    userId: 'user-1',
+    sandboxId: 'sandbox-vercel-raw',
+    workspaceRoot: '/workspace/session-vercel-raw',
+    activeSkills: [],
+    mcpProviders: [
+      {
+        connectorKey: 'vercel',
+        providerId: 'provider-vercel',
+        tools: [{ providerId: 'provider-vercel', toolName: 'vercel_list_projects' }],
+      },
+    ],
+  });
+
+  await runtime.execute('load_connector_guide', {
+    connectorKey: 'vercel',
+  });
+
+  const result = await runtime.execute('vercel_list_projects', {
+    limit: 5,
+  });
+
+  assert.equal(result.type, 'result');
+  const payload = JSON.parse(result.content);
+  assert.deepEqual(payload.result, { projects: [{ name: 'huiduabs-projects' }] });
+  assert.equal(mcpMock.mock.callCount(), 1);
+  assert.equal(mcpMock.mock.calls[0]?.arguments[1]?.toolName, 'vercel_list_projects');
+  assert.ok(guideMock.mock.callCount() >= 2);
+});
+
+test('managed vercel mcp write tool auto-attaches governed skill by raw tool name', async () => {
+  const managedToolName = buildManagedMcpToolName('provider-vercel', 'vercel_update_project');
+  mock.method(connectorGuideService, 'getActiveGuideForConnector', async (_sessionId, connectorKey) => {
+    if (connectorKey !== 'vercel') return null;
+    return {
+      connectorKey: 'vercel',
+      policyId: 'policy-vercel',
+      revisionId: 'rev-vercel-skill-1',
+      triggerMode: 'on_attach',
+      serverInstructionsMarkdown: 'Inspect Vercel project target first.',
+      guideReminderMarkdown: 'Vercel guide active.',
+      blockingRulesMarkdown: 'Do not treat project config updates as source deployment.',
+    };
+  });
+  const resolveMock = mock.method(userSkillService, 'resolveSelectionsForSession', async () => [
+    {
+      sourceType: 'platform',
+      skillId: 'vercel-project-skill-1',
+      revisionId: 'vercel-project-rev-1',
+      slug: 'vercel-mcp-project-config-operator',
+      name: 'Vercel MCP Project Config',
+      description: 'Project config safety guidance.',
+      category: 'deployment',
+      renderedMarkdown: '# Vercel MCP Project Config',
+      revisionNumber: 1,
+      governance: {
+        systemRole: 'vercel_mcp_project_operator',
+        adminManaged: true,
+        required: false,
+        autoActivation: {
+          enabled: true,
+          triggers: ['vercel', 'project-config'],
+          toolNames: ['vercel_update_project'],
+        },
+      },
+      resourceSummary: null,
+    },
+  ] as any);
+  const syncMock = mock.method(sandboxSkillSyncService, 'syncResolvedSkills', async () => ({
+    taskSessionId: 'session-vercel-skill',
+    orchestratorSessionId: 'sandbox-vercel-skill',
+    signature: 'sig-vercel-skill',
+    restartTriggered: true,
+    changed: true,
+    items: [],
+    syncedAt: new Date().toISOString(),
+  }) as any);
+  const mcpMock = mock.method(osacAgentService, 'callSessionMcpTool', async () => ({
+    providerId: 'provider-vercel',
+    toolName: 'vercel_update_project',
+    result: { ok: true },
+    isError: false,
+  }));
+
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-vercel-skill',
+    userId: 'user-1',
+    sandboxId: 'sandbox-vercel-skill',
+    workspaceRoot: '/workspace/session-vercel-skill',
+    availableSkills: [
+      {
+        sourceType: 'platform',
+        skillId: 'vercel-project-skill-1',
+        revisionId: 'vercel-project-rev-1',
+        slug: 'vercel-mcp-project-config-operator',
+        name: 'Vercel MCP Project Config',
+        description: 'Project config safety guidance.',
+        category: 'deployment',
+        revisionNumber: 1,
+        governance: {
+          systemRole: 'vercel_mcp_project_operator',
+          adminManaged: true,
+          required: false,
+          autoActivation: {
+            enabled: true,
+            triggers: ['vercel', 'project-config'],
+            toolNames: ['vercel_update_project'],
+          },
+        },
+        resourceSummary: null,
+      },
+    ],
+    activeSkills: [],
+    mcpProviders: [
+      {
+        connectorKey: 'vercel',
+        providerId: 'provider-vercel',
+        tools: [{ providerId: 'provider-vercel', toolName: 'vercel_update_project' }],
+      },
+    ],
+  });
+
+  await runtime.execute('load_connector_guide', {
+    connectorKey: 'vercel',
+  });
+
+  const result = await runtime.execute(managedToolName, {
+    projectId: 'prj_123',
+    framework: 'vite',
+  });
+
+  assert.equal(resolveMock.mock.callCount(), 1);
+  assert.equal(syncMock.mock.callCount(), 1);
+  assert.equal(mcpMock.mock.callCount(), 1);
+  assert.equal(result.type, 'result');
+  assert.deepEqual(result.activatedSkills?.map((item) => item.slug), ['vercel-mcp-project-config-operator']);
+});
+
+test('managed vercel mcp read tool does not auto-attach write-tool skill', async () => {
+  const managedToolName = buildManagedMcpToolName('provider-vercel', 'vercel_get_project');
+  mock.method(connectorGuideService, 'getActiveGuideForConnector', async (_sessionId, connectorKey) => {
+    if (connectorKey !== 'vercel') return null;
+    return {
+      connectorKey: 'vercel',
+      policyId: 'policy-vercel',
+      revisionId: 'rev-vercel-read-1',
+      triggerMode: 'on_attach',
+      serverInstructionsMarkdown: 'Inspect Vercel project target first.',
+      guideReminderMarkdown: 'Vercel guide active.',
+      blockingRulesMarkdown: 'Do not touch production without explicit target.',
+    };
+  });
+  const resolveMock = mock.method(userSkillService, 'resolveSelectionsForSession', async () => {
+    throw new Error('should_not_auto_attach_for_read_tool');
+  });
+  const syncMock = mock.method(sandboxSkillSyncService, 'syncResolvedSkills', async () => {
+    throw new Error('should_not_sync_for_read_tool');
+  });
+  const mcpMock = mock.method(osacAgentService, 'callSessionMcpTool', async () => ({
+    providerId: 'provider-vercel',
+    toolName: 'vercel_get_project',
+    result: { id: 'prj_123', name: 'demo' },
+    isError: false,
+  }));
+
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-vercel-read',
+    userId: 'user-1',
+    sandboxId: 'sandbox-vercel-read',
+    workspaceRoot: '/workspace/session-vercel-read',
+    availableSkills: [
+      {
+        sourceType: 'platform',
+        skillId: 'vercel-project-skill-1',
+        revisionId: 'vercel-project-rev-1',
+        slug: 'vercel-mcp-project-config-operator',
+        name: 'Vercel MCP Project Config',
+        description: 'Project config safety guidance.',
+        category: 'deployment',
+        revisionNumber: 1,
+        governance: {
+          systemRole: 'vercel_mcp_project_operator',
+          adminManaged: true,
+          required: false,
+          autoActivation: {
+            enabled: true,
+            triggers: ['vercel', 'project-config'],
+            toolNames: ['vercel_update_project'],
+          },
+        },
+        resourceSummary: null,
+      },
+    ],
+    activeSkills: [],
+    mcpProviders: [
+      {
+        connectorKey: 'vercel',
+        providerId: 'provider-vercel',
+        tools: [{ providerId: 'provider-vercel', toolName: 'vercel_get_project' }],
+      },
+    ],
+  });
+
+  await runtime.execute('load_connector_guide', {
+    connectorKey: 'vercel',
+  });
+
+  const result = await runtime.execute(managedToolName, {
+    projectId: 'prj_123',
+  });
+
+  assert.equal(resolveMock.mock.callCount(), 0);
+  assert.equal(syncMock.mock.callCount(), 0);
+  assert.equal(mcpMock.mock.callCount(), 1);
+  assert.equal(result.type, 'result');
+  assert.deepEqual(result.activatedSkills, []);
+});
+
+test('managed vercel mcp git deployment tool auto-attaches release safety skill', async () => {
+  const managedToolName = buildManagedMcpToolName('provider-vercel', 'vercel_create_deployment');
+  mock.method(connectorGuideService, 'getActiveGuideForConnector', async (_sessionId, connectorKey) => {
+    if (connectorKey !== 'vercel') return null;
+    return {
+      connectorKey: 'vercel',
+      policyId: 'policy-vercel',
+      revisionId: 'rev-vercel-deploy-1',
+      triggerMode: 'on_attach',
+      serverInstructionsMarkdown: 'Inspect Vercel deployment target first.',
+      guideReminderMarkdown: 'Vercel guide active.',
+      blockingRulesMarkdown: 'Do not upload workspace files through Git deployment tools.',
+    };
+  });
+  const resolveMock = mock.method(userSkillService, 'resolveSelectionsForSession', async () => [
+    {
+      sourceType: 'platform',
+      skillId: 'vercel-release-skill-1',
+      revisionId: 'vercel-release-rev-1',
+      slug: 'vercel-mcp-release-safety-operator',
+      name: 'Vercel MCP Release Safety',
+      description: 'Release safety guidance.',
+      category: 'deployment',
+      renderedMarkdown: '# Vercel MCP Release Safety',
+      revisionNumber: 1,
+      governance: {
+        systemRole: 'vercel_mcp_release_operator',
+        adminManaged: true,
+        required: false,
+        autoActivation: {
+          enabled: true,
+          triggers: ['vercel', 'deployment'],
+          toolNames: ['vercel_create_deployment'],
+        },
+      },
+      resourceSummary: null,
+    },
+  ] as any);
+  const syncMock = mock.method(sandboxSkillSyncService, 'syncResolvedSkills', async () => ({
+    taskSessionId: 'session-vercel-deploy-skill',
+    orchestratorSessionId: 'sandbox-vercel-deploy-skill',
+    signature: 'sig-vercel-deploy-skill',
+    restartTriggered: true,
+    changed: true,
+    items: [],
+    syncedAt: new Date().toISOString(),
+  }) as any);
+  const mcpMock = mock.method(osacAgentService, 'callSessionMcpTool', async () => ({
+    providerId: 'provider-vercel',
+    toolName: 'vercel_create_deployment',
+    result: { id: 'dpl_123' },
+    isError: false,
+  }));
+
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-vercel-deploy-skill',
+    userId: 'user-1',
+    sandboxId: 'sandbox-vercel-deploy-skill',
+    workspaceRoot: '/workspace/session-vercel-deploy-skill',
+    availableSkills: [
+      {
+        sourceType: 'platform',
+        skillId: 'vercel-release-skill-1',
+        revisionId: 'vercel-release-rev-1',
+        slug: 'vercel-mcp-release-safety-operator',
+        name: 'Vercel MCP Release Safety',
+        description: 'Release safety guidance.',
+        category: 'deployment',
+        revisionNumber: 1,
+        governance: {
+          systemRole: 'vercel_mcp_release_operator',
+          adminManaged: true,
+          required: false,
+          autoActivation: {
+            enabled: true,
+            triggers: ['vercel', 'deployment'],
+            toolNames: ['vercel_create_deployment'],
+          },
+        },
+        resourceSummary: null,
+      },
+    ],
+    activeSkills: [],
+    mcpProviders: [
+      {
+        connectorKey: 'vercel',
+        providerId: 'provider-vercel',
+        tools: [{ providerId: 'provider-vercel', toolName: 'vercel_create_deployment' }],
+      },
+    ],
+  });
+
+  await runtime.execute('load_connector_guide', {
+    connectorKey: 'vercel',
+  });
+
+  const result = await runtime.execute(managedToolName, {
+    gitSource: {
+      type: 'github',
+      repoId: '123456',
+      ref: 'main',
+    },
+  });
+
+  assert.equal(resolveMock.mock.callCount(), 1);
+  assert.equal(syncMock.mock.callCount(), 1);
+  assert.equal(mcpMock.mock.callCount(), 1);
+  assert.equal(result.type, 'result');
+  assert.deepEqual(result.activatedSkills?.map((item) => item.slug), ['vercel-mcp-release-safety-operator']);
+});
+
+test('managed vercel mcp list teams tool does not auto-attach write-tool skill', async () => {
+  const managedToolName = buildManagedMcpToolName('provider-vercel', 'vercel_list_teams');
+  mock.method(connectorGuideService, 'getActiveGuideForConnector', async (_sessionId, connectorKey) => {
+    if (connectorKey !== 'vercel') return null;
+    return {
+      connectorKey: 'vercel',
+      policyId: 'policy-vercel',
+      revisionId: 'rev-vercel-teams-1',
+      triggerMode: 'on_attach',
+      serverInstructionsMarkdown: 'Inspect Vercel team context first.',
+      guideReminderMarkdown: 'Vercel guide active.',
+      blockingRulesMarkdown: 'Do not touch production without explicit target.',
+    };
+  });
+  const resolveMock = mock.method(userSkillService, 'resolveSelectionsForSession', async () => {
+    throw new Error('should_not_auto_attach_for_list_teams');
+  });
+  const syncMock = mock.method(sandboxSkillSyncService, 'syncResolvedSkills', async () => {
+    throw new Error('should_not_sync_for_list_teams');
+  });
+  const mcpMock = mock.method(osacAgentService, 'callSessionMcpTool', async () => ({
+    providerId: 'provider-vercel',
+    toolName: 'vercel_list_teams',
+    result: { teams: [] },
+    isError: false,
+  }));
+
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-vercel-teams',
+    userId: 'user-1',
+    sandboxId: 'sandbox-vercel-teams',
+    workspaceRoot: '/workspace/session-vercel-teams',
+    availableSkills: [
+      {
+        sourceType: 'platform',
+        skillId: 'vercel-project-skill-1',
+        revisionId: 'vercel-project-rev-1',
+        slug: 'vercel-mcp-project-config-operator',
+        name: 'Vercel MCP Project Config',
+        description: 'Project config safety guidance.',
+        category: 'deployment',
+        revisionNumber: 1,
+        governance: {
+          systemRole: 'vercel_mcp_project_operator',
+          adminManaged: true,
+          required: false,
+          autoActivation: {
+            enabled: true,
+            triggers: ['vercel', 'project-config'],
+            toolNames: ['vercel_create_project_from_git'],
+          },
+        },
+        resourceSummary: null,
+      },
+    ],
+    activeSkills: [],
+    mcpProviders: [
+      {
+        connectorKey: 'vercel',
+        providerId: 'provider-vercel',
+        tools: [{ providerId: 'provider-vercel', toolName: 'vercel_list_teams' }],
+      },
+    ],
+  });
+
+  await runtime.execute('load_connector_guide', {
+    connectorKey: 'vercel',
+  });
+
+  const result = await runtime.execute(managedToolName, {
+    limit: 20,
+  });
+
+  assert.equal(resolveMock.mock.callCount(), 0);
+  assert.equal(syncMock.mock.callCount(), 0);
+  assert.equal(mcpMock.mock.callCount(), 1);
+  assert.equal(result.type, 'result');
+  assert.deepEqual(result.activatedSkills, []);
+});
+
 test('write_file marks sandbox dirty so archive job can persist latest workspace snapshot', async () => {
   mock.method(e2bConnector, 'runCommand', async () => ({
     stdout: '',

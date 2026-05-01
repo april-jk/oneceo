@@ -638,6 +638,8 @@
       "saveProfile": "保存 profile",
       "reconnectNotion": "重新连接 Notion",
       "connectNotion": "连接 Notion",
+      "reconnectConnector": "重新连接 {{name}}",
+      "connectConnector": "连接 {{name}}",
       "reauthorize": "重新授权",
       "startOauth": "发起 OAuth"
     },
@@ -689,28 +691,21 @@
       "directRedirectHint": "如果 GitHub 判断当前 App 已授权，授权页可能会直接回跳到 oneceo，这是 GitHub App 的正常行为。"
     },
     "supabase": {
-      "tokenRequired": "请先输入 Supabase Personal Access Token",
       "connected": "Supabase 已连接",
-      "goToTokenCreation": "前往 Token 创建",
       "mcpDetails": "MCP 详细信息",
-      "description": "与你的 Supabase 项目交互，支持管理数据表、执行 SQL、搜索文档、部署边缘函数与项目设置维护。",
-      "mcpEndpoint": "MCP Endpoint",
+      "description": "通过 Composio 托管授权与 oneceo API broker 使用 Supabase MCP 工具。",
+      "mcpEndpoint": "运行时",
       "authMethod": "认证方式",
-      "personalAccessToken": "Personal Access Token",
+      "composioConnectLink": "Composio Connect Link",
       "defaultProfile": "Supabase Default",
-      "tokenGuideTitle": "从注册到生成 Token",
-      "accessTokensPage": "Access Tokens 页面",
-      "connectHint": "点击上方“连接”，输入 Token 后即可完成 Supabase MCP 挂载。",
+      "connectGuideTitle": "连接流程",
+      "connectHint": "点击上方“连接”并完成 Composio 授权后，即可挂载 Supabase MCP。",
       "connectTitle": "连接 Supabase",
-      "connectDescriptionPrefix": "配置 Supabase 访问令牌以使用该功能。请参阅",
-      "officialDocs": "官方文档",
-      "connectDescriptionSuffix": "获取与管理 Token。",
       "steps": {
-        "signup": "注册账号（已有账号可直接登录）。",
-        "dashboard": "登录后进入 Dashboard，按提示创建或进入任意项目。",
-        "accountSettings": "点击右上角头像，进入 Account Settings（账户设置）。",
-        "createTokenSuffix": "，点击创建新的 Personal Access Token。",
-        "copyToken": "复制新生成的 Token，回到本页面粘贴后点击“连接”。"
+        "connect": "点击连接，打开 Composio/Supabase 授权页。",
+        "authorize": "为目标 Supabase 账号和项目范围完成授权。",
+        "attach": "返回 oneceo 后，系统会保存 profile，并可挂载到当前会话。",
+        "useTools": "会话工具通过 API broker 暴露；sandbox 不接收 Supabase 或 Composio token。"
       }
     },
     "guides": {
@@ -737,111 +732,95 @@
         }
       },
       "slack": {
-        "intro": "Slack 连接器只保留 OAuth 授权路径。当前链路获取的是 Slack User OAuth 授权。",
+        "intro": "Slack 连接器通过 Composio 托管授权和 MCP 工具调用；oneceo 只在 API 服务端保存 broker 所需信息，不会把 Slack token 或 MCP headers 下发到 sandbox。",
         "steps": {
-          "0": "点击连接后，在 Slack 授权页确认你要使用的 workspace 和账号。",
-          "1": "完成授权并返回 oneceo，系统会自动保存默认 profile，并在需要时挂载到当前会话。",
-          "2": "如果读取不到频道或消息，先检查该 Slack 用户本身是否拥有对应访问权限。"
+          "0": "点击连接并在 Composio/Slack 授权页面完成工作区授权。",
+          "1": "返回 oneceo 后，系统会保存 Slack profile 并在需要时挂载到当前会话。",
+          "2": "会话内工具调用会通过 API broker 转发到 Composio MCP，sandbox 不接收 Slack 或 Composio 凭据。"
         },
         "tips": {
-          "0": "如果切换了 workspace、账号或 scopes，需要重新连接，不能继续沿用旧授权。"
+          "0": "旧版 Slack User OAuth profile 需要重新通过 Composio 授权。"
         },
         "links": {
-          "apps": {
-            "label": "Slack Your Apps",
-            "description": "查看当前 Slack App 与 OAuth 配置"
-          },
-          "oauthDocs": {
-            "label": "Slack OAuth 文档",
-            "description": "了解 User OAuth 安装与授权方式"
-          },
-          "mcpDocs": {
-            "label": "Slack MCP 文档",
-            "description": "查看 Slack MCP 的能力和权限要求"
+          "composioToolkit": {
+            "label": "Composio Slack toolkit",
+            "description": "查看 Composio 托管的 Slack toolkit"
           }
         }
       },
       "notion": {
-        "intro": "Notion 连接器只保留 OAuth 授权路径。完成 OAuth 后，真正可访问的内容范围仍取决于目标 page 或 database 是否已经共享给对应 integration。",
+        "intro": "Notion 连接器通过 Composio 托管授权和 MCP 工具调用；oneceo 只在 API 服务端保存 broker 所需信息，不会把 token 或 MCP headers 下发到 sandbox。",
         "steps": {
-          "0": "点击连接并完成 Notion OAuth 授权，确认当前使用的是正确的 workspace。",
-          "1": "回到 Notion，把目标 page 或 database 通过 Add connections 共享给对应 integration。",
-          "2": "返回 oneceo 再使用 Notion MCP；如当前在会话中授权，系统会自动把连接结果挂载到该会话。"
+          "0": "点击连接并在 Composio/Notion 授权页面完成工作区授权。",
+          "1": "返回 oneceo 后，系统会保存 Notion profile 并在需要时挂载到当前会话。",
+          "2": "会话内工具调用会通过 API broker 转发到 Composio MCP，sandbox 不接收 Notion 或 Composio 凭据。"
         },
         "tips": {
-          "0": "连接成功不等于内容已可访问；未共享页面时，授权成功后仍会读不到内容。",
-          "1": "如果切换 workspace、integration 权限或共享范围，请重新连接并重新检查页面共享关系。"
+          "0": "旧版 Notion 直连 OAuth profile 需要重新通过 Composio 授权。",
+          "1": "如果切换 workspace 或授权范围，请重新连接 Notion。"
         },
         "links": {
-          "integrations": {
-            "label": "My Integrations",
-            "description": "查看 Notion integration 与工作区绑定"
-          },
-          "authorization": {
-            "label": "Notion 授权文档",
-            "description": "查看 Notion OAuth 授权说明"
-          },
-          "mcpDocs": {
-            "label": "Notion MCP 文档",
-            "description": "查看 Notion MCP 能力与接入方式"
+          "composioToolkit": {
+            "label": "Composio Notion MCP",
+            "description": "查看 Composio 托管的 Notion MCP toolkit"
           }
         }
       },
       "supabase": {
-        "intro": "Supabase 是独立连接器，不替代 postgres。请在 sandbox 外配置 access token，平台会在 sandbox 内通过本地桥接挂载 MCP。",
+        "intro": "Supabase 连接器通过 Composio 托管授权和 MCP 工具调用；oneceo 只在 API 服务端保存 broker 所需信息，不会把 token 或 MCP headers 下发到 sandbox。",
         "steps": {
-          "0": "在 account tokens 页面创建或复制 access token。",
-          "1": "把 token 填入连接器配置，sandbox 内会复用该配置访问 Supabase 能力。"
+          "0": "点击连接并在 Composio 授权页面完成 Supabase 授权。",
+          "1": "返回 oneceo 后，系统会保存 Supabase profile 并在需要时挂载到当前会话。",
+          "2": "会话内工具调用会通过 API broker 转发到 Composio MCP，sandbox 不接收 Supabase 或 Composio 凭据。"
         },
         "tips": {
-          "0": "不要把 Supabase 当作 postgres 的替代项；它是独立连接器。",
-          "1": "Profile Name 和 Display Name 都可以留空，系统会自动补齐默认 profile 名称。",
-          "2": "保存后可以附带一个 display name，方便后续在会话里识别。"
+          "0": "旧版 Supabase token profile 需要重新通过 Composio 授权。",
+          "1": "修改 schema、数据、Auth、Storage、Functions 或项目设置前，先确认目标项目。"
         },
         "links": {
-          "tokens": {
-            "label": "Supabase Access Tokens",
-            "description": "创建或管理 access token"
+          "composioToolkit": {
+            "label": "Composio Supabase toolkit",
+            "description": "查看 Composio 托管的 Supabase toolkit"
           }
         }
       },
       "figma": {
-        "intro": "Figma 连接器在 sandbox 外配置 access token，sandbox 内直接复用该凭据访问 Figma 能力。",
+        "intro": "Figma 连接器通过 Composio 托管授权，并通过 oneceo API broker 暴露 MCP 工具。系统不再接受 Personal Access Token。",
         "steps": {
-          "0": "在 Figma 开发者页面创建 Personal Access Token。",
-          "1": "复制 token 并回到连接器配置页保存。",
-          "2": "sandbox 内将直接使用该 token，不需要重复授权。"
+          "0": "点击连接并完成 Composio/Figma 授权流程。",
+          "1": "授权完成后，将 Figma 挂载到当前会话，或保留为可复用 profile。",
+          "2": "sandbox 只接收 broker 后的 MCP 工具，不接收 Figma token。"
         },
         "tips": {
-          "0": "Token 一旦泄露应立即撤销并重新生成。",
-          "1": "留空 secret 不会覆盖当前配置。"
+          "0": "不要把 Figma token 粘贴到对话、连接器表单、shell 或 sandbox 文件中。",
+          "1": "如果 Figma 账号或 workspace 权限变化，请通过 Composio 重新连接。"
         },
         "links": {
-          "tokens": {
-            "label": "Figma Personal Access Tokens",
-            "description": "创建或管理 token"
+          "composioToolkit": {
+            "label": "Composio Figma Toolkit",
+            "description": "查看 Composio 托管的 Figma 工具集"
           }
         }
       },
       "vercel": {
-        "intro": "Vercel 连接器使用官方 MCP 地址 https://mcp.vercel.com。优先使用 Vercel OAuth；如果当前环境尚未配置 OAuth，再使用 Personal Access Token 作为过渡。",
+        "intro": "Vercel 连接器现在使用 Vercel Integration 安装授权。完成授权后，平台会通过 oneceo 内部 MCP 包装层在服务端代调 Vercel REST API，不再把官方 MCP 或个人 Token 直接暴露到 sandbox。",
         "steps": {
-          "0": "如果部署已配置 Vercel OAuth，优先点击连接并完成官方授权。",
-          "1": "如果当前环境尚未配置 OAuth，就在 Vercel 账号设置中创建 Personal Access Token。",
-          "2": "保存后，sandbox 会通过官方 MCP 地址复用该授权。"
+          "0": "点击连接并完成 Vercel Integration 安装授权。",
+          "1": "如果你希望默认锁定团队或项目，请在 profile 中填写 teamId、projectId 或 projectSlug。",
+          "2": "授权完成后，平台会把当前 profile 挂载为内部 MCP provider，Agent 看到的是 Vercel MCP 工具，不是个人 Token。"
         },
         "tips": {
-          "0": "Team ID 仍然是可选项，用于限定团队上下文。",
-          "1": "如果部署或项目能力异常，先检查 token 权限范围，或确认 OAuth 已授权到目标团队。"
+          "0": "建议为不同团队或项目分别创建独立 profile，避免部署、域名和环境变量上下文混用。",
+          "1": "涉及环境变量或生产流量变更时，请先明确目标项目和目标环境。"
         },
         "links": {
-          "tokens": {
-            "label": "Vercel Tokens",
-            "description": "创建或管理 access token"
+          "oauthDocs": {
+            "label": "Vercel Integration 文档",
+            "description": "查看 Integration 安装与回调要求"
           },
-          "mcpDocs": {
-            "label": "Vercel MCP 文档",
-            "description": "查看官方 MCP 能力与授权方式"
+          "restApi": {
+            "label": "Vercel REST API",
+            "description": "查看项目、部署、域名和环境变量接口"
           }
         }
       },
@@ -1214,8 +1193,12 @@
         "saveFailed": "保存数据库记录失败",
         "deleteFailed": "删除数据库记录失败",
         "deleteConfirm": "确认删除当前记录？此操作无法撤销。",
+        "enableFailed": "启用数据库失败",
         "missingSession": "缺少会话信息，无法管理数据库",
         "preparing": "正在准备数据库…",
+        "notConfiguredTitle": "尚未启用数据库",
+        "notConfiguredDescription": "点击启用后，OneCEO 会在当前会话对应的 Railway Environment 中创建 Postgres，并把连接变量注入到应用服务。",
+        "enable": "启用数据库",
         "readyNoTables": "数据库已准备，但还没有业务表",
         "settings": "设置",
         "database": "数据库",
@@ -1233,13 +1216,18 @@
         "connecting": "正在连接数据库…",
         "selectTableHint": "选择数据表后即可查看和修改数据",
         "connectionInfo": "连接信息",
+        "manageConnectionTitle": "管理数据库",
+        "manageConnectionDescription": "通过任何 PostgreSQL 客户端连接到数据库",
         "recordDetail": "记录详情",
         "canCopyToClient": "可直接复制到 DBeaver、DataGrip、TablePlus 等数据库工具",
+        "secretWarning": "请妥善保管您的连接 URL 和密码，拥有这些信息的任何人都可以访问和修改数据库。",
         "connectionUrl": "连接 URL",
         "host": "主机",
         "port": "端口",
         "username": "用户名",
         "password": "密码",
+        "showSensitive": "显示敏感信息",
+        "hideSensitive": "隐藏敏感信息",
         "databaseName": "数据库",
         "databaseStatus": "数据库状态",
         "connectionMode": "连接模式",
@@ -1262,7 +1250,35 @@
       },
       "storage": {
         "title": "存储桶",
+        "loadFailed": "加载存储桶信息失败",
+        "enableFailed": "启用存储桶失败",
+        "uploadFailed": "上传文件失败",
+        "deleteFailed": "删除文件失败",
+        "missingSession": "缺少会话信息，无法管理存储桶",
+        "uploading": "正在上传文件",
+        "uploadTooLarge": "文件过大，最大仅支持 20MB",
+        "refresh": "刷新",
+        "upload": "上传",
+        "enable": "启用存储桶",
+        "ready": "已就绪",
+        "waitPanelReady": "等待存储桶准备完成",
+        "notConfiguredTitle": "尚未启用存储桶",
+        "notConfiguredDescription": "点击启用后，OneCEO 会在当前会话对应的 Railway Environment 中创建 Bucket，并把 S3 访问变量注入到应用服务。",
         "storageStatus": "存储状态",
+        "filesTitle": "文件列表",
+        "fileName": "文件名",
+        "fileSize": "大小",
+        "lastModified": "更新时间",
+        "emptyFiles": "当前存储桶还没有文件",
+        "filePreviewTitle": "文件信息",
+        "closePreview": "关闭",
+        "downloadFile": "下载文件",
+        "deleteFile": "删除文件",
+        "fileCount_one": "{{count}} 个文件",
+        "fileCount_other": "{{count}} 个文件",
+        "manageConnectionTitle": "管理存储桶",
+        "manageConnectionDescription": "通过任何兼容 S3 的客户端连接到存储桶",
+        "secretWarning": "请妥善保管您的访问密钥。持有这些信息的任何人都可以读写这个存储桶。",
         "reservedEntry": "保留入口",
         "reservedEntryDescription": "当前版本按文档约束保留前端位置，不进入真实后端能力开发。",
         "recommendedUsage": "推荐用途",
@@ -1281,7 +1297,16 @@
         "buildArtifactSeparation": "构建产物分离",
         "buildArtifactSeparationDescription": "让静态资源和运行时代码解耦，减轻重新发布的成本。",
         "accessPolicy": "访问策略",
-        "accessPolicyDescription": "后续可扩展公开读、私有签名下载和生命周期清理策略。"
+        "accessPolicyDescription": "后续可扩展公开读、私有签名下载和生命周期清理策略。",
+        "bucketName": "Bucket 名称",
+        "endpoint": "S3 Endpoint",
+        "publicUrl": "公开访问地址",
+        "accessKeyId": "Access Key ID",
+        "secretAccessKey": "Secret Access Key",
+        "revealSecrets": "显示访问密钥",
+        "applicationVariables": "应用环境变量",
+        "applicationVariablesDescription": "存储桶启用后会自动写入应用服务环境变量，运行时代码可以直接读取这些变量访问 Railway Bucket。",
+        "usageGuidance": "使用建议"
       },
       "settings": {
         "general": "通用",

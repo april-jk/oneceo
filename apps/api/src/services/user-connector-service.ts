@@ -283,113 +283,6 @@ function resolveAuthStatus(
   return 'not_configured';
 }
 
-async function resolveGithubProfile(accessToken: string): Promise<{ displayName?: string }> {
-  const payload = await fetchJson('https://api.github.com/user', {
-    method: 'GET',
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${accessToken}`,
-      'User-Agent': 'oneceo-connectors',
-    },
-  });
-  return {
-    displayName: asText(payload.login) || asText(payload.name) || undefined,
-  };
-}
-
-async function resolveGithubInstallationCount(accessToken: string): Promise<number> {
-  const payload = await fetchJson('https://api.github.com/user/installations', {
-    method: 'GET',
-    headers: {
-      Accept: 'application/vnd.github+json',
-      Authorization: `Bearer ${accessToken}`,
-      'User-Agent': 'oneceo-connectors',
-      'X-GitHub-Api-Version': '2022-11-28',
-    },
-  });
-  const totalCount = Number(payload.total_count || 0);
-  if (!Number.isFinite(totalCount)) {
-    throw new Error('GitHub installation response is invalid');
-  }
-  return totalCount;
-}
-
-async function revokeGithubOauthGrant(accessToken: string): Promise<void> {
-  const provider = connectorRegistry.getOauthProvider('github');
-  if (!provider) {
-    throw new Error('GitHub OAuth provider is not configured');
-  }
-
-  let response: Response;
-  try {
-    response = await fetch(
-      `https://api.github.com/applications/${encodeURIComponent(provider.clientId)}/grant`,
-      {
-        method: 'DELETE',
-        headers: {
-          Accept: 'application/vnd.github+json',
-          Authorization: `Basic ${Buffer.from(
-            `${provider.clientId}:${provider.clientSecret}`,
-            'utf8'
-          ).toString('base64')}`,
-          'Content-Type': 'application/json',
-          'User-Agent': 'oneceo-connectors',
-          'X-GitHub-Api-Version': '2022-11-28',
-        },
-        body: JSON.stringify({
-          access_token: accessToken,
-        }),
-        signal: AbortSignal.timeout(3000),
-      }
-    );
-  } catch (error) {
-    if (error instanceof Error && error.name === 'TimeoutError') {
-      throw new Error('GitHub revoke authorization timed out. Please try again later.');
-    }
-    throw error;
-  }
-
-  if (response.status === 204) {
-    return;
-  }
-
-  const text = await response.text();
-  let payload: Record<string, unknown> = {};
-  if (text) {
-    try {
-      payload = JSON.parse(text) as Record<string, unknown>;
-    } catch {
-      payload = { raw: text };
-    }
-  }
-  const message =
-    asText(payload.message) ||
-    asText(payload.error_description) ||
-    asText(payload.error) ||
-    `GitHub revoke grant failed: ${response.status}`;
-  if (response.status === 404) {
-    return;
-  }
-  throw new Error(message);
-}
-
-async function resolveDisplayNameForSave(input: {
-  connectorKey: ConnectorKey;
-  secret: ConnectorAccountSecret | null;
-  fallbackDisplayName?: string;
-}): Promise<string | undefined> {
-  const fallback = asText(input.fallbackDisplayName) || undefined;
-  if (input.connectorKey !== 'github') {
-    return fallback;
-  }
-  const accessToken = asText(input.secret?.accessToken);
-  if (!accessToken) {
-    return fallback;
-  }
-  const profile = await resolveGithubProfile(accessToken);
-  return profile.displayName || fallback;
-}
-
 function ensureRequiredProfileName(profileName: string, connectorKey: ConnectorKey) {
   if (!profileName) {
     throw new Error(`${connectorKey} connector requires a profile name`);
@@ -967,11 +860,7 @@ export class UserConnectorService {
     if (catalogItem.authMode === 'token' && !catalogItem.oauth?.supported && connectorKey !== 'postgres' && !secret?.accessToken) {
       throw new Error(`${catalogItem.name} connector requires an access token`);
     }
-    const resolvedDisplayName = await resolveDisplayNameForSave({
-      connectorKey,
-      secret,
-      fallbackDisplayName: displayName,
-    });
+    const resolvedDisplayName = displayName || undefined;
     const profileNameCandidate =
       asText(input.profileName) ||
       asText(config.profileName) ||
@@ -1087,23 +976,6 @@ export class UserConnectorService {
     if (!existing) {
       throw new Error('Connector profile does not exist');
     }
-    let remoteGrantRevoked = true;
-    let remoteGrantError: string | null = null;
-    if (existing.connectorKey === 'github' && existing.secretCiphertext) {
-      const secret = connectorSecretService.decryptJson<ConnectorAccountSecret>(
-        existing.secretCiphertext,
-        existing.connectorKey as ConnectorKey
-      );
-      const revokeToken = asText(secret?.accessToken);
-      if (revokeToken) {
-        try {
-          await revokeGithubOauthGrant(revokeToken);
-        } catch (error) {
-          remoteGrantRevoked = false;
-          remoteGrantError = error instanceof Error ? error.message : String(error);
-        }
-      }
-    }
     const catalogItem = connectorRegistry.getCatalogItem(existing.connectorKey);
     const saved = await userConnectorProfileDAO.update(profileId, userId, {
       authMode: catalogItem.authMode,
@@ -1118,8 +990,8 @@ export class UserConnectorService {
     await this.invalidateMeCache(userId);
     return {
       profile: buildProfileView(saved as any),
-      remoteGrantRevoked,
-      remoteGrantError,
+      remoteGrantRevoked: true,
+      remoteGrantError: null,
     };
   }
 
@@ -1451,23 +1323,7 @@ export class UserConnectorService {
       let secretCiphertext = connectorSecretService.encrypt(secret, connectorKey);
       let lastAuthAt: Date | null = new Date();
 
-      if (connectorKey === 'github') {
-        const [githubProfile, installationCount] = await Promise.all([
-          resolveGithubProfile(accessToken),
-          resolveGithubInstallationCount(accessToken),
-        ]);
-        displayName = githubProfile.displayName || displayName;
-        if (!asText(profile.profileName) || profile.profileName === 'GitHub Default' || profile.profileName === 'GitHub') {
-          profileName = buildGithubProfileName(displayName);
-        }
-        if (installationCount <= 0) {
-          authStatus = 'needs_auth';
-          lastError =
-            'GitHub App is authorized, but no available installation was found for this account. Install or approve the GitHub App, then reconnect.';
-          secretCiphertext = null;
-          lastAuthAt = null;
-        }
-      } else if (connectorKey === 'vercel') {
+      if (connectorKey === 'vercel') {
         if (isVercelIntegrationProvider(provider)) {
           const teamId = asText(input.teamId) || asText(tokenPayload.team_id);
           const configurationId =

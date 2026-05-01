@@ -75,6 +75,7 @@ import { userSkillService } from '../services/user-skill-service';
 import { altusMemoryContextService } from '../services/altus-memory-context-service';
 import { projectDefaultConnectorService } from '../services/project-default-connector-service';
 import { taskCreationProjectRedisCacheService } from '../services/task-creation-project-redis-cache-service';
+import { taskSessionDeploymentRedisCacheService } from '../services/task-session-deployment-redis-cache-service';
 import { isLegacyClientUserId, isSameUserId, normalizeUserId } from '../utils/user-id';
 
 const router = express.Router();
@@ -3376,6 +3377,11 @@ function pickRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
+async function invalidateTaskSessionDeploymentReads(userId: string, sessionId: string) {
+  if (!taskSessionDeploymentRedisCacheService.isEnabled()) return;
+  await taskSessionDeploymentRedisCacheService.invalidateSessionReads(userId, sessionId);
+}
+
 function isSandboxNotFoundError(error: unknown): boolean {
   if (!error) return false;
   const message = error instanceof Error ? error.message : String(error);
@@ -6024,6 +6030,17 @@ router.get('/sessions/:sessionId/deployment', async (req, res) => {
 
     const runtimeContext = await resolveTaskSessionRuntimeReadContext(sessionId, session);
     const deploymentId = asText(req.query.deploymentId);
+    const cached = await taskSessionDeploymentRedisCacheService.getDeploymentInfo<Awaited<ReturnType<typeof buildTaskSessionDeploymentResponse>>>(
+      currentUser.userId,
+      sessionId,
+      deploymentId || undefined
+    );
+    if (cached) {
+      return res.json({
+        success: true,
+        data: cached,
+      });
+    }
     const data = await buildTaskSessionDeploymentResponse({
       userId: currentUser.userId,
       session,
@@ -6031,6 +6048,12 @@ router.get('/sessions/:sessionId/deployment', async (req, res) => {
       resolvedEnvironment: runtimeContext.environment || undefined,
       resolvedOrchestratorSessionId: runtimeContext.orchestratorSessionId || undefined,
     });
+    await taskSessionDeploymentRedisCacheService.setDeploymentInfo(
+      currentUser.userId,
+      sessionId,
+      data,
+      deploymentId || undefined
+    );
     return res.json({
       success: true,
       data,
@@ -6064,9 +6087,27 @@ router.get('/sessions/:sessionId/deployment/analytics', async (req, res) => {
     }
 
     const runtimeContext = await resolveTaskSessionRuntimeReadContext(sessionId, session);
+    const range = asText(req.query.range) || undefined;
+    const cached = await taskSessionDeploymentRedisCacheService.getDeploymentAnalytics<Awaited<ReturnType<typeof buildTaskSessionDeploymentAnalyticsOverview>>>(
+      currentUser.userId,
+      sessionId,
+      range
+    );
+    if (cached) {
+      return res.json({
+        success: true,
+        data: cached,
+      });
+    }
     const data = await buildTaskSessionDeploymentAnalyticsOverview(
       runtimeContext.environment?.metadata,
       req.query.range
+    );
+    await taskSessionDeploymentRedisCacheService.setDeploymentAnalytics(
+      currentUser.userId,
+      sessionId,
+      data,
+      range
     );
     return res.json({
       success: true,
@@ -6101,11 +6142,26 @@ router.get('/sessions/:sessionId/deployment/template', async (req, res) => {
     }
 
     const runtimeContext = await resolveTaskSessionRuntimeReadContext(sessionId, session);
+    const cached = await taskSessionDeploymentRedisCacheService.getDeploymentTemplate<Awaited<ReturnType<typeof inspectTaskSessionDeploymentTemplate>>>(
+      currentUser.userId,
+      sessionId
+    );
+    if (cached) {
+      return res.json({
+        success: true,
+        data: cached,
+      });
+    }
 
     const data = await inspectTaskSessionDeploymentTemplate({
       orchestratorSessionId: runtimeContext.orchestratorSessionId,
       workspaceRoot: runtimeContext.workspaceRoot,
     });
+    await taskSessionDeploymentRedisCacheService.setDeploymentTemplate(
+      currentUser.userId,
+      sessionId,
+      data
+    );
     return res.json({
       success: true,
       data,
@@ -6144,6 +6200,7 @@ router.post('/sessions/:sessionId/deployment/token/rotate', async (req, res) => 
     }
 
     await platformDeploymentAccountService.rotateProjectToken(currentUser.userId, sessionId);
+    await invalidateTaskSessionDeploymentReads(currentUser.userId, sessionId);
     const runtimeContext = await resolveTaskSessionRuntimeReadContext(sessionId, session);
     const data = await buildTaskSessionDeploymentResponse({
       userId: currentUser.userId,
@@ -6204,6 +6261,7 @@ router.post('/sessions/:sessionId/deployment/deploy', async (req, res) => {
       resolvedOrchestratorSessionId: orchestratorSessionId,
       resolvedEnvironment: environment,
     });
+    await invalidateTaskSessionDeploymentReads(currentUser.userId, sessionId);
     return res.json({
       success: true,
       data: result.panel,
@@ -6248,6 +6306,7 @@ router.post('/sessions/:sessionId/deployment/redeploy', async (req, res) => {
       session,
       deploymentId,
     });
+    await invalidateTaskSessionDeploymentReads(currentUser.userId, sessionId);
     return res.json({
       success: true,
       data: result.panel,
@@ -6300,6 +6359,7 @@ router.post('/sessions/:sessionId/deployment/rollback', async (req, res) => {
       session,
       deploymentId,
     });
+    await invalidateTaskSessionDeploymentReads(currentUser.userId, sessionId);
     return res.json({
       success: true,
       data: result.panel,
@@ -6337,6 +6397,16 @@ router.get('/sessions/:sessionId/deployment/database', async (req, res) => {
       });
     }
 
+    const cached = await taskSessionDeploymentRedisCacheService.getDatabaseStatus<Record<string, unknown>>(
+      currentUser.userId,
+      sessionId
+    );
+    if (cached) {
+      return res.json({
+        success: true,
+        data: cached,
+      });
+    }
     const account = await platformDeploymentAccountService.getProjectAccount(currentUser.userId, sessionId);
     const data = account?.databaseServiceId
       ? await railwayDatabaseService.getSummary(account)
@@ -6346,6 +6416,11 @@ router.get('/sessions/:sessionId/deployment/database', async (req, res) => {
           status: 'not_configured',
           tables: [],
         };
+    await taskSessionDeploymentRedisCacheService.setDatabaseStatus(
+      currentUser.userId,
+      sessionId,
+      data
+    );
     return res.json({
       success: true,
       data,
@@ -6378,6 +6453,16 @@ router.get('/sessions/:sessionId/deployment/database/status', async (req, res) =
       });
     }
 
+    const cached = await taskSessionDeploymentRedisCacheService.getDatabaseStatus<Record<string, unknown>>(
+      currentUser.userId,
+      sessionId
+    );
+    if (cached) {
+      return res.json({
+        success: true,
+        data: cached,
+      });
+    }
     const account = await platformDeploymentAccountService.getProjectAccount(currentUser.userId, sessionId);
     const data = account?.databaseServiceId
       ? await railwayDatabaseService.getSummary(account)
@@ -6387,6 +6472,11 @@ router.get('/sessions/:sessionId/deployment/database/status', async (req, res) =
           status: 'not_configured',
           tables: [],
         };
+    await taskSessionDeploymentRedisCacheService.setDatabaseStatus(
+      currentUser.userId,
+      sessionId,
+      data
+    );
     return res.json({
       success: true,
       data,
@@ -6424,6 +6514,7 @@ router.post('/sessions/:sessionId/deployment/database/ensure', async (req, res) 
       sessionId
     );
     const data = await railwayDatabaseService.getSummary(account);
+    await invalidateTaskSessionDeploymentReads(currentUser.userId, sessionId);
     return res.json({
       success: true,
       data,
@@ -6466,6 +6557,19 @@ router.get('/sessions/:sessionId/deployment/database/rows', async (req, res) => 
 
     const page = clampNumber(Number(req.query.page || 1), 1, 10_000);
     const pageSize = clampNumber(Number(req.query.pageSize || 50), 10, 200);
+    const cached = await taskSessionDeploymentRedisCacheService.getDatabaseRows<Record<string, unknown>>(
+      currentUser.userId,
+      sessionId,
+      table,
+      page,
+      pageSize
+    );
+    if (cached) {
+      return res.json({
+        success: true,
+        data: cached,
+      });
+    }
     const account = await platformDeploymentAccountService.getProjectAccount(currentUser.userId, sessionId);
     if (!account?.databaseServiceId) {
       return res.status(409).json({
@@ -6474,6 +6578,14 @@ router.get('/sessions/:sessionId/deployment/database/rows', async (req, res) => 
       });
     }
     const data = await railwayDatabaseService.getRows(account, table, page, pageSize);
+    await taskSessionDeploymentRedisCacheService.setDatabaseRows(
+      currentUser.userId,
+      sessionId,
+      table,
+      page,
+      pageSize,
+      data
+    );
     return res.json({
       success: true,
       data,
@@ -6523,6 +6635,7 @@ router.post('/sessions/:sessionId/deployment/database/rows', async (req, res) =>
       });
     }
     const data = await railwayDatabaseService.insertRow(account, table, values);
+    await invalidateTaskSessionDeploymentReads(currentUser.userId, sessionId);
     return res.json({
       success: true,
       data,
@@ -6573,6 +6686,7 @@ router.patch('/sessions/:sessionId/deployment/database/rows', async (req, res) =
       });
     }
     const data = await railwayDatabaseService.updateRow(account, table, locator, values);
+    await invalidateTaskSessionDeploymentReads(currentUser.userId, sessionId);
     return res.json({
       success: true,
       data,
@@ -6622,6 +6736,7 @@ router.delete('/sessions/:sessionId/deployment/database/rows', async (req, res) 
       });
     }
     const data = await railwayDatabaseService.deleteRow(account, table, locator);
+    await invalidateTaskSessionDeploymentReads(currentUser.userId, sessionId);
     return res.json({
       success: true,
       data,
@@ -6655,9 +6770,26 @@ router.get('/sessions/:sessionId/deployment/storage/status', async (req, res) =>
     }
 
     const revealSecrets = asText(req.query.reveal) === '1' || asText(req.query.reveal) === 'true';
+    const cached = await taskSessionDeploymentRedisCacheService.getStorageStatus<Record<string, unknown>>(
+      currentUser.userId,
+      sessionId,
+      revealSecrets
+    );
+    if (cached) {
+      return res.json({
+        success: true,
+        data: cached,
+      });
+    }
     const data = await projectStorageResourceService.getStatus(currentUser.userId, sessionId, {
       revealSecrets,
     });
+    await taskSessionDeploymentRedisCacheService.setStorageStatus(
+      currentUser.userId,
+      sessionId,
+      revealSecrets,
+      data
+    );
     return res.json({
       success: true,
       data,
@@ -6694,6 +6826,7 @@ router.post('/sessions/:sessionId/deployment/storage/ensure', async (req, res) =
     const data = await projectStorageResourceService.ensureRailwayBucket(currentUser.userId, sessionId, {
       revealSecrets,
     });
+    await invalidateTaskSessionDeploymentReads(currentUser.userId, sessionId);
     return res.json({
       success: true,
       data,
@@ -6827,6 +6960,7 @@ router.delete('/sessions/:sessionId/deployment/storage/files', express.json(), a
       sessionId,
       key
     );
+    await invalidateTaskSessionDeploymentReads(currentUser.userId, sessionId);
     return res.json({
       success: true,
       data,

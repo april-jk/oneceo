@@ -4,98 +4,129 @@ function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function parseScopes(value: string | undefined, fallback: string[]): string[] {
-  const raw = asText(value);
-  if (!raw) return fallback;
-  return raw
-    .split(/[,\s]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+function resolveVercelRedirectUri(): string {
+  const configured = asText(process.env.VERCEL_INTEGRATION_REDIRECT_URI);
+  if (!configured) return '';
+
+  if (/^https?:\/\//i.test(configured)) {
+    return configured;
+  }
+
+  const frontendBaseUrl = asText(process.env.FRONTEND_URL);
+  if (!frontendBaseUrl) return '';
+
+  try {
+    const normalizedPath = configured.startsWith('/') ? configured : `/${configured}`;
+    return new URL(normalizedPath, frontendBaseUrl).toString();
+  } catch {
+    return '';
+  }
 }
 
 export function resolveVercelOauthProvider(): ConnectorOauthProvider | undefined {
-  const clientId = asText(process.env.VERCEL_CONNECTOR_CLIENT_ID);
-  const clientSecret = asText(process.env.VERCEL_CONNECTOR_CLIENT_SECRET);
-  if (!clientId || !clientSecret) return undefined;
+  const integrationSlug = asText(process.env.VERCEL_INTEGRATION_SLUG);
+  const clientId = asText(process.env.VERCEL_INTEGRATION_CLIENT_ID);
+  const clientSecret = asText(process.env.VERCEL_INTEGRATION_CLIENT_SECRET);
+  const redirectUri = resolveVercelRedirectUri();
+  const installUrl =
+    asText(process.env.VERCEL_INTEGRATION_INSTALL_URL) ||
+    (integrationSlug ? `https://vercel.com/integrations/${integrationSlug}/new` : '');
+
+  if (!integrationSlug || !clientId || !clientSecret || !redirectUri || !installUrl) {
+    return undefined;
+  }
+
   return {
     provider: 'vercel',
+    authorizationMode: 'vercel_integration',
+    integrationSlug,
     clientId,
     clientSecret,
-    authorizationUrl:
-      asText(process.env.VERCEL_CONNECTOR_AUTHORIZE_URL) ||
-      'https://vercel.com/oauth/authorize',
+    redirectUri,
+    authorizationUrl: installUrl,
     tokenUrl:
-      asText(process.env.VERCEL_CONNECTOR_TOKEN_URL) ||
+      asText(process.env.VERCEL_INTEGRATION_TOKEN_URL) ||
       'https://api.vercel.com/v2/oauth/access_token',
-    pkceMethod: 'S256',
-    scopeParam: 'scope',
-    scopes: parseScopes(process.env.VERCEL_CONNECTOR_SCOPES, []),
+    scopes: [],
     tokenRequestBodyFormat: 'form',
     tokenClientAuth: 'body',
-    tokenExtraParams: {
-      grant_type: 'authorization_code',
-    },
   };
 }
 
 export function buildVercelDefinition(): ConnectorDefinition {
   const oauth = resolveVercelOauthProvider();
+  const integrationSlug = asText(process.env.VERCEL_INTEGRATION_SLUG);
+  const redirectUri = resolveVercelRedirectUri();
+  const available = Boolean(oauth);
+
+  const availabilityReason = !integrationSlug
+      ? 'Deployment is missing VERCEL_INTEGRATION_SLUG.'
+      : !oauth
+        ? 'Deployment is missing Vercel Integration client credentials or redirect URI.'
+        : !redirectUri
+          ? 'Deployment is missing Vercel Integration redirect URI.'
+          : undefined;
+
   return {
     key: 'vercel',
     category: 'app',
     name: 'Vercel',
-    description: '直接接入 Vercel 官方 MCP（mcp.vercel.com），在平台外部管理授权，在 sandbox 内按 profile 使用。',
+    description:
+      'Connects Vercel through the OneCEO hosted provider host and a Vercel Integration installation token.',
     icon: 'vercel',
     isNew: true,
     sortOrder: 60,
-    authMode: oauth ? 'oauth' : 'token',
-    available: true,
+    authMode: 'oauth',
+    available,
+    availabilityReason,
     configFields: [
       {
         key: 'profileName',
         label: 'Profile Name',
         type: 'text',
-        required: true,
+        required: false,
         placeholder: 'Vercel Team',
-        description: '用于区分不同 Vercel 组织或项目上下文。',
+        description: 'Optional display name for this Vercel Integration profile.',
       },
       {
         key: 'displayName',
         label: 'Display Name',
         type: 'text',
         placeholder: 'Frontend Deployments',
-        description: '显示名称。',
+        description: 'Optional UI display name.',
       },
       {
         key: 'teamId',
         label: 'Team ID (Optional)',
         type: 'text',
         placeholder: 'team_xxx',
-        description: '可选，用于限定团队上下文。',
+        description:
+          'Optional manual team context. Integration callback teamId takes precedence after installation.',
       },
       {
-        key: 'accessToken',
-        label: oauth ? 'Access Token (Optional)' : 'Access Token',
-        type: 'password',
-        required: !oauth,
-        secret: true,
-        placeholder: 'vercel_xxx',
-        description: oauth
-          ? '优先走 Vercel OAuth；如已有 Personal Access Token，也可直接粘贴保存。'
-          : '填写 Vercel Personal Access Token，平台将直接用它访问官方 MCP。',
+        key: 'projectId',
+        label: 'Project ID (Optional)',
+        type: 'text',
+        placeholder: 'prj_xxx',
+        description: 'Optional default project context for MCP tools.',
+      },
+      {
+        key: 'projectSlug',
+        label: 'Project Slug (Optional)',
+        type: 'text',
+        placeholder: 'my-project',
+        description: 'Optional default project slug for MCP tools.',
       },
     ],
     oauth: {
-      supported: Boolean(oauth),
+      supported: available,
       provider: oauth?.provider,
     },
     activityMatcherVerified: true,
     visibleInMenu: true,
     runtime: {
       type: 'remote',
-      urlDefault: 'https://mcp.vercel.com',
-      headersEnv: 'VERCEL_MCP_REMOTE_HEADERS_JSON',
-      headerTemplate: 'bearer-token',
+      headerTemplate: 'none',
     },
   };
 }

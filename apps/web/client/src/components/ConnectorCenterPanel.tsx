@@ -75,8 +75,11 @@ type ConnectorCenterTab = ConnectorCategory;
 type ConnectorFormValues = Record<string, string>;
 
 const NEW_PROFILE_ID = "__new__";
+export const GITHUB_FIXED_CALLBACK_PATH = "/github/callback";
 export const NOTION_FIXED_CALLBACK_PATH = "/notion/callback";
+export const SUPABASE_FIXED_CALLBACK_PATH = "/supabase/callback";
 export const SLACK_FIXED_CALLBACK_PATH = "/slack/callback";
+export const VERCEL_FIXED_CALLBACK_PATH = "/vercel/callback";
 const GITHUB_APP_AUTHORIZATIONS_URL = "https://github.com/settings/apps/authorizations";
 const GITHUB_APP_INSTALLATIONS_URL = "https://github.com/settings/installations";
 const GITHUB_INSTALLATION_MISSING_PATTERN = /没有任何可用安装|未安装到任何账号|installation/i;
@@ -156,6 +159,10 @@ function buildConnectorRedirectUri(
   [
     "code",
     "state",
+    "teamId",
+    "configurationId",
+    "next",
+    "source",
     "settings",
     "settingsTab",
     "connector_oauth",
@@ -178,27 +185,39 @@ function buildConnectorRedirectUri(
 }
 
 function isFixedConnectorCallbackPath(pathname: string) {
-  return pathname === NOTION_FIXED_CALLBACK_PATH || pathname === SLACK_FIXED_CALLBACK_PATH;
+  return (
+    pathname === GITHUB_FIXED_CALLBACK_PATH ||
+    pathname === NOTION_FIXED_CALLBACK_PATH ||
+    pathname === SUPABASE_FIXED_CALLBACK_PATH ||
+    pathname === SLACK_FIXED_CALLBACK_PATH ||
+    pathname === VERCEL_FIXED_CALLBACK_PATH
+  );
 }
 
 export function resolveConnectorOauthCallbackContext(location: string, params: URLSearchParams) {
   const currentPath = new URL(location, resolveBrowserOrigin()).pathname;
   const hasOauthCallbackParams = Boolean(params.get("code")) && Boolean(params.get("state"));
   const fixedPathConnector =
-    currentPath === NOTION_FIXED_CALLBACK_PATH
+    currentPath === GITHUB_FIXED_CALLBACK_PATH
+      ? "github"
+      : currentPath === NOTION_FIXED_CALLBACK_PATH
       ? "notion"
+      : currentPath === SUPABASE_FIXED_CALLBACK_PATH
+        ? "supabase"
       : currentPath === SLACK_FIXED_CALLBACK_PATH
         ? "slack"
-        : null;
+        : currentPath === VERCEL_FIXED_CALLBACK_PATH
+          ? "vercel"
+          : null;
   const connector =
     (params.get("connector") as ConnectorKey | null) ||
-    (hasOauthCallbackParams ? fixedPathConnector : null);
+    (params.get("state") ? fixedPathConnector : null);
   const hasConnectorOAuthFlag = params.get("connector_oauth") === "1";
   return {
     connector,
     currentPath,
-    isFixedCallback: Boolean(fixedPathConnector && hasOauthCallbackParams),
-    shouldHandle: hasConnectorOAuthFlag || Boolean(fixedPathConnector && hasOauthCallbackParams),
+    isFixedCallback: Boolean(fixedPathConnector && params.get("state")),
+    shouldHandle: hasConnectorOAuthFlag || Boolean(fixedPathConnector && params.get("state")),
   };
 }
 
@@ -214,6 +233,10 @@ export function cleanupConnectorQuery(
   [
     "code",
     "state",
+    "teamId",
+    "configurationId",
+    "next",
+    "source",
     "connector_oauth",
     "connector",
     "profileId",
@@ -345,15 +368,44 @@ function isGithubConnector(item: ConnectorCatalogItem | null | undefined) {
 }
 
 export function shouldUseConnectorLevelOauth(connectorKey: ConnectorKey | null | undefined) {
-  return connectorKey === "notion" || connectorKey === "slack";
+  return (
+    connectorKey === "github" ||
+    connectorKey === "notion" ||
+    connectorKey === "supabase" ||
+    connectorKey === "figma" ||
+    connectorKey === "slack" ||
+    connectorKey === "vercel"
+  );
 }
 
 export function shouldUseUnifiedConnectorCard(connectorKey: ConnectorKey | null | undefined) {
-  return connectorKey === "github" || shouldUseConnectorLevelOauth(connectorKey);
+  return connectorKey === "github" || connectorKey === "vercel" || shouldUseConnectorLevelOauth(connectorKey);
 }
 
 function getGithubAppReauthHint() {
   return i18n.t("connectors.github.reauthHint");
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value) {
+    const text = asText(item);
+    if (!text) continue;
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(text);
+  }
+  return result;
+}
+
+export function resolveAuthorizedRepositoryLabel(profile: ConnectorProfile | null | undefined) {
+  const repositories = asStringArray(profile?.config?.repositories);
+  if (repositories.length === 1) return repositories[0];
+  if (repositories.length > 1) return `${repositories[0]} +${repositories.length - 1}`;
+  return asText(profile?.displayName) || asText(profile?.profileName) || i18n.t("connectors.authorizedRepo");
 }
 
 export function ConnectorCenterPanel({
@@ -381,8 +433,6 @@ export function ConnectorCenterPanel({
     effectiveHighlightedConnector || null
   );
   const [supabaseDetailExpanded, setSupabaseDetailExpanded] = useState(false);
-  const [supabaseConnectDialogOpen, setSupabaseConnectDialogOpen] = useState(false);
-  const [supabaseTokenInput, setSupabaseTokenInput] = useState("");
   const [catalog, setCatalog] = useState<ConnectorCatalogItem[]>([]);
   const [profiles, setProfiles] = useState<ConnectorProfile[]>([]);
   const [selectedProfileIds, setSelectedProfileIds] = useState<
@@ -457,9 +507,11 @@ export function ConnectorCenterPanel({
     const connector = callbackContext.connector;
     const profileId = params.get("profileId");
     const useConnectorLevelOauth = shouldUseConnectorLevelOauth(connector);
+    const useConnectorLevelCallback = useConnectorLevelOauth;
     if (!callbackContext.shouldHandle) return;
-    if (!code || !state || !connector) return;
-    if (!useConnectorLevelOauth && !profileId) return;
+    if (!state || !connector) return;
+    if (!code && connector !== "github" && connector !== "notion" && connector !== "slack" && connector !== "figma" && connector !== "supabase") return;
+    if (!useConnectorLevelCallback && !profileId) return;
     if (callbackHandled.current) return;
     callbackHandled.current = true;
 
@@ -485,22 +537,38 @@ export function ConnectorCenterPanel({
             ? {
                 callbackPath: NOTION_FIXED_CALLBACK_PATH,
               }
-            : connector === "slack"
+            : connector === "github"
               ? {
-                  callbackPath: SLACK_FIXED_CALLBACK_PATH,
+                  callbackPath: GITHUB_FIXED_CALLBACK_PATH,
                 }
-            : undefined
+            : connector === "supabase"
+              ? {
+                  callbackPath: SUPABASE_FIXED_CALLBACK_PATH,
+                }
+              : connector === "slack"
+                ? {
+                    callbackPath: SLACK_FIXED_CALLBACK_PATH,
+                  }
+              : connector === "vercel"
+                ? {
+                    callbackPath: VERCEL_FIXED_CALLBACK_PATH,
+                  }
+                : undefined
         );
         let completedProfileId = profileId || null;
         let attachTarget: string | null | undefined = effectiveTargetSessionId;
         let authStatus = "";
         let callbackLastError = "";
 
-        if (useConnectorLevelOauth) {
+        if (useConnectorLevelCallback) {
           const result = await completeConnectorOauth(connector, {
-            code,
+            code: code || "",
             state,
             redirectUri,
+            teamId: asText(params.get("teamId")),
+            configurationId: asText(params.get("configurationId")),
+            next: asText(params.get("next")),
+            source: asText(params.get("source")),
           });
           completedProfileId =
             result.account?.defaultProfileId || result.account?.profileId || completedProfileId;
@@ -509,9 +577,13 @@ export function ConnectorCenterPanel({
           callbackLastError = asText(result.account?.lastError);
         } else {
           const result = await completeConnectorProfileOauth(profileId!, {
-            code,
+            code: code || "",
             state,
             redirectUri,
+            teamId: asText(params.get("teamId")),
+            configurationId: asText(params.get("configurationId")),
+            next: asText(params.get("next")),
+            source: asText(params.get("source")),
           });
           completedProfileId =
             result.profile?.profileId || result.account?.profileId || completedProfileId;
@@ -620,8 +692,6 @@ export function ConnectorCenterPanel({
 
   useEffect(() => {
     setSupabaseDetailExpanded(false);
-    setSupabaseConnectDialogOpen(false);
-    setSupabaseTokenInput("");
   }, [detailKey]);
 
   useEffect(() => {
@@ -663,7 +733,11 @@ export function ConnectorCenterPanel({
       formOverride || formState[editorKey(item.key, profileId)] || {}
     );
     const requiresExplicitProfileName =
-      item.key !== "github" && item.key !== "supabase" && item.key !== "notion";
+      item.key !== "github" &&
+      item.key !== "supabase" &&
+      item.key !== "notion" &&
+      item.key !== "figma" &&
+      item.key !== "vercel";
 
     if (requiresExplicitProfileName && !payload.profileName) {
       throw new Error(i18n.t("connectors.errors.profileNameRequired"));
@@ -722,65 +796,6 @@ export function ConnectorCenterPanel({
     }
   };
 
-  const handleSupabaseConnect = async () => {
-    if (!detailItem || detailItem.key !== "supabase") return;
-    const token = supabaseTokenInput.trim();
-    if (!token) {
-      toast.error(i18n.t("connectors.supabase.tokenRequired"));
-      return;
-    }
-
-    const profileId = activeEditorProfileId;
-    const formKey = editorKey(detailItem.key, profileId);
-    const nextForm: ConnectorFormValues = {
-      ...(formState[formKey] || {}),
-      accessToken: token,
-    };
-
-    setActionKey(`save:${detailItem.key}`);
-    try {
-      const saved = await persistProfile(detailItem, profileId, nextForm);
-      setSelectedProfileIds((prev) => ({
-        ...prev,
-        [detailItem.key]: saved.profileId,
-      }));
-      setFormState((prev) => ({
-        ...prev,
-        [editorKey(detailItem.key, saved.profileId)]: nextForm,
-      }));
-
-      let attachError: Error | null = null;
-      if (effectiveTargetSessionId && saved.authStatus === "authorized") {
-        try {
-          await attachSessionConnector(effectiveTargetSessionId, detailItem.key, {
-            profileId: saved.profileId,
-          });
-        } catch (error) {
-          attachError = error instanceof Error ? error : new Error(i18n.t("connectors.errors.attachFailed"));
-        }
-      }
-
-      await load();
-      setSupabaseConnectDialogOpen(false);
-
-      if (attachError) {
-        toast.error(
-          i18n.t("connectors.profile.savedButAttachFailed", {
-            message: attachError.message,
-          })
-        );
-      } else if (effectiveTargetSessionId && saved.authStatus === "authorized") {
-        toast.success(i18n.t("connectors.profile.savedAndAttached"));
-      } else {
-        toast.success(i18n.t("connectors.supabase.connected"));
-      }
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : i18n.t("connectors.errors.saveFailed"));
-    } finally {
-      setActionKey(null);
-    }
-  };
-
   const handleOAuth = async () => {
     if (!detailItem) return;
     const githubConnector = isGithubConnector(detailItem);
@@ -792,17 +807,36 @@ export function ConnectorCenterPanel({
         const redirectUri =
           detailItem.key === "slack"
             ? new URL(SLACK_FIXED_CALLBACK_PATH, resolveBrowserOrigin()).toString()
+            : detailItem.key === "github"
+              ? buildConnectorRedirectUri(
+                  location,
+                  "",
+                  detailItem.key,
+                  null,
+                  effectiveTargetSessionId,
+                  {
+                    callbackPath: GITHUB_FIXED_CALLBACK_PATH,
+                  }
+                )
             : buildConnectorRedirectUri(
                 location,
                 search,
                 detailItem.key,
                 null,
                 effectiveTargetSessionId,
-                detailItem.key === "notion"
+                detailItem.key === "github"
+                  ? {
+                      callbackPath: GITHUB_FIXED_CALLBACK_PATH,
+                    }
+                  : detailItem.key === "notion"
                   ? {
                       callbackPath: NOTION_FIXED_CALLBACK_PATH,
                     }
-                  : undefined
+                  : detailItem.key === "vercel"
+                    ? {
+                        callbackPath: VERCEL_FIXED_CALLBACK_PATH,
+                      }
+                    : undefined
               );
         const { authUrl } = await startConnectorOauth(detailItem.key, {
           redirectUri,
@@ -849,7 +883,12 @@ export function ConnectorCenterPanel({
         search,
         detailItem.key,
         profile.profileId,
-        effectiveTargetSessionId
+        effectiveTargetSessionId,
+        detailItem.key === "vercel"
+          ? {
+              callbackPath: VERCEL_FIXED_CALLBACK_PATH,
+            }
+          : undefined
       );
       const { authUrl } = await startConnectorProfileOauth(profile.profileId, {
         redirectUri,
@@ -1064,13 +1103,17 @@ export function ConnectorCenterPanel({
         : showGithubInstallationMissingWarning
           ? t("connectors.github.installationMissing")
           : getGithubAppReauthHint();
+    const authorizedAccountLabel =
+      asText(selectedDetailProfile?.displayName) ||
+      asText(selectedDetailProfile?.profileName) ||
+      t("connectors.authorizedAccount");
+    const authorizedRepositoryLabel = githubConnector
+      ? resolveAuthorizedRepositoryLabel(selectedDetailProfile)
+      : t("connectors.authorizedRepo");
 
     const isSupabaseConnector = detailItem.key === "supabase";
     const isSupabaseAuthorized =
       isSupabaseConnector && selectedDetailProfile?.authStatus === "authorized";
-    const supabaseRuntimeUrl =
-      detailItem.runtime?.urlDefault || "https://mcp.supabase.com/mcp";
-
     return (
       <>
       <Dialog open={Boolean(detailItem)} onOpenChange={(open) => !open && setDetailKey(null)}>
@@ -1142,12 +1185,16 @@ export function ConnectorCenterPanel({
                       <div className="flex items-center justify-center gap-[8px]">
                         <div className="flex items-center gap-[4px]">
                           <CheckCircle2 className="h-4 w-4 text-emerald-500 fill-emerald-500/20" />
-                          <span className="text-muted-foreground text-center text-sm">{t("connectors.authorizedAccount")}</span>
+                          <span className="max-w-[220px] truncate text-center text-sm text-muted-foreground" title={authorizedAccountLabel}>
+                            {authorizedAccountLabel}
+                          </span>
                         </div>
                         <div className="h-[1px] w-[16px] bg-muted-foreground/30"></div>
                         <div className="flex items-center gap-[4px]">
                           <ShieldCheck className="h-4 w-4 text-muted-foreground" />
-                          <span className="text-muted-foreground text-center text-sm">{t("connectors.authorizedRepo")}</span>
+                          <span className="max-w-[260px] truncate text-center text-sm text-muted-foreground" title={authorizedRepositoryLabel}>
+                            {authorizedRepositoryLabel}
+                          </span>
                         </div>
                       </div>
                       
@@ -1163,73 +1210,34 @@ export function ConnectorCenterPanel({
                           ) : null}
                           {t("connectors.actions.disconnect")}
                         </Button>
-                        {!isSupabaseConnector ? (
-                          <Button
-                            className="h-[36px] min-w-[72px] px-[12px] rounded-[8px] text-sm bg-primary text-primary-foreground hover:bg-primary/90 font-medium"
-                            onClick={() => void handleOAuth()}
-                            disabled={busy || !detailItem.available}
-                          >
-                            {actionKey === `oauth:${detailItem.key}` ? (
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            ) : null}
-                            {t("connectors.actions.reconnect")}
-                          </Button>
-                        ) : null}
+                        <Button
+                          className="h-[36px] min-w-[72px] px-[12px] rounded-[8px] text-sm bg-primary text-primary-foreground hover:bg-primary/90 font-medium"
+                          onClick={() => void handleOAuth()}
+                          disabled={busy || !detailItem.available}
+                        >
+                          {actionKey === `oauth:${detailItem.key}` ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : null}
+                          {t("connectors.actions.reconnect")}
+                        </Button>
                       </div>
                     </div>
                   ) : (
                     <>
-                      {isSupabaseConnector ? (
-                        <div className="mt-2 flex flex-col items-center gap-2">
-                          <div className="inline-flex items-center gap-2 rounded-xl bg-muted px-4 py-2 text-sm text-muted-foreground">
-                            <AlertCircle className="h-4 w-4" />
-                            {t("connectors.requiresExtraConfig")}
-                          </div>
-                        </div>
-                      ) : null}
-                      {isSupabaseConnector ? (
-                        <div className="mt-2 flex items-center justify-center gap-2.5">
-                          <Button
-                            className="inline-flex items-center justify-center whitespace-nowrap font-medium transition-colors h-[36px] min-w-[72px] px-[12px] rounded-[8px] gap-[6px] text-sm bg-primary text-primary-foreground hover:bg-primary/90"
-                            onClick={() => {
-                              setSupabaseTokenInput((activeEditorForm.accessToken || "").trim());
-                              setSupabaseConnectDialogOpen(true);
-                            }}
-                            disabled={busy || !detailItem.available}
-                          >
-                            {actionKey === `save:${detailItem.key}` ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <Plus className="h-4 w-4" />
-                            )}
-                            {t("connectors.actions.connect")}
-                          </Button>
-                          <a
-                            href="https://supabase.com/dashboard/account/tokens"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex h-[36px] min-w-[72px] items-center justify-center gap-1 rounded-[8px] border border-border/60 bg-background px-[12px] text-sm text-foreground hover:bg-muted/40"
-                          >
-                            {t("connectors.supabase.goToTokenCreation")}
-                            <ArrowUpRight className="h-3.5 w-3.5" />
-                          </a>
-                        </div>
-                      ) : (
-                        <Button
-                          className="inline-flex items-center justify-center whitespace-nowrap font-medium transition-colors h-[36px] min-w-[72px] px-[12px] rounded-[8px] gap-[6px] text-sm mt-2 bg-primary text-primary-foreground hover:bg-primary/90"
-                          onClick={() => {
-                            void handleOAuth();
-                          }}
-                          disabled={busy || !detailItem.available}
-                        >
-                          {actionKey === `oauth:${detailItem.key}` || actionKey === `save:${detailItem.key}` ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Plus className="h-4 w-4" />
-                          )}
-                          {t("connectors.actions.connect")}
-                        </Button>
-                      )}
+                      <Button
+                        className="inline-flex items-center justify-center whitespace-nowrap font-medium transition-colors h-[36px] min-w-[72px] px-[12px] rounded-[8px] gap-[6px] text-sm mt-2 bg-primary text-primary-foreground hover:bg-primary/90"
+                        onClick={() => {
+                          void handleOAuth();
+                        }}
+                        disabled={busy || !detailItem.available}
+                      >
+                        {actionKey === `oauth:${detailItem.key}` || actionKey === `save:${detailItem.key}` ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Plus className="h-4 w-4" />
+                        )}
+                        {t("connectors.actions.connect")}
+                      </Button>
                     </>
                   )}
                 </div>
@@ -1271,11 +1279,11 @@ export function ConnectorCenterPanel({
                     <div className="grid gap-3 sm:grid-cols-2">
                       <div className="rounded-2xl border border-border/60 bg-background px-4 py-3">
                         <p className="text-xs text-muted-foreground">{t("connectors.supabase.mcpEndpoint")}</p>
-                        <p className="mt-1 break-all text-sm font-medium text-foreground">{supabaseRuntimeUrl}</p>
+                        <p className="mt-1 break-all text-sm font-medium text-foreground">oneceo API broker</p>
                       </div>
                       <div className="rounded-2xl border border-border/60 bg-background px-4 py-3">
                         <p className="text-xs text-muted-foreground">{t("connectors.supabase.authMethod")}</p>
-                        <p className="mt-1 text-sm font-medium text-foreground">{t("connectors.supabase.personalAccessToken")}</p>
+                        <p className="mt-1 text-sm font-medium text-foreground">{t("connectors.supabase.composioConnectLink")}</p>
                       </div>
                       <div className="rounded-2xl border border-border/60 bg-background px-4 py-3">
                         <p className="text-xs text-muted-foreground">{t("connectors.currentStatus")}</p>
@@ -1310,35 +1318,12 @@ export function ConnectorCenterPanel({
                     ) : null}
 
                     <div className="space-y-3 rounded-2xl border border-border/60 bg-background px-4 py-3">
-                      <p className="text-sm font-medium text-foreground">{t("connectors.supabase.tokenGuideTitle")}</p>
+                      <p className="text-sm font-medium text-foreground">{t("connectors.supabase.connectGuideTitle")}</p>
                       <ol className="list-decimal space-y-1.5 pl-5 text-sm leading-6 text-muted-foreground">
-                        <li>
-                          {t("connectors.actions.open")}
-                          <a
-                            href="https://supabase.com"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="mx-1 text-foreground underline decoration-muted-foreground/50 underline-offset-2"
-                          >
-                            supabase.com
-                          </a>
-                          {t("connectors.supabase.steps.signup")}
-                        </li>
-                        <li>{t("connectors.supabase.steps.dashboard")}</li>
-                        <li>{t("connectors.supabase.steps.accountSettings")}</li>
-                        <li>
-                          {t("connectors.actions.open")}
-                          <a
-                            href="https://supabase.com/dashboard/account/tokens"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="mx-1 text-foreground underline decoration-muted-foreground/50 underline-offset-2"
-                          >
-                            {t("connectors.supabase.accessTokensPage")}
-                          </a>
-                          {t("connectors.supabase.steps.createTokenSuffix")}
-                        </li>
-                        <li>{t("connectors.supabase.steps.copyToken")}</li>
+                        <li>{t("connectors.supabase.steps.connect")}</li>
+                        <li>{t("connectors.supabase.steps.authorize")}</li>
+                        <li>{t("connectors.supabase.steps.attach")}</li>
+                        <li>{t("connectors.supabase.steps.useTools")}</li>
                       </ol>
                     </div>
 
@@ -1692,9 +1677,9 @@ export function ConnectorCenterPanel({
                             <ArrowUpRight className="mr-2 h-4 w-4" />
                           )}
                           {connectorLevelOauth
-                            ? detailItem.key === "notion"
-                              ? t("connectors.actions.reconnectNotion")
-                              : t("connectors.actions.connectNotion")
+                            ? selectedDetailProfile?.authStatus === "authorized"
+                              ? t("connectors.actions.reconnectConnector", { name: detailItem.name })
+                              : t("connectors.actions.connectConnector", { name: detailItem.name })
                             : selectedDetailProfile?.authStatus === "authorized"
                               ? t("connectors.actions.reauthorize")
                               : t("connectors.actions.startOauth")}
@@ -1722,74 +1707,6 @@ export function ConnectorCenterPanel({
               </div>
             </div>
           </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={supabaseConnectDialogOpen} onOpenChange={setSupabaseConnectDialogOpen}>
-        <DialogContent
-          showCloseButton={false}
-          className="w-[min(620px,calc(100vw-32px))] max-w-[620px] gap-0 overflow-hidden rounded-[28px] border shadow-xl p-0"
-        >
-          <div className="flex items-center justify-end border-b border-border/60 px-6 py-4">
-            <button
-              onClick={() => setSupabaseConnectDialogOpen(false)}
-              className="inline-flex items-center justify-center text-foreground transition hover:opacity-80"
-            >
-              <X className="h-5 w-5" />
-            </button>
-          </div>
-
-          <div className="space-y-6 px-8 pb-8 pt-6">
-            <div className="flex flex-col items-center gap-4 text-center">
-              <div className="flex items-center gap-4">
-                <div className="flex h-14 w-14 items-center justify-center rounded-xl border border-border/70 bg-background">
-                  <Sparkles className="h-6 w-6 text-foreground/80" />
-                </div>
-                <ChevronRight className="h-5 w-5 text-muted-foreground" />
-                <div className="flex h-14 w-14 items-center justify-center rounded-xl border border-border/70 bg-background">
-                  <Database className="h-6 w-6 text-foreground/80" />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <h3 className="text-2xl font-semibold text-foreground">{t("connectors.supabase.connectTitle")}</h3>
-                <p className="text-sm leading-6 text-muted-foreground">
-                  {t("connectors.supabase.connectDescriptionPrefix")}
-                  <a
-                    href="https://supabase.com/dashboard/account/tokens"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="mx-1 text-foreground underline decoration-muted-foreground/50 underline-offset-2"
-                  >
-                    {t("connectors.supabase.officialDocs")}
-                  </a>
-                  {t("connectors.supabase.connectDescriptionSuffix")}
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-base font-medium text-foreground">{t("connectors.supabase.personalAccessToken")}</Label>
-              <Input
-                type="password"
-                value={supabaseTokenInput}
-                placeholder="YOUR_SUPABASE_ACCESS_TOKEN"
-                className="h-14 rounded-xl bg-muted/30 text-base"
-                onChange={(event) => setSupabaseTokenInput(event.target.value)}
-              />
-            </div>
-
-            <Button
-              className="h-14 w-full rounded-xl text-xl font-semibold"
-              disabled={Boolean(actionKey) || !supabaseTokenInput.trim()}
-              onClick={() => void handleSupabaseConnect()}
-            >
-              {actionKey === "save:supabase" ? (
-                <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-              ) : null}
-              {t("connectors.actions.connect")}
-            </Button>
           </div>
         </DialogContent>
       </Dialog>

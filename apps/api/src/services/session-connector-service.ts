@@ -117,6 +117,17 @@ function normalizeSessionConfig(
   value: unknown
 ): SessionConnectorConfig | null {
   const config = pickObject(value);
+  const catalogItem = connectorRegistry.getCatalogItem(connectorKey);
+  if (catalogItem.composio?.provider === 'composio') {
+    return {
+      ...config,
+      provider: 'composio',
+      brokerMode: 'api_only',
+      toolkitSlugs: catalogItem.composio?.toolkitSlugs || [],
+      allowedTools: catalogItem.composio?.allowedTools || [],
+      tokenInSandbox: false,
+    } as SessionConnectorConfig;
+  }
   if (connectorKey !== 'github') {
     return Object.keys(config).length > 0 ? (config as SessionConnectorConfig) : null;
   }
@@ -169,6 +180,18 @@ function mapRuntimeStatus(value: unknown): ConnectorRuntimeStatus {
   if (text === 'disabled') return 'disabled';
   if (text === 'disconnected') return 'disconnected';
   return 'unknown';
+}
+
+function dedupeProviderTools(tools: SessionMcpProviderStatus['tools']): SessionMcpProviderStatus['tools'] {
+  const seen = new Set<string>();
+  const result: SessionMcpProviderStatus['tools'] = [];
+  for (const tool of tools) {
+    const key = `${tool.providerId}:${tool.toolName}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(tool);
+  }
+  return result;
 }
 
 export type AttachConnectorErrorCode =
@@ -292,6 +315,37 @@ function isOsacRequestTimeoutError(error: unknown): boolean {
 }
 
 export class SessionConnectorService {
+  private attachLocks = new Map<string, Promise<SessionConnectorStatus | undefined>>();
+
+  private attachLockKey(taskSessionId: string, connectorKey: ConnectorKey) {
+    return `${taskSessionId}:${connectorKey}`;
+  }
+
+  async waitForAttachIdle(taskSessionId: string, connectorKey?: ConnectorKey, timeoutMs = 75000) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      const pending = Array.from(this.attachLocks.entries()).filter(([key]) => {
+        if (connectorKey) {
+          return key === this.attachLockKey(taskSessionId, connectorKey);
+        }
+        return key.startsWith(`${taskSessionId}:`);
+      });
+      if (pending.length === 0) {
+        return true;
+      }
+      writeConnectorDebugLog('[CONNECTOR_ATTACH_LOCK_WAIT_FOR_SNAPSHOT]', {
+        taskSessionId,
+        connectorKey: connectorKey || null,
+        pendingCount: pending.length,
+      });
+      await Promise.race([
+        Promise.all(pending.map(([, promise]) => promise.catch(() => undefined))),
+        wait(Math.min(1000, Math.max(100, timeoutMs - (Date.now() - startedAt)))),
+      ]);
+    }
+    return false;
+  }
+
   private async invalidateConnectorProjection(taskSessionId: string) {
     await taskSessionRedisCacheService.invalidateConnectorProjectionBySessionId(taskSessionId).catch(() => null);
   }
@@ -418,6 +472,7 @@ export class SessionConnectorService {
             ? (record.inputSchema as Record<string, unknown>)
             : null,
       });
+      provider.tools = dedupeProviderTools(provider.tools);
       result.set(providerId, provider);
     }
     return result;
@@ -434,12 +489,17 @@ export class SessionConnectorService {
   private buildProviderTransport(
     connectorKey: ConnectorKey,
     profileMaterial: NonNullable<Awaited<ReturnType<typeof userConnectorService.getProfileMaterial>>>,
-    sessionConfig: Record<string, unknown> | null
+    sessionConfig: Record<string, unknown> | null,
+    runtimeContext?: {
+      taskSessionId?: string;
+      userId?: string;
+    }
   ) {
     const runtimeConfig = connectorRegistry.materializeRuntimeConfig({
       connectorKey,
       account: profileMaterial,
       sessionConfig,
+      runtimeContext,
     });
     if (runtimeConfig.type === 'local') {
       return {
@@ -451,15 +511,31 @@ export class SessionConnectorService {
         transportName: 'local_stdio',
       };
     }
+    if (runtimeConfig.type === 'hosted') {
+      return {
+        transport: {
+          type: 'backend_rpc' as const,
+          rpcNamespace: 'mcp',
+          backendProvider: runtimeConfig.provider,
+          capabilities: runtimeConfig.capabilities || ['initialize', 'tools/list', 'tools/call'],
+        },
+        transportName:
+          connectorRegistry.getCatalogItem(connectorKey).composio?.provider === 'composio'
+            ? 'api_brokered_mcp'
+            : 'backend_rpc',
+      };
+    }
     const proxyEnv = buildSupabaseProxyEnv(connectorKey);
+    const osacTransport =
+      runtimeConfig.transport === 'streamable_http' ? 'http_stream' : runtimeConfig.transport;
     return {
       transport: {
-        type: runtimeConfig.transport,
+        type: osacTransport,
         url: runtimeConfig.url,
         headers: runtimeConfig.headers || {},
         env: proxyEnv,
       },
-      transportName: runtimeConfig.transport,
+      transportName: osacTransport,
     };
   }
 
@@ -738,6 +814,47 @@ export class SessionConnectorService {
     sessionConfig: Record<string, unknown> = {},
     orchestratorSessionId?: string
   ) {
+    const lockKey = this.attachLockKey(taskSessionId, connectorKey);
+    const previous = this.attachLocks.get(lockKey) || Promise.resolve(undefined);
+    if (this.attachLocks.has(lockKey)) {
+      writeConnectorDebugLog('[CONNECTOR_ATTACH_LOCK_WAIT]', {
+        taskSessionId,
+        connectorKey,
+        profileId,
+      });
+    }
+    const current = previous
+      .catch(() => undefined)
+      .then(() =>
+        this.attachConnectorUnlocked(
+          taskSessionId,
+          userId,
+          connectorKey,
+          profileId,
+          enabledTools,
+          sessionConfig,
+          orchestratorSessionId
+        )
+      );
+    this.attachLocks.set(lockKey, current);
+    try {
+      return await current;
+    } finally {
+      if (this.attachLocks.get(lockKey) === current) {
+        this.attachLocks.delete(lockKey);
+      }
+    }
+  }
+
+  private async attachConnectorUnlocked(
+    taskSessionId: string,
+    userId: string,
+    connectorKey: ConnectorKey,
+    profileId: string,
+    enabledTools: string[] = [],
+    sessionConfig: Record<string, unknown> = {},
+    orchestratorSessionId?: string
+  ) {
     await connectorStorageBootstrap.ensureReady();
     writeConnectorDebugLog('[CONNECTOR_ATTACH_SERVICE_START]', {
       taskSessionId,
@@ -762,7 +879,7 @@ export class SessionConnectorService {
       });
     }
     const normalizedSessionConfig = normalizeSessionConfig(connectorKey, sessionConfig);
-    if (connectorKey === 'github') {
+    if (connectorKey === 'github' && catalogItem.composio?.provider !== 'composio') {
       await githubConnectorRepositoryService.assertProfileAuthorized(userId, profileId);
       const repositories = normalizedSessionConfig?.repositories || [];
       // 移除必须至少选择一个仓库的限制，允许先开启开关再选仓库
@@ -800,7 +917,15 @@ export class SessionConnectorService {
     const serverName = serverNameFor(connectorKey, taskSessionId);
     const providerId = providerIdFor(taskSessionId, connectorKey, profileId);
     const runtimeEnvVersion = Number(existingBinding?.runtimeEnvVersion || 0) + 1;
-    const providerConfig = this.buildProviderTransport(connectorKey, profileMaterial, normalizedSessionConfig);
+    const providerConfig = this.buildProviderTransport(
+      connectorKey,
+      profileMaterial,
+      normalizedSessionConfig,
+      {
+        taskSessionId,
+        userId,
+      }
+    );
     if (connectorKey === 'supabase') {
       const runtimeEnv =
         providerConfig.transport && typeof providerConfig.transport === 'object' && 'env' in providerConfig.transport
@@ -1054,7 +1179,31 @@ export class SessionConnectorService {
       asText(attachPayload.error) ||
       asText(attachPayload.message) ||
       null;
+    let attached = this.normalizeSessionMcpProviders({
+      ...attachReply,
+      payload: {
+        ...attachPayload,
+        providers: [attachPayload],
+      },
+    } as OsacMessage).get(providerId);
+    let recoveredByLiveProvider = false;
     if (mappedAttachStatus !== 'connected') {
+      const liveAfterUnexpectedStatus = await this.waitForRuntimeServer(runtime, providerId, 3, 500);
+      if (liveAfterUnexpectedStatus) {
+        attached = liveAfterUnexpectedStatus;
+        recoveredByLiveProvider = true;
+        writeConnectorDebugLog('[CONNECTOR_ATTACH_PROVIDER_LIVE_AFTER_UNEXPECTED_STATUS]', {
+          taskSessionId,
+          connectorKey,
+          providerId,
+          runtimeSessionId: runtime.orchestratorSessionId,
+          attachStatus,
+          liveStatus: liveAfterUnexpectedStatus.status,
+          tools: liveAfterUnexpectedStatus.tools.map((item) => item.toolName),
+        });
+      }
+    }
+    if (mappedAttachStatus !== 'connected' && !recoveredByLiveProvider) {
       const failureMessage = attachErrorMessage || `MCP provider attach failed: ${attachStatus}`;
       await this.recordAttachFailure({
         taskSessionId,
@@ -1076,14 +1225,6 @@ export class SessionConnectorService {
         stateHandled: true,
       });
     }
-    const attachedProviders = this.normalizeSessionMcpProviders({
-      ...attachReply,
-      payload: {
-        ...attachPayload,
-        providers: [attachPayload],
-      },
-    } as OsacMessage);
-    const attached = attachedProviders.get(providerId);
     await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
       runtimeAttachedToolsJson: attached?.tools || [],
       runtimeStatus: mapRuntimeStatus(attached?.status || 'connected'),

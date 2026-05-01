@@ -86,6 +86,7 @@ type DeploymentCompletionIntent = {
 type DeploymentCompletionEvidence = {
   toolName: string;
   status: string;
+  bindingState: string;
   deploymentStatus: string;
   deploymentFlowState: string;
   summary: string;
@@ -936,12 +937,22 @@ private async chargeForModelCall(state: AltusRunState, input: {
     return !this.isClarificationResponse(normalizedAssistant);
   }
 
-  private buildContinuationReminder(assistantContent: string) {
-    const reminder = [
-      'System reminder: continue from the latest tool result.',
-      'Do not repeat the request or ask for optional clarification unless the task is truly blocked.',
-      'Choose the next required tool call immediately, or call complete_task if the work is already done and verified.',
-    ];
+  private buildContinuationReminder(
+    assistantContent: string,
+    deploymentIntent?: DeploymentCompletionIntent
+  ) {
+    const reminder = deploymentIntent?.requiresManagedSuccess
+      ? [
+          'System reminder: continue from the latest tool result.',
+          'The current request has an explicit deployment goal.',
+          'Do not finish with plain text or complete_task until the managed deployment is actually ready online.',
+          'Choose the next required deployment tool call immediately: deploy_application, redeploy_application, or get_application_deployment_status.',
+        ]
+      : [
+          'System reminder: continue from the latest tool result.',
+          'Do not repeat the request or ask for optional clarification unless the task is truly blocked.',
+          'Choose the next required tool call immediately, or call complete_task if the work is already done and verified.',
+        ];
     const excerpt = truncate(asText(assistantContent), 600);
     if (!excerpt) {
       return reminder.join(' ');
@@ -1029,7 +1040,10 @@ private async chargeForModelCall(state: AltusRunState, input: {
       };
     }
 
-    const capabilityIntent = classifyPlatformCapabilityIntent(userInput);
+    const capabilityIntent =
+      taskIntentProfile?.deploymentAllowed && taskIntentProfile.platformCapabilityIntent?.mode === 'execute'
+        ? taskIntentProfile.platformCapabilityIntent
+        : classifyPlatformCapabilityIntent(userInput);
     if (capabilityIntent.mode !== 'execute') {
       return {
         mode: 'none',
@@ -1077,6 +1091,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
       return {
         toolName: asText(parsed.toolName),
         status: asText(parsed.status).toLowerCase(),
+        bindingState: asText(parsed.bindingState).toLowerCase(),
         deploymentStatus: asText(parsed.deploymentStatus).toLowerCase(),
         deploymentFlowState: asText((parsed.deploymentFlow as Record<string, unknown> | undefined)?.state).toLowerCase(),
         summary: asText(parsed.summary),
@@ -1099,6 +1114,9 @@ private async chargeForModelCall(state: AltusRunState, input: {
     if (evidence.status !== 'success') {
       return false;
     }
+    if (evidence.bindingState === 'public_settling' || evidence.bindingState === 'provisioning') {
+      return false;
+    }
     if (evidence.deploymentFlowState && evidence.deploymentFlowState !== 'succeeded') {
       return false;
     }
@@ -1117,6 +1135,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
   ) {
     const lastTool = evidence?.toolName || 'none';
     const lastStatus = evidence?.status || 'unknown';
+    const lastBindingState = evidence?.bindingState || 'unknown';
     const lastDeploymentStatus = evidence?.deploymentStatus || 'unknown';
     const lastDeploymentFlowState = evidence?.deploymentFlowState || 'unknown';
     const mode = intent.mode || 'deploy';
@@ -1126,6 +1145,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
       'managed deployment is not successful yet',
       `last_tool=${lastTool}`,
       `last_status=${lastStatus}`,
+      `last_binding_state=${lastBindingState}`,
       `last_deployment_status=${lastDeploymentStatus}`,
       `last_deployment_flow_state=${lastDeploymentFlowState}`,
       'do_not_treat_debug_open_page_or_local_server_as_deploy_success',
@@ -1183,6 +1203,8 @@ private async chargeForModelCall(state: AltusRunState, input: {
             ? '线上部署尚未成功，Altus 正在根据部署状态和公网访问结果修复后重试。'
             : repairCategory === 'resource_binding'
             ? 'Altus 正在优先修复平台部署资源绑定，并将在资源恢复后重试发布。'
+            : repairCategory === 'deployment_pending'
+            ? '发布完成，正在等待公网生效。'
             : 'Altus 正在按平台部署基线自动修复后重试。'
         );
       } else if (deploymentStatus) {
@@ -1192,14 +1214,16 @@ private async chargeForModelCall(state: AltusRunState, input: {
         publicLines.push(`访问地址：${url}`);
       }
       const publicDetail = publicLines.filter(Boolean).join('\n');
-      const publicPreview = url
-        ? `访问地址 ${url}`
-        : status === 'retryable_repair_required'
-          ? repairCategory === 'deployment_failed'
-            ? '线上部署未成功，Altus 正在修复后重试。'
-            : repairCategory === 'resource_binding'
-            ? '已识别到平台部署资源问题，Altus 正在修复绑定后重试。'
-            : '已识别到发布配置问题，Altus 正在自动修复后重试。'
+      const publicPreview = status === 'retryable_repair_required'
+        ? repairCategory === 'deployment_failed'
+          ? '线上部署未成功，Altus 正在修复后重试。'
+          : repairCategory === 'resource_binding'
+          ? '已识别到平台部署资源问题，Altus 正在修复绑定后重试。'
+          : repairCategory === 'deployment_pending'
+          ? '发布完成，正在等待公网生效。'
+          : '已识别到发布配置问题，Altus 正在自动修复后重试。'
+        : url
+          ? `访问地址 ${url}`
           : summary || this.buildToolEventContent(toolName, 'completed');
 
       const internalLines: string[] = [];
@@ -2181,6 +2205,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
         }
         if (
           assistantContent &&
+          !deploymentCompletionIntent.requiresManagedSuccess &&
           this.shouldAcceptPlainTextConversationCompletion(state.input.userInput, assistantContent)
         ) {
           await this.syncLoopSnapshot(state, {
@@ -2209,7 +2234,12 @@ private async chargeForModelCall(state: AltusRunState, input: {
             assistantStreamMessageKey,
           );
         }
-        if (assistantContent && currentRound > 1 && this.looksLikeCompletedTaskSummary(assistantContent)) {
+        if (
+          assistantContent &&
+          currentRound > 1 &&
+          !deploymentCompletionIntent.requiresManagedSuccess &&
+          this.looksLikeCompletedTaskSummary(assistantContent)
+        ) {
           await this.syncLoopSnapshot(state, {
             lastTransitionReason: 'plain_text_conversation_completed',
             recoveryMode: 'none',
@@ -2270,7 +2300,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
         }
         messages.push({
           role: 'user',
-          content: this.buildContinuationReminder(assistantContent),
+          content: this.buildContinuationReminder(assistantContent, deploymentCompletionIntent),
         });
         plainTextRecoveryUsed = true;
         await this.syncLoopSnapshot(state, {

@@ -6,51 +6,39 @@ import {
 } from '../src/services/connector-registry';
 
 const envBackup = {
-  GITHUB_CONNECTOR_CLIENT_ID: process.env.GITHUB_CONNECTOR_CLIENT_ID,
-  GITHUB_CONNECTOR_CLIENT_SECRET: process.env.GITHUB_CONNECTOR_CLIENT_SECRET,
-  SLACK_MCP_REMOTE_URL: process.env.SLACK_MCP_REMOTE_URL,
-  SLACK_MCP_REMOTE_HEADERS_JSON: process.env.SLACK_MCP_REMOTE_HEADERS_JSON,
-  SLACK_CONNECTOR_CLIENT_ID: process.env.SLACK_CONNECTOR_CLIENT_ID,
-  SLACK_CONNECTOR_CLIENT_SECRET: process.env.SLACK_CONNECTOR_CLIENT_SECRET,
-  SLACK_CONNECTOR_REDIRECT_URI: process.env.SLACK_CONNECTOR_REDIRECT_URI,
-  NOTION_MCP_REMOTE_URL: process.env.NOTION_MCP_REMOTE_URL,
-  NOTION_MCP_REMOTE_HEADERS_JSON: process.env.NOTION_MCP_REMOTE_HEADERS_JSON,
-  NOTION_CONNECTOR_CLIENT_ID: process.env.NOTION_CONNECTOR_CLIENT_ID,
-  NOTION_CONNECTOR_CLIENT_SECRET: process.env.NOTION_CONNECTOR_CLIENT_SECRET,
-  NOTION_CONNECTOR_REDIRECT_URI: process.env.NOTION_CONNECTOR_REDIRECT_URI,
   FRONTEND_URL: process.env.FRONTEND_URL,
-  VERCEL_MCP_REMOTE_URL: process.env.VERCEL_MCP_REMOTE_URL,
-  VERCEL_MCP_REMOTE_HEADERS_JSON: process.env.VERCEL_MCP_REMOTE_HEADERS_JSON,
-  VERCEL_CONNECTOR_CLIENT_ID: process.env.VERCEL_CONNECTOR_CLIENT_ID,
-  VERCEL_CONNECTOR_CLIENT_SECRET: process.env.VERCEL_CONNECTOR_CLIENT_SECRET,
+  ONECEO_API_PUBLIC_URL: process.env.ONECEO_API_PUBLIC_URL,
+  VERCEL_INTEGRATION_SLUG: process.env.VERCEL_INTEGRATION_SLUG,
+  VERCEL_INTEGRATION_CLIENT_ID: process.env.VERCEL_INTEGRATION_CLIENT_ID,
+  VERCEL_INTEGRATION_CLIENT_SECRET: process.env.VERCEL_INTEGRATION_CLIENT_SECRET,
+  VERCEL_INTEGRATION_REDIRECT_URI: process.env.VERCEL_INTEGRATION_REDIRECT_URI,
+  ONECEO_INTERNAL_TOKEN: process.env.ONECEO_INTERNAL_TOKEN,
+  CONNECTOR_SECRET_KEY: process.env.CONNECTOR_SECRET_KEY,
   ONECEO_PROXY_ENABLED: process.env.ONECEO_PROXY_ENABLED,
   HTTP_PROXY: process.env.HTTP_PROXY,
   HTTPS_PROXY: process.env.HTTPS_PROXY,
   NO_PROXY: process.env.NO_PROXY,
+  COMPOSIO_API_KEY: process.env.COMPOSIO_API_KEY,
+  COMPOSIO_GITHUB_TOOLKITS: process.env.COMPOSIO_GITHUB_TOOLKITS,
+  COMPOSIO_SLACK_TOOLKITS: process.env.COMPOSIO_SLACK_TOOLKITS,
 };
 
 beforeEach(() => {
-  process.env.GITHUB_CONNECTOR_CLIENT_ID = 'github-client';
-  process.env.GITHUB_CONNECTOR_CLIENT_SECRET = 'github-secret';
-  process.env.SLACK_MCP_REMOTE_URL = 'https://slack-mcp.example.com';
-  process.env.SLACK_MCP_REMOTE_HEADERS_JSON = '{"Authorization":"Bearer ${token}"}';
-  process.env.SLACK_CONNECTOR_CLIENT_ID = 'slack-client';
-  process.env.SLACK_CONNECTOR_CLIENT_SECRET = 'slack-secret';
-  process.env.SLACK_CONNECTOR_REDIRECT_URI = '/slack/callback';
-  process.env.NOTION_MCP_REMOTE_URL = 'https://notion-mcp.example.com/sse';
-  process.env.NOTION_MCP_REMOTE_HEADERS_JSON = '{"Authorization":"Bearer ${token}"}';
-  process.env.NOTION_CONNECTOR_CLIENT_ID = 'notion-client';
-  process.env.NOTION_CONNECTOR_CLIENT_SECRET = 'notion-secret';
   process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
-  process.env.NOTION_CONNECTOR_REDIRECT_URI = '/notion/callback';
-  process.env.VERCEL_MCP_REMOTE_URL = 'https://vercel-mcp.example.com';
-  process.env.VERCEL_MCP_REMOTE_HEADERS_JSON = '{"Authorization":"Bearer ${token}","X-Test":"1"}';
-  process.env.VERCEL_CONNECTOR_CLIENT_ID = 'vercel-client';
-  process.env.VERCEL_CONNECTOR_CLIENT_SECRET = 'vercel-secret';
+  delete process.env.ONECEO_API_PUBLIC_URL;
+  process.env.VERCEL_INTEGRATION_SLUG = 'oneceo';
+  process.env.VERCEL_INTEGRATION_REDIRECT_URI = 'https://dev.oneceo.ai/vercel/callback';
+  process.env.VERCEL_INTEGRATION_CLIENT_ID = 'vercel-client';
+  process.env.VERCEL_INTEGRATION_CLIENT_SECRET = 'vercel-secret';
+  process.env.ONECEO_INTERNAL_TOKEN = 'internal-token';
+  process.env.CONNECTOR_SECRET_KEY = 'unit-test-secret';
   process.env.ONECEO_PROXY_ENABLED = 'true';
   process.env.HTTP_PROXY = 'http://127.0.0.1:7890';
   process.env.HTTPS_PROXY = 'http://127.0.0.1:7890';
   process.env.NO_PROXY = 'localhost,127.0.0.1';
+  process.env.COMPOSIO_API_KEY = 'composio-test-key';
+  process.env.COMPOSIO_GITHUB_TOOLKITS = 'github';
+  process.env.COMPOSIO_SLACK_TOOLKITS = 'slack';
 });
 
 afterEach(() => {
@@ -68,6 +56,7 @@ function buildAccount(
   secret: ConnectorAccountMaterial['secret']
 ): ConnectorAccountMaterial {
   return {
+    profileId: `${connectorKey}-profile`,
     connectorKey,
     authMode: connectorKey === 'postgres' ? 'dsn' : 'oauth',
     authStatus: 'authorized',
@@ -76,36 +65,61 @@ function buildAccount(
   };
 }
 
+function buildComposioAccount(
+  connectorKey: ConnectorAccountMaterial['connectorKey']
+): ConnectorAccountMaterial {
+  return {
+    ...buildAccount(connectorKey, {
+      source: 'composio',
+      composioMcpUrl: 'https://composio.example.com/mcp',
+      composioMcpHeaders: { 'x-api-key': 'test-composio-key' },
+    }),
+    metadataJson: { provider: 'composio' },
+  };
+}
+
 test('connector registry exposes built-in connectors with availability metadata', () => {
   const catalog = connectorRegistry.listCatalog();
   const notionProvider = connectorRegistry.getOauthProvider('notion');
+  const slackProvider = connectorRegistry.getOauthProvider('slack');
+  const githubProvider = connectorRegistry.getOauthProvider('github');
+  const github = catalog.find((item) => item.key === 'github');
   const slack = catalog.find((item) => item.key === 'slack');
   const notion = catalog.find((item) => item.key === 'notion');
   assert.equal(catalog.length, 7);
   assert.equal(connectorRegistry.listVisibleCatalog().length, 6);
-  assert.equal(catalog.find((item) => item.key === 'github')?.oauth?.supported, true);
+  assert.equal(github?.available, true);
+  assert.equal(github?.authMode, 'oauth');
+  assert.deepEqual(github?.configFields, []);
+  assert.equal(github?.oauth?.provider, 'composio');
+  assert.equal(githubProvider, undefined);
   assert.equal(slack?.available, true);
   assert.equal(slack?.authMode, 'oauth');
   assert.deepEqual(slack?.configFields, []);
+  assert.equal(slack?.oauth?.provider, 'composio');
+  assert.equal(slackProvider, undefined);
   assert.equal(notion?.available, true);
   assert.equal(notion?.authMode, 'oauth');
   assert.deepEqual(notion?.configFields, []);
-  assert.equal(notionProvider?.redirectUri, 'https://dev.oneceo.ai/notion/callback');
+  assert.equal(notionProvider, undefined);
+  assert.equal(catalog.find((item) => item.key === 'supabase')?.authMode, 'oauth');
+  assert.deepEqual(catalog.find((item) => item.key === 'supabase')?.configFields, []);
   assert.equal(catalog.find((item) => item.key === 'vercel')?.available, true);
   assert.equal(catalog.find((item) => item.key === 'vercel')?.oauth?.supported, true);
+  assert.equal(
+    catalog.find((item) => item.key === 'vercel')?.configFields.find((field) => field.key === 'profileName')?.required,
+    false
+  );
   assert.equal(catalog.find((item) => item.key === 'postgres')?.visibleInMenu, false);
 });
 
-test('connector registry materializes local and remote MCP configs', () => {
+test('connector registry materializes current MCP connector runtimes', () => {
   const githubConfig = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'github',
-    account: buildAccount('github', { accessToken: 'gh-token' }),
+    account: buildComposioAccount('github'),
   });
-  assert.equal(githubConfig.type, 'local');
-  assert.equal(githubConfig.command[0], 'node');
-  assert.equal(githubConfig.command[1], '-e');
-  assert.match(githubConfig.command[2], /server-github/);
-  assert.equal(githubConfig.environment?.GITHUB_PERSONAL_ACCESS_TOKEN, 'gh-token');
+  assert.equal(githubConfig.type, 'hosted');
+  assert.equal(githubConfig.provider, 'github');
 
   const postgresConfig = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'postgres',
@@ -118,20 +132,17 @@ test('connector registry materializes local and remote MCP configs', () => {
 
   const slackConfig = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'slack',
-    account: buildAccount('slack', { accessToken: 'slack-token' }),
+    account: buildComposioAccount('slack'),
   });
-  assert.equal(slackConfig.type, 'remote');
-  assert.equal(slackConfig.transport, 'remote_sse');
-  assert.equal(slackConfig.headers?.Authorization, 'Bearer slack-token');
+  assert.equal(slackConfig.type, 'hosted');
+  assert.equal(slackConfig.provider, 'slack');
 
   const notionConfig = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'notion',
-    account: buildAccount('notion', { accessToken: 'notion-token' }),
+    account: buildComposioAccount('notion'),
   });
-  assert.equal(notionConfig.type, 'remote');
-  assert.equal(notionConfig.transport, 'remote_sse');
-  assert.equal(notionConfig.url, 'https://notion-mcp.example.com/sse');
-  assert.equal(notionConfig.headers?.Authorization, 'Bearer notion-token');
+  assert.equal(notionConfig.type, 'hosted');
+  assert.equal(notionConfig.provider, 'notion');
 
   const vercelConfig = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'vercel',
@@ -139,94 +150,71 @@ test('connector registry materializes local and remote MCP configs', () => {
       ...buildAccount('vercel', { accessToken: 'vercel-token' }),
       configJson: { teamId: 'team_123' },
     },
+    runtimeContext: {
+      taskSessionId: 'task-1',
+      userId: 'user-1',
+    },
   });
-  assert.equal(vercelConfig.type, 'remote');
-  assert.equal(vercelConfig.headers?.Authorization, 'Bearer vercel-token');
-  assert.equal(vercelConfig.headers?.['X-Test'], '1');
-  assert.equal(new URL(vercelConfig.url || '').searchParams.get('teamId'), 'team_123');
+  assert.equal(vercelConfig.type, 'hosted');
+  assert.equal(vercelConfig.provider, 'vercel');
+  assert.deepEqual(vercelConfig.capabilities, ['initialize', 'tools/list', 'tools/call']);
 
   const supabaseConfig = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'supabase',
-    account: buildAccount('supabase', { accessToken: 'supabase-token' }),
+    account: buildComposioAccount('supabase'),
   });
-  assert.equal(supabaseConfig.type, 'local');
-  assert.equal(supabaseConfig.command[0], 'node');
-  assert.equal(supabaseConfig.command[1], '-e');
-  assert.match(supabaseConfig.command[2], /SUPABASE_MCP_URL/);
-  assert.equal(supabaseConfig.environment?.SUPABASE_ACCESS_TOKEN, 'supabase-token');
-  assert.equal(supabaseConfig.environment?.SUPABASE_MCP_URL, 'https://mcp.supabase.com/mcp');
-  assert.equal(supabaseConfig.environment?.HTTP_PROXY, 'http://127.0.0.1:7890');
-  assert.equal(supabaseConfig.environment?.NO_PROXY, 'localhost,127.0.0.1');
+  assert.equal(supabaseConfig.type, 'hosted');
+  assert.equal(supabaseConfig.provider, 'supabase');
 });
 
-test('connector registry falls back to official slack mcp url when remote url env is missing', () => {
-  delete process.env.SLACK_MCP_REMOTE_URL;
+test('connector registry materializes Slack as Composio hosted provider without remote url', () => {
   const catalog = connectorRegistry.listCatalog();
   const slack = catalog.find((item) => item.key === 'slack');
   assert.equal(slack?.available, true);
-  assert.equal(slack?.runtime.urlDefault, 'https://mcp.slack.com/mcp');
+  assert.equal(slack?.runtime.urlDefault, undefined);
+  assert.equal(slack?.runtime.headerTemplate, 'none');
 
   const runtime = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'slack',
-    account: buildAccount('slack', { accessToken: 'slack-token' }),
+    account: buildComposioAccount('slack'),
   });
-  assert.equal(runtime.type, 'remote');
-  assert.equal(new URL(runtime.url || '').origin, 'https://mcp.slack.com');
-  assert.equal(runtime.transport, 'remote_sse');
+  assert.equal(runtime.type, 'hosted');
+  assert.equal(runtime.provider, 'slack');
 });
 
-test('slack catalog is unavailable when oauth client is missing', () => {
-  delete process.env.SLACK_CONNECTOR_CLIENT_ID;
+test('slack catalog is unavailable when Composio API key is missing', () => {
+  delete process.env.COMPOSIO_API_KEY;
   const slack = connectorRegistry.listCatalog().find((item) => item.key === 'slack');
   assert.equal(slack?.available, false);
-  assert.match(String(slack?.availabilityReason || ''), /Slack OAuth client/i);
+  assert.match(String(slack?.availabilityReason || ''), /COMPOSIO_API_KEY/);
 });
 
-test('notion catalog is unavailable when fixed redirect uri is missing', () => {
-  delete process.env.NOTION_CONNECTOR_REDIRECT_URI;
+test('notion catalog is unavailable when Composio API key is missing', () => {
+  delete process.env.COMPOSIO_API_KEY;
   const notion = connectorRegistry.listCatalog().find((item) => item.key === 'notion');
   assert.equal(notion?.available, false);
-  assert.match(String(notion?.availabilityReason || ''), /回调路径/);
+  assert.match(String(notion?.availabilityReason || ''), /COMPOSIO_API_KEY/);
 });
 
-test('notion catalog is unavailable when redirect path is set but frontend base url is missing', () => {
-  delete process.env.FRONTEND_URL;
-  process.env.NOTION_CONNECTOR_REDIRECT_URI = '/notion/callback';
-  const notion = connectorRegistry.listCatalog().find((item) => item.key === 'notion');
-  assert.equal(notion?.available, false);
-  assert.match(String(notion?.availabilityReason || ''), /解析失败/);
+test('github catalog is unavailable when Composio API key is missing', () => {
+  delete process.env.COMPOSIO_API_KEY;
+  const github = connectorRegistry.listCatalog().find((item) => item.key === 'github');
+  assert.equal(github?.available, false);
+  assert.match(String(github?.availabilityReason || ''), /COMPOSIO_API_KEY/);
 });
 
-test('notion catalog falls back to official sse endpoint when remote url env is missing', () => {
-  delete process.env.NOTION_MCP_REMOTE_URL;
-
-  const notion = connectorRegistry.listCatalog().find((item) => item.key === 'notion');
-  assert.equal(notion?.available, true);
-  assert.equal(notion?.runtime.urlDefault, 'https://mcp.notion.com/sse');
-
-  const runtime = connectorRegistry.materializeRuntimeConfig({
-    connectorKey: 'notion',
-    account: buildAccount('notion', { accessToken: 'notion-token' }),
-  });
-  assert.equal(runtime.type, 'remote');
-  assert.equal(runtime.transport, 'remote_sse');
-  assert.equal(runtime.url, 'https://mcp.notion.com/sse');
+test('supabase catalog is unavailable when Composio API key is missing', () => {
+  delete process.env.COMPOSIO_API_KEY;
+  const supabase = connectorRegistry.listCatalog().find((item) => item.key === 'supabase');
+  assert.equal(supabase?.available, false);
+  assert.match(String(supabase?.availabilityReason || ''), /COMPOSIO_API_KEY/);
 });
 
-test('notion catalog is unavailable when remote url is not an sse endpoint', () => {
-  process.env.NOTION_MCP_REMOTE_URL = 'https://mcp.notion.com/mcp';
-
-  const notion = connectorRegistry.listCatalog().find((item) => item.key === 'notion');
-  assert.equal(notion?.available, false);
-  assert.match(String(notion?.availabilityReason || ''), /SSE.*\/sse/);
-});
-
-test('connector registry falls back to official vercel mcp url when remote url env is missing', () => {
-  delete process.env.VERCEL_MCP_REMOTE_URL;
+test('connector registry materializes vercel as hosted provider without internal mcp url', () => {
   const catalog = connectorRegistry.listCatalog();
   const vercel = catalog.find((item) => item.key === 'vercel');
   assert.equal(vercel?.available, true);
-  assert.equal(vercel?.runtime.urlDefault, 'https://mcp.vercel.com');
+  assert.equal(vercel?.runtime.urlDefault, undefined);
   assert.equal(vercel?.availabilityReason, undefined);
 
   const runtime = connectorRegistry.materializeRuntimeConfig({
@@ -235,8 +223,18 @@ test('connector registry falls back to official vercel mcp url when remote url e
       ...buildAccount('vercel', { accessToken: 'vercel-token' }),
       configJson: { teamId: 'team_fallback' },
     },
+    runtimeContext: {
+      taskSessionId: 'task-fallback',
+      userId: 'user-fallback',
+    },
   });
-  assert.equal(runtime.type, 'remote');
-  assert.equal(new URL(runtime.url || '').origin, 'https://mcp.vercel.com');
-  assert.equal(new URL(runtime.url || '').searchParams.get('teamId'), 'team_fallback');
+  assert.equal(runtime.type, 'hosted');
+  assert.equal(runtime.provider, 'vercel');
+});
+
+test('vercel catalog no longer depends on internal mcp token', () => {
+  delete process.env.ONECEO_INTERNAL_TOKEN;
+  const vercel = connectorRegistry.listCatalog().find((item) => item.key === 'vercel');
+  assert.equal(vercel?.available, true);
+  assert.equal(vercel?.availabilityReason, undefined);
 });

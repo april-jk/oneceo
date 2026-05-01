@@ -638,6 +638,8 @@
       "saveProfile": "Save profile",
       "reconnectNotion": "Reconnect Notion",
       "connectNotion": "Connect Notion",
+      "reconnectConnector": "Reconnect {{name}}",
+      "connectConnector": "Connect {{name}}",
       "reauthorize": "Reauthorize",
       "startOauth": "Start OAuth"
     },
@@ -689,28 +691,21 @@
       "directRedirectHint": "If GitHub decides the app is already authorized, the authorization page may jump directly back to oneceo. This is normal GitHub App behavior."
     },
     "supabase": {
-      "tokenRequired": "Please enter a Supabase Personal Access Token first",
       "connected": "Supabase connected",
-      "goToTokenCreation": "Create token",
       "mcpDetails": "MCP details",
-      "description": "Interact with your Supabase project, including table management, SQL execution, document search, edge function deployment, and project settings maintenance.",
-      "mcpEndpoint": "MCP endpoint",
+      "description": "Use Supabase through Composio managed authorization and oneceo API-brokered MCP tools.",
+      "mcpEndpoint": "Runtime",
       "authMethod": "Authentication",
-      "personalAccessToken": "Personal Access Token",
+      "composioConnectLink": "Composio Connect Link",
       "defaultProfile": "Supabase Default",
-      "tokenGuideTitle": "From signup to token creation",
-      "accessTokensPage": "Access Tokens page",
-      "connectHint": "Click Connect above, enter your token, and the Supabase MCP will be attached.",
+      "connectGuideTitle": "Connection flow",
+      "connectHint": "Click Connect above, finish Composio authorization, and the Supabase MCP can be attached.",
       "connectTitle": "Connect Supabase",
-      "connectDescriptionPrefix": "Configure a Supabase access token to use this feature. Refer to the",
-      "officialDocs": "official docs",
-      "connectDescriptionSuffix": "to get and manage your token.",
       "steps": {
-        "signup": "Create an account, or sign in if you already have one.",
-        "dashboard": "After signing in, open the dashboard and create or enter any project.",
-        "accountSettings": "Click your avatar in the upper-right corner and open Account Settings.",
-        "createTokenSuffix": ", then create a new Personal Access Token.",
-        "copyToken": "Copy the new token, return to this page, paste it in, and click Connect."
+        "connect": "Click Connect to open the Composio/Supabase authorization page.",
+        "authorize": "Finish authorization for the intended Supabase account and project scope.",
+        "attach": "After returning to oneceo, the profile is saved and can be attached to the current session.",
+        "useTools": "Session tools are exposed through the API broker; the sandbox receives no Supabase or Composio tokens."
       }
     },
     "guides": {
@@ -737,111 +732,95 @@
         }
       },
       "slack": {
-        "intro": "The Slack connector only keeps the OAuth path. The current flow uses Slack User OAuth authorization.",
+        "intro": "The Slack connector uses Composio managed authorization and MCP tool calls. oneceo keeps broker data on the API server only, without sending Slack tokens or MCP headers into the sandbox.",
         "steps": {
-          "0": "After clicking connect, confirm which workspace and account you want to use on the Slack authorization page.",
-          "1": "After authorizing and returning to oneceo, the system automatically saves the default profile and mounts it to the current session when needed.",
-          "2": "If channels or messages cannot be read, first verify that the Slack user has access to them."
+          "0": "Click connect and finish workspace authorization on the Composio/Slack authorization page.",
+          "1": "After returning to oneceo, the system saves the Slack profile and mounts it to the current session when needed.",
+          "2": "Session tool calls go through the API broker to Composio MCP; the sandbox receives no Slack or Composio credentials."
         },
         "tips": {
-          "0": "If you switch workspaces, accounts, or scopes, reconnect instead of reusing the old authorization."
+          "0": "Legacy Slack User OAuth profiles must be reconnected through Composio."
         },
         "links": {
-          "apps": {
-            "label": "Slack Your Apps",
-            "description": "Review the current Slack app and OAuth configuration"
-          },
-          "oauthDocs": {
-            "label": "Slack OAuth docs",
-            "description": "Learn how User OAuth installation and authorization work"
-          },
-          "mcpDocs": {
-            "label": "Slack MCP docs",
-            "description": "Review Slack MCP capabilities and permission requirements"
+          "composioToolkit": {
+            "label": "Composio Slack toolkit",
+            "description": "Review the Composio managed Slack toolkit"
           }
         }
       },
       "notion": {
-        "intro": "The Notion connector only keeps the OAuth path. After OAuth completes, the actual accessible content still depends on whether the target page or database has been shared with the integration.",
+        "intro": "The Notion connector uses Composio managed authorization and MCP tool calls. oneceo keeps broker data on the API server only, without sending tokens or MCP headers into the sandbox.",
         "steps": {
-          "0": "Connect and complete Notion OAuth, then confirm you are using the correct workspace.",
-          "1": "Go back to Notion and share the target page or database with the integration via Add connections.",
-          "2": "Return to oneceo and use Notion MCP. If authorization happens in the session, the system mounts the result automatically."
+          "0": "Click connect and finish workspace authorization on the Composio/Notion authorization page.",
+          "1": "After returning to oneceo, the system saves the Notion profile and mounts it to the current session when needed.",
+          "2": "Session tool calls go through the API broker to Composio MCP; the sandbox receives no Notion or Composio credentials."
         },
         "tips": {
-          "0": "A successful connection does not mean the content is accessible. If the page is not shared, the content is still unavailable after authorization.",
-          "1": "If you switch workspaces, integration permissions, or sharing scope, reconnect and re-check the page sharing relationship."
+          "0": "Legacy direct Notion OAuth profiles must be reconnected through Composio.",
+          "1": "Reconnect Notion when switching workspaces or authorization scope."
         },
         "links": {
-          "integrations": {
-            "label": "My Integrations",
-            "description": "Review the Notion integration and workspace binding"
-          },
-          "authorization": {
-            "label": "Notion authorization docs",
-            "description": "Review the Notion OAuth authorization guide"
-          },
-          "mcpDocs": {
-            "label": "Notion MCP docs",
-            "description": "Review Notion MCP capabilities and integration guidance"
+          "composioToolkit": {
+            "label": "Composio Notion MCP",
+            "description": "Review the Composio managed Notion MCP toolkit"
           }
         }
       },
       "supabase": {
-        "intro": "Supabase is an independent connector, not a replacement for postgres. Configure the access token outside the sandbox. The platform mounts MCP inside the sandbox through a local bridge.",
+        "intro": "The Supabase connector uses Composio managed authorization and MCP tool calls. oneceo keeps broker data on the API server only, without sending tokens or MCP headers into the sandbox.",
         "steps": {
-          "0": "Create or copy an access token from the account tokens page.",
-          "1": "Paste the token into the connector configuration. The sandbox reuses it to access Supabase capabilities."
+          "0": "Click connect and finish Supabase authorization on the Composio authorization page.",
+          "1": "After returning to oneceo, the system saves the Supabase profile and mounts it to the current session when needed.",
+          "2": "Session tool calls go through the API broker to Composio MCP; the sandbox receives no Supabase or Composio credentials."
         },
         "tips": {
-          "0": "Do not treat Supabase as a replacement for postgres. It is an independent connector.",
-          "1": "Profile Name and Display Name can both be left empty. The system fills in a default profile name automatically.",
-          "2": "After saving, you can add a display name to make it easier to recognize inside sessions."
+          "0": "Legacy Supabase token profiles must be reconnected through Composio.",
+          "1": "Confirm the target project before schema, data, auth, storage, function, or settings changes."
         },
         "links": {
-          "tokens": {
-            "label": "Supabase Access Tokens",
-            "description": "Create or manage access tokens"
+          "composioToolkit": {
+            "label": "Composio Supabase toolkit",
+            "description": "Review the Composio managed Supabase toolkit"
           }
         }
       },
       "figma": {
-        "intro": "The Figma connector configures its access token outside the sandbox. The sandbox directly reuses the credential to access Figma capabilities.",
+        "intro": "The Figma connector uses Composio managed authorization and exposes Figma capabilities through oneceo API-brokered MCP tools. Personal Access Tokens are not accepted.",
         "steps": {
-          "0": "Create a Personal Access Token on the Figma developer page.",
-          "1": "Copy the token and save it in the connector configuration page.",
-          "2": "The sandbox uses the token directly, so no repeated authorization is required."
+          "0": "Click connect and finish the Composio/Figma authorization flow.",
+          "1": "After authorization, attach Figma to the current session or keep it as a reusable profile.",
+          "2": "The sandbox receives only brokered MCP tools; it never receives a Figma token."
         },
         "tips": {
-          "0": "If a token is leaked, revoke it immediately and create a new one.",
-          "1": "Leaving the secret empty does not overwrite the current configuration."
+          "0": "Do not paste Figma tokens into the chat, connector form, shell, or sandbox files.",
+          "1": "Reconnect through Composio if the Figma account or workspace access changes."
         },
         "links": {
-          "tokens": {
-            "label": "Figma Personal Access Tokens",
-            "description": "Create or manage tokens"
+          "composioToolkit": {
+            "label": "Composio Figma Toolkit",
+            "description": "Review the Composio-managed Figma toolkit"
           }
         }
       },
       "vercel": {
-        "intro": "The Vercel connector uses the official MCP endpoint at https://mcp.vercel.com. Prefer Vercel OAuth. If OAuth is not configured in the current environment yet, use a Personal Access Token as a temporary path.",
+        "intro": "The Vercel connector now uses Vercel Integration installation authorization. After authorization completes, the platform calls the Vercel REST API through the oneceo internal MCP wrapper instead of exposing the official MCP endpoint or a personal token inside the sandbox.",
         "steps": {
-          "0": "If Vercel OAuth is configured in the deployment, click connect and complete the official authorization first.",
-          "1": "If OAuth is not configured in the current environment, create a Personal Access Token in Vercel account settings.",
-          "2": "After saving, the sandbox reuses the authorization through the official MCP endpoint."
+          "0": "Click connect and finish the Vercel Integration installation flow.",
+          "1": "If you want a default team or project scope, fill in teamId, projectId, or projectSlug on the profile.",
+          "2": "After authorization, the platform mounts the profile as an internal MCP provider. The agent sees Vercel MCP tools, not a personal token."
         },
         "tips": {
-          "0": "Team ID is still optional and can be used to constrain the team context.",
-          "1": "If deployment or project capabilities behave unexpectedly, first check the token scope or confirm that OAuth was authorized for the target team."
+          "0": "Use separate profiles for different teams or projects so deployment, domain, and env-var context does not get mixed.",
+          "1": "Before changing env vars or production-facing settings, make the target project and environment explicit."
         },
         "links": {
-          "tokens": {
-            "label": "Vercel Tokens",
-            "description": "Create or manage access tokens"
+          "oauthDocs": {
+            "label": "Vercel Integration docs",
+            "description": "Read the Integration installation and callback requirements"
           },
-          "mcpDocs": {
-            "label": "Vercel MCP docs",
-            "description": "Review official MCP capabilities and authorization guidance"
+          "restApi": {
+            "label": "Vercel REST API",
+            "description": "Review project, deployment, domain, and env-var endpoints"
           }
         }
       },
@@ -1214,8 +1193,12 @@
         "saveFailed": "Failed to save the database record",
         "deleteFailed": "Failed to delete the database record",
         "deleteConfirm": "Delete the current record? This action cannot be undone.",
+        "enableFailed": "Failed to enable database",
         "missingSession": "Missing session information, so the database cannot be managed",
         "preparing": "Preparing database…",
+        "notConfiguredTitle": "Database is not enabled",
+        "notConfiguredDescription": "After enabling it, OneCEO creates Postgres in the Railway Environment for this session and injects the connection variables into the app service.",
+        "enable": "Enable database",
         "readyNoTables": "The database is ready, but there are no business tables yet",
         "settings": "Settings",
         "database": "Database",
@@ -1233,13 +1216,18 @@
         "connecting": "Connecting to database…",
         "selectTableHint": "Select a table to view and edit data",
         "connectionInfo": "Connection info",
+        "manageConnectionTitle": "Manage database",
+        "manageConnectionDescription": "Connect to the database using any PostgreSQL client",
         "recordDetail": "Record detail",
         "canCopyToClient": "You can copy this directly into DBeaver, DataGrip, TablePlus, and other database clients",
+        "secretWarning": "Protect the connection URL and password. Anyone with these values can access and modify the database.",
         "connectionUrl": "Connection URL",
         "host": "Host",
         "port": "Port",
         "username": "Username",
         "password": "Password",
+        "showSensitive": "Show sensitive values",
+        "hideSensitive": "Hide sensitive values",
         "databaseName": "Database",
         "databaseStatus": "Database status",
         "connectionMode": "Connection mode",
@@ -1262,7 +1250,35 @@
       },
       "storage": {
         "title": "Storage",
+        "loadFailed": "Failed to load storage information",
+        "enableFailed": "Failed to enable storage",
+        "uploadFailed": "Failed to upload file",
+        "deleteFailed": "Failed to delete file",
+        "missingSession": "Missing session information, so storage cannot be managed",
+        "uploading": "Uploading file",
+        "uploadTooLarge": "File is too large. The maximum supported size is 20MB.",
+        "refresh": "Refresh",
+        "upload": "Upload",
+        "enable": "Enable storage",
+        "ready": "Ready",
+        "waitPanelReady": "Waiting for storage to become ready",
+        "notConfiguredTitle": "Storage is not enabled",
+        "notConfiguredDescription": "After enabling it, OneCEO creates a Bucket in the Railway Environment for this session and injects S3 access variables into the app service.",
         "storageStatus": "Storage status",
+        "filesTitle": "Files",
+        "fileName": "File name",
+        "fileSize": "Size",
+        "lastModified": "Updated",
+        "emptyFiles": "This bucket does not contain any files yet",
+        "filePreviewTitle": "File details",
+        "closePreview": "Close",
+        "downloadFile": "Download file",
+        "deleteFile": "Delete file",
+        "fileCount_one": "{{count}} file",
+        "fileCount_other": "{{count}} files",
+        "manageConnectionTitle": "Manage storage bucket",
+        "manageConnectionDescription": "Connect to the bucket using any S3-compatible client",
+        "secretWarning": "Protect these access keys carefully. Anyone with them can read and write this bucket.",
         "reservedEntry": "Reserved entry",
         "reservedEntryDescription": "This version keeps the frontend position only under the current documentation constraints and does not enter real backend capability development.",
         "recommendedUsage": "Recommended usage",
@@ -1281,7 +1297,16 @@
         "buildArtifactSeparation": "Build artifact separation",
         "buildArtifactSeparationDescription": "Decouple static assets from runtime code to reduce republish cost.",
         "accessPolicy": "Access policy",
-        "accessPolicyDescription": "This can later expand to public reads, private signed downloads, and lifecycle cleanup strategies."
+        "accessPolicyDescription": "This can later expand to public reads, private signed downloads, and lifecycle cleanup strategies.",
+        "bucketName": "Bucket name",
+        "endpoint": "S3 Endpoint",
+        "publicUrl": "Public URL",
+        "accessKeyId": "Access Key ID",
+        "secretAccessKey": "Secret Access Key",
+        "revealSecrets": "Reveal access keys",
+        "applicationVariables": "Application variables",
+        "applicationVariablesDescription": "After storage is enabled, OneCEO writes app service environment variables so runtime code can access the Railway Bucket directly.",
+        "usageGuidance": "Usage guidance"
       },
       "settings": {
         "general": "General",

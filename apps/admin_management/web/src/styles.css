@@ -15849,6 +15849,27 @@ tbody td,
 
 .rp-inline-table-area {
   padding: 0;
+  max-height: min(50vh, 480px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.rp-inline-table-area::-webkit-scrollbar {
+  width: 6px;
+}
+
+.rp-inline-table-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.rp-inline-table-area::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.rp-inline-table-area::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
 }
 
 .rp-inline-actions {

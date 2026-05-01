@@ -14848,14 +14848,14 @@ tbody td,
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  padding: 16px 20px 12px;
+  padding: 18px 20px 14px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
   flex-shrink: 0;
 }
 
 .pricing-form-modal-heading {
   display: grid;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
 }
 
@@ -14863,6 +14863,19 @@ tbody td,
 .pricing-form-modal-heading h2,
 .pricing-form-modal-heading .panel-caption {
   margin: 0;
+}
+
+.pricing-form-modal-heading .section-tag {
+  font-size: 12px;
+  font-weight: 800;
+  color: #9a6700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.pricing-form-modal-heading .panel-caption {
+  font-size: 12px;
+  color: var(--text-faint, #6b7480);
 }
 
 .pricing-form-modal-close {
@@ -14894,6 +14907,16 @@ tbody td,
   min-height: 0;
   overflow-y: auto;
   padding: 16px 20px;
+}
+
+.pricing-form-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 20px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  background: var(--surface-strong);
 }
 
 .pricing-form-section {
@@ -15756,20 +15779,97 @@ tbody td,
   }
 }
 
-/* ===== Reference Pricing Modal Enhancements ===== */
-.reference-pricing-modal {
+/* ===== Reference Pricing Inline Panel ===== */
+.rp-inline-panel {
+  margin-top: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.rp-inline-panel-header {
   display: flex;
-  flex-direction: column;
-  max-height: 85vh;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  cursor: pointer;
+  transition: background 150ms;
+  user-select: none;
+}
+
+.rp-inline-panel-header:hover {
+  background: var(--surface-muted);
+}
+
+.rp-inline-panel-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.rp-inline-panel-title {
+  font-size: 14px;
+  font-weight: 850;
+  line-height: 1.25;
+  color: var(--text);
+  margin: 0;
+}
+
+.rp-inline-panel-toggle {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-soft);
+  cursor: pointer;
+  transition: background 150ms, color 150ms;
+}
+
+.rp-inline-panel-toggle:hover {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.rp-inline-panel-toggle:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.rp-inline-panel-expanded .rp-inline-panel-header {
+  border-bottom: 1px solid var(--border);
+}
+
+.rp-inline-panel-body {
+  padding: 0;
+}
+
+.rp-inline-table-area {
+  padding: 0;
+}
+
+.rp-inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-muted);
 }
 
 .reference-pricing-toolbar {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 24px;
-  border-bottom: 1px solid var(--border, #d0d7de);
-  background: var(--surface, #fff);
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-muted);
 }
 
 .reference-pricing-search {
@@ -15791,18 +15891,18 @@ tbody td,
   width: 100%;
   height: 34px;
   padding: 0 28px 0 32px;
-  border: 1px solid var(--border, #d0d7de);
-  border-radius: 8px;
-  background: var(--surface, #fff);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
   font-size: 13px;
-  color: var(--text, #1f2328);
+  color: var(--text);
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 .reference-pricing-search-input:focus {
   outline: none;
-  border-color: var(--primary, #0969da);
-  box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.1);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.12);
 }
 
 .reference-pricing-search-clear {
@@ -15814,18 +15914,23 @@ tbody td,
   align-items: center;
   justify-content: center;
   border: none;
-  background: var(--surface-muted, #f6f8fa);
+  background: var(--surface-muted);
   border-radius: 50%;
-  color: var(--text-soft, #656d76);
+  color: var(--text-soft);
   font-size: 12px;
   cursor: pointer;
   line-height: 1;
 }
 
+.reference-pricing-search-clear:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
 .reference-pricing-count {
   font-size: 12px;
-  font-weight: 700;
-  color: var(--text-faint, #8c959f);
+  font-weight: 800;
+  color: var(--text-faint);
   white-space: nowrap;
 }
 
@@ -15835,254 +15940,14 @@ tbody td,
   padding: 0 !important;
 }
 
-/* Card List Layout */
-.reference-pricing-list {
-  padding: 8px 24px 16px;
-}
-
-.reference-pricing-group {
-  margin-bottom: 16px;
-}
-
-.reference-pricing-group-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 0;
-  margin-bottom: 8px;
-}
-
-.reference-pricing-group-badge {
-  display: inline-flex;
-  align-items: center;
-  height: 22px;
-  padding: 0 10px;
-  background: rgba(9, 105, 218, 0.08);
-  color: var(--primary, #0969da);
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.03em;
-}
-
-.reference-pricing-group-count {
-  font-size: 11px;
-  color: var(--text-faint, #8c959f);
-  font-weight: 600;
-}
-
-.reference-pricing-cards {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.reference-pricing-card {
-  padding: 12px 16px;
-  background: var(--surface, #fff);
-  border: 1px solid var(--border, #d0d7de);
-  border-radius: 10px;
-  transition: box-shadow 0.15s, border-color 0.15s;
-}
-
-.reference-pricing-card:hover {
-  border-color: var(--border-hover, #c4cdd5);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
-}
-
-.reference-pricing-card-new {
-  background-color: rgba(210, 153, 34, 0.04);
-  border-color: rgba(210, 153, 34, 0.25);
-}
-
-.reference-pricing-card-new:hover {
-  border-color: rgba(210, 153, 34, 0.4);
-}
-
-.reference-pricing-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.reference-pricing-card-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-  min-width: 0;
-}
-
-.reference-pricing-provider-name {
-  font-weight: 700;
-  color: var(--text-soft, #656d76);
-  font-size: 12px;
-  flex-shrink: 0;
-}
-
-.reference-pricing-card-fields {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-.reference-pricing-card-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.reference-pricing-card-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-faint, #8c959f);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-/* Inputs */
-.reference-pricing-select,
-.reference-pricing-text-input {
-  width: 100%;
-  height: 32px;
-  padding: 0 8px;
-  border: 1px solid var(--border, #d0d7de);
-  border-radius: 6px;
-  background: var(--surface, #fff);
-  font-size: 13px;
-  color: var(--text, #1f2328);
-  transition: border-color 0.15s, box-shadow 0.15s, background-color 0.15s;
-}
-
-.reference-pricing-text-input::placeholder {
-  color: var(--text-faint, #8c959f);
-}
-
-.reference-pricing-select:focus,
-.reference-pricing-text-input:focus {
-  outline: none;
-  border-color: var(--primary, #0969da);
-  box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.12);
-  background: var(--surface, #fff);
-}
-
-.reference-pricing-input-wrap {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 0 0 0 8px;
-  border: 1px solid var(--border, #d0d7de);
-  border-radius: 6px;
-  background: var(--surface, #fff);
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-
-.reference-pricing-input-wrap:focus-within {
-  border-color: var(--primary, #0969da);
-  box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.12);
-}
-
-.reference-pricing-currency {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--text-faint, #8c959f);
-  user-select: none;
-}
-
-.reference-pricing-number-input {
-  flex: 1;
-  height: 32px;
-  padding: 0 8px 0 2px;
-  border: none;
-  background: transparent;
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-  color: var(--text, #1f2328);
-  text-align: right;
-}
-
-.reference-pricing-number-input:focus {
-  outline: none;
-}
-
-/* Delete button */
-.reference-pricing-delete {
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-faint, #8c959f);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.12s, background-color 0.12s, color 0.12s;
-}
-
-.reference-pricing-card:hover .reference-pricing-delete {
-  opacity: 1;
-}
-
-.reference-pricing-delete:hover {
-  background: rgba(207, 34, 46, 0.08);
-  color: var(--danger-red, #cf222e);
-}
-
-/* Add bar */
-.reference-pricing-add-bar {
-  padding: 12px 24px;
-  border-top: 1px solid var(--border, #d0d7de);
-  background: var(--surface, #fff);
-}
-
-/* Empty state */
-.reference-pricing-empty {
-  padding: 40px 24px;
-}
-
-.reference-pricing-empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-faint, #8c959f);
-}
-
-.reference-pricing-empty-icon {
-  font-size: 24px;
-  opacity: 0.5;
-}
-
-.reference-pricing-empty p {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-/* Mobile */
-@media (max-width: 640px) {
-  .reference-pricing-delete {
-    opacity: 1;
-  }
-  .reference-pricing-toolbar {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .reference-pricing-card-fields {
-    grid-template-columns: 1fr;
-  }
-}
-
 /* ── Compact reference pricing table ── */
 .reference-pricing-table-wrap {
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--border);
   border-radius: 10px;
   overflow: hidden;
-  background: var(--color-bg);
+  background: var(--surface);
+  margin: 12px 18px;
+  width: calc(100% - 36px);
 }
 
 .reference-pricing-table-compact {
@@ -16100,20 +15965,20 @@ tbody td,
 
 .reference-pricing-table-compact th {
   text-align: left;
-  padding: 10px 12px;
+  padding: 10px 14px;
   font-weight: 600;
-  color: var(--color-text-secondary);
+  color: var(--text-soft);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.4px;
-  background: var(--color-surface-elevated);
-  border-bottom: 1px solid var(--color-border);
+  background: var(--surface-elevated);
+  border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
 
 .reference-pricing-table-compact td {
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--color-border-subtle);
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
   vertical-align: middle;
 }
 
@@ -16127,20 +15992,20 @@ tbody td,
 .rp-col-action   { width: 36px; text-align: center; }
 
 .rp-group-header td {
-  background: var(--color-surface-elevated);
-  padding: 6px 12px;
+  background: color-mix(in srgb, var(--surface-elevated) 94%, #9a6700 6%);
+  padding: 8px 14px;
   font-size: 11px;
   font-weight: 600;
-  color: var(--color-text-secondary);
-  border-bottom: 1px solid var(--color-border);
+  color: var(--text-soft);
+  border-bottom: 1px solid var(--border);
 }
 
-.rp-group-name  { color: var(--color-text-primary); }
+.rp-group-name  { color: var(--text); }
 .rp-group-sep   { margin: 0 6px; opacity: 0.4; }
 .rp-group-count { font-weight: 400; opacity: 0.7; }
 
 .rp-row:hover td {
-  background: var(--color-hover-bg);
+  background: var(--surface-muted);
 }
 
 .rp-row-new td {
@@ -16149,7 +16014,7 @@ tbody td,
 
 .rp-provider {
   font-weight: 500;
-  color: var(--color-text-primary);
+  color: var(--text);
   font-size: 12px;
 }
 
@@ -16158,44 +16023,62 @@ tbody td,
   width: 100%;
   padding: 5px 8px;
   font-size: 13px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--color-bg);
-  color: var(--color-text-primary);
+  background: var(--surface);
+  color: var(--text);
   outline: none;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 .rp-select:focus,
 .rp-input-text:focus {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px var(--color-primary-ghost);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.12);
+}
+
+.rp-select:focus-visible,
+.rp-input-text:focus-visible {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.12);
 }
 
 .rp-input-money {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--color-text-tertiary);
-}
-
-.rp-input-money input {
-  width: 80px;
-  padding: 5px 8px;
-  font-size: 13px;
-  border: 1px solid var(--color-border);
+  gap: 0;
+  padding: 0 8px 0 10px;
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--color-bg);
-  color: var(--color-text-primary);
-  outline: none;
-  text-align: right;
+  background: var(--surface);
+  font-size: 12px;
+  color: var(--text-faint);
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
-.rp-input-money input:focus {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px var(--color-primary-ghost);
+.rp-input-money:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.12);
+}
+
+.rp-input-money span {
+  font-weight: 700;
+  color: var(--text-faint);
+  user-select: none;
+  padding-right: 4px;
+}
+
+.rp-input-money input {
+  flex: 1;
+  width: 80px;
+  padding: 5px 0 5px 2px;
+  font-size: 13px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  outline: none;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .rp-delete {
@@ -16207,10 +16090,10 @@ tbody td,
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: var(--color-text-tertiary);
+  color: var(--text-faint);
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  transition: opacity 180ms ease-out, background 180ms ease-out, color 180ms ease-out;
 }
 
 .rp-row:hover .rp-delete {
@@ -16218,8 +16101,29 @@ tbody td,
 }
 
 .rp-delete:hover {
-  background: var(--color-danger-ghost);
-  color: var(--color-danger);
+  background: rgba(207, 34, 46, 0.08);
+  color: var(--danger);
+}
+
+.rp-delete:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Contrast fix: ensure reference pricing small text meets WCAG AA */
+.rp-inline-panel .reference-pricing-count,
+.rp-group-count,
+.rp-input-money span {
+  color: var(--text-soft);
+}
+
+.reference-pricing-empty-state {
+  color: var(--text-soft);
+}
+
+.rp-row-new td:first-child {
+  border-left: 1px solid rgba(9, 105, 218, 0.3);
 }
 
 @media (max-width: 768px) {
@@ -16241,4 +16145,52 @@ tbody td,
     width: 24px;
     height: 24px;
   }
+  .rp-inline-panel-heading {
+    flex-wrap: wrap;
+  }
+  .rp-inline-panel-title {
+    font-size: 13px;
+  }
+  .rp-inline-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+.rp-undo-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 8px 18px;
+  background: color-mix(in srgb, var(--surface-muted) 80%, var(--warning) 20%);
+  font-size: 13px;
+  color: var(--text-soft);
+  animation: rp-undo-slide 180ms ease-out;
+}
+
+.rp-undo-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 150ms, color 150ms;
+}
+
+.rp-undo-btn:hover {
+  background: var(--primary);
+  color: #fff;
+}
+
+@keyframes rp-undo-slide {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.rp-input-money input:invalid {
+  border-color: var(--danger);
 }

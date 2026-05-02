@@ -5,7 +5,9 @@ export type ConnectorKey =
   | 'supabase'
   | 'figma'
   | 'vercel'
-  | 'postgres';
+  | 'postgres'
+  | 'custom_api'
+  | 'custom_mcp';
 
 export type ConnectorCategory = 'app' | 'custom_api' | 'custom_mcp';
 
@@ -73,7 +75,7 @@ export type ConnectorDefinition = {
   visibleInMenu: boolean;
   deprecated?: boolean;
   runtime: {
-    type: 'local' | 'remote';
+    type: 'local' | 'remote' | 'hosted';
     urlEnv?: string;
     urlDefault?: string;
     headersEnv?: string;

@@ -52,6 +52,7 @@ import {
 } from "@/lib/altus-settings";
 import { toast } from "sonner";
 import {
+  CLOSE_SETTINGS_DIALOG_EVENT,
   OPEN_SETTINGS_DIALOG_EVENT,
   type OpenSettingsDialogDetail,
   type SettingsTab,
@@ -1480,6 +1481,18 @@ export function GlobalSettingsDialogHost() {
         OPEN_SETTINGS_DIALOG_EVENT,
         handleOpen as EventListener,
       );
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleClose = () => {
+      setOpen(false);
+      setConnectorTargetSessionId(null);
+      setHighlightedConnector(null);
+    };
+    window.addEventListener(CLOSE_SETTINGS_DIALOG_EVENT, handleClose);
+    return () => {
+      window.removeEventListener(CLOSE_SETTINGS_DIALOG_EVENT, handleClose);
     };
   }, []);
 

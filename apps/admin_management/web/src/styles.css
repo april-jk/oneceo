@@ -4591,6 +4591,264 @@ select:focus-visible {
   grid-template-rows: auto auto minmax(0, 1fr);
 }
 
+.membership-management-page {
+  align-content: start;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.membership-management-toolbar {
+  display: grid;
+  gap: 12px;
+}
+
+.membership-management-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.85fr);
+  gap: 16px;
+  min-height: 0;
+}
+
+.membership-management-list-panel,
+.membership-management-detail-panel {
+  min-width: 0;
+  min-height: 0;
+}
+
+.membership-plan-list {
+  display: grid;
+  gap: 10px;
+}
+
+.membership-plan-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.membership-plan-card.active {
+  border-color: color-mix(in srgb, var(--primary) 42%, var(--border));
+  background: color-mix(in srgb, var(--primary) 7%, var(--surface));
+}
+
+.membership-plan-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.membership-plan-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.membership-management-form {
+  display: grid;
+  gap: 12px;
+}
+
+.membership-management-form label {
+  display: grid;
+  gap: 6px;
+}
+
+.membership-management-field {
+  display: grid;
+  gap: 6px;
+}
+
+.membership-management-form label span {
+  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.membership-management-field > span {
+  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.membership-management-form input,
+.membership-management-form textarea,
+.membership-management-form select {
+  width: 100%;
+}
+
+.membership-management-form dt {
+  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.membership-management-form dd {
+  margin: 3px 0 0;
+  color: var(--text);
+}
+
+.membership-management-checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 10px;
+}
+
+.membership-check-card {
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-muted) 80%, transparent);
+}
+
+.membership-check-card > span {
+  color: var(--text-soft);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.membership-create-modal .admin-detail-body {
+  padding-top: 10px;
+}
+
+.membership-create-form {
+  display: grid;
+  gap: 10px;
+}
+
+.membership-create-form label {
+  display: grid;
+  gap: 6px;
+}
+
+.membership-create-form label > span {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.membership-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.membership-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 7px 8px;
+}
+
+.membership-choice-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  background: color-mix(in srgb, var(--surface-strong) 92%, var(--surface-muted));
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease, transform 120ms ease;
+  cursor: pointer;
+  position: relative;
+}
+
+.membership-choice-chip:has(input:checked) {
+  border-color: color-mix(in srgb, var(--border-strong) 92%, transparent);
+  background: color-mix(in srgb, var(--surface-elevated) 96%, var(--surface-muted));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--surface-strong) 84%, transparent),
+    0 0 0 2px color-mix(in srgb, var(--admin-ui-blue) 12%, transparent);
+}
+
+.membership-choice-chip:has(input:checked)::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: color-mix(in srgb, var(--admin-ui-blue) 72%, var(--text));
+}
+
+.membership-choice-chip:hover {
+  border-color: color-mix(in srgb, var(--border-strong) 72%, transparent);
+}
+
+.membership-choice-chip:active {
+  transform: scale(0.995);
+}
+
+.membership-create-modal .membership-choice-chip input[type='checkbox'],
+.membership-create-modal .membership-toggle-card input[type='checkbox'] {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+
+.membership-choice-chip > span {
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.membership-choice-grid-agent {
+  grid-template-columns: repeat(3, minmax(120px, 180px));
+  justify-content: flex-start;
+}
+
+.membership-toggle-card {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  background: color-mix(in srgb, var(--surface-strong) 88%, var(--surface-muted));
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+  cursor: pointer;
+  position: relative;
+}
+
+.membership-toggle-card:has(input:checked) {
+  border-color: color-mix(in srgb, var(--border-strong) 92%, transparent);
+  background: color-mix(in srgb, var(--surface-elevated) 96%, var(--surface-muted));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--admin-ui-blue) 10%, transparent);
+}
+
+.membership-toggle-card:has(input:checked)::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--admin-ui-blue) 70%, var(--text));
+  flex: 0 0 8px;
+}
+
+.membership-toggle-card > span {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+@media (max-width: 900px) {
+  .membership-form-grid,
+  .membership-choice-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .user-management-hero {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -15616,6 +15874,10 @@ tbody td,
 
   .billing-management-page .pricing-live .admin-mobile-card-list {
     display: grid;
+  }
+
+  .membership-management-grid {
+    grid-template-columns: 1fr;
   }
 }
 

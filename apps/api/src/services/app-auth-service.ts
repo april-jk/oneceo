@@ -223,6 +223,12 @@ export class AppAuthService {
         personalization: normalizeAppUserPersonalization(undefined),
       },
     });
+    try {
+      const { membershipService } = await import('./membership-service');
+      await membershipService.assignDefaultMembershipForNewUser(String(created.id));
+    } catch (error) {
+      console.error('[Membership] 注册默认会员绑定失败:', error);
+    }
     // 初始化用户积分（新用户赠送 500 积分）
     try {
       const { billingService } = await import('./billing-service');

@@ -15,12 +15,21 @@
 
 ## 分支与工作方式
 
-- 当前常见工作分支是 `task-creation-agent`，但实际以你当前所在分支为准。
+- 当前主集成分支是 `task-creation-agent`，日常开发成果默认先汇入该分支。
+- `develop` 是研发测试分支，所有协作者可推送。
+- `staging` 是预发布分支，仅 `april-jk` 可管理和推送，且只能由 `task-creation-agent` 推进。
+- `product` 是产品分支，仅 `april-jk` 可管理和推送，且只能由 `task-creation-agent` 推进。
 - 不要把旧 worktree、旧分支或别的机器路径当成当前事实。
 - 若需新建临时分支，建议围绕单一主题命名，避免泛化名称。
 - 如果发现工作区里有你未创建的变更，先判断是否和当前任务同文件、同主题：
   - 同文件或强相关：先读懂，再决定是否继续
   - 无关文件：不要回退、不要整理、不要顺手修
+
+## 受保护分支协作要求
+
+- 非 `april-jk` 不得直接向 `staging`、`product` 推送。
+- 即使是 `april-jk`，也不得从个人分支、临时分支或 `develop` 直接推进到 `staging`、`product`。
+- `staging`、`product` 的更新来源必须是 `task-creation-agent`，这样才能保证预发布与产品分支都基于同一条已集成主线。
 
 ## 修改边界规则
 

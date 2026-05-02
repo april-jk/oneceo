@@ -270,6 +270,7 @@ export default function Sidebar({
   const [deleteProjectDialogOpen, setDeleteProjectDialogOpen] = React.useState(false);
   const [deleteProjectTarget, setDeleteProjectTarget] = React.useState<TaskCreationProjectSummary | null>(null);
   const [deleteProjectSubmitting, setDeleteProjectSubmitting] = React.useState(false);
+  const [unreadCount, setUnreadCount] = React.useState(0);
   const listLoadingRef = React.useRef(false);
   const lastListFetchRef = React.useRef(0);
   const lastListErrorToastAtRef = React.useRef(0);
@@ -615,6 +616,26 @@ export default function Sidebar({
       );
     };
   }, [mapSessionTask, sortSessionTasks, t]);
+
+  // 获取未读通知数量
+  React.useEffect(() => {
+    const fetchUnreadCount = async () => {
+      try {
+        const response = await fetch("/api/notifications/unread-count", {
+          credentials: "include",
+        });
+        if (response.ok) {
+          const data = await response.json();
+          setUnreadCount(data.count || 0);
+        }
+      } catch (error) {
+        console.error("[Sidebar] failed to load unread count:", error);
+      }
+    };
+    void fetchUnreadCount();
+    const timer = window.setInterval(fetchUnreadCount, 60000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const toggleProjectGroup = (groupId: string) => {
     setExpandedProjectGroups((prev) =>
@@ -1623,7 +1644,12 @@ export default function Sidebar({
           className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150 mb-1 ${collapsed ? "" : "min-w-0 overflow-hidden"}`}
           onClick={() => openNotificationCenter()}
         >
-          <Bell className="w-4 h-4" />
+          <span className="relative">
+            <Bell className={`w-4 h-4 ${unreadCount > 0 ? "animate-bounce" : ""}`} />
+            {unreadCount > 0 && (
+              <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full" />
+            )}
+          </span>
           {!collapsed && (
             <span className="min-w-0 truncate text-sm font-medium">
               {t("sidebar.notifications")}

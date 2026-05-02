@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, mock, test } from 'node:test';
 import { platformSkillDAO } from '../src/db/dao';
+import { PLATFORM_SKILL_SEEDS } from '../src/services/platform-skill-seeds';
 import { platformSkillService } from '../src/services/platform-skill-service';
 import { skillObjectStorageService } from '../src/services/skill-object-storage-service';
 
@@ -339,6 +340,10 @@ test('ensureSeeded repairs missing governance column before reading seeded skill
     } as any;
   });
   mock.method(platformSkillDAO, 'updateSkillMetadata', async () => undefined as any);
+  mock.method(platformSkillDAO, 'createPublishedRevision', async (skillId: string) => ({
+    skill: { id: skillId },
+    revision: { id: `rev-${skillId}` },
+  }) as any);
   mock.method(platformSkillDAO, 'createSkillWithRevision', async () => {
     throw new Error('should not create seeded skill when read succeeds after repair');
   });
@@ -349,6 +354,64 @@ test('ensureSeeded repairs missing governance column before reading seeded skill
   assert.deepEqual(skills, []);
   assert.equal(ensureSchemaMock.mock.callCount(), 1);
   assert.equal(firstRead, false);
+});
+
+test('ensureSeeded publishes a new revision when a seed-managed skill changed', async () => {
+  (platformSkillService as any).seeded = false;
+  const docxSeed = PLATFORM_SKILL_SEEDS.find((item) => item.slug === 'office-docx');
+  assert.ok(docxSeed);
+  const docxSkillId = '11111111-1111-4111-8111-111111111111';
+  const docxRevisionId = '22222222-2222-4222-8222-222222222222';
+  const published: Array<{ skillId: string; input: any }> = [];
+
+  mock.method(platformSkillDAO, 'getSkillBySlug', async (slug: string) => ({
+    id: slug === 'office-docx' ? docxSkillId : `skill-${slug}`,
+    slug,
+    name: slug,
+    description: `${slug} description`,
+    category: slug.startsWith('office-') ? 'office' : 'general',
+    status: 'active',
+    metadataJson: {},
+    publishedRevisionId: slug === 'office-docx' ? docxRevisionId : 'manual-revision',
+    createdAt: new Date('2026-05-02T00:00:00.000Z'),
+    updatedAt: new Date('2026-05-02T00:00:00.000Z'),
+  }) as any);
+  mock.method(platformSkillDAO, 'getRevision', async (revisionId: string) => {
+    assert.equal(revisionId, docxRevisionId);
+    return {
+      id: docxRevisionId,
+      skillId: docxSkillId,
+      revisionNumber: 1,
+      slugSnapshot: 'office-docx',
+      nameSnapshot: 'Word 文档',
+      descriptionSnapshot: 'old description',
+      categorySnapshot: 'office',
+      bodyMarkdown: '# Old Word Skill',
+      publishedAt: new Date('2026-05-02T00:00:00.000Z'),
+      createdBy: 'seed',
+      createdAt: new Date('2026-05-02T00:00:00.000Z'),
+    } as any;
+  });
+  mock.method(platformSkillDAO, 'getRevisionEntry', async () => null);
+  mock.method(platformSkillDAO, 'listRevisionResourceIndexes', async () => []);
+  mock.method(platformSkillDAO, 'listRevisionResources', async () => []);
+  mock.method(platformSkillDAO, 'updateSkillMetadata', async () => undefined as any);
+  mock.method(platformSkillDAO, 'updateSkillStatus', async () => undefined as any);
+  mock.method(platformSkillDAO, 'createSkillWithRevision', async () => {
+    throw new Error('should not create when seeds already exist');
+  });
+  mock.method(platformSkillDAO, 'createPublishedRevision', async (skillId: string, input: any) => {
+    published.push({ skillId, input });
+    return { skill: { id: skillId }, revision: { id: 'rev-new' } } as any;
+  });
+  mock.method(platformSkillDAO, 'listSkills', async () => []);
+
+  await platformSkillService.listAdminSkills();
+
+  assert.equal(published.length, 1);
+  assert.equal(published[0]?.skillId, docxSkillId);
+  assert.equal(published[0]?.input.createdBy, 'seed');
+  assert.equal(published[0]?.input.bodyMarkdown, docxSeed.bodyMarkdown);
 });
 
 test('importSkillFolder creates new skill using layered import payload', async () => {

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, mock, test } from 'node:test';
 import { platformSkillDAO } from '../src/db/dao';
 import { PLATFORM_SKILL_SEEDS } from '../src/services/platform-skill-seeds';
-import { platformSkillService } from '../src/services/platform-skill-service';
+import { normalizePlatformSkillGovernance, platformSkillService } from '../src/services/platform-skill-service';
 import { skillObjectStorageService } from '../src/services/skill-object-storage-service';
 
 afterEach(() => {
@@ -17,6 +17,7 @@ test('ensureSeeded does not overwrite existing admin-managed skill governance', 
   const createMock = mock.method(platformSkillDAO, 'createSkillWithRevision', async () => {
     throw new Error('all_seed_skills_should_exist_in_this_test');
   });
+  mock.method(platformSkillDAO, 'updateSkillStatus', async () => undefined as any);
   mock.method(platformSkillDAO, 'getSkillBySlug', async (slug: string) => ({
     id: `skill-${slug}`,
     slug,
@@ -45,19 +46,56 @@ test('ensureSeeded does not overwrite existing admin-managed skill governance', 
   assert.equal(createMock.mock.callCount(), 0);
 });
 
+test('platform seeds include ppt workflow as auto-attached office skill with controlled renderer handoff', () => {
+  const seed = PLATFORM_SKILL_SEEDS.find((item) => item.slug === 'ppt-workflow');
+
+  assert.ok(seed);
+  assert.equal(seed.name, 'PPT 工作流');
+  assert.equal(seed.category, 'office');
+  assert.match(seed.description, /子任务编排/);
+  assert.match(seed.bodyMarkdown, /PptRenderInstructionDraft/);
+  assert.match(seed.bodyMarkdown, /render_pptx_from_instructions/);
+  assert.match(seed.bodyMarkdown, /ppt_intent_analyzer/);
+  assert.match(seed.bodyMarkdown, /aesthetic-style-guide/);
+
+  const governance = normalizePlatformSkillGovernance(seed.metadataJson);
+  assert.equal(governance.systemRole, null);
+  assert.equal(governance.adminManaged, true);
+  assert.equal(governance.required, false);
+  assert.equal(governance.autoActivation.enabled, true);
+  assert.deepEqual(governance.autoActivation.triggers, [
+    'ppt',
+    'pptx',
+    'powerpoint',
+    'presentation',
+    'slides',
+    '演示文稿',
+  ]);
+  assert.deepEqual(governance.autoActivation.toolNames, []);
+
+  const resourcePaths = seed.resources?.map((item) => item.resourcePath).sort();
+  assert.deepEqual(resourcePaths, [
+    'references/aesthetic-style-guide.md',
+    'references/preflight-checklist.md',
+    'references/subtask-contracts.md',
+    'references/visual-plan-guide.md',
+    'templates/render-instruction-draft.md',
+  ]);
+});
+
 test('listPublicSkills returns resourceSummary without exposing resource bodies', async () => {
   (platformSkillService as any).seeded = true;
   mock.method(platformSkillDAO, 'countSkills', async () => 1);
   mock.method(platformSkillDAO, 'listPublishedActiveSkills', async () => [
     {
       id: 'skill-1',
-      slug: 'office-ppt',
-      name: 'PPT 办公',
-      description: '创建专业演示文稿',
+      slug: 'ppt-workflow',
+      name: 'PPT 工作流',
+      description: 'PPT 子任务编排',
       category: 'office',
       status: 'active',
       metadataJson: {
-        systemRole: 'ppt_builder',
+        systemRole: null,
         adminManaged: true,
         required: false,
         autoActivation: {
@@ -75,9 +113,9 @@ test('listPublicSkills returns resourceSummary without exposing resource bodies'
     id: 'rev-1',
     skillId: 'skill-1',
     revisionNumber: 3,
-    slugSnapshot: 'office-ppt',
-    nameSnapshot: 'PPT 办公',
-    descriptionSnapshot: '创建专业演示文稿',
+    slugSnapshot: 'ppt-workflow',
+    nameSnapshot: 'PPT 工作流',
+    descriptionSnapshot: 'PPT 子任务编排',
     categorySnapshot: 'office',
     bodyMarkdown: '# Skill Brief',
     publishedAt: new Date('2026-03-29T00:00:00.000Z'),
@@ -89,7 +127,7 @@ test('listPublicSkills returns resourceSummary without exposing resource bodies'
   mock.method(platformSkillDAO, 'getRevisionResource', async () => ({
     id: 'res-1',
     revisionId: 'rev-1',
-    resourcePath: 'references/slide-structure-guide.md',
+    resourcePath: 'references/subtask-contracts.md',
     resourceType: 'reference',
     contentMarkdown: '# Ref',
     createdAt: new Date('2026-03-29T00:00:00.000Z'),
@@ -98,7 +136,7 @@ test('listPublicSkills returns resourceSummary without exposing resource bodies'
     {
       id: 'res-1',
       revisionId: 'rev-1',
-      resourcePath: 'references/slide-structure-guide.md',
+      resourcePath: 'references/subtask-contracts.md',
       resourceType: 'reference',
       contentMarkdown: '# Ref',
       createdAt: new Date('2026-03-29T00:00:00.000Z'),
@@ -106,7 +144,7 @@ test('listPublicSkills returns resourceSummary without exposing resource bodies'
     {
       id: 'res-2',
       revisionId: 'rev-1',
-      resourcePath: 'templates/business-deck-outline.md',
+      resourcePath: 'templates/render-instruction-draft.md',
       resourceType: 'template',
       contentMarkdown: '# Template',
       createdAt: new Date('2026-03-29T00:00:00.000Z'),
@@ -119,13 +157,13 @@ test('listPublicSkills returns resourceSummary without exposing resource bodies'
   assert.equal(skills[0]?.resourceSummary.totalCount, 2);
   assert.equal(skills[0]?.resourceSummary.referenceCount, 1);
   assert.equal(skills[0]?.resourceSummary.templateCount, 1);
-  assert.equal(skills[0]?.governance.systemRole, 'ppt_builder');
+  assert.equal(skills[0]?.governance.systemRole, null);
   assert.equal(skills[0]?.governance.adminManaged, true);
   assert.equal(skills[0]?.governance.autoActivation.enabled, false);
   assert.deepEqual(skills[0]?.governance.autoActivation.toolNames, []);
   assert.deepEqual(skills[0]?.resourceSummary.paths, [
-    'references/slide-structure-guide.md',
-    'templates/business-deck-outline.md',
+    'references/subtask-contracts.md',
+    'templates/render-instruction-draft.md',
   ]);
   assert.equal((skills[0] as any).contentMarkdown, undefined);
 });
@@ -135,9 +173,9 @@ test('getRevisionResource returns exact resource payload for selected revision',
   mock.method(platformSkillDAO, 'countSkills', async () => 1);
   mock.method(platformSkillDAO, 'getSkill', async () => ({
     id: 'skill-1',
-    slug: 'office-ppt',
-    name: 'PPT 办公',
-    description: '创建专业演示文稿',
+    slug: 'ppt-workflow',
+    name: 'PPT 工作流',
+    description: 'PPT 子任务编排',
     category: 'office',
     status: 'active',
     publishedRevisionId: 'rev-1',
@@ -148,9 +186,9 @@ test('getRevisionResource returns exact resource payload for selected revision',
     id: 'rev-1',
     skillId: 'skill-1',
     revisionNumber: 3,
-    slugSnapshot: 'office-ppt',
-    nameSnapshot: 'PPT 办公',
-    descriptionSnapshot: '创建专业演示文稿',
+    slugSnapshot: 'ppt-workflow',
+    nameSnapshot: 'PPT 工作流',
+    descriptionSnapshot: 'PPT 子任务编排',
     categorySnapshot: 'office',
     bodyMarkdown: '# Skill Brief',
     publishedAt: new Date('2026-03-29T00:00:00.000Z'),
@@ -162,7 +200,7 @@ test('getRevisionResource returns exact resource payload for selected revision',
   mock.method(platformSkillDAO, 'getRevisionResource', async () => ({
     id: 'res-1',
     revisionId: 'rev-1',
-    resourcePath: 'references/slide-structure-guide.md',
+    resourcePath: 'references/subtask-contracts.md',
     resourceType: 'reference',
     contentMarkdown: '# Ref',
     createdAt: new Date('2026-03-29T00:00:00.000Z'),
@@ -171,7 +209,7 @@ test('getRevisionResource returns exact resource payload for selected revision',
     {
       id: 'res-1',
       revisionId: 'rev-1',
-      resourcePath: 'references/slide-structure-guide.md',
+      resourcePath: 'references/subtask-contracts.md',
       resourceType: 'reference',
       contentMarkdown: '# Ref',
       createdAt: new Date('2026-03-29T00:00:00.000Z'),
@@ -181,10 +219,10 @@ test('getRevisionResource returns exact resource payload for selected revision',
   const result = await platformSkillService.getRevisionResource(
     'skill-1',
     'rev-1',
-    'references/slide-structure-guide.md'
+    'references/subtask-contracts.md'
   );
 
-  assert.equal(result.resource.resourcePath, 'references/slide-structure-guide.md');
+  assert.equal(result.resource.resourcePath, 'references/subtask-contracts.md');
   assert.equal(result.resource.resourceType, 'reference');
   assert.equal(result.resource.contentMarkdown, '# Ref');
 });
@@ -248,9 +286,9 @@ test('renderRevisionById prefers layered entry body when available', async () =>
   mock.method(platformSkillDAO, 'countSkills', async () => 1);
   mock.method(platformSkillDAO, 'getSkill', async () => ({
     id: 'skill-1',
-    slug: 'office-ppt',
-    name: 'PPT 办公',
-    description: '创建专业演示文稿',
+    slug: 'ppt-workflow',
+    name: 'PPT 工作流',
+    description: 'PPT 子任务编排',
     category: 'office',
     status: 'active',
     publishedRevisionId: 'rev-1',
@@ -261,9 +299,9 @@ test('renderRevisionById prefers layered entry body when available', async () =>
     id: 'rev-1',
     skillId: 'skill-1',
     revisionNumber: 3,
-    slugSnapshot: 'office-ppt',
-    nameSnapshot: 'PPT 办公',
-    descriptionSnapshot: '创建专业演示文稿',
+    slugSnapshot: 'ppt-workflow',
+    nameSnapshot: 'PPT 工作流',
+    descriptionSnapshot: 'PPT 子任务编排',
     categorySnapshot: 'office',
     bodyMarkdown: '# Legacy Body',
     publishedAt: new Date('2026-03-29T00:00:00.000Z'),
@@ -273,8 +311,8 @@ test('renderRevisionById prefers layered entry body when available', async () =>
   mock.method(platformSkillDAO, 'getRevisionEntry', async () => ({
     id: 'entry-1',
     revisionId: 'rev-1',
-    entryName: 'PPT 办公',
-    entryDescription: '创建专业演示文稿',
+    entryName: 'PPT 工作流',
+    entryDescription: 'PPT 子任务编排',
     bodyMarkdown: '# Layered Body',
   }) as any);
 
@@ -340,13 +378,11 @@ test('ensureSeeded repairs missing governance column before reading seeded skill
     } as any;
   });
   mock.method(platformSkillDAO, 'updateSkillMetadata', async () => undefined as any);
-  mock.method(platformSkillDAO, 'createPublishedRevision', async (skillId: string) => ({
-    skill: { id: skillId },
-    revision: { id: `rev-${skillId}` },
-  }) as any);
+  mock.method(platformSkillDAO, 'updateSkillStatus', async () => undefined as any);
   mock.method(platformSkillDAO, 'createSkillWithRevision', async () => {
     throw new Error('should not create seeded skill when read succeeds after repair');
   });
+  mock.method(platformSkillDAO, 'createPublishedRevision', async () => ({}) as any);
   mock.method(platformSkillDAO, 'listSkills', async () => []);
 
   const skills = await platformSkillService.listAdminSkills();
@@ -414,17 +450,82 @@ test('ensureSeeded publishes a new revision when a seed-managed skill changed', 
   assert.equal(published[0]?.input.bodyMarkdown, docxSeed.bodyMarkdown);
 });
 
+test('ensureSeeded archives deprecated ppt seeds and reactivates current seed', async () => {
+  (platformSkillService as any).seeded = false;
+  const statusUpdates: Array<{ id: string; status: string }> = [];
+
+  mock.method(platformSkillDAO, 'getSkillBySlug', async (slug: string) => {
+    if (slug === 'office-ppt' || slug === 'magazine-web-ppt') {
+      return {
+        id: `skill-${slug}`,
+        slug,
+        name: slug,
+        description: `${slug} description`,
+        category: 'office',
+        status: 'active',
+        metadataJson: {},
+        publishedRevisionId: 'rev-old',
+        createdAt: new Date('2026-04-18T00:00:00.000Z'),
+        updatedAt: new Date('2026-04-18T00:00:00.000Z'),
+      } as any;
+    }
+    if (slug === 'ppt-workflow') {
+      return {
+        id: 'skill-ppt-workflow',
+        slug,
+        name: 'PPT 工作流',
+        description: 'PPT 子任务编排',
+        category: 'office',
+        status: 'archived',
+        metadataJson: {},
+        publishedRevisionId: 'rev-ppt-workflow',
+        createdAt: new Date('2026-05-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-05-01T00:00:00.000Z'),
+      } as any;
+    }
+    return {
+      id: `skill-${slug}`,
+      slug,
+      name: slug,
+      description: `${slug} description`,
+      category: 'general',
+      status: 'active',
+      metadataJson: {},
+      publishedRevisionId: 'rev-current',
+      createdAt: new Date('2026-04-18T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-18T00:00:00.000Z'),
+    } as any;
+  });
+  mock.method(platformSkillDAO, 'updateSkillMetadata', async () => undefined as any);
+  mock.method(platformSkillDAO, 'updateSkillStatus', async (id: string, status: any) => {
+    statusUpdates.push({ id, status });
+    return { id, status } as any;
+  });
+  mock.method(platformSkillDAO, 'createSkillWithRevision', async () => {
+    throw new Error('should not create when all seeds exist');
+  });
+  mock.method(platformSkillDAO, 'listSkills', async () => []);
+
+  await platformSkillService.listAdminSkills();
+
+  assert.deepEqual(statusUpdates, [
+    { id: 'skill-ppt-workflow', status: 'active' },
+    { id: 'skill-office-ppt', status: 'archived' },
+    { id: 'skill-magazine-web-ppt', status: 'archived' },
+  ]);
+});
+
 test('importSkillFolder creates new skill using layered import payload', async () => {
   (platformSkillService as any).seeded = true;
   mock.method(platformSkillDAO, 'countSkills', async () => 1);
   mock.method(platformSkillDAO, 'getSkillBySlug', async () => null);
   const uploadMock = mock.method(skillObjectStorageService, 'uploadTextResource', async () => ({
-    objectKey: 'skills/platform/office-ppt/create/hash/scripts/render_body.py',
-    storagePath: 'r2://unit-test/skills/platform/office-ppt/create/hash/scripts/render_body.py',
+    objectKey: 'skills/platform/ppt-workflow/create/hash/scripts/render_body.py',
+    storagePath: 'r2://unit-test/skills/platform/ppt-workflow/create/hash/scripts/render_body.py',
     storageLocatorJson: {
       provider: 'r2',
       bucket: 'unit-test',
-      objectKey: 'skills/platform/office-ppt/create/hash/scripts/render_body.py',
+      objectKey: 'skills/platform/ppt-workflow/create/hash/scripts/render_body.py',
       mimeType: 'text/x-python',
     },
   }));
@@ -454,7 +555,7 @@ test('importSkillFolder creates new skill using layered import payload', async (
   }) as any);
 
   const result = await platformSkillService.importSkillFolder({
-    rootFolderName: 'office-ppt',
+    rootFolderName: 'ppt-workflow',
     files: [
       {
         relativePath: 'SKILL.md',
@@ -481,7 +582,7 @@ test('importSkillFolder can publish a new revision for an existing admin skill',
   mock.method(platformSkillDAO, 'countSkills', async () => 1);
   mock.method(platformSkillDAO, 'getSkill', async () => ({
     id: 'skill-1',
-    slug: 'office-ppt',
+    slug: 'ppt-workflow',
     name: 'Office PPT',
     description: 'original',
     category: 'general',
@@ -494,7 +595,7 @@ test('importSkillFolder can publish a new revision for an existing admin skill',
   const updateMock = mock.method(platformSkillDAO, 'createPublishedRevision', async (_skillId: string, input: any) => ({
     skill: {
       id: 'skill-1',
-      slug: 'office-ppt',
+      slug: 'ppt-workflow',
       name: input.name,
       description: input.description,
       category: input.category,
@@ -506,7 +607,7 @@ test('importSkillFolder can publish a new revision for an existing admin skill',
       id: 'rev-2',
       skillId: 'skill-1',
       revisionNumber: 2,
-      slugSnapshot: 'office-ppt',
+      slugSnapshot: 'ppt-workflow',
       nameSnapshot: input.name,
       descriptionSnapshot: input.description,
       categorySnapshot: input.category,
@@ -518,7 +619,7 @@ test('importSkillFolder can publish a new revision for an existing admin skill',
 
   const result = await platformSkillService.importSkillFolder({
     skillId: 'skill-1',
-    rootFolderName: 'office-ppt',
+    rootFolderName: 'ppt-workflow',
     files: [
       {
         relativePath: 'SKILL.md',

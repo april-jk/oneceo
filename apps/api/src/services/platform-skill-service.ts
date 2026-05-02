@@ -10,9 +10,10 @@ import type {
 import { ensurePlatformSkillGovernanceSchema } from '../db/migrate';
 import { platformSkillImportService } from './platform-skill-import-service';
 import type { SkillImportPreview } from './platform-skill-import-service';
-import { PLATFORM_SKILL_SEEDS } from './platform-skill-seeds';
-import type { PlatformSkillSeed } from './platform-skill-seeds';
+import { PLATFORM_SKILL_SEEDS, type PlatformSkillSeed } from './platform-skill-seeds';
 import { skillObjectStorageService } from './skill-object-storage-service';
+
+const DEPRECATED_PLATFORM_SKILL_SEED_SLUGS = ['office-ppt', 'magazine-web-ppt'] as const;
 
 export type PlatformSkillResourceSummary = {
   totalCount: number;
@@ -370,6 +371,15 @@ export class PlatformSkillService {
     });
   }
 
+  private async archiveDeprecatedSeedSkills() {
+    for (const slug of DEPRECATED_PLATFORM_SKILL_SEED_SLUGS) {
+      const skill = await platformSkillDAO.getSkillBySlug(slug);
+      if (skill && assertStatus(skill.status) !== 'archived') {
+        await platformSkillDAO.updateSkillStatus(skill.id, 'archived');
+      }
+    }
+  }
+
   async ensureSeeded() {
     if (this.seeded) return;
     let repairedGovernanceSchema = false;
@@ -382,6 +392,9 @@ export class PlatformSkillService {
             const expected = governanceToMetadataJson(seed.metadataJson as any);
             if (shouldSyncSeedGovernance(seed.metadataJson, existed.metadataJson)) {
               await platformSkillDAO.updateSkillMetadata(existed.id, expected);
+            }
+            if (assertStatus(existed.status) === 'archived') {
+              await platformSkillDAO.updateSkillStatus(existed.id, 'active');
             }
             if (!existed.publishedRevisionId) {
               await platformSkillDAO.createPublishedRevision(existed.id, {
@@ -426,6 +439,7 @@ export class PlatformSkillService {
             throw error;
           }
         }
+        await this.archiveDeprecatedSeedSkills();
         this.seeded = true;
       } catch (error) {
         if (!repairedGovernanceSchema && isMissingPlatformSkillGovernanceColumnError(error)) {

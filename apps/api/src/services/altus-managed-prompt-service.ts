@@ -684,10 +684,9 @@ export class AltusManagedPromptService {
       '- Do not call complete_task for a downloadable deliverable until the final file already exists in the workspace at the exact attachment path you provide.',
       '- For downloadable deliverables, prefer the shortest verified path: inspect the requirement, create or update the file, verify it once, then call complete_task immediately.',
       '- Do not spend extra rounds on optional environment probing, repeated existence checks, or alternate implementations after the requested deliverable already exists and is verified.',
-      '- For office-file tasks such as pptx/docx/xlsx generation, prefer a simple, correct deliverable over decorative or over-engineered scripts.',
+      '- For DOCX/XLSX tasks, prefer a simple, correct deliverable over decorative or over-engineered scripts.',
       '- Do not broaden scope beyond the user request.',
       '- When using third-party libraries, start with stable imports and a minimal working script. Do not guess module paths, and do not build complex helper abstractions before a basic file can be generated successfully.',
-      '- For python-pptx tasks, prefer stable imports such as Presentation, Inches, Pt, and RGBColor from pptx.dml.color when color is needed.',
       '- For PPT tasks that need current facts, examples, or visual assets, use web_search and web_extract instead of guessing.',
       '- For DOCX tasks that depend on current facts, policies, examples, market references, or citations, use web_search and web_extract instead of inventing unsupported claims.',
       '- For XLSX tasks that depend on public data, benchmark data, current indicators, or external learning/resource links, use web_search and web_extract first, then organize the verified results into the workbook.',
@@ -717,18 +716,6 @@ export class AltusManagedPromptService {
       '- Do not finish a deployable web app task while required deployment files are missing. Before completion, verify at least: `package.json`, `oneceo.manifest.json`, and the primary app entry files exist.',
       deploymentToolSection,
       resourceToolSection,
-      '',
-      '# PPT workflow',
-      `- For PPT tasks, choose exactly one contentArchetype from ${formatCodeList(PPT_CONTENT_ARCHETYPES)} before drafting slides.`,
-      `- For PPT tasks, also choose one bounded style pack that matches the archetype: ${formatCodeList(PPT_STYLE_PACKS)}.`,
-      `- For PPT tasks, execute the internal multi-phase workflow in this fixed order: ${formatCodeList(PPT_TASK_PHASES)}.`,
-      '- In phase `ppt_task_router`, decide whether the request is create, revise, or restructure, then form an internal `PptGenerationBrief` with artifactType, contentArchetype, audience, goal, tone, structureStrategy, visualGoal, evidenceMode, requiresWebResearch, requiresImages, and requiresCharts.',
-      '- In phase `ppt_research_curator`, only run a bounded retrieval when the brief actually requires it. Prefer one focused web_search, one targeted web_extract, and keep at most three candidate images that you truly plan to use.',
-      `- In phase \`ppt_storyboard_designer\`, plan the deck before writing slide copy. Choose pageType from ${formatCodeList(PPT_PAGE_TYPES)}. For content pages, also choose contentSubtype from ${formatCodeList(PPT_CONTENT_SUBTYPES)}.`,
-      `- In phase \`ppt_visual_system_designer\`, choose exactly one paletteKey from ${formatCodeList(PPT_PALETTE_KEYS)}, one styleRecipe from ${formatCodeList(PPT_STYLE_RECIPES)}, and one fontPairing from ${formatCodeList(PPT_FONT_PAIRINGS)}.`,
-      '- In phase `ppt_builder`, generate the final `.pptx` only after the brief, evidence bundle, storyboard, and visual system are internally settled. Also write a `presentation_manifest.json` that records slide count, pageType, contentSubtype, visual usage, and source preservation decisions.',
-      `- In phase \`ppt_qa_reviewer\`, enforce this PPT QA gate before complete_task: ${formatCodeList(PPT_QA_GATE_RULES)}.`,
-      '- Treat slide variety as a contract. Do not allow three consecutive slides with the same layout, and do not let the whole deck collapse into repeated title-plus-bullets pages.',
       '',
       '# DOCX workflow',
       `- For DOCX tasks, choose exactly one taskMode from ${formatCodeList(DOCX_TASK_MODES)} and one contentArchetype from ${formatCodeList(DOCX_CONTENT_ARCHETYPES)} before drafting sections.`,
@@ -885,6 +872,7 @@ export class AltusManagedPromptService {
     if (!Array.isArray(skills) || skills.length === 0) {
       return '';
     }
+    const hasPptWorkflow = skills.some((skill) => skill.slug === 'ppt-workflow');
     const blockIndex = altusManagedDynamicContextBlockService.renderBlockIndex(
       altusManagedDynamicContextBlockService.buildSkillBlocks({ activeSkills: skills })
     );
@@ -896,11 +884,14 @@ export class AltusManagedPromptService {
       '- These skills are already synced into the sandbox and must be followed when relevant.',
       '- Treat each skill body below as task-specific operating instructions unless it conflicts with higher-priority system rules.',
       '- Skill identity is carried by sourceType, skillId, and revisionId. Do not rely on slug alone.',
+      hasPptWorkflow
+        ? '- For PPTX delivery, finish the ppt-workflow planning and preflight first, then call `render_pptx_from_instructions` with the final `PptRenderInstruction`; include the returned `.pptx` path in `complete_task.attachments`. Do not create PPTX through python-pptx, shell scripts, or manual office-generation code while ppt-workflow is active.'
+        : '',
       '',
       blockIndex,
       '',
       ...this.formatSkillSections(skills),
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   }
 
   buildAutoAttachedSkillPrompt(skills: ManagedSkillContext[], toolName: string) {

@@ -149,7 +149,7 @@ type JsonSchema =
       description?: string;
       properties: Record<string, JsonSchema>;
       required: string[];
-      additionalProperties: false;
+      additionalProperties: boolean;
     };
 
 export function asText(value: unknown): string {
@@ -725,6 +725,31 @@ export function buildManagedToolDefinitions() {
             },
           },
           ['skillId', 'revisionId', 'resourcePath']
+        ),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'render_pptx_from_instructions',
+        description:
+          'Render a PPTX file in the sandbox from a validated PptRenderInstruction after ppt-workflow has produced and reviewed the deck plan. Use only when the user wants a final PowerPoint file.',
+        parameters: objectSchema(
+          {
+            instructions: {
+              type: 'object',
+              description:
+                'PptRenderInstruction object with deck, theme, slides, sources, and empty openQuestions.',
+              properties: {},
+              required: [],
+              additionalProperties: true,
+            },
+            outputFileName: {
+              type: 'string',
+              description: 'Optional final .pptx filename, for example career-plan.pptx.',
+            },
+          },
+          ['instructions']
         ),
       },
     },

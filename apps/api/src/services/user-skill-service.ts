@@ -123,7 +123,8 @@ export class UserSkillService {
 
     const bindingMap = new Map(bindings.map((item) => [item.platformSkillId, item]));
     for (const skill of platformSkills) {
-      if (!skill.governance?.required) continue;
+      const shouldBackfill = Boolean(skill.governance?.required || skill.governance?.autoActivation?.enabled);
+      if (!shouldBackfill) continue;
       const existing = bindingMap.get(skill.skillId);
       if (existing?.enabled) continue;
       await userSkillDAO.upsertPlatformBinding({

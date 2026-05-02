@@ -132,7 +132,7 @@ test('managed task intent profile carries a hard clarification gate for broad bu
   assert.match(prompt, /Active clarification type/i);
 });
 
-test('managed prompt enforces multi-phase PPT collaboration and QA gate', () => {
+test('managed prompt does not expose legacy direct PPT workflow globally', () => {
   const prompt = altusManagedPromptService.buildSystemPrompt({
     sessionId: 'session-ppt-test',
     sessionTitle: 'ppt phase contract',
@@ -140,15 +140,10 @@ test('managed prompt enforces multi-phase PPT collaboration and QA gate', () => 
     connectors: [],
   });
 
-  assert.match(prompt, /execute the internal multi-phase workflow in this fixed order/i);
-  assert.match(prompt, /ppt_task_router/i);
-  assert.match(prompt, /ppt_storyboard_designer/i);
-  assert.match(prompt, /ppt_visual_system_designer/i);
-  assert.match(prompt, /presentation_manifest\.json/i);
-  assert.match(prompt, /choose pageType from/i);
-  assert.match(prompt, /choose exactly one paletteKey from/i);
-  assert.match(prompt, /enforce this PPT QA gate before complete_task/i);
-  assert.match(prompt, /do not allow three consecutive slides with the same layout/i);
+  assert.doesNotMatch(prompt, /ppt_task_router/i);
+  assert.doesNotMatch(prompt, /ppt_storyboard_designer/i);
+  assert.doesNotMatch(prompt, /presentation_manifest\.json/i);
+  assert.doesNotMatch(prompt, /enforce this PPT QA gate before complete_task/i);
 });
 
 test('managed prompt enforces multi-phase DOCX collaboration and QA gate', () => {
@@ -340,25 +335,63 @@ test('managed prompt builds minimal skill catalog index without full body', () =
       sourceType: 'platform',
       skillId: 'skill-1',
       revisionId: 'rev-1',
-      slug: 'office-ppt',
-      name: 'PPT 办公',
-      description: '创建、改写或重组专业演示文稿',
+      slug: 'ppt-workflow',
+      name: 'PPT 工作流',
+      description: '按子任务编排准备 PPT 渲染指令草稿',
       category: 'office',
       revisionNumber: 3,
       resourceSummary: {
-        totalCount: 2,
-        referenceCount: 1,
+        totalCount: 4,
+        referenceCount: 3,
         templateCount: 1,
-        paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+        paths: [
+          'references/subtask-contracts.md',
+          'references/visual-plan-guide.md',
+          'references/preflight-checklist.md',
+          'templates/render-instruction-draft.md',
+        ],
       },
     },
   ]);
 
   assert.match(prompt, /available skills catalog/i);
-  assert.match(prompt, /office-ppt: 创建、改写或重组专业演示文稿/);
-  assert.match(prompt, /resources=1 references, 1 templates/);
+  assert.match(prompt, /ppt-workflow: 按子任务编排准备 PPT 渲染指令草稿/);
+  assert.match(prompt, /id=skill-catalog:platform:skill-1:rev-1/);
+  assert.match(prompt, /resources=3 references, 1 templates/);
   assert.match(prompt, /call `load_skill_resource`/i);
   assert.doesNotMatch(prompt, /compatibility:\s*opencode/i);
+});
+
+test('managed prompt exposes ppt workflow as catalog-only pre-render skill', () => {
+  const prompt = altusManagedPromptService.buildSkillCatalogPrompt([
+    {
+      sourceType: 'platform',
+      skillId: 'skill-ppt-workflow',
+      revisionId: 'rev-ppt-workflow',
+      slug: 'ppt-workflow',
+      name: 'PPT 工作流',
+      description: '按竞品式子任务编排完成 PPT 生成前工作流',
+      category: 'office',
+      revisionNumber: 1,
+      resourceSummary: {
+        totalCount: 4,
+        referenceCount: 3,
+        templateCount: 1,
+        paths: [
+          'references/subtask-contracts.md',
+          'references/visual-plan-guide.md',
+          'references/preflight-checklist.md',
+          'templates/render-instruction-draft.md',
+        ],
+      },
+    },
+  ]);
+
+  assert.match(prompt, /ppt-workflow: 按竞品式子任务编排完成 PPT 生成前工作流/);
+  assert.match(prompt, /id=skill-catalog:platform:skill-ppt-workflow:rev-ppt-workflow/);
+  assert.match(prompt, /resources=3 references, 1 templates/);
+  assert.match(prompt, /call `load_skill_resource`/i);
+  assert.doesNotMatch(prompt, /# Skill Brief: PPT 子任务编排工作流/);
 });
 
 test('managed prompt shows active skill resource summary alongside full body', () => {
@@ -367,9 +400,9 @@ test('managed prompt shows active skill resource summary alongside full body', (
       sourceType: 'platform',
       skillId: 'skill-1',
       revisionId: 'rev-1',
-      slug: 'office-ppt',
-      name: 'PPT 办公',
-      description: '创建、改写或重组专业演示文稿',
+      slug: 'ppt-workflow',
+      name: 'PPT 工作流',
+      description: '按子任务编排准备 PPT 渲染指令草稿',
       category: 'office',
       renderedMarkdown: '# Skill Brief\n\nDo the work.',
       revisionNumber: 3,
@@ -377,15 +410,57 @@ test('managed prompt shows active skill resource summary alongside full body', (
         totalCount: 2,
         referenceCount: 1,
         templateCount: 1,
-        paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+        paths: ['references/subtask-contracts.md', 'templates/render-instruction-draft.md'],
       },
     },
   ]);
 
   assert.match(prompt, /# Active skills/);
   assert.match(prompt, /currently active for the run/i);
+  assert.match(prompt, /id=skill:platform:skill-1:rev-1/);
   assert.match(prompt, /resources: 1 references, 1 templates/);
   assert.match(prompt, /# Skill Brief/);
+});
+
+test('managed prompt includes full ppt workflow instructions when skill is active', () => {
+  const prompt = altusManagedPromptService.buildSkillContextPrompt([
+    {
+      sourceType: 'platform',
+      skillId: 'skill-ppt-workflow',
+      revisionId: 'rev-ppt-workflow',
+      slug: 'ppt-workflow',
+      name: 'PPT 工作流',
+      description: '按竞品式子任务编排完成 PPT 生成前工作流',
+      category: 'office',
+      renderedMarkdown: [
+        '# Skill Brief: PPT 子任务编排工作流',
+        '',
+        '当前阶段不调用 PPT 专用渲染器。',
+        '固定顺序：`ppt_intent_analyzer -> ppt_research_planner -> ppt_material_collector -> ppt_visual_planner -> ppt_outline_planner -> ppt_render_instruction_planner -> ppt_preflight_reviewer`。',
+        '最终产物是 `PptRenderInstructionDraft`。',
+      ].join('\n'),
+      revisionNumber: 1,
+      resourceSummary: {
+        totalCount: 4,
+        referenceCount: 3,
+        templateCount: 1,
+        paths: [
+          'references/subtask-contracts.md',
+          'references/visual-plan-guide.md',
+          'references/preflight-checklist.md',
+          'templates/render-instruction-draft.md',
+        ],
+      },
+    },
+  ]);
+
+  assert.match(prompt, /# Active skills/);
+  assert.match(prompt, /slug: ppt-workflow/);
+  assert.match(prompt, /id=skill:platform:skill-ppt-workflow:rev-ppt-workflow/);
+  assert.match(prompt, /resources: 3 references, 1 templates/);
+  assert.match(prompt, /# Skill Brief: PPT 子任务编排工作流/);
+  assert.match(prompt, /ppt_intent_analyzer/);
+  assert.match(prompt, /PptRenderInstructionDraft/);
 });
 
 test('managed prompt can append auto-attached skill instructions after a governed tool call', () => {

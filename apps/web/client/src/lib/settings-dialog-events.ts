@@ -16,6 +16,7 @@ export type OpenSettingsDialogDetail = {
 };
 
 export const OPEN_SETTINGS_DIALOG_EVENT = "oneceo:open-settings-dialog";
+export const CLOSE_SETTINGS_DIALOG_EVENT = "oneceo:close-settings-dialog";
 export const TASK_CREATION_SKILLS_UPDATED_EVENT = "oneceo:task-creation-skills-updated";
 
 export function openSettingsDialog(detail: OpenSettingsDialogDetail = {}) {
@@ -25,6 +26,11 @@ export function openSettingsDialog(detail: OpenSettingsDialogDetail = {}) {
       detail,
     })
   );
+}
+
+export function closeSettingsDialog() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(CLOSE_SETTINGS_DIALOG_EVENT));
 }
 
 export function notifyTaskCreationSkillsUpdated() {

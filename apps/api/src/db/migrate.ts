@@ -42,6 +42,10 @@ const REQUIRED_TABLES = [
   'sandbox_execution_environments',
   'user_connector_accounts',
   'user_connector_profiles',
+  'custom_api_definitions',
+  'custom_api_endpoint_tools',
+  'custom_api_confirmations',
+  'custom_api_call_audit_logs',
   'user_platform_skill_bindings',
   'user_custom_skills',
   'user_custom_skill_documents',
@@ -104,6 +108,7 @@ const REQUIRED_COLUMNS = [
   ['task_session_recent_messages', 'runtime_generation'],
   ['task_session_recent_messages', 'updated_at'],
   ['task_session_runs', 'mcp_tool_snapshot_id'],
+  ['task_session_connector_bindings', 'connector_instance_key'],
   ['task_session_connector_bindings', 'profile_id'],
   ['task_session_connector_bindings', 'runtime_provider_id'],
   ['task_session_connector_bindings', 'runtime_env_version'],
@@ -150,6 +155,23 @@ const REQUIRED_COLUMNS = [
   ['project_storage_resources', 'last_checked_at'],
   ['connector_auth_requests', 'profile_id'],
   ['connector_auth_requests', 'profile_draft_json'],
+  ['custom_api_definitions', 'owner_user_id'],
+  ['custom_api_definitions', 'slug'],
+  ['custom_api_definitions', 'base_url'],
+  ['custom_api_definitions', 'allowed_hosts_json'],
+  ['custom_api_endpoint_tools', 'definition_id'],
+  ['custom_api_endpoint_tools', 'tool_slug'],
+  ['custom_api_endpoint_tools', 'input_schema_json'],
+  ['custom_api_endpoint_tools', 'request_mapping_json'],
+  ['custom_api_endpoint_tools', 'response_mapping_json'],
+  ['custom_api_endpoint_tools', 'review_status'],
+  ['custom_api_endpoint_tools', 'operation_type'],
+  ['custom_api_call_audit_logs', 'request_id'],
+  ['custom_api_call_audit_logs', 'tool_name'],
+  ['custom_api_call_audit_logs', 'effective_risk_level'],
+  ['custom_api_call_audit_logs', 'status'],
+  ['custom_api_confirmations', 'arguments_hash'],
+  ['custom_api_confirmations', 'expires_at'],
   ['platform_skills', 'slug'],
   ['platform_skills', 'metadata_json'],
   ['platform_skills', 'published_revision_id'],
@@ -246,6 +268,7 @@ const REQUIRED_INDEXES = [
   'idx_task_session_run_events_run_sequence',
   'idx_task_session_deliverable_artifacts_storage_key',
   'idx_task_session_sandbox_bindings_session_id',
+  'idx_task_session_connector_bindings_session_instance',
   'idx_task_session_connector_bindings_session_connector',
   'idx_task_session_mcp_recovery_jobs_recovery_key',
   'idx_task_session_deployment_sync_jobs_sync_key',
@@ -266,6 +289,10 @@ const REQUIRED_INDEXES = [
   'idx_connector_guide_policies_connector_key',
   'idx_connector_guide_revisions_policy_version',
   'idx_task_session_connector_guides_session_connector',
+  'idx_custom_api_definitions_owner_slug',
+  'idx_custom_api_endpoint_tools_definition_slug',
+  'idx_custom_api_call_audit_logs_request_id',
+  'idx_custom_api_confirmations_lookup',
   'idx_platform_runtime_artifacts_type_version',
   'idx_platform_runtime_artifact_channels_unique',
   'idx_user_credits_user_id',
@@ -323,6 +350,7 @@ CREATE TABLE IF NOT EXISTS task_session_connector_bindings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   task_session_id TEXT NOT NULL,
   connector_key TEXT NOT NULL,
+  connector_instance_key TEXT NOT NULL,
   profile_id TEXT,
   desired_state TEXT NOT NULL DEFAULT 'detached',
   runtime_status TEXT NOT NULL DEFAULT 'unknown',
@@ -498,8 +526,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_user_connector_profiles_user_connector_pro
   ON user_connector_profiles(user_id, connector_key, profile_name);
 CREATE INDEX IF NOT EXISTS idx_user_connector_profiles_user_id ON user_connector_profiles(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_connector_profiles_user_connector ON user_connector_profiles(user_id, connector_key);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_connector_bindings_session_connector
-  ON task_session_connector_bindings(task_session_id, connector_key);
 CREATE INDEX IF NOT EXISTS idx_task_session_connector_bindings_task_session_id
   ON task_session_connector_bindings(task_session_id);
 CREATE INDEX IF NOT EXISTS idx_task_session_connector_bindings_orchestrator_session_id
@@ -556,6 +582,7 @@ CREATE INDEX IF NOT EXISTS idx_platform_runtime_artifact_channels_published_rele
   ON platform_runtime_artifact_channels(published_release_id);
 
 ALTER TABLE IF EXISTS task_session_connector_bindings
+  ADD COLUMN IF NOT EXISTS connector_instance_key TEXT,
   ADD COLUMN IF NOT EXISTS profile_id TEXT,
   ADD COLUMN IF NOT EXISTS runtime_provider_id TEXT,
   ADD COLUMN IF NOT EXISTS runtime_env_version INTEGER NOT NULL DEFAULT 0,
@@ -569,6 +596,37 @@ ALTER TABLE IF EXISTS task_session_connector_bindings
   ADD COLUMN IF NOT EXISTS enabled_tools JSONB,
   ADD COLUMN IF NOT EXISTS session_config_json JSONB,
   ADD COLUMN IF NOT EXISTS definition_snapshot_json JSONB;
+
+UPDATE task_session_connector_bindings
+SET connector_instance_key =
+  CASE
+    WHEN connector_key = 'custom_mcp' AND profile_id IS NOT NULL AND profile_id <> ''
+      THEN connector_key || ':' || profile_id
+    ELSE connector_key
+  END
+WHERE connector_instance_key IS NULL OR connector_instance_key = '';
+
+UPDATE task_session_connector_bindings
+SET desired_state = 'detached',
+    runtime_status = 'disconnected',
+    runtime_provider_id = NULL,
+    runtime_attached_tools_json = '[]'::jsonb,
+    runtime_last_stopped_at = COALESCE(runtime_last_stopped_at, NOW()),
+    recovery_queued_at = NULL,
+    recovery_started_at = NULL,
+    recovery_completed_at = NULL,
+    last_error = 'custom_mcp_profile_missing_after_instance_key_migration'
+WHERE connector_key = 'custom_mcp'
+  AND (profile_id IS NULL OR profile_id = '');
+
+ALTER TABLE IF EXISTS task_session_connector_bindings
+  ALTER COLUMN connector_instance_key SET NOT NULL;
+
+DROP INDEX IF EXISTS idx_task_session_connector_bindings_session_connector;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_connector_bindings_session_instance
+  ON task_session_connector_bindings(task_session_id, connector_instance_key);
+CREATE INDEX IF NOT EXISTS idx_task_session_connector_bindings_session_connector
+  ON task_session_connector_bindings(task_session_id, connector_key);
 
 ALTER TABLE IF EXISTS connector_guide_policies
   ADD COLUMN IF NOT EXISTS connector_key TEXT,
@@ -677,6 +735,128 @@ WHERE bindings.profile_id IS NULL
   AND profiles.user_id = sessions.user_id
   AND profiles.connector_key = bindings.connector_key
   AND profiles.is_default = TRUE;
+
+UPDATE task_session_connector_bindings
+SET connector_instance_key =
+  CASE
+    WHEN connector_key = 'custom_mcp' AND profile_id IS NOT NULL AND profile_id <> ''
+      THEN connector_key || ':' || profile_id
+    ELSE connector_key
+  END
+WHERE connector_instance_key IS NULL
+   OR connector_instance_key = ''
+   OR connector_instance_key = 'custom_mcp';
+`;
+
+const customApiTablesSQL = `
+CREATE TABLE IF NOT EXISTS custom_api_definitions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_user_id TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT 'user',
+  slug TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  base_url TEXT NOT NULL,
+  auth_mode TEXT NOT NULL DEFAULT 'none',
+  default_headers_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  allowed_hosts_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'draft',
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS custom_api_endpoint_tools (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  definition_id UUID NOT NULL REFERENCES custom_api_definitions(id) ON DELETE CASCADE,
+  tool_slug TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  method TEXT NOT NULL,
+  path_template TEXT NOT NULL,
+  operation_type TEXT NOT NULL DEFAULT 'read',
+  input_schema_json JSONB NOT NULL,
+  request_mapping_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  response_mapping_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  risk_level TEXT NOT NULL DEFAULT 'low',
+  computed_risk_level TEXT NOT NULL DEFAULT 'low',
+  risk_report_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  confirmation_policy TEXT NOT NULL DEFAULT 'none',
+  review_status TEXT NOT NULL DEFAULT 'draft',
+  reviewed_by TEXT,
+  reviewed_at TIMESTAMP,
+  review_notes TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS custom_api_confirmations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  task_session_id TEXT NOT NULL,
+  endpoint_tool_id UUID NOT NULL REFERENCES custom_api_endpoint_tools(id) ON DELETE CASCADE,
+  tool_name TEXT NOT NULL,
+  arguments_hash TEXT NOT NULL,
+  effective_risk_level TEXT NOT NULL,
+  confirmation_text TEXT NOT NULL,
+  confirmed_by TEXT NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS custom_api_call_audit_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  task_session_id TEXT NOT NULL,
+  run_id TEXT,
+  definition_id UUID REFERENCES custom_api_definitions(id) ON DELETE SET NULL,
+  endpoint_tool_id UUID REFERENCES custom_api_endpoint_tools(id) ON DELETE SET NULL,
+  connector_profile_id TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  method TEXT NOT NULL,
+  operation_type TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  caller_type TEXT NOT NULL DEFAULT 'agent',
+  declared_risk_level TEXT NOT NULL,
+  computed_risk_level TEXT NOT NULL,
+  runtime_risk_level TEXT NOT NULL,
+  effective_risk_level TEXT NOT NULL,
+  resolved_url_hash TEXT,
+  resolved_url_redacted TEXT,
+  request_body_hash TEXT,
+  request_body_redacted_preview TEXT,
+  response_body_redacted_preview TEXT,
+  response_status INTEGER,
+  duration_ms INTEGER,
+  confirmation_id TEXT,
+  actor_context_json JSONB,
+  status TEXT NOT NULL DEFAULT 'started',
+  result_summary TEXT,
+  error_code TEXT,
+  debug_expires_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_api_definitions_owner_slug
+  ON custom_api_definitions (owner_user_id, slug);
+CREATE INDEX IF NOT EXISTS idx_custom_api_definitions_owner_status
+  ON custom_api_definitions (owner_user_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_api_endpoint_tools_definition_slug
+  ON custom_api_endpoint_tools (definition_id, tool_slug);
+CREATE INDEX IF NOT EXISTS idx_custom_api_endpoint_tools_review_status
+  ON custom_api_endpoint_tools (review_status);
+CREATE INDEX IF NOT EXISTS idx_custom_api_endpoint_tools_definition_status
+  ON custom_api_endpoint_tools (definition_id, review_status);
+CREATE INDEX IF NOT EXISTS idx_custom_api_confirmations_lookup
+  ON custom_api_confirmations (user_id, task_session_id, endpoint_tool_id);
+CREATE INDEX IF NOT EXISTS idx_custom_api_call_audit_logs_session_created
+  ON custom_api_call_audit_logs (task_session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_custom_api_call_audit_logs_tool_created
+  ON custom_api_call_audit_logs (endpoint_tool_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_custom_api_call_audit_logs_request_id
+  ON custom_api_call_audit_logs (request_id);
 `;
 
 const createTablesSQL = `
@@ -1613,6 +1793,7 @@ export async function runMigration() {
     
     // 执行创建表的 SQL
     await db.execute(sql.raw(createTablesSQL));
+    await db.execute(sql.raw(customApiTablesSQL));
     await db.execute(sql.raw(deliverableTablesSQL));
     await db.execute(sql.raw(backfillMessageStorageSQL));
     
@@ -1662,6 +1843,7 @@ export async function runMigration() {
     console.log('  - search_records');
     console.log('  - sandbox_execution_environments');
     console.log('  - user_connector_accounts');
+    console.log('  - custom_api_definitions / custom_api_endpoint_tools');
     console.log('  - task_session_connector_bindings');
     console.log('  - connector_guide_policies');
     console.log('  - connector_guide_revisions');
@@ -1686,6 +1868,7 @@ export async function runConnectorMigration() {
   try {
     await ensureDatabaseConnection({ retries: 5, delayMs: 1200 });
     await db.execute(sql.raw(connectorTablesSQL));
+    await db.execute(sql.raw(customApiTablesSQL));
     return true;
   } catch (error) {
     console.error('❌ 连接器表迁移失败:', error);

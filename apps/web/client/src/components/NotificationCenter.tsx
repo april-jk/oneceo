@@ -3,6 +3,10 @@ import { Bell, Check, CheckCheck, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+  OPEN_NOTIFICATION_CENTER_EVENT,
+  CLOSE_NOTIFICATION_CENTER_EVENT,
+} from '@/lib/notification-center-events';
 
 interface Notification {
   id: string;
@@ -15,18 +19,27 @@ interface Notification {
   createdAt: string;
 }
 
-interface NotificationCenterProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}
-
-export function NotificationCenter({ open, onOpenChange }: NotificationCenterProps) {
+export function NotificationCenter() {
+  const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [filter, setFilter] = useState<'all' | 'unread'>('all');
+
+  // 监听打开/关闭事件
+  useEffect(() => {
+    const handleOpen = () => setOpen(true);
+    const handleClose = () => setOpen(false);
+
+    window.addEventListener(OPEN_NOTIFICATION_CENTER_EVENT, handleOpen);
+    window.addEventListener(CLOSE_NOTIFICATION_CENTER_EVENT, handleClose);
+    return () => {
+      window.removeEventListener(OPEN_NOTIFICATION_CENTER_EVENT, handleOpen);
+      window.removeEventListener(CLOSE_NOTIFICATION_CENTER_EVENT, handleClose);
+    };
+  }, []);
 
   // 获取通知列表
   const fetchNotifications = useCallback(async (pageNum: number, append = false) => {
@@ -49,10 +62,10 @@ export function NotificationCenter({ open, onOpenChange }: NotificationCenterPro
       if (append) {
         setNotifications((prev) => [...prev, ...data.items]);
       } else {
-        setNotifications(data.items);
+        setNotifications(data.items || []);
       }
-      setUnreadCount(data.unreadCount);
-      setHasMore(data.items.length === 20);
+      setUnreadCount(data.unreadCount || 0);
+      setHasMore((data.items || []).length === 20);
     } catch (error) {
       console.error('获取通知失败:', error);
     } finally {
@@ -68,7 +81,7 @@ export function NotificationCenter({ open, onOpenChange }: NotificationCenterPro
       });
       if (!response.ok) throw new Error('获取未读数量失败');
       const data = await response.json();
-      setUnreadCount(data.count);
+      setUnreadCount(data.count || 0);
     } catch (error) {
       console.error('获取未读数量失败:', error);
     }
@@ -78,16 +91,15 @@ export function NotificationCenter({ open, onOpenChange }: NotificationCenterPro
   useEffect(() => {
     if (open) {
       setPage(1);
+      setFilter('all');
       fetchNotifications(1);
     }
   }, [open, fetchNotifications]);
 
-  // 定期刷新未读数量
+  // 初始加载未读数量
   useEffect(() => {
-    if (!open) {
-      fetchUnreadCount();
-    }
-  }, [open, fetchUnreadCount]);
+    fetchUnreadCount();
+  }, [fetchUnreadCount]);
 
   // 标记单条为已读
   const handleMarkAsRead = async (id: string) => {
@@ -175,7 +187,7 @@ export function NotificationCenter({ open, onOpenChange }: NotificationCenterPro
       {/* 背景遮罩 */}
       <div
         className="absolute inset-0 bg-black/50"
-        onClick={() => onOpenChange(false)}
+        onClick={() => setOpen(false)}
       />
 
       {/* 通知中心面板 */}
@@ -206,7 +218,7 @@ export function NotificationCenter({ open, onOpenChange }: NotificationCenterPro
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => onOpenChange(false)}
+              onClick={() => setOpen(false)}
             >
               <X className="w-4 h-4" />
             </Button>
@@ -218,14 +230,14 @@ export function NotificationCenter({ open, onOpenChange }: NotificationCenterPro
           <Button
             variant={filter === 'all' ? 'default' : 'ghost'}
             size="sm"
-            onClick={() => setFilter('all')}
+            onClick={() => { setFilter('all'); setPage(1); fetchNotifications(1); }}
           >
             全部
           </Button>
           <Button
             variant={filter === 'unread' ? 'default' : 'ghost'}
             size="sm"
-            onClick={() => setFilter('unread')}
+            onClick={() => { setFilter('unread'); setPage(1); fetchNotifications(1); }}
           >
             未读
             {unreadCount > 0 && (

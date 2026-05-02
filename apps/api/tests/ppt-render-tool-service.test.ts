@@ -23,6 +23,9 @@ class Slide {
     if (typeof value !== 'string' && !Array.isArray(value)) {
       throw new Error('addText received non-string value: ' + typeof value);
     }
+    if (typeof value === 'string' && value.includes('[object Object]')) {
+      throw new Error('addText received object placeholder text');
+    }
   }
   addShape() {}
   addImage() {}
@@ -175,7 +178,13 @@ module.exports = PptxGen;
           layoutFamily: 'pipeline',
           contentBlocks: [
             { type: 'detail', text: '汉代已有正月十五观灯活动，并逐步形成节日仪式' },
-            { type: 'detail', text: '唐宋时期城市夜游和灯市兴盛，赏灯成为公共娱乐' },
+            {
+              type: 'bullets',
+              items: [
+                { text: '唐宋时期城市夜游和灯市兴盛' },
+                { label: '民间', content: '赏灯逐渐成为公共娱乐' },
+              ],
+            },
           ],
         },
       ],

@@ -90,5 +90,20 @@ export function createBillingManagementRoutes() {
   // 计费调试工具
   router.post('/debug/llm-request', proxyToApi);
 
+  // 激活码管理
+  router.get('/activation-codes', proxyToApi);
+  router.get('/activation-codes/stats', proxyToApi);
+  router.get('/activation-codes/export', proxyToApi);
+  router.get('/activation-codes/:id', proxyToApi);
+  router.post('/activation-codes', proxyToApi);
+  router.put('/activation-codes/:id', proxyToApi);
+  router.delete('/activation-codes/:id', proxyToApi);
+
+  // 激活码分组管理
+  router.get('/activation-code-groups', proxyToApi);
+  router.post('/activation-code-groups', proxyToApi);
+  router.put('/activation-code-groups/:id', proxyToApi);
+  router.delete('/activation-code-groups/:id', proxyToApi);
+
   return router;
 }

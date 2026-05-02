@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { BillingStatsDashboard } from './BillingStatsDashboard';
 import { BillingUsageLogs } from './BillingUsageLogs';
 import { BillingDebugPanel } from './BillingDebugPanel';
+import { ActivationCodeManagement } from './ActivationCodeManagement';
 import { getBillingErrorMessage, readBillingResponseError, type BillingNotify } from './billing-feedback';
 import { AdminButton, AdminDetailShell, AdminTabs, AuditTimeline, DangerConfirmDialog, DiffDrawer, IdToken, StatusBadge, getAdminActionIcon, getAdminModuleIcon } from './admin-ui';
 
@@ -191,7 +192,7 @@ const MAX_CACHE_HIT_PERCENT = 100;
 const MAX_CACHE_CREATION_PERCENT = 1000;
 
 export function BillingManagementSection({ onOpenUser, onOpenConversation, onNotify }: BillingManagementSectionProps) {
-  const [activeTab, setActiveTab] = useState<'pricing' | 'stats' | 'logs' | 'debug'>('stats');
+  const [activeTab, setActiveTab] = useState<'pricing' | 'stats' | 'activationCodes' | 'logs' | 'debug'>('stats');
   const [pricing, setPricing] = useState<Pricing[]>([]);
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
   const [modelCandidates, setModelCandidates] = useState<ModelCandidate[]>([]);
@@ -372,6 +373,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
   const tabs = [
     { key: 'stats' as const, label: '平台统计' },
     { key: 'pricing' as const, label: '定价配置' },
+    { key: 'activationCodes' as const, label: '激活码管理' },
     { key: 'logs' as const, label: '使用明细' },
     { key: 'debug' as const, label: '调试工具' },
   ];
@@ -2643,6 +2645,13 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
         <div className="billing-stats-layout-rail billing-stats-layout-fill">
           <BillingStatsDashboard onNotify={onNotify} />
         </div>
+      )}
+
+      {/* Activation Codes Tab */}
+      {activeTab === 'activationCodes' && (
+        <section className="sub-panel user-management-list-panel">
+          <ActivationCodeManagement onNotify={onNotify} />
+        </section>
       )}
 
       {/* Logs Tab */}

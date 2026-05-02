@@ -1695,6 +1695,25 @@ export async function runMigration() {
       console.error('[MIGRATION] activation code tables failed (non-fatal):', activationCodeErr);
     }
 
+    // 迁移：将定价基础单位从 1k tokens 切换到 1M tokens（必须在插入定价数据之前执行）
+    await db.execute(sql.raw(`
+      DO $$ BEGIN
+        ALTER TABLE model_pricing RENAME COLUMN prompt_price_per_1k_tokens TO prompt_price_per_1m_tokens;
+      EXCEPTION WHEN undefined_column THEN NULL;
+      END $$;
+
+      DO $$ BEGIN
+        ALTER TABLE model_pricing RENAME COLUMN completion_price_per_1k_tokens TO completion_price_per_1m_tokens;
+      EXCEPTION WHEN undefined_column THEN NULL;
+      END $$;
+
+      UPDATE model_pricing SET prompt_price_per_1m_tokens = prompt_price_per_1m_tokens * 1000
+        WHERE prompt_price_per_1m_tokens < 1000;
+
+      UPDATE model_pricing SET completion_price_per_1m_tokens = completion_price_per_1m_tokens * 1000
+        WHERE completion_price_per_1m_tokens < 1000;
+    `));
+
     // 插入当前使用的模型默认定价（如不存在）
     await db.execute(sql.raw(`
       WITH seed(model, model_provider, prompt_price_per_1m_tokens, completion_price_per_1m_tokens) AS (
@@ -1725,25 +1744,6 @@ export async function runMigration() {
       UPDATE model_pricing
       SET model_provider = 'qwen', updated_at = NOW()
       WHERE LOWER(model) LIKE 'qwen%';
-    `));
-
-    // 迁移：将定价基础单位从 1k tokens 切换到 1M tokens
-    await db.execute(sql.raw(`
-      DO $$ BEGIN
-        ALTER TABLE model_pricing RENAME COLUMN prompt_price_per_1k_tokens TO prompt_price_per_1m_tokens;
-      EXCEPTION WHEN undefined_column THEN NULL;
-      END $$;
-
-      DO $$ BEGIN
-        ALTER TABLE model_pricing RENAME COLUMN completion_price_per_1k_tokens TO completion_price_per_1m_tokens;
-      EXCEPTION WHEN undefined_column THEN NULL;
-      END $$;
-
-      UPDATE model_pricing SET prompt_price_per_1m_tokens = prompt_price_per_1m_tokens * 1000
-        WHERE prompt_price_per_1m_tokens < 1000;
-
-      UPDATE model_pricing SET completion_price_per_1m_tokens = completion_price_per_1m_tokens * 1000
-        WHERE completion_price_per_1m_tokens < 1000;
     `));
 
     // 迁移：添加 multiplier 列

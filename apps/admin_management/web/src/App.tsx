@@ -100,8 +100,11 @@ const OsacReleaseManagementSection = lazy(() =>
 const BillingManagementSection = lazy(() =>
   import('./components/BillingManagementSection').then((module) => ({ default: module.BillingManagementSection }))
 );
+const NotificationManagement = lazy(() =>
+  import('./components/NotificationManagement').then((module) => ({ default: module.NotificationManagement }))
+);
 
-type SectionKey = 'kvm' | 'operations' | 'deployment' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit' | 'billing';
+type SectionKey = 'kvm' | 'operations' | 'deployment' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit' | 'billing' | 'notification';
 type NavGroupKey = 'runtime' | 'platform' | 'billing';
 type ToastTone = 'error' | 'success' | 'warning' | 'info';
 type SandboxDetailTab = 'overview' | 'files' | 'processes' | 'connectivity' | 'archive' | 'terminal';
@@ -490,6 +493,16 @@ const NAV_ITEMS: Array<{
     iconKey: 'billing',
     description: '查看平台积分消耗、调整用户余额、配置模型定价。',
     signal: '消费统计',
+  },
+  {
+    key: 'notification',
+    group: 'platform',
+    label: '通知管理',
+    subtitle: '系统通知与下发',
+    tag: 'NTF',
+    iconKey: 'notification',
+    description: '管理系统通知，向用户下发通知。',
+    signal: '通知状态',
   },
 ];
 
@@ -12043,6 +12056,13 @@ export default function App() {
             }}
             onNotify={pushToast}
           />
+        </Suspense>
+      );
+    }
+    if (activeSection === 'notification') {
+      return (
+        <Suspense fallback={<div className="p-6">加载中...</div>}>
+          <NotificationManagement onNotify={pushToast} />
         </Suspense>
       );
     }

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import {
   Activity,
   Archive,
+  Bell,
   Binary,
   BookOpenText,
   Bot,
@@ -61,7 +62,8 @@ export type AdminModuleIconKey =
   | 'deployment'
   | 'operations'
   | 'kvm'
-  | 'terminal';
+  | 'terminal'
+  | 'notification';
 
 export type AdminStatusIconKey =
   | 'healthy'
@@ -124,6 +126,7 @@ export function getAdminModuleIcon(key: AdminModuleIconKey, options?: IconOption
     case 'operations': return <Activity {...props} />;
     case 'kvm': return <Server {...props} />;
     case 'terminal': return <Terminal {...props} />;
+    case 'notification': return <Bell {...props} />;
     default: return <Box {...props} />;
   }
 }

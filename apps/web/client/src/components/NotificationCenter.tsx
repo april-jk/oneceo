@@ -59,11 +59,20 @@ export function NotificationCenter() {
       if (!response.ok) throw new Error('获取通知失败');
       const data = await response.json();
 
-      // 按未读优先、时间倒序排序
+      // 按未读优先、优先级、时间倒序排序
+      const priorityOrder: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
       const sortedItems = (data.items || []).sort((a: Notification, b: Notification) => {
+        // 1. 未读优先
         if (a.isRead !== b.isRead) {
           return a.isRead ? 1 : -1;
         }
+        // 2. 优先级（urgent > high > normal > low）
+        const priorityA = priorityOrder[a.priority] ?? 2;
+        const priorityB = priorityOrder[b.priority] ?? 2;
+        if (priorityA !== priorityB) {
+          return priorityA - priorityB;
+        }
+        // 3. 时间倒序（最新优先）
         return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
       });
 
@@ -315,10 +324,6 @@ export function NotificationCenter() {
                   <span>{formatFullTime(selectedNotification.publishedAt || selectedNotification.createdAt)}</span>
                   <span>·</span>
                   <span>{getTypeLabel(selectedNotification.type)}</span>
-                  <span>·</span>
-                  <span className={getPriorityColor(selectedNotification.priority)}>
-                    {getPriorityLabel(selectedNotification.priority)}
-                  </span>
                 </div>
               </div>
 
@@ -374,9 +379,6 @@ export function NotificationCenter() {
                           <div className="flex items-center gap-2 mt-2">
                             <span className="text-xs text-gray-400">
                               {formatTime(notification.publishedAt || notification.createdAt)}
-                            </span>
-                            <span className={`text-xs ${getPriorityColor(notification.priority)}`}>
-                              {getPriorityLabel(notification.priority)}
                             </span>
                           </div>
                         </div>

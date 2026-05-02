@@ -25,6 +25,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import { normalizeLanguage } from "@/i18n";
 import {
+  Bell,
   ChevronLeft,
   Copy,
   Diamond,
@@ -877,25 +878,33 @@ export function SettingsPanel({
                       {t("settings.notificationsDescription")}
                     </p>
                   </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="email-notifications" className="text-sm">
-                      {t("settings.emailNotifications")}
-                    </Label>
-                    <Switch
-                      id="email-notifications"
-                      checked={emailNotifications}
-                      onCheckedChange={setEmailNotifications}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="push-notifications" className="text-sm">
-                      {t("settings.pushNotifications")}
-                    </Label>
-                    <Switch
-                      id="push-notifications"
-                      checked={pushNotifications}
-                      onCheckedChange={setPushNotifications}
-                    />
+                  <div className="rounded-xl border border-border/60 divide-y divide-border/60">
+                    <div className="flex items-center justify-between px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <Mail className="h-4 w-4 text-muted-foreground" />
+                        <Label htmlFor="email-notifications" className="text-sm">
+                          {t("settings.emailNotifications")}
+                        </Label>
+                      </div>
+                      <Switch
+                        id="email-notifications"
+                        checked={emailNotifications}
+                        onCheckedChange={setEmailNotifications}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <Bell className="h-4 w-4 text-muted-foreground" />
+                        <Label htmlFor="push-notifications" className="text-sm">
+                          {t("settings.pushNotifications")}
+                        </Label>
+                      </div>
+                      <Switch
+                        id="push-notifications"
+                        checked={pushNotifications}
+                        onCheckedChange={setPushNotifications}
+                      />
+                    </div>
                   </div>
                 </div>
               </TabsContent>

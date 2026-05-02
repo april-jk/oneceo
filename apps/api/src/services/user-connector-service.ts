@@ -211,6 +211,41 @@ function buildSecretPayload(
   existing?: ConnectorAccountSecret | null
 ): ConnectorAccountSecret | null {
   const current = existing || {};
+  if (connectorKey === 'custom_api') {
+    const accessToken =
+      asText(credentials.accessToken) ||
+      asText(credentials.apiKey) ||
+      asText(credentials.token) ||
+      asText(current.accessToken);
+    const username = asText(credentials.username) || asText((current as any).username);
+    const password = asText(credentials.password) || asText((current as any).password);
+    const headerName = asText(credentials.headerName) || asText((current as any).headerName);
+    if (!accessToken && (!username || !password)) return null;
+    return {
+      accessToken: accessToken || undefined,
+      ...(headerName ? { headerName } : {}),
+      ...(username ? { username } : {}),
+      ...(password ? { password } : {}),
+    } as ConnectorAccountSecret;
+  }
+  if (connectorKey === 'custom_mcp') {
+    const headers =
+      credentials.headers && typeof credentials.headers === 'object' && !Array.isArray(credentials.headers)
+        ? (credentials.headers as Record<string, unknown>)
+        : {};
+    const customMcpHeaders: Record<string, string> = {};
+    for (const [key, value] of Object.entries(headers)) {
+      const headerName = asText(key);
+      const headerValue = asText(value);
+      if (headerName && headerValue) {
+        customMcpHeaders[headerName] = headerValue;
+      }
+    }
+    return {
+      customMcpHeaders,
+      accessToken: Object.keys(customMcpHeaders).length > 0 ? '__custom_mcp_headers__' : '__custom_mcp_no_auth__',
+    } as ConnectorAccountSecret;
+  }
   if (connectorKey === 'postgres') {
     const dsn = asText(credentials.dsn) || asText(current.dsn);
     return dsn ? { dsn } : null;

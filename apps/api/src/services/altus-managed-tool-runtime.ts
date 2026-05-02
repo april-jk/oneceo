@@ -472,6 +472,36 @@ function isLegacySlackMcpShellCommand(value: string) {
   );
 }
 
+function isCustomApiBypassShellCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('curl ') ||
+    normalized.includes('wget ') ||
+    normalized.includes('set custom_api') ||
+    normalized.includes('custom_api_token') ||
+    normalized.includes('custom_api_api_key') ||
+    normalized.includes('authorization: bearer')
+  );
+}
+
+function isCustomMcpBypassShellCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('curl ') ||
+    normalized.includes('wget ') ||
+    normalized.includes('npx ') ||
+    normalized.includes('node ') ||
+    normalized.includes('python ') ||
+    normalized.includes('docker ') ||
+    normalized.includes('stdio') ||
+    normalized.includes('custom_mcp_token') ||
+    normalized.includes('custom_mcp_api_key') ||
+    normalized.includes('authorization: bearer')
+  );
+}
+
 function extractLeadingCdTarget(value: string) {
   const raw = asText(value).trim();
   if (!raw.toLowerCase().startsWith('cd ')) {
@@ -1195,6 +1225,30 @@ export class AltusManagedToolRuntime {
             'slack_legacy_mcp_shell_blocked: Slack is attached through oneceo API broker + Composio Tool Router.',
             'Do not install or run local Slack MCP tooling, and do not place Slack or Composio tokens in the sandbox.',
             'Call load_connector_guide(connectorKey=slack), then use the attached slack__COMPOSIO_SEARCH_TOOLS and related Slack router tools.',
+          ].join('\n')
+        );
+      }
+      if (
+        isCustomApiBypassShellCommand(command) &&
+        (await connectorGuideService.getActiveGuideForConnector(this.input.sessionId, 'custom_api'))
+      ) {
+        throw new Error(
+          [
+            'custom_api_shell_broker_bypass_blocked: Custom API is attached through the oneceo API broker.',
+            'Do not call external Custom API endpoints from shell or place Custom API tokens in the sandbox.',
+            'Call load_connector_guide(connectorKey=custom_api), then use the attached custom_api MCP tools.',
+          ].join('\n')
+        );
+      }
+      if (
+        isCustomMcpBypassShellCommand(command) &&
+        (await connectorGuideService.getActiveGuideForConnector(this.input.sessionId, 'custom_mcp'))
+      ) {
+        throw new Error(
+          [
+            'custom_mcp_shell_broker_bypass_blocked: Custom MCP is attached through the oneceo API broker.',
+            'Do not run local stdio MCP servers, curl remote MCP URLs, or place Custom MCP secrets in the sandbox.',
+            'Call load_connector_guide(connectorKey=custom_mcp), then use the attached custom_mcp provider tools.',
           ].join('\n')
         );
       }

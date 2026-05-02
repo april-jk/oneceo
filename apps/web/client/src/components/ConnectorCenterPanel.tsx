@@ -60,6 +60,7 @@ import {
   formatConnectorStatus,
   resolveConnectorIcon,
 } from "@/lib/connector-ui";
+import { CustomMcpManagementPanel } from "@/components/connectors/CustomMcpManagementPanel";
 import i18n from "@/i18n";
 import { cn } from "@/lib/utils";
 
@@ -999,6 +1000,16 @@ export function ConnectorCenterPanel({
     ) : null;
 
   const renderDirectory = () => {
+    if (activeTab === "custom_mcp") {
+      return (
+        <CustomMcpManagementPanel
+          profiles={profilesByConnector.custom_mcp || []}
+          query={deferredQuery}
+          targetSessionId={effectiveTargetSessionId}
+          onProfilesChanged={load}
+        />
+      );
+    }
     if (activeTab !== "app") {
       return renderEmptyTab(activeTab);
     }

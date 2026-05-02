@@ -20,7 +20,7 @@ export type ConnectorGuide = {
 export const POSTGRES_DSN_TEMPLATE =
   "postgresql://user:password@host:5432/database?sslmode=require";
 
-export function getConnectorGuides(t: TFunction): Record<ConnectorKey, ConnectorGuide> {
+export function getConnectorGuides(t: TFunction): Partial<Record<ConnectorKey, ConnectorGuide>> {
   return {
     github: {
       intro: t("connectors.guides.github.intro"),

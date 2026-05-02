@@ -111,6 +111,35 @@ function imageUrl(slot) {
   return text(slot?.url || slot?.src);
 }
 
+function decodeLoose(value) {
+  try {
+    return decodeURIComponent(String(value || ''));
+  } catch {
+    return String(value || '');
+  }
+}
+
+function imageQualityIssue(slot, url) {
+  const metadata = [
+    url,
+    decodeLoose(url),
+    slot?.alt,
+    slot?.title,
+    slot?.caption,
+    slot?.sourceUrl,
+    slot?.usageHint,
+  ].map((item) => String(item || '').toLowerCase()).join(' ');
+  const badPatterns = [
+    /手抄报|小报|电子小报|电子手抄报/,
+    /模板|模版|template|ppt模板|word格式|可打印|下载|素材下载/,
+    /千库|昵图|包图|摄图|觅知|我图|六图|588ku|nipic|ibaotu|ooopic|sucai|素材网/,
+    /31款|合集|大全|海报模板|边框素材/,
+    /watermark|stock photo|正版授权/,
+  ];
+  if (badPatterns.some((pattern) => pattern.test(metadata))) return 'promotional_or_template_image';
+  return '';
+}
+
 function imageSlotsForSlide(slots) {
   const seen = new Set();
   const result = [];
@@ -162,6 +191,11 @@ async function downloadImages(slots, slideIndex, maxCount, usedUrls) {
   const result = [];
   for (const slot of imageSlotsForSlide(slots)) {
     const url = imageUrl(slot);
+    const qualityIssue = imageQualityIssue(slot, url);
+    if (qualityIssue) {
+      warnings.push({ slide: slideIndex, code: 'low_quality_image_skipped', reason: qualityIssue, url, alt: text(slot?.alt || slot?.title).slice(0, 80) });
+      continue;
+    }
     if (usedUrls.has(url) && result.length > 0) {
       warnings.push({ slide: slideIndex, code: 'reused_image_skipped', url });
       continue;
@@ -285,6 +319,45 @@ function splitBlocksForColumns(blocks) {
   return [usable, []];
 }
 
+function totalContentLength(blocks) {
+  return blocks.map((block) => normalizeForCompare(blockText(block)).length).reduce((sum, value) => sum + value, 0);
+}
+
+function slideLooksLowDensity(pageType, layoutFamily, blocks, showCoreMessage, hasImage) {
+  if (['cover', 'section-divider', 'closing', 'quote'].includes(pageType)) return false;
+  if (layoutFamily.includes('big-quote') || layoutFamily.includes('question')) return false;
+  return !hasImage && blocks.length < 2 && (totalContentLength(blocks) + normalizeForCompare(showCoreMessage).length) < 70;
+}
+
+function comparisonSemanticIssue(item, title, coreMessage, blocks) {
+  const family = text(item.layoutFamily || item.layout || item.visualLayout).toLowerCase().replace(/_/g, '-');
+  if (family.includes('regional-compare') || family.includes('two-column')) return '';
+  if (text(item.leftLabel) || text(item.rightLabel)) return '';
+  const haystack = [title, coreMessage, ...blocks.map((block) => blockText(block))].join(' ');
+  if (/(美食|汤圆|元宵|食材|南方|北方|地域|民俗活动|舞龙|舞狮|灯会|习俗|种类|类型|分类)/.test(haystack)) {
+    return 'semantic_compare_not_before_after';
+  }
+  return '';
+}
+
+function semanticLayoutFamily(layoutFamily, item, pageType, title, coreMessage, blocks) {
+  if ((layoutFamily.includes('before-after') || pageType === 'comparison') && comparisonSemanticIssue(item, title, coreMessage, blocks)) {
+    return 'regional-compare';
+  }
+  return layoutFamily;
+}
+
+function compareLabels(item, title, coreMessage, blocks, layoutFamily) {
+  if (text(item.leftLabel) || text(item.rightLabel)) {
+    return [text(item.leftLabel || 'LEFT'), text(item.rightLabel || 'RIGHT')];
+  }
+  const haystack = [title, coreMessage, ...blocks.map((block) => blockText(block))].join(' ');
+  if (/(南方|北方|汤圆|元宵|地域)/.test(haystack)) return ['北方 / 元宵', '南方 / 汤圆'];
+  if (/(民俗活动|舞龙|舞狮|灯会|习俗)/.test(haystack)) return ['传统仪式', '公共活动'];
+  if (layoutFamily.includes('regional-compare') || layoutFamily.includes('two-column')) return ['角度一', '角度二'];
+  return ['BEFORE', 'AFTER'];
+}
+
 function addInsightCards(slide, blocks, colors, options = {}) {
   const x = options.x ?? 0.76;
   const y = options.y ?? 2.14;
@@ -396,8 +469,6 @@ for (const [ordinal, item] of slides.entries()) {
   const slide = pptx.addSlide();
   const pageType = text(item.pageType) || 'content';
   const role = visualRoleFor(item, pageType, ordinal + 1);
-  const layoutFamily = layoutFamilyFor(item, pageType);
-  const colors = colorsForRole(role);
   const title = text(item.title);
   const coreMessage = text(item.coreMessage);
   const showCoreMessage = coreMessage && !isDuplicateText(coreMessage, title) ? coreMessage : '';
@@ -405,9 +476,18 @@ for (const [ordinal, item] of slides.entries()) {
     warnings.push({ slide: item.index, code: 'duplicate_core_message_skipped', text: coreMessage.slice(0, 80) });
   }
   const blocks = uniqueContentBlocks(contentBlocks(item), [title, coreMessage], item.index);
+  const layoutFamily = semanticLayoutFamily(layoutFamilyFor(item, pageType), item, pageType, title, showCoreMessage || coreMessage, blocks);
+  const colors = colorsForRole(role);
   const imageSlots = Array.isArray(item.imageSlots) ? item.imageSlots : [];
   const heroImages = await downloadImages(imageSlots, item.index, layoutFamily.includes('image-grid') ? 6 : 2, usedImageUrls);
   const heroImage = heroImages[0] || null;
+  if (slideLooksLowDensity(pageType, layoutFamily, blocks, showCoreMessage, Boolean(heroImage))) {
+    warnings.push({ slide: item.index, code: 'low_density_slide', layoutFamily, contentBlockCount: blocks.length });
+  }
+  const semanticIssue = comparisonSemanticIssue(item, title, showCoreMessage || coreMessage, blocks);
+  if (semanticIssue) {
+    warnings.push({ slide: item.index, code: 'layout_semantic_downgraded', from: 'before-after', to: layoutFamily, reason: semanticIssue });
+  }
 
   addSoftTexture(slide, colors, role);
   addChrome(slide, item, colors, slides.length);
@@ -506,7 +586,7 @@ for (const [ordinal, item] of slides.entries()) {
     continue;
   }
 
-  if (layoutFamily.includes('before-after') || pageType === 'comparison') {
+  if (layoutFamily.includes('before-after') || layoutFamily.includes('regional-compare') || layoutFamily.includes('two-column') || pageType === 'comparison') {
     slide.addText(title || coreMessage, { x: 0.68, y: 0.78, w: 7.8, h: 0.58, fontFace: serifFont, fontSize: 24, bold: true, color: colors.fg, fit: 'shrink' });
     if (showCoreMessage) slide.addText(showCoreMessage, { x: 0.72, y: 1.44, w: 7.8, h: 0.38, fontFace: sansFont, fontSize: 10.8, color: colors.muted, fit: 'shrink' });
     const [splitLeft, splitRight] = splitBlocksForColumns(blocks);
@@ -517,9 +597,10 @@ for (const [ordinal, item] of slides.entries()) {
     }
     const leftBlocks = splitLeft.slice(0, 3);
     const rightBlocks = splitRight.slice(0, 3);
+    const [leftLabel, rightLabel] = compareLabels(item, title, showCoreMessage || coreMessage, blocks, layoutFamily);
     const columns = [
-      { label: text(item.leftLabel || 'BEFORE'), x: 0.78, blocks: leftBlocks },
-      { label: text(item.rightLabel || 'AFTER'), x: 6.92, blocks: rightBlocks },
+      { label: leftLabel, x: 0.78, blocks: leftBlocks },
+      { label: rightLabel, x: 6.92, blocks: rightBlocks },
     ];
     columns.forEach((column) => {
       slide.addText(column.label, { x: column.x, y: 2.08, w: 4.8, h: 0.25, fontFace: monoFont, fontSize: 7.2, charSpace: 1.2, color: colors.muted, fit: 'shrink' });

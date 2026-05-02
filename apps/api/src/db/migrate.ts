@@ -62,6 +62,7 @@ const REQUIRED_TABLES = [
   'cache_pricing_config',
   'credit_activation_codes',
   'credit_activation_code_uses',
+  'credit_activation_code_groups',
 ] as const;
 
 const REQUIRED_COLUMNS = [
@@ -282,11 +283,14 @@ const REQUIRED_INDEXES = [
   'idx_cache_pricing_config_provider_active',
   'idx_activation_codes_code',
   'idx_activation_codes_status',
+  'idx_activation_codes_group_id',
   'idx_activation_codes_batch_id',
   'idx_activation_codes_expires_at',
   'idx_activation_codes_used_by',
   'idx_activation_code_uses_code_id',
   'idx_activation_code_uses_user_id',
+  'idx_activation_code_groups_name',
+  'idx_activation_code_groups_status',
 ] as const;
 
 /**
@@ -1439,7 +1443,7 @@ CREATE INDEX IF NOT EXISTS idx_task_session_workspace_cache_updated_at
   ON task_session_workspace_cache(updated_at);
 `;
 
-const billingTablesSQL = `
+const billingCoreTablesSQL = `
 -- 用户积分余额表
 CREATE TABLE IF NOT EXISTS user_credits (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1538,6 +1542,22 @@ VALUES
   ('agent', 500, 0, true),
   ('sandbox', 500, 0, true)
 ON CONFLICT DO NOTHING;
+`;
+
+const activationCodeTablesSQL = `
+-- 积分激活码分组表
+CREATE TABLE IF NOT EXISTS credit_activation_code_groups (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_by UUID REFERENCES admin_users(id) ON DELETE SET NULL,
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_activation_code_groups_name ON credit_activation_code_groups(name);
+CREATE INDEX IF NOT EXISTS idx_activation_code_groups_status ON credit_activation_code_groups(status);
 
 -- 积分激活码表
 CREATE TABLE IF NOT EXISTS credit_activation_codes (
@@ -1548,6 +1568,7 @@ CREATE TABLE IF NOT EXISTS credit_activation_codes (
   max_uses INTEGER NOT NULL DEFAULT 1,
   current_uses INTEGER NOT NULL DEFAULT 0,
   expires_at TIMESTAMP,
+  group_id UUID REFERENCES credit_activation_code_groups(id) ON DELETE SET NULL,
   created_by UUID REFERENCES admin_users(id) ON DELETE SET NULL,
   used_by UUID REFERENCES app_users(id) ON DELETE SET NULL,
   used_at TIMESTAMP,
@@ -1559,6 +1580,7 @@ CREATE TABLE IF NOT EXISTS credit_activation_codes (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_activation_codes_code ON credit_activation_codes(code);
 CREATE INDEX IF NOT EXISTS idx_activation_codes_status ON credit_activation_codes(status);
+CREATE INDEX IF NOT EXISTS idx_activation_codes_group_id ON credit_activation_codes(group_id);
 CREATE INDEX IF NOT EXISTS idx_activation_codes_batch_id ON credit_activation_codes(batch_id);
 CREATE INDEX IF NOT EXISTS idx_activation_codes_expires_at ON credit_activation_codes(expires_at);
 CREATE INDEX IF NOT EXISTS idx_activation_codes_used_by ON credit_activation_codes(used_by);
@@ -1663,8 +1685,15 @@ export async function runMigration() {
     await db.execute(sql.raw(deliverableTablesSQL));
     await db.execute(sql.raw(backfillMessageStorageSQL));
     
-    // 创建计费相关表
-    await db.execute(sql.raw(billingTablesSQL));
+    // Step 1: core billing tables
+    await db.execute(sql.raw(billingCoreTablesSQL));
+
+    // Step 2: activation code tables (separate - failure does not affect core billing)
+    try {
+      await db.execute(sql.raw(activationCodeTablesSQL));
+    } catch (activationCodeErr) {
+      console.error('[MIGRATION] activation code tables failed (non-fatal):', activationCodeErr);
+    }
 
     // 插入当前使用的模型默认定价（如不存在）
     await db.execute(sql.raw(`
@@ -1722,31 +1751,20 @@ export async function runMigration() {
       ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS multiplier REAL NOT NULL DEFAULT 1.0;
     `));
 
+    // Post-migration verification: ensure critical tables actually exist
+    const postCheck = await inspectDatabaseSchemaReadiness();
+    if (!postCheck.ready) {
+      const criticalMissing = postCheck.missing.filter(m =>
+        m.startsWith('table:') || m.startsWith('column:model_pricing')
+      );
+      if (criticalMissing.length > 0) {
+        console.error('[MIGRATION] Post-migration check failed, still missing:', criticalMissing.join(', '));
+        throw new Error(`Migration incomplete: ${criticalMissing.join(', ')}`);
+      }
+      console.warn('[MIGRATION] Post-migration check: non-critical items still missing:', postCheck.missing.join(', '));
+    }
+
     console.log('✅ 数据库迁移完成！');
-    console.log('已创建以下表：');
-    console.log('  - task_creation_sessions');
-    console.log('  - conversation_messages');
-    console.log('  - task_session_recent_messages');
-    console.log('  - task_session_workspace_cache');
-    console.log('  - task_session_deliverable_artifacts');
-    console.log('  - intent_recognition_results');
-    console.log('  - task_descriptions');
-    console.log('  - execution_plans');
-    console.log('  - search_records');
-    console.log('  - sandbox_execution_environments');
-    console.log('  - user_connector_accounts');
-    console.log('  - task_session_connector_bindings');
-    console.log('  - connector_guide_policies');
-    console.log('  - connector_guide_revisions');
-    console.log('  - task_session_connector_guides');
-    console.log('  - connector_auth_requests');
-    console.log('  - platform_runtime_artifact_releases');
-    console.log('  - platform_runtime_artifact_channels');
-    console.log('  - user_credits');
-    console.log('  - credit_transactions');
-    console.log('  - token_usage_logs');
-    console.log('  - model_pricing');
-    console.log('  - cache_pricing_config');
     
     return true;
   } catch (error) {

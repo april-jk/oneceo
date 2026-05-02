@@ -60,6 +60,8 @@ const REQUIRED_TABLES = [
   'token_usage_logs',
   'model_pricing',
   'cache_pricing_config',
+  'credit_activation_codes',
+  'credit_activation_code_uses',
 ] as const;
 
 const REQUIRED_COLUMNS = [
@@ -278,6 +280,13 @@ const REQUIRED_INDEXES = [
   'idx_model_pricing_model_active',
   'idx_model_pricing_active',
   'idx_cache_pricing_config_provider_active',
+  'idx_activation_codes_code',
+  'idx_activation_codes_status',
+  'idx_activation_codes_batch_id',
+  'idx_activation_codes_expires_at',
+  'idx_activation_codes_used_by',
+  'idx_activation_code_uses_code_id',
+  'idx_activation_code_uses_user_id',
 ] as const;
 
 /**
@@ -1529,6 +1538,43 @@ VALUES
   ('agent', 500, 0, true),
   ('sandbox', 500, 0, true)
 ON CONFLICT DO NOTHING;
+
+-- 积分激活码表
+CREATE TABLE IF NOT EXISTS credit_activation_codes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  code TEXT NOT NULL,
+  credits_amount INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  max_uses INTEGER NOT NULL DEFAULT 1,
+  current_uses INTEGER NOT NULL DEFAULT 0,
+  expires_at TIMESTAMP,
+  created_by UUID REFERENCES admin_users(id) ON DELETE SET NULL,
+  used_by UUID REFERENCES app_users(id) ON DELETE SET NULL,
+  used_at TIMESTAMP,
+  batch_id TEXT,
+  description TEXT,
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_activation_codes_code ON credit_activation_codes(code);
+CREATE INDEX IF NOT EXISTS idx_activation_codes_status ON credit_activation_codes(status);
+CREATE INDEX IF NOT EXISTS idx_activation_codes_batch_id ON credit_activation_codes(batch_id);
+CREATE INDEX IF NOT EXISTS idx_activation_codes_expires_at ON credit_activation_codes(expires_at);
+CREATE INDEX IF NOT EXISTS idx_activation_codes_used_by ON credit_activation_codes(used_by);
+
+-- 积分激活码使用记录表
+CREATE TABLE IF NOT EXISTS credit_activation_code_uses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  activation_code_id UUID NOT NULL REFERENCES credit_activation_codes(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  credits_granted INTEGER NOT NULL,
+  transaction_id UUID REFERENCES credit_transactions(id) ON DELETE SET NULL,
+  used_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_activation_code_uses_code_id ON credit_activation_code_uses(activation_code_id);
+CREATE INDEX IF NOT EXISTS idx_activation_code_uses_user_id ON credit_activation_code_uses(user_id);
 `;
 
 export async function inspectDatabaseSchemaReadiness(): Promise<SchemaReadinessReport> {

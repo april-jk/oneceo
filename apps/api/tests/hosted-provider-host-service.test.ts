@@ -22,6 +22,15 @@ function createHarness(input?: {
       },
     },
     bindingDAO: {
+      async getByRuntimeProviderId() {
+        return input?.binding === undefined
+          ? {
+              desiredState: 'attached',
+              runtimeProviderId: 'provider-1',
+              profileId: 'profile-1',
+            }
+          : input.binding;
+      },
       async getByTaskSessionAndConnectorKey() {
         return input?.binding === undefined
           ? {

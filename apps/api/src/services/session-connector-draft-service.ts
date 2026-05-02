@@ -1,4 +1,5 @@
 import { taskCreationSessionDAO, taskSessionConnectorBindingDAO, taskSessionRunDAO } from '../db/dao';
+import { buildConnectorInstanceKey } from '../db/dao/task-session-connector-binding.dao';
 import { type ConnectorKey, connectorRegistry, CONNECTOR_KEYS } from './connector-registry';
 import { redisClientService, type RedisCommandPort } from './redis-client-service';
 import { deriveTenantKeyForRedis, redisKeyspace, redisTtlSeconds } from './redis-keyspace';
@@ -45,7 +46,7 @@ function asObject(value: unknown): Record<string, unknown> {
 
 function normalizeEntries(entries: unknown): DraftEntry[] {
   if (!Array.isArray(entries)) return [];
-  const dedup = new Map<ConnectorKey, DraftEntry>();
+  const dedup = new Map<string, DraftEntry>();
   for (const raw of entries) {
     const record = asObject(raw);
     const connectorKey = asConnectorKey(record.connectorKey);
@@ -56,7 +57,12 @@ function normalizeEntries(entries: unknown): DraftEntry[] {
       ? record.enabledTools.map((item) => asText(item)).filter(Boolean)
       : [];
     const sessionConfig = asObject(record.sessionConfig);
-    dedup.set(connectorKey, {
+    const draftKey =
+      connectorKey === 'custom_mcp' && profileId
+        ? buildConnectorInstanceKey(connectorKey, profileId)
+        : connectorKey;
+    if (connectorKey === 'custom_mcp' && !profileId) continue;
+    dedup.set(draftKey, {
       connectorKey,
       profileId,
       desiredState,
@@ -192,10 +198,12 @@ export class SessionConnectorDraftService {
       const catalogItem = connectorRegistry.getCatalogItem(entry.connectorKey);
       const desiredState = entry.desiredState === 'detached' ? 'detached' : 'attached';
       if (desiredState === 'detached') {
+        const profileId = asText(entry.profileId);
         await taskSessionConnectorBindingDAO.upsert({
           taskSessionId,
           connectorKey: entry.connectorKey,
-          profileId: null,
+          connectorInstanceKey: buildConnectorInstanceKey(entry.connectorKey, profileId || undefined),
+          profileId: profileId || null,
           desiredState: 'detached',
           runtimeStatus: 'detached',
           orchestratorSessionId: null,
@@ -227,6 +235,7 @@ export class SessionConnectorDraftService {
       await taskSessionConnectorBindingDAO.upsert({
         taskSessionId,
         connectorKey: entry.connectorKey,
+        connectorInstanceKey: buildConnectorInstanceKey(entry.connectorKey, profileId),
         profileId,
         desiredState: 'attached',
         runtimeStatus: 'pending_recover',

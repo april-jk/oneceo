@@ -8,7 +8,9 @@ export type ConnectorKey =
   | "supabase"
   | "figma"
   | "vercel"
-  | "postgres";
+  | "postgres"
+  | "custom_api"
+  | "custom_mcp";
 
 export type ConnectorCategory = "app" | "custom_api" | "custom_mcp";
 
@@ -85,6 +87,8 @@ export type ConnectorOauthAccount = ConnectorProfile & {
 
 export type SessionConnectorStatus = {
   connectorKey: ConnectorKey;
+  connectorInstanceKey?: string;
+  isConnectorInstance?: boolean;
   name: string;
   icon: string;
   authMode: string;
@@ -126,6 +130,7 @@ export type GithubConnectorRepository = {
 
 export type SessionConnectorDraftEntry = {
   connectorKey: ConnectorKey;
+  connectorInstanceKey?: string;
   profileId?: string | null;
   desiredState?: "attached" | "detached";
   enabledTools?: string[];
@@ -514,7 +519,11 @@ export async function getGithubProfileRepositories(
 
 export async function detachSessionConnector(
   sessionId: string,
-  connectorKey: ConnectorKey
+  connectorKey: ConnectorKey,
+  input: {
+    profileId?: string | null;
+    connectorInstanceKey?: string | null;
+  } = {}
 ): Promise<SessionConnectorStatus | null> {
   const result = await requestJson<{
     data?: {
@@ -526,6 +535,7 @@ export async function detachSessionConnector(
     )}/connectors/${encodeURIComponent(connectorKey)}/detach`,
     {
       method: "POST",
+      body: input,
     }
   );
   return result.data?.connector || null;

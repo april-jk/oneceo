@@ -1616,11 +1616,7 @@ export default function Sidebar({
       </div>
 
       {/* Bottom Section */}
-      <div
-        className="border-t border-sidebar-border p-2.5"
-        onMouseEnter={() => setSettingsMenuOpen(true)}
-        onMouseLeave={() => setSettingsMenuOpen(false)}
-      >
+      <div className="border-t border-sidebar-border p-2.5">
         {/* 通知按钮 */}
         <Button
           variant="ghost"
@@ -1636,24 +1632,28 @@ export default function Sidebar({
         </Button>
 
         {/* 设置按钮 */}
-        <DropdownMenu
-          open={settingsMenuOpen}
-          onOpenChange={setSettingsMenuOpen}
+        <div
+          onMouseEnter={() => setSettingsMenuOpen(true)}
+          onMouseLeave={() => setSettingsMenuOpen(false)}
         >
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150 ${collapsed ? "" : "min-w-0 overflow-hidden"}`}
-              onClick={() => openSettingsDialog({ tab: "personalization" })}
-            >
-              <Settings className="w-4 h-4" />
-              {!collapsed && (
-                <span className="min-w-0 truncate text-sm font-medium">
-                  {t("sidebar.settings")}
-                </span>
-              )}
-            </Button>
-          </DropdownMenuTrigger>
+          <DropdownMenu
+            open={settingsMenuOpen}
+            onOpenChange={setSettingsMenuOpen}
+          >
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150 ${collapsed ? "" : "min-w-0 overflow-hidden"}`}
+                onClick={() => openSettingsDialog({ tab: "personalization" })}
+              >
+                <Settings className="w-4 h-4" />
+                {!collapsed && (
+                  <span className="min-w-0 truncate text-sm font-medium">
+                    {t("sidebar.settings")}
+                  </span>
+                )}
+              </Button>
+            </DropdownMenuTrigger>
           <DropdownMenuContent
             side="top"
             align="start"
@@ -1708,6 +1708,7 @@ export default function Sidebar({
             </div>
           </DropdownMenuContent>
         </DropdownMenu>
+        </div>
       </div>
 
       <Dialog open={tasksDialogOpen} onOpenChange={setTasksDialogOpen}>

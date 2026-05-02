@@ -100,6 +100,7 @@ import type { TaskProjectSelection } from "@/lib/task-project-selection";
 import { openSettingsDialog } from "@/lib/settings-dialog-events";
 import { useAuth } from "@/contexts/AuthContext";
 import { ProjectEditorDialog } from "@/components/ProjectEditorDialog";
+import { NotificationCenter } from "@/components/NotificationCenter";
 
 interface SidebarProps {
   className?: string;
@@ -269,6 +270,7 @@ export default function Sidebar({
   const [deleteProjectDialogOpen, setDeleteProjectDialogOpen] = React.useState(false);
   const [deleteProjectTarget, setDeleteProjectTarget] = React.useState<TaskCreationProjectSummary | null>(null);
   const [deleteProjectSubmitting, setDeleteProjectSubmitting] = React.useState(false);
+  const [notificationCenterOpen, setNotificationCenterOpen] = React.useState(false);
   const listLoadingRef = React.useRef(false);
   const lastListFetchRef = React.useRef(0);
   const lastListErrorToastAtRef = React.useRef(0);
@@ -1682,7 +1684,10 @@ export default function Sidebar({
               </div>
             </div>
             <div className="p-2">
-              <DropdownMenuItem className="rounded-lg py-2.5 px-3">
+              <DropdownMenuItem
+                className="rounded-lg py-2.5 px-3"
+                onSelect={() => setNotificationCenterOpen(true)}
+              >
                 <Bell className="w-4 h-4 mr-2 text-muted-foreground" />
                 <span className="text-sm">{t("sidebar.notifications")}</span>
               </DropdownMenuItem>
@@ -1697,6 +1702,11 @@ export default function Sidebar({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      <NotificationCenter
+        open={notificationCenterOpen}
+        onOpenChange={setNotificationCenterOpen}
+      />
 
       <Dialog open={tasksDialogOpen} onOpenChange={setTasksDialogOpen}>
         <DialogContent className="max-w-2xl p-0 gap-0 flex flex-col h-[80vh] max-h-[80vh] min-h-[420px] overflow-hidden">

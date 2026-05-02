@@ -1645,3 +1645,66 @@ export type CreditActivationCodeUse = typeof creditActivationCodeUses.$inferSele
 export type NewCreditActivationCodeUse = typeof creditActivationCodeUses.$inferInsert;
 export type CreditActivationCodeGroup = typeof creditActivationCodeGroups.$inferSelect;
 export type NewCreditActivationCodeGroup = typeof creditActivationCodeGroups.$inferInsert;
+
+/**
+ * 通知主表
+ *
+ * 存储系统通知内容和下发策略
+ */
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    title: text('title').notNull(),
+    content: text('content').notNull(),
+    type: text('type').notNull().default('system'), // system, billing, task, security
+    priority: text('priority').notNull().default('normal'), // low, normal, high, urgent
+    targetType: text('target_type').notNull().default('all'), // all, specific_users
+    targetUserIds: jsonb('target_user_ids'), // 当 target_type='specific_users' 时存储用户 ID 列表
+    status: text('status').notNull().default('draft'), // draft, published, archived
+    publishedAt: timestamp('published_at'),
+    expiresAt: timestamp('expires_at'),
+    metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
+    createdBy: uuid('created_by').references(() => adminUsers.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    typeIdx: index('idx_notifications_type').on(table.type),
+    statusIdx: index('idx_notifications_status').on(table.status),
+    createdAtIdx: index('idx_notifications_created_at').on(table.createdAt),
+  })
+);
+
+/**
+ * 用户通知关联表
+ *
+ * 存储每个用户与通知的关联关系及已读状态
+ */
+export const userNotifications = pgTable(
+  'user_notifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => appUsers.id, { onDelete: 'cascade' }),
+    notificationId: uuid('notification_id')
+      .notNull()
+      .references(() => notifications.id, { onDelete: 'cascade' }),
+    isRead: boolean('is_read').notNull().default(false),
+    readAt: timestamp('read_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userNotificationUnique: uniqueIndex('idx_user_notifications_user_notification')
+      .on(table.userId, table.notificationId),
+    userIdx: index('idx_user_notifications_user_id').on(table.userId),
+    notificationIdx: index('idx_user_notifications_notification_id').on(table.notificationId),
+    userReadIdx: index('idx_user_notifications_user_read').on(table.userId, table.isRead),
+  })
+);
+
+export type Notification = typeof notifications.$inferSelect;
+export type NewNotification = typeof notifications.$inferInsert;
+export type UserNotification = typeof userNotifications.$inferSelect;
+export type NewUserNotification = typeof userNotifications.$inferInsert;

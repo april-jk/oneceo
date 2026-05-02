@@ -10,6 +10,7 @@ interface ActivationCode {
   maxUses: number;
   currentUses: number;
   expiresAt: string | null;
+  groupId: string | null;
   createdBy: string | null;
   usedBy: string | null;
   usedAt: string | null;
@@ -21,6 +22,7 @@ interface ActivationCode {
   creatorName?: string | null;
   usedByName?: string | null;
   usedByEmail?: string | null;
+  groupName?: string | null;
 }
 
 interface ActivationCodeDetail extends ActivationCode {
@@ -44,6 +46,15 @@ interface ActivationCodeStats {
   usedCredits: number;
 }
 
+interface ActivationCodeGroup {
+  id: string;
+  name: string;
+  description: string | null;
+  status: string;
+  codeCount: number;
+  createdAt: string;
+}
+
 interface ActivationCodeManagementProps {
   onNotify?: BillingNotify;
 }
@@ -51,11 +62,13 @@ interface ActivationCodeManagementProps {
 export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementProps) {
   const [codes, setCodes] = useState<ActivationCode[]>([]);
   const [stats, setStats] = useState<ActivationCodeStats | null>(null);
+  const [groups, setGroups] = useState<ActivationCodeGroup[]>([]);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [limit] = useState(20);
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [groupIdFilter, setGroupIdFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<string>('created_at');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
@@ -69,8 +82,17 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
     expiresInDays: '30',
     description: '',
     prefix: '',
+    groupId: '',
   });
   const [createLoading, setCreateLoading] = useState(false);
+
+  // 分组管理弹窗状态
+  const [groupFormOpen, setGroupFormOpen] = useState(false);
+  const [groupForm, setGroupForm] = useState({
+    name: '',
+    description: '',
+  });
+  const [groupLoading, setGroupLoading] = useState(false);
 
   // 详情弹窗状态
   const [detailOpen, setDetailOpen] = useState(false);
@@ -80,6 +102,10 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
   // 删除确认状态
   const [deleteTarget, setDeleteTarget] = useState<ActivationCode | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+
+  // 分组删除确认状态
+  const [deleteGroupTarget, setDeleteGroupTarget] = useState<ActivationCodeGroup | null>(null);
+  const [deleteGroupLoading, setDeleteGroupLoading] = useState(false);
 
   // 获取激活码列表
   const fetchCodes = useCallback(async () => {
@@ -94,6 +120,10 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
 
       if (statusFilter !== 'all') {
         params.set('status', statusFilter);
+      }
+
+      if (groupIdFilter !== 'all') {
+        params.set('groupId', groupIdFilter);
       }
 
       if (searchQuery.trim()) {
@@ -117,7 +147,7 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
     } finally {
       setLoading(false);
     }
-  }, [page, limit, statusFilter, searchQuery, sortBy, sortOrder, onNotify]);
+  }, [page, limit, statusFilter, groupIdFilter, searchQuery, sortBy, sortOrder, onNotify]);
 
   // 获取统计数据
   const fetchStats = useCallback(async () => {
@@ -135,10 +165,27 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
     }
   }, []);
 
+  // 获取分组列表
+  const fetchGroups = useCallback(async () => {
+    try {
+      const response = await fetch('/api/internal/billing/activation-code-groups', {
+        credentials: 'include',
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setGroups(data || []);
+      }
+    } catch (error) {
+      console.error('获取分组列表失败:', error);
+    }
+  }, []);
+
   useEffect(() => {
     fetchCodes();
     fetchStats();
-  }, [fetchCodes, fetchStats]);
+    fetchGroups();
+  }, [fetchCodes, fetchStats, fetchGroups]);
 
   // 创建激活码
   const handleCreate = async () => {
@@ -152,8 +199,8 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
       return;
     }
 
-    if (!quantity || quantity < 1 || quantity > 100) {
-      onNotify?.('error', '参数错误', '生成数量必须在 1-100 之间');
+    if (!quantity || quantity < 1 || quantity > 1000) {
+      onNotify?.('error', '参数错误', '生成数量必须在 1-1000 之间');
       return;
     }
 
@@ -170,6 +217,7 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
           expiresInDays,
           description: createForm.description || undefined,
           prefix: createForm.prefix || undefined,
+          groupId: createForm.groupId || undefined,
         }),
       });
 
@@ -184,6 +232,7 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
           expiresInDays: '30',
           description: '',
           prefix: '',
+          groupId: '',
         });
         fetchCodes();
         fetchStats();
@@ -196,6 +245,124 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
       onNotify?.('error', '创建失败', '创建激活码失败');
     } finally {
       setCreateLoading(false);
+    }
+  };
+
+  // 创建分组
+  const handleCreateGroup = async () => {
+    if (!groupForm.name.trim()) {
+      onNotify?.('error', '参数错误', '分组名称不能为空');
+      return;
+    }
+
+    setGroupLoading(true);
+    try {
+      const response = await fetch('/api/internal/billing/activation-code-groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          name: groupForm.name.trim(),
+          description: groupForm.description || undefined,
+        }),
+      });
+
+      if (response.ok) {
+        onNotify?.('success', '创建成功', '分组已创建');
+        setGroupFormOpen(false);
+        setGroupForm({ name: '', description: '' });
+        fetchGroups();
+      } else {
+        const error = await response.json().catch(() => ({ error: '创建失败' }));
+        onNotify?.('error', '创建失败', error.error || '创建分组失败');
+      }
+    } catch (error) {
+      console.error('创建分组失败:', error);
+      onNotify?.('error', '创建失败', '创建分组失败');
+    } finally {
+      setGroupLoading(false);
+    }
+  };
+
+  // 删除分组
+  const handleDeleteGroup = async () => {
+    if (!deleteGroupTarget) return;
+
+    setDeleteGroupLoading(true);
+    try {
+      const response = await fetch(`/api/internal/billing/activation-code-groups/${deleteGroupTarget.id}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+
+      if (response.ok) {
+        onNotify?.('success', '删除成功', '分组已删除');
+        setDeleteGroupTarget(null);
+        fetchGroups();
+      } else {
+        const error = await response.json().catch(() => ({ error: '删除失败' }));
+        onNotify?.('error', '删除失败', error.error || '删除分组失败');
+      }
+    } catch (error) {
+      console.error('删除分组失败:', error);
+      onNotify?.('error', '删除失败', '删除分组失败');
+    } finally {
+      setDeleteGroupLoading(false);
+    }
+  };
+
+  // 导出 CSV
+  const handleExportCSV = async () => {
+    try {
+      const params = new URLSearchParams();
+      if (statusFilter !== 'all') {
+        params.set('status', statusFilter);
+      }
+      if (groupIdFilter !== 'all') {
+        params.set('groupId', groupIdFilter);
+      }
+
+      const response = await fetch(`/api/internal/billing/activation-codes/export?${params}`, {
+        credentials: 'include',
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        
+        // 生成 CSV
+        const headers = ['激活码', '积分', '状态', '使用次数', '分组', '描述', '创建时间', '过期时间'];
+        const rows = data.map((item: any) => [
+          item.code,
+          item.creditsAmount,
+          item.status,
+          `${item.currentUses}/${item.maxUses}`,
+          item.groupName || '-',
+          item.description || '-',
+          item.createdAt,
+          item.expiresAt || '-',
+        ]);
+
+        const csvContent = [
+          headers.join(','),
+          ...rows.map((row: any[]) => row.map((cell: any) => `"${cell}"`).join(',')),
+        ].join('\n');
+
+        // 下载文件
+        const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `激活码_${new Date().toISOString().slice(0, 10)}.csv`;
+        link.click();
+        URL.revokeObjectURL(url);
+
+        onNotify?.('success', '导出成功', `已导出 ${data.length} 个激活码`);
+      } else {
+        onNotify?.('error', '导出失败', '无法导出激活码');
+      }
+    } catch (error) {
+      console.error('导出激活码失败:', error);
+      onNotify?.('error', '导出失败', '导出激活码失败');
     }
   };
 
@@ -357,9 +524,15 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
       {/* 操作栏 */}
       <div className="activation-code-actions">
         <AdminButton variant="primary" onClick={() => setCreateFormOpen(true)}>
-          新建激活码
+          批量创建激活码
         </AdminButton>
-        <AdminButton variant="secondary" onClick={() => { fetchCodes(); fetchStats(); }}>
+        <AdminButton variant="secondary" onClick={() => setGroupFormOpen(true)}>
+          管理分组
+        </AdminButton>
+        <AdminButton variant="secondary" onClick={() => handleExportCSV()}>
+          导出 CSV
+        </AdminButton>
+        <AdminButton variant="secondary" onClick={() => { fetchCodes(); fetchStats(); fetchGroups(); }}>
           刷新
         </AdminButton>
       </div>
@@ -376,6 +549,18 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
           <option value="used">已使用</option>
           <option value="disabled">已禁用</option>
           <option value="expired">已过期</option>
+        </select>
+        <select
+          value={groupIdFilter}
+          onChange={(e) => { setGroupIdFilter(e.target.value); setPage(1); }}
+          className="filter-select"
+        >
+          <option value="all">全部分组</option>
+          {groups.map((group) => (
+            <option key={group.id} value={group.id}>
+              {group.name} ({group.codeCount})
+            </option>
+          ))}
         </select>
         <input
           type="text"
@@ -395,6 +580,7 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
               <th>积分</th>
               <th>状态</th>
               <th>使用次数</th>
+              <th>分组</th>
               <th>过期时间</th>
               <th>创建时间</th>
               <th>操作</th>
@@ -403,11 +589,11 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={7} className="empty">加载中...</td>
+                <td colSpan={8} className="empty">加载中...</td>
               </tr>
             ) : codes.length === 0 ? (
               <tr>
-                <td colSpan={7} className="empty">暂无激活码</td>
+                <td colSpan={8} className="empty">暂无激活码</td>
               </tr>
             ) : (
               codes.map((code) => (
@@ -432,6 +618,7 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
                     </StatusBadge>
                   </td>
                   <td>{code.currentUses}/{code.maxUses}</td>
+                  <td>{code.groupName || '-'}</td>
                   <td>{formatDate(code.expiresAt)}</td>
                   <td>{formatDate(code.createdAt)}</td>
                   <td>
@@ -503,7 +690,7 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
             onClick={(e) => e.stopPropagation()}
           >
             <div className="modal-header">
-              <h2>新建激活码</h2>
+              <h2>批量创建激活码</h2>
               <button
                 type="button"
                 className="modal-close"
@@ -529,10 +716,25 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
                   type="number"
                   value={createForm.quantity}
                   onChange={(e) => setCreateForm({ ...createForm, quantity: e.target.value })}
-                  placeholder="1-100"
+                  placeholder="1-1000"
                   min="1"
-                  max="100"
+                  max="1000"
                 />
+              </div>
+              <div className="form-group">
+                <label>分组</label>
+                <select
+                  value={createForm.groupId}
+                  onChange={(e) => setCreateForm({ ...createForm, groupId: e.target.value })}
+                  className="filter-select"
+                >
+                  <option value="">不分组</option>
+                  {groups.map((group) => (
+                    <option key={group.id} value={group.id}>
+                      {group.name}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div className="form-group">
                 <label>最大使用次数</label>
@@ -638,6 +840,10 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
                       <span className="detail-value">{detailCode.currentUses} / {detailCode.maxUses}</span>
                     </div>
                     <div className="detail-item">
+                      <span className="detail-label">分组</span>
+                      <span className="detail-value">{detailCode.groupName || '-'}</span>
+                    </div>
+                    <div className="detail-item">
                       <span className="detail-label">创建时间</span>
                       <span className="detail-value">{formatDate(detailCode.createdAt)}</span>
                     </div>
@@ -732,6 +938,99 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
           loading={deleteLoading}
           onConfirm={handleDelete}
           onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+
+      {/* 分组管理弹窗 */}
+      {groupFormOpen && (
+        <div className="modal-backdrop" onClick={() => setGroupFormOpen(false)}>
+          <aside
+            className="activation-code-modal"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h2>管理分组</h2>
+              <button
+                type="button"
+                className="modal-close"
+                onClick={() => setGroupFormOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label>分组名称 *</label>
+                <input
+                  type="text"
+                  value={groupForm.name}
+                  onChange={(e) => setGroupForm({ ...groupForm, name: e.target.value })}
+                  placeholder="输入分组名称"
+                />
+              </div>
+              <div className="form-group">
+                <label>描述</label>
+                <input
+                  type="text"
+                  value={groupForm.description}
+                  onChange={(e) => setGroupForm({ ...groupForm, description: e.target.value })}
+                  placeholder="可选"
+                />
+              </div>
+              <div className="form-group">
+                <label>现有分组</label>
+                <div className="group-list">
+                  {groups.length === 0 ? (
+                    <p className="empty">暂无分组</p>
+                  ) : (
+                    groups.map((group) => (
+                      <div key={group.id} className="group-item">
+                        <div className="group-info">
+                          <strong>{group.name}</strong>
+                          <span>{group.codeCount} 个激活码</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="table-btn table-btn-danger"
+                          onClick={() => setDeleteGroupTarget(group)}
+                        >
+                          删除
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <AdminButton variant="secondary" onClick={() => setGroupFormOpen(false)}>
+                取消
+              </AdminButton>
+              <AdminButton variant="primary" onClick={handleCreateGroup} loading={groupLoading}>
+                {groupLoading ? '创建中...' : '创建分组'}
+              </AdminButton>
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {/* 分组删除确认弹窗 */}
+      {deleteGroupTarget && (
+        <DangerConfirmDialog
+          open={true}
+          title="删除分组"
+          objectLabel={deleteGroupTarget.name}
+          objectId={deleteGroupTarget.id}
+          actionLabel="删除分组"
+          impactItems={['分组将被永久删除', '分组下的激活码将变为未分组状态']}
+          reversibility="irreversible"
+          confirmText={deleteGroupTarget.name}
+          reasonRequired={false}
+          loading={deleteGroupLoading}
+          onConfirm={handleDeleteGroup}
+          onCancel={() => setDeleteGroupTarget(null)}
         />
       )}
 
@@ -992,7 +1291,8 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
           color: var(--text);
         }
 
-        .form-group input {
+        .form-group input,
+        .form-group select {
           width: 100%;
           padding: 8px 12px;
           border: 1px solid var(--border);
@@ -1002,7 +1302,8 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
           font-size: 14px;
         }
 
-        .form-group input:focus {
+        .form-group input:focus,
+        .form-group select:focus {
           outline: none;
           border-color: var(--primary);
           box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 12%, transparent);
@@ -1055,6 +1356,41 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
 
         .uses-table th {
           font-weight: 600;
+          color: var(--text-soft);
+        }
+
+        .group-list {
+          max-height: 300px;
+          overflow-y: auto;
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          padding: 8px;
+        }
+
+        .group-item {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 8px;
+          border-bottom: 1px solid var(--border);
+        }
+
+        .group-item:last-child {
+          border-bottom: none;
+        }
+
+        .group-info {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+
+        .group-info strong {
+          font-size: 14px;
+        }
+
+        .group-info span {
+          font-size: 12px;
           color: var(--text-soft);
         }
       `}</style>

@@ -1632,83 +1632,18 @@ export default function Sidebar({
         </Button>
 
         {/* 设置按钮 */}
-        <div
-          onMouseEnter={() => setSettingsMenuOpen(true)}
-          onMouseLeave={() => setSettingsMenuOpen(false)}
+        <Button
+          variant="ghost"
+          className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150 ${collapsed ? "" : "min-w-0 overflow-hidden"}`}
+          onClick={() => openSettingsDialog({ tab: "personalization" })}
         >
-          <DropdownMenu
-            open={settingsMenuOpen}
-            onOpenChange={setSettingsMenuOpen}
-          >
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150 ${collapsed ? "" : "min-w-0 overflow-hidden"}`}
-                onClick={() => openSettingsDialog({ tab: "personalization" })}
-              >
-                <Settings className="w-4 h-4" />
-                {!collapsed && (
-                  <span className="min-w-0 truncate text-sm font-medium">
-                    {t("sidebar.settings")}
-                  </span>
-                )}
-              </Button>
-            </DropdownMenuTrigger>
-          <DropdownMenuContent
-            side="top"
-            align="start"
-            className="w-72 p-0 rounded-2xl border border-border shadow-lg"
-          >
-            <div className="p-4 border-b border-border">
-              <div className="flex items-center gap-3 mb-3">
-                <Avatar className="h-12 w-12">
-                  <AvatarImage
-                    src={user?.email ? `https://avatar.vercel.sh/${encodeURIComponent(user.email)}` : undefined}
-                    alt={user?.displayName || user?.email || t("account.title")}
-                  />
-                  <AvatarFallback>{(user?.displayName || user?.email || "U").slice(0, 1).toUpperCase()}</AvatarFallback>
-                </Avatar>
-                <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-sm text-foreground truncate">
-                    {user?.displayName || user?.email || t("userMenu.guestName")}
-                  </div>
-                  <div className="text-xs text-muted-foreground truncate">
-                    {user?.email || t("userMenu.guestSubtitle")}
-                  </div>
-                </div>
-              </div>
-              <div className="bg-accent/50 rounded-xl p-3 border border-border">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <Coins className="w-4 h-4 text-amber-500" />
-                    <span className="text-sm font-medium text-foreground">
-                      {t("sidebar.credits")}
-                    </span>
-                  </div>
-                  <span className="text-sm font-bold text-foreground">
-                    {creditBalanceLabel}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Crown className="w-4 h-4 text-purple-500" />
-                  <span className="text-xs text-muted-foreground">
-                    {t("sidebar.proMember")}
-                  </span>
-                </div>
-              </div>
-            </div>
-            <div className="p-2">
-              <DropdownMenuItem
-                className="rounded-lg py-2.5 px-3"
-                onSelect={() => openSettingsDialog({ tab: "settings" })}
-              >
-                <Settings className="w-4 h-4 mr-2 text-muted-foreground" />
-                <span className="text-sm">{t("sidebar.settings")}</span>
-              </DropdownMenuItem>
-            </div>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        </div>
+          <Settings className="w-4 h-4" />
+          {!collapsed && (
+            <span className="min-w-0 truncate text-sm font-medium">
+              {t("sidebar.settings")}
+            </span>
+          )}
+        </Button>
       </div>
 
       <Dialog open={tasksDialogOpen} onOpenChange={setTasksDialogOpen}>

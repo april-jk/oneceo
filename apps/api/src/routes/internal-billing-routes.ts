@@ -8,6 +8,7 @@ import { conversionService } from '../services/conversion-service';
 import { adminAuthMiddleware } from '../middleware/admin-auth-middleware';
 import { billingRuntimeConfigService } from '../services/billing-runtime-config-service';
 import { normalizeAgentModelTier, type AgentModelTier } from '../services/agent-runtime-profile-service';
+import { ActivationCodeService } from '../services/activation-code-service';
 
 const router = express.Router();
 const POSTGRES_INTEGER_MAX = 2147483647;
@@ -1053,6 +1054,262 @@ router.get('/usage-logs', async (req, res) => {
   } catch (error) {
     console.error('[Billing Admin] 获取使用明细失败:', error);
     res.status(500).json({ error: '获取使用明细失败' });
+  }
+});
+
+// ==================== 激活码管理 ====================
+
+const activationCodeService = new ActivationCodeService();
+
+/**
+ * POST /api/internal/billing/activation-codes
+ * 创建激活码
+ */
+router.post('/activation-codes', async (req, res) => {
+  try {
+    const { creditsAmount, quantity, maxUses, expiresInDays, description, prefix, groupId } = req.body;
+
+    if (!creditsAmount || creditsAmount <= 0) {
+      return res.status(400).json({ error: '积分数量必须大于 0' });
+    }
+
+    const adminUserId = (req as any).adminUserId;
+
+    const result = await activationCodeService.createActivationCodes({
+      creditsAmount,
+      quantity,
+      maxUses,
+      expiresInDays,
+      description,
+      prefix,
+      groupId,
+      adminUserId,
+    });
+
+    res.json(result);
+  } catch (error: any) {
+    console.error('[Billing Admin] 创建激活码失败:', error);
+    res.status(400).json({ error: error.message || '创建激活码失败' });
+  }
+});
+
+/**
+ * GET /api/internal/billing/activation-codes
+ * 获取激活码列表
+ */
+router.get('/activation-codes', async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+    const status = req.query.status as string | undefined;
+    const batchId = req.query.batchId as string | undefined;
+    const groupId = req.query.groupId as string | undefined;
+    const search = req.query.search as string | undefined;
+    const sortBy = req.query.sortBy as string | undefined;
+    const sortOrder = req.query.sortOrder as 'asc' | 'desc' | undefined;
+
+    const result = await activationCodeService.listActivationCodes({
+      page,
+      limit,
+      status,
+      batchId,
+      groupId,
+      search,
+      sortBy,
+      sortOrder,
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error('[Billing Admin] 获取激活码列表失败:', error);
+    res.status(500).json({ error: '获取激活码列表失败' });
+  }
+});
+
+/**
+ * GET /api/internal/billing/activation-codes/stats
+ * 获取激活码统计
+ */
+router.get('/activation-codes/stats', async (req, res) => {
+  try {
+    const stats = await activationCodeService.getActivationCodeStats();
+    res.json(stats);
+  } catch (error) {
+    console.error('[Billing Admin] 获取激活码统计失败:', error);
+    res.status(500).json({ error: '获取激活码统计失败' });
+  }
+});
+
+/**
+ * GET /api/internal/billing/activation-codes/export
+ * 导出激活码
+ */
+router.get('/activation-codes/export', async (req, res) => {
+  try {
+    const status = req.query.status as string | undefined;
+    const batchId = req.query.batchId as string | undefined;
+    const groupId = req.query.groupId as string | undefined;
+    const search = req.query.search as string | undefined;
+
+    const items = await activationCodeService.exportActivationCodes({ status, batchId, groupId, search });
+
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', 'attachment; filename=activation-codes.json');
+    res.json(items);
+  } catch (error) {
+    console.error('[Billing Admin] 导出激活码失败:', error);
+    res.status(500).json({ error: '导出激活码失败' });
+  }
+});
+
+/**
+ * GET /api/internal/billing/activation-codes/:id
+ * 获取激活码详情
+ */
+router.get('/activation-codes/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const detail = await activationCodeService.getActivationCodeDetail(id);
+
+    if (!detail) {
+      return res.status(404).json({ error: '激活码不存在' });
+    }
+
+    res.json(detail);
+  } catch (error) {
+    console.error('[Billing Admin] 获取激活码详情失败:', error);
+    res.status(500).json({ error: '获取激活码详情失败' });
+  }
+});
+
+/**
+ * PUT /api/internal/billing/activation-codes/:id
+ * 更新激活码状态（启用/禁用）
+ */
+router.put('/activation-codes/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (status !== 'active' && status !== 'disabled') {
+      return res.status(400).json({ error: '状态只能是 active 或 disabled' });
+    }
+
+    const result = await activationCodeService.updateActivationCodeStatus(id, status);
+
+    if (!result) {
+      return res.status(404).json({ error: '激活码不存在或状态不允许修改' });
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error('[Billing Admin] 更新激活码状态失败:', error);
+    res.status(500).json({ error: '更新激活码状态失败' });
+  }
+});
+
+/**
+ * DELETE /api/internal/billing/activation-codes/:id
+ * 删除激活码
+ */
+router.delete('/activation-codes/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const success = await activationCodeService.deleteActivationCode(id);
+
+    if (!success) {
+      return res.status(404).json({ error: '激活码不存在或已被使用，无法删除' });
+    }
+
+    res.json({ success: true, message: '激活码已删除' });
+  } catch (error) {
+    console.error('[Billing Admin] 删除激活码失败:', error);
+    res.status(500).json({ error: '删除激活码失败' });
+  }
+});
+
+// ==================== 激活码分组管理 ====================
+
+/**
+ * GET /api/internal/billing/activation-code-groups
+ * 获取分组列表
+ */
+router.get('/activation-code-groups', async (req, res) => {
+  try {
+    const groups = await activationCodeService.listGroups();
+    res.json(groups);
+  } catch (error) {
+    console.error('[Billing Admin] 获取分组列表失败:', error);
+    res.status(500).json({ error: '获取分组列表失败' });
+  }
+});
+
+/**
+ * POST /api/internal/billing/activation-code-groups
+ * 创建分组
+ */
+router.post('/activation-code-groups', async (req, res) => {
+  try {
+    const { name, description } = req.body;
+
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: '分组名称不能为空' });
+    }
+
+    const adminUserId = (req as any).adminUserId;
+
+    const group = await activationCodeService.createGroup({
+      name,
+      description,
+      adminUserId,
+    });
+
+    res.json(group);
+  } catch (error: any) {
+    console.error('[Billing Admin] 创建分组失败:', error);
+    res.status(400).json({ error: error.message || '创建分组失败' });
+  }
+});
+
+/**
+ * PUT /api/internal/billing/activation-code-groups/:id
+ * 更新分组
+ */
+router.put('/activation-code-groups/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, description, status } = req.body;
+
+    const group = await activationCodeService.updateGroup(id, { name, description, status });
+
+    if (!group) {
+      return res.status(404).json({ error: '分组不存在' });
+    }
+
+    res.json(group);
+  } catch (error: any) {
+    console.error('[Billing Admin] 更新分组失败:', error);
+    res.status(400).json({ error: error.message || '更新分组失败' });
+  }
+});
+
+/**
+ * DELETE /api/internal/billing/activation-code-groups/:id
+ * 删除分组
+ */
+router.delete('/activation-code-groups/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const success = await activationCodeService.deleteGroup(id);
+
+    if (!success) {
+      return res.status(404).json({ error: '分组不存在' });
+    }
+
+    res.json({ success: true, message: '分组已删除' });
+  } catch (error: any) {
+    console.error('[Billing Admin] 删除分组失败:', error);
+    res.status(400).json({ error: error.message || '删除分组失败' });
   }
 });
 

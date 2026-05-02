@@ -2,8 +2,9 @@ import { useState, useEffect, useCallback } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
-import { Diamond, ArrowDown, MessageSquare, RefreshCw, Wallet } from "lucide-react";
+import { Diamond, ArrowDown, MessageSquare, RefreshCw, Wallet, Gift } from "lucide-react";
 import { RechargeDialog } from "./RechargeDialog";
+import { ActivationCodeDialog } from "./ActivationCodeDialog";
 
 interface SessionConsumptionRecord {
   id: string;
@@ -22,6 +23,7 @@ export function BillingSettingsPanel({ onClose }: { onClose?: () => void }) {
   const [hasMore, setHasMore] = useState(false);
   const [page, setPage] = useState(1);
   const [rechargeOpen, setRechargeOpen] = useState(false);
+  const [activationCodeOpen, setActivationCodeOpen] = useState(false);
 
   const fetchTransactions = useCallback(async (pageNum: number) => {
     setLoading(true);
@@ -90,6 +92,14 @@ export function BillingSettingsPanel({ onClose }: { onClose?: () => void }) {
         >
           <Wallet className="mr-2 h-4 w-4" />
           充值积分
+        </Button>
+        <Button
+          onClick={() => setActivationCodeOpen(true)}
+          variant="outline"
+          className="h-10 px-4 rounded-lg border-purple-200 text-purple-700 hover:bg-purple-50 hover:text-purple-800 font-semibold text-sm shadow-none"
+        >
+          <Gift className="mr-2 h-4 w-4" />
+          使用激活码
         </Button>
       </div>
 
@@ -167,6 +177,19 @@ export function BillingSettingsPanel({ onClose }: { onClose?: () => void }) {
         open={rechargeOpen}
         onOpenChange={setRechargeOpen}
         currentBalance={credits?.balance || 0}
+      />
+
+      <ActivationCodeDialog
+        open={activationCodeOpen}
+        onOpenChange={setActivationCodeOpen}
+        currentBalance={credits?.balance || 0}
+        onSuccess={(newBalance) => {
+          // 刷新积分余额
+          void refreshCredits();
+          // 刷新交易记录
+          setPage(1);
+          void fetchTransactions(1);
+        }}
       />
     </div>
   );

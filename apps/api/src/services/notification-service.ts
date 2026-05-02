@@ -333,7 +333,16 @@ export class NotificationService {
     userId: string,
     params: GetUserNotificationsParams = {}
   ): Promise<{
-    items: Array<UserNotification & { notification: Notification }>;
+    items: Array<{
+      id: string;
+      title: string;
+      content: string;
+      type: string;
+      priority: string;
+      isRead: boolean;
+      publishedAt: Date | null;
+      createdAt: Date;
+    }>;
     total: number;
     unreadCount: number;
     page: number;
@@ -390,19 +399,26 @@ export class NotificationService {
 
     const notifMap = new Map(notifDetails.map((n) => [n.id, n]));
 
-    // 过滤过期通知
+    // 过滤过期通知并扁平化数据
     const now = new Date();
     const items = userNotifs
-      .map((un) => ({
-        ...un,
-        notification: notifMap.get(un.notificationId)!,
-      }))
-      .filter((item) => {
-        if (!item.notification) return false;
-        if (item.notification.expiresAt && item.notification.expiresAt < now) return false;
-        if (type && item.notification.type !== type) return false;
-        return true;
-      });
+      .map((un) => {
+        const notification = notifMap.get(un.notificationId);
+        if (!notification) return null;
+        if (notification.expiresAt && notification.expiresAt < now) return null;
+        if (type && notification.type !== type) return null;
+        return {
+          id: notification.id,
+          title: notification.title,
+          content: notification.content,
+          type: notification.type,
+          priority: notification.priority,
+          isRead: un.isRead,
+          publishedAt: notification.publishedAt,
+          createdAt: notification.createdAt,
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null);
 
     return {
       items,

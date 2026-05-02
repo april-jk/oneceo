@@ -9,7 +9,7 @@ const router = Router();
  */
 router.get('/', async (req: Request, res: Response) => {
   try {
-    const userId = (req as any).userId;
+    const userId = (req as any).user?.id;
     if (!userId) {
       return res.status(401).json({ error: '未登录' });
     }
@@ -39,7 +39,7 @@ router.get('/', async (req: Request, res: Response) => {
  */
 router.get('/unread-count', async (req: Request, res: Response) => {
   try {
-    const userId = (req as any).userId;
+    const userId = (req as any).user?.id;
     if (!userId) {
       return res.status(401).json({ error: '未登录' });
     }
@@ -58,7 +58,7 @@ router.get('/unread-count', async (req: Request, res: Response) => {
  */
 router.put('/:id/read', async (req: Request, res: Response) => {
   try {
-    const userId = (req as any).userId;
+    const userId = (req as any).user?.id;
     if (!userId) {
       return res.status(401).json({ error: '未登录' });
     }
@@ -78,7 +78,7 @@ router.put('/:id/read', async (req: Request, res: Response) => {
  */
 router.put('/read-all', async (req: Request, res: Response) => {
   try {
-    const userId = (req as any).userId;
+    const userId = (req as any).user?.id;
     if (!userId) {
       return res.status(401).json({ error: '未登录' });
     }

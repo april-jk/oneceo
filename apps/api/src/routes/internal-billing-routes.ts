@@ -1148,8 +1148,10 @@ router.get('/activation-codes/export', async (req, res) => {
   try {
     const status = req.query.status as string | undefined;
     const batchId = req.query.batchId as string | undefined;
+    const groupId = req.query.groupId as string | undefined;
+    const search = req.query.search as string | undefined;
 
-    const items = await activationCodeService.exportActivationCodes({ status, batchId });
+    const items = await activationCodeService.exportActivationCodes({ status, batchId, groupId, search });
 
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Content-Disposition', 'attachment; filename=activation-codes.json');

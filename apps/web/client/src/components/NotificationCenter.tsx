@@ -305,33 +305,28 @@ export function NotificationCenter() {
         {/* 通知详情视图 */}
         {selectedNotification ? (
           <div className="flex-1 overflow-y-auto">
-            <div className="p-4">
-              {/* 通知元信息 */}
-              <div className="flex items-center gap-2 mb-3">
-                <span className="text-2xl">{getTypeIcon(selectedNotification.type)}</span>
-                <div>
-                  <span className="text-xs text-gray-500">{getTypeLabel(selectedNotification.type)}</span>
-                  <div className="flex items-center gap-2">
-                    <span className={`text-xs ${getPriorityColor(selectedNotification.priority)}`}>
-                      {getPriorityLabel(selectedNotification.priority)}
-                    </span>
-                    {!selectedNotification.isRead && (
-                      <Badge variant="secondary" className="text-xs">未读</Badge>
-                    )}
-                  </div>
+            <div className="p-5">
+              {/* 标题区域 */}
+              <div className="mb-4">
+                <h2 className="text-base font-semibold text-gray-900 mb-2">
+                  {selectedNotification.title}
+                </h2>
+                <div className="flex items-center gap-3 text-xs text-gray-400">
+                  <span>{formatFullTime(selectedNotification.publishedAt || selectedNotification.createdAt)}</span>
+                  <span>·</span>
+                  <span>{getTypeLabel(selectedNotification.type)}</span>
+                  <span>·</span>
+                  <span className={getPriorityColor(selectedNotification.priority)}>
+                    {getPriorityLabel(selectedNotification.priority)}
+                  </span>
                 </div>
               </div>
 
-              {/* 通知标题 */}
-              <h3 className="text-lg font-semibold mb-2">{selectedNotification.title}</h3>
-
-              {/* 通知时间 */}
-              <div className="text-sm text-gray-500 mb-4">
-                {formatFullTime(selectedNotification.publishedAt || selectedNotification.createdAt)}
-              </div>
+              {/* 分割线 */}
+              <div className="border-t border-gray-100 mb-4" />
 
               {/* 通知内容 */}
-              <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
+              <div className="text-sm text-gray-600 leading-relaxed whitespace-pre-wrap">
                 {selectedNotification.content}
               </div>
             </div>

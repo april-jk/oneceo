@@ -531,15 +531,37 @@ export class ActivationCodeService {
   async exportActivationCodes(params: {
     status?: string;
     batchId?: string;
-  }): Promise<Array<CreditActivationCode & { creatorName?: string | null }>> {
+    groupId?: string;
+    search?: string;
+  }): Promise<Array<CreditActivationCode & { creatorName?: string | null; groupName?: string | null }>> {
     const conditions: any[] = [];
 
     if (params.status && params.status !== 'all') {
-      conditions.push(eq(creditActivationCodes.status, params.status));
+      if (params.status === 'expired') {
+        conditions.push(
+          or(
+            eq(creditActivationCodes.status, 'expired'),
+            and(
+              eq(creditActivationCodes.status, 'active'),
+              sql`${creditActivationCodes.expiresAt} IS NOT NULL AND ${creditActivationCodes.expiresAt} < NOW()`
+            )
+          )
+        );
+      } else {
+        conditions.push(eq(creditActivationCodes.status, params.status));
+      }
     }
 
     if (params.batchId) {
       conditions.push(eq(creditActivationCodes.batchId, params.batchId));
+    }
+
+    if (params.groupId) {
+      conditions.push(eq(creditActivationCodes.groupId, params.groupId));
+    }
+
+    if (params.search) {
+      conditions.push(like(creditActivationCodes.code, `%${params.search}%`));
     }
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;

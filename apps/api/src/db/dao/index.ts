@@ -22,3 +22,4 @@ export * from './platform-skill.dao';
 export * from './connector-guide.dao';
 export * from './platform-runtime-artifact.dao';
 export * from './project-storage-resource.dao';
+export * from './membership.dao';

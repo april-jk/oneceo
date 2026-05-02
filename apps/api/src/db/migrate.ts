@@ -67,6 +67,11 @@ const REQUIRED_TABLES = [
   'credit_activation_codes',
   'credit_activation_code_uses',
   'credit_activation_code_groups',
+  'membership_plans',
+  'user_memberships',
+  'membership_grants',
+  'membership_audit_logs',
+  'membership_daily_restores',
   'notifications',
   'user_notifications',
 ] as const;
@@ -252,6 +257,23 @@ const REQUIRED_COLUMNS = [
   ['platform_runtime_artifact_channels', 'arch'],
   ['platform_runtime_artifact_channels', 'channel'],
   ['platform_runtime_artifact_channels', 'published_release_id'],
+  ['membership_plans', 'code'],
+  ['membership_plans', 'name'],
+  ['membership_plans', 'status'],
+  ['membership_plans', 'default_credits'],
+  ['membership_plans', 'is_default'],
+  ['membership_plans', 'daily_auto_restore_enabled'],
+  ['membership_plans', 'daily_auto_restore_credits'],
+  ['user_memberships', 'user_id'],
+  ['user_memberships', 'membership_plan_id'],
+  ['user_memberships', 'status'],
+  ['membership_grants', 'user_id'],
+  ['membership_grants', 'membership_plan_id'],
+  ['membership_audit_logs', 'action'],
+  ['membership_audit_logs', 'target_type'],
+  ['membership_daily_restores', 'user_id'],
+  ['membership_daily_restores', 'membership_plan_id'],
+  ['membership_daily_restores', 'restore_date'],
   ['notifications', 'title'],
   ['notifications', 'content'],
   ['notifications', 'type'],
@@ -329,6 +351,26 @@ const REQUIRED_INDEXES = [
   'idx_activation_code_uses_user_id',
   'idx_activation_code_groups_name',
   'idx_activation_code_groups_status',
+  'idx_membership_plans_code',
+  'idx_membership_plans_status',
+  'idx_membership_plans_sort_order',
+  'idx_membership_plans_is_default',
+  'idx_user_memberships_user_id',
+  'idx_user_memberships_membership_plan_id',
+  'idx_user_memberships_status',
+  'idx_user_memberships_user_active',
+  'idx_membership_grants_user_id',
+  'idx_membership_grants_membership_plan_id',
+  'idx_membership_grants_created_at',
+  'idx_membership_grants_credit_transaction_id',
+  'idx_membership_audit_logs_actor_id',
+  'idx_membership_audit_logs_target_type_target_id',
+  'idx_membership_audit_logs_created_at',
+  'idx_membership_daily_restores_user_id',
+  'idx_membership_daily_restores_membership_plan_id',
+  'idx_membership_daily_restores_restore_date',
+  'idx_membership_daily_restores_unique',
+  'idx_membership_daily_restores_credit_transaction_id',
   'idx_notifications_type',
   'idx_notifications_status',
   'idx_notifications_created_at',
@@ -1740,6 +1782,103 @@ VALUES
   ('agent', 500, 0, true),
   ('sandbox', 500, 0, true)
 ON CONFLICT DO NOTHING;
+
+-- 会员类型表
+CREATE TABLE IF NOT EXISTS membership_plans (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  code TEXT NOT NULL,
+  name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  default_credits INTEGER NOT NULL DEFAULT 0,
+  is_default BOOLEAN NOT NULL DEFAULT false,
+  allowed_agent_levels_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  benefits_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  daily_auto_restore_enabled BOOLEAN NOT NULL DEFAULT false,
+  daily_auto_restore_credits INTEGER NOT NULL DEFAULT 0,
+  description TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  effective_from TIMESTAMP,
+  effective_until TIMESTAMP,
+  created_by UUID REFERENCES admin_users(id) ON DELETE SET NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_membership_plans_code ON membership_plans(code);
+CREATE INDEX IF NOT EXISTS idx_membership_plans_status ON membership_plans(status);
+CREATE INDEX IF NOT EXISTS idx_membership_plans_sort_order ON membership_plans(sort_order);
+CREATE INDEX IF NOT EXISTS idx_membership_plans_is_default ON membership_plans(is_default);
+
+-- 会员关联用户表
+CREATE TABLE IF NOT EXISTS user_memberships (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  membership_plan_id UUID NOT NULL REFERENCES membership_plans(id) ON DELETE RESTRICT,
+  status TEXT NOT NULL DEFAULT 'active',
+  started_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMP,
+  source_type TEXT NOT NULL DEFAULT 'manual',
+  source_id UUID,
+  assigned_by UUID REFERENCES admin_users(id) ON DELETE SET NULL,
+  assigned_reason TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_user_memberships_user_id ON user_memberships(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_memberships_membership_plan_id ON user_memberships(membership_plan_id);
+CREATE INDEX IF NOT EXISTS idx_user_memberships_status ON user_memberships(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_memberships_user_active ON user_memberships(user_id, status);
+
+-- 会员积分发放记录表
+CREATE TABLE IF NOT EXISTS membership_grants (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  membership_plan_id UUID NOT NULL REFERENCES membership_plans(id) ON DELETE RESTRICT,
+  grant_credits INTEGER NOT NULL DEFAULT 0,
+  grant_reason TEXT NOT NULL DEFAULT '',
+  grant_status TEXT NOT NULL DEFAULT 'issued',
+  credit_transaction_id UUID REFERENCES credit_transactions(id) ON DELETE SET NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_membership_grants_user_id ON membership_grants(user_id);
+CREATE INDEX IF NOT EXISTS idx_membership_grants_membership_plan_id ON membership_grants(membership_plan_id);
+CREATE INDEX IF NOT EXISTS idx_membership_grants_created_at ON membership_grants(created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_membership_grants_credit_transaction_id ON membership_grants(credit_transaction_id);
+
+-- 会员操作审计表
+CREATE TABLE IF NOT EXISTS membership_audit_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  actor_id UUID REFERENCES admin_users(id) ON DELETE SET NULL,
+  action TEXT NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id UUID,
+  before_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  after_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  reason TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_membership_audit_logs_actor_id ON membership_audit_logs(actor_id);
+CREATE INDEX IF NOT EXISTS idx_membership_audit_logs_target_type_target_id ON membership_audit_logs(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_membership_audit_logs_created_at ON membership_audit_logs(created_at);
+
+-- 会员每日恢复记录（幂等）
+CREATE TABLE IF NOT EXISTS membership_daily_restores (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  membership_plan_id UUID NOT NULL REFERENCES membership_plans(id) ON DELETE RESTRICT,
+  restore_date DATE NOT NULL,
+  restore_credits INTEGER NOT NULL DEFAULT 0,
+  credit_transaction_id UUID REFERENCES credit_transactions(id) ON DELETE SET NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_membership_daily_restores_user_id ON membership_daily_restores(user_id);
+CREATE INDEX IF NOT EXISTS idx_membership_daily_restores_membership_plan_id ON membership_daily_restores(membership_plan_id);
+CREATE INDEX IF NOT EXISTS idx_membership_daily_restores_restore_date ON membership_daily_restores(restore_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_membership_daily_restores_unique ON membership_daily_restores(user_id, membership_plan_id, restore_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_membership_daily_restores_credit_transaction_id ON membership_daily_restores(credit_transaction_id);
+
+ALTER TABLE membership_plans ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE membership_plans ADD COLUMN IF NOT EXISTS daily_auto_restore_enabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE membership_plans ADD COLUMN IF NOT EXISTS daily_auto_restore_credits INTEGER NOT NULL DEFAULT 0;
 `;
 
 const activationCodeTablesSQL = `

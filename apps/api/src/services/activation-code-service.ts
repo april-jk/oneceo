@@ -3,6 +3,7 @@ import { db } from '../config/database';
 import {
   creditActivationCodes,
   creditActivationCodeUses,
+  creditActivationCodeGroups,
   creditTransactions,
   userCredits,
   appUsers,
@@ -12,6 +13,7 @@ import type {
   CreditActivationCode,
   NewCreditActivationCode,
   CreditActivationCodeUse,
+  CreditActivationCodeGroup,
 } from '../db/schema';
 import { BillingService } from './billing-service';
 
@@ -59,6 +61,7 @@ export class ActivationCodeService {
     expiresInDays?: number | null;
     description?: string;
     prefix?: string;
+    groupId?: string;
     adminUserId?: string;
   }): Promise<{ items: CreditActivationCode[]; batchId?: string }> {
     const {
@@ -68,6 +71,7 @@ export class ActivationCodeService {
       expiresInDays,
       description,
       prefix,
+      groupId,
       adminUserId,
     } = params;
 
@@ -113,6 +117,7 @@ export class ActivationCodeService {
           creditsAmount,
           maxUses,
           expiresAt,
+          groupId: params.groupId as any || null,
           createdBy: adminUserId as any,
           batchId,
           description,
@@ -133,11 +138,12 @@ export class ActivationCodeService {
     limit?: number;
     status?: string;
     batchId?: string;
+    groupId?: string;
     search?: string;
     sortBy?: string;
     sortOrder?: 'asc' | 'desc';
   }): Promise<{
-    items: Array<CreditActivationCode & { creatorName?: string | null; usedByName?: string | null; usedByEmail?: string | null }>;
+    items: Array<CreditActivationCode & { creatorName?: string | null; usedByName?: string | null; usedByEmail?: string | null; groupName?: string | null }>;
     total: number;
     page: number;
     limit: number;
@@ -147,6 +153,7 @@ export class ActivationCodeService {
       limit = 20,
       status,
       batchId,
+      groupId,
       search,
       sortBy = 'created_at',
       sortOrder = 'desc',
@@ -176,6 +183,11 @@ export class ActivationCodeService {
     // 批次筛选
     if (batchId) {
       conditions.push(eq(creditActivationCodes.batchId, batchId));
+    }
+
+    // 分组筛选
+    if (groupId) {
+      conditions.push(eq(creditActivationCodes.groupId, groupId));
     }
 
     // 搜索
@@ -218,6 +230,7 @@ export class ActivationCodeService {
         maxUses: creditActivationCodes.maxUses,
         currentUses: creditActivationCodes.currentUses,
         expiresAt: creditActivationCodes.expiresAt,
+        groupId: creditActivationCodes.groupId,
         createdBy: creditActivationCodes.createdBy,
         usedBy: creditActivationCodes.usedBy,
         usedAt: creditActivationCodes.usedAt,
@@ -229,10 +242,12 @@ export class ActivationCodeService {
         creatorName: adminUsers.displayName,
         usedByName: appUsers.displayName,
         usedByEmail: appUsers.email,
+        groupName: creditActivationCodeGroups.name,
       })
       .from(creditActivationCodes)
       .leftJoin(adminUsers, eq(creditActivationCodes.createdBy, adminUsers.id))
       .leftJoin(appUsers, eq(creditActivationCodes.usedBy, appUsers.id))
+      .leftJoin(creditActivationCodeGroups, eq(creditActivationCodes.groupId, creditActivationCodeGroups.id))
       .where(whereClause)
       .orderBy(sortOrder === 'asc' ? sortColumn : desc(sortColumn))
       .limit(limit)
@@ -262,6 +277,7 @@ export class ActivationCodeService {
         maxUses: creditActivationCodes.maxUses,
         currentUses: creditActivationCodes.currentUses,
         expiresAt: creditActivationCodes.expiresAt,
+        groupId: creditActivationCodes.groupId,
         createdBy: creditActivationCodes.createdBy,
         usedBy: creditActivationCodes.usedBy,
         usedAt: creditActivationCodes.usedAt,
@@ -273,10 +289,12 @@ export class ActivationCodeService {
         creatorName: adminUsers.displayName,
         usedByName: appUsers.displayName,
         usedByEmail: appUsers.email,
+        groupName: creditActivationCodeGroups.name,
       })
       .from(creditActivationCodes)
       .leftJoin(adminUsers, eq(creditActivationCodes.createdBy, adminUsers.id))
       .leftJoin(appUsers, eq(creditActivationCodes.usedBy, appUsers.id))
+      .leftJoin(creditActivationCodeGroups, eq(creditActivationCodes.groupId, creditActivationCodeGroups.id))
       .where(eq(creditActivationCodes.id, id))
       .limit(1);
 
@@ -535,6 +553,7 @@ export class ActivationCodeService {
         maxUses: creditActivationCodes.maxUses,
         currentUses: creditActivationCodes.currentUses,
         expiresAt: creditActivationCodes.expiresAt,
+        groupId: creditActivationCodes.groupId,
         createdBy: creditActivationCodes.createdBy,
         usedBy: creditActivationCodes.usedBy,
         usedAt: creditActivationCodes.usedAt,
@@ -544,10 +563,143 @@ export class ActivationCodeService {
         createdAt: creditActivationCodes.createdAt,
         updatedAt: creditActivationCodes.updatedAt,
         creatorName: adminUsers.displayName,
+        groupName: creditActivationCodeGroups.name,
       })
       .from(creditActivationCodes)
       .leftJoin(adminUsers, eq(creditActivationCodes.createdBy, adminUsers.id))
+      .leftJoin(creditActivationCodeGroups, eq(creditActivationCodes.groupId, creditActivationCodeGroups.id))
       .where(whereClause)
       .orderBy(desc(creditActivationCodes.createdAt));
+  }
+
+  // ==================== 分组管理 ====================
+
+  /**
+   * 创建分组
+   */
+  async createGroup(params: {
+    name: string;
+    description?: string;
+    adminUserId?: string;
+  }): Promise<CreditActivationCodeGroup> {
+    const { name, description, adminUserId } = params;
+
+    if (!name.trim()) {
+      throw new Error('分组名称不能为空');
+    }
+
+    // 检查名称是否已存在
+    const existing = await db
+      .select({ id: creditActivationCodeGroups.id })
+      .from(creditActivationCodeGroups)
+      .where(eq(creditActivationCodeGroups.name, name.trim()))
+      .limit(1);
+
+    if (existing.length > 0) {
+      throw new Error('分组名称已存在');
+    }
+
+    const result = await db
+      .insert(creditActivationCodeGroups)
+      .values({
+        name: name.trim(),
+        description: description || null,
+        createdBy: adminUserId as any || null,
+      })
+      .returning();
+
+    return result[0];
+  }
+
+  /**
+   * 获取分组列表
+   */
+  async listGroups(): Promise<Array<CreditActivationCodeGroup & { codeCount: number }>> {
+    const groups = await db
+      .select({
+        id: creditActivationCodeGroups.id,
+        name: creditActivationCodeGroups.name,
+        description: creditActivationCodeGroups.description,
+        status: creditActivationCodeGroups.status,
+        createdBy: creditActivationCodeGroups.createdBy,
+        metadataJson: creditActivationCodeGroups.metadataJson,
+        createdAt: creditActivationCodeGroups.createdAt,
+        updatedAt: creditActivationCodeGroups.updatedAt,
+        codeCount: count(creditActivationCodes.id),
+      })
+      .from(creditActivationCodeGroups)
+      .leftJoin(creditActivationCodes, eq(creditActivationCodeGroups.id, creditActivationCodes.groupId))
+      .groupBy(creditActivationCodeGroups.id)
+      .orderBy(desc(creditActivationCodeGroups.createdAt));
+
+    return groups;
+  }
+
+  /**
+   * 删除分组
+   */
+  async deleteGroup(id: string): Promise<boolean> {
+    // 检查分组下是否有激活码
+    const codeCount = await db
+      .select({ count: count() })
+      .from(creditActivationCodes)
+      .where(eq(creditActivationCodes.groupId, id));
+
+    if (Number(codeCount[0].count) > 0) {
+      throw new Error('该分组下还有激活码，无法删除');
+    }
+
+    const result = await db
+      .delete(creditActivationCodeGroups)
+      .where(eq(creditActivationCodeGroups.id, id))
+      .returning();
+
+    return result.length > 0;
+  }
+
+  /**
+   * 更新分组
+   */
+  async updateGroup(
+    id: string,
+    params: { name?: string; description?: string; status?: string }
+  ): Promise<CreditActivationCodeGroup | null> {
+    const updateData: Record<string, any> = { updatedAt: new Date() };
+
+    if (params.name !== undefined) {
+      if (!params.name.trim()) {
+        throw new Error('分组名称不能为空');
+      }
+      // 检查名称是否已存在
+      const existing = await db
+        .select({ id: creditActivationCodeGroups.id })
+        .from(creditActivationCodeGroups)
+        .where(and(
+          eq(creditActivationCodeGroups.name, params.name.trim()),
+          sql`${creditActivationCodeGroups.id} != ${id}`
+        ))
+        .limit(1);
+
+      if (existing.length > 0) {
+        throw new Error('分组名称已存在');
+      }
+      updateData.name = params.name.trim();
+    }
+
+    if (params.description !== undefined) {
+      updateData.description = params.description || null;
+    }
+
+    if (params.status !== undefined) {
+      updateData.status = params.status;
+    }
+
+    const result = await db
+      .update(creditActivationCodeGroups)
+      .set(updateData)
+      .where(eq(creditActivationCodeGroups.id, id))
+      .returning();
+
+    return result[0] || null;
   }
 }

@@ -134,7 +134,7 @@ export class SessionMcpRecoveryService {
     const now = new Date();
     for (const binding of bindings) {
       if (asText(binding.desiredState) === 'attached') {
-        await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, binding.connectorKey, {
+        await taskSessionConnectorBindingDAO.updateRuntimeByBindingId(binding.id, {
           runtimeStatus: 'pending_recover',
           orchestratorSessionId: null,
           runtimeProviderId: null,
@@ -146,7 +146,7 @@ export class SessionMcpRecoveryService {
           lastError: reason,
         });
       } else {
-        await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, binding.connectorKey, {
+        await taskSessionConnectorBindingDAO.updateRuntimeByBindingId(binding.id, {
           runtimeStatus: 'detached',
           orchestratorSessionId: null,
           runtimeProviderId: null,
@@ -178,7 +178,7 @@ export class SessionMcpRecoveryService {
     const now = new Date();
     for (const binding of bindings) {
       if (asText(binding.desiredState) !== 'attached') continue;
-      await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, binding.connectorKey, {
+      await taskSessionConnectorBindingDAO.updateRuntimeByBindingId(binding.id, {
         runtimeStatus: 'pending_recover',
         orchestratorSessionId,
         recoveryQueuedAt: now,
@@ -242,7 +242,7 @@ export class SessionMcpRecoveryService {
       const now = new Date();
       for (const binding of bindings) {
         if (asText(binding.desiredState) !== 'attached') continue;
-        await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, binding.connectorKey, {
+        await taskSessionConnectorBindingDAO.updateRuntimeByBindingId(binding.id, {
           runtimeStatus: 'recovering',
           orchestratorSessionId: runnable.orchestratorSessionId,
           recoveryStartedAt: now,
@@ -254,7 +254,7 @@ export class SessionMcpRecoveryService {
         await sessionConnectorService.reconcileByOrchestratorSessionId(runnable.orchestratorSessionId);
         for (const binding of bindings) {
           if (asText(binding.desiredState) !== 'attached') continue;
-          await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, binding.connectorKey, {
+          await taskSessionConnectorBindingDAO.updateRuntimeByBindingId(binding.id, {
             recoveryCompletedAt: new Date(),
             lastError: null,
           });
@@ -264,7 +264,7 @@ export class SessionMcpRecoveryService {
         const message = error instanceof Error ? error.message : String(error);
         for (const binding of bindings) {
           if (asText(binding.desiredState) !== 'attached') continue;
-          await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, binding.connectorKey, {
+          await taskSessionConnectorBindingDAO.updateRuntimeByBindingId(binding.id, {
             runtimeStatus: 'failed',
             orchestratorSessionId: runnable.orchestratorSessionId,
             lastError: message,

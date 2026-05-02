@@ -1829,6 +1829,7 @@ CREATE TABLE IF NOT EXISTS user_notifications (
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   UNIQUE(user_id, notification_id)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_notifications_user_notification ON user_notifications(user_id, notification_id);
 CREATE INDEX IF NOT EXISTS idx_user_notifications_user_id ON user_notifications(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_notifications_notification_id ON user_notifications(notification_id);
 CREATE INDEX IF NOT EXISTS idx_user_notifications_user_read ON user_notifications(user_id, is_read);

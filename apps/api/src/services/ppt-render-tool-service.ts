@@ -212,14 +212,95 @@ const aestheticPresets = {
   'indigo-porcelain': { ink: '0A1F3D', paper: 'F1F3F5', paperTint: 'E4E8EC', inkTint: '152A4A', accent: '75AADB' },
   'forest-ink': { ink: '1A2E1F', paper: 'F5F1E8', paperTint: 'ECE7DA', inkTint: '253D2C', accent: 'A2B58C' },
   'kraft-paper': { ink: '2A1E13', paper: 'EEDFC7', paperTint: 'E0D0B6', inkTint: '3A2A1D', accent: 'B27645' },
+  'festival-lantern': { ink: '3A1511', paper: 'FFF4E1', paperTint: 'F7DEC2', inkTint: '5A2119', accent: 'D71920' },
+  'temple-night': { ink: '102018', paper: 'F8F1DC', paperTint: 'EAD8B4', inkTint: '183528', accent: 'E5B84C' },
   dune: { ink: '1F1A14', paper: 'F0E6D2', paperTint: 'E3D7BF', inkTint: '2D2620', accent: 'C8A46D' },
 };
-const presetKey = text(theme.aestheticPreset || theme.visualPreset || theme.stylePreset) || 'ink-classic';
+function looksFestive() {
+  const haystack = [
+    deck.title,
+    deck.topic,
+    deck.purpose,
+    theme.aestheticPreset,
+    theme.visualPreset,
+    theme.stylePreset,
+    theme.mood,
+    theme.visualTone,
+  ].map(text).join(' ');
+  return /(元宵|春节|新年|灯会|灯笼|民俗|传统|节日|festival|lantern|lunar|new year)/i.test(haystack);
+}
+const requestedPresetKey = text(theme.aestheticPreset || theme.visualPreset || theme.stylePreset);
+const presetKey = looksFestive() && !/(festival|lantern|temple|heritage|lunar)/i.test(requestedPresetKey)
+  ? 'festival-lantern'
+  : requestedPresetKey || 'ink-classic';
 const preset = aestheticPresets[presetKey] || aestheticPresets['ink-classic'];
 const primary = color(colorTokens.primary || colorTokens.primaryColor || colorTokens.accent, preset.accent);
 const serifFont = theme.fontSystem?.serifHeading || theme.fontSystem?.heading || 'Noto Serif SC';
 const sansFont = theme.fontSystem?.body || theme.fontSystem?.cjk || 'Noto Sans SC';
 const monoFont = theme.fontSystem?.mono || 'IBM Plex Mono';
+
+function isLongText(value) {
+  return normalizeForCompare(value).length > 42 || String(value || '').split(/\n/).length > 2;
+}
+
+function blockLines(block) {
+  if (!block || typeof block !== 'object') return [];
+  if (Array.isArray(block.items)) return block.items.map((item) => text(item)).filter(Boolean);
+  const body = blockText(block);
+  return body ? body.split(/\n+/).map((line) => text(line)).filter(Boolean) : [];
+}
+
+function splitBlocksForColumns(blocks) {
+  const usable = blocks.filter((block) => blockText(block));
+  if (usable.length >= 2) {
+    const midpoint = Math.ceil(usable.length / 2);
+    return [usable.slice(0, midpoint), usable.slice(midpoint)];
+  }
+  const lines = blockLines(usable[0]);
+  if (lines.length >= 2) {
+    const midpoint = Math.ceil(lines.length / 2);
+    return [
+      [{ type: 'detail', text: lines.slice(0, midpoint).join('\n') }],
+      [{ type: 'detail', text: lines.slice(midpoint).join('\n') }],
+    ];
+  }
+  return [usable, []];
+}
+
+function addInsightCards(slide, blocks, colors, options = {}) {
+  const x = options.x ?? 0.76;
+  const y = options.y ?? 2.14;
+  const w = options.w ?? 11.45;
+  const cardH = options.cardH ?? 0.9;
+  const gap = options.gap ?? 0.22;
+  const max = Math.min(blocks.length, options.max ?? 4);
+  if (!max) return;
+  blocks.slice(0, max).forEach((block, index) => {
+    const body = blockText(block);
+    const cy = y + index * (cardH + gap);
+    slide.addShape(pptx.ShapeType.roundRect, {
+      x,
+      y: cy,
+      w,
+      h: cardH,
+      rectRadius: 0.05,
+      fill: { color: colors.softBg, transparency: colors.isDark ? 8 : 0 },
+      line: { color: colors.line, transparency: colors.isDark ? 58 : 78, width: 0.55 },
+    });
+    slide.addShape(pptx.ShapeType.rect, { x, y: cy, w: 0.06, h: cardH, fill: { color: primary }, line: { color: primary, transparency: 100 } });
+    slide.addText(body, {
+      x: x + 0.24,
+      y: cy + 0.14,
+      w: w - 0.46,
+      h: cardH - 0.22,
+      fontFace: sansFont,
+      fontSize: isLongText(body) ? 9.4 : 10.8,
+      color: colors.fg,
+      fit: 'shrink',
+      breakLine: false,
+    });
+  });
+}
 
 function visualRoleFor(item, pageType, ordinal) {
   const explicit = text(item.visualRole || item.themeRole || item.tone).toLowerCase().replace(/_/g, '-');
@@ -341,19 +422,26 @@ for (const [ordinal, item] of slides.entries()) {
   if (layoutFamily.includes('image-grid')) {
     slide.addText(title || coreMessage, { x: 0.68, y: 0.78, w: 7.1, h: 0.58, fontFace: serifFont, fontSize: 24, bold: true, color: colors.fg, fit: 'shrink' });
     if (showCoreMessage) slide.addText(showCoreMessage, { x: 0.72, y: 1.44, w: 6.6, h: 0.38, fontFace: sansFont, fontSize: 10.8, color: colors.muted, fit: 'shrink' });
-    const boxes = [
-      { x: 0.76, y: 2.08, w: 3.65, h: 1.72 },
-      { x: 4.68, y: 2.08, w: 3.65, h: 1.72 },
-      { x: 8.6, y: 2.08, w: 3.65, h: 1.72 },
-      { x: 0.76, y: 4.2, w: 3.65, h: 1.72 },
-      { x: 4.68, y: 4.2, w: 3.65, h: 1.72 },
-      { x: 8.6, y: 4.2, w: 3.65, h: 1.72 },
-    ];
-    boxes.forEach((box, index) => addImagePanel(slide, heroImages[index], box, { placeholderColor: colors.softBg, borderColor: colors.line, captionColor: colors.muted }));
-    blocks.slice(0, 2).forEach((block, index) => {
-      const body = blockText(block);
-      if (body) slide.addText(body, { x: 0.76 + index * 6.0, y: 6.12, w: 5.3, h: 0.36, fontFace: sansFont, fontSize: 8.8, color: colors.muted, fit: 'shrink' });
-    });
+    const imagesToShow = heroImages.slice(0, 3);
+    if (imagesToShow.length >= 3) {
+      const boxes = [
+        { x: 0.76, y: 2.08, w: 3.65, h: 2.2 },
+        { x: 4.68, y: 2.08, w: 3.65, h: 2.2 },
+        { x: 8.6, y: 2.08, w: 3.65, h: 2.2 },
+      ];
+      boxes.forEach((box, index) => addImagePanel(slide, imagesToShow[index], box, { placeholderColor: colors.softBg, borderColor: colors.line, captionColor: colors.muted }));
+      addInsightCards(slide, blocks, colors, { x: 0.76, y: 4.78, w: 11.5, cardH: 0.58, gap: 0.16, max: 2 });
+    } else if (imagesToShow.length === 2) {
+      addImagePanel(slide, imagesToShow[0], { x: 0.76, y: 2.05, w: 5.48, h: 2.72 }, { placeholderColor: colors.softBg, borderColor: colors.line, captionColor: colors.muted });
+      addImagePanel(slide, imagesToShow[1], { x: 6.78, y: 2.05, w: 5.48, h: 2.72 }, { placeholderColor: colors.softBg, borderColor: colors.line, captionColor: colors.muted });
+      addInsightCards(slide, blocks, colors, { x: 0.76, y: 5.22, w: 11.5, cardH: 0.54, gap: 0.14, max: 2 });
+    } else if (imagesToShow.length === 1) {
+      addImagePanel(slide, imagesToShow[0], { x: 0.78, y: 2.0, w: 5.45, h: 3.28 }, { placeholderColor: colors.softBg, borderColor: colors.line, captionColor: colors.muted });
+      addInsightCards(slide, blocks, colors, { x: 6.72, y: 2.0, w: 5.5, cardH: 0.88, gap: 0.22, max: 4 });
+    } else {
+      warnings.push({ slide: item.index, code: 'image_grid_without_images_rendered_as_cards' });
+      addInsightCards(slide, blocks.length ? blocks : [{ text: showCoreMessage || title }], colors, { x: 0.76, y: 2.08, w: 11.5, cardH: 0.82, gap: 0.2, max: 4 });
+    }
     continue;
   }
 
@@ -377,25 +465,43 @@ for (const [ordinal, item] of slides.entries()) {
     slide.addText(title || coreMessage, { x: 0.68, y: 0.78, w: 8.4, h: 0.58, fontFace: serifFont, fontSize: 24, bold: true, color: colors.fg, fit: 'shrink' });
     if (showCoreMessage) slide.addText(showCoreMessage, { x: 0.72, y: 1.44, w: 8.8, h: 0.38, fontFace: sansFont, fontSize: 10.8, color: colors.muted, fit: 'shrink' });
     const steps = (blocks.length ? blocks : [{ text: title || coreMessage }]).slice(0, 5);
-    slide.addShape(pptx.ShapeType.line, { x: 1.15, y: 3.28, w: 10.7, h: 0, line: { color: primary, transparency: 12, width: 1.4 } });
-    steps.forEach((block, index) => {
-      const x = 0.76 + index * 2.38;
-      slide.addShape(pptx.ShapeType.ellipse, { x: x + 0.38, y: 3.08, w: 0.42, h: 0.42, fill: { color: primary }, line: { color: primary } });
-      slide.addText(String(index + 1).padStart(2, '0'), { x, y: 2.36, w: 1.15, h: 0.26, fontFace: monoFont, fontSize: 7.2, color: colors.muted, align: 'center' });
-      slide.addShape(pptx.ShapeType.roundRect, { x, y: 3.68, w: 1.72, h: 1.36, rectRadius: 0.05, fill: { color: colors.softBg }, line: { color: colors.line, transparency: 68, width: 0.5 } });
-      slide.addText(blockText(block), { x: x + 0.14, y: 3.86, w: 1.44, h: 0.92, fontFace: sansFont, fontSize: 8.8, color: colors.fg, fit: 'shrink' });
-    });
+    const useVertical = steps.some((block) => isLongText(blockText(block))) || steps.length <= 3;
+    if (useVertical) {
+      slide.addShape(pptx.ShapeType.line, { x: 1.05, y: 2.12, w: 0, h: 3.9, line: { color: primary, transparency: 10, width: 1.4 } });
+      steps.slice(0, 4).forEach((block, index) => {
+        const y = 2.0 + index * 0.95;
+        slide.addShape(pptx.ShapeType.ellipse, { x: 0.86, y: y + 0.1, w: 0.38, h: 0.38, fill: { color: primary }, line: { color: primary } });
+        slide.addText(String(index + 1).padStart(2, '0'), { x: 1.42, y, w: 0.52, h: 0.24, fontFace: monoFont, fontSize: 7.2, color: colors.muted, fit: 'shrink' });
+        slide.addShape(pptx.ShapeType.roundRect, { x: 2.02, y: y - 0.02, w: 9.85, h: 0.78, rectRadius: 0.05, fill: { color: colors.softBg }, line: { color: colors.line, transparency: 68, width: 0.5 } });
+        slide.addText(blockText(block), { x: 2.22, y: y + 0.11, w: 9.45, h: 0.52, fontFace: sansFont, fontSize: isLongText(blockText(block)) ? 8.8 : 10.2, color: colors.fg, fit: 'shrink' });
+      });
+    } else {
+      slide.addShape(pptx.ShapeType.line, { x: 1.15, y: 3.28, w: 10.7, h: 0, line: { color: primary, transparency: 12, width: 1.4 } });
+      steps.forEach((block, index) => {
+        const x = 0.76 + index * 2.38;
+        slide.addShape(pptx.ShapeType.ellipse, { x: x + 0.38, y: 3.08, w: 0.42, h: 0.42, fill: { color: primary }, line: { color: primary } });
+        slide.addText(String(index + 1).padStart(2, '0'), { x, y: 2.36, w: 1.15, h: 0.26, fontFace: monoFont, fontSize: 7.2, color: colors.muted, align: 'center' });
+        slide.addShape(pptx.ShapeType.roundRect, { x, y: 3.68, w: 1.72, h: 1.36, rectRadius: 0.05, fill: { color: colors.softBg }, line: { color: colors.line, transparency: 68, width: 0.5 } });
+        slide.addText(blockText(block), { x: x + 0.14, y: 3.86, w: 1.44, h: 0.92, fontFace: sansFont, fontSize: 8.8, color: colors.fg, fit: 'shrink' });
+      });
+    }
     continue;
   }
 
   if (layoutFamily.includes('before-after') || pageType === 'comparison') {
     slide.addText(title || coreMessage, { x: 0.68, y: 0.78, w: 7.8, h: 0.58, fontFace: serifFont, fontSize: 24, bold: true, color: colors.fg, fit: 'shrink' });
     if (showCoreMessage) slide.addText(showCoreMessage, { x: 0.72, y: 1.44, w: 7.8, h: 0.38, fontFace: sansFont, fontSize: 10.8, color: colors.muted, fit: 'shrink' });
-    const leftBlocks = blocks.filter((_, index) => index % 2 === 0).slice(0, 3);
-    const rightBlocks = blocks.filter((_, index) => index % 2 === 1).slice(0, 3);
+    const [splitLeft, splitRight] = splitBlocksForColumns(blocks);
+    if (!splitLeft.length || !splitRight.length) {
+      warnings.push({ slide: item.index, code: 'comparison_without_two_sides_rendered_as_cards' });
+      addInsightCards(slide, blocks.length ? blocks : [{ text: showCoreMessage || title }], colors, { x: 0.76, y: 2.12, w: 11.45, cardH: 0.86, gap: 0.24, max: 4 });
+      continue;
+    }
+    const leftBlocks = splitLeft.slice(0, 3);
+    const rightBlocks = splitRight.slice(0, 3);
     const columns = [
-      { label: text(item.leftLabel || 'BEFORE'), x: 0.78, blocks: leftBlocks.length ? leftBlocks : blocks.slice(0, 2) },
-      { label: text(item.rightLabel || 'AFTER'), x: 6.92, blocks: rightBlocks.length ? rightBlocks : blocks.slice(2, 4) },
+      { label: text(item.leftLabel || 'BEFORE'), x: 0.78, blocks: leftBlocks },
+      { label: text(item.rightLabel || 'AFTER'), x: 6.92, blocks: rightBlocks },
     ];
     columns.forEach((column) => {
       slide.addText(column.label, { x: column.x, y: 2.08, w: 4.8, h: 0.25, fontFace: monoFont, fontSize: 7.2, charSpace: 1.2, color: colors.muted, fit: 'shrink' });

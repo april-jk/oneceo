@@ -564,6 +564,32 @@
     "connectionSteps": "连接步骤",
     "usageTips": "使用提示",
     "guideTitle": "{{name}} 使用指南",
+    "catalog": {
+      "github": {
+        "name": "GitHub",
+        "description": "通过 Composio 托管授权和 oneceo API broker 使用 GitHub MCP 工具。"
+      },
+      "notion": {
+        "name": "Notion",
+        "description": "通过 Composio 托管 Notion 授权与 MCP 工具调用，sandbox 只接收 API broker provider。"
+      },
+      "slack": {
+        "name": "Slack",
+        "description": "通过 Composio 托管授权和 oneceo API broker 使用 Slack MCP 工具。"
+      },
+      "supabase": {
+        "name": "Supabase",
+        "description": "通过 Composio 托管 Supabase 授权与 MCP 工具调用，sandbox 只接收 API broker provider。"
+      },
+      "figma": {
+        "name": "Figma",
+        "description": "通过 Composio 托管授权和 oneceo API broker 使用 Figma MCP 工具。"
+      },
+      "vercel": {
+        "name": "Vercel",
+        "description": "通过 OneCEO 托管 provider host 和 Vercel Integration 安装令牌连接 Vercel。"
+      }
+    },
     "dialog": {
       "title": "连接器",
       "triggerLabel": "连接器",

@@ -6,12 +6,10 @@ import {
   ArrowUpRight,
   Check,
   CheckCircle2,
-  Database,
   ChevronRight,
   Loader2,
   Plus,
   ShieldCheck,
-  Sparkles,
   Trash2,
   Unplug,
   X,
@@ -39,7 +37,6 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
-import { getConnectorGuides } from "@/lib/connector-guides";
 import {
   attachSessionConnector,
   clearConnectorProfileAuth,
@@ -80,8 +77,6 @@ export const NOTION_FIXED_CALLBACK_PATH = "/notion/callback";
 export const SUPABASE_FIXED_CALLBACK_PATH = "/supabase/callback";
 export const SLACK_FIXED_CALLBACK_PATH = "/slack/callback";
 export const VERCEL_FIXED_CALLBACK_PATH = "/vercel/callback";
-const GITHUB_APP_AUTHORIZATIONS_URL = "https://github.com/settings/apps/authorizations";
-const GITHUB_APP_INSTALLATIONS_URL = "https://github.com/settings/installations";
 const GITHUB_INSTALLATION_MISSING_PATTERN = /没有任何可用安装|未安装到任何账号|installation/i;
 const CONNECTOR_TABS: Array<{ key: ConnectorCenterTab; labelKey: string }> = [
   { key: "app", labelKey: "connectors.tabs.app" },
@@ -382,8 +377,18 @@ export function shouldUseUnifiedConnectorCard(connectorKey: ConnectorKey | null 
   return connectorKey === "github" || connectorKey === "vercel" || shouldUseConnectorLevelOauth(connectorKey);
 }
 
-function getGithubAppReauthHint() {
-  return i18n.t("connectors.github.reauthHint");
+function resolveAuthorizedAccountLabel(
+  connectorKey: ConnectorKey,
+  profile: ConnectorProfile | null | undefined
+) {
+  if (connectorKey === "vercel") {
+    return "Vercel";
+  }
+  return (
+    asText(profile?.displayName) ||
+    asText(profile?.profileName) ||
+    i18n.t("connectors.authorizedAccount")
+  );
 }
 
 function asStringArray(value: unknown): string[] {
@@ -408,12 +413,21 @@ export function resolveAuthorizedRepositoryLabel(profile: ConnectorProfile | nul
   return asText(profile?.displayName) || asText(profile?.profileName) || i18n.t("connectors.authorizedRepo");
 }
 
+function resolveConnectorDisplayText(
+  item: ConnectorCatalogItem,
+  field: "name" | "description",
+  fallback: string
+) {
+  return i18n.t(`connectors.catalog.${item.key}.${field}`, {
+    defaultValue: fallback,
+  });
+}
+
 export function ConnectorCenterPanel({
   targetSessionId,
   highlightedConnector,
 }: ConnectorCenterPanelProps) {
   const { t } = useTranslation();
-  const connectorGuides = useMemo(() => getConnectorGuides(t), [t]);
   const [location, setLocation] = useLocation();
   const search = useSearch();
   const params = useMemo(() => new URLSearchParams(search), [search]);
@@ -432,7 +446,6 @@ export function ConnectorCenterPanel({
   const [detailKey, setDetailKey] = useState<ConnectorKey | null>(
     effectiveHighlightedConnector || null
   );
-  const [supabaseDetailExpanded, setSupabaseDetailExpanded] = useState(false);
   const [catalog, setCatalog] = useState<ConnectorCatalogItem[]>([]);
   const [profiles, setProfiles] = useState<ConnectorProfile[]>([]);
   const [selectedProfileIds, setSelectedProfileIds] = useState<
@@ -655,10 +668,16 @@ export function ConnectorCenterPanel({
     const keyword = deferredQuery.trim().toLowerCase();
     if (!keyword) return appCatalog;
     return appCatalog.filter((item) => {
-      const haystack = [item.name, item.description, item.key].join(" ").toLowerCase();
+      const displayName = resolveConnectorDisplayText(item, "name", item.name);
+      const displayDescription = resolveConnectorDisplayText(
+        item,
+        "description",
+        item.description
+      );
+      const haystack = [displayName, displayDescription, item.key].join(" ").toLowerCase();
       return haystack.includes(keyword);
     });
-  }, [appCatalog, deferredQuery]);
+  }, [appCatalog, deferredQuery, t]);
 
   const featuredCatalog = useMemo(
     () => filteredAppCatalog.filter((item) => item.featured),
@@ -689,10 +708,6 @@ export function ConnectorCenterPanel({
     detailItem && activeEditorProfileId !== undefined
       ? formState[editorKey(detailItem.key, activeEditorProfileId)] || {}
       : {};
-
-  useEffect(() => {
-    setSupabaseDetailExpanded(false);
-  }, [detailKey]);
 
   useEffect(() => {
     if (!detailItem) return;
@@ -824,11 +839,7 @@ export function ConnectorCenterPanel({
                 detailItem.key,
                 null,
                 effectiveTargetSessionId,
-                detailItem.key === "github"
-                  ? {
-                      callbackPath: GITHUB_FIXED_CALLBACK_PATH,
-                    }
-                  : detailItem.key === "notion"
+                detailItem.key === "notion"
                   ? {
                       callbackPath: NOTION_FIXED_CALLBACK_PATH,
                     }
@@ -998,6 +1009,12 @@ export function ConnectorCenterPanel({
       const status = getDirectoryStatus(item, connectorProfiles);
       const connected = status === "authorized";
       const pending = status === "needs_auth";
+      const displayName = resolveConnectorDisplayText(item, "name", item.name);
+      const displayDescription = resolveConnectorDisplayText(
+        item,
+        "description",
+        item.description
+      );
 
       return (
         <button
@@ -1014,7 +1031,7 @@ export function ConnectorCenterPanel({
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="truncate text-sm font-medium text-foreground">{item.name}</span>
+              <span className="truncate text-sm font-medium text-foreground">{displayName}</span>
               {item.isNew ? (
                 <span className="rounded border border-[var(--brand-border)] bg-[var(--brand-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--brand-soft-foreground)]">
                   {t("connectors.badges.new")}
@@ -1027,7 +1044,7 @@ export function ConnectorCenterPanel({
               ) : null}
             </div>
             <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-              {item.description}
+              {displayDescription}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -1075,45 +1092,27 @@ export function ConnectorCenterPanel({
     if (!detailItem) return null;
 
     const Icon = resolveConnectorIcon(detailItem.icon);
-    const guide = connectorGuides[detailItem.key];
     const githubConnector = isGithubConnector(detailItem);
     const connectorLevelOauth = shouldUseConnectorLevelOauth(detailItem.key);
     const unifiedOauthCard = shouldUseUnifiedConnectorCard(detailItem.key);
-    const statusText = connectorStatusText({
-      available: detailItem.available,
-      authStatus: selectedDetailProfile?.authStatus,
-    });
     const busy = Boolean(actionKey);
     const actionBusy =
       actionKey === `save:${detailItem.key}` || actionKey === `oauth:${detailItem.key}`;
-    const showGithubPermissionWarning =
-      githubConnector &&
-      typeof selectedDetailProfile?.lastError === "string" &&
-      !GITHUB_INSTALLATION_MISSING_PATTERN.test(selectedDetailProfile.lastError) &&
-      /resource not accessible by integration|permission denied|installation/i.test(
-        selectedDetailProfile.lastError
-      );
-    const showGithubInstallationMissingWarning =
-      githubConnector &&
-      typeof selectedDetailProfile?.lastError === "string" &&
-      GITHUB_INSTALLATION_MISSING_PATTERN.test(selectedDetailProfile.lastError);
-    const githubStatusHint =
-      selectedDetailProfile?.authStatus === "authorized"
-        ? t("connectors.github.statusAuthorized")
-        : showGithubInstallationMissingWarning
-          ? t("connectors.github.installationMissing")
-          : getGithubAppReauthHint();
-    const authorizedAccountLabel =
-      asText(selectedDetailProfile?.displayName) ||
-      asText(selectedDetailProfile?.profileName) ||
-      t("connectors.authorizedAccount");
+    const detailDisplayName = resolveConnectorDisplayText(detailItem, "name", detailItem.name);
+    const detailDisplayDescription = resolveConnectorDisplayText(
+      detailItem,
+      "description",
+      detailItem.description
+    );
+    const authorizedAccountLabel = resolveAuthorizedAccountLabel(
+      detailItem.key,
+      selectedDetailProfile
+    );
     const authorizedRepositoryLabel = githubConnector
       ? resolveAuthorizedRepositoryLabel(selectedDetailProfile)
       : t("connectors.authorizedRepo");
 
     const isSupabaseConnector = detailItem.key === "supabase";
-    const isSupabaseAuthorized =
-      isSupabaseConnector && selectedDetailProfile?.authStatus === "authorized";
     return (
       <>
       <Dialog open={Boolean(detailItem)} onOpenChange={(open) => !open && setDetailKey(null)}>
@@ -1126,57 +1125,51 @@ export function ConnectorCenterPanel({
               : "h-[min(400px,calc(100vh-64px))] md:h-[min(440px,calc(100vh-64px))]"
           )}
         >
+          <DialogHeader className="sr-only">
+            <DialogTitle>{detailDisplayName}</DialogTitle>
+            <DialogDescription>{detailDisplayDescription}</DialogDescription>
+          </DialogHeader>
           <div
-            className="flex h-full flex-col items-start justify-start overflow-clip relative w-full"
+            className="relative flex h-full w-full flex-col items-start justify-start overflow-clip"
           >
-            <div className="bg-muted/10 flex gap-6 items-center justify-start px-6 py-5 relative shrink-0 w-full border-b border-border/60">
-              <div className="basis-0 flex gap-6 grow items-center justify-end min-h-px min-w-px p-0 relative shrink-0">
-                <button 
-                  onClick={() => setDetailKey(null)}
-                  className="inline-flex items-center justify-center whitespace-nowrap font-medium transition-colors active:opacity-80 text-foreground gap-[4px] text-[14px] leading-[18px] min-w-0 hover:opacity-80 bg-inherit h-max rounded-full p-0"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-            </div>
+            <button
+              onClick={() => setDetailKey(null)}
+              className="absolute right-5 top-5 z-10 inline-flex items-center justify-center rounded-full border border-border/60 bg-background/90 p-2 text-foreground shadow-sm transition-colors hover:bg-muted/80"
+              aria-label={t("common.close")}
+            >
+              <X className="h-4 w-4" />
+            </button>
 
             <div
               className={cn(
                 "min-h-0 flex-1 w-full bg-background",
                 isSupabaseConnector
-                  ? "overflow-y-auto [scrollbar-gutter:stable] [scrollbar-width:thin] [-ms-overflow-style:auto] [&::-webkit-scrollbar]:w-3 [&::-webkit-scrollbar]:h-3"
-                  : "overflow-y-auto",
-                isSupabaseConnector && !supabaseDetailExpanded
-                  ? "[scrollbar-color:transparent_transparent] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-transparent"
-                  : isSupabaseConnector
-                    ? "[scrollbar-color:rgba(120,120,120,0.7)_transparent] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-muted-foreground/50 [&::-webkit-scrollbar-thumb]:rounded-full"
-                    : ""
+                  ? "overflow-y-auto [scrollbar-gutter:stable] [scrollbar-width:thin] [-ms-overflow-style:auto] [scrollbar-color:rgba(120,120,120,0.7)_transparent] [&::-webkit-scrollbar]:w-3 [&::-webkit-scrollbar]:h-3 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-muted-foreground/50"
+                  : "overflow-y-auto"
               )}
             >
               <div
                 className={cn(
-                  "flex flex-col items-center justify-start px-6 relative shrink-0 w-full",
-                  isSupabaseConnector
-                    ? supabaseDetailExpanded
-                      ? "gap-6 pb-4 pt-8"
-                      : "gap-4 pb-3 pt-6"
-                    : "gap-6 pb-4 pt-8"
+                  "relative flex w-full shrink-0 flex-col items-center px-6",
+                  unifiedOauthCard
+                    ? "min-h-full justify-center gap-5 pt-12 pb-8"
+                    : "justify-start gap-5 pb-4 pt-10"
                 )}
               >
-                <div className="flex flex-col gap-4 items-center justify-center max-w-[600px] p-0 relative shrink-0 w-full">
-                  <div className="bg-background flex items-center justify-center p-[8px] relative rounded-xl shrink-0 size-16 border border-border/60 shadow-sm">
+                <div className="flex w-full max-w-[600px] shrink-0 flex-col items-center justify-center gap-3.5 p-0 relative">
+                  <div className="bg-background flex items-center justify-center p-[8px] relative rounded-xl shrink-0 size-14 border border-border/60 shadow-sm">
                     <Icon className="h-10 w-10 text-foreground/85" />
                   </div>
                   
                   <div className="flex flex-col gap-2 items-start justify-center leading-[0] p-0 relative shrink-0 text-center w-full">
                     <div className="flex gap-2 items-center justify-center font-semibold overflow-hidden relative shrink-0 text-foreground text-[20px] tracking-[-0.44px] w-full">
-                      <p className="leading-[26px] overflow-hidden text-ellipsis">{detailItem.name}</p>
+                      <p className="leading-[26px] overflow-hidden text-ellipsis">{detailDisplayName}</p>
                       {detailItem.isNew ? (
                         <span className="ml-2 rounded-md border border-[var(--brand-border)] bg-[var(--brand-soft)] px-2 py-0.5 text-[11px] font-medium text-[var(--brand-soft-foreground)]">{t("connectors.badges.new")}</span>
                       ) : null}
                     </div>
                     <div className="font-normal relative shrink-0 text-muted-foreground tracking-[-0.154px] w-full">
-                      <p className="block text-[14px] leading-[20px]">{detailItem.description}</p>
+                      <p className="block text-[14px] leading-[20px]">{detailDisplayDescription}</p>
                     </div>
                   </div>
 
@@ -1242,165 +1235,14 @@ export function ConnectorCenterPanel({
                   )}
                 </div>
 
-                {isSupabaseConnector ? (
-                  <div className="mt-1 mb-3 flex w-full items-center justify-center">
-                    <button
-                      className="flex gap-1 items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
-                      onClick={() => setSupabaseDetailExpanded((prev) => !prev)}
-                    >
-                      <span className="text-[13px] leading-[18px] tracking-[-0.08px]">
-                        {supabaseDetailExpanded ? t("connectors.actions.hideDetails") : t("connectors.actions.showDetails")}
-                      </span>
-                      <ChevronRight
-                        className={cn(
-                          "h-4 w-4 transition-transform",
-                          supabaseDetailExpanded ? "rotate-90" : "-rotate-90"
-                        )}
-                      />
-                    </button>
-                  </div>
-                ) : null}
-
                 {renderTargetBanner()}
 
-                <div className="w-full max-w-[720px] space-y-8 mt-4">
-                {isSupabaseConnector && supabaseDetailExpanded ? (
-                  <div className="space-y-4 rounded-3xl border border-border/70 bg-muted/20 p-5">
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                        <Sparkles className="h-4 w-4 text-foreground/70" />
-                        {t("connectors.supabase.mcpDetails")}
-                      </div>
-                      <p className="text-sm leading-6 text-muted-foreground">
-                        {t("connectors.supabase.description")}
-                      </p>
-                    </div>
-
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <div className="rounded-2xl border border-border/60 bg-background px-4 py-3">
-                        <p className="text-xs text-muted-foreground">{t("connectors.supabase.mcpEndpoint")}</p>
-                        <p className="mt-1 break-all text-sm font-medium text-foreground">oneceo API broker</p>
-                      </div>
-                      <div className="rounded-2xl border border-border/60 bg-background px-4 py-3">
-                        <p className="text-xs text-muted-foreground">{t("connectors.supabase.authMethod")}</p>
-                        <p className="mt-1 text-sm font-medium text-foreground">{t("connectors.supabase.composioConnectLink")}</p>
-                      </div>
-                      <div className="rounded-2xl border border-border/60 bg-background px-4 py-3">
-                        <p className="text-xs text-muted-foreground">{t("connectors.currentStatus")}</p>
-                        <p className="mt-1 text-sm font-medium text-foreground">{statusText}</p>
-                      </div>
-                      <div className="rounded-2xl border border-border/60 bg-background px-4 py-3">
-                        <p className="text-xs text-muted-foreground">{t("connectors.selectedProfile")}</p>
-                        <p className="mt-1 text-sm font-medium text-foreground">
-                          {selectedDetailProfile?.profileName || t("connectors.supabase.defaultProfile")}
-                        </p>
-                      </div>
-                    </div>
-
-                    {guide?.quickLinks?.length ? (
-                      <div className="space-y-2">
-                        <p className="text-xs font-medium text-muted-foreground">{t("connectors.relatedDocs")}</p>
-                        <div className="grid gap-2">
-                          {guide.quickLinks.map((link) => (
-                            <a
-                              key={link.href}
-                              href={link.href}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="flex items-center justify-between rounded-xl border border-border/60 bg-background px-3 py-2 text-sm text-foreground hover:bg-muted/40"
-                            >
-                              <span>{link.label}</span>
-                              <ArrowUpRight className="h-4 w-4 text-muted-foreground" />
-                            </a>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-
-                    <div className="space-y-3 rounded-2xl border border-border/60 bg-background px-4 py-3">
-                      <p className="text-sm font-medium text-foreground">{t("connectors.supabase.connectGuideTitle")}</p>
-                      <ol className="list-decimal space-y-1.5 pl-5 text-sm leading-6 text-muted-foreground">
-                        <li>{t("connectors.supabase.steps.connect")}</li>
-                        <li>{t("connectors.supabase.steps.authorize")}</li>
-                        <li>{t("connectors.supabase.steps.attach")}</li>
-                        <li>{t("connectors.supabase.steps.useTools")}</li>
-                      </ol>
-                    </div>
-
-                    {!isSupabaseAuthorized ? (
-                      <div className="rounded-2xl border border-border/60 bg-background px-4 py-3 text-sm text-muted-foreground">
-                        {t("connectors.supabase.connectHint")}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                {githubConnector ? (
-                  <div className="space-y-4 rounded-3xl border border-border/70 bg-muted/20 p-5">
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                        <ShieldCheck className="h-4 w-4 text-foreground/70" />
-                        {t("connectors.github.authGuideTitle")}
-                      </div>
-                      <p className="text-sm leading-6 text-muted-foreground">{githubStatusHint}</p>
-                    </div>
-
-                    {showGithubPermissionWarning ? (
-                      <div className="flex items-start gap-3 rounded-2xl border border-amber-300/60 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                        <span className="leading-relaxed">
-                          {t("connectors.github.permissionWarning")}
-                        </span>
-                      </div>
-                    ) : null}
-
-                    {showGithubInstallationMissingWarning ? (
-                      <div className="flex items-start gap-3 rounded-2xl border border-amber-300/60 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                        <span className="leading-relaxed">
-                          {t("connectors.github.installationWarning")}
-                        </span>
-                      </div>
-                    ) : null}
-
-                    {selectedDetailProfile?.lastError ? (
-                      <div className="flex items-start gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-                        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                        <span className="leading-relaxed">{selectedDetailProfile.lastError}</span>
-                      </div>
-                    ) : null}
-
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <Button
-                        variant="outline"
-                        className="rounded-xl justify-between bg-background"
-                        onClick={() => window.open(GITHUB_APP_AUTHORIZATIONS_URL, "_blank", "noopener,noreferrer")}
-                      >
-                        {t("connectors.github.manageAuthorization")}
-                        <ArrowUpRight className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="rounded-xl justify-between bg-background"
-                        onClick={() => window.open(GITHUB_APP_INSTALLATIONS_URL, "_blank", "noopener,noreferrer")}
-                      >
-                        {t("connectors.github.manageInstallation")}
-                        <ArrowUpRight className="h-4 w-4" />
-                      </Button>
-                    </div>
-
-                    <div className="rounded-2xl border border-border/60 bg-background px-4 py-3 text-sm text-muted-foreground">
-                      <p className="leading-6">
-                        {t("connectors.github.reconnectOrder")}
-                        {" "}
-                        {t("connectors.github.directRedirectHint")}
-                      </p>
-                    </div>
-                  </div>
-                ) : null}
-                
-                {/* 仅在非 GitHub 连接器时显示复杂的 Profile 配置区 */}
-                {unifiedOauthCard && !githubConnector && selectedDetailProfile?.lastError ? (
+                <div className="mt-4 w-full max-w-[720px] space-y-8">
+                {/* 仅在已授权态显示必要错误，未授权态不展示错误提示 */}
+                {unifiedOauthCard &&
+                !githubConnector &&
+                selectedDetailProfile?.authStatus === "authorized" &&
+                selectedDetailProfile?.lastError ? (
                   <div className="flex items-start gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                     <span className="leading-relaxed">{selectedDetailProfile.lastError}</span>
@@ -1411,65 +1253,6 @@ export function ConnectorCenterPanel({
                   <div className="flex items-start gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                     <span className="leading-relaxed">{detailItem.availabilityReason}</span>
-                  </div>
-                ) : null}
-
-                {unifiedOauthCard && !githubConnector && guide ? (
-                  <div className="space-y-4 rounded-3xl border border-border/70 bg-muted/20 p-5">
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                        <ShieldCheck className="h-4 w-4 text-foreground/70" />
-                        {t("connectors.guideTitle", { name: detailItem.name })}
-                      </div>
-                      <p className="text-sm leading-6 text-muted-foreground">{guide.intro}</p>
-                    </div>
-
-                    {guide.steps?.length ? (
-                      <div className="space-y-3 rounded-2xl border border-border/60 bg-background px-4 py-3">
-                        <p className="text-sm font-medium text-foreground">{t("connectors.connectionSteps")}</p>
-                        <ol className="list-decimal space-y-1.5 pl-5 text-sm leading-6 text-muted-foreground">
-                          {guide.steps.map((step) => (
-                            <li key={step}>{step}</li>
-                          ))}
-                        </ol>
-                      </div>
-                    ) : null}
-
-                    {guide.tips?.length ? (
-                      <div className="space-y-3 rounded-2xl border border-border/60 bg-background px-4 py-3">
-                        <p className="text-sm font-medium text-foreground">{t("connectors.usageTips")}</p>
-                        <div className="space-y-2">
-                          {guide.tips.map((tip) => (
-                            <p key={tip} className="text-sm leading-6 text-muted-foreground">
-                              {tip}
-                            </p>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-
-                    {guide.quickLinks?.length ? (
-                      <div className="space-y-2">
-                        <p className="text-xs font-medium text-muted-foreground">{t("connectors.relatedDocs")}</p>
-                        <div className="grid gap-2">
-                          {guide.quickLinks.map((link) => (
-                            <a
-                              key={link.href}
-                              href={link.href}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-background px-3 py-2 text-sm text-foreground hover:bg-muted/40"
-                            >
-                              <div className="min-w-0">
-                                <div>{link.label}</div>
-                                <div className="text-xs text-muted-foreground">{link.description}</div>
-                              </div>
-                              <ArrowUpRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-                            </a>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
                   </div>
                 ) : null}
 
@@ -1678,8 +1461,8 @@ export function ConnectorCenterPanel({
                           )}
                           {connectorLevelOauth
                             ? selectedDetailProfile?.authStatus === "authorized"
-                              ? t("connectors.actions.reconnectConnector", { name: detailItem.name })
-                              : t("connectors.actions.connectConnector", { name: detailItem.name })
+                              ? t("connectors.actions.reconnectConnector", { name: detailDisplayName })
+                              : t("connectors.actions.connectConnector", { name: detailDisplayName })
                             : selectedDetailProfile?.authStatus === "authorized"
                               ? t("connectors.actions.reauthorize")
                               : t("connectors.actions.startOauth")}

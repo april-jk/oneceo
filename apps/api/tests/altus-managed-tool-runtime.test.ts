@@ -124,6 +124,60 @@ test('load_skill_resource accepts active skill slug and revisionNumber as a narr
   assert.equal(payload.contentMarkdown, '# Routing');
 });
 
+test('load_skill_resource accepts platform display skill ids from prompt context', async () => {
+  const syncMock = mock.method(sandboxSkillSyncService, 'syncResolvedSkillResource', async (input: any) => ({
+    taskSessionId: 'session-1',
+    orchestratorSessionId: 'sandbox-1',
+    skillId: input.skill.skillId,
+    revisionId: input.skill.revisionId,
+    slug: input.skill.slug,
+    resourcePath: input.resourcePath,
+    skillResourcePath: '/home/user/.config/opencode/skills/platform/ppt-workflow/templates/render-instruction-draft.md',
+    resourceType: 'template',
+    contentMarkdown: '# Render Draft',
+  }));
+
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [
+      {
+        sourceType: 'platform',
+        skillId: '569150cf-820e-48df-8966-e24abe47aae8',
+        revisionId: 'c954276e-1cae-495f-bdf6-4af11c8221dc',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: 'PPT 子任务编排',
+        category: 'office',
+        renderedMarkdown: '# Skill Brief',
+        revisionNumber: 6,
+        resourceSummary: {
+          totalCount: 1,
+          referenceCount: 0,
+          templateCount: 1,
+          paths: ['templates/render-instruction-draft.md'],
+        },
+      },
+    ],
+  });
+
+  const result = await runtime.execute('load_skill_resource', {
+    skillId: 'skill:platform:569150cf-820e-48df-8966-e24abe47aae8',
+    revisionId: 'c954276e-1cae-495f-bdf6-4af11c8221dc',
+    resourcePath: 'templates/render-instruction-draft.md',
+  });
+
+  assert.equal(syncMock.mock.callCount(), 1);
+  const syncInput = syncMock.mock.calls[0]?.arguments[0] as any;
+  assert.equal(syncInput.skill.skillId, '569150cf-820e-48df-8966-e24abe47aae8');
+  assert.equal(syncInput.skill.revisionId, 'c954276e-1cae-495f-bdf6-4af11c8221dc');
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.resourcePath, 'templates/render-instruction-draft.md');
+  assert.equal(payload.contentMarkdown, '# Render Draft');
+});
+
 test('load_skill_resource rejects inactive or non-selected skills', async () => {
   const runtime = new AltusManagedToolRuntime({
     sessionId: 'session-1',

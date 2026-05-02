@@ -92,9 +92,39 @@ function findActiveSkillForResourceLoad(
   activeSkills: ManagedSkillContext[],
   input: { skillId: string; revisionId: string }
 ) {
-  const exactMatch = activeSkills.find((item) => item.skillId === input.skillId && item.revisionId === input.revisionId);
+  const normalized = normalizeSkillResourceLoadInput(input);
+  const exactMatch = activeSkills.find(
+    (item) => item.skillId === normalized.skillId && item.revisionId === normalized.revisionId
+  );
   if (exactMatch) return exactMatch;
-  return activeSkills.find((item) => item.slug === input.skillId && String(item.revisionNumber ?? '') === input.revisionId);
+  return activeSkills.find(
+    (item) => item.slug === normalized.skillId && String(item.revisionNumber ?? '') === normalized.revisionId
+  );
+}
+
+function normalizeSkillResourceLoadInput(input: { skillId: string; revisionId: string }) {
+  return {
+    skillId: normalizeSkillResourceLoadSkillId(input.skillId),
+    revisionId: normalizeSkillResourceLoadRevisionId(input.revisionId),
+  };
+}
+
+function normalizeSkillResourceLoadSkillId(value: string) {
+  const text = value.trim().replace(/^id=/i, '');
+  const catalogMatch = /^skill-catalog:platform:([^:]+)(?::[^:]+)?$/i.exec(text);
+  if (catalogMatch?.[1]) return catalogMatch[1];
+  const platformMatch = /^skill:platform:([^:]+)(?::[^:]+)?$/i.exec(text);
+  if (platformMatch?.[1]) return platformMatch[1];
+  return text;
+}
+
+function normalizeSkillResourceLoadRevisionId(value: string) {
+  const text = value.trim().replace(/^id=/i, '');
+  const catalogMatch = /^skill-catalog:platform:[^:]+:([^:]+)$/i.exec(text);
+  if (catalogMatch?.[1]) return catalogMatch[1];
+  const revisionMatch = /^revision:platform:([^:]+)$/i.exec(text);
+  if (revisionMatch?.[1]) return revisionMatch[1];
+  return text;
 }
 
 function normalizeShellRunMode(value: unknown): ShellRunMode {

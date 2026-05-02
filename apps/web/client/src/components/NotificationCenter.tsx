@@ -360,7 +360,9 @@ export function NotificationCenter() {
                       onClick={() => handleNotificationClick(notification)}
                     >
                       <div className="flex items-start gap-3">
-                        <span className="text-lg">{getTypeIcon(notification.type)}</span>
+                        <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 mt-1.5 ${
+                          notification.isRead ? 'bg-gray-300' : 'bg-gray-900'
+                        }`} />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <h3
@@ -370,9 +372,6 @@ export function NotificationCenter() {
                             >
                               {notification.title}
                             </h3>
-                            {!notification.isRead && (
-                              <span className="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0" />
-                            )}
                           </div>
                           <p className="text-sm text-gray-500 mt-1 line-clamp-2">
                             {notification.content}

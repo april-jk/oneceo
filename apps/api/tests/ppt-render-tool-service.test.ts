@@ -100,6 +100,111 @@ module.exports = PptxGen;
   assert.match(output, /ONECEO_PPT_RENDER_RESULT/);
 });
 
+test('renderer script reports material, density, and layout quality gates', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oneceo-ppt-render-test-'));
+  const moduleDir = path.join(dir, 'node_modules', 'pptxgenjs');
+  fs.mkdirSync(moduleDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(moduleDir, 'package.json'),
+    JSON.stringify({ name: 'pptxgenjs', version: '0.0.0', main: 'index.js' })
+  );
+  fs.writeFileSync(
+    path.join(moduleDir, 'index.js'),
+    `
+class Slide {
+  constructor() { this.background = null; }
+  addText(value) {
+    if (typeof value !== 'string' && !Array.isArray(value)) {
+      throw new Error('addText received non-string value: ' + typeof value);
+    }
+    if (typeof value === 'string' && value.includes('[object Object]')) {
+      throw new Error('addText received object placeholder text');
+    }
+  }
+  addShape() {}
+  addImage() {}
+}
+class PptxGen {
+  constructor() { this.layout = ''; this.author = ''; this.company = ''; this.subject = ''; this.title = ''; this.lang = ''; this.theme = {}; this.ShapeType = PptxGen.ShapeType; }
+  addSlide() { return new Slide(); }
+  async writeFile() {}
+}
+PptxGen.ShapeType = { rect: 'rect', roundRect: 'roundRect', ellipse: 'ellipse', line: 'line' };
+module.exports = PptxGen;
+`
+  );
+  fs.writeFileSync(path.join(dir, 'render-pptx.mjs'), buildRendererScript());
+  fs.writeFileSync(
+    path.join(dir, 'input.json'),
+    JSON.stringify({
+      deck: {
+        title: '元宵节介绍',
+        purpose: '介绍元宵节民俗',
+        audience: '通用观众',
+        slideCount: 3,
+      },
+      theme: {
+        colorTokens: {
+          text: '#3a1511',
+          primary: '#d71920',
+          background: '#fff4e1',
+        },
+      },
+      slides: [
+        {
+          index: 1,
+          title: '什么是元宵节？',
+          pageType: 'content',
+          visualRole: 'light',
+          coreMessage: '元宵节是春节后的第一个重要传统节日',
+          layoutFamily: 'lead-image-side-text',
+          contentBlocks: [{ type: 'detail', text: '农历正月十五庆祝。' }],
+          imageSlots: [
+            {
+              url: 'https://example.com/yuanxiao-word-template-31kuan.jpg',
+              alt: '元宵节电子手抄报 WORD格式 可打印 31款',
+            },
+          ],
+        },
+        {
+          index: 2,
+          title: '特色美食',
+          pageType: 'comparison',
+          visualRole: 'dark',
+          coreMessage: '汤圆和元宵承载团圆寓意',
+          layoutFamily: 'before-after',
+          contentBlocks: [
+            { type: 'detail', text: '北方多称元宵，滚制成型，口感扎实。' },
+            { type: 'detail', text: '南方多称汤圆，包制成型，口感软糯。' },
+          ],
+        },
+        {
+          index: 3,
+          title: '现代庆祝方式',
+          pageType: 'content',
+          visualRole: 'light',
+          coreMessage: '各地举办庆祝活动',
+          layoutFamily: 'lead-image-side-text',
+          contentBlocks: [{ type: 'detail', text: '灯光秀、文化展览等。' }],
+        },
+      ],
+      sources: [],
+      openQuestions: [],
+    })
+  );
+
+  execFileSync(process.execPath, ['render-pptx.mjs', 'input.json', 'deliverables/output.pptx', 'deliverables/report.json'], {
+    cwd: dir,
+    encoding: 'utf8',
+  });
+  const report = JSON.parse(fs.readFileSync(path.join(dir, 'deliverables', 'report.json'), 'utf8'));
+  const warningCodes = report.warnings.map((warning: any) => warning.code);
+
+  assert.ok(warningCodes.includes('low_quality_image_skipped'));
+  assert.ok(warningCodes.includes('low_density_slide'));
+  assert.ok(warningCodes.includes('layout_semantic_downgraded'));
+});
+
 test('renderer script repairs underfilled visual structures instead of drawing empty shells', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oneceo-ppt-render-test-'));
   const moduleDir = path.join(dir, 'node_modules', 'pptxgenjs');

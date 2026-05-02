@@ -7,6 +7,7 @@
 
 import { useState } from "react";
 import Sidebar from "./Sidebar";
+import { NotificationCenter } from "./NotificationCenter";
 import type { TaskProjectSelection } from "@/lib/task-project-selection";
 
 interface WorkspaceLayoutProps {
@@ -64,6 +65,7 @@ export default function WorkspaceLayout({
           {children}
         </div>
       </main>
+      <NotificationCenter />
     </div>
   );
 }

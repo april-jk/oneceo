@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
-import { Diamond, ArrowDown, MessageSquare, RefreshCw } from "lucide-react";
+import { Diamond, ArrowDown, MessageSquare, RefreshCw, Wallet } from "lucide-react";
+import { RechargeDialog } from "./RechargeDialog";
 
 interface SessionConsumptionRecord {
   id: string;
@@ -20,6 +21,7 @@ export function BillingSettingsPanel({ onClose }: { onClose?: () => void }) {
   const [loading, setLoading] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [page, setPage] = useState(1);
+  const [rechargeOpen, setRechargeOpen] = useState(false);
 
   const fetchTransactions = useCallback(async (pageNum: number) => {
     setLoading(true);
@@ -80,11 +82,14 @@ export function BillingSettingsPanel({ onClose }: { onClose?: () => void }) {
         </div>
       </div>
 
-      {/* 充值入口（预留） */}
+      {/* 充值入口 */}
       <div className="flex gap-3">
-        <Button disabled>
-          <span className="mr-2">+</span>
-          充值积分（即将上线）
+        <Button
+          onClick={() => setRechargeOpen(true)}
+          className="h-10 px-4 rounded-lg bg-[#0969da] hover:bg-[#0550ae] text-white font-semibold text-sm shadow-none"
+        >
+          <Wallet className="mr-2 h-4 w-4" />
+          充值积分
         </Button>
       </div>
 
@@ -157,6 +162,12 @@ export function BillingSettingsPanel({ onClose }: { onClose?: () => void }) {
           </Button>
         )}
       </div>
+
+      <RechargeDialog
+        open={rechargeOpen}
+        onOpenChange={setRechargeOpen}
+        currentBalance={credits?.balance || 0}
+      />
     </div>
   );
 }

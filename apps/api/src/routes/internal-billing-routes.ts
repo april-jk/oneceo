@@ -127,8 +127,8 @@ function buildBillingDebugMessages(input: { cacheMode: string; systemPrompt: str
 }
 
 function calculateBillingDebugBreakdown(input: {
-  promptPricePer1kTokens: number;
-  completionPricePer1kTokens: number;
+  promptPricePer1mTokens: number;
+  completionPricePer1mTokens: number;
   cacheHitRatio: number;
   cacheCreationRatio: number;
   normalizedUsage: {
@@ -140,10 +140,10 @@ function calculateBillingDebugBreakdown(input: {
   totalCredits: number;
   creditToRmb: number;
 }) {
-  const regularPromptCredits = input.normalizedUsage.nonCachedPromptTokens * input.promptPricePer1kTokens / 1000;
-  const cachedPromptCredits = input.normalizedUsage.cachedPromptTokens * input.promptPricePer1kTokens * input.cacheHitRatio / 1000;
-  const cacheCreationCredits = input.normalizedUsage.cacheCreationTokens * input.promptPricePer1kTokens * input.cacheCreationRatio / 1000;
-  const completionCredits = input.normalizedUsage.completionTokens * input.completionPricePer1kTokens / 1000;
+  const regularPromptCredits = input.normalizedUsage.nonCachedPromptTokens * input.promptPricePer1mTokens / 1000000;
+  const cachedPromptCredits = input.normalizedUsage.cachedPromptTokens * input.promptPricePer1mTokens * input.cacheHitRatio / 1000000;
+  const cacheCreationCredits = input.normalizedUsage.cacheCreationTokens * input.promptPricePer1mTokens * input.cacheCreationRatio / 1000000;
+  const completionCredits = input.normalizedUsage.completionTokens * input.completionPricePer1mTokens / 1000000;
   const totalCreditsBeforeCeil = regularPromptCredits + cachedPromptCredits + cacheCreationCredits + completionCredits;
   return {
     regularPromptCredits,
@@ -518,15 +518,15 @@ router.post('/debug/llm-request', async (req, res) => {
         modelProvider: provider,
         originalModelProvider: pricing.modelProvider,
         resolvedCacheProvider: provider,
-        promptPricePer1kTokens: pricing.promptPricePer1kTokens,
-        completionPricePer1kTokens: pricing.completionPricePer1kTokens,
+        promptPricePer1mTokens: pricing.promptPricePer1mTokens,
+        completionPricePer1mTokens: pricing.completionPricePer1mTokens,
         cacheHitRatio: cacheRatios?.hit || 0,
         cacheCreationRatio: cacheRatios?.creation || 0,
         creditToRmb: exchange.creditToRmb,
       };
       calculation = calculateBillingDebugBreakdown({
-        promptPricePer1kTokens: pricing.promptPricePer1kTokens,
-        completionPricePer1kTokens: pricing.completionPricePer1kTokens,
+        promptPricePer1mTokens: pricing.promptPricePer1mTokens,
+        completionPricePer1mTokens: pricing.completionPricePer1mTokens,
         cacheHitRatio: cacheRatios?.hit || 0,
         cacheCreationRatio: cacheRatios?.creation || 0,
         normalizedUsage,
@@ -678,6 +678,7 @@ router.get('/pricing', async (req, res) => {
           runtimeConfigAnchor: runtime?.runtimeConfigAnchor || null,
           cacheHitRatio: ratios?.hit || 0,
           cacheCreationRatio: ratios?.creation || 0,
+          multiplier: p.multiplier !== undefined ? Number(parseFloat(String(p.multiplier)).toFixed(4)) : 1.0,
         };
       })
     );
@@ -689,8 +690,9 @@ router.get('/pricing', async (req, res) => {
         id: `missing:${runtime.key}`,
         model: runtime.key,
         modelProvider: runtime.kind,
-        promptPricePer1kTokens: 0,
-        completionPricePer1kTokens: 0,
+        promptPricePer1mTokens: 0,
+        completionPricePer1mTokens: 0,
+        multiplier: 1.0,
         isActive: false,
         effectiveFrom: null,
         effectiveUntil: null,
@@ -774,8 +776,9 @@ router.post('/pricing', async (req, res) => {
     const {
       model,
       modelProvider,
-      promptPricePer1kTokens,
-      completionPricePer1kTokens,
+      promptPricePer1mTokens,
+      completionPricePer1mTokens,
+      multiplier,
       effectiveFrom,
       cacheHitRatio,
       cacheCreationRatio,
@@ -794,8 +797,8 @@ router.post('/pricing', async (req, res) => {
       return res.status(400).json({ error: '计费对象与 provider 不匹配' });
     }
     if (
-      !isPositivePostgresInteger(promptPricePer1kTokens) ||
-      !isPositivePostgresInteger(completionPricePer1kTokens)
+      !isPositivePostgresInteger(promptPricePer1mTokens) ||
+      !isPositivePostgresInteger(completionPricePer1mTokens)
     ) {
       return res.status(400).json({ error: '模型定价必须是大于 0 的整数' });
     }
@@ -816,8 +819,9 @@ router.post('/pricing', async (req, res) => {
     const result = await pricingService.createPricing({
       model,
       modelProvider,
-      promptPricePer1kTokens,
-      completionPricePer1kTokens,
+      promptPricePer1mTokens,
+      completionPricePer1mTokens,
+      multiplier: multiplier !== undefined ? Number(parseFloat(String(multiplier)).toFixed(4)) : undefined,
       effectiveFrom: parsedEffectiveFrom,
     });
 

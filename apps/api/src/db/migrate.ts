@@ -1489,8 +1489,9 @@ CREATE TABLE IF NOT EXISTS model_pricing (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   model TEXT NOT NULL,
   model_provider TEXT NOT NULL,
-  prompt_price_per_1k_tokens INTEGER NOT NULL,
-  completion_price_per_1k_tokens INTEGER NOT NULL,
+  prompt_price_per_1m_tokens INTEGER NOT NULL,
+  completion_price_per_1m_tokens INTEGER NOT NULL,
+  multiplier REAL NOT NULL DEFAULT 1.0,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   effective_from TIMESTAMP NOT NULL DEFAULT NOW(),
   effective_until TIMESTAMP,
@@ -1621,19 +1622,21 @@ export async function runMigration() {
 
     // 插入当前使用的模型默认定价（如不存在）
     await db.execute(sql.raw(`
-      WITH seed(model, model_provider, prompt_price_per_1k_tokens, completion_price_per_1k_tokens) AS (
+      WITH seed(model, model_provider, prompt_price_per_1m_tokens, completion_price_per_1m_tokens) AS (
         VALUES
-          ('qwen3-max-2026-01-23', 'qwen', 3, 6),
-          ('qwen3-vl-plus', 'qwen', 5, 10),
-          ('claude-haiku-4-5-20251001', 'anthropic', 5, 10),
-          ('agent.lite', 'agent', 3, 6),
-          ('agent.pro', 'agent', 3, 6),
-          ('agent.max', 'agent', 3, 6),
-          ('sandbox.opencode', 'sandbox', 3, 6),
-          ('sandbox.codex', 'sandbox', 3, 6)
+          ('qwen3-max-2026-01-23', 'qwen', 25, 1000),
+          ('qwen3-vl-plus', 'qwen', 50, 2000),
+          ('claude-haiku-4-5-20251001', 'anthropic', 180, 9000),
+          ('gpt-4o', 'openai', 1800, 72000),
+          ('gpt-4o-mini', 'openai', 180, 7200),
+          ('agent.lite', 'agent', 25, 1000),
+          ('agent.pro', 'agent', 180, 9000),
+          ('agent.max', 'agent', 1800, 72000),
+          ('sandbox.opencode', 'sandbox', 25, 1000),
+          ('sandbox.codex', 'sandbox', 180, 9000)
       )
-      INSERT INTO model_pricing (model, model_provider, prompt_price_per_1k_tokens, completion_price_per_1k_tokens, is_active, effective_from)
-      SELECT seed.model, seed.model_provider, seed.prompt_price_per_1k_tokens, seed.completion_price_per_1k_tokens, true, NOW()
+      INSERT INTO model_pricing (model, model_provider, prompt_price_per_1m_tokens, completion_price_per_1m_tokens, is_active, effective_from)
+      SELECT seed.model, seed.model_provider, seed.prompt_price_per_1m_tokens, seed.completion_price_per_1m_tokens, true, NOW()
       FROM seed
       WHERE NOT EXISTS (
         SELECT 1
@@ -1647,6 +1650,30 @@ export async function runMigration() {
       UPDATE model_pricing
       SET model_provider = 'qwen', updated_at = NOW()
       WHERE LOWER(model) LIKE 'qwen%';
+    `));
+
+    // 迁移：将定价基础单位从 1k tokens 切换到 1M tokens
+    await db.execute(sql.raw(`
+      DO $$ BEGIN
+        ALTER TABLE model_pricing RENAME COLUMN prompt_price_per_1k_tokens TO prompt_price_per_1m_tokens;
+      EXCEPTION WHEN undefined_column THEN NULL;
+      END $$;
+
+      DO $$ BEGIN
+        ALTER TABLE model_pricing RENAME COLUMN completion_price_per_1k_tokens TO completion_price_per_1m_tokens;
+      EXCEPTION WHEN undefined_column THEN NULL;
+      END $$;
+
+      UPDATE model_pricing SET prompt_price_per_1m_tokens = prompt_price_per_1m_tokens * 1000
+        WHERE prompt_price_per_1m_tokens < 1000;
+
+      UPDATE model_pricing SET completion_price_per_1m_tokens = completion_price_per_1m_tokens * 1000
+        WHERE completion_price_per_1m_tokens < 1000;
+    `));
+
+    // 迁移：添加 multiplier 列
+    await db.execute(sql.raw(`
+      ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS multiplier REAL NOT NULL DEFAULT 1.0;
     `));
 
     console.log('✅ 数据库迁移完成！');

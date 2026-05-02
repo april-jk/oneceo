@@ -4,23 +4,23 @@ import { pricingService } from './pricing-service';
  * 兑换比例配置
  * 
  * 基于以下原则：
- * 1. 1 credit = ¥0.01 (1分钱) 作为基准
- * 2. 模型定价参考实际 API 成本 + 20-30% 平台 margin
+ * 1. 1 credit = ¥0.1 (1角钱) 作为基准，即 1 RMB = 10 credits
+ * 2. 模型定价规则：1元/百万token = 10积分/百万token
  * 3. 允许管理员调整汇率和 margin
  * 
- * 参考价格（每 1k tokens）：
- * - GPT-4o: ¥0.175 / ¥0.70 (prompt/completion)
- * - Claude-3-Haiku: ¥0.018 / ¥0.09
- * - Qwen3-Max: ¥0.003 / ¥0.006
+ * 参考价格（每 1k tokens，代码中乘以 1000 换算为 1M tokens 定价）：
+ * - GPT-4o: ¥0.18 / ¥0.72 (prompt/completion)
+ * - Claude-Haiku-4-5: ¥0.018 / ¥0.09
+ * - Qwen3-Max: ¥0.0025 / ¥0.10
  */
 
 // 平台兑换基准：1 credit = X RMB
-const DEFAULT_CREDIT_TO_RMB = 0.01; // 1 credit = 1 分钱
+const DEFAULT_CREDIT_TO_RMB = 0.1; // 1 credit = 1 角钱 (1 RMB = 10 credits)
 
 // 平台利润率（在 API 成本上的加成）
 const DEFAULT_PLATFORM_MARGIN = 0.25; // 25%
 
-// API 实际成本（RMB / 1k tokens）——用于计算建议定价
+// API 实际成本（RMB / 1k tokens）——用于计算建议定价（代码中乘以 1000 换算为 per 1M tokens）
 export const API_COST_RMB: Record<string, { prompt: number; completion: number }> = {
   // OpenAI 系列（按 $1=¥7.2 换算）
   'gpt-4o': { prompt: 0.18, completion: 0.72 },
@@ -64,7 +64,9 @@ export class ConversionService {
   }
 
   /**
-   * 根据 API 成本计算建议定价（credits / 1k tokens）
+   * 根据 API 成本计算建议定价（credits / 1M tokens）
+   * API_COST_RMB 为 per 1k tokens，乘以 1000 后得到 per 1M tokens 的定价
+   * 新规则：1 RMB = 10 credits（rate = 0.1）
    */
   calculateSuggestedPricing(
     model: string,
@@ -73,11 +75,11 @@ export class ConversionService {
     const cost = API_COST_RMB[model];
     if (!cost) return null;
 
-    const rate = DEFAULT_CREDIT_TO_RMB;
+    const rate = 0.1; // 1 RMB = 10 credits
     
-    // 成本 + margin，转换为 credits
-    const promptPrice = Math.ceil((cost.prompt * (1 + margin)) / rate);
-    const completionPrice = Math.ceil((cost.completion * (1 + margin)) / rate);
+    // 成本 + margin，转换为 credits（API_COST_RMB 是 per 1k tokens，定价是 per 1M tokens，需乘 1000）
+    const promptPrice = Math.ceil((cost.prompt * (1 + margin)) / rate * 1000);
+    const completionPrice = Math.ceil((cost.completion * (1 + margin)) / rate * 1000);
 
     return { promptPrice, completionPrice };
   }
@@ -110,11 +112,11 @@ export class ConversionService {
   getRechargePackages(): Array<{ credits: number; rmb: number; bonus: number; label: string }> {
     const rate = DEFAULT_CREDIT_TO_RMB;
     return [
-      { credits: 500, rmb: 5, bonus: 0, label: '体验包' },
-      { credits: 2000, rmb: 20, bonus: 100, label: '基础包' },
-      { credits: 5000, rmb: 50, bonus: 500, label: '标准包' },
-      { credits: 12000, rmb: 100, bonus: 2000, label: '进阶包' },
-      { credits: 30000, rmb: 200, bonus: 8000, label: '专业包' },
+      { credits: 50, rmb: 5, bonus: 0, label: '体验包' },
+      { credits: 200, rmb: 20, bonus: 10, label: '基础包' },
+      { credits: 500, rmb: 50, bonus: 50, label: '标准包' },
+      { credits: 1200, rmb: 120, bonus: 200, label: '进阶包' },
+      { credits: 3000, rmb: 300, bonus: 800, label: '专业包' },
     ];
   }
 

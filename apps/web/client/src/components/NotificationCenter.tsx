@@ -347,6 +347,7 @@ export function NotificationCenter() {
               <Button
                 variant={filter === 'unread' ? 'default' : 'ghost'}
                 size="sm"
+                disabled={unreadCount === 0}
                 onClick={() => { setFilter('unread'); setPage(1); fetchNotifications(1); }}
               >
                 未读
@@ -367,7 +368,7 @@ export function NotificationCenter() {
               ) : notifications.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-32 text-gray-500">
                   <Bell className="w-8 h-8 mb-2 opacity-50" />
-                  <p>暂无通知</p>
+                  <p>{filter === 'unread' ? '没有未读消息' : '暂无通知'}</p>
                 </div>
               ) : (
                 <div className="divide-y">

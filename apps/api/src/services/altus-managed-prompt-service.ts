@@ -939,7 +939,7 @@ export class AltusManagedPromptService {
       '- This is the metadata catalog of skills the current user can use.',
       '- Do not assume the full skill body is loaded from this list alone.',
       '- If the user explicitly selected a skill, its full body appears in the Active skills section.',
-      '- If an active skill lists extra resources and you need one, call `load_skill_resource` with the exact `skillId`, `revisionId`, and `resourcePath`.',
+      '- If an active skill lists extra resources and you need one, call `load_skill_resource` with the raw active `skillId`, raw `revisionId`, and `resourcePath`; do not copy display ids such as `id=skill:platform:...`.',
       '- Catalog entries are diagnostic/index context only; do not treat them as loaded skill bodies.',
       '',
       blockIndex,

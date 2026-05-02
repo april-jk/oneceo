@@ -1397,6 +1397,29 @@ export const cachePricingConfig = pgTable(
 );
 
 /**
+ * 积分激活码分组表
+ *
+ * 管理员创建的激活码分组，用于组织和管理激活码
+ */
+export const creditActivationCodeGroups = pgTable(
+  'credit_activation_code_groups',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    description: text('description'),
+    status: text('status').notNull().default('active'), // active, archived
+    createdBy: uuid('created_by').references(() => adminUsers.id, { onDelete: 'set null' }),
+    metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    nameIdx: index('idx_activation_code_groups_name').on(table.name),
+    statusIdx: index('idx_activation_code_groups_status').on(table.status),
+  })
+);
+
+/**
  * 积分激活码表
  *
  * 管理员创建的积分激活码，用户可兑换获得积分
@@ -1411,6 +1434,7 @@ export const creditActivationCodes = pgTable(
     maxUses: integer('max_uses').notNull().default(1),
     currentUses: integer('current_uses').notNull().default(0),
     expiresAt: timestamp('expires_at'),
+    groupId: uuid('group_id').references(() => creditActivationCodeGroups.id, { onDelete: 'set null' }),
     createdBy: uuid('created_by').references(() => adminUsers.id, { onDelete: 'set null' }),
     usedBy: uuid('used_by').references(() => appUsers.id, { onDelete: 'set null' }),
     usedAt: timestamp('used_at'),
@@ -1423,6 +1447,7 @@ export const creditActivationCodes = pgTable(
   (table) => ({
     codeUnique: uniqueIndex('idx_activation_codes_code').on(table.code),
     statusIdx: index('idx_activation_codes_status').on(table.status),
+    groupIdIdx: index('idx_activation_codes_group_id').on(table.groupId),
     batchIdIdx: index('idx_activation_codes_batch_id').on(table.batchId),
     expiresAtIdx: index('idx_activation_codes_expires_at').on(table.expiresAt),
     usedByIdx: index('idx_activation_codes_used_by').on(table.usedBy),
@@ -1469,3 +1494,5 @@ export type CreditActivationCode = typeof creditActivationCodes.$inferSelect;
 export type NewCreditActivationCode = typeof creditActivationCodes.$inferInsert;
 export type CreditActivationCodeUse = typeof creditActivationCodeUses.$inferSelect;
 export type NewCreditActivationCodeUse = typeof creditActivationCodeUses.$inferInsert;
+export type CreditActivationCodeGroup = typeof creditActivationCodeGroups.$inferSelect;
+export type NewCreditActivationCodeGroup = typeof creditActivationCodeGroups.$inferInsert;

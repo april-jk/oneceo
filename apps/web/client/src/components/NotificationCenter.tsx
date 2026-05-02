@@ -6,6 +6,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   OPEN_NOTIFICATION_CENTER_EVENT,
   CLOSE_NOTIFICATION_CENTER_EVENT,
+  notifyNotificationRead,
 } from '@/lib/notification-center-events';
 
 interface Notification {
@@ -136,6 +137,9 @@ export function NotificationCenter() {
       if (selectedNotification?.id === id) {
         setSelectedNotification((prev) => prev ? { ...prev, isRead: true } : null);
       }
+
+      // 通知侧边栏刷新未读数量
+      notifyNotificationRead();
     } catch (error) {
       console.error('标记已读失败:', error);
     }

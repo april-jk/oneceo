@@ -808,10 +808,10 @@ export function SettingsPanel({
                     value={currentLanguage}
                     onValueChange={handleLanguageChange}
                   >
-                    <SelectTrigger className="w-full max-w-xs rounded-xl">
+                    <SelectTrigger className="w-[208px] h-9 px-3 rounded-lg bg-[var(--fill-tsp-white-light)] border border-[var(--border-white)]">
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent className="rounded-xl">
+                    <SelectContent className="rounded-lg border border-[var(--border-white)]">
                       <SelectItem value="zh" className="rounded-md">
                         {t("settings.chinese")}
                       </SelectItem>
@@ -878,11 +878,11 @@ export function SettingsPanel({
                       {t("settings.notificationsDescription")}
                     </p>
                   </div>
-                  <div className="rounded-xl border border-border/60 divide-y divide-border/60">
-                    <div className="flex items-center justify-between px-4 py-3">
-                      <div className="flex items-center gap-3">
-                        <Mail className="h-4 w-4 text-muted-foreground" />
-                        <Label htmlFor="email-notifications" className="text-sm">
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between h-9 px-3 rounded-lg bg-[var(--fill-tsp-white-light)] border border-[var(--border-white)]">
+                      <div className="flex items-center gap-2">
+                        <Mail className="h-4 w-4 text-[var(--text-primary)]" />
+                        <Label htmlFor="email-notifications" className="text-sm text-[var(--text-primary)]">
                           {t("settings.emailNotifications")}
                         </Label>
                       </div>
@@ -892,10 +892,10 @@ export function SettingsPanel({
                         onCheckedChange={setEmailNotifications}
                       />
                     </div>
-                    <div className="flex items-center justify-between px-4 py-3">
-                      <div className="flex items-center gap-3">
-                        <Bell className="h-4 w-4 text-muted-foreground" />
-                        <Label htmlFor="push-notifications" className="text-sm">
+                    <div className="flex items-center justify-between h-9 px-3 rounded-lg bg-[var(--fill-tsp-white-light)] border border-[var(--border-white)]">
+                      <div className="flex items-center gap-2">
+                        <Bell className="h-4 w-4 text-[var(--text-primary)]" />
+                        <Label htmlFor="push-notifications" className="text-sm text-[var(--text-primary)]">
                           {t("settings.pushNotifications")}
                         </Label>
                       </div>

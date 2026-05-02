@@ -25,6 +25,8 @@ test('platform skill governance options expose all managed tool names and known 
   assert.equal(roleNames.has('ppt_builder'), true);
   assert.equal(roleNames.has('docx_builder'), true);
   assert.equal(roleNames.has('xlsx_builder'), true);
+  assert.equal(options.autoActivationTriggers.some((item) => item.value === 'ppt'), true);
+  assert.equal(options.autoActivationTriggers.some((item) => item.value === 'presentation'), true);
 
   assert.equal(toolNames.has('vercel_update_project'), true);
   assert.equal(toolNames.has('vercel_create_deployment'), true);

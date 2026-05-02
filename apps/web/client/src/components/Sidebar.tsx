@@ -1621,6 +1621,21 @@ export default function Sidebar({
         onMouseEnter={() => setSettingsMenuOpen(true)}
         onMouseLeave={() => setSettingsMenuOpen(false)}
       >
+        {/* 通知按钮 */}
+        <Button
+          variant="ghost"
+          className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150 mb-1 ${collapsed ? "" : "min-w-0 overflow-hidden"}`}
+          onClick={() => openNotificationCenter()}
+        >
+          <Bell className="w-4 h-4" />
+          {!collapsed && (
+            <span className="min-w-0 truncate text-sm font-medium">
+              {t("sidebar.notifications")}
+            </span>
+          )}
+        </Button>
+
+        {/* 设置按钮 */}
         <DropdownMenu
           open={settingsMenuOpen}
           onOpenChange={setSettingsMenuOpen}
@@ -1683,13 +1698,6 @@ export default function Sidebar({
               </div>
             </div>
             <div className="p-2">
-              <DropdownMenuItem
-                className="rounded-lg py-2.5 px-3"
-                onSelect={() => openNotificationCenter()}
-              >
-                <Bell className="w-4 h-4 mr-2 text-muted-foreground" />
-                <span className="text-sm">{t("sidebar.notifications")}</span>
-              </DropdownMenuItem>
               <DropdownMenuItem
                 className="rounded-lg py-2.5 px-3"
                 onSelect={() => openSettingsDialog({ tab: "settings" })}

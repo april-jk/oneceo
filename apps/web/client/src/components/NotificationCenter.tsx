@@ -26,7 +26,6 @@ export function NotificationCenter() {
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
-  const [filter, setFilter] = useState<'all' | 'unread'>('all');
   const [selectedNotification, setSelectedNotification] = useState<Notification | null>(null);
 
   // 监听打开/关闭事件
@@ -53,9 +52,6 @@ export function NotificationCenter() {
         page: String(pageNum),
         pageSize: '20',
       });
-      if (filter === 'unread') {
-        params.append('unreadOnly', 'true');
-      }
 
       const response = await fetch(`/api/notifications?${params}`, {
         credentials: 'include',
@@ -63,10 +59,18 @@ export function NotificationCenter() {
       if (!response.ok) throw new Error('获取通知失败');
       const data = await response.json();
 
+      // 按未读优先、时间倒序排序
+      const sortedItems = (data.items || []).sort((a: Notification, b: Notification) => {
+        if (a.isRead !== b.isRead) {
+          return a.isRead ? 1 : -1;
+        }
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+
       if (append) {
-        setNotifications((prev) => [...prev, ...data.items]);
+        setNotifications((prev) => [...prev, ...sortedItems]);
       } else {
-        setNotifications(data.items || []);
+        setNotifications(sortedItems);
       }
       setUnreadCount(data.unreadCount || 0);
       setHasMore((data.items || []).length === 20);
@@ -75,7 +79,7 @@ export function NotificationCenter() {
     } finally {
       setLoading(false);
     }
-  }, [filter]);
+  }, []);
 
   // 获取未读数量
   const fetchUnreadCount = useCallback(async () => {
@@ -95,7 +99,6 @@ export function NotificationCenter() {
   useEffect(() => {
     if (open) {
       setPage(1);
-      setFilter('all');
       setSelectedNotification(null);
       fetchNotifications(1);
     }
@@ -335,29 +338,6 @@ export function NotificationCenter() {
           </div>
         ) : (
           <>
-            {/* 筛选标签 */}
-            <div className="flex gap-2 px-4 py-2 border-b">
-              <Button
-                variant={filter === 'all' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => { setFilter('all'); setPage(1); fetchNotifications(1); }}
-              >
-                全部
-              </Button>
-              <Button
-                variant={filter === 'unread' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => { setFilter('unread'); setPage(1); fetchNotifications(1); }}
-              >
-                未读
-                {unreadCount > 0 && (
-                  <Badge variant="secondary" className="ml-1">
-                    {unreadCount}
-                  </Badge>
-                )}
-              </Button>
-            </div>
-
             {/* 通知列表 */}
             <ScrollArea className="flex-1">
               {loading && notifications.length === 0 ? (
@@ -367,7 +347,7 @@ export function NotificationCenter() {
               ) : notifications.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-32 text-gray-500">
                   <Bell className="w-8 h-8 mb-2 opacity-50" />
-                  <p>{filter === 'unread' ? '没有未读消息' : '暂无通知'}</p>
+                  <p>暂无通知</p>
                 </div>
               ) : (
                 <div className="divide-y">

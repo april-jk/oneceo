@@ -717,8 +717,14 @@ export function buildManagedToolDefinitions() {
           'Load one markdown resource file for an already selected skill into the sandbox skill directory when the current task needs more detail.',
         parameters: objectSchema(
           {
-            skillId: { type: 'string', description: 'Skill id from the active skill list.' },
-            revisionId: { type: 'string', description: 'Revision id from the active skill list.' },
+            skillId: {
+              type: 'string',
+              description: 'Skill id from the active skill list. Prefer the raw skillId, not display ids.',
+            },
+            revisionId: {
+              type: 'string',
+              description: 'Revision id from the active skill list. Prefer the raw revisionId, not display ids.',
+            },
             resourcePath: {
               type: 'string',
               description: 'Relative markdown resource path such as references/foo.md or templates/bar.md.',

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { AdminButton, AdminTabs, StatusBadge, DangerConfirmDialog } from './admin-ui';
+import { AdminButton, StatusBadge, DangerConfirmDialog } from './admin-ui';
 import type { BillingNotify } from './billing-feedback';
 
 interface Notification {
@@ -34,7 +34,6 @@ interface NotificationManagementProps {
 
 export function NotificationManagement({ onNotify }: NotificationManagementProps) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [stats, setStats] = useState<NotificationStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -43,7 +42,7 @@ export function NotificationManagement({ onNotify }: NotificationManagementProps
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // 创建/编辑弹窗状态
+  // 表单状态
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({
@@ -52,41 +51,45 @@ export function NotificationManagement({ onNotify }: NotificationManagementProps
     type: 'system',
     priority: 'normal',
     targetType: 'all',
-    targetUserIds: [] as string[],
     expiresAt: '',
   });
   const [formLoading, setFormLoading] = useState(false);
 
-  // 详情弹窗状态
+  // 详情状态
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailNotification, setDetailNotification] = useState<Notification | null>(null);
   const [detailStats, setDetailStats] = useState<NotificationStats | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
 
-  // 删除确认状态
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+  // 删除确认
+  const [deleteTarget, setDeleteTarget] = useState<Notification | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   // 获取通知列表
   const fetchNotifications = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams({
-        page: page.toString(),
-        pageSize: limit.toString(),
+        page: String(page),
+        pageSize: String(limit),
       });
-      if (statusFilter !== 'all') params.append('status', statusFilter);
-      if (typeFilter !== 'all') params.append('type', typeFilter);
-      if (searchQuery) params.append('search', searchQuery);
+      if (statusFilter !== 'all') params.set('status', statusFilter);
+      if (typeFilter !== 'all') params.set('type', typeFilter);
+      if (searchQuery.trim()) params.set('search', searchQuery.trim());
 
-      const response = await fetch(`/api/internal/notifications?${params}`);
-      if (!response.ok) throw new Error('获取通知列表失败');
-      const data = await response.json();
-      setNotifications(data.items);
-      setTotal(data.total);
+      const response = await fetch(`/api/internal/notifications?${params}`, {
+        credentials: 'include',
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setNotifications(data.items || []);
+        setTotal(data.total || 0);
+      } else {
+        onNotify?.('error', '加载失败', '无法获取通知列表');
+      }
     } catch (error) {
       console.error('获取通知列表失败:', error);
-      onNotify?.('error', '获取失败', '获取通知列表失败');
+      onNotify?.('error', '加载失败', '无法获取通知列表');
     } finally {
       setLoading(false);
     }
@@ -99,10 +102,13 @@ export function NotificationManagement({ onNotify }: NotificationManagementProps
   // 获取通知详情统计
   const fetchNotificationStats = async (id: string) => {
     try {
-      const response = await fetch(`/api/internal/notifications/${id}/stats`);
-      if (!response.ok) throw new Error('获取统计失败');
-      const data = await response.json();
-      setDetailStats(data);
+      const response = await fetch(`/api/internal/notifications/${id}/stats`, {
+        credentials: 'include',
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setDetailStats(data);
+      }
     } catch (error) {
       console.error('获取统计失败:', error);
     }
@@ -117,7 +123,6 @@ export function NotificationManagement({ onNotify }: NotificationManagementProps
       type: 'system',
       priority: 'normal',
       targetType: 'all',
-      targetUserIds: [],
       expiresAt: '',
     });
     setFormOpen(true);
@@ -132,7 +137,6 @@ export function NotificationManagement({ onNotify }: NotificationManagementProps
       type: notification.type,
       priority: notification.priority,
       targetType: notification.targetType,
-      targetUserIds: notification.targetUserIds || [],
       expiresAt: notification.expiresAt ? notification.expiresAt.split('T')[0] : '',
     });
     setFormOpen(true);
@@ -141,11 +145,11 @@ export function NotificationManagement({ onNotify }: NotificationManagementProps
   // 提交表单
   const handleSubmit = async () => {
     if (!form.title.trim()) {
-      onNotify?.('error', '验证失败', '通知标题不能为空');
+      onNotify?.('error', '参数错误', '通知标题不能为空');
       return;
     }
     if (!form.content.trim()) {
-      onNotify?.('error', '验证失败', '通知内容不能为空');
+      onNotify?.('error', '参数错误', '通知内容不能为空');
       return;
     }
 
@@ -159,23 +163,24 @@ export function NotificationManagement({ onNotify }: NotificationManagementProps
       const response = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           ...form,
           expiresAt: form.expiresAt || undefined,
         }),
       });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || '操作失败');
+      if (response.ok) {
+        onNotify?.('success', '操作成功', editingId ? '通知已更新' : '通知已创建');
+        setFormOpen(false);
+        fetchNotifications();
+      } else {
+        const error = await response.json().catch(() => ({ error: '操作失败' }));
+        onNotify?.('error', '操作失败', error.error || '操作失败');
       }
-
-      onNotify?.('success', '操作成功', editingId ? '通知已更新' : '通知已创建');
-      setFormOpen(false);
-      fetchNotifications();
     } catch (error) {
       console.error('提交失败:', error);
-      onNotify?.('error', '操作失败', error instanceof Error ? error.message : '操作失败');
+      onNotify?.('error', '操作失败', '操作失败');
     } finally {
       setFormLoading(false);
     }
@@ -186,13 +191,17 @@ export function NotificationManagement({ onNotify }: NotificationManagementProps
     try {
       const response = await fetch(`/api/internal/notifications/${id}/publish`, {
         method: 'POST',
+        credentials: 'include',
       });
-      if (!response.ok) throw new Error('发布失败');
-      onNotify?.('success', '发布成功', '通知已发布');
-      fetchNotifications();
+      if (response.ok) {
+        onNotify?.('success', '操作成功', '通知已发布');
+        fetchNotifications();
+      } else {
+        onNotify?.('error', '操作失败', '发布失败');
+      }
     } catch (error) {
       console.error('发布失败:', error);
-      onNotify?.('error', '发布失败', '发布失败');
+      onNotify?.('error', '操作失败', '发布失败');
     }
   };
 
@@ -201,31 +210,46 @@ export function NotificationManagement({ onNotify }: NotificationManagementProps
     try {
       const response = await fetch(`/api/internal/notifications/${id}/archive`, {
         method: 'POST',
+        credentials: 'include',
       });
-      if (!response.ok) throw new Error('归档失败');
-      onNotify?.('success', '归档成功', '通知已归档');
-      fetchNotifications();
+      if (response.ok) {
+        onNotify?.('success', '操作成功', '通知已归档');
+        fetchNotifications();
+      } else {
+        onNotify?.('error', '操作失败', '归档失败');
+      }
     } catch (error) {
       console.error('归档失败:', error);
-      onNotify?.('error', '归档失败', '归档失败');
+      onNotify?.('error', '操作失败', '归档失败');
     }
   };
 
   // 删除通知
-  const handleDelete = async () => {
-    if (!deletingId) return;
+  const handleDelete = async (_payload: { reason: string }) => {
+    if (!deleteTarget) return;
+
+    setDeleteLoading(true);
     try {
-      const response = await fetch(`/api/internal/notifications/${deletingId}`, {
+      const response = await fetch(`/api/internal/notifications/${deleteTarget.id}`, {
         method: 'DELETE',
+        credentials: 'include',
       });
-      if (!response.ok) throw new Error('删除失败');
-      onNotify?.('success', '删除成功', '通知已删除');
-      setDeleteConfirmOpen(false);
-      setDeletingId(null);
-      fetchNotifications();
+
+      if (response.ok) {
+        onNotify?.('success', '删除成功', '通知已删除');
+        setDeleteTarget(null);
+        setDetailOpen(false);
+        setDetailNotification(null);
+        fetchNotifications();
+      } else {
+        const error = await response.json().catch(() => ({ error: '删除失败' }));
+        onNotify?.('error', '删除失败', error.error || '无法删除通知');
+      }
     } catch (error) {
-      console.error('删除失败:', error);
-      onNotify?.('error', '删除失败', '删除失败');
+      console.error('删除通知失败:', error);
+      onNotify?.('error', '删除失败', '无法删除通知');
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -236,29 +260,56 @@ export function NotificationManagement({ onNotify }: NotificationManagementProps
     await fetchNotificationStats(notification.id);
   };
 
-  // 获取状态颜色
-  const getStatusColor = (status: string) => {
+  // 格式化日期
+  const formatDate = (dateStr: string | null | undefined) => {
+    if (!dateStr) return '-';
+    return new Date(dateStr).toLocaleString('zh-CN', { hour12: false });
+  };
+
+  // 状态标签
+  const statusLabel = (status: string) => {
     switch (status) {
-      case 'draft': return 'bg-gray-100 text-gray-800';
-      case 'published': return 'bg-green-100 text-green-800';
-      case 'archived': return 'bg-blue-100 text-blue-800';
-      default: return 'bg-gray-100 text-gray-800';
+      case 'draft': return '草稿';
+      case 'published': return '已发布';
+      case 'archived': return '已归档';
+      default: return status;
     }
   };
 
-  // 获取优先级颜色
-  const getPriorityColor = (priority: string) => {
+  // 状态色调
+  const statusTone = (status: string) => {
+    switch (status) {
+      case 'draft': return 'neutral' as const;
+      case 'published': return 'success' as const;
+      case 'archived': return 'warning' as const;
+      default: return 'neutral' as const;
+    }
+  };
+
+  // 优先级标签
+  const priorityLabel = (priority: string) => {
     switch (priority) {
-      case 'urgent': return 'bg-red-100 text-red-800';
-      case 'high': return 'bg-orange-100 text-orange-800';
-      case 'normal': return 'bg-blue-100 text-blue-800';
-      case 'low': return 'bg-gray-100 text-gray-800';
-      default: return 'bg-gray-100 text-gray-800';
+      case 'urgent': return '紧急';
+      case 'high': return '高';
+      case 'normal': return '普通';
+      case 'low': return '低';
+      default: return priority;
     }
   };
 
-  // 获取类型标签
-  const getTypeLabel = (type: string) => {
+  // 优先级色调
+  const priorityTone = (priority: string) => {
+    switch (priority) {
+      case 'urgent': return 'danger' as const;
+      case 'high': return 'warning' as const;
+      case 'normal': return 'info' as const;
+      case 'low': return 'neutral' as const;
+      default: return 'neutral' as const;
+    }
+  };
+
+  // 类型标签
+  const typeLabel = (type: string) => {
     switch (type) {
       case 'system': return '系统';
       case 'billing': return '计费';
@@ -268,34 +319,37 @@ export function NotificationManagement({ onNotify }: NotificationManagementProps
     }
   };
 
+  // 计算总页数
+  const totalPages = Math.ceil(total / limit);
+
   return (
-    <div className="space-y-6">
-      {/* 页面标题 */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold">通知管理</h2>
-          <p className="text-sm text-muted-foreground">管理系统通知，向用户下发通知</p>
-        </div>
-        <AdminButton onClick={handleCreate}>创建通知</AdminButton>
+    <section className="notification-management">
+      {/* 操作栏 */}
+      <div className="notification-actions">
+        <AdminButton variant="primary" onClick={handleCreate}>
+          创建通知
+        </AdminButton>
+        <AdminButton variant="secondary" onClick={fetchNotifications}>
+          刷新
+        </AdminButton>
       </div>
 
       {/* 筛选栏 */}
-      <div className="flex items-center gap-4">
+      <div className="notification-filters">
         <select
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className="px-3 py-2 border rounded-md"
+          onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+          className="filter-select"
         >
           <option value="all">全部状态</option>
           <option value="draft">草稿</option>
           <option value="published">已发布</option>
           <option value="archived">已归档</option>
         </select>
-
         <select
           value={typeFilter}
-          onChange={(e) => setTypeFilter(e.target.value)}
-          className="px-3 py-2 border rounded-md"
+          onChange={(e) => { setTypeFilter(e.target.value); setPage(1); }}
+          className="filter-select"
         >
           <option value="all">全部类型</option>
           <option value="system">系统</option>
@@ -303,91 +357,84 @@ export function NotificationManagement({ onNotify }: NotificationManagementProps
           <option value="task">任务</option>
           <option value="security">安全</option>
         </select>
-
         <input
           type="text"
           placeholder="搜索通知标题..."
           value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="px-3 py-2 border rounded-md flex-1"
+          onChange={(e) => { setSearchQuery(e.target.value); setPage(1); }}
+          className="filter-search"
         />
       </div>
 
-      {/* 通知列表 */}
-      <div className="border rounded-lg">
-        <table className="w-full">
-          <thead className="bg-gray-50">
+      {/* 列表表格 */}
+      <div className="table-wrap notification-table-wrap">
+        <table className="notification-table">
+          <thead>
             <tr>
-              <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">标题</th>
-              <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">类型</th>
-              <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">优先级</th>
-              <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">状态</th>
-              <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">创建时间</th>
-              <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">操作</th>
+              <th>标题</th>
+              <th>类型</th>
+              <th>优先级</th>
+              <th>状态</th>
+              <th>下发范围</th>
+              <th>创建时间</th>
+              <th>操作</th>
             </tr>
           </thead>
-          <tbody className="divide-y">
+          <tbody>
             {loading ? (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
-                  加载中...
-                </td>
+                <td colSpan={7} className="empty">加载中...</td>
               </tr>
             ) : notifications.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
-                  暂无通知
-                </td>
+                <td colSpan={7} className="empty">暂无通知</td>
               </tr>
             ) : (
               notifications.map((notification) => (
-                <tr key={notification.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3">
-                    <div className="font-medium">{notification.title}</div>
-                    <div className="text-sm text-gray-500 truncate max-w-xs">
-                      {notification.content}
+                <tr key={notification.id}>
+                  <td>
+                    <div className="title-cell">
+                      <strong>{notification.title}</strong>
+                      <span className="content-preview">{notification.content.slice(0, 50)}...</span>
                     </div>
                   </td>
-                  <td className="px-4 py-3">
-                    <span className="px-2 py-1 text-xs rounded-full bg-gray-100">
-                      {getTypeLabel(notification.type)}
-                    </span>
+                  <td>
+                    <StatusBadge tone="neutral">{typeLabel(notification.type)}</StatusBadge>
                   </td>
-                  <td className="px-4 py-3">
-                    <span className={`px-2 py-1 text-xs rounded-full ${getPriorityColor(notification.priority)}`}>
-                      {notification.priority === 'urgent' ? '紧急' :
-                       notification.priority === 'high' ? '高' :
-                       notification.priority === 'normal' ? '普通' : '低'}
-                    </span>
+                  <td>
+                    <StatusBadge tone={priorityTone(notification.priority)}>
+                      {priorityLabel(notification.priority)}
+                    </StatusBadge>
                   </td>
-                  <td className="px-4 py-3">
-                    <span className={`px-2 py-1 text-xs rounded-full ${getStatusColor(notification.status)}`}>
-                      {notification.status === 'draft' ? '草稿' :
-                       notification.status === 'published' ? '已发布' : '已归档'}
-                    </span>
+                  <td>
+                    <StatusBadge tone={statusTone(notification.status)}>
+                      {statusLabel(notification.status)}
+                    </StatusBadge>
                   </td>
-                  <td className="px-4 py-3 text-sm text-gray-500">
-                    {new Date(notification.createdAt).toLocaleDateString()}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
+                  <td>{notification.targetType === 'all' ? '全员' : '指定用户'}</td>
+                  <td>{formatDate(notification.createdAt)}</td>
+                  <td>
+                    <div className="action-buttons">
                       <button
+                        type="button"
+                        className="table-btn"
                         onClick={() => handleViewDetail(notification)}
-                        className="text-blue-600 hover:text-blue-800 text-sm"
                       >
                         详情
                       </button>
                       {notification.status === 'draft' && (
                         <>
                           <button
+                            type="button"
+                            className="table-btn"
                             onClick={() => handleEdit(notification)}
-                            className="text-gray-600 hover:text-gray-800 text-sm"
                           >
                             编辑
                           </button>
                           <button
+                            type="button"
+                            className="table-btn"
                             onClick={() => handlePublish(notification.id)}
-                            className="text-green-600 hover:text-green-800 text-sm"
                           >
                             发布
                           </button>
@@ -395,18 +442,17 @@ export function NotificationManagement({ onNotify }: NotificationManagementProps
                       )}
                       {notification.status === 'published' && (
                         <button
+                          type="button"
+                          className="table-btn"
                           onClick={() => handleArchive(notification.id)}
-                          className="text-orange-600 hover:text-orange-800 text-sm"
                         >
                           归档
                         </button>
                       )}
                       <button
-                        onClick={() => {
-                          setDeletingId(notification.id);
-                          setDeleteConfirmOpen(true);
-                        }}
-                        className="text-red-600 hover:text-red-800 text-sm"
+                        type="button"
+                        className="table-btn table-btn-danger"
+                        onClick={() => setDeleteTarget(notification)}
                       >
                         删除
                       </button>
@@ -420,63 +466,63 @@ export function NotificationManagement({ onNotify }: NotificationManagementProps
       </div>
 
       {/* 分页 */}
-      <div className="flex items-center justify-between">
-        <div className="text-sm text-gray-500">
-          共 {total} 条记录
+      {totalPages > 1 && (
+        <div className="pagination">
+          <span className="pagination-info">共 {total} 条，第 {page}/{totalPages} 页</span>
+          <div className="pagination-buttons">
+            <AdminButton
+              variant="secondary"
+              size="sm"
+              disabled={page <= 1}
+              onClick={() => setPage(page - 1)}
+            >
+              上一页
+            </AdminButton>
+            <AdminButton
+              variant="secondary"
+              size="sm"
+              disabled={page >= totalPages}
+              onClick={() => setPage(page + 1)}
+            >
+              下一页
+            </AdminButton>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setPage(Math.max(1, page - 1))}
-            disabled={page === 1}
-            className="px-3 py-1 border rounded disabled:opacity-50"
-          >
-            上一页
-          </button>
-          <span className="text-sm">第 {page} 页</span>
-          <button
-            onClick={() => setPage(page + 1)}
-            disabled={notifications.length < limit}
-            className="px-3 py-1 border rounded disabled:opacity-50"
-          >
-            下一页
-          </button>
-        </div>
-      </div>
+      )}
 
       {/* 创建/编辑弹窗 */}
       {formOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <h3 className="text-lg font-bold mb-4">
-              {editingId ? '编辑通知' : '创建通知'}
-            </h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">标题 *</label>
+        <div className="modal-overlay" onClick={() => setFormOpen(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>{editingId ? '编辑通知' : '创建通知'}</h3>
+              <button type="button" className="modal-close" onClick={() => setFormOpen(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label>标题 *</label>
                 <input
                   type="text"
                   value={form.title}
                   onChange={(e) => setForm({ ...form, title: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-md"
                   placeholder="输入通知标题"
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">内容 *</label>
+              <div className="form-group">
+                <label>内容 *</label>
                 <textarea
                   value={form.content}
                   onChange={(e) => setForm({ ...form, content: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-md h-32"
                   placeholder="输入通知内容"
+                  rows={4}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium mb-1">类型</label>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>类型</label>
                   <select
                     value={form.type}
                     onChange={(e) => setForm({ ...form, type: e.target.value })}
-                    className="w-full px-3 py-2 border rounded-md"
                   >
                     <option value="system">系统</option>
                     <option value="billing">计费</option>
@@ -484,12 +530,11 @@ export function NotificationManagement({ onNotify }: NotificationManagementProps
                     <option value="security">安全</option>
                   </select>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">优先级</label>
+                <div className="form-group">
+                  <label>优先级</label>
                   <select
                     value={form.priority}
                     onChange={(e) => setForm({ ...form, priority: e.target.value })}
-                    className="w-full px-3 py-2 border rounded-md"
                   >
                     <option value="low">低</option>
                     <option value="normal">普通</option>
@@ -498,43 +543,38 @@ export function NotificationManagement({ onNotify }: NotificationManagementProps
                   </select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium mb-1">下发范围</label>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>下发范围</label>
                   <select
                     value={form.targetType}
                     onChange={(e) => setForm({ ...form, targetType: e.target.value })}
-                    className="w-full px-3 py-2 border rounded-md"
                   >
                     <option value="all">全员</option>
                     <option value="specific_users">指定用户</option>
                   </select>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">有效期（可选）</label>
+                <div className="form-group">
+                  <label>有效期（可选）</label>
                   <input
                     type="date"
                     value={form.expiresAt}
                     onChange={(e) => setForm({ ...form, expiresAt: e.target.value })}
-                    className="w-full px-3 py-2 border rounded-md"
                   />
                 </div>
               </div>
             </div>
-            <div className="flex justify-end gap-2 mt-6">
-              <button
-                onClick={() => setFormOpen(false)}
-                className="px-4 py-2 border rounded-md hover:bg-gray-50"
-              >
+            <div className="modal-footer">
+              <AdminButton variant="secondary" onClick={() => setFormOpen(false)}>
                 取消
-              </button>
-              <button
+              </AdminButton>
+              <AdminButton
+                variant="primary"
+                loading={formLoading}
                 onClick={handleSubmit}
-                disabled={formLoading}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
               >
-                {formLoading ? '提交中...' : '确定'}
-              </button>
+                确定
+              </AdminButton>
             </div>
           </div>
         </div>
@@ -542,62 +582,66 @@ export function NotificationManagement({ onNotify }: NotificationManagementProps
 
       {/* 详情弹窗 */}
       {detailOpen && detailNotification && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <h3 className="text-lg font-bold mb-4">通知详情</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-500">标题</label>
-                <p className="mt-1">{detailNotification.title}</p>
+        <div className="modal-overlay" onClick={() => setDetailOpen(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>通知详情</h3>
+              <button type="button" className="modal-close" onClick={() => setDetailOpen(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <div className="detail-group">
+                <label>标题</label>
+                <p>{detailNotification.title}</p>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-500">内容</label>
-                <p className="mt-1 whitespace-pre-wrap">{detailNotification.content}</p>
+              <div className="detail-group">
+                <label>内容</label>
+                <p className="detail-content">{detailNotification.content}</p>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-500">类型</label>
-                  <p className="mt-1">{getTypeLabel(detailNotification.type)}</p>
+              <div className="detail-row">
+                <div className="detail-group">
+                  <label>类型</label>
+                  <StatusBadge tone="neutral">{typeLabel(detailNotification.type)}</StatusBadge>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-500">优先级</label>
-                  <p className="mt-1">{detailNotification.priority}</p>
+                <div className="detail-group">
+                  <label>优先级</label>
+                  <StatusBadge tone={priorityTone(detailNotification.priority)}>
+                    {priorityLabel(detailNotification.priority)}
+                  </StatusBadge>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-500">状态</label>
-                  <p className="mt-1">{detailNotification.status === 'draft' ? '草稿' :
-                    detailNotification.status === 'published' ? '已发布' : '已归档'}</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-500">下发范围</label>
-                  <p className="mt-1">{detailNotification.targetType === 'all' ? '全员' : '指定用户'}</p>
+                <div className="detail-group">
+                  <label>状态</label>
+                  <StatusBadge tone={statusTone(detailNotification.status)}>
+                    {statusLabel(detailNotification.status)}
+                  </StatusBadge>
                 </div>
               </div>
               {detailStats && (
-                <div className="border-t pt-4">
-                  <label className="block text-sm font-medium text-gray-500 mb-2">统计数据</label>
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div>总用户数：{detailStats.totalUsers}</div>
-                    <div>已读数：{detailStats.totalReads}</div>
+                <div className="detail-stats">
+                  <div className="stat-item">
+                    <span className="stat-label">总用户数</span>
+                    <strong>{detailStats.totalUsers}</strong>
+                  </div>
+                  <div className="stat-item">
+                    <span className="stat-label">已读数</span>
+                    <strong>{detailStats.totalReads}</strong>
                   </div>
                 </div>
               )}
-              <div className="grid grid-cols-2 gap-4 text-sm text-gray-500">
-                <div>创建时间：{new Date(detailNotification.createdAt).toLocaleString()}</div>
-                <div>
-                  发布时间：{detailNotification.publishedAt
-                    ? new Date(detailNotification.publishedAt).toLocaleString()
-                    : '-'}
+              <div className="detail-row">
+                <div className="detail-group">
+                  <label>创建时间</label>
+                  <p>{formatDate(detailNotification.createdAt)}</p>
+                </div>
+                <div className="detail-group">
+                  <label>发布时间</label>
+                  <p>{formatDate(detailNotification.publishedAt)}</p>
                 </div>
               </div>
             </div>
-            <div className="flex justify-end mt-6">
-              <button
-                onClick={() => setDetailOpen(false)}
-                className="px-4 py-2 border rounded-md hover:bg-gray-50"
-              >
+            <div className="modal-footer">
+              <AdminButton variant="secondary" onClick={() => setDetailOpen(false)}>
                 关闭
-              </button>
+              </AdminButton>
             </div>
           </div>
         </div>
@@ -605,19 +649,18 @@ export function NotificationManagement({ onNotify }: NotificationManagementProps
 
       {/* 删除确认弹窗 */}
       <DangerConfirmDialog
-        open={deleteConfirmOpen}
+        open={!!deleteTarget}
         title="删除通知"
         objectLabel="通知"
-        objectId={deletingId}
+        objectId={deleteTarget?.id}
+        objectName={deleteTarget?.title}
         actionLabel="删除"
         impactItems={['通知将被永久删除', '所有用户的已读记录将被清除']}
         reversibility="irreversible"
-        onCancel={() => {
-          setDeleteConfirmOpen(false);
-          setDeletingId(null);
-        }}
+        onCancel={() => setDeleteTarget(null)}
         onConfirm={handleDelete}
+        loading={deleteLoading}
       />
-    </div>
+    </section>
   );
 }

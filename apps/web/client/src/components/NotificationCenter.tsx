@@ -33,14 +33,16 @@ export function NotificationCenter({ open, onOpenChange }: NotificationCenterPro
     setLoading(true);
     try {
       const params = new URLSearchParams({
-        page: pageNum.toString(),
+        page: String(pageNum),
         pageSize: '20',
       });
       if (filter === 'unread') {
         params.append('unreadOnly', 'true');
       }
 
-      const response = await fetch(`/api/notifications?${params}`);
+      const response = await fetch(`/api/notifications?${params}`, {
+        credentials: 'include',
+      });
       if (!response.ok) throw new Error('获取通知失败');
       const data = await response.json();
 
@@ -61,7 +63,9 @@ export function NotificationCenter({ open, onOpenChange }: NotificationCenterPro
   // 获取未读数量
   const fetchUnreadCount = useCallback(async () => {
     try {
-      const response = await fetch('/api/notifications/unread-count');
+      const response = await fetch('/api/notifications/unread-count', {
+        credentials: 'include',
+      });
       if (!response.ok) throw new Error('获取未读数量失败');
       const data = await response.json();
       setUnreadCount(data.count);
@@ -90,6 +94,7 @@ export function NotificationCenter({ open, onOpenChange }: NotificationCenterPro
     try {
       const response = await fetch(`/api/notifications/${id}/read`, {
         method: 'PUT',
+        credentials: 'include',
       });
       if (!response.ok) throw new Error('标记已读失败');
 
@@ -107,6 +112,7 @@ export function NotificationCenter({ open, onOpenChange }: NotificationCenterPro
     try {
       const response = await fetch('/api/notifications/read-all', {
         method: 'PUT',
+        credentials: 'include',
       });
       if (!response.ok) throw new Error('标记全部已读失败');
 

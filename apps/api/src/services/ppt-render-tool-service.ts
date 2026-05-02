@@ -51,9 +51,27 @@ function blockText(block) {
   if (!block || typeof block !== 'object') return '';
   if (typeof block.text === 'string') return block.text;
   if (typeof block.content === 'string') return block.content;
-  if (Array.isArray(block.items)) return block.items.map((item) => String(item || '').trim()).filter(Boolean).join('\n');
+  if (Array.isArray(block.items)) return block.items.map((item) => itemText(item)).filter(Boolean).join('\n');
   if (Array.isArray(block.rows)) return block.rows.map((row) => Array.isArray(row) ? row.join(' | ') : String(row || '')).join('\n');
   return '';
+}
+
+function itemText(item) {
+  if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') {
+    return String(item).trim();
+  }
+  if (!item || typeof item !== 'object') return '';
+  const record = item;
+  const direct = text(record.text || record.content || record.title || record.label || record.value || record.name);
+  if (direct) return direct;
+  if (Array.isArray(record.items)) return record.items.map((child) => itemText(child)).filter(Boolean).join('；');
+  const pairs = Object.entries(record)
+    .map(([key, value]) => {
+      const body = itemText(value);
+      return body ? (['text', 'content', 'title', 'label', 'value', 'name'].includes(key) ? body : key + '：' + body) : '';
+    })
+    .filter(Boolean);
+  return pairs.join('；');
 }
 
 function normalizeForCompare(value) {
@@ -245,7 +263,7 @@ function isLongText(value) {
 
 function blockLines(block) {
   if (!block || typeof block !== 'object') return [];
-  if (Array.isArray(block.items)) return block.items.map((item) => text(item)).filter(Boolean);
+  if (Array.isArray(block.items)) return block.items.map((item) => itemText(item)).filter(Boolean);
   const body = blockText(block);
   return body ? body.split(/\n+/).map((line) => text(line)).filter(Boolean) : [];
 }

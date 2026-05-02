@@ -18,6 +18,10 @@
 ## 拉取与同步原则
 
 - 开始开发前，先确认当前分支是否需要同步最新远端。
+- 涉及分支推进时，必须遵守 `docs/AGENTS_GUIDE/06_分支与部署环境简要规范.md` 中的目标分支权限约束：
+  - `develop`：研发测试分支，所有协作者可推送。
+  - `staging`：仅 `april-jk` 可管理和推送，且只能由 `task-creation-agent` 推进。
+  - `product`：仅 `april-jk` 可管理和推送，且只能由 `task-creation-agent` 推进。
 - 如果需要拉取最新改动，优先做法是：
   1. 先看 `git status --short` 是否干净
   2. 再决定 `fetch`、`rebase` 或 `merge`

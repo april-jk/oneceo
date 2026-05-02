@@ -177,10 +177,10 @@ export function NotificationCenter() {
   const getPriorityColor = (priority: string) => {
     switch (priority) {
       case 'urgent': return 'text-red-500';
-      case 'high': return 'text-orange-500';
-      case 'normal': return 'text-blue-500';
+      case 'high': return 'text-amber-500';
+      case 'normal': return 'text-gray-500';
       case 'low': return 'text-gray-400';
-      default: return 'text-gray-400';
+      default: return 'text-gray-500';
     }
   };
 

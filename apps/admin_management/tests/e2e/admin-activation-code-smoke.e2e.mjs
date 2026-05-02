@@ -10,14 +10,20 @@ const password = process.env.ONECEO_ADMIN_E2E_PASSWORD || process.env.ONECEO_ADM
 
 async function loginIfNeeded(page) {
   await page.goto(baseUrl, { waitUntil: 'networkidle' });
-  const loginNameInput = page.getByRole('textbox', { name: '登录名' });
-  if (await loginNameInput.isVisible().catch(() => false)) {
-    await loginNameInput.fill(loginName);
+  await page.waitForTimeout(2000);
+  
+  // 检查是否需要登录
+  const loginButton = page.getByRole('button', { name: '登录' });
+  if (await loginButton.isVisible().catch(() => false)) {
+    console.log('Login required, filling credentials...');
+    await page.getByRole('textbox', { name: '登录名' }).fill(loginName);
     await page.getByRole('textbox', { name: '密码' }).fill(password);
-    await page.getByRole('button', { name: '登录' }).click();
+    await loginButton.click();
     await page.waitForLoadState('networkidle');
-    // 等待侧边栏加载
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(3000);
+    console.log('Login completed');
+  } else {
+    console.log('Already logged in');
   }
 }
 
@@ -47,10 +53,14 @@ async function run() {
       await activationTab.click();
       await page.waitForTimeout(2000);
     } else {
-      console.log('Activation code tab not found, page content might be different');
+      console.log('Activation code tab not found, trying to find it in the page...');
       // 截图用于调试
       await page.screenshot({ path: '/tmp/admin-billing-debug.png' });
       console.log('Debug screenshot saved to /tmp/admin-billing-debug.png');
+      
+      // 检查所有按钮
+      const allButtons = await page.locator('button').allTextContents();
+      console.log('All buttons:', allButtons.join(' | '));
     }
 
     // 验证激活码管理页面元素

@@ -5,7 +5,7 @@
  */
 
 import { sql } from 'drizzle-orm';
-import { pgTable, text, timestamp, jsonb, uuid, integer, boolean, uniqueIndex, index, bigint } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, uuid, integer, boolean, uniqueIndex, index, bigint, real } from 'drizzle-orm/pg-core';
 
 export const appUsers = pgTable(
   'app_users',
@@ -1345,7 +1345,7 @@ export const tokenUsageLogs = pgTable(
 /**
  * 模型定价配置表
  * 
- * 配置各模型的积分定价（按 1k tokens 计费）
+ * 配置各模型的积分定价（按 1M tokens 计费）
  * 缓存比例由系统固定：OpenAI 命中 50%，Anthropic 命中 10%/创建 125%
  */
 export const modelPricing = pgTable(
@@ -1354,8 +1354,9 @@ export const modelPricing = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     model: text('model').notNull(),
     modelProvider: text('model_provider').notNull(),
-    promptPricePer1kTokens: integer('prompt_price_per_1k_tokens').notNull(),
-    completionPricePer1kTokens: integer('completion_price_per_1k_tokens').notNull(),
+    promptPricePer1mTokens: integer('prompt_price_per_1m_tokens').notNull(),
+    completionPricePer1mTokens: integer('completion_price_per_1m_tokens').notNull(),
+    multiplier: real('multiplier').notNull().default(1.0),
     isActive: boolean('is_active').notNull().default(true),
     effectiveFrom: timestamp('effective_from').notNull().defaultNow(),
     effectiveUntil: timestamp('effective_until'),

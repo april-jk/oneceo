@@ -28,8 +28,9 @@ describe('PricingService.calculateCredits', () => {
       id: '1',
       model: 'gpt-4o',
       modelProvider: 'openai',
-      promptPricePer1kTokens: 100, // 100 credits per 1k tokens
-      completionPricePer1kTokens: 200,
+      promptPricePer1mTokens: 100000, // 100000 credits per 1M tokens
+      completionPricePer1mTokens: 200000,
+      multiplier: 1.0,
       isActive: true,
       effectiveFrom: new Date(),
       effectiveUntil: null,
@@ -42,7 +43,7 @@ describe('PricingService.calculateCredits', () => {
       completionTokens: 500,
     }, pricing as any);
 
-    // (1000 * 100 / 1000) + (500 * 200 / 1000) = 100 + 100 = 200
+    // (1000 * 100000 / 1000000) + (500 * 200000 / 1000000) = 100 + 100 = 200
     assert.strictEqual(credits, 200);
   });
 
@@ -51,8 +52,9 @@ describe('PricingService.calculateCredits', () => {
       id: '1',
       model: 'gpt-4o',
       modelProvider: 'openai',
-      promptPricePer1kTokens: 100,
-      completionPricePer1kTokens: 200,
+      promptPricePer1mTokens: 100000,
+      completionPricePer1mTokens: 200000,
+      multiplier: 1.0,
       isActive: true,
       effectiveFrom: new Date(),
       effectiveUntil: null,
@@ -67,7 +69,7 @@ describe('PricingService.calculateCredits', () => {
       completionTokens: 500,
     }, pricing as any);
 
-    // (200 * 100 / 1000) + (800 * 50 / 1000) + (500 * 200 / 1000)
+    // (200 * 100000 / 1000000) + (800 * 50000 / 1000000) + (500 * 200000 / 1000000)
     // = 20 + 40 + 100 = 160
     assert.strictEqual(credits, 160);
   });
@@ -77,8 +79,9 @@ describe('PricingService.calculateCredits', () => {
       id: '1',
       model: 'claude-sonnet-4-6',
       modelProvider: 'anthropic',
-      promptPricePer1kTokens: 100,
-      completionPricePer1kTokens: 200,
+      promptPricePer1mTokens: 100000,
+      completionPricePer1mTokens: 200000,
+      multiplier: 1.0,
       isActive: true,
       effectiveFrom: new Date(),
       effectiveUntil: null,
@@ -94,9 +97,34 @@ describe('PricingService.calculateCredits', () => {
       completionTokens: 500,
     }, pricing as any);
 
-    // (400 * 100 / 1000) + (500 * 10 / 1000) + (100 * 125 / 1000) + (500 * 200 / 1000)
+    // (400 * 100000 / 1000000) + (500 * 10000 / 1000000) + (100 * 125000 / 1000000) + (500 * 200000 / 1000000)
     // = 40 + 5 + 12.5 + 100 = 157.5 -> ceil = 158
     assert.strictEqual(credits, 158);
+  });
+
+  test('calculates pricing with multiplier', () => {
+    const pricing = {
+      id: '1',
+      model: 'gpt-4o',
+      modelProvider: 'openai',
+      promptPricePer1mTokens: 100000,
+      completionPricePer1mTokens: 200000,
+      multiplier: 1.5, // 1.5x multiplier
+      isActive: true,
+      effectiveFrom: new Date(),
+      effectiveUntil: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const credits = pricingService.calculateCredits({
+      promptTokens: 1000,
+      completionTokens: 500,
+    }, pricing as any);
+
+    // effectivePrompt = 100000 * 1.5 = 150000, effectiveCompletion = 200000 * 1.5 = 300000
+    // (1000 * 150000 / 1000000) + (500 * 300000 / 1000000) = 150 + 150 = 300
+    assert.strictEqual(credits, 300);
   });
 
   test('returns correct default cache ratios via getDefaultCacheRatios', () => {
@@ -115,8 +143,9 @@ describe('PricingService.calculateCredits', () => {
       id: '1',
       model: 'gpt-4o',
       modelProvider: 'openai',
-      promptPricePer1kTokens: 100,
-      completionPricePer1kTokens: 200,
+      promptPricePer1mTokens: 100000,
+      completionPricePer1mTokens: 200000,
+      multiplier: 1.0,
       isActive: true,
       effectiveFrom: new Date(),
       effectiveUntil: null,
@@ -132,7 +161,7 @@ describe('PricingService.calculateCredits', () => {
       completionTokens: 500,
     }, pricing as any, { hit: 0.3, creation: 0 });
 
-    // (200 * 100 / 1000) + (800 * 30 / 1000) + (500 * 200 / 1000)
+    // (200 * 100000 / 1000000) + (800 * 30000 / 1000000) + (500 * 200000 / 1000000)
     // = 20 + 24 + 100 = 144
     assert.strictEqual(credits, 144);
   });
@@ -142,8 +171,9 @@ describe('PricingService.calculateCredits', () => {
       id: '1',
       model: 'gpt-4o',
       modelProvider: 'openai',
-      promptPricePer1kTokens: 1,
-      completionPricePer1kTokens: 1,
+      promptPricePer1mTokens: 1000,
+      completionPricePer1mTokens: 1000,
+      multiplier: 1.0,
       isActive: true,
       effectiveFrom: new Date(),
       effectiveUntil: null,
@@ -156,7 +186,7 @@ describe('PricingService.calculateCredits', () => {
       completionTokens: 1,
     }, pricing as any);
 
-    // (1 * 1 / 1000) + (1 * 1 / 1000) = 0.002 -> ceil = 1
+    // (1 * 1000 / 1000000) + (1 * 1000 / 1000000) = 0.002 -> ceil = 1
     assert.strictEqual(credits, 1);
   });
 });
@@ -188,8 +218,9 @@ describe('BillingService', () => {
       id: '1',
       model: 'gpt-4o',
       modelProvider: 'openai',
-      promptPricePer1kTokens: 100,
-      completionPricePer1kTokens: 200,
+      promptPricePer1mTokens: 100000,
+      completionPricePer1mTokens: 200000,
+      multiplier: 1.0,
       isActive: true,
       effectiveFrom: new Date(),
       effectiveUntil: null,

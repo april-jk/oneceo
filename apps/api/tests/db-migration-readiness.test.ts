@@ -16,8 +16,8 @@ if (!shouldRun) {
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           model TEXT NOT NULL,
           model_provider TEXT NOT NULL,
-          prompt_price_per_1k_tokens INTEGER NOT NULL,
-          completion_price_per_1k_tokens INTEGER NOT NULL,
+          prompt_price_per_1m_tokens INTEGER NOT NULL,
+          completion_price_per_1m_tokens INTEGER NOT NULL,
           is_active BOOLEAN NOT NULL DEFAULT TRUE,
           effective_from TIMESTAMP NOT NULL DEFAULT NOW(),
           effective_until TIMESTAMP,
@@ -45,18 +45,18 @@ if (!shouldRun) {
       assert.match(indexDefinition, /effective_from/);
 
       await databasePool.query(
-        `INSERT INTO model_pricing (model, model_provider, prompt_price_per_1k_tokens, completion_price_per_1k_tokens, is_active)
-         VALUES ($1, 'openai', 1, 1, false), ($1, 'openai', 2, 2, false)`,
+        `INSERT INTO model_pricing (model, model_provider, prompt_price_per_1m_tokens, completion_price_per_1m_tokens, is_active)
+         VALUES ($1, 'openai', 1000, 1000, false), ($1, 'openai', 2000, 2000, false)`,
         ['p2-index-model']
       );
       await databasePool.query(
-        `INSERT INTO model_pricing (model, model_provider, prompt_price_per_1k_tokens, completion_price_per_1k_tokens, is_active)
-         VALUES ($1, 'openai', 3, 3, true)`,
+        `INSERT INTO model_pricing (model, model_provider, prompt_price_per_1m_tokens, completion_price_per_1m_tokens, is_active)
+         VALUES ($1, 'openai', 3000, 3000, true)`,
         ['p2-index-model']
       );
       await databasePool.query(
-        `INSERT INTO model_pricing (model, model_provider, prompt_price_per_1k_tokens, completion_price_per_1k_tokens, is_active, effective_from)
-         VALUES ($1, 'openai', 4, 4, true, NOW() + INTERVAL '1 day')`,
+        `INSERT INTO model_pricing (model, model_provider, prompt_price_per_1m_tokens, completion_price_per_1m_tokens, is_active, effective_from)
+         VALUES ($1, 'openai', 4000, 4000, true, NOW() + INTERVAL '1 day')`,
         ['p2-index-model']
       );
     } finally {

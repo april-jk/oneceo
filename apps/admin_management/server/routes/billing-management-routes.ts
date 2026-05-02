@@ -99,5 +99,11 @@ export function createBillingManagementRoutes() {
   router.put('/activation-codes/:id', proxyToApi);
   router.delete('/activation-codes/:id', proxyToApi);
 
+  // 激活码分组管理
+  router.get('/activation-code-groups', proxyToApi);
+  router.post('/activation-code-groups', proxyToApi);
+  router.put('/activation-code-groups/:id', proxyToApi);
+  router.delete('/activation-code-groups/:id', proxyToApi);
+
   return router;
 }

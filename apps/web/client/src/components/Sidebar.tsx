@@ -634,7 +634,15 @@ export default function Sidebar({
     };
     void fetchUnreadCount();
     const timer = window.setInterval(fetchUnreadCount, 60000);
-    return () => window.clearInterval(timer);
+
+    // 监听通知已读事件，刷新未读数量
+    const handleNotificationRead = () => void fetchUnreadCount();
+    window.addEventListener("oneceo:notification-read", handleNotificationRead);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("oneceo:notification-read", handleNotificationRead);
+    };
   }, []);
 
   const toggleProjectGroup = (groupId: string) => {

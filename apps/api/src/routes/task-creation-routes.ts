@@ -5664,7 +5664,9 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, 
       );
       nextStatus =
         (await sessionConnectorService.listSessionConnectors(sessionId, currentUser.userId)).find(
-          (item) => item.connectorKey === connectorKey
+          (item) =>
+            (item.connectorInstanceKey || item.connectorKey) ===
+            (connectorKey === 'custom_mcp' ? `${connectorKey}:${profileId}` : connectorKey)
         ) || status;
     }
     return res.json({
@@ -5722,12 +5724,21 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/detach', async (req, 
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
     const connectorKey = parseConnectorKey(req.params.connectorKey);
+    const profileId = String(req.body?.profileId || '').trim();
+    if (connectorKey === 'custom_mcp' && !profileId) {
+      return res.status(400).json({
+        success: false,
+        errorCode: 'custom_mcp_profile_required',
+        error: getPublicErrorMessage('Detach custom MCP requires profileId.'),
+      });
+    }
     await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
     const session = await resolveTaskSessionRecord(sessionId);
     const status = await sessionConnectorService.detachConnector(
       sessionId,
       currentUser.userId,
       connectorKey,
+      profileId || undefined,
       session?.runtime?.orchestratorSessionId
     );
     return res.json({

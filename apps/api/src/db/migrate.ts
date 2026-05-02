@@ -67,6 +67,8 @@ const REQUIRED_TABLES = [
   'credit_activation_codes',
   'credit_activation_code_uses',
   'credit_activation_code_groups',
+  'notifications',
+  'user_notifications',
 ] as const;
 
 const REQUIRED_COLUMNS = [
@@ -250,6 +252,15 @@ const REQUIRED_COLUMNS = [
   ['platform_runtime_artifact_channels', 'arch'],
   ['platform_runtime_artifact_channels', 'channel'],
   ['platform_runtime_artifact_channels', 'published_release_id'],
+  ['notifications', 'title'],
+  ['notifications', 'content'],
+  ['notifications', 'type'],
+  ['notifications', 'priority'],
+  ['notifications', 'target_type'],
+  ['notifications', 'status'],
+  ['user_notifications', 'user_id'],
+  ['user_notifications', 'notification_id'],
+  ['user_notifications', 'is_read'],
 ] as const;
 
 const REQUIRED_INDEXES = [
@@ -318,6 +329,13 @@ const REQUIRED_INDEXES = [
   'idx_activation_code_uses_user_id',
   'idx_activation_code_groups_name',
   'idx_activation_code_groups_status',
+  'idx_notifications_type',
+  'idx_notifications_status',
+  'idx_notifications_created_at',
+  'idx_user_notifications_user_notification',
+  'idx_user_notifications_user_id',
+  'idx_user_notifications_notification_id',
+  'idx_user_notifications_user_read',
 ] as const;
 
 /**
@@ -1779,6 +1797,43 @@ CREATE INDEX IF NOT EXISTS idx_activation_code_uses_code_id ON credit_activation
 CREATE INDEX IF NOT EXISTS idx_activation_code_uses_user_id ON credit_activation_code_uses(user_id);
 `;
 
+const notificationTablesSQL = `
+-- 通知主表
+CREATE TABLE IF NOT EXISTS notifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'system',
+  priority TEXT NOT NULL DEFAULT 'normal',
+  target_type TEXT NOT NULL DEFAULT 'all',
+  target_user_ids JSONB,
+  status TEXT NOT NULL DEFAULT 'draft',
+  published_at TIMESTAMP,
+  expires_at TIMESTAMP,
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by UUID REFERENCES admin_users(id) ON DELETE SET NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_type ON notifications(type);
+CREATE INDEX IF NOT EXISTS idx_notifications_status ON notifications(status);
+CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at);
+
+-- 用户通知关联表
+CREATE TABLE IF NOT EXISTS user_notifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  notification_id UUID NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+  is_read BOOLEAN NOT NULL DEFAULT FALSE,
+  read_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id, notification_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_notifications_user_id ON user_notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_notifications_notification_id ON user_notifications(notification_id);
+CREATE INDEX IF NOT EXISTS idx_user_notifications_user_read ON user_notifications(user_id, is_read);
+`;
+
 export async function inspectDatabaseSchemaReadiness(): Promise<SchemaReadinessReport> {
   await ensureDatabaseConnection({ retries: 3, delayMs: 500 });
 
@@ -1874,6 +1929,13 @@ export async function runMigration() {
       await db.execute(sql.raw(activationCodeTablesSQL));
     } catch (activationCodeErr) {
       console.error('[MIGRATION] activation code tables failed (non-fatal):', activationCodeErr);
+    }
+
+    // Step 3: notification tables (separate - failure does not affect billing)
+    try {
+      await db.execute(sql.raw(notificationTablesSQL));
+    } catch (notificationErr) {
+      console.error('[MIGRATION] notification tables failed (non-fatal):', notificationErr);
     }
 
     // 迁移：将定价基础单位从 1k tokens 切换到 1M tokens（必须在插入定价数据之前执行）

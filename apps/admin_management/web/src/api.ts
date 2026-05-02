@@ -26,6 +26,9 @@ import type {
   ConnectorGuideValidationResult,
   DashboardOverview,
   HostListResponse,
+  MembershipPlan,
+  NewMembershipPlanPayload,
+  UserMembership,
   OsacRelease,
   OsacReleaseDetailResponse,
   OsacReleaseListResponse,
@@ -975,4 +978,23 @@ export const api = {
   },
   getAuditDetail: (auditId: string) =>
     request<AuditDetailResponse>(`/api/audit/${encodeURIComponent(auditId)}`),
+
+  listMembershipPlans: () => request<MembershipPlan[]>('/api/internal/membership/plans'),
+  createMembershipPlan: (payload: NewMembershipPlanPayload) =>
+    request<MembershipPlan>('/api/internal/membership/plans', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  listUserMemberships: (userId: string) =>
+    request<UserMembership[]>(`/api/internal/membership/users/${encodeURIComponent(userId)}`),
+  assignUserMembership: (userId: string, payload: Record<string, unknown>) =>
+    request(`/api/internal/membership/users/${encodeURIComponent(userId)}/assign`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  runMembershipDailyRestore: (payload: { date?: string } = {}) =>
+    request<{ restoreDate: string; restoredCount: number }>('/api/internal/membership/daily-restore/run', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 };

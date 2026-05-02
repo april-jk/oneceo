@@ -100,8 +100,11 @@ const OsacReleaseManagementSection = lazy(() =>
 const BillingManagementSection = lazy(() =>
   import('./components/BillingManagementSection').then((module) => ({ default: module.BillingManagementSection }))
 );
+const MembershipManagementSection = lazy(() =>
+  import('./components/MembershipManagementSection').then((module) => ({ default: module.MembershipManagementSection }))
+);
 
-type SectionKey = 'kvm' | 'operations' | 'deployment' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit' | 'billing';
+type SectionKey = 'kvm' | 'operations' | 'deployment' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit' | 'billing' | 'membership';
 type NavGroupKey = 'runtime' | 'platform' | 'billing';
 type ToastTone = 'error' | 'success' | 'warning' | 'info';
 type SandboxDetailTab = 'overview' | 'files' | 'processes' | 'connectivity' | 'archive' | 'terminal';
@@ -490,6 +493,16 @@ const NAV_ITEMS: Array<{
     iconKey: 'billing',
     description: '查看平台积分消耗、调整用户余额、配置模型定价。',
     signal: '消费统计',
+  },
+  {
+    key: 'membership',
+    group: 'platform',
+    label: '会员管理',
+    subtitle: '会员类型与权益',
+    tag: 'MBR',
+    iconKey: 'billing',
+    description: '维护会员类型、默认积分和 Agent 权限。',
+    signal: '会员权益',
   },
 ];
 
@@ -12043,6 +12056,13 @@ export default function App() {
             }}
             onNotify={pushToast}
           />
+        </Suspense>
+      );
+    }
+    if (activeSection === 'membership') {
+      return (
+        <Suspense fallback={<div className="p-6">加载中...</div>}>
+          <MembershipManagementSection />
         </Suspense>
       );
     }

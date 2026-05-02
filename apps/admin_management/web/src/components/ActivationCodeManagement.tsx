@@ -321,6 +321,9 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
       if (groupIdFilter !== 'all') {
         params.set('groupId', groupIdFilter);
       }
+      if (searchQuery.trim()) {
+        params.set('search', searchQuery.trim());
+      }
 
       const response = await fetch(`/api/internal/billing/activation-codes/export?${params}`, {
         credentials: 'include',

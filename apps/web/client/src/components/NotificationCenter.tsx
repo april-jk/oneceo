@@ -347,7 +347,6 @@ export function NotificationCenter() {
               <Button
                 variant={filter === 'unread' ? 'default' : 'ghost'}
                 size="sm"
-                disabled={unreadCount === 0}
                 onClick={() => { setFilter('unread'); setPage(1); fetchNotifications(1); }}
               >
                 未读

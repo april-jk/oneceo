@@ -564,6 +564,32 @@
     "connectionSteps": "Connection steps",
     "usageTips": "Usage tips",
     "guideTitle": "{{name}} guide",
+    "catalog": {
+      "github": {
+        "name": "GitHub",
+        "description": "Use GitHub through Composio managed authorization and oneceo API-brokered MCP tools."
+      },
+      "notion": {
+        "name": "Notion",
+        "description": "Use Notion through Composio managed authorization and oneceo API-brokered MCP tools."
+      },
+      "slack": {
+        "name": "Slack",
+        "description": "Use Slack through Composio managed authorization and oneceo API-brokered MCP tools."
+      },
+      "supabase": {
+        "name": "Supabase",
+        "description": "Use Supabase through Composio managed authorization and oneceo API-brokered MCP tools."
+      },
+      "figma": {
+        "name": "Figma",
+        "description": "Use Figma through Composio managed authorization and oneceo API-brokered MCP tools."
+      },
+      "vercel": {
+        "name": "Vercel",
+        "description": "Connect Vercel through the OneCEO hosted provider host and a Vercel Integration installation token."
+      }
+    },
     "dialog": {
       "title": "Connectors",
       "triggerLabel": "Connectors",

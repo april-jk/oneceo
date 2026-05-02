@@ -5,6 +5,9 @@ import { composioConnectorService } from './composio-connector-service';
 import { vercelMcpService } from './vercel-mcp-service';
 import { connectorRegistry, type ConnectorKey } from './connector-registry';
 import { userConnectorService } from './user-connector-service';
+import { customApiBrokerService } from './custom-api-broker-service';
+import { customApiMcpToolService } from './custom-api-mcp-tool-service';
+import { customMcpRemoteClientService } from './custom-mcp-remote-client-service';
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -38,6 +41,7 @@ type HostedProviderHostDeps = {
   };
   bindingDAO: {
     getByTaskSessionAndConnectorKey(taskSessionId: string, connectorKey: string): Promise<any>;
+    getByRuntimeProviderId(taskSessionId: string, runtimeProviderId: string): Promise<any>;
   };
   sessionDAO: {
     getSession(taskSessionId: string): Promise<any>;
@@ -75,6 +79,26 @@ type HostedProviderHostDeps = {
   connectorRegistry: {
     getCatalogItem(connectorKey: string): any;
   };
+  customApiService: {
+    listToolsForSession(taskSessionId: string): Promise<any[]>;
+  };
+  customApiBroker: {
+    executeCustomApiTool(input: {
+      userId: string;
+      taskSessionId: string;
+      connectorProfileId: string;
+      endpointToolId: string;
+      toolName?: string;
+      callerType: 'agent' | 'user' | 'admin_test' | 'system';
+      argumentsJson: unknown;
+      confirmationId?: string;
+    }): Promise<unknown>;
+  };
+  customMcpClient: {
+    initializeForProfile(userId: string, profileId: string): Promise<unknown>;
+    listToolsForProfile(userId: string, profileId: string): Promise<{ tools: any[] }>;
+    callToolForProfile(userId: string, profileId: string, name: string, args: unknown): Promise<unknown>;
+  };
 };
 
 export class HostedProviderHostService {
@@ -89,6 +113,9 @@ export class HostedProviderHostService {
       composioService: composioConnectorService,
       userConnectorService,
       connectorRegistry,
+      customApiService: customApiMcpToolService,
+      customApiBroker: customApiBrokerService,
+      customMcpClient: customMcpRemoteClientService,
     }
   ) {}
 
@@ -143,16 +170,19 @@ export class HostedProviderHostService {
       case 'slack':
       case 'supabase':
         return this.executeComposio(input, (input.backendProvider || input.connectorKey) as ConnectorKey);
+      case 'custom_api':
+        return this.executeCustomApi(input);
+      case 'custom_mcp':
+        return this.executeCustomMcp(input);
       default:
         throw new Error(`涓嶆敮鎸佺殑 hosted provider: ${input.backendProvider || input.connectorKey}`);
     }
   }
 
   private async loadAttachedContext(input: HostedProviderRequest, connectorKey: string) {
-    const binding = await this.deps.bindingDAO.getByTaskSessionAndConnectorKey(
-      input.taskSessionId,
-      connectorKey
-    );
+    const binding =
+      (await this.deps.bindingDAO.getByRuntimeProviderId(input.taskSessionId, input.providerId)) ||
+      (await this.deps.bindingDAO.getByTaskSessionAndConnectorKey(input.taskSessionId, connectorKey));
     const profileId = asText(binding?.profileId);
     if (
       !binding ||
@@ -209,6 +239,88 @@ export class HostedProviderHostService {
         catalogItem,
       },
     });
+  }
+
+  private async executeCustomApi(input: HostedProviderRequest) {
+    const { profileId, userId } = await this.loadAttachedContext(input, 'custom_api');
+    if (input.method === 'initialize') {
+      return {
+        protocolVersion: '2024-11-05',
+        serverInfo: {
+          name: 'oneceo-custom-api-mcp-broker',
+          version: '1.0.0',
+        },
+        capabilities: {
+          tools: { listChanged: false },
+        },
+      };
+    }
+    if (input.method === 'ping' || input.method === 'notifications/initialized') {
+      return {};
+    }
+    if (input.method === 'tools/list') {
+      const tools = await this.deps.customApiService.listToolsForSession(input.taskSessionId);
+      return {
+        tools: tools.map((tool) => ({
+          name: tool.name,
+          title: tool.title,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        })),
+      };
+    }
+    if (input.method === 'tools/call') {
+      const params = pickObject(input.params);
+      const toolName = asText(params.name);
+      if (!toolName) throw new Error('tools/call missing custom_api tool name');
+      const tools = await this.deps.customApiService.listToolsForSession(input.taskSessionId);
+      const tool = tools.find((item) => item.name === toolName);
+      if (!tool) throw new Error('custom_api_tool_not_attached');
+      const args = pickObject(params.arguments);
+      return this.deps.customApiBroker.executeCustomApiTool({
+        userId,
+        taskSessionId: input.taskSessionId,
+        connectorProfileId: profileId,
+        endpointToolId: tool.metadata.endpointToolId,
+        toolName,
+        callerType: 'agent',
+        argumentsJson: args,
+        confirmationId: asText(params.confirmationId) || asText(args.confirmationId) || undefined,
+      });
+    }
+    throw new Error(`Unsupported Custom API MCP method: ${input.method}`);
+  }
+
+  private async executeCustomMcp(input: HostedProviderRequest) {
+    const { profileId, userId } = await this.loadAttachedContext(input, 'custom_mcp');
+    if (input.method === 'initialize') {
+      const remote = await this.deps.customMcpClient.initializeForProfile(userId, profileId).catch(() => null);
+      return (
+        remote || {
+          protocolVersion: '2024-11-05',
+          serverInfo: {
+            name: 'oneceo-custom-mcp-broker',
+            version: '1.0.0',
+          },
+          capabilities: {
+            tools: { listChanged: true },
+          },
+        }
+      );
+    }
+    if (input.method === 'ping' || input.method === 'notifications/initialized') {
+      return {};
+    }
+    if (input.method === 'tools/list') {
+      return this.deps.customMcpClient.listToolsForProfile(userId, profileId);
+    }
+    if (input.method === 'tools/call') {
+      const params = pickObject(input.params);
+      const toolName = asText(params.name);
+      if (!toolName) throw new Error('tools/call missing custom_mcp tool name');
+      return this.deps.customMcpClient.callToolForProfile(userId, profileId, toolName, params.arguments);
+    }
+    throw new Error(`Unsupported Custom MCP method: ${input.method}`);
   }
 
   private async handleRequest(sessionId: string, message: OsacMessage) {

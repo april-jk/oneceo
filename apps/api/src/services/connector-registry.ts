@@ -41,6 +41,7 @@ export type ConnectorAccountSecret = {
   dsn?: string;
   composioMcpUrl?: string;
   composioMcpHeaders?: Record<string, string>;
+  customMcpHeaders?: Record<string, string>;
 };
 
 export type ConnectorProfileMaterial = {
@@ -209,6 +210,26 @@ export class ConnectorRegistry {
       };
     }
 
+    if (connectorKey === 'custom_api') {
+      return {
+        type: 'hosted',
+        enabled: true,
+        provider: 'custom_api',
+        capabilities: ['initialize', 'tools/list', 'tools/call'],
+      };
+    }
+    if (connectorKey === 'custom_mcp') {
+      if (asText(configJson.transportType) === 'stdio') {
+        throw new Error('Custom MCP stdio transport is not supported');
+      }
+      return {
+        type: 'hosted',
+        enabled: true,
+        provider: 'custom_mcp',
+        capabilities: ['initialize', 'tools/list', 'tools/call'],
+      };
+    }
+
     const accessToken = asText(secret.accessToken);
     const refreshToken = asText(secret.refreshToken);
     if (connectorKey === 'vercel') {
@@ -278,6 +299,10 @@ export class ConnectorRegistry {
         return normalized.includes('vercel');
       case 'postgres':
         return normalized.includes('postgres');
+      case 'custom_api':
+        return normalized.includes('custom_api') || normalized.startsWith('custom_api__');
+      case 'custom_mcp':
+        return normalized.includes('custom_mcp');
       default:
         return false;
     }

@@ -77,6 +77,7 @@ export const GITHUB_FIXED_CALLBACK_PATH = "/github/callback";
 export const NOTION_FIXED_CALLBACK_PATH = "/notion/callback";
 export const SUPABASE_FIXED_CALLBACK_PATH = "/supabase/callback";
 export const SLACK_FIXED_CALLBACK_PATH = "/slack/callback";
+export const FIGMA_FIXED_CALLBACK_PATH = "/figma/callback";
 export const VERCEL_FIXED_CALLBACK_PATH = "/vercel/callback";
 const GITHUB_INSTALLATION_MISSING_PATTERN = /没有任何可用安装|未安装到任何账号|installation/i;
 const CONNECTOR_TABS: Array<{ key: ConnectorCenterTab; labelKey: string }> = [
@@ -186,6 +187,7 @@ function isFixedConnectorCallbackPath(pathname: string) {
     pathname === NOTION_FIXED_CALLBACK_PATH ||
     pathname === SUPABASE_FIXED_CALLBACK_PATH ||
     pathname === SLACK_FIXED_CALLBACK_PATH ||
+    pathname === FIGMA_FIXED_CALLBACK_PATH ||
     pathname === VERCEL_FIXED_CALLBACK_PATH
   );
 }
@@ -202,6 +204,8 @@ export function resolveConnectorOauthCallbackContext(location: string, params: U
         ? "supabase"
       : currentPath === SLACK_FIXED_CALLBACK_PATH
         ? "slack"
+        : currentPath === FIGMA_FIXED_CALLBACK_PATH
+          ? "figma"
         : currentPath === VERCEL_FIXED_CALLBACK_PATH
           ? "vercel"
           : null;
@@ -563,6 +567,10 @@ export function ConnectorCenterPanel({
                 ? {
                     callbackPath: SLACK_FIXED_CALLBACK_PATH,
                   }
+              : connector === "figma"
+                ? {
+                    callbackPath: FIGMA_FIXED_CALLBACK_PATH,
+                  }
               : connector === "vercel"
                 ? {
                     callbackPath: VERCEL_FIXED_CALLBACK_PATH,
@@ -844,6 +852,10 @@ export function ConnectorCenterPanel({
                   ? {
                       callbackPath: NOTION_FIXED_CALLBACK_PATH,
                     }
+                  : detailItem.key === "figma"
+                    ? {
+                        callbackPath: FIGMA_FIXED_CALLBACK_PATH,
+                      }
                   : detailItem.key === "vercel"
                     ? {
                         callbackPath: VERCEL_FIXED_CALLBACK_PATH,

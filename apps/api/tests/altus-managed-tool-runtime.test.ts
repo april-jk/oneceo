@@ -6,6 +6,7 @@ import { sandboxSkillSyncService } from '../src/services/sandbox-skill-sync-serv
 import { connectorGuideService } from '../src/services/connector-guide-service';
 import { osacAgentService } from '../src/services/osac-agent-service';
 import { altusManagedDeploymentToolService } from '../src/services/altus-managed-deployment-tool-service';
+import { pptRenderToolService } from '../src/services/ppt-render-tool-service';
 import { userSkillService } from '../src/services/user-skill-service';
 import { buildManagedMcpToolName } from '../src/services/altus-managed-shared';
 
@@ -19,10 +20,11 @@ test('load_skill_resource only allows active selected platform skills and return
     orchestratorSessionId: 'sandbox-1',
     skillId: 'skill-1',
     revisionId: 'rev-1',
-    slug: 'office-ppt',
-    resourcePath: 'references/slide-structure-guide.md',
-    skillResourcePath: '/home/user/.config/opencode/skills/platform/office-ppt/references/slide-structure-guide.md',
+    slug: 'ppt-workflow',
+    resourcePath: 'references/subtask-contracts.md',
+    skillResourcePath: '/home/user/.config/opencode/skills/platform/ppt-workflow/references/subtask-contracts.md',
     resourceType: 'reference',
+    contentMarkdown: '# Ref Body',
   }));
 
   const runtime = new AltusManagedToolRuntime({
@@ -35,9 +37,9 @@ test('load_skill_resource only allows active selected platform skills and return
         sourceType: 'platform',
         skillId: 'skill-1',
         revisionId: 'rev-1',
-        slug: 'office-ppt',
-        name: 'PPT 办公',
-        description: '创建专业演示文稿',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: 'PPT 子任务编排',
         category: 'office',
         renderedMarkdown: '# Skill Brief',
         revisionNumber: 3,
@@ -45,7 +47,7 @@ test('load_skill_resource only allows active selected platform skills and return
           totalCount: 2,
           referenceCount: 1,
           templateCount: 1,
-          paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+          paths: ['references/subtask-contracts.md', 'templates/render-instruction-draft.md'],
         },
       },
     ],
@@ -54,7 +56,7 @@ test('load_skill_resource only allows active selected platform skills and return
   const result = await runtime.execute('load_skill_resource', {
     skillId: 'skill-1',
     revisionId: 'rev-1',
-    resourcePath: 'references/slide-structure-guide.md',
+    resourcePath: 'references/subtask-contracts.md',
   });
 
   assert.equal(syncMock.mock.callCount(), 1);
@@ -62,7 +64,118 @@ test('load_skill_resource only allows active selected platform skills and return
   const payload = JSON.parse(result.content);
   assert.equal(payload.skillId, 'skill-1');
   assert.equal(payload.resourceType, 'reference');
-  assert.match(payload.skillResourcePath, /office-ppt\/references\/slide-structure-guide\.md$/);
+  assert.equal(payload.contentMarkdown, '# Ref Body');
+  assert.match(payload.usageHint, /Use contentMarkdown directly/);
+  assert.match(payload.skillResourcePath, /ppt-workflow\/references\/subtask-contracts\.md$/);
+});
+
+test('load_skill_resource accepts active skill slug and revisionNumber as a narrow fallback', async () => {
+  const syncMock = mock.method(sandboxSkillSyncService, 'syncResolvedSkillResource', async (input: any) => ({
+    taskSessionId: 'session-1',
+    orchestratorSessionId: 'sandbox-1',
+    skillId: input.skill.skillId,
+    revisionId: input.skill.revisionId,
+    slug: input.skill.slug,
+    resourcePath: input.resourcePath,
+    skillResourcePath: '/home/user/.config/opencode/skills/platform/wide-research/references/routing.md',
+    resourceType: 'reference',
+    contentMarkdown: '# Routing',
+  }));
+
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [
+      {
+        sourceType: 'platform',
+        skillId: 'skill-wide-research',
+        revisionId: 'rev-wide-research-15',
+        slug: 'wide-research',
+        name: '广度调研',
+        description: '广度调研 Skill',
+        category: 'research',
+        renderedMarkdown: '# Skill Brief',
+        revisionNumber: 15,
+        resourceSummary: {
+          totalCount: 1,
+          referenceCount: 1,
+          templateCount: 0,
+          paths: ['references/routing.md'],
+        },
+      },
+    ],
+  });
+
+  const result = await runtime.execute('load_skill_resource', {
+    skillId: 'wide-research',
+    revisionId: '15',
+    resourcePath: 'references/routing.md',
+  });
+
+  assert.equal(syncMock.mock.callCount(), 1);
+  const syncInput = syncMock.mock.calls[0]?.arguments[0] as any;
+  assert.equal(syncInput.skill.skillId, 'skill-wide-research');
+  assert.equal(syncInput.skill.revisionId, 'rev-wide-research-15');
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.skillId, 'skill-wide-research');
+  assert.equal(payload.revisionId, 'rev-wide-research-15');
+  assert.equal(payload.contentMarkdown, '# Routing');
+});
+
+test('load_skill_resource accepts platform display skill ids from prompt context', async () => {
+  const syncMock = mock.method(sandboxSkillSyncService, 'syncResolvedSkillResource', async (input: any) => ({
+    taskSessionId: 'session-1',
+    orchestratorSessionId: 'sandbox-1',
+    skillId: input.skill.skillId,
+    revisionId: input.skill.revisionId,
+    slug: input.skill.slug,
+    resourcePath: input.resourcePath,
+    skillResourcePath: '/home/user/.config/opencode/skills/platform/ppt-workflow/templates/render-instruction-draft.md',
+    resourceType: 'template',
+    contentMarkdown: '# Render Draft',
+  }));
+
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [
+      {
+        sourceType: 'platform',
+        skillId: '569150cf-820e-48df-8966-e24abe47aae8',
+        revisionId: 'c954276e-1cae-495f-bdf6-4af11c8221dc',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: 'PPT 子任务编排',
+        category: 'office',
+        renderedMarkdown: '# Skill Brief',
+        revisionNumber: 6,
+        resourceSummary: {
+          totalCount: 1,
+          referenceCount: 0,
+          templateCount: 1,
+          paths: ['templates/render-instruction-draft.md'],
+        },
+      },
+    ],
+  });
+
+  const result = await runtime.execute('load_skill_resource', {
+    skillId: 'skill:platform:569150cf-820e-48df-8966-e24abe47aae8',
+    revisionId: 'c954276e-1cae-495f-bdf6-4af11c8221dc',
+    resourcePath: 'templates/render-instruction-draft.md',
+  });
+
+  assert.equal(syncMock.mock.callCount(), 1);
+  const syncInput = syncMock.mock.calls[0]?.arguments[0] as any;
+  assert.equal(syncInput.skill.skillId, '569150cf-820e-48df-8966-e24abe47aae8');
+  assert.equal(syncInput.skill.revisionId, 'c954276e-1cae-495f-bdf6-4af11c8221dc');
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.resourcePath, 'templates/render-instruction-draft.md');
+  assert.equal(payload.contentMarkdown, '# Render Draft');
 });
 
 test('load_skill_resource rejects inactive or non-selected skills', async () => {
@@ -78,10 +191,166 @@ test('load_skill_resource rejects inactive or non-selected skills', async () => 
     runtime.execute('load_skill_resource', {
       skillId: 'skill-1',
       revisionId: 'rev-1',
-      resourcePath: 'references/slide-structure-guide.md',
+      resourcePath: 'references/subtask-contracts.md',
     }),
     /load_skill_resource_skill_not_active/
   );
+});
+
+test('render_pptx_from_instructions requires active ppt-workflow skill', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [],
+  });
+
+  await assert.rejects(
+    runtime.execute('render_pptx_from_instructions', {
+      instructions: {},
+    }),
+    /render_pptx_from_instructions_ppt_workflow_not_active/
+  );
+});
+
+test('render_pptx_from_instructions returns renderer result for active ppt workflow', async () => {
+  const renderMock = mock.method(pptRenderToolService, 'render', async () => ({
+    status: 'completed',
+    pptxPath: 'deliverables/career-plan.pptx',
+    reportPath: 'deliverables/career-plan.render-report.json',
+    slideCount: 5,
+    warnings: [],
+    repairHints: [],
+  }) as any);
+  const markDirtyMock = mock.fn(async () => undefined);
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [
+        {
+          sourceType: 'platform',
+          skillId: 'skill-ppt-workflow',
+          revisionId: 'rev-ppt-workflow',
+          slug: 'ppt-workflow',
+          name: 'PPT 工作流',
+          description: 'PPT 子任务编排',
+          category: 'office',
+          renderedMarkdown: '# Skill Brief',
+          revisionNumber: 2,
+          resourceSummary: null,
+        },
+      ],
+    },
+    {
+      touchSandbox: async () => undefined,
+      markSandboxDirty: markDirtyMock,
+    }
+  );
+
+  const result = await runtime.execute('render_pptx_from_instructions', {
+    instructions: {
+      deck: { title: '职业规划', slideCount: 1, fileName: 'career-plan.pptx' },
+      theme: { colorTokens: { background: '#ffffff', primary: '#0969da', text: '#1f2328' } },
+      slides: [{ index: 1, pageType: 'cover', title: '职业规划', coreMessage: '从探索到落地' }],
+      sources: [],
+      openQuestions: [],
+    },
+  });
+
+  assert.equal(renderMock.mock.callCount(), 1);
+  assert.equal(markDirtyMock.mock.callCount(), 1);
+  assert.equal(result.type, 'result');
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.pptxPath, 'deliverables/career-plan.pptx');
+  assert.equal(payload.slideCount, 5);
+});
+
+test('complete_task rejects pptx attachments that bypass ppt workflow renderer', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [
+      {
+        sourceType: 'platform',
+        skillId: 'skill-ppt-workflow',
+        revisionId: 'rev-ppt-workflow',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: 'PPT 子任务编排',
+        category: 'office',
+        renderedMarkdown: '# Skill Brief',
+        revisionNumber: 2,
+        resourceSummary: null,
+      },
+    ],
+  });
+
+  await assert.rejects(
+    runtime.execute('complete_task', {
+      summary: '已生成 PPT',
+      attachments: [{ path: 'openai-codex-introduction.pptx' }],
+    }),
+    /complete_task_pptx_requires_render_pptx_from_instructions/
+  );
+});
+
+test('complete_task accepts pptx attachment returned by ppt workflow renderer', async () => {
+  mock.method(pptRenderToolService, 'render', async () => ({
+    status: 'completed',
+    pptxPath: 'deliverables/career-plan.pptx',
+    reportPath: 'deliverables/career-plan.render-report.json',
+    slideCount: 5,
+    warnings: [],
+    repairHints: [],
+  }) as any);
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [
+        {
+          sourceType: 'platform',
+          skillId: 'skill-ppt-workflow',
+          revisionId: 'rev-ppt-workflow',
+          slug: 'ppt-workflow',
+          name: 'PPT 工作流',
+          description: 'PPT 子任务编排',
+          category: 'office',
+          renderedMarkdown: '# Skill Brief',
+          revisionNumber: 2,
+          resourceSummary: null,
+        },
+      ],
+    },
+    {
+      touchSandbox: async () => undefined,
+      markSandboxDirty: async () => undefined,
+    }
+  );
+
+  await runtime.execute('render_pptx_from_instructions', {
+    instructions: {
+      deck: { title: '职业规划', slideCount: 1, fileName: 'career-plan.pptx' },
+      theme: { colorTokens: { background: '#ffffff', primary: '#0969da', text: '#1f2328' } },
+      slides: [{ index: 1, pageType: 'cover', title: '职业规划', coreMessage: '从探索到落地' }],
+      sources: [],
+      openQuestions: [],
+    },
+  });
+  const result = await runtime.execute('complete_task', {
+    summary: '已生成 PPT',
+    attachments: [{ path: 'deliverables/career-plan.pptx' }],
+  });
+
+  assert.equal(result.type, 'complete');
 });
 
 test('load_connector_guide returns the active connector guide and unlocks later mcp calls', async () => {

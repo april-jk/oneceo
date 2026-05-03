@@ -14,9 +14,9 @@ test('user can enable platform skill and list it as available', async () => {
       sourceType: 'platform',
       skillId: 'skill-1',
       revisionId: 'rev-1',
-      slug: 'office-ppt',
-      name: 'PPT 办公',
-      description: '创建专业演示文稿',
+      slug: 'ppt-workflow',
+      name: 'PPT 工作流',
+      description: 'PPT 子任务编排',
       category: 'office',
       revisionNumber: 3,
       resourceSummary: {
@@ -29,7 +29,7 @@ test('user can enable platform skill and list it as available', async () => {
   ] as any);
   mock.method(platformSkillService, 'getAdminSkill', async () => ({
     id: 'skill-1',
-    slug: 'office-ppt',
+    slug: 'ppt-workflow',
   }) as any);
   let enabled = false;
   mock.method(userSkillDAO, 'listPlatformBindings', async () =>
@@ -140,9 +140,9 @@ test('user can resolve enabled platform skill for managed runtime usage', async 
     {
       skill: {
         id: 'skill-1',
-        slug: 'office-ppt',
-        name: 'PPT 办公',
-        description: '创建专业演示文稿',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: 'PPT 子任务编排',
         category: 'office',
         status: 'active',
       },
@@ -150,7 +150,7 @@ test('user can resolve enabled platform skill for managed runtime usage', async 
         id: 'rev-1',
         skillId: 'skill-1',
         revisionNumber: 3,
-        slugSnapshot: 'office-ppt',
+        slugSnapshot: 'ppt-workflow',
       },
       renderedMarkdown: '# Skill Brief',
       signature: 'sig-1',
@@ -184,25 +184,162 @@ test('user can resolve enabled platform skill for managed runtime usage', async 
   assert.match(resolved[0]?.renderedMarkdown || '', /Skill Brief/);
 });
 
-test('listSettings backfills missing required platform bindings for existing users', async () => {
+test('user can enable and resolve ppt workflow platform skill for managed runtime usage', async () => {
+  const pptWorkflowSkill = {
+    sourceType: 'platform',
+    skillId: 'skill-ppt-workflow',
+    revisionId: 'rev-ppt-workflow',
+    slug: 'ppt-workflow',
+    name: 'PPT 工作流',
+    description: '按竞品式子任务编排完成 PPT 生成前工作流',
+    category: 'office',
+    revisionNumber: 1,
+    resourceSummary: {
+      totalCount: 4,
+      referenceCount: 3,
+      templateCount: 1,
+      paths: [
+        'references/subtask-contracts.md',
+        'references/visual-plan-guide.md',
+        'references/preflight-checklist.md',
+        'templates/render-instruction-draft.md',
+      ],
+    },
+    governance: {
+      systemRole: null,
+      adminManaged: true,
+      required: false,
+      autoActivation: {
+        enabled: false,
+        triggers: [],
+        toolNames: [],
+      },
+    },
+  };
+  mock.method(platformSkillService, 'listPublicSkills', async () => [pptWorkflowSkill] as any);
+  mock.method(platformSkillService, 'getAdminSkill', async () => ({
+    id: 'skill-ppt-workflow',
+    slug: 'ppt-workflow',
+  }) as any);
+  let enabled = false;
+  mock.method(userSkillDAO, 'listPlatformBindings', async () =>
+    enabled
+      ? [
+          {
+            id: 'binding-ppt-workflow',
+            userId: 'user-1',
+            platformSkillId: 'skill-ppt-workflow',
+            enabled: true,
+          },
+        ]
+      : []
+  );
+  mock.method(userSkillDAO, 'upsertPlatformBinding', async (input: any) => {
+    enabled = input.enabled;
+    return {
+      id: 'binding-ppt-workflow',
+      userId: input.userId,
+      platformSkillId: input.platformSkillId,
+      enabled: input.enabled,
+    } as any;
+  });
+  mock.method(userSkillDAO, 'listCustomSkills', async () => []);
+  mock.method(taskCreationSessionDAO, 'getSession', async () => ({
+    id: 'session-1',
+    userId: 'user-1',
+  }) as any);
+  mock.method(platformSkillService, 'resolveSkillSelections', async () => [
+    {
+      skill: {
+        id: 'skill-ppt-workflow',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: '按竞品式子任务编排完成 PPT 生成前工作流',
+        category: 'office',
+        status: 'active',
+        metadataJson: pptWorkflowSkill.governance,
+      },
+      revision: {
+        id: 'rev-ppt-workflow',
+        skillId: 'skill-ppt-workflow',
+        revisionNumber: 1,
+        slugSnapshot: 'ppt-workflow',
+      },
+      renderedMarkdown: '# Skill Brief: PPT 子任务编排工作流\n\n当前阶段不调用 PPT 专用渲染器。',
+      signature: 'sig-ppt-workflow',
+      resources: [],
+      resourceSummary: pptWorkflowSkill.resourceSummary,
+    },
+  ] as any);
+  mock.method(userSkillDAO, 'getPlatformBinding', async () => ({
+    id: 'binding-ppt-workflow',
+    userId: 'user-1',
+    platformSkillId: 'skill-ppt-workflow',
+    enabled: true,
+  }) as any);
+
+  await userSkillService.enablePlatformSkill('user-1', 'skill-ppt-workflow');
+  const settings = await userSkillService.listSettings('user-1');
+  const resolved = await userSkillService.resolveSelectionsForSession('session-1', [
+    {
+      sourceType: 'platform',
+      skillId: 'skill-ppt-workflow',
+      revisionId: 'rev-ppt-workflow',
+    },
+  ]);
+
+  assert.equal(settings.availableSkills.length, 1);
+  assert.equal(settings.availableSkills[0]?.slug, 'ppt-workflow');
+  assert.equal(settings.availableSkills[0]?.resourceSummary?.totalCount, 4);
+  assert.equal(settings.availableSkills[0]?.governance?.adminManaged, true);
+  assert.equal(settings.availableSkills[0]?.governance?.autoActivation.enabled, false);
+  assert.equal(resolved.length, 1);
+  assert.equal(resolved[0]?.slug, 'ppt-workflow');
+  assert.match(resolved[0]?.renderedMarkdown || '', /PPT 专用渲染器/);
+  assert.equal(resolved[0]?.resourceSummary?.templateCount, 1);
+  assert.equal(resolved[0]?.governance?.required, false);
+});
+
+test('listSettings backfills missing required and auto-activation platform bindings for existing users', async () => {
   mock.method(platformSkillService, 'listPublicSkills', async () => [
     {
       sourceType: 'platform',
       skillId: 'skill-office',
       revisionId: 'rev-office',
-      slug: 'office-ppt',
-      name: 'PPT 办公',
-      description: '创建专业演示文稿',
+      slug: 'office-docx',
+      name: 'Word 文档',
+      description: '已有启用 skill',
       category: 'office',
       revisionNumber: 1,
       resourceSummary: null,
       governance: {
         systemRole: null,
-        adminManaged: false,
+        adminManaged: true,
         required: false,
         autoActivation: {
           enabled: false,
           triggers: [],
+          toolNames: [],
+        },
+      },
+    },
+    {
+      sourceType: 'platform',
+      skillId: 'skill-ppt-workflow',
+      revisionId: 'rev-ppt-workflow',
+      slug: 'ppt-workflow',
+      name: 'PPT 工作流',
+      description: 'PPT 子任务编排',
+      category: 'office',
+      revisionNumber: 1,
+      resourceSummary: null,
+      governance: {
+        systemRole: null,
+        adminManaged: true,
+        required: false,
+        autoActivation: {
+          enabled: true,
+          triggers: ['ppt'],
           toolNames: [],
         },
       },
@@ -242,7 +379,7 @@ test('listSettings backfills missing required platform bindings for existing use
     bindings = [
       ...bindings,
       {
-        id: 'binding-required',
+        id: `binding-${input.platformSkillId}`,
         userId: input.userId,
         platformSkillId: input.platformSkillId,
         enabled: input.enabled,
@@ -254,6 +391,8 @@ test('listSettings backfills missing required platform bindings for existing use
 
   const settings = await userSkillService.listSettings('user-1');
 
-  assert.equal(upsertMock.mock.callCount(), 1);
+  assert.equal(upsertMock.mock.callCount(), 2);
+  assert.equal(settings.availableSkills.some((item) => item.skillId === 'skill-office'), true);
+  assert.equal(settings.availableSkills.some((item) => item.skillId === 'skill-ppt-workflow'), true);
   assert.equal(settings.availableSkills.some((item) => item.skillId === 'skill-required'), true);
 });

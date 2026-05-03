@@ -463,6 +463,47 @@ function shouldForceFigmaComposioReconnect(row: UserConnectorProfileRow): boolea
   );
 }
 
+const COMPOSIO_CALLBACK_PATHS: Partial<Record<ConnectorKey, string>> = {
+  github: '/github/callback',
+  notion: '/notion/callback',
+  supabase: '/supabase/callback',
+  slack: '/slack/callback',
+  figma: '/figma/callback',
+};
+
+function resolveComposioCallbackBaseUrl(): string {
+  const baseUrl =
+    asText(process.env.COMPOSIO_OAUTH_CALLBACK_BASE_URL) ||
+    asText(process.env.FRONTEND_URL);
+  if (!baseUrl) {
+    throw new Error('COMPOSIO_OAUTH_CALLBACK_BASE_URL or FRONTEND_URL is required for Composio OAuth');
+  }
+  const parsed = new URL(baseUrl);
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('COMPOSIO_OAUTH_CALLBACK_BASE_URL must be an http(s) URL');
+  }
+  parsed.pathname = parsed.pathname.replace(/\/+$/, '');
+  parsed.search = '';
+  parsed.hash = '';
+  return parsed.toString().replace(/\/+$/, '');
+}
+
+export function resolveComposioOauthCallbackUrl(
+  connectorKey: ConnectorKey,
+  inputRedirectUri: string
+): URL {
+  const callbackPath = COMPOSIO_CALLBACK_PATHS[connectorKey];
+  if (!callbackPath) {
+    throw new Error(`${connectorKey} Composio OAuth callback path is not configured`);
+  }
+  const callbackUrl = new URL(callbackPath, `${resolveComposioCallbackBaseUrl()}/`);
+  const input = asText(inputRedirectUri);
+  if (input) {
+    callbackUrl.search = new URL(input).search;
+  }
+  return callbackUrl;
+}
+
 function resolveOauthRedirectUri(
   connectorKey: ConnectorKey,
   provider: { redirectUri?: string },
@@ -1088,11 +1129,8 @@ export class UserConnectorService {
         status: 'pending',
         expiresAt: new Date(Date.now() + 30 * 60 * 1000),
       } as any);
-      const callbackUrl = input.redirectUri ? new URL(input.redirectUri) : null;
-      callbackUrl?.searchParams.set('state', state);
-      if (!callbackUrl) {
-        throw new Error(`${catalogItem.name} Composio OAuth requires redirectUri`);
-      }
+      const callbackUrl = resolveComposioOauthCallbackUrl(connectorKey, input.redirectUri);
+      callbackUrl.searchParams.set('state', state);
       const auth = await composioConnectorService.startAuthorization({
         connectorKey,
         userId,

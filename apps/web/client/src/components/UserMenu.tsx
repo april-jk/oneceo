@@ -44,7 +44,7 @@ export default function UserMenu() {
         >
             <Avatar className="h-9 w-9">
               <AvatarImage
-                src={user?.email ? `https://avatar.vercel.sh/${encodeURIComponent(user.email)}` : undefined}
+                src={user?.avatarUrl || undefined}
                 alt={t("userMenu.avatarAlt")}
               />
             <AvatarFallback>{initials}</AvatarFallback>
@@ -56,7 +56,7 @@ export default function UserMenu() {
           <div className="mb-3 flex items-center gap-3">
             <Avatar className="h-12 w-12">
               <AvatarImage
-                src={user?.email ? `https://avatar.vercel.sh/${encodeURIComponent(user.email)}` : undefined}
+                src={user?.avatarUrl || undefined}
                 alt={t("userMenu.avatarAlt")}
               />
               <AvatarFallback>{initials}</AvatarFallback>

@@ -1,6 +1,7 @@
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
 import { db } from '../config/database';
 import {
+  appUsers,
   creditTransactions,
   membershipAuditLogs,
   membershipDailyRestores,
@@ -26,18 +27,59 @@ function generateMembershipCode(name: string) {
 }
 
 export class MembershipService {
+  private normalizePlanStatus(status: string) {
+    const normalized = String(status || '').trim().toLowerCase();
+    if (!['active', 'inactive'].includes(normalized)) {
+      throw new Error('会员类型状态无效');
+    }
+    return normalized;
+  }
+
+  private sanitizeNonNegativeInteger(value: unknown, fieldName: string) {
+    const num = Math.max(0, Math.floor(Number(value || 0)));
+    if (!Number.isFinite(num)) {
+      throw new Error(`${fieldName}无效`);
+    }
+    return num;
+  }
+
   async listPlans() {
     return db.select().from(membershipPlans).orderBy(desc(membershipPlans.sortOrder), desc(membershipPlans.createdAt));
   }
 
+  async getPlanById(planId: string) {
+    const [plan] = await db.select().from(membershipPlans).where(eq(membershipPlans.id, planId)).limit(1);
+    if (!plan) throw new Error('会员类型不存在');
+    return plan;
+  }
+
   async createPlan(input: NewMembershipPlan, actorId?: string | null) {
     return db.transaction(async (trx) => {
+      const planName = String(input.name || '').trim();
+      if (!planName) throw new Error('会员名称不能为空');
+      const status = this.normalizePlanStatus(String(input.status || 'active'));
+      const defaultCredits = this.sanitizeNonNegativeInteger(input.defaultCredits, '默认积分');
+      const dailyAutoRestoreEnabled = Boolean(input.dailyAutoRestoreEnabled);
+      const dailyAutoRestoreCredits = dailyAutoRestoreEnabled
+        ? this.sanitizeNonNegativeInteger(input.dailyAutoRestoreCredits, '每日自动恢复积分')
+        : 0;
+
       if (input.isDefault) {
         await trx.update(membershipPlans).set({ isDefault: false, updatedAt: new Date() }).where(eq(membershipPlans.isDefault, true));
       }
 
-      const code = String(input.code || '').trim() || generateMembershipCode(String(input.name || ''));
-      const [plan] = await trx.insert(membershipPlans).values({ ...input, code }).returning();
+      const code = String(input.code || '').trim() || generateMembershipCode(planName);
+      const [plan] = await trx.insert(membershipPlans).values({
+        ...input,
+        code,
+        name: planName,
+        status,
+        defaultCredits,
+        dailyAutoRestoreEnabled,
+        dailyAutoRestoreCredits,
+        allowedAgentLevelsJson: Array.isArray(input.allowedAgentLevelsJson) ? input.allowedAgentLevelsJson : [],
+        benefitsJson: Array.isArray(input.benefitsJson) ? input.benefitsJson : [],
+      }).returning();
       await trx.insert(membershipAuditLogs).values({
         actorId: actorId || null,
         action: 'membership_plan.create',
@@ -51,12 +93,137 @@ export class MembershipService {
     });
   }
 
+  async updatePlan(
+    planId: string,
+    input: Partial<NewMembershipPlan>,
+    actorId?: string | null
+  ) {
+    return db.transaction(async (trx) => {
+      const [before] = await trx.select().from(membershipPlans).where(eq(membershipPlans.id, planId)).limit(1);
+      if (!before) throw new Error('会员类型不存在');
+
+      const nextStatus = input.status === undefined ? before.status : this.normalizePlanStatus(String(input.status));
+      const nextName = input.name === undefined ? before.name : String(input.name || '').trim();
+      if (!nextName) throw new Error('会员名称不能为空');
+      const nextDefaultCredits = input.defaultCredits === undefined
+        ? before.defaultCredits
+        : this.sanitizeNonNegativeInteger(input.defaultCredits, '默认积分');
+      const nextDailyEnabled = input.dailyAutoRestoreEnabled === undefined
+        ? before.dailyAutoRestoreEnabled
+        : Boolean(input.dailyAutoRestoreEnabled);
+      const nextDailyCredits = input.dailyAutoRestoreCredits === undefined
+        ? before.dailyAutoRestoreCredits
+        : this.sanitizeNonNegativeInteger(input.dailyAutoRestoreCredits, '每日自动恢复积分');
+
+      const nextIsDefault = input.isDefault === undefined ? before.isDefault : Boolean(input.isDefault);
+      if (nextIsDefault) {
+        await trx
+          .update(membershipPlans)
+          .set({ isDefault: false, updatedAt: new Date() })
+          .where(and(eq(membershipPlans.isDefault, true), sql`${membershipPlans.id} <> ${planId}`));
+      }
+
+      const [after] = await trx
+        .update(membershipPlans)
+        .set({
+          name: nextName,
+          status: nextStatus,
+          defaultCredits: nextDefaultCredits,
+          isDefault: nextIsDefault,
+          allowedAgentLevelsJson: input.allowedAgentLevelsJson === undefined
+            ? before.allowedAgentLevelsJson
+            : (Array.isArray(input.allowedAgentLevelsJson) ? input.allowedAgentLevelsJson : []),
+          benefitsJson: input.benefitsJson === undefined
+            ? before.benefitsJson
+            : (Array.isArray(input.benefitsJson) ? input.benefitsJson : []),
+          dailyAutoRestoreEnabled: nextDailyEnabled,
+          dailyAutoRestoreCredits: nextDailyEnabled ? nextDailyCredits : 0,
+          description: input.description === undefined ? before.description : String(input.description || '').trim(),
+          sortOrder: input.sortOrder === undefined ? before.sortOrder : this.sanitizeNonNegativeInteger(input.sortOrder, '排序值'),
+          effectiveFrom: input.effectiveFrom === undefined ? before.effectiveFrom : input.effectiveFrom,
+          effectiveUntil: input.effectiveUntil === undefined ? before.effectiveUntil : input.effectiveUntil,
+          updatedAt: new Date(),
+        })
+        .where(eq(membershipPlans.id, planId))
+        .returning();
+
+      await trx.insert(membershipAuditLogs).values({
+        actorId: actorId || null,
+        action: 'membership_plan.update',
+        targetType: 'membership_plan',
+        targetId: planId,
+        beforeJson: before as any,
+        afterJson: after as any,
+        reason: String(input.description || '').trim(),
+      });
+
+      return after;
+    });
+  }
+
+  async updatePlanStatus(planId: string, status: string, actorId?: string | null) {
+    const normalized = this.normalizePlanStatus(status);
+    return this.updatePlan(planId, { status: normalized }, actorId);
+  }
+
   async listUserMemberships(userId: string) {
     return db
       .select()
       .from(userMemberships)
       .where(eq(userMemberships.userId, userId))
       .orderBy(desc(userMemberships.createdAt));
+  }
+
+  async listMemberships(input: {
+    userId?: string;
+    membershipPlanId?: string;
+    status?: string;
+    page?: number;
+    pageSize?: number;
+  }) {
+    const page = Math.max(1, Math.floor(Number(input.page || 1)));
+    const pageSize = Math.min(100, Math.max(1, Math.floor(Number(input.pageSize || 20))));
+    const whereParts = [];
+    if (input.userId) whereParts.push(eq(userMemberships.userId, input.userId));
+    if (input.membershipPlanId) whereParts.push(eq(userMemberships.membershipPlanId, input.membershipPlanId));
+    if (input.status) whereParts.push(eq(userMemberships.status, String(input.status).trim()));
+    const whereExpr = whereParts.length > 0 ? and(...whereParts) : undefined;
+
+    const rows = await db
+      .select({
+        membership: userMemberships,
+        user: {
+          id: appUsers.id,
+          email: appUsers.email,
+          displayName: appUsers.displayName,
+          status: appUsers.status,
+        },
+        plan: {
+          id: membershipPlans.id,
+          code: membershipPlans.code,
+          name: membershipPlans.name,
+          status: membershipPlans.status,
+        },
+      })
+      .from(userMemberships)
+      .innerJoin(appUsers, eq(userMemberships.userId, appUsers.id))
+      .innerJoin(membershipPlans, eq(userMemberships.membershipPlanId, membershipPlans.id))
+      .where(whereExpr)
+      .orderBy(desc(userMemberships.createdAt))
+      .limit(pageSize)
+      .offset((page - 1) * pageSize);
+
+    const [totalRow] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(userMemberships)
+      .where(whereExpr);
+
+    return {
+      page,
+      pageSize,
+      total: totalRow?.count || 0,
+      items: rows,
+    };
   }
 
   async assignUserMembership(
@@ -72,10 +239,24 @@ export class MembershipService {
     actorId?: string | null
   ) {
     return db.transaction(async (trx) => {
+      if (!input.userId) throw new Error('用户ID不能为空');
+      if (!input.membershipPlanId) throw new Error('会员类型不能为空');
+
       const [plan] = await trx.select().from(membershipPlans).where(eq(membershipPlans.id, input.membershipPlanId)).limit(1);
       if (!plan) {
         throw new Error('会员类型不存在');
       }
+      if (plan.status !== 'active') {
+        throw new Error('会员类型未启用');
+      }
+
+      await trx
+        .update(userMemberships)
+        .set({
+          status: 'expired',
+          updatedAt: new Date(),
+        })
+        .where(and(eq(userMemberships.userId, input.userId), eq(userMemberships.status, 'active')));
 
       const [membership] = await trx.insert(userMemberships).values({
         userId: input.userId,
@@ -162,6 +343,82 @@ export class MembershipService {
         grantRecord,
         grantTransactionId: transactionId,
       };
+    });
+  }
+
+  async updateUserMembershipStatus(
+    membershipId: string,
+    status: string,
+    actorId?: string | null,
+    reason?: string
+  ) {
+    return db.transaction(async (trx) => {
+      const [before] = await trx.select().from(userMemberships).where(eq(userMemberships.id, membershipId)).limit(1);
+      if (!before) throw new Error('用户会员不存在');
+
+      const normalized = String(status || '').trim().toLowerCase();
+      if (!['active', 'expired', 'cancelled'].includes(normalized)) {
+        throw new Error('用户会员状态无效');
+      }
+
+      if (normalized === 'active') {
+        await trx
+          .update(userMemberships)
+          .set({ status: 'expired', updatedAt: new Date() })
+          .where(and(eq(userMemberships.userId, before.userId), eq(userMemberships.status, 'active'), sql`${userMemberships.id} <> ${membershipId}`));
+      }
+
+      const [after] = await trx
+        .update(userMemberships)
+        .set({
+          status: normalized,
+          updatedAt: new Date(),
+        })
+        .where(eq(userMemberships.id, membershipId))
+        .returning();
+
+      await trx.insert(membershipAuditLogs).values({
+        actorId: actorId || null,
+        action: 'user_membership.status.update',
+        targetType: 'user_membership',
+        targetId: membershipId,
+        beforeJson: before as any,
+        afterJson: after as any,
+        reason: reason || '',
+      });
+      return after;
+    });
+  }
+
+  async updateUserMembershipExpireAt(
+    membershipId: string,
+    expiresAt: Date | null,
+    actorId?: string | null,
+    reason?: string
+  ) {
+    return db.transaction(async (trx) => {
+      const [before] = await trx.select().from(userMemberships).where(eq(userMemberships.id, membershipId)).limit(1);
+      if (!before) throw new Error('用户会员不存在');
+
+      const [after] = await trx
+        .update(userMemberships)
+        .set({
+          expiresAt,
+          updatedAt: new Date(),
+        })
+        .where(eq(userMemberships.id, membershipId))
+        .returning();
+
+      await trx.insert(membershipAuditLogs).values({
+        actorId: actorId || null,
+        action: 'user_membership.expire_at.update',
+        targetType: 'user_membership',
+        targetId: membershipId,
+        beforeJson: before as any,
+        afterJson: after as any,
+        reason: reason || '',
+      });
+      return after;
     });
   }
 
@@ -274,6 +531,58 @@ export class MembershipService {
 
       return { restoreDate, restoredCount };
     });
+  }
+
+  async listDailyRestoreHistory(input: {
+    page?: number;
+    pageSize?: number;
+    userId?: string;
+    membershipPlanId?: string;
+    startDate?: string;
+    endDate?: string;
+  }) {
+    const page = Math.max(1, Math.floor(Number(input.page || 1)));
+    const pageSize = Math.min(100, Math.max(1, Math.floor(Number(input.pageSize || 20))));
+    const whereParts = [];
+    if (input.userId) whereParts.push(eq(membershipDailyRestores.userId, input.userId));
+    if (input.membershipPlanId) whereParts.push(eq(membershipDailyRestores.membershipPlanId, input.membershipPlanId));
+    if (input.startDate) whereParts.push(gte(membershipDailyRestores.restoreDate, input.startDate));
+    if (input.endDate) whereParts.push(lte(membershipDailyRestores.restoreDate, input.endDate));
+    const whereExpr = whereParts.length > 0 ? and(...whereParts) : undefined;
+
+    const rows = await db
+      .select({
+        restore: membershipDailyRestores,
+        user: {
+          id: appUsers.id,
+          email: appUsers.email,
+          displayName: appUsers.displayName,
+        },
+        plan: {
+          id: membershipPlans.id,
+          code: membershipPlans.code,
+          name: membershipPlans.name,
+        },
+      })
+      .from(membershipDailyRestores)
+      .innerJoin(appUsers, eq(membershipDailyRestores.userId, appUsers.id))
+      .innerJoin(membershipPlans, eq(membershipDailyRestores.membershipPlanId, membershipPlans.id))
+      .where(whereExpr)
+      .orderBy(desc(membershipDailyRestores.restoreDate), desc(membershipDailyRestores.createdAt))
+      .limit(pageSize)
+      .offset((page - 1) * pageSize);
+
+    const [totalRow] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(membershipDailyRestores)
+      .where(whereExpr);
+
+    return {
+      page,
+      pageSize,
+      total: totalRow?.count || 0,
+      items: rows,
+    };
   }
 }
 

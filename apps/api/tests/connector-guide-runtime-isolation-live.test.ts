@@ -380,6 +380,7 @@ test('runtime recovery reconciles by session owner instead of foreign profile ow
   await db.insert(taskSessionConnectorBindings).values({
     taskSessionId: sessionA.id,
     connectorKey: 'supabase',
+    connectorInstanceKey: 'supabase',
     profileId: foreignProfile.profileId,
     desiredState: 'attached',
     runtimeStatus: 'pending_recover',

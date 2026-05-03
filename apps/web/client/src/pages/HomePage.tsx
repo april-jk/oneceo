@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Mic, Send, Sparkles } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import ConnectorDialog from "@/components/ConnectorDialog";
 import AttachmentChipList from "@/components/AttachmentChipList";
@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { CreditBadge } from "@/components/CreditBadge";
 import UserMenu from "@/components/UserMenu";
+import { useAuth } from "@/contexts/AuthContext";
 import type { TaskCreationPlatformSkill } from "@/lib/task-creation-client";
 import {
   DEFAULT_ATTACHMENT_PROMPT,
@@ -77,10 +78,21 @@ function QuickActionRow({
 export default function HomePage() {
   const [, setLocation] = useLocation();
   const { t } = useTranslation();
+  const { status } = useAuth();
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">("pro");
   const quickActionRows = t("homePage.quickActions", { returnObjects: true }) as string[][];
+
+  useEffect(() => {
+    if (status === "authenticated") {
+      setLocation("/home");
+    }
+  }, [setLocation, status]);
+
+  if (status === "authenticated") {
+    return null;
+  }
 
   const goToNewTask = (input: string) => {
     const value = input.trim() || (attachments.length ? DEFAULT_ATTACHMENT_PROMPT : "");

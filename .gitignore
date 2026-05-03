@@ -20,6 +20,7 @@ build/
 .env.test.local
 .env.production.local
 .env.develop
+.env.staging
 .env.product
 
 # Logs

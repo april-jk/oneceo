@@ -144,6 +144,102 @@ test('prepareRunState keeps contextual resident skill only when current intent s
   assert.ok(persistedStates.length >= 2);
 });
 
+test('prepareRunState auto-attaches ppt workflow skill for presentation requests', async () => {
+  const service = new TaskSessionSkillStateService();
+  let savedPatch: Record<string, unknown> | null = null;
+
+  mock.method(taskSessionRedisCacheService, 'resolveScopeBySession', async () => null as any);
+  mock.method(taskCreationSessionDAO, 'getSessionMetadataJson', async () => ({
+    sessionSkillState: {
+      explicitSelections: [],
+      residentSelections: [],
+      bindings: [],
+    },
+  }));
+  mock.method(taskCreationSessionDAO, 'patchSessionMetadataJson', async (_sessionId, patch) => {
+    savedPatch = patch;
+    return null as any;
+  });
+  mock.method(userSkillService, 'resolveSelectionsForSession', async (_sessionId, selections) => {
+    return (Array.isArray(selections) ? selections : []).map((item: any) => ({
+      sourceType: item.sourceType,
+      skillId: item.skillId,
+      revisionId: item.revisionId,
+      slug: 'ppt-workflow',
+      name: 'PPT 工作流',
+      description: 'PPT 子任务编排',
+      category: 'office',
+      renderedMarkdown: '# Skill Brief: PPT 子任务编排工作流',
+      revisionNumber: 1,
+      resourceSummary: null,
+      governance: {
+        systemRole: null,
+        adminManaged: true,
+        required: false,
+        autoActivation: {
+          enabled: true,
+          triggers: ['ppt', 'presentation'],
+          toolNames: [],
+        },
+      },
+    })) as any;
+  });
+
+  const result = await service.prepareRunState({
+    sessionId: 'session-ppt',
+    skillCatalog: [
+      {
+        sourceType: 'platform',
+        skillId: 'ppt-workflow-skill',
+        revisionId: 'rev-ppt-workflow',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: 'PPT 子任务编排',
+        category: 'office',
+        revisionNumber: 1,
+        resourceSummary: null,
+        governance: {
+          systemRole: null,
+          adminManaged: true,
+          required: false,
+          autoActivation: {
+            enabled: true,
+            triggers: ['ppt', 'presentation'],
+            toolNames: [],
+          },
+        },
+      },
+    ] as any,
+    taskIntentProfile: {
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: ['生成一个介绍 Codex 的 PPT，篇幅详细'],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: true,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
+    },
+    messageType: 'user_input',
+  });
+
+  assert.deepEqual(
+    result.activeSkillsForTurn.map((item) => item.slug),
+    ['ppt-workflow']
+  );
+  assert.ok(savedPatch);
+  const normalized = readSessionSkillState((savedPatch || {}).sessionSkillState);
+  assert.equal(normalized.bindings[0]?.activationSource, 'intent');
+  assert.equal(normalized.bindings[0]?.skillId, 'ppt-workflow-skill');
+});
+
 test('prepareRunState auto-attaches deployment orchestrator for action triggers only on deploy requests', async () => {
   const service = new TaskSessionSkillStateService();
   const resolvedSelections: any[][] = [];

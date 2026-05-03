@@ -6,6 +6,7 @@ import {
   logoutAppUser,
   registerAppUser,
   resolveAppAuthSession,
+  startAppAuthOAuth,
   sendRegisterVerificationCode,
   type AppUserPersonalization,
   updateAppUserProfile,
@@ -25,6 +26,7 @@ type AuthContextValue = {
   credits: UserCredits | null;
   refreshCredits: () => Promise<void>;
   login: (input: { email: string; password: string }) => Promise<AppAuthUser>;
+  startOAuth: (input: { provider: "google" | "github"; redirect?: string }) => Promise<void>;
   sendRegisterCode: (input: { email: string }) => Promise<{ cooldownSeconds?: number; expiresInSeconds?: number }>;
   register: (input: {
     email: string;
@@ -95,6 +97,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setStatus("authenticated");
       await refreshCredits();
       return nextUser;
+    },
+    startOAuth: async (input) => {
+      const result = await startAppAuthOAuth(input);
+      window.location.assign(result.authUrl);
     },
     sendRegisterCode: async (input) => await sendRegisterVerificationCode(input),
     register: async (input) => {

@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  __buildNekoClientUrlForTest,
   __hasTurnIceServerForTest,
   __parseIceServersForTest,
+  __renderNekoMemberYamlForTest,
   detectIceFailureFromLog,
 } from '../src/services/sandbox-debug-service';
 
@@ -69,4 +71,13 @@ test('ice failure detector ignores historical failed after recovered connected',
     '10:51AM INF ICE connection state changed: connected',
   ].join('\n');
   assert.equal(detectIceFailureFromLog(log), false);
+});
+
+test('neko debug uses anonymous access without url credentials', () => {
+  const memberYaml = __renderNekoMemberYamlForTest();
+
+  assert.match(memberYaml, /provider: "noauth"/);
+  assert.doesNotMatch(memberYaml, /multiuser/i);
+  assert.doesNotMatch(memberYaml, /password/i);
+  assert.equal(__buildNekoClientUrlForTest('https://8081-example.e2b.app'), 'https://8081-example.e2b.app');
 });

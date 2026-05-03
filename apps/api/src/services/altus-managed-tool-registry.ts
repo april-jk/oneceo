@@ -2,7 +2,7 @@ import { asText } from './altus-managed-shared';
 
 export type ManagedToolDescriptor = {
   name: string;
-  category: 'workspace' | 'web' | 'deployment' | 'connector' | 'conversation' | 'skill';
+  category: 'workspace' | 'web' | 'deployment' | 'database' | 'storage' | 'connector' | 'conversation' | 'skill';
   mutatesWorkspace: boolean;
   readsWorkspace: boolean;
   requiresConnectorGuide: boolean;
@@ -31,6 +31,16 @@ const BASE_TOOL_DESCRIPTORS: ManagedToolDescriptor[] = [
     requiresExplicitDeploymentIntent: false,
     budgetHint: 'small',
     hasStableProgressShape: false,
+  },
+  {
+    name: 'browser_interact',
+    category: 'web',
+    mutatesWorkspace: false,
+    readsWorkspace: false,
+    requiresConnectorGuide: false,
+    requiresExplicitDeploymentIntent: false,
+    budgetHint: 'small',
+    hasStableProgressShape: true,
   },
   {
     name: 'deploy_application',
@@ -71,6 +81,56 @@ const BASE_TOOL_DESCRIPTORS: ManagedToolDescriptor[] = [
     requiresExplicitDeploymentIntent: true,
     budgetHint: 'medium',
     hasStableProgressShape: false,
+  },
+  {
+    name: 'ensure_project_database',
+    category: 'database',
+    mutatesWorkspace: false,
+    readsWorkspace: false,
+    requiresConnectorGuide: false,
+    requiresExplicitDeploymentIntent: false,
+    budgetHint: 'medium',
+    hasStableProgressShape: true,
+  },
+  {
+    name: 'get_project_database_status',
+    category: 'database',
+    mutatesWorkspace: false,
+    readsWorkspace: false,
+    requiresConnectorGuide: false,
+    requiresExplicitDeploymentIntent: false,
+    budgetHint: 'small',
+    hasStableProgressShape: true,
+  },
+  {
+    name: 'inspect_project_database_schema',
+    category: 'database',
+    mutatesWorkspace: false,
+    readsWorkspace: false,
+    requiresConnectorGuide: false,
+    requiresExplicitDeploymentIntent: false,
+    budgetHint: 'small',
+    hasStableProgressShape: true,
+  },
+  {
+    name: 'ensure_project_storage_bucket',
+    category: 'storage',
+    mutatesWorkspace: false,
+    readsWorkspace: false,
+    requiresConnectorGuide: false,
+    requiresExplicitDeploymentIntent: false,
+    budgetHint: 'medium',
+    hasStableProgressShape: true,
+  },
+  {
+    name: 'get_project_storage_status',
+    category: 'storage',
+    mutatesWorkspace: false,
+    readsWorkspace: false,
+    requiresConnectorGuide: false,
+    requiresExplicitDeploymentIntent: false,
+    budgetHint: 'small',
+    hasStableProgressShape: true,
   },
   {
     name: 'read_file',

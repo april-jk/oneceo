@@ -5,6 +5,10 @@ import { altusManagedStreamService } from './altus-managed-stream-service';
 import {
   asText,
   isManagedRunTerminalStatus,
+  managedSkillContextToCatalogEntry,
+  mergeManagedSkillCatalogEntries,
+  normalizeManagedSkillCatalogEntries,
+  normalizeManagedSkillContexts,
   type ManagedRunStartInput,
 } from './altus-managed-shared';
 import { AltusManagedSetupService, altusManagedSetupService } from './altus-managed-setup-service';
@@ -19,6 +23,11 @@ import { altusMemoryContextService } from './altus-memory-context-service';
 import { userSkillService } from './user-skill-service';
 import { taskSessionAltusMemoryService } from './task-session-altus-memory-service';
 import { taskSessionSkillStateService } from './task-session-skill-state-service';
+import {
+  AltusManagedAskUserPairingService,
+  altusManagedAskUserPairingService,
+} from './altus-managed-ask-user-pairing-service';
+import { normalizeAgentModelTier, resolveAgentRuntimeProfile, toAgentRuntimeSnapshot } from './agent-runtime-profile-service';
 
 export class AltusManagedRunEntryService {
   private readonly controllers = new Map<string, AbortController>();
@@ -30,7 +39,8 @@ export class AltusManagedRunEntryService {
     private readonly lifecycleService: AltusRunLifecycleService = altusRunLifecycleService,
     private readonly coordinator: AltusRunCoordinator = altusRunCoordinator,
     private readonly redisStateService: AltusRunRedisStateService = altusRunRedisStateService,
-    private readonly recoveryService: AltusRunRecoveryService = altusRunRecoveryService
+    private readonly recoveryService: AltusRunRecoveryService = altusRunRecoveryService,
+    private readonly askUserPairingService: AltusManagedAskUserPairingService = altusManagedAskUserPairingService
   ) {}
 
   private getModelName() {
@@ -40,6 +50,26 @@ export class AltusManagedRunEntryService {
       asText(process.env.OPENAI_MODEL) ||
       'claude-haiku-4-5-20251001'
     );
+  }
+
+  private resolveModelTier(metadata?: Record<string, unknown>) {
+    const nested = metadata?.metadata && typeof metadata.metadata === 'object' && !Array.isArray(metadata.metadata)
+      ? (metadata.metadata as Record<string, unknown>)
+      : undefined;
+    return normalizeAgentModelTier(metadata?.modelTier ?? nested?.modelTier);
+  }
+
+  private metadataHasImageInput(value: unknown): boolean {
+    if (!value) return false;
+    if (typeof value === 'string') return value.toLowerCase().startsWith('image/');
+    if (Array.isArray(value)) return value.some((item) => this.metadataHasImageInput(item));
+    if (typeof value === 'object') {
+      const record = value as Record<string, unknown>;
+      const mimeType = asText(record.mimeType || record.contentType).toLowerCase();
+      if (mimeType.startsWith('image/')) return true;
+      return Object.values(record).some((item) => this.metadataHasImageInput(item));
+    }
+    return false;
   }
 
   private getHeartbeatIntervalMs() {
@@ -79,21 +109,30 @@ export class AltusManagedRunEntryService {
     }
 
     const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId);
+    const pendingAskUser = await this.askUserPairingService.resolvePending(sessionId, sessionMemory as any);
     const orchestratorSessionId = asText(sessionMemory?.runtime?.orchestratorSessionId);
     if (orchestratorSessionId) {
       void sessionMcpRecoveryService.ensureSessionRecovered(sessionId, orchestratorSessionId).catch(() => null);
     }
+    const runtimeProfile = resolveAgentRuntimeProfile({
+      tier: this.resolveModelTier(input.metadata),
+      needsVision: this.metadataHasImageInput(input.metadata),
+    });
+    const runtimeSnapshot = toAgentRuntimeSnapshot(runtimeProfile);
     const connectorSnapshot = await this.setupService.captureConnectorSnapshot(sessionId, userId);
     const mcpToolSnapshot = await this.setupService.captureMcpToolSnapshot(sessionId);
     const run = await taskSessionRunDAO.createRun({
       sessionId,
       status: 'queued',
       mode: 'managed',
-      model: this.getModelName(),
+      model: runtimeSnapshot.model,
       connectorSnapshotId: connectorSnapshot.snapshotId,
       mcpToolSnapshotId: mcpToolSnapshot.snapshotId,
       metadataJson: {
         trigger: 'user_input',
+        modelTier: runtimeSnapshot.tier,
+        billingTargetKey: runtimeSnapshot.billingTargetKey,
+        runtimeSnapshot,
         mcpToolSnapshotId: mcpToolSnapshot.snapshotId,
       },
     });
@@ -101,14 +140,14 @@ export class AltusManagedRunEntryService {
       runId: run.id,
       sessionId,
       userId,
-      model: run.model || this.getModelName(),
+      model: run.model || runtimeSnapshot.model,
       status: 'queued',
     });
     const queuedRecovery = await this.recoveryService.buildRecoverySnapshot({
       runId: run.id,
       sessionId,
       userId,
-      model: run.model || this.getModelName(),
+      model: run.model || runtimeSnapshot.model,
       status: 'queued',
     });
     await this.redisStateService.setRecoverySnapshot({
@@ -133,7 +172,18 @@ export class AltusManagedRunEntryService {
       content,
       metadata: {
         ...(input.metadata || {}),
+        modelTier: runtimeSnapshot.tier,
+        billingTargetKey: runtimeSnapshot.billingTargetKey,
+        runtimeSnapshot,
         runId: run.id,
+        ...(pendingAskUser
+          ? {
+              clarificationAnswer: true,
+              clarificationRunId: pendingAskUser.runId,
+              clarificationToolCallId: pendingAskUser.toolCallId,
+              clarificationMessageKey: pendingAskUser.messageKey,
+            }
+          : {}),
       },
       messageKey,
     });
@@ -142,7 +192,24 @@ export class AltusManagedRunEntryService {
       content,
       messageType
     );
-    const skillCatalog = await userSkillService.listAvailableSkills(userId);
+    const closedAskUser = isClarificationAnswer
+      ? await this.askUserPairingService.closePending({
+          sessionId,
+          userId,
+          pending: pendingAskUser,
+          answer: content,
+          answerRunId: run.id,
+          answerMessageKey: messageKey,
+          taskIntentProfile,
+        })
+      : null;
+    const submittedSkillContexts = normalizeManagedSkillContexts(input.metadata?.managedSkillContext);
+    const metadataSkillCatalog = normalizeManagedSkillCatalogEntries(input.metadata?.managedSkillCatalog);
+    const availableSkillCatalog = await userSkillService.listAvailableSkills(userId);
+    const skillCatalog = mergeManagedSkillCatalogEntries(
+      mergeManagedSkillCatalogEntries(availableSkillCatalog as any, metadataSkillCatalog),
+      submittedSkillContexts.map((item) => managedSkillContextToCatalogEntry(item))
+    );
     const preparedSkills = await taskSessionSkillStateService.prepareRunState({
       sessionId,
       skillCatalog: skillCatalog as any,
@@ -151,6 +218,7 @@ export class AltusManagedRunEntryService {
         input.metadata && Object.prototype.hasOwnProperty.call(input.metadata, 'skills')
           ? input.metadata.skills
           : undefined,
+      submittedSkillContexts,
       messageType,
     });
     const memoryContext = await altusMemoryContextService.buildPromptSectionForRun({
@@ -180,7 +248,10 @@ export class AltusManagedRunEntryService {
       runId: run.id,
       sessionId,
       userId,
-      model: run.model || this.getModelName(),
+      model: run.model || runtimeSnapshot.model,
+      billingTargetKey: runtimeSnapshot.billingTargetKey,
+      runtimeSnapshot,
+      runtimeTokenSource: runtimeProfile.tokenSource,
       userInput: content,
       messageType,
       sessionTitle: sessionMemory?.title || null,
@@ -195,6 +266,13 @@ export class AltusManagedRunEntryService {
       residentSkillSelections: preparedSkills.residentSkillSelections,
       sessionSkillState: preparedSkills.sessionSkillState,
       taskIntentProfile,
+      ...(closedAskUser?.closed
+        ? {
+            clarificationAnswerKind: closedAskUser.answerKind,
+            closedClarificationRunId: closedAskUser.pending?.runId,
+            closedClarificationToolCallId: closedAskUser.pending?.toolCallId,
+          }
+        : {}),
     });
     const abortController = new AbortController();
     this.controllers.set(run.id, abortController);

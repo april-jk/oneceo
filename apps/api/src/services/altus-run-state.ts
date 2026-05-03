@@ -6,6 +6,7 @@ import type { ManagedMcpProvider, ManagedSkillCatalogEntry, ManagedSkillContext 
 import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-service';
 import type { AltusSessionMemory } from './task-session-altus-memory-service';
 import type { SessionSkillState, SkillSelectionInput } from './task-session-skill-state-service';
+import type { AgentRuntimeSnapshot } from './agent-runtime-profile-service';
 
 export class AltusRunState {
   status: ManagedRunStatus;
@@ -23,6 +24,9 @@ export class AltusRunState {
       sessionId: string;
       userId: string;
       model: string;
+      billingTargetKey?: string;
+      runtimeSnapshot?: AgentRuntimeSnapshot;
+      runtimeTokenSource?: string;
       userInput: string;
       messageType?: 'user_input' | 'user_response';
       sessionTitle?: string | null;
@@ -37,6 +41,9 @@ export class AltusRunState {
       residentSkillSelections: SkillSelectionInput[];
       sessionSkillState: SessionSkillState;
       taskIntentProfile: AltusManagedTaskIntentProfile;
+      clarificationAnswerKind?: string;
+      closedClarificationRunId?: string | null;
+      closedClarificationToolCallId?: string | null;
     }
   ) {
     this.status = 'queued';

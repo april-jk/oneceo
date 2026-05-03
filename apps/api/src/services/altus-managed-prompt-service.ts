@@ -1,6 +1,11 @@
 import type { ManagedSkillCatalogEntry, ManagedSkillContext } from './altus-managed-shared';
 import type { SessionConnectorStatus } from './session-connector-service';
 import { classifyTaskIntentShape, type TaskClarificationType } from './task-intent-shape-service';
+import { altusManagedDynamicContextBlockService } from './altus-managed-dynamic-context-blocks';
+import {
+  classifyPlatformCapabilityIntent,
+  type PlatformCapabilityIntentDecision,
+} from './platform-capability-intent-service';
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -224,15 +229,6 @@ const WEB_ARTIFACT_KEYWORDS = [
   'browser product',
 ] as const;
 
-const DEPLOY_REQUEST_KEYWORDS = [
-  '部署',
-  '发布',
-  '上线',
-  'deploy',
-  'publish',
-  'go live',
-] as const;
-
 function includesAnyKeyword(text: string, keywords: readonly string[]) {
   return keywords.some((keyword) => text.includes(keyword));
 }
@@ -260,6 +256,7 @@ export type AltusManagedTaskIntentProfile = {
   explicitNoWeb: boolean;
   webArtifactRequested: boolean;
   deployRequested: boolean;
+  platformCapabilityIntent?: PlatformCapabilityIntentDecision;
   scriptArtifactRequested: boolean;
   emailTemplateRequested: boolean;
   deploymentAllowed: boolean;
@@ -267,6 +264,11 @@ export type AltusManagedTaskIntentProfile = {
   clarificationQuestion: string;
   clarificationType: TaskClarificationType;
   clarificationOptions?: string[];
+  clarificationTransition?: {
+    nextState: 'advisory' | 'ready_to_execute' | 'new_turn' | 'clarifying' | 'risk_confirmation';
+    reason?: string;
+    assumptions?: string[];
+  };
   todoRequired: boolean;
   todoReason:
     | 'multi_step'
@@ -286,16 +288,19 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
   const latestExplicitNoDeploy = includesAnyKeyword(latest, EXPLICIT_NO_DEPLOY_KEYWORDS);
   const latestExplicitNoWeb = includesAnyKeyword(latest, EXPLICIT_NO_WEB_KEYWORDS);
   const latestWebArtifact = includesAnyKeyword(latest, WEB_ARTIFACT_KEYWORDS);
-  const latestDeployRequest = includesAnyKeyword(latest, DEPLOY_REQUEST_KEYWORDS);
+  const latestCapabilityIntent = classifyPlatformCapabilityIntent(latest);
+  const latestDeployRequest = latestCapabilityIntent.mode === 'execute';
 
   const explicitNoDeploy = includesAnyKeyword(combined, EXPLICIT_NO_DEPLOY_KEYWORDS);
   const explicitNoWeb = includesAnyKeyword(combined, EXPLICIT_NO_WEB_KEYWORDS);
   const webArtifactRequested = includesAnyKeyword(combined, WEB_ARTIFACT_KEYWORDS);
-  const deployRequested = includesAnyKeyword(combined, DEPLOY_REQUEST_KEYWORDS);
+  const platformCapabilityIntent = classifyPlatformCapabilityIntent(texts);
+  const deployRequested = platformCapabilityIntent.mode === 'execute';
   const scriptArtifactRequested = includesAnyKeyword(combined, SCRIPT_ARTIFACT_KEYWORDS);
   const emailTemplateRequested = includesAnyKeyword(combined, EMAIL_TEMPLATE_KEYWORDS);
   const deploymentAllowed =
-    deployRequested &&
+    platformCapabilityIntent.mode === 'execute' &&
+    platformCapabilityIntent.intentKind === 'explicit_action' &&
     !explicitNoDeploy &&
     !explicitNoWeb &&
     !scriptArtifactRequested &&
@@ -335,6 +340,7 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
     explicitNoWeb,
     webArtifactRequested,
     deployRequested,
+    platformCapabilityIntent,
     scriptArtifactRequested,
     emailTemplateRequested,
     deploymentAllowed,
@@ -362,6 +368,16 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
             ? 'integration_chain'
             : 'none',
   };
+}
+
+function isPlatformCapabilityAdvisoryProfile(profile?: AltusManagedTaskIntentProfile) {
+  const mode = profile?.platformCapabilityIntent?.mode;
+  return (
+    mode === 'answer_capability' ||
+    mode === 'explain_how_to' ||
+    mode === 'discuss_requirement' ||
+    mode === 'explain_concept'
+  );
 }
 
 function describeConnectorToolAccess(runtimeStatus: string): string {
@@ -438,12 +454,15 @@ export class AltusManagedPromptService {
       instructionsSection?: string;
       reminderSection?: string;
     };
+    includeRuntimeState?: boolean;
   }) {
     const title = asText(input.sessionTitle) || '未命名会话';
     const now = new Date().toISOString();
+    const includeRuntimeState = input.includeRuntimeState !== false;
     const taskIntentProfile = input.taskIntentProfile;
+    const platformCapabilityAdvisory = isPlatformCapabilityAdvisoryProfile(taskIntentProfile);
     const nonDeployableTaskSection =
-      taskIntentProfile?.mode === 'non_deployable_artifact'
+      includeRuntimeState && taskIntentProfile?.mode === 'non_deployable_artifact'
         ? [
             '# Non-deployable task contract',
             `- The current session intent is classified as a non-deployable artifact (${taskIntentProfile.reason}).`,
@@ -455,7 +474,7 @@ export class AltusManagedPromptService {
           ].join('\n')
         : '';
     const noAutoDeploySection =
-      taskIntentProfile && !taskIntentProfile.deploymentAllowed
+      includeRuntimeState && taskIntentProfile && !taskIntentProfile.deploymentAllowed && !platformCapabilityAdvisory
         ? [
             '# Deployment trigger contract',
             '- The current session is not an explicit deployment request.',
@@ -465,24 +484,52 @@ export class AltusManagedPromptService {
             '',
           ].join('\n')
         : '';
+    const platformCapabilityAdvisorySection =
+      includeRuntimeState && platformCapabilityAdvisory
+        ? [
+            '# Platform capability advisory contract',
+            `- The latest user message is a platform capability conversation (${taskIntentProfile?.platformCapabilityIntent?.mode}; topic=${taskIntentProfile?.platformCapabilityIntent?.topic || 'deployment'}).`,
+            '- Answer the user naturally and directly about the capability, how-to, requirement tradeoff, or concept they asked about.',
+            '- Do not create deployable artifacts, do not start implementation, and do not call deployment tools unless the user explicitly asks you to execute deployment in a later turn.',
+            '- If the user asks whether Vercel deployment can be used, answer the capability question and offer guidance or next steps; do not infer that the current session lacks deployment permission.',
+            '- Do not say deployment is blocked, disabled, not enabled, unauthorized, or prevented by the platform just because this turn is advisory.',
+            '',
+          ].join('\n')
+        : '';
     const deploymentToolSection =
-      taskIntentProfile && !taskIntentProfile.deploymentAllowed
-        ? ''
+      !includeRuntimeState
+        ? [
+            '- Deployment tools are governed by the current turn state. Use deploy/status/rollback tools only for an explicit current-turn deployment request.',
+          ].join('\n')
+        : taskIntentProfile && !taskIntentProfile.deploymentAllowed
+          ? ''
         : [
             '- When the user asks to deploy, publish, go live, 上线, redeploy, rollback deployment, or check deployment status for the current app, use the managed deployment tools instead of replying with plain text.',
             '- In deploy/redeploy/status flows, do not run local preview/dev commands such as `vite preview`, `npm run preview`, `vite dev`, `npm run dev`, or `react-scripts start` to decide whether Railway deployment is healthy.',
             '- In deploy/redeploy/status flows, do not infer the public deployment start command from the raw workspace `package.json` or an outdated `oneceo.manifest.json`. The platform will normalize the deployable source before publishing.',
+            '- Before the first deploy attempt, make sure the workspace already satisfies the deployable baseline: build/start contract, healthcheck path, analytics entry, and recognizable public entrypoint. If the deployment tool returns `template_compliance`, `deployment_configuration`, or `workspace_missing`, treat that as a pre-deploy baseline gate and fix the workspace before trying to publish again.',
             '- Use `deploy_application` for first publish or publishing the latest workspace changes.',
             '- Use `redeploy_application` when the user wants the latest code changes published again.',
             '- Use `rollback_application_deployment` only when the user explicitly asks to rollback or revert the deployment.',
             '- Use `get_application_deployment_status` when the user asks for deployment progress, current URL, or deployment health.',
-            '- If `deploy_application` or `redeploy_application` returns `status=retryable_repair_required`, inspect `repair.category` first. For `template_compliance`, `deployment_configuration`, or `workspace_missing`, repair the workspace baseline with file/code tools and then call the deployment tool again. For `resource_binding`, do not keep editing workspace files; continue with deployment/status tools until the platform resource binding is repaired or a clear blocker is surfaced. For `deployment_pending`, do not edit workspace files; keep calling `get_application_deployment_status` until the deployment becomes ready.',
+            '- If `deploy_application`, `redeploy_application`, or `get_application_deployment_status` returns `status=retryable_repair_required`, inspect `repair.category` first. For `template_compliance`, `deployment_configuration`, or `workspace_missing`, repair the workspace baseline with file/code tools and then call the deployment tool again. For `deployment_failed`, read deployment status/log evidence and repair runtime/start/healthcheck/entry configuration before redeploying. For `resource_binding`, do not keep editing workspace files; continue with deployment/status tools until the platform resource binding is repaired or a clear blocker is surfaced. For `deployment_pending`, do not edit workspace files; keep calling `get_application_deployment_status` until the deployment becomes ready or the public-settling window clearly times out.',
             '- `debug_open_page` only proves a local debug preview is reachable. It never proves that the managed public deployment succeeded.',
             '- For deploy/redeploy/rollback requests, do not call `complete_task` until deployment is actually ready online. Treat `bindingState=ready` plus a non-transient deployment status as the success condition. If the deployment tool reports `deployment_pending`, keep polling with `get_application_deployment_status`. If deployment is still failing, continue repairing or clearly report that the online deployment is not complete yet.',
             '- Keep deployment debug details internal. In user-facing replies, summarize only the current phase, whether auto-repair is happening, and the final result.',
           ].join('\n');
+    const resourceToolSection = [
+      '- Database and storage are managed platform resources. Do not simulate them with local files when the app requirement clearly needs persistence.',
+      '- In OneCEO managed deployment, database always means the fixed managed Railway Postgres. Do not ask the user to choose MySQL / SQLite / other engines for this flow.',
+      '- In OneCEO managed deployment, object storage always means the fixed managed Railway Bucket. Do not ask the user to choose R2 / S3 / MinIO / other storage engines for this flow.',
+      '- Use `get_project_database_status` or `get_project_storage_status` to inspect existing resources without creating anything.',
+      '- Use `ensure_project_database` only when the user request or the app design clearly needs relational persistence, user records, accounts, auth/session data, admin CRUD data, or SQL-backed business data.',
+      '- Use `ensure_project_storage_bucket` only when the user request or the app design clearly needs file uploads, images, media, attachments, exports, or object storage.',
+      '- Calling `ensure_project_database` or `ensure_project_storage_bucket` records an explicit deployment resource requirement for the current session. Do not call them speculatively.',
+      '- Do not ask the user to manually create Railway Postgres or Railway Bucket when the managed tools can create them for the current project.',
+      '- Never print database passwords, access keys, or secret access keys in the ordinary chat response. Users can view/copy secrets from the deployment resource panels.',
+    ].join('\n');
     const clarificationGateSection =
-      taskIntentProfile?.needsClarification && asText(taskIntentProfile.clarificationQuestion)
+      includeRuntimeState && taskIntentProfile?.needsClarification && asText(taskIntentProfile.clarificationQuestion)
         ? [
             '# Clarification gate',
             '- The current request is under-specified and requires clarification before execution.',
@@ -492,7 +539,7 @@ export class AltusManagedPromptService {
           ].join('\n')
         : '';
     const clarificationFocusSection =
-      taskIntentProfile?.needsClarification && taskIntentProfile.clarificationType !== 'none'
+      includeRuntimeState && taskIntentProfile?.needsClarification && taskIntentProfile.clarificationType !== 'none'
         ? [
             '# Clarification focus',
             `- Active clarification type: ${taskIntentProfile.clarificationType}.`,
@@ -507,8 +554,38 @@ export class AltusManagedPromptService {
             '',
           ].join('\n')
         : '';
+    const clarificationTransitionSection =
+      includeRuntimeState && taskIntentProfile?.clarificationTransition && !taskIntentProfile.needsClarification
+        ? [
+            '# Clarification transition',
+            `- Transition state: ${taskIntentProfile.clarificationTransition.nextState}.`,
+            ...(asText(taskIntentProfile.clarificationTransition.reason)
+              ? [`- Transition reason: ${taskIntentProfile.clarificationTransition.reason}.`]
+              : []),
+            ...(Array.isArray(taskIntentProfile.clarificationTransition.assumptions) &&
+            taskIntentProfile.clarificationTransition.assumptions.length > 0
+              ? [
+                  `- Accepted assumptions: ${taskIntentProfile.clarificationTransition.assumptions
+                    .map((item) => `\`${item}\``)
+                    .join(', ')}.`,
+                ]
+              : []),
+            ...(taskIntentProfile.clarificationTransition.nextState === 'advisory'
+              ? [
+                  '- The user shifted to advisory, planning, discussion, or proposal mode. Answer naturally with useful analysis or a plan.',
+                  '- Do not ask the same clarification again, and do not start implementation unless the user explicitly asks to implement.',
+                ]
+              : []),
+            ...(taskIntentProfile.clarificationTransition.nextState === 'new_turn'
+              ? [
+                  '- The user started a new turn. Ignore stale pending clarification from earlier turns and respond to the current request.',
+                ]
+              : []),
+            '',
+          ].join('\n')
+        : '';
     const todoGateSection =
-      taskIntentProfile && !taskIntentProfile.needsClarification
+      includeRuntimeState && taskIntentProfile && !taskIntentProfile.needsClarification
         ? taskIntentProfile.todoRequired
           ? [
               '# Todo gate',
@@ -555,13 +632,21 @@ export class AltusManagedPromptService {
       `- Session ID: ${input.sessionId}`,
       `- Session title: ${title}`,
       `- Sandbox workspace root: ${input.workspaceRoot}`,
-      `- Current time: ${now}`,
+      ...(includeRuntimeState ? [`- Current time: ${now}`] : []),
       '',
-      '# Session connectors',
-      formatConnectors(input.connectors),
-      input.connectorGuideSections?.instructionsSection || '',
-      input.connectorGuideSections?.reminderSection || '',
-      '',
+      ...(includeRuntimeState
+        ? [
+            '# Session connectors',
+            formatConnectors(input.connectors),
+            input.connectorGuideSections?.instructionsSection || '',
+            input.connectorGuideSections?.reminderSection || '',
+            '',
+          ]
+        : [
+            '# Session connectors',
+            '- Runtime connector status and connector guide reminders are supplied in the current turn context.',
+            '',
+          ]),
       '# Tool usage rules',
       '- Never treat a connector/tool failure from an earlier turn as proof that the connector still fails now.',
       '- If the user says they reconnected, reauthorized, or wants to retry a connector action, you must call the connector tool again in the current run before concluding it still fails.',
@@ -576,8 +661,20 @@ export class AltusManagedPromptService {
       '- When running shell commands, explain only the essential outcome in your final reply.',
       '- If a command fails, inspect the real error and adjust instead of guessing.',
       '- If the user asks to 启动网站调试功能, open a debug page, or load a website in the debug view, use debug_open_page instead of free-form command text.',
-      '- For website debug tasks, if the target service is not running yet, start it first with shell_execute, then call debug_open_page with the final http/https URL.',
+      '- Treat website debugging as entry into a testing workflow, not as a visual-only action. Before the first debug_open_page call, write or update a workspace test document such as `docs/test-plan.md` with requirements, target flows, test cases, acceptance criteria, and a results section.',
+      '- After the test document exists, explicitly enter the testing phase in your todo/progress: start or open the app, call debug_open_page, then run Playwright / playwright-mcp functional checks against the same n.eko Chromium session.',
+      '- During website debugging, expose concrete Playwright-backed browser actions with browser_interact instead of vague progress text: open the page with debug_open_page, then call browser_interact only for supported Playwright projections such as locator_click, text_click, coordinate_click, locator_fill, keyboard_type, keyboard_press, mouse_wheel, wait_for_locator, wait_for_text, wait_for_load_state, and wait_for_timeout. Set the browser_interact description to the exact user-visible action, for example `点击“新游戏”按钮`, `按下 ArrowUp 键`, `向下滚动页面`.',
+      '- The functional test must cover the core user flows implied by the request, not only page reachability. Check visible content, navigation, key controls/forms/interactions, state changes, responsive layout when relevant, and obvious console/runtime failures.',
+      '- If Playwright finds a defect, record the failure in the test document, return to repair with file/code tools, then rerun the affected tests and update the same test document with the retest result before completing.',
+      '- For website debug tasks, if the target service is not running yet, start it first with shell_execute. Long-running preview/dev server commands are managed by shell_execute in runMode=auto/background_service; use the returned service.url with debug_open_page.',
+      '- For standalone HTML deliverables already present in the workspace, call debug_open_page with the workspace file:// URL instead of trying to start a persistent local HTTP server through shell_execute.',
+      '- Treat debug_open_page as successful only when the tool result succeeds. If debug_open_page reports target unreachable, bad HTTP status, or tab not ready, fix the local preview service/port and call debug_open_page again before telling the user the page is open.',
+      '- After opening a page for debugging or after building a website/app, use Playwright / playwright-mcp by default to inspect or test the same n.eko Chromium session through CDP 9222. Do not launch a separate browser instance for this verification.',
+      '- Do not tell the user the page is displayed correctly until Playwright confirms the visible page is the target page, not about:blank, a Chrome error page, or an unexpected fallback route.',
       '- Do not replace debug_open_page with ad-hoc docker-compose/install shell flows when the request is about opening a website in the debug browser.',
+      '- Browser Use CLI is preinstalled in the sandbox. Use Browser Use for exploratory external-site access and interaction only when that is the better browser automation surface; when it must share the debug browser, pass `--cdp-url http://127.0.0.1:9222`.',
+      '- Use Playwright / playwright-mcp by default for debugging, deterministic testing, regression checks, screenshots for verification, and local app test flows.',
+      '- Do not install browser-use, Playwright, or @playwright/mcp at task time; they are sandbox defaults. If one is unavailable, report the sandbox capability failure instead of adding runtime dependencies to the user project.',
       '- When the current user message includes an uploaded image, analyze the image directly from the multimodal message input first.',
       '- For image understanding requests, do not start with shell file probes, OCR libraries, Pillow, or other local image-processing tools unless the user explicitly asks for OCR/extraction or the model cannot access the image input.',
       '- Do not ask the user to describe an uploaded image when the image is already attached and available in the current multimodal context, unless the image input is actually unavailable.',
@@ -599,8 +696,10 @@ export class AltusManagedPromptService {
       '',
       nonDeployableTaskSection,
       noAutoDeploySection,
+      platformCapabilityAdvisorySection,
       clarificationGateSection,
       clarificationFocusSection,
+      clarificationTransitionSection,
       todoGateSection,
       '# OneCEO web app contract',
       '- When the user asks for a website, web app, dashboard, admin panel, SaaS UI, landing page with working product flow, or other deployable browser product, you must build it as a OneCEO deployable web app instead of an ad-hoc static artifact.',
@@ -617,6 +716,7 @@ export class AltusManagedPromptService {
       '- For deployable web app tasks, include a healthcheck route path in `oneceo.manifest.json`. Prefer `/api/system/health` when you own the server route design.',
       '- Do not finish a deployable web app task while required deployment files are missing. Before completion, verify at least: `package.json`, `oneceo.manifest.json`, and the primary app entry files exist.',
       deploymentToolSection,
+      resourceToolSection,
       '',
       '# PPT workflow',
       `- For PPT tasks, choose exactly one contentArchetype from ${formatCodeList(PPT_CONTENT_ARCHETYPES)} before drafting slides.`,
@@ -656,6 +756,7 @@ export class AltusManagedPromptService {
       '',
       '# Clarification rules',
       '- If critical requirements are missing, call ask_user with one precise question.',
+      '- When calling ask_user for a missing requirement, include `clarificationType` when the question is about artifact type, tech stack, scope boundary, integration target, or acceptance requirement.',
       '- Do not ask unnecessary questions when a reasonable next step is clear.',
       '- For requests like "generate a PPT/docx/xlsx on topic X", you already have enough information to start. Use reasonable defaults and proceed instead of asking a generic meta-question.',
       '- Do not ask generic office-flow questions such as "Do you want to create or modify a PPT?" when the user request already clearly asks to create one.',
@@ -666,6 +767,7 @@ export class AltusManagedPromptService {
       '',
       '# Completion rules',
       '- Use complete_task once the task is actually complete. The `summary` must be a user-facing final answer with enough detail to stand alone (use structured bullets when helpful), not a one-line placeholder.',
+      '- When using bullets in complete_task.summary, use Markdown list lines like `- item` on separate lines. Do not put multiple `• item` fragments on one line.',
       '- For downloadable deliverables, complete_task.attachments is part of the completion contract, not an optional note.',
       '- complete_task.attachments must be a real JSON array of attachment objects. Never wrap the attachments array as a string.',
       '- If the requested final file already exists and one verification command confirmed it, your next action should usually be complete_task with attachments.',
@@ -673,10 +775,117 @@ export class AltusManagedPromptService {
     ].join('\n');
   }
 
+  buildRuntimeContextPrompt(input: {
+    sessionId: string;
+    sessionTitle?: string | null;
+    workspaceRoot: string;
+    connectors: SessionConnectorStatus[];
+    taskIntentProfile?: AltusManagedTaskIntentProfile;
+    connectorGuideSections?: {
+      instructionsSection?: string;
+      reminderSection?: string;
+    };
+    turnStatePrompt?: string | null;
+  }) {
+    const title = asText(input.sessionTitle) || '未命名会话';
+    const now = new Date().toISOString();
+    const profile = input.taskIntentProfile;
+    const lines = [
+      '# Runtime context',
+      '- This block contains current-turn state and may change between runs. Stable operating rules are in the first system message.',
+      asText(input.turnStatePrompt),
+      '',
+      '# Workspace runtime',
+      `- Session ID: ${input.sessionId}`,
+      `- Session title: ${title}`,
+      `- Sandbox workspace root: ${input.workspaceRoot}`,
+      `- Current time: ${now}`,
+      '',
+      '# Session connectors',
+      formatConnectors(input.connectors),
+      input.connectorGuideSections?.instructionsSection || '',
+      input.connectorGuideSections?.reminderSection || '',
+    ].filter(Boolean);
+
+    if (profile?.mode === 'non_deployable_artifact') {
+      lines.push(
+        '',
+        '# Non-deployable task contract',
+        `- The current session intent is classified as a non-deployable artifact (${profile.reason}).`,
+        '- Do not transform this task into a website, web app, or deployable browser product unless the user explicitly changes the requirement.',
+        '- Do not create deploy-only scaffolding just to satisfy a web contract.',
+        '- Do not call deployment tools for this task.'
+      );
+    }
+
+    const platformCapabilityAdvisory = isPlatformCapabilityAdvisoryProfile(profile);
+
+    if (profile && !profile.deploymentAllowed && !platformCapabilityAdvisory) {
+      lines.push(
+        '',
+        '# Deployment trigger contract',
+        '- The current session is not an explicit deployment request.',
+        '- Do not call deploy/status/rollback tools unless the user explicitly asks for that action in the current turn.',
+        '- Building or editing an artifact does not by itself authorize deployment.'
+      );
+    }
+
+    if (platformCapabilityAdvisory) {
+      lines.push(
+        '',
+        '# Platform capability advisory contract',
+        `- The latest user message is a platform capability conversation (${profile?.platformCapabilityIntent?.mode}; topic=${profile?.platformCapabilityIntent?.topic || 'deployment'}).`,
+        '- Answer naturally and directly. Do not create artifacts or call deployment tools for this advisory turn.',
+        '- If the user asks whether Vercel deployment can be used, answer the capability question and offer guidance or next steps; do not infer that the current session lacks deployment permission.',
+        '- Do not say deployment is blocked, disabled, not enabled, unauthorized, or prevented by the platform unless a real external provider error proves that.'
+      );
+    }
+
+    if (profile?.needsClarification && asText(profile.clarificationQuestion)) {
+      lines.push(
+        '',
+        '# Clarification gate',
+        '- The current request is under-specified and requires clarification before execution.',
+        `- Ask exactly this focused question: ${profile.clarificationQuestion}`,
+        ...(Array.isArray(profile.clarificationOptions) && profile.clarificationOptions.length > 0
+          ? [`- Suggested options: ${profile.clarificationOptions.join(' | ')}`]
+          : []),
+        '- Do not start execution before the user answers.'
+      );
+    }
+
+    if (profile?.clarificationTransition && !profile.needsClarification) {
+      lines.push(
+        '',
+        '# Clarification transition',
+        `- Transition state: ${profile.clarificationTransition.nextState}.`,
+        ...(profile.clarificationTransition.reason ? [`- Reason: ${profile.clarificationTransition.reason}.`] : []),
+        ...(Array.isArray(profile.clarificationTransition.assumptions) &&
+        profile.clarificationTransition.assumptions.length > 0
+          ? [`- Accepted assumptions: ${profile.clarificationTransition.assumptions.join(' | ')}`]
+          : [])
+      );
+    }
+
+    if (profile && !profile.needsClarification) {
+      lines.push(
+        '',
+        profile.todoRequired
+          ? `# Todo gate\n- The current request requires a pre-execution todo snapshot (reason=${profile.todoReason}).\n- Call \`todowrite\` before the first execution step, then update it after each major step.`
+          : '# Simple-task gate\n- The current request does not require a pre-execution todo snapshot.\n- Execute directly with the minimum correct tool path.'
+      );
+    }
+
+    return lines.join('\n');
+  }
+
   buildSkillContextPrompt(skills: ManagedSkillContext[]) {
     if (!Array.isArray(skills) || skills.length === 0) {
       return '';
     }
+    const blockIndex = altusManagedDynamicContextBlockService.renderBlockIndex(
+      altusManagedDynamicContextBlockService.buildSkillBlocks({ activeSkills: skills })
+    );
 
     return [
       '# Active skills',
@@ -684,6 +893,9 @@ export class AltusManagedPromptService {
       '- They may be user-selected or auto-attached by platform governance.',
       '- These skills are already synced into the sandbox and must be followed when relevant.',
       '- Treat each skill body below as task-specific operating instructions unless it conflicts with higher-priority system rules.',
+      '- Skill identity is carried by sourceType, skillId, and revisionId. Do not rely on slug alone.',
+      '',
+      blockIndex,
       '',
       ...this.formatSkillSections(skills),
     ].join('\n');
@@ -693,11 +905,20 @@ export class AltusManagedPromptService {
     if (!Array.isArray(skills) || skills.length === 0) {
       return '';
     }
+    const blockIndex = altusManagedDynamicContextBlockService.renderBlockIndex(
+      altusManagedDynamicContextBlockService.buildSkillBlocks({
+        autoAttachedSkills: skills,
+        toolName,
+      })
+    );
 
     return [
       '# Newly auto-attached skills',
       `- These skills were automatically activated because tool \`${toolName}\` was used.`,
       '- They are now active for the rest of this run and must be followed when relevant.',
+      '- They become model-visible as a next-turn delta and are not part of the stable prompt.',
+      '',
+      blockIndex,
       '',
       ...this.formatSkillSections(skills),
     ].join('\n');
@@ -707,6 +928,9 @@ export class AltusManagedPromptService {
     if (!Array.isArray(skills) || skills.length === 0) {
       return '';
     }
+    const blockIndex = altusManagedDynamicContextBlockService.renderBlockIndex(
+      altusManagedDynamicContextBlockService.buildSkillBlocks({ catalog: skills })
+    );
 
     const lines = skills.map((skill) => {
       const resourceSummary = skill.resourceSummary;
@@ -723,6 +947,9 @@ export class AltusManagedPromptService {
       '- Do not assume the full skill body is loaded from this list alone.',
       '- If the user explicitly selected a skill, its full body appears in the Active skills section.',
       '- If an active skill lists extra resources and you need one, call `load_skill_resource` with the exact `skillId`, `revisionId`, and `resourcePath`.',
+      '- Catalog entries are diagnostic/index context only; do not treat them as loaded skill bodies.',
+      '',
+      blockIndex,
       '',
       ...lines,
     ].join('\n');

@@ -85,7 +85,10 @@ describe('managed mixed timeline render', () => {
     );
 
     expect(agentItem).toBeTruthy();
-    expect(agentItem?.markdown).toContain('**Altus**');
+    expect(agentItem?.author).toBe('Altus');
+    expect(agentItem?.showAuthor).toBeUndefined();
+    expect(agentItem?.markdown).toContain('这是刷新后从历史恢复的 managed 最终答复');
+    expect(agentItem?.markdown).not.toContain('**Altus**');
     expect(agentItem?.markdown).not.toContain('**智能体**');
   });
 });

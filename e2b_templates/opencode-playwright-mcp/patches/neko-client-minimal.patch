@@ -207,8 +207,9 @@ index fbe3564..46cc65d 100644
 -        <img src="@/assets/images/logo.svg" alt="n.eko" />
 -        <span><b>n</b>.eko</span>
 -      </div>
-+      <div class="status" v-if="connecting">连接中...</div>
-       <form class="message" v-if="!connecting" @submit.stop.prevent="connect">
++      <div class="status">{{ connecting ? '连接中...' : '正在进入调试浏览器...' }}</div>
+-      <form class="message" v-if="!connecting" @submit.stop.prevent="connect">
++      <form class="message" v-if="false" @submit.stop.prevent="connect">
          <span v-if="!autoPassword">{{ $t('connect.login_title') }}</span>
          <span v-else>{{ $t('connect.invitation_title') }}</span>
 @@ -14,10 +11,6 @@
@@ -356,10 +357,37 @@ index fbe3564..46cc65d 100644
        }
      }
    }
-@@ -222,8 +158,5 @@
+@@ -159,21 +95,7 @@
+     mounted() {
+-      // auto-password fill
+-      let password = this.$accessor.password
+-      if (this.autoPassword !== null) {
+-        this.removeUrlParam('pwd')
+-        password = this.autoPassword
+-      }
+-
+-      // auto-user fill
+-      let displayname = this.$accessor.displayname
+-      const usr = new URL(location.href).searchParams.get('usr')
+-      if (usr) {
+-        this.removeUrlParam('usr')
+-        displayname = this.$accessor.displayname || usr
+-      }
+-
+-      if (displayname !== '' && password !== '') {
+-        this.$accessor.login({ displayname, password })
+-        this.autoPassword = null
+-      }
++      this.removeUrlParam('pwd')
++      this.removeUrlParam('usr')
++      const displayname = this.$accessor.displayname || 'oneceo'
++      this.$accessor.login({ displayname, password: '' })
++      this.autoPassword = null
+     }
+@@ -222,7 +158,3 @@
        this.autoPassword = null
      }
- 
+-
 -    about() {
 -      this.$accessor.client.toggleAbout()
 -    }

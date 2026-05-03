@@ -62,6 +62,17 @@ export type RailwayDatabaseRowsPage = {
   totalPages: number;
 };
 
+export type RailwayDatabaseSchemaSummary = {
+  configured: boolean;
+  provider: 'railway_postgres';
+  serviceId: string;
+  serviceName: string;
+  tables: Array<{
+    table: RailwayDatabaseTableSummary;
+    columns: RailwayDatabaseColumn[];
+  }>;
+};
+
 type TableRecord = {
   schema: string;
   name: string;
@@ -99,6 +110,23 @@ function quoteTable(schema: string, table: string) {
 function clamp(value: number, min: number, max: number) {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetriableDatabaseError(error: unknown) {
+  const message = asText(error instanceof Error ? error.message : error);
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('econnreset') ||
+    normalized.includes('connection terminated unexpectedly') ||
+    normalized.includes('terminating connection') ||
+    normalized.includes('connection refused') ||
+    normalized.includes('timeout') ||
+    normalized.includes('socket hang up')
+  );
 }
 
 function parseTableId(tableId: string) {
@@ -231,12 +259,27 @@ class RailwayDatabasePoolRegistry {
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 15_000,
     });
+    pool.on('error', () => {
+      this.pools.delete(key);
+    });
     this.pools.set(key, pool);
     return pool;
+  }
+
+  async reset(key: string) {
+    const existing = this.pools.get(key);
+    this.pools.delete(key);
+    if (existing) {
+      await existing.end().catch(() => undefined);
+    }
   }
 }
 
 const poolRegistry = new RailwayDatabasePoolRegistry();
+
+function buildPoolKey(account: UserPlatformDeploymentAccount) {
+  return `${account.projectId}:${account.databaseServiceId || 'missing'}`;
+}
 
 async function loadDatabaseVariables(account: UserPlatformDeploymentAccount) {
   if (!account.databaseServiceId) {
@@ -251,7 +294,7 @@ async function loadDatabaseVariables(account: UserPlatformDeploymentAccount) {
       } | null;
     } | null;
   }>(
-    asText(process.env.RAILWAY_ADMIN_TOKEN) || account.accessToken,
+    account.accessToken,
     `
       query RailwayDatabaseVariables(
         $projectId: String!,
@@ -290,9 +333,30 @@ async function getPool(account: UserPlatformDeploymentAccount) {
   const connection = parseConnectionInfo(variables);
   return {
     connection,
-    pool: poolRegistry.get(`${account.projectId}:${account.databaseServiceId}`, connection),
+    pool: poolRegistry.get(buildPoolKey(account), connection),
     variables,
   };
+}
+
+async function withDatabaseRetry<T>(
+  account: UserPlatformDeploymentAccount,
+  operation: () => Promise<T>
+): Promise<T> {
+  const poolKey = buildPoolKey(account);
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!isRetriableDatabaseError(error) || attempt === 5) {
+        throw error;
+      }
+      await poolRegistry.reset(poolKey);
+      await sleep((attempt + 1) * 5_000);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('数据库查询失败');
 }
 
 async function listTables(pool: Pool): Promise<TableRecord[]> {
@@ -421,25 +485,29 @@ export class RailwayDatabaseService {
     if (!account.databaseServiceId || !account.databaseServiceName) {
       throw new Error('数据库服务尚未准备完成');
     }
+    const serviceId = account.databaseServiceId;
+    const serviceName = account.databaseServiceName;
 
-    const [{ connection, pool }, metadata] = await Promise.all([
-      getPool(account),
-      loadDatabaseVariables(account),
-    ]);
-    const tables = await listTables(pool);
+    return withDatabaseRetry(account, async () => {
+      const [{ connection, pool }, metadata] = await Promise.all([
+        getPool(account),
+        loadDatabaseVariables(account),
+      ]);
+      const tables = await listTables(pool);
 
-    return {
-      configured: true,
-      provider: 'railway_postgres',
-      serviceId: account.databaseServiceId,
-      serviceName: account.databaseServiceName,
-      volumeId: account.databaseVolumeId,
-      volumeName: account.databaseVolumeName,
-      latestDeploymentStatus: metadata.latestDeploymentStatus,
-      latestDeploymentAt: metadata.latestDeploymentAt,
-      connection,
-      tables: tables.map(buildTableSummary),
-    };
+        return {
+          configured: true,
+          provider: 'railway_postgres',
+          serviceId,
+          serviceName,
+          volumeId: account.databaseVolumeId,
+          volumeName: account.databaseVolumeName,
+        latestDeploymentStatus: metadata.latestDeploymentStatus,
+        latestDeploymentAt: metadata.latestDeploymentAt,
+        connection,
+        tables: tables.map(buildTableSummary),
+      };
+    });
   }
 
   async getRows(
@@ -448,35 +516,62 @@ export class RailwayDatabaseService {
     page = 1,
     pageSize = 50
   ): Promise<RailwayDatabaseRowsPage> {
-    const { schema, table } = parseTableId(tableId);
-    const normalizedPage = clamp(page, 1, 10_000);
-    const normalizedPageSize = clamp(pageSize, 10, 200);
-    const offset = (normalizedPage - 1) * normalizedPageSize;
-    const { pool } = await getPool(account);
-    const [tables, columns, total] = await Promise.all([
-      listTables(pool),
-      listColumns(pool, schema, table),
-      countRows(pool, schema, table),
-    ]);
-    const target = tables.find((item) => item.schema === schema && item.name === table);
-    if (!target) {
-      throw new Error('数据表不存在');
+    return withDatabaseRetry(account, async () => {
+      const { schema, table } = parseTableId(tableId);
+      const normalizedPage = clamp(page, 1, 10_000);
+      const normalizedPageSize = clamp(pageSize, 10, 200);
+      const offset = (normalizedPage - 1) * normalizedPageSize;
+      const { pool } = await getPool(account);
+      const [tables, columns, total] = await Promise.all([
+        listTables(pool),
+        listColumns(pool, schema, table),
+        countRows(pool, schema, table),
+      ]);
+      const target = tables.find((item) => item.schema === schema && item.name === table);
+      if (!target) {
+        throw new Error('数据表不存在');
+      }
+
+      const rowsResult = await pool.query(
+        `select ctid::text as "_oneceo_ctid", * from ${quoteTable(schema, table)} order by ctid asc limit $1 offset $2`,
+        [normalizedPageSize, offset]
+      );
+
+      return {
+        table: buildTableSummary(target),
+        columns,
+        rows: rowsResult.rows.map((row) => serializeRow(row)),
+        page: normalizedPage,
+        pageSize: normalizedPageSize,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / normalizedPageSize)),
+      };
+    });
+  }
+
+  async getSchemaSummary(account: UserPlatformDeploymentAccount): Promise<RailwayDatabaseSchemaSummary> {
+    if (!account.databaseServiceId || !account.databaseServiceName) {
+      throw new Error('数据库服务尚未准备完成');
     }
-
-    const rowsResult = await pool.query(
-      `select ctid::text as "_oneceo_ctid", * from ${quoteTable(schema, table)} order by ctid asc limit $1 offset $2`,
-      [normalizedPageSize, offset]
-    );
-
-    return {
-      table: buildTableSummary(target),
-      columns,
-      rows: rowsResult.rows.map((row) => serializeRow(row)),
-      page: normalizedPage,
-      pageSize: normalizedPageSize,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / normalizedPageSize)),
-    };
+    const serviceId = account.databaseServiceId;
+    const serviceName = account.databaseServiceName;
+    return withDatabaseRetry(account, async () => {
+      const { pool } = await getPool(account);
+      const tables = await listTables(pool);
+      const tablesWithColumns = await Promise.all(
+        tables.map(async (table) => ({
+          table: buildTableSummary(table),
+          columns: await listColumns(pool, table.schema, table.name),
+        }))
+      );
+      return {
+        configured: true,
+        provider: 'railway_postgres',
+        serviceId,
+        serviceName,
+        tables: tablesWithColumns,
+      };
+    });
   }
 
   async insertRow(
@@ -484,27 +579,29 @@ export class RailwayDatabaseService {
     tableId: string,
     values: Record<string, unknown>
   ) {
-    const { schema, table } = parseTableId(tableId);
-    const payload = pickRecord(values);
-    const { pool } = await getPool(account);
-    const columns = await listColumns(pool, schema, table);
-    const editableColumns = columns.filter((column) => column.name in payload);
-    if (!editableColumns.length) {
-      throw new Error('缺少可写入字段');
-    }
+    return withDatabaseRetry(account, async () => {
+      const { schema, table } = parseTableId(tableId);
+      const payload = pickRecord(values);
+      const { pool } = await getPool(account);
+      const columns = await listColumns(pool, schema, table);
+      const editableColumns = columns.filter((column) => column.name in payload);
+      if (!editableColumns.length) {
+        throw new Error('缺少可写入字段');
+      }
 
-    const params = editableColumns.map((column) =>
-      normalizeCellValue(payload[column.name], column.dataType)
-    );
-    const sql = `
-      insert into ${quoteTable(schema, table)} (
-        ${editableColumns.map((column) => quoteIdentifier(column.name)).join(', ')}
-      )
-      values (${editableColumns.map((_, index) => `$${index + 1}`).join(', ')})
-      returning ctid::text as "_oneceo_ctid", *
-    `;
-    const result = await pool.query(sql, params);
-    return serializeRow(result.rows[0] || {});
+      const params = editableColumns.map((column) =>
+        normalizeCellValue(payload[column.name], column.dataType)
+      );
+      const sql = `
+        insert into ${quoteTable(schema, table)} (
+          ${editableColumns.map((column) => quoteIdentifier(column.name)).join(', ')}
+        )
+        values (${editableColumns.map((_, index) => `$${index + 1}`).join(', ')})
+        returning ctid::text as "_oneceo_ctid", *
+      `;
+      const result = await pool.query(sql, params);
+      return serializeRow(result.rows[0] || {});
+    });
   }
 
   async updateRow(
@@ -513,35 +610,37 @@ export class RailwayDatabaseService {
     locator: RailwayDatabaseRowLocator,
     values: Record<string, unknown>
   ) {
-    const { schema, table } = parseTableId(tableId);
-    const payload = pickRecord(values);
-    const { pool } = await getPool(account);
-    const columns = await listColumns(pool, schema, table);
-    const editableColumns = columns.filter(
-      (column) => !column.isPrimaryKey && column.name in payload
-    );
-    if (!editableColumns.length) {
-      throw new Error('缺少可更新字段');
-    }
+    return withDatabaseRetry(account, async () => {
+      const { schema, table } = parseTableId(tableId);
+      const payload = pickRecord(values);
+      const { pool } = await getPool(account);
+      const columns = await listColumns(pool, schema, table);
+      const editableColumns = columns.filter(
+        (column) => !column.isPrimaryKey && column.name in payload
+      );
+      if (!editableColumns.length) {
+        throw new Error('缺少可更新字段');
+      }
 
-    const setValues = editableColumns.map((column) =>
-      normalizeCellValue(payload[column.name], column.dataType)
-    );
-    const locatorClause = buildLocatorClause(locator, columns, setValues.length);
-    const assignments = editableColumns.map(
-      (column, index) => `${quoteIdentifier(column.name)} = $${index + 1}`
-    );
-    const sql = `
-      update ${quoteTable(schema, table)}
-      set ${assignments.join(', ')}
-      where ${locatorClause.clause}
-      returning ctid::text as "_oneceo_ctid", *
-    `;
-    const result = await pool.query(sql, [...setValues, ...locatorClause.values]);
-    if (!result.rows[0]) {
-      throw new Error('未找到需要更新的数据行');
-    }
-    return serializeRow(result.rows[0]);
+      const setValues = editableColumns.map((column) =>
+        normalizeCellValue(payload[column.name], column.dataType)
+      );
+      const locatorClause = buildLocatorClause(locator, columns, setValues.length);
+      const assignments = editableColumns.map(
+        (column, index) => `${quoteIdentifier(column.name)} = $${index + 1}`
+      );
+      const sql = `
+        update ${quoteTable(schema, table)}
+        set ${assignments.join(', ')}
+        where ${locatorClause.clause}
+        returning ctid::text as "_oneceo_ctid", *
+      `;
+      const result = await pool.query(sql, [...setValues, ...locatorClause.values]);
+      if (!result.rows[0]) {
+        throw new Error('未找到需要更新的数据行');
+      }
+      return serializeRow(result.rows[0]);
+    });
   }
 
   async deleteRow(
@@ -549,17 +648,19 @@ export class RailwayDatabaseService {
     tableId: string,
     locator: RailwayDatabaseRowLocator
   ) {
-    const { schema, table } = parseTableId(tableId);
-    const { pool } = await getPool(account);
-    const columns = await listColumns(pool, schema, table);
-    const locatorClause = buildLocatorClause(locator, columns);
-    const result = await pool.query(
-      `delete from ${quoteTable(schema, table)} where ${locatorClause.clause}`,
-      locatorClause.values
-    );
-    return {
-      deleted: result.rowCount || 0,
-    };
+    return withDatabaseRetry(account, async () => {
+      const { schema, table } = parseTableId(tableId);
+      const { pool } = await getPool(account);
+      const columns = await listColumns(pool, schema, table);
+      const locatorClause = buildLocatorClause(locator, columns);
+      const result = await pool.query(
+        `delete from ${quoteTable(schema, table)} where ${locatorClause.clause}`,
+        locatorClause.values
+      );
+      return {
+        deleted: result.rowCount || 0,
+      };
+    });
   }
 }
 

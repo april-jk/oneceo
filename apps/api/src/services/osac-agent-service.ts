@@ -25,7 +25,7 @@ type OpencodePartInput = {
   name?: string;
 };
 
-type ExecutorName = 'opencode' | 'codex' | 'claudecode';
+type ExecutorName = 'opencode' | 'codex';
 
 type ExecutorPartInput = OpencodePartInput;
 
@@ -65,10 +65,16 @@ type McpProviderTransport =
       env?: Record<string, string>;
     }
   | {
-      type: 'streamable_http';
+      type: 'http_stream';
       url: string;
       headers?: Record<string, string>;
       env?: Record<string, string>;
+    }
+  | {
+      type: 'backend_rpc';
+      rpcNamespace?: string;
+      backendProvider?: string;
+      capabilities?: string[];
     };
 
 type McpProviderTool = {
@@ -152,7 +158,6 @@ function createOsacRequestId(prefix: string) {
 function normalizeExecutorName(value: unknown): ExecutorName {
   const normalized = asString(value).toLowerCase();
   if (normalized === 'codex') return 'codex';
-  if (normalized === 'claudecode') return 'claudecode';
   return 'opencode';
 }
 

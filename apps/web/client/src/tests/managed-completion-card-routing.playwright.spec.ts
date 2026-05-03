@@ -8,6 +8,7 @@ function createManagedMessage(input: {
   sessionId?: string;
   runId?: string;
   deliverables?: Array<Record<string, unknown>>;
+  previewSnapshot?: Record<string, unknown> | null;
 }): AgentMessage {
   return {
     type: input.type,
@@ -19,6 +20,7 @@ function createManagedMessage(input: {
       eventType: input.eventType,
       runId: input.runId || 'run-pw-1',
       deliverables: input.deliverables || [],
+      previewSnapshot: input.previewSnapshot || null,
     },
   };
 }
@@ -52,6 +54,34 @@ test('website deliverable routes to managed_artifact_card', async () => {
   expect(emittedRuns.has('run-pw-web-1')).toBeTruthy();
 });
 
+test('website edit run with only a fresh snapshot routes to managed_artifact_card', async () => {
+  const emittedRuns = new Set<string>();
+  const artifactsByRun = new Map();
+  const item = buildManagedCompletionCardItem({
+    message: createManagedMessage({
+      type: 'agent_message',
+      runId: 'run-pw-web-edit-snapshot-1',
+      previewSnapshot: {
+        kind: 'website_screenshot',
+        status: 'captured',
+        storageKey: 'sessions/session-pw-1/previews/run-pw-web-edit-snapshot-1/snapshot.png',
+        mimeType: 'image/png',
+        width: 1280,
+        height: 720,
+      },
+    }),
+    managedArtifactsByRun: artifactsByRun,
+    emittedManagedCompletionRuns: emittedRuns,
+  });
+
+  expect(item?.kind).toBe('managed_artifact_card');
+  expect((item as Extract<ChatItem, { kind: 'managed_artifact_card' }>)?.artifacts).toEqual([]);
+  expect(
+    (item as Extract<ChatItem, { kind: 'managed_artifact_card' }>)?.previewSnapshot?.status,
+  ).toBe('captured');
+  expect(emittedRuns.has('run-pw-web-edit-snapshot-1')).toBeTruthy();
+});
+
 test('non-web deliverable keeps managed_deliverable_card', async () => {
   const emittedRuns = new Set<string>();
   const artifactsByRun = new Map();
@@ -81,4 +111,3 @@ test('non-web deliverable keeps managed_deliverable_card', async () => {
   );
   expect(emittedRuns.has('run-pw-docx-1')).toBeTruthy();
 });
-

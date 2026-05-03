@@ -1,5 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { resolveArtifactDeploymentPreviewUrl } from "../components/AltusArtifactPreviewCard";
+import {
+  getScaledWebPreviewFrame,
+  resolveArtifactDeploymentPreviewUrl,
+} from "../components/AltusArtifactPreviewCard";
+
+describe("altus artifact preview card scaled web preview", () => {
+  it("scales a web preview down to fit the card container", () => {
+    expect(getScaledWebPreviewFrame(800, 400)).toEqual({
+      width: 1280,
+      height: 640,
+      scale: 0.625,
+    });
+  });
+
+  it("keeps large preview containers at native scale", () => {
+    expect(getScaledWebPreviewFrame(1440, 500)).toEqual({
+      width: 1440,
+      height: 500,
+      scale: 1,
+    });
+  });
+});
 
 describe("altus artifact preview card deployment preview selection", () => {
   it("prefers the selected deployment public url", () => {

@@ -171,6 +171,10 @@ router.post('/profiles/:profileId/oauth/callback', async (req, res) => {
       state: String(req.body?.state || '').trim(),
       code: String(req.body?.code || '').trim(),
       redirectUri: String(req.body?.redirectUri || '').trim(),
+      teamId: String(req.body?.teamId || '').trim(),
+      configurationId: String(req.body?.configurationId || '').trim(),
+      next: String(req.body?.next || '').trim(),
+      source: String(req.body?.source || '').trim(),
     });
     const runtimeRefreshQueued = result.profile.authStatus === 'authorized';
     if (runtimeRefreshQueued) {
@@ -263,6 +267,10 @@ router.post('/:connectorKey/oauth/callback', async (req, res) => {
       state: String(req.body?.state || '').trim(),
       code: String(req.body?.code || '').trim(),
       redirectUri: String(req.body?.redirectUri || '').trim(),
+      teamId: String(req.body?.teamId || '').trim(),
+      configurationId: String(req.body?.configurationId || '').trim(),
+      next: String(req.body?.next || '').trim(),
+      source: String(req.body?.source || '').trim(),
     });
     const profileId = result.account?.defaultProfileId;
     const runtimeRefreshQueued = Boolean(profileId && result.account?.authStatus === 'authorized');

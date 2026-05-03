@@ -5,6 +5,10 @@ import {
 import { setSandboxMetadata } from './sandbox-activity-service';
 import {
   umamiAnalyticsService,
+  type UmamiWebsiteExpandedMetric,
+  type UmamiWebsitePageviews,
+  type UmamiWebsiteStats,
+  type UmamiWebsiteStatsRange,
   type UmamiWebsiteSummary,
 } from './umami-analytics-service';
 import type { DeploymentAnalyticsPanelData } from './railway-deployment-service';
@@ -21,6 +25,33 @@ type AnalyticsMetadata = {
   lastError?: string;
 };
 
+export type TaskSessionDeploymentAnalyticsRangeKey = '24h' | '7d' | '30d';
+
+export type TaskSessionDeploymentAnalyticsOverview = {
+  updatedAt: string;
+  configured: boolean;
+  enabled: boolean;
+  status: AnalyticsMetadata['status'] | 'empty';
+  message?: string;
+  error?: string;
+  range: {
+    key: TaskSessionDeploymentAnalyticsRangeKey;
+    startAt: string;
+    endAt: string;
+    unit: UmamiWebsiteStatsRange['unit'];
+    timezone: string;
+  };
+  stats: UmamiWebsiteStats;
+  activeVisitors: number;
+  bounceRate: number;
+  averageVisitDurationSeconds: number;
+  pageviews: UmamiWebsitePageviews;
+  topPages: UmamiWebsiteExpandedMetric[];
+  referrers: UmamiWebsiteExpandedMetric[];
+  regions: UmamiWebsiteExpandedMetric[];
+  devices: UmamiWebsiteExpandedMetric[];
+};
+
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -32,6 +63,10 @@ function asNumber(value: unknown): number | undefined {
     if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
+}
+
+function asMetricNumber(value: unknown): number {
+  return asNumber(value) || 0;
 }
 
 function pickRecord(value: unknown): Record<string, unknown> {
@@ -121,6 +156,68 @@ function hasTrackingEvidence(metrics: {
   ].some((value) => typeof value === 'number' && value > 0);
 }
 
+function emptyStats(): UmamiWebsiteStats {
+  return {
+    pageviews: 0,
+    visits: 0,
+    visitors: 0,
+    bounces: 0,
+    totaltime: 0,
+  };
+}
+
+function emptyPageviews(): UmamiWebsitePageviews {
+  return {
+    pageviews: [],
+    sessions: [],
+  };
+}
+
+function normalizeAnalyticsRange(value: unknown): TaskSessionDeploymentAnalyticsRangeKey {
+  const text = asText(value).toLowerCase();
+  if (text === '7d' || text === '30d') return text;
+  return '24h';
+}
+
+function buildAnalyticsRange(key: TaskSessionDeploymentAnalyticsRangeKey): {
+  range: UmamiWebsiteStatsRange;
+  timezone: string;
+} {
+  const endAt = Date.now();
+  const timezone = 'Asia/Shanghai';
+  if (key === '24h') {
+    return {
+      range: {
+        startAt: endAt - 24 * 60 * 60 * 1000,
+        endAt,
+        unit: 'hour',
+        timezone,
+        scope: 'deployment',
+      },
+      timezone,
+    };
+  }
+  const days = key === '7d' ? 7 : 30;
+  return {
+    range: {
+      startAt: endAt - days * 24 * 60 * 60 * 1000,
+      endAt,
+      unit: 'day',
+      timezone,
+      scope: 'deployment',
+    },
+    timezone,
+  };
+}
+
+function calculateBounceRate(stats: UmamiWebsiteStats) {
+  return stats.visits > 0 ? Math.round((stats.bounces / stats.visits) * 100) : 0;
+}
+
+function calculateAverageVisitDurationSeconds(stats: UmamiWebsiteStats) {
+  return stats.visits > 0 ? Math.round(stats.totaltime / stats.visits) : 0;
+}
+
 export async function prepareTaskSessionAnalyticsBinding(input: {
   sessionId: string;
   orchestratorSessionId: string;
@@ -153,7 +250,12 @@ export async function prepareTaskSessionAnalyticsBinding(input: {
     };
   }
 
-  const websiteName = existing?.websiteName || buildWebsiteName(input.sessionId, domain);
+  const websiteName =
+    existing?.websiteId &&
+    existing.websiteName &&
+    !existing.websiteName.includes('railway.app')
+      ? existing.websiteName
+      : buildWebsiteName(input.sessionId, domain);
   const website = await umamiAnalyticsService.ensureWebsiteBinding({
     scope: 'deployment',
     websiteId: existing?.websiteId,
@@ -295,6 +397,142 @@ export async function buildTaskSessionAnalyticsPanel(
       updatedAt: existing.updatedAt,
       error: asText(error?.message) || existing.lastError,
       message: '统计读取失败，但不影响部署与访问链路',
+    };
+  }
+}
+
+export async function buildTaskSessionDeploymentAnalyticsOverview(
+  environmentMetadata: unknown,
+  rangeKeyInput: unknown
+): Promise<TaskSessionDeploymentAnalyticsOverview> {
+  const metadata = pickRecord(environmentMetadata);
+  const existing = pickAnalyticsMetadata(metadata.analytics);
+  const key = normalizeAnalyticsRange(rangeKeyInput);
+  const { range, timezone } = buildAnalyticsRange(key);
+  const baseRange = {
+    key,
+    startAt: new Date(range.startAt).toISOString(),
+    endAt: new Date(range.endAt).toISOString(),
+    unit: range.unit,
+    timezone,
+  };
+  const base = {
+    updatedAt: new Date().toISOString(),
+    configured: umamiAnalyticsService.isConfigured('deployment'),
+    enabled: Boolean(existing?.websiteId),
+    status: existing?.status || ('empty' as const),
+    range: baseRange,
+    stats: emptyStats(),
+    activeVisitors: 0,
+    bounceRate: 0,
+    averageVisitDurationSeconds: 0,
+    pageviews: emptyPageviews(),
+    topPages: [],
+    referrers: [],
+    regions: [],
+    devices: [],
+  };
+
+  if (!umamiAnalyticsService.isEnabled('deployment')) {
+    return {
+      ...base,
+      configured: false,
+      enabled: Boolean(existing?.websiteId),
+      status: 'unconfigured',
+      message: '平台未启用 Umami',
+    };
+  }
+
+  if (!existing?.websiteId) {
+    return {
+      ...base,
+      status: existing?.domain ? 'pending_domain' : 'empty',
+      message: existing?.domain
+        ? '站点域名已记录，等待平台完成 Umami website 绑定'
+        : '等待首次部署后绑定 Umami website',
+    };
+  }
+
+  try {
+    const [
+      statsResult,
+      activeVisitorsResult,
+      pageviewsResult,
+      topPagesResult,
+      referrersResult,
+      regionsResult,
+      devicesResult,
+    ] = await Promise.all([
+      umamiAnalyticsService.getWebsiteStats(existing.websiteId, range),
+      umamiAnalyticsService.getWebsiteActiveVisitors(existing.websiteId, {
+        scope: 'deployment',
+      }),
+      umamiAnalyticsService.getWebsitePageviews(existing.websiteId, range),
+      umamiAnalyticsService.getWebsiteMetric(existing.websiteId, {
+        ...range,
+        type: 'path',
+        limit: 10,
+        expanded: true,
+      }),
+      umamiAnalyticsService.getWebsiteMetric(existing.websiteId, {
+        ...range,
+        type: 'referrer',
+        limit: 8,
+        expanded: true,
+      }),
+      umamiAnalyticsService.getWebsiteMetric(existing.websiteId, {
+        ...range,
+        type: 'country',
+        limit: 8,
+        expanded: true,
+      }),
+      umamiAnalyticsService.getWebsiteMetric(existing.websiteId, {
+        ...range,
+        type: 'device',
+        limit: 8,
+        expanded: true,
+      }),
+    ]);
+    const stats = statsResult || emptyStats();
+    return {
+      ...base,
+      enabled: true,
+      status:
+        hasTrackingEvidence({
+          pageviews: stats.pageviews,
+          visits: stats.visits,
+          visitors: stats.visitors,
+          activeVisitors: activeVisitorsResult,
+        })
+          ? 'tracking'
+          : 'bound',
+      stats,
+      activeVisitors: activeVisitorsResult || 0,
+      bounceRate: calculateBounceRate(stats),
+      averageVisitDurationSeconds: calculateAverageVisitDurationSeconds(stats),
+      pageviews: pageviewsResult || emptyPageviews(),
+      topPages: topPagesResult,
+      referrers: referrersResult,
+      regions: regionsResult,
+      devices: devicesResult,
+    };
+  } catch (error: any) {
+    return {
+      ...base,
+      enabled: true,
+      status: 'error',
+      error: asText(error?.message) || '统计读取失败',
+      message: '统计读取失败，但不影响部署与访问链路',
+      stats: {
+        pageviews: asMetricNumber((metadata.analytics as Record<string, unknown> | undefined)?.pageviews),
+        visits: asMetricNumber((metadata.analytics as Record<string, unknown> | undefined)?.visits),
+        visitors: asMetricNumber((metadata.analytics as Record<string, unknown> | undefined)?.visitors),
+        bounces: 0,
+        totaltime: 0,
+      },
+      activeVisitors: asMetricNumber(
+        (metadata.analytics as Record<string, unknown> | undefined)?.activeVisitors
+      ),
     };
   }
 }

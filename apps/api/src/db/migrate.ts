@@ -42,7 +42,6 @@ const REQUIRED_TABLES = [
   'sandbox_execution_environments',
   'user_connector_accounts',
   'user_connector_profiles',
-  'user_codex_runtime_configs',
   'user_platform_skill_bindings',
   'user_custom_skills',
   'user_custom_skill_documents',
@@ -52,9 +51,18 @@ const REQUIRED_TABLES = [
   'task_session_connector_guides',
   'task_session_mcp_recovery_jobs',
   'task_session_deployment_sync_jobs',
+  'project_storage_resources',
   'connector_auth_requests',
   'platform_runtime_artifact_releases',
   'platform_runtime_artifact_channels',
+  'user_credits',
+  'credit_transactions',
+  'token_usage_logs',
+  'model_pricing',
+  'cache_pricing_config',
+  'credit_activation_codes',
+  'credit_activation_code_uses',
+  'credit_activation_code_groups',
 ] as const;
 
 const REQUIRED_COLUMNS = [
@@ -128,6 +136,21 @@ const REQUIRED_COLUMNS = [
   ['task_session_deployment_sync_jobs', 'next_retry_at'],
   ['task_session_deployment_sync_jobs', 'started_at'],
   ['task_session_deployment_sync_jobs', 'completed_at'],
+  ['project_storage_resources', 'user_id'],
+  ['project_storage_resources', 'session_id'],
+  ['project_storage_resources', 'project_key'],
+  ['project_storage_resources', 'provider'],
+  ['project_storage_resources', 'railway_bucket_id'],
+  ['project_storage_resources', 'railway_project_id'],
+  ['project_storage_resources', 'railway_environment_id'],
+  ['project_storage_resources', 'bucket_name'],
+  ['project_storage_resources', 'endpoint'],
+  ['project_storage_resources', 'public_url'],
+  ['project_storage_resources', 'access_key_id'],
+  ['project_storage_resources', 'secret_access_key_ciphertext'],
+  ['project_storage_resources', 'access_model'],
+  ['project_storage_resources', 'status'],
+  ['project_storage_resources', 'last_checked_at'],
   ['connector_auth_requests', 'profile_id'],
   ['connector_auth_requests', 'profile_draft_json'],
   ['platform_skills', 'slug'],
@@ -229,6 +252,8 @@ const REQUIRED_INDEXES = [
   'idx_task_session_connector_bindings_session_connector',
   'idx_task_session_mcp_recovery_jobs_recovery_key',
   'idx_task_session_deployment_sync_jobs_sync_key',
+  'idx_project_storage_resources_unique',
+  'idx_project_storage_resources_session',
   'idx_task_session_mcp_tool_snapshots_session_id',
   'idx_task_session_connector_runtime_events_session_id',
   'idx_platform_skills_slug',
@@ -246,6 +271,26 @@ const REQUIRED_INDEXES = [
   'idx_task_session_connector_guides_session_connector',
   'idx_platform_runtime_artifacts_type_version',
   'idx_platform_runtime_artifact_channels_unique',
+  'idx_user_credits_user_id',
+  'idx_credit_transactions_user_id',
+  'idx_credit_transactions_type',
+  'idx_credit_transactions_created_at',
+  'idx_token_usage_logs_user_id',
+  'idx_token_usage_logs_session_id',
+  'idx_token_usage_logs_created_at',
+  'idx_model_pricing_model_active',
+  'idx_model_pricing_active',
+  'idx_cache_pricing_config_provider_active',
+  'idx_activation_codes_code',
+  'idx_activation_codes_status',
+  'idx_activation_codes_group_id',
+  'idx_activation_codes_batch_id',
+  'idx_activation_codes_expires_at',
+  'idx_activation_codes_used_by',
+  'idx_activation_code_uses_code_id',
+  'idx_activation_code_uses_user_id',
+  'idx_activation_code_groups_name',
+  'idx_activation_code_groups_status',
 ] as const;
 
 /**
@@ -282,15 +327,6 @@ CREATE TABLE IF NOT EXISTS user_connector_profiles (
   is_default BOOLEAN NOT NULL DEFAULT FALSE,
   last_auth_at TIMESTAMP,
   last_error TEXT,
-  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS user_codex_runtime_configs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id TEXT NOT NULL,
-  config_toml TEXT NOT NULL,
-  auth_json TEXT NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -393,6 +429,28 @@ CREATE TABLE IF NOT EXISTS task_session_deployment_sync_jobs (
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS project_storage_resources (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  project_key TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'railway_bucket',
+  railway_bucket_id TEXT NOT NULL,
+  railway_project_id TEXT NOT NULL,
+  railway_environment_id TEXT NOT NULL,
+  bucket_name TEXT NOT NULL,
+  endpoint TEXT NOT NULL,
+  public_url TEXT,
+  access_key_id TEXT NOT NULL,
+  secret_access_key_ciphertext TEXT NOT NULL,
+  access_model TEXT NOT NULL DEFAULT 'public_and_private',
+  status TEXT NOT NULL DEFAULT 'ready',
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_checked_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 -- OAuth 请求事务表
 CREATE TABLE IF NOT EXISTS connector_auth_requests (
   request_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -453,8 +511,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_user_connector_profiles_user_connector_pro
   ON user_connector_profiles(user_id, connector_key, profile_name);
 CREATE INDEX IF NOT EXISTS idx_user_connector_profiles_user_id ON user_connector_profiles(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_connector_profiles_user_connector ON user_connector_profiles(user_id, connector_key);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_user_codex_runtime_configs_user_id ON user_codex_runtime_configs(user_id);
-CREATE INDEX IF NOT EXISTS idx_user_codex_runtime_configs_updated_at ON user_codex_runtime_configs(updated_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_connector_bindings_session_connector
   ON task_session_connector_bindings(task_session_id, connector_key);
 CREATE INDEX IF NOT EXISTS idx_task_session_connector_bindings_task_session_id
@@ -493,6 +549,10 @@ CREATE INDEX IF NOT EXISTS idx_task_session_deployment_sync_jobs_orchestrator_se
   ON task_session_deployment_sync_jobs(orchestrator_session_id);
 CREATE INDEX IF NOT EXISTS idx_task_session_deployment_sync_jobs_next_retry_at
   ON task_session_deployment_sync_jobs(next_retry_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_storage_resources_unique
+  ON project_storage_resources(user_id, project_key, provider);
+CREATE INDEX IF NOT EXISTS idx_project_storage_resources_session
+  ON project_storage_resources(session_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_auth_requests_state ON connector_auth_requests(state);
 CREATE INDEX IF NOT EXISTS idx_connector_auth_requests_user_id ON connector_auth_requests(user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_runtime_artifacts_type_version
@@ -1383,6 +1443,162 @@ CREATE INDEX IF NOT EXISTS idx_task_session_workspace_cache_updated_at
   ON task_session_workspace_cache(updated_at);
 `;
 
+const billingCoreTablesSQL = `
+-- 用户积分余额表
+CREATE TABLE IF NOT EXISTS user_credits (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  balance INTEGER NOT NULL DEFAULT 0,
+  total_earned INTEGER NOT NULL DEFAULT 0,
+  total_consumed INTEGER NOT NULL DEFAULT 0,
+  last_recharge_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_credits_user_id ON user_credits(user_id);
+DO $$ BEGIN ALTER TABLE user_credits ADD CONSTRAINT check_balance_non_negative CHECK (balance >= 0); EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+-- 积分交易记录表
+CREATE TABLE IF NOT EXISTS credit_transactions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  amount INTEGER NOT NULL,
+  balance_after INTEGER NOT NULL,
+  source_id UUID,
+  source_type TEXT,
+  description TEXT,
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_credit_transactions_user_id ON credit_transactions(user_id);
+CREATE INDEX IF NOT EXISTS idx_credit_transactions_type ON credit_transactions(type);
+CREATE INDEX IF NOT EXISTS idx_credit_transactions_created_at ON credit_transactions(created_at);
+
+-- Token 使用明细表
+CREATE TABLE IF NOT EXISTS token_usage_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  session_id UUID REFERENCES task_creation_sessions(id) ON DELETE SET NULL,
+  run_id UUID REFERENCES task_session_runs(id) ON DELETE SET NULL,
+  model TEXT NOT NULL,
+  prompt_tokens INTEGER NOT NULL DEFAULT 0,
+  cached_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+  non_cached_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  total_tokens INTEGER NOT NULL DEFAULT 0,
+  credits_consumed INTEGER NOT NULL DEFAULT 0,
+  pricing_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_token_usage_logs_user_id ON token_usage_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_token_usage_logs_session_id ON token_usage_logs(session_id);
+CREATE INDEX IF NOT EXISTS idx_token_usage_logs_created_at ON token_usage_logs(created_at);
+
+-- 模型定价配置表
+CREATE TABLE IF NOT EXISTS model_pricing (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  model TEXT NOT NULL,
+  model_provider TEXT NOT NULL,
+  prompt_price_per_1m_tokens INTEGER NOT NULL,
+  completion_price_per_1m_tokens INTEGER NOT NULL,
+  multiplier REAL NOT NULL DEFAULT 1.0,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  effective_from TIMESTAMP NOT NULL DEFAULT NOW(),
+  effective_until TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+DROP INDEX IF EXISTS idx_model_pricing_model_active;
+CREATE INDEX IF NOT EXISTS idx_model_pricing_model_active ON model_pricing(model, is_active, effective_from);
+CREATE INDEX IF NOT EXISTS idx_model_pricing_active ON model_pricing(is_active);
+
+-- 缓存计费比例配置表
+CREATE TABLE IF NOT EXISTS cache_pricing_config (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider TEXT NOT NULL,
+  hit_ratio INTEGER NOT NULL,
+  creation_ratio INTEGER NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  effective_from TIMESTAMP NOT NULL DEFAULT NOW(),
+  effective_until TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+DROP INDEX IF EXISTS idx_cache_pricing_config_provider_active;
+CREATE UNIQUE INDEX idx_cache_pricing_config_provider_active
+  ON cache_pricing_config(provider)
+  WHERE is_active = TRUE;
+
+-- 初始默认配置（向后兼容：确保升级后现有计费不受影响）
+INSERT INTO cache_pricing_config (provider, hit_ratio, creation_ratio, is_active)
+VALUES
+  ('openai', 500, 0, true),
+  ('anthropic', 100, 1250, true),
+  ('qwen', 200, 1250, true),
+  ('agent', 500, 0, true),
+  ('sandbox', 500, 0, true)
+ON CONFLICT DO NOTHING;
+`;
+
+const activationCodeTablesSQL = `
+-- 积分激活码分组表
+CREATE TABLE IF NOT EXISTS credit_activation_code_groups (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_by UUID REFERENCES admin_users(id) ON DELETE SET NULL,
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_activation_code_groups_name ON credit_activation_code_groups(name);
+CREATE INDEX IF NOT EXISTS idx_activation_code_groups_status ON credit_activation_code_groups(status);
+
+-- 积分激活码表
+CREATE TABLE IF NOT EXISTS credit_activation_codes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  code TEXT NOT NULL,
+  credits_amount INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  max_uses INTEGER NOT NULL DEFAULT 1,
+  current_uses INTEGER NOT NULL DEFAULT 0,
+  expires_at TIMESTAMP,
+  group_id UUID REFERENCES credit_activation_code_groups(id) ON DELETE SET NULL,
+  created_by UUID REFERENCES admin_users(id) ON DELETE SET NULL,
+  used_by UUID REFERENCES app_users(id) ON DELETE SET NULL,
+  used_at TIMESTAMP,
+  batch_id TEXT,
+  description TEXT,
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_activation_codes_code ON credit_activation_codes(code);
+CREATE INDEX IF NOT EXISTS idx_activation_codes_status ON credit_activation_codes(status);
+CREATE INDEX IF NOT EXISTS idx_activation_codes_group_id ON credit_activation_codes(group_id);
+CREATE INDEX IF NOT EXISTS idx_activation_codes_batch_id ON credit_activation_codes(batch_id);
+CREATE INDEX IF NOT EXISTS idx_activation_codes_expires_at ON credit_activation_codes(expires_at);
+CREATE INDEX IF NOT EXISTS idx_activation_codes_used_by ON credit_activation_codes(used_by);
+
+-- 积分激活码使用记录表
+CREATE TABLE IF NOT EXISTS credit_activation_code_uses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  activation_code_id UUID NOT NULL REFERENCES credit_activation_codes(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  credits_granted INTEGER NOT NULL,
+  transaction_id UUID REFERENCES credit_transactions(id) ON DELETE SET NULL,
+  used_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_activation_code_uses_code_id ON credit_activation_code_uses(activation_code_id);
+CREATE INDEX IF NOT EXISTS idx_activation_code_uses_user_id ON credit_activation_code_uses(user_id);
+`;
+
 export async function inspectDatabaseSchemaReadiness(): Promise<SchemaReadinessReport> {
   await ensureDatabaseConnection({ retries: 3, delayMs: 500 });
 
@@ -1405,9 +1621,9 @@ export async function inspectDatabaseSchemaReadiness(): Promise<SchemaReadinessR
       `,
       [Array.from(new Set(REQUIRED_COLUMNS.map(([tableName]) => tableName)))]
     ),
-    databasePool.query<{ indexname: string }>(
+    databasePool.query<{ indexname: string; indexdef: string }>(
       `
-        select indexname
+        select indexname, indexdef
         from pg_indexes
         where schemaname = 'public'
           and indexname = any($1::text[])
@@ -1421,6 +1637,7 @@ export async function inspectDatabaseSchemaReadiness(): Promise<SchemaReadinessR
     columnResult.rows.map((row) => `${row.table_name}.${row.column_name}`)
   );
   const existingIndexes = new Set(indexResult.rows.map((row) => row.indexname));
+  const indexDefinitions = new Map(indexResult.rows.map((row) => [row.indexname, row.indexdef]));
   const missing: string[] = [];
 
   for (const tableName of REQUIRED_TABLES) {
@@ -1439,6 +1656,14 @@ export async function inspectDatabaseSchemaReadiness(): Promise<SchemaReadinessR
     if (!existingIndexes.has(indexName)) {
       missing.push(`index:${indexName}`);
     }
+  }
+
+  const cacheConfigActiveIndexDefinition = indexDefinitions.get('idx_cache_pricing_config_provider_active') || '';
+  if (
+    cacheConfigActiveIndexDefinition &&
+    !cacheConfigActiveIndexDefinition.toLowerCase().includes('where (is_active = true)')
+  ) {
+    missing.push('index:idx_cache_pricing_config_provider_active(partial-active)');
   }
 
   return {
@@ -1460,27 +1685,86 @@ export async function runMigration() {
     await db.execute(sql.raw(deliverableTablesSQL));
     await db.execute(sql.raw(backfillMessageStorageSQL));
     
+    // Step 1: core billing tables
+    await db.execute(sql.raw(billingCoreTablesSQL));
+
+    // Step 2: activation code tables (separate - failure does not affect core billing)
+    try {
+      await db.execute(sql.raw(activationCodeTablesSQL));
+    } catch (activationCodeErr) {
+      console.error('[MIGRATION] activation code tables failed (non-fatal):', activationCodeErr);
+    }
+
+    // 迁移：将定价基础单位从 1k tokens 切换到 1M tokens（必须在插入定价数据之前执行）
+    await db.execute(sql.raw(`
+      DO $$ BEGIN
+        ALTER TABLE model_pricing RENAME COLUMN prompt_price_per_1k_tokens TO prompt_price_per_1m_tokens;
+      EXCEPTION WHEN undefined_column THEN NULL;
+      END $$;
+
+      DO $$ BEGIN
+        ALTER TABLE model_pricing RENAME COLUMN completion_price_per_1k_tokens TO completion_price_per_1m_tokens;
+      EXCEPTION WHEN undefined_column THEN NULL;
+      END $$;
+
+      UPDATE model_pricing SET prompt_price_per_1m_tokens = prompt_price_per_1m_tokens * 1000
+        WHERE prompt_price_per_1m_tokens < 1000;
+
+      UPDATE model_pricing SET completion_price_per_1m_tokens = completion_price_per_1m_tokens * 1000
+        WHERE completion_price_per_1m_tokens < 1000;
+    `));
+
+    // 插入当前使用的模型默认定价（如不存在）
+    await db.execute(sql.raw(`
+      WITH seed(model, model_provider, prompt_price_per_1m_tokens, completion_price_per_1m_tokens) AS (
+        VALUES
+          ('qwen3-max-2026-01-23', 'qwen', 25, 1000),
+          ('qwen3-vl-plus', 'qwen', 50, 2000),
+          ('claude-haiku-4-5-20251001', 'anthropic', 180, 9000),
+          ('gpt-4o', 'openai', 1800, 72000),
+          ('gpt-4o-mini', 'openai', 180, 7200),
+          ('agent.lite', 'agent', 25, 1000),
+          ('agent.pro', 'agent', 180, 9000),
+          ('agent.max', 'agent', 1800, 72000),
+          ('sandbox.opencode', 'sandbox', 25, 1000),
+          ('sandbox.codex', 'sandbox', 180, 9000)
+      )
+      INSERT INTO model_pricing (model, model_provider, prompt_price_per_1m_tokens, completion_price_per_1m_tokens, is_active, effective_from)
+      SELECT seed.model, seed.model_provider, seed.prompt_price_per_1m_tokens, seed.completion_price_per_1m_tokens, true, NOW()
+      FROM seed
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM model_pricing existing
+        WHERE existing.model = seed.model
+          AND existing.is_active = TRUE
+          AND existing.effective_from <= NOW()
+          AND (existing.effective_until IS NULL OR existing.effective_until > NOW())
+      );
+
+      UPDATE model_pricing
+      SET model_provider = 'qwen', updated_at = NOW()
+      WHERE LOWER(model) LIKE 'qwen%';
+    `));
+
+    // 迁移：添加 multiplier 列
+    await db.execute(sql.raw(`
+      ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS multiplier REAL NOT NULL DEFAULT 1.0;
+    `));
+
+    // Post-migration verification: ensure critical tables actually exist
+    const postCheck = await inspectDatabaseSchemaReadiness();
+    if (!postCheck.ready) {
+      const criticalMissing = postCheck.missing.filter(m =>
+        m.startsWith('table:') || m.startsWith('column:model_pricing')
+      );
+      if (criticalMissing.length > 0) {
+        console.error('[MIGRATION] Post-migration check failed, still missing:', criticalMissing.join(', '));
+        throw new Error(`Migration incomplete: ${criticalMissing.join(', ')}`);
+      }
+      console.warn('[MIGRATION] Post-migration check: non-critical items still missing:', postCheck.missing.join(', '));
+    }
+
     console.log('✅ 数据库迁移完成！');
-    console.log('已创建以下表：');
-    console.log('  - task_creation_sessions');
-    console.log('  - conversation_messages');
-    console.log('  - task_session_recent_messages');
-    console.log('  - task_session_workspace_cache');
-    console.log('  - task_session_deliverable_artifacts');
-    console.log('  - intent_recognition_results');
-    console.log('  - task_descriptions');
-    console.log('  - execution_plans');
-    console.log('  - search_records');
-    console.log('  - sandbox_execution_environments');
-    console.log('  - user_connector_accounts');
-    console.log('  - task_session_connector_bindings');
-    console.log('  - connector_guide_policies');
-    console.log('  - connector_guide_revisions');
-    console.log('  - task_session_connector_guides');
-    console.log('  - connector_auth_requests');
-    console.log('  - user_codex_runtime_configs');
-    console.log('  - platform_runtime_artifact_releases');
-    console.log('  - platform_runtime_artifact_channels');
     
     return true;
   } catch (error) {
@@ -1538,7 +1822,6 @@ export async function dropAllTables() {
       DROP TABLE IF EXISTS user_custom_skill_documents CASCADE;
       DROP TABLE IF EXISTS user_custom_skills CASCADE;
       DROP TABLE IF EXISTS user_platform_skill_bindings CASCADE;
-      DROP TABLE IF EXISTS user_codex_runtime_configs CASCADE;
       DROP TABLE IF EXISTS app_user_legacy_id_mappings CASCADE;
       DROP TABLE IF EXISTS user_connector_accounts CASCADE;
       DROP TABLE IF EXISTS task_creation_sessions CASCADE;

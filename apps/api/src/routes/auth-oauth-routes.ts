@@ -13,10 +13,9 @@ import {
   buildAppSessionCookieOptions,
   buildAppSessionStateCookieOptions,
 } from '../utils/app-auth-cookie-policy';
-import { clearCookie, readCookie, setCookie } from '../utils/http-cookie';
+import { clearCookie, setCookie } from '../utils/http-cookie';
 
 const router = express.Router();
-const OAUTH_STATE_SEPARATOR = '.';
 
 function asText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -56,7 +55,7 @@ function asBoolean(value: unknown) {
   return false;
 }
 
-function getOauthStateSecret() {
+function resolveOauthStateSecret() {
   return (
     asText(process.env.APP_AUTH_OAUTH_STATE_SECRET) ||
     asText(process.env.APP_AUTH_GOOGLE_CLIENT_SECRET) ||
@@ -67,23 +66,36 @@ function getOauthStateSecret() {
   );
 }
 
-function signOauthState(payload: string) {
-  const secret = getOauthStateSecret();
+function signOauthStatePayload(payload: string) {
+  const secret = resolveOauthStateSecret();
   if (!secret) {
     throw new Error('OAuth state 签名密钥缺失');
   }
   return crypto.createHmac('sha256', secret).update(payload).digest('base64url');
 }
 
+function resolveOauthCallbackBaseUrl() {
+  // Prefer frontend origin because production usually exposes frontend only.
+  return (
+    asText(process.env.APP_AUTH_OAUTH_CALLBACK_BASE_URL) ||
+    asText(process.env.FRONTEND_URL) ||
+    asText(process.env.APP_AUTH_GOOGLE_CALLBACK_BASE_URL) ||
+    asText(process.env.APP_AUTH_GITHUB_CALLBACK_BASE_URL) ||
+    asText(process.env.COMPOSIO_OAUTH_CALLBACK_BASE_URL) ||
+    asText(process.env.VITE_API_BASE_URL)
+  );
+}
+
 function createOauthStatePayload(redirectTarget: string) {
   const nonce = crypto.randomBytes(24).toString('base64url');
-  const issuedAt = Date.now();
-  const payload = JSON.stringify({
+  const payloadJson = JSON.stringify({
     nonce,
     redirectTarget,
-    issuedAt,
+    issuedAt: Date.now(),
   });
-  return `${Buffer.from(payload, 'utf8').toString('base64url')}${OAUTH_STATE_SEPARATOR}${signOauthState(payload)}`;
+  const encodedPayload = Buffer.from(payloadJson, 'utf8').toString('base64url');
+  const signature = signOauthStatePayload(payloadJson);
+  return `${encodedPayload}.${signature}`;
 }
 
 function parseOauthStatePayload(input: string): {
@@ -91,18 +103,18 @@ function parseOauthStatePayload(input: string): {
   redirectTarget: string;
   issuedAt: number;
 } {
-  const [encodedPayload, providedSignature] = asText(input).split(OAUTH_STATE_SEPARATOR);
-  if (!encodedPayload || !providedSignature) {
+  const raw = asText(input);
+  const separatorIndex = raw.indexOf('.');
+  if (!raw || separatorIndex <= 0 || separatorIndex === raw.length - 1) {
     throw new Error('OAuth state 非法');
   }
+  const encodedPayload = raw.slice(0, separatorIndex);
+  const providedSignature = raw.slice(separatorIndex + 1);
   const payload = Buffer.from(encodedPayload, 'base64url').toString('utf8');
-  const expectedSignature = signOauthState(payload);
-  const providedBuffer = Buffer.from(providedSignature, 'utf8');
-  const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
-  if (
-    providedBuffer.length !== expectedBuffer.length ||
-    !crypto.timingSafeEqual(providedBuffer, expectedBuffer)
-  ) {
+  const expectedSignature = signOauthStatePayload(payload);
+  const expected = Buffer.from(expectedSignature);
+  const provided = Buffer.from(providedSignature);
+  if (expected.length !== provided.length || !crypto.timingSafeEqual(expected, provided)) {
     throw new Error('OAuth state 校验失败');
   }
   const parsed = JSON.parse(payload) as {
@@ -132,25 +144,22 @@ function clearOauthStateCookie(req: express.Request, res: express.Response) {
 
 function issueOauthState(req: express.Request, res: express.Response, redirectTarget: string) {
   const state = createOauthStatePayload(redirectTarget);
+  // Keep cookie for same-origin API deployments; callback verification does not depend on it.
   setCookie(res, APP_OAUTH_STATE_COOKIE_NAME, state, buildAppOauthStateCookieOptions(req));
   return state;
 }
 
 function consumeOauthState(req: express.Request) {
   const stateFromQuery = asText(req.query.state);
-  const stateFromCookie = readCookie(req, APP_OAUTH_STATE_COOKIE_NAME);
-  if (!stateFromQuery || !stateFromCookie) {
+  if (!stateFromQuery) {
     throw new Error('OAuth state 缺失');
-  }
-  if (stateFromQuery !== stateFromCookie) {
-    throw new Error('OAuth state 不匹配');
   }
   return parseOauthStatePayload(stateFromQuery);
 }
 
 function buildGoogleAuthUrl(redirectTarget: string) {
   const clientId = asText(process.env.APP_AUTH_GOOGLE_CLIENT_ID);
-  const callbackBase = asText(process.env.APP_AUTH_GOOGLE_CALLBACK_BASE_URL) || asText(process.env.COMPOSIO_OAUTH_CALLBACK_BASE_URL) || asText(process.env.VITE_API_BASE_URL);
+  const callbackBase = resolveOauthCallbackBaseUrl();
   if (!clientId) {
     throw new Error('未配置 Google 登录客户端');
   }
@@ -171,24 +180,25 @@ function buildGoogleAuthUrl(redirectTarget: string) {
 
 function resolveGithubConfig() {
   const runtimeEnv = runtimeEnvConfig.runtimeEnv;
+  const callbackBaseUrl = resolveOauthCallbackBaseUrl();
   if (runtimeEnv === 'dev') {
     return {
       clientId: asText(process.env.APP_AUTH_GITHUB_DEV_CLIENT_ID) || asText(process.env.APP_AUTH_GITHUB_CLIENT_ID),
       clientSecret: asText(process.env.APP_AUTH_GITHUB_DEV_CLIENT_SECRET) || asText(process.env.APP_AUTH_GITHUB_CLIENT_SECRET),
-      callbackBaseUrl: asText(process.env.APP_AUTH_GITHUB_CALLBACK_BASE_URL) || asText(process.env.VITE_API_BASE_URL),
+      callbackBaseUrl,
     };
   }
   if (runtimeEnv === 'staging') {
     return {
       clientId: asText(process.env.APP_AUTH_GITHUB_STAGING_CLIENT_ID) || asText(process.env.APP_AUTH_GITHUB_CLIENT_ID),
       clientSecret: asText(process.env.APP_AUTH_GITHUB_STAGING_CLIENT_SECRET) || asText(process.env.APP_AUTH_GITHUB_CLIENT_SECRET),
-      callbackBaseUrl: asText(process.env.APP_AUTH_GITHUB_CALLBACK_BASE_URL) || asText(process.env.VITE_API_BASE_URL),
+      callbackBaseUrl,
     };
   }
   return {
     clientId: asText(process.env.APP_AUTH_GITHUB_PRODUCT_CLIENT_ID) || asText(process.env.APP_AUTH_GITHUB_CLIENT_ID),
     clientSecret: asText(process.env.APP_AUTH_GITHUB_PRODUCT_CLIENT_SECRET) || asText(process.env.APP_AUTH_GITHUB_CLIENT_SECRET),
-    callbackBaseUrl: asText(process.env.APP_AUTH_GITHUB_CALLBACK_BASE_URL) || asText(process.env.VITE_API_BASE_URL),
+    callbackBaseUrl,
   };
 }
 
@@ -240,7 +250,7 @@ router.get('/oauth/google/callback', async (req, res) => {
     }
     const clientId = asText(process.env.APP_AUTH_GOOGLE_CLIENT_ID);
     const clientSecret = asText(process.env.APP_AUTH_GOOGLE_CLIENT_SECRET);
-    const callbackBase = asText(process.env.APP_AUTH_GOOGLE_CALLBACK_BASE_URL) || asText(process.env.COMPOSIO_OAUTH_CALLBACK_BASE_URL) || asText(process.env.VITE_API_BASE_URL);
+    const callbackBase = resolveOauthCallbackBaseUrl();
     if (!clientId || !clientSecret || !callbackBase) {
       throw new Error('Google OAuth 配置缺失');
     }

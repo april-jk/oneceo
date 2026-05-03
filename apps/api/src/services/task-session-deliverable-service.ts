@@ -5,6 +5,7 @@ import { e2bConnector } from '../connectors/e2b-connector';
 import { uploadToR2 } from './r2-client';
 import { isArchiveStorageConfigured } from './sandbox-archive-service';
 import type { ManagedCompletionAttachment } from './altus-managed-shared';
+import { officeArtifactQualityService, type OfficeArtifactKind } from './office-artifact-quality-service';
 
 export type TaskSessionDeliverableArtifactRecord = {
   id: string;
@@ -61,6 +62,14 @@ function resolveMimeType(filePath: string, explicit?: string): string {
     zip: 'application/zip',
   };
   return map[ext] || 'application/octet-stream';
+}
+
+function resolveOfficeArtifactKind(filePath: string, mimeType: string): OfficeArtifactKind | null {
+  const normalizedMime = mimeType.toLowerCase();
+  const ext = path.posix.extname(filePath).toLowerCase();
+  if (ext === '.docx' || normalizedMime.includes('wordprocessingml.document')) return 'docx';
+  if (ext === '.xlsx' || normalizedMime.includes('spreadsheetml.sheet')) return 'xlsx';
+  return null;
 }
 
 function shellEscape(value: string): string {
@@ -145,6 +154,24 @@ export class TaskSessionDeliverableService {
     }
   }
 
+  private async readOfficeManifest(input: {
+    sandboxId: string;
+    workspaceRoot: string;
+    relativePath: string;
+    kind: OfficeArtifactKind;
+  }): Promise<{ manifestPath: string; manifestBytes: Buffer | null }> {
+    const manifestPath = officeArtifactQualityService.resolveManifestRelativePath(input.relativePath, input.kind);
+    const absoluteManifestPath = this.posix.join(input.workspaceRoot, manifestPath);
+    try {
+      return {
+        manifestPath,
+        manifestBytes: Buffer.from(await e2bConnector.readFile(input.sandboxId, absoluteManifestPath)),
+      };
+    } catch {
+      return { manifestPath, manifestBytes: null };
+    }
+  }
+
   async persistManagedRunDeliverables(input: {
     sessionId: string;
     runId: string;
@@ -186,6 +213,28 @@ export class TaskSessionDeliverableService {
         const mimeType = isDirectory
           ? 'application/gzip'
           : resolveMimeType(relativePath, attachment.mimeType);
+        const officeKind = isDirectory ? null : resolveOfficeArtifactKind(relativePath, mimeType);
+        if (officeKind) {
+          const manifest = await this.readOfficeManifest({
+            sandboxId: input.sandboxId,
+            workspaceRoot: input.workspaceRoot,
+            relativePath,
+            kind: officeKind,
+          });
+          const qualityReport = officeArtifactQualityService.validateOfficeArtifact({
+            kind: officeKind,
+            artifactPath: relativePath,
+            bytes,
+            manifestPath: manifest.manifestPath,
+            manifestBytes: manifest.manifestBytes,
+          });
+          if (!qualityReport.passed) {
+            throw new Error(`office_deliverable_quality_failed:${JSON.stringify(qualityReport)}`);
+          }
+          if (qualityReport.warnings.length > 0) {
+            console.warn('[OFFICE_DELIVERABLE_QUALITY_WARNING]', JSON.stringify(qualityReport));
+          }
+        }
         const sha256 = createHash('sha256').update(bytes).digest('hex');
         const storageKey = this.buildStorageKey(input.sessionId, input.runId, displayName);
 

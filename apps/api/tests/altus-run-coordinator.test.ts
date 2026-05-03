@@ -1588,16 +1588,16 @@ test('execute injects skill catalog prompt before active skill body', async () =
         sourceType: 'platform',
         skillId: 'skill-1',
         revisionId: 'rev-1',
-        slug: 'office-ppt',
-        name: 'PPT 办公',
-        description: '创建专业演示文稿',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: 'PPT 子任务编排',
         category: 'office',
         revisionNumber: 3,
         resourceSummary: {
           totalCount: 2,
           referenceCount: 1,
           templateCount: 1,
-          paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+          paths: ['references/subtask-contracts.md', 'templates/render-instruction-draft.md'],
         },
       },
     ],
@@ -1606,9 +1606,9 @@ test('execute injects skill catalog prompt before active skill body', async () =
         sourceType: 'platform',
         skillId: 'skill-1',
         revisionId: 'rev-1',
-        slug: 'office-ppt',
-        name: 'PPT 办公',
-        description: '创建专业演示文稿',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: 'PPT 子任务编排',
         category: 'office',
         renderedMarkdown: '# Skill Brief\n\nDo the work.',
         revisionNumber: 3,
@@ -1616,7 +1616,7 @@ test('execute injects skill catalog prompt before active skill body', async () =
           totalCount: 2,
           referenceCount: 1,
           templateCount: 1,
-          paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+          paths: ['references/subtask-contracts.md', 'templates/render-instruction-draft.md'],
         },
       },
     ],
@@ -1648,7 +1648,7 @@ test('execute injects skill catalog prompt before active skill body', async () =
     buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string, options?: any) => {
       const turnStatePrompt = String(options?.turnStatePrompt || '');
       assert.match(turnStatePrompt, /# Available skills catalog/);
-      assert.match(turnStatePrompt, /office-ppt: 创建专业演示文稿/);
+      assert.match(turnStatePrompt, /ppt-workflow: PPT 子任务编排/);
       assert.match(turnStatePrompt, /# Active skills/);
       assert.match(turnStatePrompt, /# Skill Brief/);
       return [
@@ -1734,17 +1734,17 @@ test('execute syncs resolved skills after sandbox becomes ready', async () => {
         sourceType: 'platform',
         skillId: 'skill-1',
         revisionId: 'rev-1',
-        slug: 'office-ppt',
-        name: 'PPT 办公',
-        description: '创建专业演示文稿',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: 'PPT 子任务编排',
         category: 'office',
-        renderedMarkdown: '# office-ppt',
+        renderedMarkdown: '# ppt-workflow',
         revisionNumber: 3,
         resourceSummary: {
           totalCount: 1,
           referenceCount: 1,
           templateCount: 0,
-          paths: ['references/slide-structure-guide.md'],
+          paths: ['references/subtask-contracts.md'],
         },
       },
     ],

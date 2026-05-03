@@ -19,11 +19,16 @@ import internalRuntimeArtifactRoutes from './routes/internal-runtime-artifact-ro
 import internalAdminAuthRoutes from './routes/internal-admin-auth-routes';
 import internalAdminAppUserRoutes from './routes/internal-admin-app-user-routes';
 import internalAdminDeploymentRoutes from './routes/internal-admin-deployment-routes';
+import internalAdminOperationsAnalyticsRoutes from './routes/internal-admin-operations-analytics-routes';
 import internalTaskCreationRoutes from './routes/internal-task-creation-routes';
+import billingRoutes from './routes/billing-routes';
+import internalBillingRoutes from './routes/internal-billing-routes';
+import activationCodeRoutes from './routes/activation-code-routes';
 import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
 import { closeDatabaseConnection, testDatabaseConnection } from './config/database';
 import { getPublicErrorMessage } from './utils/error-response';
 import { osacLlmProxyBridgeService } from './services/osac-llm-proxy-bridge';
+import { hostedProviderHostService } from './services/hosted-provider-host-service';
 import { osacPersistentRecoveryService } from './services/osac-persistent-recovery-service';
 import { sessionMcpRecoveryService } from './services/session-mcp-recovery-service';
 import { startSandboxArchiveJob, stopSandboxArchiveJob } from './services/sandbox-archive-job';
@@ -169,7 +174,11 @@ app.use('/api/internal', internalRuntimeArtifactRoutes);
 app.use('/api/internal', internalAdminAuthRoutes);
 app.use('/api/internal', internalAdminAppUserRoutes);
 app.use('/api/internal', internalAdminDeploymentRoutes);
+app.use('/api/internal/admin/operations/analytics', internalAdminOperationsAnalyticsRoutes);
 app.use('/api/internal', internalTaskCreationRoutes);
+app.use('/api/billing', billingRoutes);
+app.use('/api/internal/billing', internalBillingRoutes);
+app.use('/api/activation-codes', activationCodeRoutes);
 
 // 任务相关 API
 app.get('/api/tasks', (req, res) => {
@@ -267,6 +276,19 @@ let listenAttempts = 0;
 const maxListenRetries = Math.max(0, Number(process.env.API_PORT_RETRY_ATTEMPTS || 12));
 const listenRetryDelayMs = Math.max(100, Number(process.env.API_PORT_RETRY_DELAY_MS || 500));
 
+function isRecoverableSocketProcessError(error: unknown): boolean {
+  const record = error as { code?: unknown; message?: unknown; syscall?: unknown } | null;
+  const code = typeof record?.code === 'string' ? record.code.toUpperCase() : '';
+  const syscall = typeof record?.syscall === 'string' ? record.syscall.toLowerCase() : '';
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error || '').toLowerCase();
+  return (
+    code === 'EPIPE' ||
+    code === 'ECONNRESET' ||
+    (syscall === 'write' && message.includes('epipe')) ||
+    message.includes('socket hang up')
+  );
+}
+
 async function shutdown(signal: string, exitCode = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -352,6 +374,7 @@ httpServer.on('error', (error: any) => {
 // 初始化任务创建 WebSocket 服务
 taskCreationWebSocketService.initialize(httpServer);
 osacLlmProxyBridgeService.initialize();
+hostedProviderHostService.initialize();
 
 async function startServer() {
   await connectorStorageBootstrap.ensureReady();
@@ -404,4 +427,22 @@ process.on('SIGINT', () => {
 
 process.on('SIGTERM', () => {
   void shutdown('SIGTERM');
+});
+
+process.on('uncaughtException', (error) => {
+  if (isRecoverableSocketProcessError(error)) {
+    console.warn('[API_RECOVERABLE_SOCKET_ERROR]', error);
+    return;
+  }
+  console.error('[API_UNCAUGHT_EXCEPTION]', error);
+  void shutdown('uncaughtException', 1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  if (isRecoverableSocketProcessError(reason)) {
+    console.warn('[API_RECOVERABLE_SOCKET_REJECTION]', reason);
+    return;
+  }
+  console.error('[API_UNHANDLED_REJECTION]', reason);
+  void shutdown('unhandledRejection', 1);
 });

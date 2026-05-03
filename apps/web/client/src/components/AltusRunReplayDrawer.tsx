@@ -11,6 +11,7 @@ import {
   Rocket,
   XCircle,
 } from "lucide-react";
+import { Streamdown } from "streamdown";
 import type { AltusArtifactFile } from "@/components/AltusArtifactPreviewCard";
 import {
   DebugPreview,
@@ -56,11 +57,56 @@ export type AltusReplayAction = {
   artifactPaths: string[];
 };
 
+export function shouldRenderReplayActionMarkdown(
+  action: Pick<AltusReplayAction, "toolName"> | null | undefined,
+) {
+  return action?.toolName === "complete_task";
+}
+
+export function normalizeReplayCompletionMarkdown(markdown: string) {
+  return markdown
+    .trim()
+    .replace(/(^|\n)([ \t]*)•[ \t]+/g, "$1$2- ")
+    .replace(/([^\n])([ \t]+)•[ \t]+/g, "$1\n- ");
+}
+
+function ReplayActionMarkdown({
+  markdown,
+  compact = false,
+}: {
+  markdown: string;
+  compact?: boolean;
+}) {
+  const text = normalizeReplayCompletionMarkdown(markdown);
+  if (!text) return null;
+  return (
+    <div
+      className={cn(
+        "max-w-none break-words text-sm leading-relaxed text-zinc-700 dark:text-zinc-300",
+        "[&_p]:my-1 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5 [&_strong]:font-semibold",
+        "[&_code]:rounded [&_code]:bg-zinc-100 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[0.92em] dark:[&_code]:bg-zinc-800",
+        compact
+          ? "max-h-40 overflow-hidden [&_a]:pointer-events-none [&_a]:text-inherit [&_a]:no-underline"
+          : "text-xs leading-5 [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5",
+      )}
+    >
+      <Streamdown>{text}</Streamdown>
+    </div>
+  );
+}
+
 export type AltusReplayFile = AltusArtifactFile & {
   displayName: string;
   lastSourceToolCallId?: string;
   lastSourceStepIndex?: number;
 };
+
+export type AltusDrawerView =
+  | "actions"
+  | "files"
+  | "changes"
+  | "debug"
+  | "deployment";
 
 type AltusRunReplayDrawerProps = {
   open: boolean;
@@ -73,6 +119,8 @@ type AltusRunReplayDrawerProps = {
   files: AltusReplayFile[];
   currentIndex: number;
   latestIndex: number;
+  activeView?: AltusDrawerView;
+  onActiveViewChange?: (view: AltusDrawerView) => void;
   onSelectIndex: (index: number) => void;
   onJumpToLatest: () => void;
   diffItems: PreviewDiffItem[];
@@ -85,8 +133,6 @@ type AltusRunReplayDrawerProps = {
   onRequestRedeployByMessage?: () => void;
   onRequestRollbackByMessage?: () => void;
 };
-
-type AltusDrawerView = "actions" | "files" | "changes" | "debug" | "deployment";
 
 function getStatusIcon(status: AltusReplayActionStatus) {
   if (status === "completed") {
@@ -192,6 +238,8 @@ export default function AltusRunReplayDrawer({
   files = [],
   currentIndex,
   latestIndex,
+  activeView,
+  onActiveViewChange,
   onSelectIndex,
   onJumpToLatest,
   diffItems = [],
@@ -216,7 +264,9 @@ export default function AltusRunReplayDrawer({
   const [selectedFilePath, setSelectedFilePath] = useState<string>(
     normalizedFiles[0]?.path || "",
   );
-  const [drawerView, setDrawerView] = useState<AltusDrawerView>("actions");
+  const [drawerView, setDrawerViewState] = useState<AltusDrawerView>(
+    activeView || "actions",
+  );
   const [selectedDiffId, setSelectedDiffId] = useState<string>(
     diffItems.at(-1)?.id || "",
   );
@@ -258,6 +308,16 @@ export default function AltusRunReplayDrawer({
   const previousSelectedActionKeyRef = useRef(selectedActionKey);
   const drawerContentRef = useRef<HTMLDivElement | null>(null);
   const selectedActionPanelRef = useRef<HTMLDivElement | null>(null);
+  const actionButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const setDrawerView = (view: AltusDrawerView) => {
+    setDrawerViewState(view);
+    onActiveViewChange?.(view);
+  };
+
+  useEffect(() => {
+    if (!activeView) return;
+    setDrawerViewState(activeView);
+  }, [activeView, runId]);
 
   useEffect(() => {
     const actionChanged =
@@ -274,8 +334,9 @@ export default function AltusRunReplayDrawer({
   }, [normalizedFiles, selectedActionKey]);
 
   useEffect(() => {
-    setDrawerView("actions");
-  }, [runId]);
+    if (activeView) return;
+    setDrawerViewState("actions");
+  }, [activeView, runId]);
 
   useEffect(() => {
     setDetailViewMode("user");
@@ -300,6 +361,18 @@ export default function AltusRunReplayDrawer({
       document.removeEventListener("pointerdown", handlePointerDown);
     };
   }, [drawerView, open, selectedActionVisible]);
+
+  useEffect(() => {
+    if (!open || drawerView !== "actions" || !selectedAction?.toolCallId) {
+      return;
+    }
+    const node = actionButtonRefs.current.get(selectedAction.toolCallId);
+    if (!node) return;
+    const frame = window.requestAnimationFrame(() => {
+      node.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [drawerView, open, selectedAction?.toolCallId]);
 
   useEffect(() => {
     if (!diffItems.length) {
@@ -633,6 +706,18 @@ export default function AltusRunReplayDrawer({
                             <button
                               key={action.toolCallId}
                               type="button"
+                              ref={(node) => {
+                                if (node) {
+                                  actionButtonRefs.current.set(
+                                    action.toolCallId,
+                                    node,
+                                  );
+                                } else {
+                                  actionButtonRefs.current.delete(
+                                    action.toolCallId,
+                                  );
+                                }
+                              }}
                               onClick={() =>
                                 handleSelectActionIndex(action.stepIndex)
                               }
@@ -660,9 +745,18 @@ export default function AltusRunReplayDrawer({
                                     {getStatusBadgeCopy(action.status)}
                                   </span>
                                 </div>
-                                <p className="text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
-                                  {action.summary}
-                                </p>
+                                {shouldRenderReplayActionMarkdown(action) ? (
+                                  <ReplayActionMarkdown
+                                    markdown={
+                                      action.summary || action.displayName
+                                    }
+                                    compact
+                                  />
+                                ) : (
+                                  <p className="text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
+                                    {action.summary}
+                                  </p>
+                                )}
                                 {action.artifactPaths.length > 0 ? (
                                   <div className="flex flex-wrap gap-1.5 pt-1">
                                     {action.artifactPaths
@@ -752,9 +846,22 @@ export default function AltusRunReplayDrawer({
                               </button>
                             </div>
                           ) : null}
-                          <pre className="whitespace-pre-wrap break-all rounded-lg bg-zinc-50 px-3 py-2 text-xs leading-5 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
-                            {selectedActionDetail}
-                          </pre>
+                          {shouldRenderReplayActionMarkdown(selectedAction) &&
+                          detailViewMode === "user" ? (
+                            <div className="rounded-lg bg-zinc-50 px-3 py-2 dark:bg-zinc-800">
+                              <ReplayActionMarkdown
+                                markdown={
+                                  selectedActionDetail ||
+                                  selectedAction.summary ||
+                                  selectedAction.displayName
+                                }
+                              />
+                            </div>
+                          ) : (
+                            <pre className="whitespace-pre-wrap break-all rounded-lg bg-zinc-50 px-3 py-2 text-xs leading-5 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+                              {selectedActionDetail}
+                            </pre>
+                          )}
                         </div>
                       ) : (
                         <div className="text-sm text-muted-foreground">

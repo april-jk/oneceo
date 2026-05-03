@@ -543,6 +543,120 @@ describe('managed message stream identity', () => {
     expect(finalState[1]?.messageKey).toContain(':segment:');
   });
 
+  it('keeps final managed assistant message after complete_task when backend uses final key', () => {
+    const streamKey = 'managed:run-complete-final-1:assistant';
+    const finalKey = 'managed:run-complete-final-1:assistant:final';
+    const streamed = mergeRealtimeMessage(
+      [],
+      {
+        type: 'agent_message',
+        content: 'watson，数据库支持已经添加完成。',
+        agent: 'altus',
+        messageKey: streamKey,
+        metadata: {
+          eventType: 'assistant_delta',
+          runId: 'run-complete-final-1',
+          sequence: 1,
+          streamDelta: true,
+          messageKey: streamKey,
+        },
+      },
+      WELCOME_MESSAGE
+    );
+
+    const withTool = mergeRealtimeMessage(
+      streamed,
+      {
+        type: 'executor_event',
+        content: '完成任务',
+        messageKey: 'managed:run-complete-final-1:tool:complete',
+        metadata: {
+          eventType: 'tool_call_completed',
+          runId: 'run-complete-final-1',
+          toolName: 'complete_task',
+          toolCallId: 'complete',
+          messageKey: 'managed:run-complete-final-1:tool:complete',
+        },
+      },
+      WELCOME_MESSAGE
+    );
+
+    const finalState = mergeRealtimeMessage(
+      withTool,
+      {
+        type: 'agent_message',
+        content: 'watson，数据库支持已经添加完成。',
+        agent: 'altus',
+        messageKey: finalKey,
+        metadata: {
+          eventType: 'assistant_message',
+          runId: 'run-complete-final-1',
+          sequence: 3,
+          messageKey: finalKey,
+        },
+      },
+      WELCOME_MESSAGE
+    );
+
+    expect(finalState).toHaveLength(2);
+    expect(finalState[0]?.type).toBe('executor_event');
+    expect(finalState[1]?.type).toBe('agent_message');
+    expect(finalState[1]?.messageKey).toBe(finalKey);
+    expect(finalState[1]?.content).toBe('watson，数据库支持已经添加完成。');
+  });
+
+  it('keeps recovered final managed assistant message after complete_task when final key differs from stream key', () => {
+    const merged = mergeHistoryAgentMessages(
+      [
+        {
+          type: 'agent_message',
+          content: 'watson，数据库支持已经添加完成。',
+          agent: 'altus',
+          messageKey: 'managed:run-complete-final-2:assistant',
+          metadata: {
+            eventType: 'assistant_delta',
+            runId: 'run-complete-final-2',
+            sequence: 1,
+            streamDelta: true,
+            messageKey: 'managed:run-complete-final-2:assistant',
+          },
+        },
+        {
+          type: 'executor_event',
+          content: '完成任务',
+          messageKey: 'managed:run-complete-final-2:tool:complete',
+          metadata: {
+            eventType: 'tool_call_completed',
+            runId: 'run-complete-final-2',
+            toolName: 'complete_task',
+            toolCallId: 'complete',
+            messageKey: 'managed:run-complete-final-2:tool:complete',
+          },
+        },
+      ],
+      [
+        {
+          type: 'agent_message',
+          content: 'watson，数据库支持已经添加完成。',
+          agent: 'altus',
+          messageKey: 'managed:run-complete-final-2:assistant:final',
+          metadata: {
+            eventType: 'assistant_message',
+            runId: 'run-complete-final-2',
+            sequence: 3,
+            messageKey: 'managed:run-complete-final-2:assistant:final',
+          },
+        },
+      ]
+    );
+
+    expect(merged).toHaveLength(2);
+    expect(merged[0]?.type).toBe('executor_event');
+    expect(merged[1]?.type).toBe('agent_message');
+    expect(merged[1]?.messageKey).toBe('managed:run-complete-final-2:assistant:final');
+    expect(merged[1]?.content).toBe('watson，数据库支持已经添加完成。');
+  });
+
   it('dedupes managed recovery history when cached streamed completion matches persisted final assistant message', () => {
     const merged = mergeHistoryAgentMessages(
       [

@@ -5,7 +5,7 @@
  */
 
 import { sql } from 'drizzle-orm';
-import { pgTable, text, timestamp, jsonb, uuid, integer, boolean, uniqueIndex, index, bigint } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, uuid, integer, boolean, uniqueIndex, index, bigint, real } from 'drizzle-orm/pg-core';
 
 export const appUsers = pgTable(
   'app_users',
@@ -785,22 +785,6 @@ export const userConnectorProfiles = pgTable(
   })
 );
 
-export const userCodexRuntimeConfigs = pgTable(
-  'user_codex_runtime_configs',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    userId: text('user_id').notNull(),
-    configToml: text('config_toml').notNull(),
-    authJson: text('auth_json').notNull(),
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
-  },
-  (table) => ({
-    userUnique: uniqueIndex('idx_user_codex_runtime_configs_user_id').on(table.userId),
-    updatedAtIdx: index('idx_user_codex_runtime_configs_updated_at').on(table.updatedAt),
-  })
-);
-
 export const userPlatformSkillBindings = pgTable(
   'user_platform_skill_bindings',
   {
@@ -1049,6 +1033,39 @@ export const taskSessionDeploymentSyncJobs = pgTable(
   })
 );
 
+export const projectStorageResources = pgTable(
+  'project_storage_resources',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id').notNull(),
+    sessionId: text('session_id').notNull(),
+    projectKey: text('project_key').notNull(),
+    provider: text('provider').notNull().default('railway_bucket'),
+    railwayBucketId: text('railway_bucket_id').notNull(),
+    railwayProjectId: text('railway_project_id').notNull(),
+    railwayEnvironmentId: text('railway_environment_id').notNull(),
+    bucketName: text('bucket_name').notNull(),
+    endpoint: text('endpoint').notNull(),
+    publicUrl: text('public_url'),
+    accessKeyId: text('access_key_id').notNull(),
+    secretAccessKeyCiphertext: text('secret_access_key_ciphertext').notNull(),
+    accessModel: text('access_model').notNull().default('public_and_private'),
+    status: text('status').notNull().default('ready'),
+    metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
+    lastCheckedAt: timestamp('last_checked_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userProjectProviderUnique: uniqueIndex('idx_project_storage_resources_unique').on(
+      table.userId,
+      table.projectKey,
+      table.provider
+    ),
+    sessionIdx: index('idx_project_storage_resources_session').on(table.sessionId),
+  })
+);
+
 export const platformRuntimeArtifactReleases = pgTable(
   'platform_runtime_artifact_releases',
   {
@@ -1208,8 +1225,6 @@ export type NewUserConnectorAccount = typeof userConnectorAccounts.$inferInsert;
 export type UserConnectorProfile = typeof userConnectorProfiles.$inferSelect;
 export type NewUserConnectorProfile = typeof userConnectorProfiles.$inferInsert;
 
-export type UserCodexRuntimeConfig = typeof userCodexRuntimeConfigs.$inferSelect;
-export type NewUserCodexRuntimeConfig = typeof userCodexRuntimeConfigs.$inferInsert;
 export type UserPlatformSkillBinding = typeof userPlatformSkillBindings.$inferSelect;
 export type NewUserPlatformSkillBinding = typeof userPlatformSkillBindings.$inferInsert;
 export type UserCustomSkill = typeof userCustomSkills.$inferSelect;
@@ -1229,6 +1244,8 @@ export type TaskSessionMcpRecoveryJob = typeof taskSessionMcpRecoveryJobs.$infer
 export type NewTaskSessionMcpRecoveryJob = typeof taskSessionMcpRecoveryJobs.$inferInsert;
 export type TaskSessionDeploymentSyncJob = typeof taskSessionDeploymentSyncJobs.$inferSelect;
 export type NewTaskSessionDeploymentSyncJob = typeof taskSessionDeploymentSyncJobs.$inferInsert;
+export type ProjectStorageResource = typeof projectStorageResources.$inferSelect;
+export type NewProjectStorageResource = typeof projectStorageResources.$inferInsert;
 
 export type PlatformRuntimeArtifactRelease = typeof platformRuntimeArtifactReleases.$inferSelect;
 export type NewPlatformRuntimeArtifactRelease = typeof platformRuntimeArtifactReleases.$inferInsert;
@@ -1237,3 +1254,245 @@ export type NewPlatformRuntimeArtifactChannel = typeof platformRuntimeArtifactCh
 
 export type ConnectorAuthRequest = typeof connectorAuthRequests.$inferSelect;
 export type NewConnectorAuthRequest = typeof connectorAuthRequests.$inferInsert;
+
+/**
+ * 用户积分余额表
+ * 
+ * 记录每个用户的积分余额和累计消费/获得
+ */
+export const userCredits = pgTable(
+  'user_credits',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => appUsers.id, { onDelete: 'cascade' }),
+    balance: integer('balance').notNull().default(0),
+    totalEarned: integer('total_earned').notNull().default(0),
+    totalConsumed: integer('total_consumed').notNull().default(0),
+    lastRechargeAt: timestamp('last_recharge_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdUnique: uniqueIndex('idx_user_credits_user_id').on(table.userId),
+  })
+);
+
+/**
+ * 积分交易记录表
+ * 
+ * 记录所有积分变动（充值、消费、人工调整）
+ */
+export const creditTransactions = pgTable(
+  'credit_transactions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => appUsers.id, { onDelete: 'cascade' }),
+    type: text('type').notNull(),
+    amount: integer('amount').notNull(),
+    balanceAfter: integer('balance_after').notNull(),
+    sourceId: uuid('source_id'),
+    sourceType: text('source_type'),
+    description: text('description'),
+    metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdIdx: index('idx_credit_transactions_user_id').on(table.userId),
+    typeIdx: index('idx_credit_transactions_type').on(table.type),
+    createdAtIdx: index('idx_credit_transactions_created_at').on(table.createdAt),
+  })
+);
+
+/**
+ * Token 使用明细表
+ * 
+ * 记录每次 LLM 调用的 token 使用情况和积分消耗
+ */
+export const tokenUsageLogs = pgTable(
+  'token_usage_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => appUsers.id, { onDelete: 'cascade' }),
+    sessionId: uuid('session_id')
+      .references(() => taskCreationSessions.id, { onDelete: 'set null' }),
+    runId: uuid('run_id')
+      .references(() => taskSessionRuns.id, { onDelete: 'set null' }),
+    model: text('model').notNull(),
+    promptTokens: integer('prompt_tokens').notNull().default(0),
+    cachedPromptTokens: integer('cached_prompt_tokens').notNull().default(0),
+    nonCachedPromptTokens: integer('non_cached_prompt_tokens').notNull().default(0),
+    cacheCreationTokens: integer('cache_creation_tokens').notNull().default(0),
+    completionTokens: integer('completion_tokens').notNull().default(0),
+    totalTokens: integer('total_tokens').notNull().default(0),
+    creditsConsumed: integer('credits_consumed').notNull().default(0),
+    pricingSnapshot: jsonb('pricing_snapshot').notNull().default(sql`'{}'::jsonb`),
+    metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdIdx: index('idx_token_usage_logs_user_id').on(table.userId),
+    sessionIdIdx: index('idx_token_usage_logs_session_id').on(table.sessionId),
+    createdAtIdx: index('idx_token_usage_logs_created_at').on(table.createdAt),
+  })
+);
+
+/**
+ * 模型定价配置表
+ * 
+ * 配置各模型的积分定价（按 1M tokens 计费）
+ * 缓存比例由系统固定：OpenAI 命中 50%，Anthropic 命中 10%/创建 125%
+ */
+export const modelPricing = pgTable(
+  'model_pricing',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    model: text('model').notNull(),
+    modelProvider: text('model_provider').notNull(),
+    promptPricePer1mTokens: integer('prompt_price_per_1m_tokens').notNull(),
+    completionPricePer1mTokens: integer('completion_price_per_1m_tokens').notNull(),
+    multiplier: real('multiplier').notNull().default(1.0),
+    isActive: boolean('is_active').notNull().default(true),
+    effectiveFrom: timestamp('effective_from').notNull().defaultNow(),
+    effectiveUntil: timestamp('effective_until'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    modelActiveIdx: index('idx_model_pricing_model_active')
+      .on(table.model, table.isActive, table.effectiveFrom),
+    activeIdx: index('idx_model_pricing_active').on(table.isActive),
+  })
+);
+
+/**
+ * 缓存计费比例配置表
+ *
+ * 各模型提供商的缓存命中/创建计费比例（千分比整数存库）
+ * 如 hitRatio=500 表示 50%，creationRatio=1250 表示 125%
+ */
+export const cachePricingConfig = pgTable(
+  'cache_pricing_config',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    provider: text('provider').notNull(),
+    hitRatio: integer('hit_ratio').notNull(),
+    creationRatio: integer('creation_ratio').notNull(),
+    isActive: boolean('is_active').notNull().default(true),
+    effectiveFrom: timestamp('effective_from').notNull().defaultNow(),
+    effectiveUntil: timestamp('effective_until'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    providerUnique: uniqueIndex('idx_cache_pricing_config_provider_active')
+      .on(table.provider)
+      .where(sql`${table.isActive} = true`),
+  })
+);
+
+/**
+ * 积分激活码分组表
+ *
+ * 管理员创建的激活码分组，用于组织和管理激活码
+ */
+export const creditActivationCodeGroups = pgTable(
+  'credit_activation_code_groups',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    description: text('description'),
+    status: text('status').notNull().default('active'), // active, archived
+    createdBy: uuid('created_by').references(() => adminUsers.id, { onDelete: 'set null' }),
+    metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    nameIdx: index('idx_activation_code_groups_name').on(table.name),
+    statusIdx: index('idx_activation_code_groups_status').on(table.status),
+  })
+);
+
+/**
+ * 积分激活码表
+ *
+ * 管理员创建的积分激活码，用户可兑换获得积分
+ */
+export const creditActivationCodes = pgTable(
+  'credit_activation_codes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    code: text('code').notNull(),
+    creditsAmount: integer('credits_amount').notNull(),
+    status: text('status').notNull().default('active'), // active, disabled, used, expired
+    maxUses: integer('max_uses').notNull().default(1),
+    currentUses: integer('current_uses').notNull().default(0),
+    expiresAt: timestamp('expires_at'),
+    groupId: uuid('group_id').references(() => creditActivationCodeGroups.id, { onDelete: 'set null' }),
+    createdBy: uuid('created_by').references(() => adminUsers.id, { onDelete: 'set null' }),
+    usedBy: uuid('used_by').references(() => appUsers.id, { onDelete: 'set null' }),
+    usedAt: timestamp('used_at'),
+    batchId: text('batch_id'),
+    description: text('description'),
+    metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    codeUnique: uniqueIndex('idx_activation_codes_code').on(table.code),
+    statusIdx: index('idx_activation_codes_status').on(table.status),
+    groupIdIdx: index('idx_activation_codes_group_id').on(table.groupId),
+    batchIdIdx: index('idx_activation_codes_batch_id').on(table.batchId),
+    expiresAtIdx: index('idx_activation_codes_expires_at').on(table.expiresAt),
+    usedByIdx: index('idx_activation_codes_used_by').on(table.usedBy),
+  })
+);
+
+/**
+ * 积分激活码使用记录表
+ *
+ * 记录每次激活码的使用情况
+ */
+export const creditActivationCodeUses = pgTable(
+  'credit_activation_code_uses',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    activationCodeId: uuid('activation_code_id')
+      .notNull()
+      .references(() => creditActivationCodes.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => appUsers.id, { onDelete: 'cascade' }),
+    creditsGranted: integer('credits_granted').notNull(),
+    transactionId: uuid('transaction_id').references(() => creditTransactions.id, { onDelete: 'set null' }),
+    usedAt: timestamp('used_at').notNull().defaultNow(),
+    metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
+  },
+  (table) => ({
+    codeIdIdx: index('idx_activation_code_uses_code_id').on(table.activationCodeId),
+    userIdIdx: index('idx_activation_code_uses_user_id').on(table.userId),
+  })
+);
+
+export type UserCredit = typeof userCredits.$inferSelect;
+export type NewUserCredit = typeof userCredits.$inferInsert;
+export type CreditTransaction = typeof creditTransactions.$inferSelect;
+export type NewCreditTransaction = typeof creditTransactions.$inferInsert;
+export type CachePricingConfig = typeof cachePricingConfig.$inferSelect;
+export type NewCachePricingConfig = typeof cachePricingConfig.$inferInsert;
+export type TokenUsageLog = typeof tokenUsageLogs.$inferSelect;
+export type NewTokenUsageLog = typeof tokenUsageLogs.$inferInsert;
+export type ModelPricing = typeof modelPricing.$inferSelect;
+export type NewModelPricing = typeof modelPricing.$inferInsert;
+export type CreditActivationCode = typeof creditActivationCodes.$inferSelect;
+export type NewCreditActivationCode = typeof creditActivationCodes.$inferInsert;
+export type CreditActivationCodeUse = typeof creditActivationCodeUses.$inferSelect;
+export type NewCreditActivationCodeUse = typeof creditActivationCodeUses.$inferInsert;
+export type CreditActivationCodeGroup = typeof creditActivationCodeGroups.$inferSelect;
+export type NewCreditActivationCodeGroup = typeof creditActivationCodeGroups.$inferInsert;

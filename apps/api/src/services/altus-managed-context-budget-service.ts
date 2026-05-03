@@ -3,6 +3,27 @@ import {
   isOpaqueManagedMcpTool,
   resolveManagedToolDescriptor,
 } from './altus-managed-tool-registry';
+import { normalizeOpenAiToolCallArguments } from '../utils/openai-chat-sanitizer';
+import { hashStableJson } from './altus-managed-context-manifest-service';
+
+export type ManagedContextBudgetReplacement = {
+  messageIndex: number;
+  role: ChatMessage['role'];
+  toolName?: string | null;
+  toolCallId?: string | null;
+  originalHash: string;
+  replacementHash: string;
+  reason: 'large_tool_result' | 'large_assistant_tool_arguments';
+};
+
+export type ManagedContextBudgetProjection = {
+  messages: ChatMessage[];
+  replacementSummary: {
+    version: 1;
+    replacementCount: number;
+    replacements: ManagedContextBudgetReplacement[];
+  };
+};
 
 function safeJsonParse(raw: string): Record<string, unknown> | null {
   try {
@@ -137,7 +158,7 @@ function summarizeOpaqueMcp(raw: string) {
 
 function summarizeAssistantWriteFileArguments(raw: string) {
   const parsed = safeJsonParse(raw);
-  if (!parsed) return raw;
+  if (!parsed) return '{}';
   const content = typeof parsed.content === 'string' ? parsed.content : '';
   if (content.length <= 4000) return raw;
   return JSON.stringify({
@@ -191,10 +212,11 @@ export class AltusManagedContextBudgetService {
     const toolCalls = message.tool_calls.map((toolCall) => {
       const toolName = asText(toolCall?.function?.name);
       const rawArguments = typeof toolCall?.function?.arguments === 'string' ? toolCall.function.arguments : '';
-      if (toolName !== 'write_file' || !rawArguments) {
-        return toolCall;
-      }
-      const nextArguments = summarizeAssistantWriteFileArguments(rawArguments);
+      const normalizedArguments = normalizeOpenAiToolCallArguments(rawArguments);
+      const nextArguments =
+        toolName === 'write_file'
+          ? summarizeAssistantWriteFileArguments(normalizedArguments)
+          : normalizedArguments;
       if (nextArguments === rawArguments) {
         return toolCall;
       }
@@ -211,7 +233,7 @@ export class AltusManagedContextBudgetService {
     return changed ? { ...message, tool_calls: toolCalls } : message;
   }
 
-  projectMessagesForModel(messages: ChatMessage[]) {
+  projectMessagesForModelWithReport(messages: ChatMessage[]): ManagedContextBudgetProjection {
     const recentToolIndexes = new Set<number>();
     let remainingRecentTools = this.recentToolWindow;
     for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -222,15 +244,43 @@ export class AltusManagedContextBudgetService {
       }
     }
 
-    return messages.map((message, index) => {
+    const replacements: ManagedContextBudgetReplacement[] = [];
+    const projectedMessages = messages.map((message, index) => {
+      let projected = message;
+      let reason: ManagedContextBudgetReplacement['reason'] | null = null;
       if (message.role === 'assistant') {
-        return this.summarizeAssistantToolCalls(message);
+        projected = this.summarizeAssistantToolCalls(message);
+        reason = 'large_assistant_tool_arguments';
+      } else if (message.role === 'tool' && !recentToolIndexes.has(index)) {
+        projected = this.summarizeToolMessage(message);
+        reason = 'large_tool_result';
       }
-      if (message.role !== 'tool' || recentToolIndexes.has(index)) {
-        return message;
+      if (projected !== message && reason) {
+        const toolCall = Array.isArray(message.tool_calls) ? message.tool_calls[0] : null;
+        replacements.push({
+          messageIndex: index,
+          role: message.role,
+          toolName: asText(message.name) || asText(toolCall?.function?.name) || null,
+          toolCallId: asText(message.tool_call_id) || asText(toolCall?.id) || null,
+          originalHash: hashStableJson(message),
+          replacementHash: hashStableJson(projected),
+          reason,
+        });
       }
-      return this.summarizeToolMessage(message);
+      return projected;
     });
+    return {
+      messages: projectedMessages,
+      replacementSummary: {
+        version: 1,
+        replacementCount: replacements.length,
+        replacements,
+      },
+    };
+  }
+
+  projectMessagesForModel(messages: ChatMessage[]) {
+    return this.projectMessagesForModelWithReport(messages).messages;
   }
 }
 

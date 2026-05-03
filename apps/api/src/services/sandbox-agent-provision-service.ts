@@ -7,6 +7,7 @@ import {
   sandboxExecutionEnvironmentDAO,
   taskCreationSessionDAO,
   taskSessionConnectorBindingDAO,
+  taskSessionRunDAO,
 } from '../db/dao';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { opencodeHttpClient } from '../connectors/opencode-http-client';
@@ -25,17 +26,16 @@ import { archiveSandboxWorkspace, restoreWorkspaceIfArchived } from './sandbox-a
 import { touchSandbox } from './sandbox-activity-service';
 import { osacAgentService } from './osac-agent-service';
 import { ensureNekoDebug } from './sandbox-debug-service';
-import { codexRuntimeConfigService } from './codex-runtime-config-service';
 import { codexAppServerService } from './codex-app-server-service';
 import {
-  DEFAULT_CODEX_API_KEY,
+  buildCodexAuthJson,
+  buildCodexConfigToml,
   DEFAULT_CODEX_MODEL,
   DEFAULT_SANDBOX_OPENAI_BASE_URL,
 } from '../utils/codex-runtime-config';
 import {
   connectorRegistry,
   type ConnectorKey,
-  type ConnectorRuntimeConfig,
 } from './connector-registry';
 import { userConnectorService } from './user-connector-service';
 import { connectorStorageBootstrap } from './connector-storage-bootstrap';
@@ -51,7 +51,7 @@ type ProvisionInput = {
   idempotencyKey?: string;
   bind?: Record<string, unknown>;
   requestBaseUrl?: string;
-  executor?: 'opencode' | 'codex' | 'claudecode' | string;
+  executor?: 'opencode' | 'codex' | string;
 };
 
 type ProvisionResult = {
@@ -79,8 +79,16 @@ type ProvisionResult = {
   trafficAccessToken?: string | null;
 };
 
-type ProvisionExecutor = 'opencode' | 'codex' | 'claudecode' | 'altus';
+type ProvisionExecutor = 'opencode' | 'codex' | 'altus';
 type ProvisionCodexMode = 'sdk' | 'ws';
+
+type ReusableSandboxResolution = {
+  reusable: { sessionId: string; environment: any } | null;
+  templateMismatchSandboxId: string | null;
+  handoffSourceSandboxId: string | null;
+  handoffReason: string | null;
+  restoreRequired: boolean;
+};
 
 function pickString(value: unknown): string | null {
   if (typeof value === 'string' && value.trim()) return value.trim();
@@ -91,7 +99,6 @@ function normalizeProvisionExecutor(value: unknown): ProvisionExecutor {
   const normalized = pickString(value)?.toLowerCase();
   if (normalized === 'altus') return 'altus';
   if (normalized === 'codex') return 'codex';
-  if (normalized === 'claudecode') return 'claudecode';
   return 'opencode';
 }
 
@@ -100,6 +107,38 @@ function normalizeProvisionCodexMode(value: unknown): ProvisionCodexMode | null 
   if (normalized === 'sdk') return 'sdk';
   if (normalized === 'ws') return 'ws';
   return null;
+}
+
+function asBoolean(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  const normalized = pickString(value)?.toLowerCase();
+  return normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on';
+}
+
+function parseTimestampMs(value: unknown): number {
+  const text = pickString(value);
+  if (!text) return 0;
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function makeReusableResolution(input?: Partial<ReusableSandboxResolution>): ReusableSandboxResolution {
+  return {
+    reusable: null,
+    templateMismatchSandboxId: null,
+    handoffSourceSandboxId: null,
+    handoffReason: null,
+    restoreRequired: false,
+    ...(input || {}),
+  };
+}
+
+function isRecoverableSandboxEnvironment(environment: any): boolean {
+  return Boolean(environment && environment.status === 'ready' && environment.sessionId);
+}
+
+function isDirtySandboxMetadata(metadata: Record<string, unknown>): boolean {
+  return asBoolean((metadata as any).archiveDirty) || asBoolean((metadata as any).pendingArchiveUpdate);
 }
 
 async function resolveProvisionCodexMode(
@@ -130,70 +169,132 @@ function resolveProvisionTemplate(
   return e2bConfig.template;
 }
 
+async function resolveHandoffSourceSandboxId(
+  taskSessionId: string,
+  preferredSandboxId?: string | null
+): Promise<{ sandboxId: string | null; reason: string | null; restoreRequired: boolean }> {
+  const candidates: Array<{ sandboxId: string; reason: string; priority: number; dirty: boolean; lastActiveAt: number }> = [];
+  const seen = new Set<string>();
+  const addCandidate = async (sandboxId: string | null | undefined, reason: string, priority: number) => {
+    const normalized = pickString(sandboxId);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(normalized).catch(() => null);
+    if (!isRecoverableSandboxEnvironment(environment)) return;
+    const metadata = ((environment?.metadata || {}) as Record<string, unknown>) || {};
+    const boundTaskSessionId = pickString((metadata as any).taskSessionId);
+    if (boundTaskSessionId && boundTaskSessionId !== taskSessionId) return;
+    candidates.push({
+      sandboxId: normalized,
+      reason,
+      priority,
+      dirty: isDirtySandboxMetadata(metadata),
+      lastActiveAt: parseTimestampMs((metadata as any).lastActiveAt) || parseTimestampMs(environment?.updatedAt),
+    });
+  };
+
+  await addCandidate(preferredSandboxId, 'runtime_sandbox', 100);
+  const binding = await taskSessionRunDAO.getSandboxBindingBySession(taskSessionId).catch(() => null);
+  await addCandidate(binding?.sandboxId, 'task_session_binding', 90);
+
+  const related = await sandboxExecutionEnvironmentDAO.listByTaskSessionId(taskSessionId, 20).catch(() => []);
+  for (const environment of related as any[]) {
+    await addCandidate(environment?.sessionId, 'related_task_session_sandbox', 40);
+  }
+
+  candidates.sort((left, right) => {
+    if (left.dirty !== right.dirty) return left.dirty ? -1 : 1;
+    if (left.priority !== right.priority) return right.priority - left.priority;
+    return right.lastActiveAt - left.lastActiveAt;
+  });
+  const selected = candidates[0];
+  if (!selected) {
+    return { sandboxId: null, reason: null, restoreRequired: false };
+  }
+  return {
+    sandboxId: selected.sandboxId,
+    reason: selected.reason,
+    restoreRequired: true,
+  };
+}
+
 async function resolveReusableSandbox(
   taskSessionId: string,
   executor: ProvisionExecutor,
   codexExecutionMode: ProvisionCodexMode | null,
   selectedTemplate: string
-) {
+): Promise<ReusableSandboxResolution> {
   const session = await taskCreationFileMemoryStore.getSession(taskSessionId);
   const orchestratorSessionId = pickString(session?.runtime?.orchestratorSessionId);
   if (!orchestratorSessionId) {
-    return {
-      reusable: null,
-      templateMismatchSandboxId: null,
-    };
+    const handoff = await resolveHandoffSourceSandboxId(taskSessionId, null);
+    return makeReusableResolution({
+      handoffSourceSandboxId: handoff.sandboxId,
+      handoffReason: handoff.reason,
+      restoreRequired: handoff.restoreRequired,
+    });
   }
 
   const sessionExecutor = normalizeProvisionExecutor(
     session?.runtime?.executor || session?.executor || session?.driver
   );
   if (sessionExecutor !== executor) {
-    return {
-      reusable: null,
-      templateMismatchSandboxId: null,
-    };
+    const handoff = await resolveHandoffSourceSandboxId(taskSessionId, orchestratorSessionId);
+    return makeReusableResolution({
+      handoffSourceSandboxId: handoff.sandboxId || orchestratorSessionId,
+      handoffReason: 'executor_mismatch',
+      restoreRequired: true,
+    });
   }
 
   const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
   if (!environment || environment.status !== 'ready') {
-    return {
-      reusable: null,
-      templateMismatchSandboxId: null,
-    };
+    const handoff = await resolveHandoffSourceSandboxId(taskSessionId, orchestratorSessionId);
+    return makeReusableResolution({
+      handoffSourceSandboxId: handoff.sandboxId,
+      handoffReason: handoff.reason || 'runtime_sandbox_unavailable',
+      restoreRequired: handoff.restoreRequired,
+    });
   }
 
   const metadata = (environment.metadata || {}) as Record<string, unknown>;
   const replacedBySandboxId = pickString(metadata.dedupeReplacementSandboxId);
   if (replacedBySandboxId) {
-    return {
-      reusable: null,
-      templateMismatchSandboxId: null,
-    };
+    const handoff = await resolveHandoffSourceSandboxId(taskSessionId, replacedBySandboxId);
+    return makeReusableResolution({
+      handoffSourceSandboxId: handoff.sandboxId,
+      handoffReason: handoff.reason || 'runtime_sandbox_replaced',
+      restoreRequired: handoff.restoreRequired,
+    });
   }
   const boundTaskSessionId = pickString(metadata.taskSessionId);
   if (boundTaskSessionId && boundTaskSessionId !== taskSessionId) {
-    return {
-      reusable: null,
-      templateMismatchSandboxId: null,
-    };
+    const handoff = await resolveHandoffSourceSandboxId(taskSessionId, null);
+    return makeReusableResolution({
+      handoffSourceSandboxId: handoff.sandboxId,
+      handoffReason: handoff.reason || 'runtime_task_session_mismatch',
+      restoreRequired: handoff.restoreRequired,
+    });
   }
   const sandboxExecutor = normalizeProvisionExecutor(
     metadata.sandboxExecutor || metadata.executor || session?.runtime?.executor || session?.executor || session?.driver
   );
   if (sandboxExecutor !== executor) {
-    return {
-      reusable: null,
-      templateMismatchSandboxId: null,
-    };
+    return makeReusableResolution({
+      handoffSourceSandboxId: orchestratorSessionId,
+      handoffReason: 'sandbox_executor_mismatch',
+      restoreRequired: true,
+    });
   }
   const environmentTemplate = pickString((metadata.e2b as Record<string, unknown> | undefined)?.template);
   // Reuse is allowed only when the running sandbox template exactly matches current selection.
   if (!environmentTemplate || environmentTemplate !== selectedTemplate) {
-    return {
-      reusable: null,
+    return makeReusableResolution({
       templateMismatchSandboxId: orchestratorSessionId,
-    };
+      handoffSourceSandboxId: orchestratorSessionId,
+      handoffReason: 'template_mismatch',
+      restoreRequired: true,
+    });
   }
   if (executor === 'codex') {
     const environmentCodexMode =
@@ -205,20 +306,20 @@ async function resolveReusableSandbox(
           : 'sdk'
       );
     if ((codexExecutionMode || environmentCodexMode) && codexExecutionMode !== environmentCodexMode) {
-      return {
-        reusable: null,
-        templateMismatchSandboxId: null,
-      };
+      return makeReusableResolution({
+        handoffSourceSandboxId: orchestratorSessionId,
+        handoffReason: 'codex_execution_mode_mismatch',
+        restoreRequired: true,
+      });
     }
   }
 
-  return {
+  return makeReusableResolution({
     reusable: {
       sessionId: orchestratorSessionId,
       environment,
     },
-    templateMismatchSandboxId: null,
-  };
+  });
 }
 
 function isSandboxUnavailableError(error: unknown): boolean {
@@ -252,7 +353,7 @@ async function markSandboxClosedBestEffort(sessionId: string, reason: string) {
   }
 }
 
-function buildSandboxEnv(): Record<string, string> {
+function buildSandboxEnv(executor: ProvisionExecutor = 'opencode'): Record<string, string> {
   const env: Record<string, string> = {};
   const passthrough = [
     'OPENAI_API_KEY',
@@ -305,6 +406,34 @@ function buildSandboxEnv(): Record<string, string> {
   if (sandboxOverrideEnabled) {
     env.OPENCODE_PROVIDER_ID = 'openai';
   }
+
+  const engineSuffix = executor.toUpperCase();
+  const engineApiKey = pickString(process.env[`SANDBOX_ENGINE_${engineSuffix}_API_KEY`]);
+  const engineBaseUrl = pickString(process.env[`SANDBOX_ENGINE_${engineSuffix}_BASE_URL`]);
+  const engineModel = pickString(process.env[`SANDBOX_ENGINE_${engineSuffix}_MODEL`]);
+  const engineApiType = pickString(process.env[`SANDBOX_ENGINE_${engineSuffix}_API_TYPE`])?.toLowerCase() || null;
+  if (engineApiKey) {
+    env.OPENAI_API_KEY = engineApiKey;
+    env.CODEX_API_KEY = engineApiKey;
+    env.OPENCODE_API_KEY = engineApiKey;
+    env.ANTHROPIC_API_KEY = engineApiKey;
+  }
+  if (engineBaseUrl) {
+    env.OPENAI_BASE_URL = engineBaseUrl;
+    env.OPENAI_API_BASE = engineBaseUrl;
+    env.CODEX_BASE_URL = engineBaseUrl;
+    env.OPENCODE_BASE_URL = engineBaseUrl;
+    env.ANTHROPIC_BASE_URL = engineBaseUrl;
+  }
+  if (engineModel) {
+    env.OPENAI_MODEL = engineModel;
+    env.CODEX_MODEL = engineModel;
+    env.OPENCODE_MODEL = engineModel;
+    env.ANTHROPIC_MODEL = engineModel;
+  }
+  if (engineApiType) {
+    env.LLM_PROXY_UPSTREAM_API_TYPE = engineApiType;
+  }
   if (!env.CODEX_API_KEY && env.OPENAI_API_KEY) {
     env.CODEX_API_KEY = env.OPENAI_API_KEY;
   }
@@ -319,9 +448,6 @@ function buildSandboxEnv(): Record<string, string> {
     } else if (env.OPENAI_API_BASE) {
       env.OPENAI_BASE_URL = env.OPENAI_API_BASE;
     }
-  }
-  if (!env.OPENAI_API_KEY) {
-    env.OPENAI_API_KEY = DEFAULT_CODEX_API_KEY;
   }
   if (!env.OPENAI_BASE_URL) {
     env.OPENAI_BASE_URL = DEFAULT_SANDBOX_OPENAI_BASE_URL;
@@ -410,16 +536,6 @@ function connectorServerName(connectorKey: ConnectorKey, taskSessionId: string) 
   return `${connectorKey}--${taskSessionId}`;
 }
 
-function buildGithubProcessEnv(runtimeConfig: Extract<ConnectorRuntimeConfig, { type: 'local' }>) {
-  const token = runtimeConfig.environment?.GITHUB_PERSONAL_ACCESS_TOKEN?.trim();
-  if (!token) return {};
-  return {
-    GITHUB_PERSONAL_ACCESS_TOKEN: token,
-    GH_TOKEN: token,
-    GITHUB_TOKEN: token,
-  };
-}
-
 async function resolveAttachedConnectorBootstrap(
   taskSessionId?: string
 ): Promise<ResolvedConnectorBootstrap> {
@@ -472,12 +588,13 @@ async function resolveAttachedConnectorBootstrap(
           !Array.isArray(binding.sessionConfigJson)
             ? (binding.sessionConfigJson as Record<string, unknown>)
             : null,
+        runtimeContext: {
+          taskSessionId,
+          userId,
+        },
       });
       const serverName = binding.serverName || connectorServerName(connectorKey, taskSessionId);
       mcpEntries[serverName] = runtimeConfig;
-      if (connectorKey === 'github' && runtimeConfig.type === 'local') {
-        Object.assign(processEnvs, buildGithubProcessEnv(runtimeConfig));
-      }
     } catch (error) {
       console.warn('[OPENCODE_CONNECTOR_BOOTSTRAP_SKIP]', {
         taskSessionId,
@@ -534,6 +651,11 @@ function buildOpencodeConfig(
       [providerId]: providerBase,
     },
     mcp: {
+      browser_use: {
+        type: 'local',
+        command: ['browser-use', '--mcp'],
+        enabled: true,
+      },
       playwright: {
         type: 'local',
         command: ['npx', '@playwright/mcp@latest', '--cdp-endpoint', 'http://127.0.0.1:9222'],
@@ -859,6 +981,14 @@ function buildSandboxVerifyScript(): string {
     '  exit 16',
     'fi',
     '',
+    'if command -v browser-use >/dev/null 2>&1; then',
+    '  browser_use_version="$(browser-use --version 2>/dev/null || browser-use --help 2>/dev/null | head -n 1 || true)"',
+    '  echo "[verify] browser_use=present ${browser_use_version}"',
+    'else',
+    '  echo "[verify] browser_use=missing"',
+    '  exit 17',
+    'fi',
+    '',
   ];
   return lines.join('\n');
 }
@@ -919,6 +1049,15 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 playwright --version >/dev/null 2>&1
+`;
+  await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30000 });
+}
+
+async function assertBrowserUseReady(sessionId: string) {
+  const command = `
+set -euo pipefail
+command -v browser-use >/dev/null 2>&1
+browser-use --version >/dev/null 2>&1 || browser-use --help >/dev/null 2>&1
 `;
   await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30000 });
 }
@@ -1088,7 +1227,7 @@ export class SandboxAgentProvisionService {
       (info as any)?.trafficAccessToken || (info as any)?.traffic_access_token || null;
     const host = await e2bConnector.getSandboxHost(sessionId, e2bConfig.opencodePort);
     const baseUrl = `https://${host}`;
-    const baseEnvs = buildSandboxEnv();
+    const baseEnvs = buildSandboxEnv('opencode');
     const connectorBootstrap = await resolveAttachedConnectorBootstrap(input.taskSessionId);
     const opencodeEnvs = {
       ...baseEnvs,
@@ -1122,7 +1261,7 @@ export class SandboxAgentProvisionService {
     if (!taskSessionId) {
       return this.provision(input);
     }
-    const lockKey = `${taskSessionId}:${executor}`;
+    const lockKey = taskSessionId;
     const existing = provisionLocks.get(lockKey);
     if (existing) {
       return existing;
@@ -1188,28 +1327,29 @@ export class SandboxAgentProvisionService {
       }
     };
 
-    const envInput = buildSandboxEnv();
     const codexExecutionMode = await resolveProvisionCodexMode(taskSessionId, input.metadata);
+    const envInput = buildSandboxEnv(executor);
     const selectedTemplate = resolveProvisionTemplate(executor, codexExecutionMode);
     const reusableResolution = taskSessionId
       ? await resolveReusableSandbox(taskSessionId, executor, codexExecutionMode, selectedTemplate)
-      : { reusable: null, templateMismatchSandboxId: null };
+      : makeReusableResolution();
     const initialReusable = reusableResolution.reusable;
     const mismatchSandboxToClose = reusableResolution.templateMismatchSandboxId || null;
     let reusable = initialReusable;
     let preferredRestoreSnapshotKey: string | null = null;
     let lastRecoverableError: unknown = null;
 
-    if (taskSessionId && !initialReusable && reusableResolution.templateMismatchSandboxId) {
-      const archived = await runStep('archive_before_template_migration', () =>
-        archiveSandboxWorkspace(reusableResolution.templateMismatchSandboxId as string, 'template_migration', {
+    if (taskSessionId && !initialReusable && reusableResolution.handoffSourceSandboxId) {
+      const archived = await runStep('workspace_handoff_prepare', () =>
+        archiveSandboxWorkspace(reusableResolution.handoffSourceSandboxId as string, reusableResolution.handoffReason || 'workspace_handoff', {
           forceUpload: true,
         })
       );
       preferredRestoreSnapshotKey = archived.snapshotKey || null;
-      writeConnectorDebugLog('[PROVISION_TEMPLATE_MIGRATION_ARCHIVED]', {
+      writeConnectorDebugLog('[PROVISION_WORKSPACE_HANDOFF_ARCHIVED]', {
         taskSessionId,
-        oldSandboxId: reusableResolution.templateMismatchSandboxId,
+        oldSandboxId: reusableResolution.handoffSourceSandboxId,
+        handoffReason: reusableResolution.handoffReason,
         selectedTemplate,
         snapshotKey: preferredRestoreSnapshotKey,
       });
@@ -1252,21 +1392,27 @@ export class SandboxAgentProvisionService {
         let codexConfigToml: string | null = null;
         let codexAuthJson: string | null = null;
 
-        if (!isReused) {
-          const restored = await runStep('workspace_restore', () =>
-            restoreWorkspaceIfArchived(
-              sessionId,
-              preferredRestoreSnapshotKey ? { snapshotKey: preferredRestoreSnapshotKey } : undefined
-            )
-          );
-          if (preferredRestoreSnapshotKey && !restored) {
-            throw new Error(`template migration restore failed: snapshot=${preferredRestoreSnapshotKey}`);
-          }
-          if (restored && taskSessionId) {
-            await taskCreationCacheStore.invalidateWorkspaceBySession(taskSessionId);
-            await taskSessionRedisCacheService.invalidateWorkspaceBySessionId(taskSessionId);
-          }
-        }
+	        if (!isReused) {
+	          const restoreResult = await runStep('workspace_restore', () =>
+	            restoreWorkspaceIfArchived(
+	              sessionId,
+	              {
+	                snapshotKey: preferredRestoreSnapshotKey || undefined,
+	                taskSessionId,
+	                restoreRequired: reusableResolution.restoreRequired || Boolean(preferredRestoreSnapshotKey),
+	                expectedSourceSandboxId: reusableResolution.handoffSourceSandboxId || undefined,
+	                reason: reusableResolution.handoffReason || 'sandbox_provision',
+	              }
+	            )
+	          );
+	          if (restoreResult.status === 'missing_required_archive') {
+	            throw new Error(`workspace restore failed: ${restoreResult.reason}`);
+	          }
+	          if (restoreResult.status === 'restored' && taskSessionId) {
+	            await taskCreationCacheStore.invalidateWorkspaceBySession(taskSessionId);
+	            await taskSessionRedisCacheService.invalidateWorkspaceBySessionId(taskSessionId);
+	          }
+	        }
 
         let baseUrl: string | undefined;
         let host: string | undefined;
@@ -1282,6 +1428,7 @@ export class SandboxAgentProvisionService {
 
           await runStep('opencode_present', () => assertOpencodeReady(sessionId));
           await runStep('playwright_present', () => assertPlaywrightReady(sessionId));
+          await runStep('browser_use_present', () => assertBrowserUseReady(sessionId));
           await ensurePlaywrightDeps(sessionId);
           await runStep('opencode_state_migrate', () => migrateLegacyWorkspaceState(sessionId, workspaceRoot, stateRoot));
 
@@ -1344,20 +1491,20 @@ export class SandboxAgentProvisionService {
           );
           codexArchiveHome = codexHomeMapping.codexArchiveHome;
           codexDotCodexPath = codexHomeMapping.codexDotCodexPath;
-          if (taskSessionId) {
-            const runtimeConfig = await runStep('codex_runtime_config', () =>
-              codexRuntimeConfigService.getByTaskSessionId(taskSessionId)
-            );
-            codexConfigToml = runtimeConfig.configToml;
-            codexAuthJson = runtimeConfig.authJson;
-            await runStep('codex_runtime_files', () =>
-              codexAppServerService.ensureRuntimeFiles({
-                sessionId,
-                configToml: codexConfigToml,
-                authJson: codexAuthJson,
-              })
-            );
-          }
+          codexConfigToml = buildCodexConfigToml({
+            baseUrl: envInput.CODEX_BASE_URL || envInput.OPENAI_BASE_URL || DEFAULT_SANDBOX_OPENAI_BASE_URL,
+            model: envInput.CODEX_MODEL || envInput.OPENAI_MODEL || DEFAULT_CODEX_MODEL,
+          });
+          codexAuthJson = buildCodexAuthJson({
+            apiKey: envInput.CODEX_API_KEY || envInput.OPENAI_API_KEY || '',
+          });
+          await runStep('codex_runtime_files', () =>
+            codexAppServerService.ensureRuntimeFiles({
+              sessionId,
+              configToml: codexConfigToml,
+              authJson: codexAuthJson,
+            })
+          );
           const reusableBridge = await canReuseOsacBridge({
             endpoint: osacEndpoint,
             authToken: osacAuthToken,

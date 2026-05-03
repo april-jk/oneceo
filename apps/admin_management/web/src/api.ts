@@ -15,6 +15,8 @@ import type {
   DeploymentManagementOverview,
   DeploymentRecord,
   DeploymentUserListResponse,
+  OperationsAnalyticsOverview,
+  OperationsAnalyticsRangeKey,
   RailwayBatchActionResponse,
   RailwayServiceListResponse,
   ConnectorGuidePolicy,
@@ -184,6 +186,17 @@ export const api = {
     }),
 
   getOverview: () => request<DashboardOverview>('/api/dashboard/overview'),
+
+  getOperationsAnalyticsOverview: (query: {
+    range?: OperationsAnalyticsRangeKey;
+    timezone?: string;
+  } = {}) => {
+    const params = new URLSearchParams();
+    if (query.range) params.set('range', query.range);
+    if (query.timezone) params.set('timezone', query.timezone);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<OperationsAnalyticsOverview>(`/api/operations-analytics/overview${suffix}`);
+  },
 
   getDeploymentOverview: (query: {
     limit?: number;

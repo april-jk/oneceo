@@ -50,19 +50,9 @@ export function getConnectorGuides(t: TFunction): Record<ConnectorKey, Connector
       intro: t("connectors.guides.slack.intro"),
       quickLinks: [
         {
-          label: t("connectors.guides.slack.links.apps.label"),
-          href: "https://api.slack.com/apps/",
-          description: t("connectors.guides.slack.links.apps.description"),
-        },
-        {
-          label: t("connectors.guides.slack.links.oauthDocs.label"),
-          href: "https://docs.slack.dev/authentication/installing-with-oauth/",
-          description: t("connectors.guides.slack.links.oauthDocs.description"),
-        },
-        {
-          label: t("connectors.guides.slack.links.mcpDocs.label"),
-          href: "https://docs.slack.dev/ai/slack-mcp-server/",
-          description: t("connectors.guides.slack.links.mcpDocs.description"),
+          label: t("connectors.guides.slack.links.composioToolkit.label"),
+          href: "https://docs.composio.dev/toolkits/slack",
+          description: t("connectors.guides.slack.links.composioToolkit.description"),
         },
       ],
       steps: [
@@ -76,19 +66,9 @@ export function getConnectorGuides(t: TFunction): Record<ConnectorKey, Connector
       intro: t("connectors.guides.notion.intro"),
       quickLinks: [
         {
-          label: t("connectors.guides.notion.links.integrations.label"),
-          href: "https://www.notion.so/my-integrations",
-          description: t("connectors.guides.notion.links.integrations.description"),
-        },
-        {
-          label: t("connectors.guides.notion.links.authorization.label"),
-          href: "https://developers.notion.com/guides/get-started/authorization",
-          description: t("connectors.guides.notion.links.authorization.description"),
-        },
-        {
-          label: t("connectors.guides.notion.links.mcpDocs.label"),
-          href: "https://developers.notion.com/docs/mcp",
-          description: t("connectors.guides.notion.links.mcpDocs.description"),
+          label: t("connectors.guides.notion.links.composioToolkit.label"),
+          href: "https://docs.composio.dev/toolkits/notion_mcp_oauth",
+          description: t("connectors.guides.notion.links.composioToolkit.description"),
         },
       ],
       steps: [
@@ -105,28 +85,28 @@ export function getConnectorGuides(t: TFunction): Record<ConnectorKey, Connector
       intro: t("connectors.guides.supabase.intro"),
       quickLinks: [
         {
-          label: t("connectors.guides.supabase.links.tokens.label"),
-          href: "https://supabase.com/dashboard/account/tokens",
-          description: t("connectors.guides.supabase.links.tokens.description"),
+          label: t("connectors.guides.supabase.links.composioToolkit.label"),
+          href: "https://docs.composio.dev/toolkits/supabase",
+          description: t("connectors.guides.supabase.links.composioToolkit.description"),
         },
       ],
       steps: [
         t("connectors.guides.supabase.steps.0"),
         t("connectors.guides.supabase.steps.1"),
+        t("connectors.guides.supabase.steps.2"),
       ],
       tips: [
         t("connectors.guides.supabase.tips.0"),
         t("connectors.guides.supabase.tips.1"),
-        t("connectors.guides.supabase.tips.2"),
       ],
     },
     figma: {
       intro: t("connectors.guides.figma.intro"),
       quickLinks: [
         {
-          label: t("connectors.guides.figma.links.tokens.label"),
-          href: "https://www.figma.com/developers/api#access-tokens",
-          description: t("connectors.guides.figma.links.tokens.description"),
+          label: t("connectors.guides.figma.links.composioToolkit.label"),
+          href: "https://docs.composio.dev/toolkits/figma/",
+          description: t("connectors.guides.figma.links.composioToolkit.description"),
         },
       ],
       steps: [
@@ -143,14 +123,14 @@ export function getConnectorGuides(t: TFunction): Record<ConnectorKey, Connector
       intro: t("connectors.guides.vercel.intro"),
       quickLinks: [
         {
-          label: t("connectors.guides.vercel.links.tokens.label"),
-          href: "https://vercel.com/account/tokens",
-          description: t("connectors.guides.vercel.links.tokens.description"),
+          label: t("connectors.guides.vercel.links.oauthDocs.label"),
+          href: "https://vercel.com/docs/sign-in-with-vercel/authorization-server-api",
+          description: t("connectors.guides.vercel.links.oauthDocs.description"),
         },
         {
-          label: t("connectors.guides.vercel.links.mcpDocs.label"),
-          href: "https://vercel.com/docs/agent-resources/vercel-mcp",
-          description: t("connectors.guides.vercel.links.mcpDocs.description"),
+          label: t("connectors.guides.vercel.links.restApi.label"),
+          href: "https://vercel.com/docs/rest-api/reference",
+          description: t("connectors.guides.vercel.links.restApi.description"),
         },
       ],
       steps: [

@@ -67,6 +67,55 @@ test('deployment template baseline marks manifest generation and platform analyt
   }
 });
 
+test('deployment template baseline does not auto-declare railway_postgres from pg dependency alone', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-pg-infer-test-'));
+  try {
+    await mkdir(join(workspace, 'client'), { recursive: true });
+    await mkdir(join(workspace, 'server'), { recursive: true });
+    await writeFile(
+      join(workspace, 'package.json'),
+      JSON.stringify({
+        name: 'baseline-pg-demo',
+        dependencies: {
+          pg: '^8.11.0',
+        },
+        scripts: {
+          build: 'vite build',
+          start: 'node dist/server.js',
+        },
+      }),
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'client/index.html'),
+      '<!doctype html><html><body><div id="root"></div></body></html>',
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'server/index.ts'),
+      "app.get('/api/system/health', (_req, res) => res.json({ ok: true }));\n",
+      'utf-8'
+    );
+
+    const bootstrap = await ensureDeploymentTemplateBootstrap(workspace);
+    const compliance = await ensureTemplateCompliance(workspace);
+    const baseline = buildDeploymentTemplateBaseline({
+      workspaceDetected: true,
+      bootstrap,
+      compliance,
+    });
+
+    assert.equal(compliance.ok, true);
+    assert.equal(compliance.manifest.features.database, false);
+    assert.equal(compliance.checks.databaseDependencyDetected, null);
+    assert.equal(baseline.status, 'ready');
+    assert.equal(baseline.features.database, false);
+    assert.equal(baseline.checks.database, null);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('deployment template baseline highlights missing railway database dependency', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-db-test-'));
   try {
@@ -267,6 +316,108 @@ test('deployment template baseline normalizes PHP built-in server healthcheck to
   }
 });
 
+test('deployment source normalization builds php baseline and inherits umami bootstrap safely', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-php-test-'));
+  try {
+    await writeFile(
+      join(workspace, 'index.php'),
+      [
+        '<?php $title = "PHP Site"; ?>',
+        '<!doctype html>',
+        '<html>',
+        '<head><title><?= htmlspecialchars($title, ENT_QUOTES) ?></title></head>',
+        '<body><main>php app</main></body>',
+        '</html>',
+      ].join('\n'),
+      'utf-8'
+    );
+
+    const normalization = await normalizeDeploymentSourceDirectoryForPublish(workspace);
+    const bootstrap = await ensureDeploymentTemplateBootstrap(workspace, {
+      analyticsConfig: {
+        enabled: true,
+        host: 'https://analytics.oneceo.ai',
+        websiteId: 'test-website-id',
+        publicDomain: 'app.example.com',
+      },
+    });
+    const compliance = await ensureTemplateCompliance(workspace);
+    const manifest = JSON.parse(await readFile(join(workspace, 'oneceo.manifest.json'), 'utf-8'));
+    const railwayConfig = JSON.parse(await readFile(join(workspace, 'railway.json'), 'utf-8'));
+    const phpSource = await readFile(join(workspace, 'index.php'), 'utf-8');
+
+    assert.equal(normalization.injectedPhpBaseline, true);
+    assert.equal(normalization.injectedPythonBaseline, false);
+    assert.equal(bootstrap.analyticsInjected, true);
+    assert.equal(compliance.ok, true);
+    assert.equal(compliance.manifest.runtime.framework, 'php');
+    assert.equal(compliance.manifest.start.command, 'php -S 0.0.0.0:$PORT -t .');
+    assert.equal(compliance.manifest.healthcheck.path, '/');
+    assert.equal(manifest.features.analytics, true);
+    assert.equal(manifest.features.userTracking, true);
+    assert.equal(railwayConfig.deploy.startCommand, 'php -S 0.0.0.0:$PORT -t .');
+    assert.equal(railwayConfig.deploy.healthcheckPath, '/');
+    assert.match(phpSource, /ONECEO_ANALYTICS:START/);
+    assert.match(phpSource, /analytics\.oneceo\.ai/);
+    assert.match(phpSource, /test-website-id/);
+    assert.doesNotMatch(phpSource, /ONECEO_ANALYTICS:START[\s\S]*<\?php/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('deployment source normalization builds java manifest without forcing publish readiness', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-java-test-'));
+  try {
+    await writeFile(
+      join(workspace, 'pom.xml'),
+      '<project><modelVersion>4.0.0</modelVersion><artifactId>demo</artifactId></project>',
+      'utf-8'
+    );
+
+    const normalization = await normalizeDeploymentSourceDirectoryForPublish(workspace);
+    await ensureDeploymentTemplateBootstrap(workspace);
+    const compliance = await ensureTemplateCompliance(workspace);
+    const manifest = JSON.parse(await readFile(join(workspace, 'oneceo.manifest.json'), 'utf-8'));
+    const railwayConfig = JSON.parse(await readFile(join(workspace, 'railway.json'), 'utf-8'));
+
+    assert.equal(normalization.injectedJavaBaseline, true);
+    assert.equal(manifest.runtime.framework, 'java_maven');
+    assert.equal(manifest.build.command, 'mvn package -DskipTests');
+    assert.equal(manifest.start.command, "sh -c 'java -jar target/*.jar'");
+    assert.equal(railwayConfig.deploy.startCommand, "sh -c 'java -jar target/*.jar'");
+    assert.equal(compliance.ok, false);
+    assert.equal(compliance.manifest.healthcheck.path, '/');
+    assert.equal(compliance.checks.startCommandDetected, true);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('deployment bootstrap does not append analytics snippet to php files without html document', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-php-script-test-'));
+  try {
+    await writeFile(
+      join(workspace, 'index.php'),
+      [
+        '<?php',
+        'header("Content-Type: application/json");',
+        'echo json_encode(["ok" => true]);',
+      ].join('\n'),
+      'utf-8'
+    );
+
+    const bootstrap = await ensureDeploymentTemplateBootstrap(workspace);
+    const phpSource = await readFile(join(workspace, 'index.php'), 'utf-8');
+
+    assert.equal(bootstrap.analyticsInjected, false);
+    assert.match(bootstrap.errors.join(' | '), /无法注入 analytics bootstrap/);
+    assert.doesNotMatch(phpSource, /ONECEO_ANALYTICS:START/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('deployment template baseline accepts analytics injected into server-rendered EJS layout', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-ejs-layout-test-'));
   try {
@@ -430,6 +581,127 @@ test('deployment source normalization builds python fastapi baseline without pac
   }
 });
 
+test('deployment source normalization detects analytics in python jinja2 templates', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-python-jinja2-test-'));
+  try {
+    await writeFile(join(workspace, 'requirements.txt'), 'flask\ngunicorn\n', 'utf-8');
+    await writeFile(
+      join(workspace, 'app.py'),
+      [
+        'from flask import Flask, render_template',
+        'app = Flask(__name__)',
+        "@app.get('/health')",
+        'def health():',
+        "    return {'ok': True}",
+        "@app.get('/')",
+        'def index():',
+        "    return render_template('base.jinja2')",
+        '',
+      ].join('\n'),
+      'utf-8'
+    );
+    await mkdir(join(workspace, 'templates'), { recursive: true });
+    await writeFile(
+      join(workspace, 'templates/base.jinja2'),
+      '<!doctype html><html><body><main>python jinja2 app</main></body></html>',
+      'utf-8'
+    );
+
+    const normalization = await normalizeDeploymentSourceDirectoryForPublish(workspace);
+    const bootstrap = await ensureDeploymentTemplateBootstrap(workspace, {
+      analyticsConfig: {
+        enabled: true,
+        host: 'https://analytics.oneceo.ai',
+        websiteId: 'site_python_jinja2',
+      },
+    });
+    const compliance = await ensureTemplateCompliance(workspace);
+    const templateSource = await readFile(join(workspace, 'templates/base.jinja2'), 'utf-8');
+
+    assert.equal(normalization.injectedPythonBaseline, true);
+    assert.equal(bootstrap.analyticsInjected, true);
+    assert.equal(compliance.ok, true);
+    assert.equal(compliance.manifest.runtime.framework, 'flask');
+    assert.equal(compliance.manifest.start.command, 'gunicorn app:app --bind 0.0.0.0:$PORT');
+    assert.equal(compliance.checks.analyticsEntryDetected, true);
+    assert.match(templateSource, /site_python_jinja2/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('deployment template baseline injects analytics into spring boot resource templates', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-java-test-'));
+  try {
+    await writeFile(
+      join(workspace, 'oneceo.manifest.json'),
+      JSON.stringify({
+        templateVersion: '1.0.0',
+        appType: 'web_app',
+        stack: 'java_spring_boot_thymeleaf_dbless',
+        build: {
+          command: 'mvn clean package -DskipTests',
+          outputDir: 'target',
+        },
+        start: {
+          command: 'java -jar target/enterprise-website-1.0.0.jar',
+          portEnv: 'PORT',
+        },
+        healthcheck: {
+          path: '/api/system/health',
+        },
+        features: {
+          analytics: true,
+          userTracking: true,
+          database: false,
+          auth: 'optional',
+          objectStorage: false,
+        },
+        runtime: {
+          framework: 'spring_boot',
+          transport: 'http',
+        },
+      }),
+      'utf-8'
+    );
+    await mkdir(join(workspace, 'src/main/resources/templates'), { recursive: true });
+    await mkdir(join(workspace, 'src/main/java/com/example'), { recursive: true });
+    await writeFile(
+      join(workspace, 'src/main/resources/templates/index.html'),
+      '<!doctype html><html><body><main>java spring boot app</main></body></html>',
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'src/main/java/com/example/HealthController.java'),
+      '@GetMapping("/api/system/health") String health() { return "ok"; }\n',
+      'utf-8'
+    );
+
+    const bootstrap = await ensureDeploymentTemplateBootstrap(workspace, {
+      analyticsConfig: {
+        enabled: true,
+        host: 'https://analytics.oneceo.ai',
+        websiteId: 'site_java_spring',
+      },
+    });
+    const compliance = await ensureTemplateCompliance(workspace);
+    const templateSource = await readFile(
+      join(workspace, 'src/main/resources/templates/index.html'),
+      'utf-8'
+    );
+
+    assert.equal(bootstrap.analyticsInjected, true);
+    assert.match(bootstrap.analyticsTargetPath || '', /src\/main\/resources\/templates\/index\.html$/);
+    assert.equal(compliance.ok, true);
+    assert.equal(compliance.checks.analyticsEntryDetected, true);
+    assert.equal(compliance.manifest.healthcheck.path, '/');
+    assert.equal(compliance.checks.healthcheckRouteDetected, false);
+    assert.match(templateSource, /site_java_spring/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('deployment source normalization converts vite-style frontend into dist-serving deployment baseline', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-built-frontend-test-'));
   try {
@@ -463,21 +735,21 @@ test('deployment source normalization converts vite-style frontend into dist-ser
     const normalization = await normalizeDeploymentSourceDirectoryForPublish(workspace);
     const bootstrap = await ensureDeploymentTemplateBootstrap(workspace);
     const compliance = await ensureTemplateCompliance(workspace);
-    const serverSource = await readFile(join(workspace, 'server.js'), 'utf-8');
+    const serverSource = await readFile(join(workspace, 'server.cjs'), 'utf-8');
     const packageJson = JSON.parse(await readFile(join(workspace, 'package.json'), 'utf-8'));
 
     assert.equal(normalization.injectedBuiltFrontendBaseline, true);
     assert.equal(normalization.injectedStaticBaseline, false);
     assert.equal(normalization.injectedNodeScriptBaseline, false);
-    assert.equal(packageJson.scripts.start, 'node server.js');
+    assert.equal(packageJson.scripts.start, 'node server.cjs');
     assert.match(serverSource, /rootDir = path\.join\(__dirname, 'dist'\)/);
     assert.match(serverSource, /ONECEO_ANALYTICS:START/);
     assert.match(serverSource, /data-oneceo-analytics/);
     assert.equal(compliance.ok, true);
-    assert.equal(compliance.manifest.start.command, 'node server.js');
+    assert.equal(compliance.manifest.start.command, 'node server.cjs');
     assert.equal(compliance.manifest.build.outputDir, 'dist');
     assert.equal(bootstrap.analyticsInjected, true);
-    await execFile('node', ['--check', join(workspace, 'server.js')]);
+    await execFile('node', ['--check', join(workspace, 'server.cjs')]);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -544,21 +816,128 @@ test('deployment source normalization rewrites existing frontend manifest and ra
     const packageJson = JSON.parse(await readFile(join(workspace, 'package.json'), 'utf-8'));
     const manifest = JSON.parse(await readFile(join(workspace, 'oneceo.manifest.json'), 'utf-8'));
     const railwayConfig = JSON.parse(await readFile(join(workspace, 'railway.json'), 'utf-8'));
-    const serverSource = await readFile(join(workspace, 'server.js'), 'utf-8');
+    const serverSource = await readFile(join(workspace, 'server.cjs'), 'utf-8');
 
     assert.equal(normalization.injectedBuiltFrontendBaseline, true);
-    assert.equal(packageJson.scripts.start, 'node server.js');
-    assert.equal(manifest.start.command, 'node server.js');
+    assert.equal(packageJson.scripts.start, 'node server.cjs');
+    assert.equal(manifest.start.command, 'node server.cjs');
     assert.equal(manifest.start.portEnv, 'PORT');
     assert.equal(manifest.healthcheck.path, '/api/system/health');
     assert.equal(manifest.build.outputDir, 'dist');
-    assert.equal(railwayConfig.deploy.startCommand, 'node server.js');
+    assert.equal(railwayConfig.deploy.startCommand, 'node server.cjs');
     assert.equal(railwayConfig.deploy.healthcheckPath, '/api/system/health');
     assert.match(serverSource, /ONECEO_ANALYTICS:START/);
     assert.match(serverSource, /data-oneceo-analytics/);
     assert.equal(bootstrap.analyticsInjected, true);
     assert.equal(compliance.ok, true);
-    assert.equal(compliance.manifest.start.command, 'node server.js');
+    assert.equal(compliance.manifest.start.command, 'node server.cjs');
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('deployment source normalization bypasses commonjs server when frontend package uses esm mode', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-frontend-esm-server-test-'));
+  try {
+    await mkdir(join(workspace, 'src'), { recursive: true });
+    await writeFile(
+      join(workspace, 'package.json'),
+      JSON.stringify({
+        name: 'baseline-vite-esm-server-demo',
+        type: 'module',
+        scripts: {
+          build: 'vite build',
+          start: 'node server.js',
+        },
+        dependencies: {
+          vue: '^3.4.0',
+          express: '^4.18.2',
+        },
+        devDependencies: {
+          vite: '^5.0.0',
+        },
+      }),
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'index.html'),
+      '<!doctype html><html><body><div id="app"></div><script type="module" src="/src/main.js"></script></body></html>',
+      'utf-8'
+    );
+    await writeFile(join(workspace, 'src/main.js'), 'console.log("hello");\n', 'utf-8');
+    await writeFile(
+      join(workspace, 'server.js'),
+      "const express = require('express');\nconst app = express();\napp.listen(process.env.PORT || 8080);\n",
+      'utf-8'
+    );
+
+    const normalization = await normalizeDeploymentSourceDirectoryForPublish(workspace);
+    await ensureDeploymentTemplateBootstrap(workspace);
+    const compliance = await ensureTemplateCompliance(workspace);
+    const packageJson = JSON.parse(await readFile(join(workspace, 'package.json'), 'utf-8'));
+    const generatedServer = await readFile(join(workspace, 'server.cjs'), 'utf-8');
+    const originalServer = await readFile(join(workspace, 'server.js'), 'utf-8');
+
+    assert.equal(normalization.injectedBuiltFrontendBaseline, true);
+    assert.equal(packageJson.scripts.start, 'node server.cjs');
+    assert.match(originalServer, /require\('express'\)/);
+    assert.match(generatedServer, /oneceo-frontend-dist-server/);
+    assert.equal(compliance.ok, true);
+    assert.equal(compliance.manifest.start.command, 'node server.cjs');
+    await execFile('node', ['--check', join(workspace, 'server.cjs')]);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('deployment source normalization replaces frontend server.cjs when runtime analytics is missing', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-frontend-server-cjs-test-'));
+  try {
+    await mkdir(join(workspace, 'src'), { recursive: true });
+    await writeFile(
+      join(workspace, 'package.json'),
+      JSON.stringify({
+        name: 'baseline-vite-server-cjs-demo',
+        type: 'module',
+        scripts: {
+          build: 'vite build',
+          start: 'node server.cjs',
+        },
+        dependencies: {
+          vue: '^3.4.0',
+          express: '^4.18.2',
+        },
+        devDependencies: {
+          vite: '^5.0.0',
+        },
+      }),
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'index.html'),
+      '<!doctype html><html><body><div id="app"></div><script type="module" src="/src/main.js"></script></body></html>',
+      'utf-8'
+    );
+    await writeFile(join(workspace, 'src/main.js'), 'console.log("hello");\n', 'utf-8');
+    await writeFile(
+      join(workspace, 'server.cjs'),
+      "const express = require('express');\nconst app = express();\napp.use(express.static('dist'));\napp.listen(process.env.PORT || 8080);\n",
+      'utf-8'
+    );
+
+    const normalization = await normalizeDeploymentSourceDirectoryForPublish(workspace);
+    await ensureDeploymentTemplateBootstrap(workspace);
+    const compliance = await ensureTemplateCompliance(workspace);
+    const packageJson = JSON.parse(await readFile(join(workspace, 'package.json'), 'utf-8'));
+    const generatedServer = await readFile(join(workspace, 'server.cjs'), 'utf-8');
+
+    assert.equal(normalization.injectedBuiltFrontendBaseline, true);
+    assert.equal(packageJson.scripts.start, 'node server.cjs');
+    assert.match(generatedServer, /ONECEO_ANALYTICS:START/);
+    assert.match(generatedServer, /oneceo-frontend-dist-server/);
+    assert.equal(compliance.ok, true);
+    assert.equal(compliance.manifest.start.command, 'node server.cjs');
+    await execFile('node', ['--check', join(workspace, 'server.cjs')]);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -671,18 +1050,20 @@ test('deployment source normalization converts frontend projects with public/ind
     await ensureDeploymentTemplateBootstrap(workspace);
     const compliance = await ensureTemplateCompliance(workspace);
     const packageJson = JSON.parse(await readFile(join(workspace, 'package.json'), 'utf-8'));
-    const serverSource = await readFile(join(workspace, 'server.js'), 'utf-8');
+    const serverSource = await readFile(join(workspace, 'server.cjs'), 'utf-8');
     const rootIndex = await readFile(join(workspace, 'index.html'), 'utf-8');
 
     assert.equal(normalization.injectedBuiltFrontendBaseline, true);
-    assert.equal(packageJson.scripts.start, 'node server.js');
+    assert.equal(packageJson.scripts.start, 'node server.cjs');
     assert.match(rootIndex, /<div id="root"><\/div>/);
     assert.match(serverSource, /rootDir = path\.join\(__dirname, 'dist'\)/);
     assert.match(serverSource, /ONECEO_ANALYTICS:START/);
+    assert.match(serverSource, /ANALYTICS_MARKER_END/);
+    assert.match(serverSource, /markerStartIndex/);
     assert.equal(compliance.ok, true);
-    assert.equal(compliance.manifest.start.command, 'node server.js');
+    assert.equal(compliance.manifest.start.command, 'node server.cjs');
     assert.equal(compliance.manifest.build.outputDir, 'dist');
-    await execFile('node', ['--check', join(workspace, 'server.js')]);
+    await execFile('node', ['--check', join(workspace, 'server.cjs')]);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

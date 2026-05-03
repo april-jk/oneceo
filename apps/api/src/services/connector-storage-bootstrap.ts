@@ -24,10 +24,17 @@ export class ConnectorStorageBootstrap {
           return;
         }
 
-        console.warn(
-          `[DB_BOOTSTRAP] schema incomplete, running migration: ${schemaState.missing.join(', ')}`
-        );
+        const missingList = schemaState.missing.join(', ');
+        console.warn('[DB_BOOTSTRAP] schema incomplete, running migration: ' + missingList);
         await this.deps.runMigration();
+
+        // Verify migration succeeded
+        const postState = await this.deps.inspectSchema();
+        if (!postState.ready) {
+          const postMissing = postState.missing.join(', ');
+          throw new Error('[DB_BOOTSTRAP] migration completed but schema still incomplete: ' + postMissing);
+        }
+        console.log('[DB_BOOTSTRAP] migration verified, schema is complete');
       })().catch((error) => {
         this.readyPromise = null;
         throw error;

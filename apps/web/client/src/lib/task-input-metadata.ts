@@ -9,6 +9,7 @@ export type TaskCreationMcpReference = {
 export type ManagedTaskInputMetadata = {
   skills?: TaskCreationPlatformSkill[];
   mcpReferences?: TaskCreationMcpReference[];
+  modelTier?: "lite" | "pro" | "max";
   originalInput: string;
 };
 
@@ -17,14 +18,16 @@ export function buildManagedTaskInputMetadata(input: {
   skills: TaskCreationPlatformSkill[];
   mcpReferences: TaskCreationMcpReference[];
   fileCount: number;
+  modelTier?: "lite" | "pro" | "max";
 }): ManagedTaskInputMetadata | undefined {
   const fileCount = Number.isFinite(input.fileCount)
     ? Math.max(0, Math.floor(input.fileCount))
     : 0;
   const hasReferences =
     fileCount > 0 || input.skills.length > 0 || input.mcpReferences.length > 0;
+  const modelTier = input.modelTier || "pro";
 
-  if (!hasReferences) {
+  if (!hasReferences && !modelTier) {
     return undefined;
   }
 
@@ -33,6 +36,7 @@ export function buildManagedTaskInputMetadata(input: {
     ...(input.mcpReferences.length
       ? { mcpReferences: input.mcpReferences }
       : {}),
+    modelTier,
     originalInput: input.originalInput,
   };
 }

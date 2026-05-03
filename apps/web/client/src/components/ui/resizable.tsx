@@ -37,14 +37,14 @@ function ResizableHandle({
     <ResizablePrimitive.PanelResizeHandle
       data-slot="resizable-handle"
       className={cn(
-        "bg-border focus-visible:ring-ring relative flex w-px items-center justify-center after:absolute after:inset-y-0 after:left-1/2 after:w-1 after:-translate-x-1/2 focus-visible:ring-1 focus-visible:ring-offset-1 focus-visible:outline-hidden data-[panel-group-direction=vertical]:h-px data-[panel-group-direction=vertical]:w-full data-[panel-group-direction=vertical]:after:left-0 data-[panel-group-direction=vertical]:after:h-1 data-[panel-group-direction=vertical]:after:w-full data-[panel-group-direction=vertical]:after:translate-x-0 data-[panel-group-direction=vertical]:after:-translate-y-1/2 [&[data-panel-group-direction=vertical]>div]:rotate-90",
+        "relative z-10 -mx-2 flex w-4 shrink-0 items-center justify-center border-0 bg-transparent shadow-none outline-none after:absolute after:inset-y-0 after:left-0 after:w-full after:bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:outline-hidden [&[data-resize-handle-active]>div]:opacity-100 [&[data-resize-handle-state=drag]>div]:opacity-100 [&[data-resize-handle-state=hover]>div]:opacity-100 data-[panel-group-direction=vertical]:mx-0 data-[panel-group-direction=vertical]:-my-2 data-[panel-group-direction=vertical]:h-4 data-[panel-group-direction=vertical]:w-full data-[panel-group-direction=vertical]:after:inset-x-0 data-[panel-group-direction=vertical]:after:inset-y-0 [&[data-panel-group-direction=vertical]>div]:rotate-90",
         className
       )}
       {...props}
     >
       {withHandle && (
-        <div className="bg-border z-10 flex h-4 w-3 items-center justify-center rounded-xs border">
-          <GripVerticalIcon className="size-2.5" />
+        <div className="pointer-events-none absolute left-1/2 top-1/2 z-10 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center border-0 bg-transparent opacity-0 shadow-none">
+          <GripVerticalIcon className="size-4 text-foreground/65" />
         </div>
       )}
     </ResizablePrimitive.PanelResizeHandle>

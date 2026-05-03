@@ -3,6 +3,10 @@ import type { AltusRunEventWriter } from './altus-run-event-writer';
 import type { AltusRunRecoveryMode, AltusRunTransitionReason } from './altus-run-loop-state';
 import type { ToolCall } from './altus-managed-shared';
 import { asText } from './altus-managed-shared';
+import {
+  buildManagedToolResultEnvelope,
+  type ManagedToolResultEnvelope,
+} from './altus-managed-tool-result-envelope';
 
 export type AltusManagedToolExecutionEnvelope =
   | {
@@ -13,6 +17,7 @@ export type AltusManagedToolExecutionEnvelope =
       result: Extract<ManagedToolResult, { type: 'result' }>;
       transitionReason: AltusRunTransitionReason;
       recoveryMode: AltusRunRecoveryMode;
+      toolResultEnvelope: ManagedToolResultEnvelope;
       meta?: Record<string, unknown>;
     }
   | {
@@ -21,6 +26,7 @@ export type AltusManagedToolExecutionEnvelope =
       toolCallId: string;
       args: Record<string, unknown>;
       result: Extract<ManagedToolResult, { type: 'ask_user' }>;
+      toolResultEnvelope: ManagedToolResultEnvelope;
     }
   | {
       status: 'complete';
@@ -28,6 +34,7 @@ export type AltusManagedToolExecutionEnvelope =
       toolCallId: string;
       args: Record<string, unknown>;
       result: Extract<ManagedToolResult, { type: 'complete' }>;
+      toolResultEnvelope: ManagedToolResultEnvelope;
     }
   | {
       status: 'failed';
@@ -38,6 +45,7 @@ export type AltusManagedToolExecutionEnvelope =
       rawError: string;
       transitionReason: AltusRunTransitionReason;
       recoveryMode: AltusRunRecoveryMode;
+      toolResultEnvelope: ManagedToolResultEnvelope;
       meta?: Record<string, unknown>;
     };
 
@@ -72,6 +80,7 @@ export class AltusManagedToolExecutor {
     toolCall: ToolCall;
     args: Record<string, unknown>;
     signal: AbortSignal;
+    modelRoundId?: string | number | null;
     onResult?: (result: Extract<ManagedToolResult, { type: 'result' }>) => ToolResultDisposition;
     onFailure?: (rawError: string, sanitizedError: string) => ToolFailureDisposition;
   }): Promise<AltusManagedToolExecutionEnvelope> {
@@ -94,26 +103,66 @@ export class AltusManagedToolExecutor {
     try {
       const result = await this.input.runtime.execute(toolName, input.args, input.signal);
       if (result.type === 'ask_user') {
+        const toolResultEnvelope = buildManagedToolResultEnvelope({
+          status: 'ask_user',
+          runId: this.input.runId,
+          toolUseId: toolCallId,
+          toolName,
+          modelRoundId: input.modelRoundId,
+          args: input.args,
+          content: result.question,
+          contentForUser: result.question,
+          activatedSkills: result.activatedSkills as any,
+        });
         return {
           status: 'ask_user',
           toolName,
           toolCallId,
           args: input.args,
           result,
+          toolResultEnvelope,
         };
       }
 
       if (result.type === 'complete') {
+        const toolResultEnvelope = buildManagedToolResultEnvelope({
+          status: 'complete',
+          runId: this.input.runId,
+          toolUseId: toolCallId,
+          toolName,
+          modelRoundId: input.modelRoundId,
+          args: input.args,
+          content: JSON.stringify({
+            summary: result.summary,
+            verification: result.verification || [],
+            attachments: result.attachments || [],
+          }),
+          contentForUser: result.summary,
+          activatedSkills: result.activatedSkills as any,
+        });
         return {
           status: 'complete',
           toolName,
           toolCallId,
           args: input.args,
           result,
+          toolResultEnvelope,
         };
       }
 
       const disposition = input.onResult?.(result) || {};
+      const toolResultEnvelope = buildManagedToolResultEnvelope({
+        status: 'ok',
+        runId: this.input.runId,
+        toolUseId: toolCallId,
+        toolName,
+        modelRoundId: input.modelRoundId,
+        args: input.args,
+        content: result.content,
+        contentForUser: this.input.buildToolEventContent(toolName, 'completed'),
+        activatedSkills: result.activatedSkills as any,
+        result: result.content,
+      });
       await this.input.eventWriter.appendRunEvent(
         this.input.runId,
         this.input.sessionId,
@@ -124,6 +173,7 @@ export class AltusManagedToolExecutor {
           content: this.input.buildToolEventContent(toolName, 'completed'),
           arguments: input.args,
           toolCallId,
+          toolResultEnvelope,
           ...(disposition.eventPayload || {}),
         }
       );
@@ -134,6 +184,7 @@ export class AltusManagedToolExecutor {
         toolCallId,
         args: input.args,
         result,
+        toolResultEnvelope,
         transitionReason: disposition.transitionReason || 'tool_result_continue',
         recoveryMode: disposition.recoveryMode || 'none',
         meta: disposition.meta,
@@ -142,6 +193,17 @@ export class AltusManagedToolExecutor {
       const rawError = error instanceof Error ? error.message : String(error || 'tool_failed');
       const sanitizedError = this.input.sanitizeToolEventError(toolName, rawError);
       const disposition = input.onFailure?.(rawError, sanitizedError) || {};
+      const toolResultEnvelope = buildManagedToolResultEnvelope({
+        status: 'error',
+        runId: this.input.runId,
+        toolUseId: toolCallId,
+        toolName,
+        modelRoundId: input.modelRoundId,
+        args: input.args,
+        content: sanitizedError,
+        contentForUser: sanitizedError,
+        errorMessage: rawError,
+      });
 
       await this.input.eventWriter.appendRunEvent(
         this.input.runId,
@@ -154,6 +216,7 @@ export class AltusManagedToolExecutor {
           arguments: input.args,
           toolCallId,
           error: sanitizedError,
+          toolResultEnvelope,
           transitionReason: disposition.transitionReason || 'tool_failed_but_recoverable',
           ...(disposition.eventPayload || {}),
         }
@@ -166,6 +229,7 @@ export class AltusManagedToolExecutor {
         args: input.args,
         error: sanitizedError,
         rawError,
+        toolResultEnvelope,
         transitionReason: disposition.transitionReason || 'tool_failed_but_recoverable',
         recoveryMode: disposition.recoveryMode || 'tool_repair',
         meta: disposition.meta,

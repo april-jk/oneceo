@@ -960,6 +960,75 @@ export interface DeploymentManagementOverview {
   };
 }
 
+export type OperationsAnalyticsRangeKey = '24h' | '7d' | '30d' | '90d';
+
+export interface OperationsAnalyticsExpandedMetric {
+  name: string;
+  pageviews: number;
+  visitors: number;
+  visits: number;
+  bounces: number;
+  totaltime: number;
+}
+
+export interface OperationsAnalyticsOverview {
+  updatedAt: string;
+  range: {
+    key: OperationsAnalyticsRangeKey;
+    startAt: string;
+    endAt: string;
+    unit: 'hour' | 'day' | 'month' | 'year';
+    timezone: string;
+  };
+  source: {
+    umami: {
+      configured: boolean;
+      host: string;
+      teamId: string | null;
+      websiteId: string | null;
+    };
+    oneceoDb: {
+      configured: boolean;
+    };
+  };
+  traffic: {
+    stats: {
+      pageviews: number;
+      visits: number;
+      visitors: number;
+      bounces: number;
+      totaltime: number;
+    };
+    activeVisitors: number;
+    bounceRate: number;
+    averageVisitDurationSeconds: number;
+    pageviews: {
+      pageviews: Array<{ x: string; y: number }>;
+      sessions: Array<{ x: string; y: number }>;
+    };
+  };
+  acquisition: {
+    referrers: OperationsAnalyticsExpandedMetric[];
+    channels: OperationsAnalyticsExpandedMetric[];
+    entryPages: OperationsAnalyticsExpandedMetric[];
+  };
+  behavior: {
+    topPages: OperationsAnalyticsExpandedMetric[];
+    devices: OperationsAnalyticsExpandedMetric[];
+    events: OperationsAnalyticsExpandedMetric[];
+  };
+  business: {
+    metrics: Array<{
+      key: string;
+      label: string;
+      value: number;
+      source: 'umami' | 'oneceo_db';
+      unit?: 'count' | 'percent' | 'seconds';
+    }>;
+  };
+  alerts: string[];
+}
+
 export interface DeploymentManagementListResponse {
   records: DeploymentRecord[];
   total: number;

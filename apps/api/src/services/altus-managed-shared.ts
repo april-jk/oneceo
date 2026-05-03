@@ -137,6 +137,7 @@ type JsonSchema =
   | {
       type: 'string' | 'number' | 'integer' | 'boolean';
       description?: string;
+      enum?: string[];
     }
   | {
       type: 'array';
@@ -158,6 +159,134 @@ export function asText(value: unknown): string {
 export function pickObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return value as Record<string, unknown>;
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => asText(item)).filter(Boolean);
+}
+
+function normalizeSkillGovernance(value: unknown): ManagedSkillContext['governance'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const autoActivation = pickObject(record.autoActivation);
+  return {
+    systemRole: asText(record.systemRole) || null,
+    adminManaged: Boolean(record.adminManaged),
+    required: Boolean(record.required),
+    autoActivation: {
+      enabled: Boolean(autoActivation.enabled),
+      triggers: readStringArray(autoActivation.triggers),
+      toolNames: readStringArray(autoActivation.toolNames),
+    },
+  };
+}
+
+function skillKey(value: {
+  sourceType: 'platform' | 'custom';
+  skillId: string;
+  revisionId: string;
+}) {
+  return `${value.sourceType}:${value.skillId}:${value.revisionId}`;
+}
+
+export function normalizeManagedSkillContexts(value: unknown): ManagedSkillContext[] {
+  if (!Array.isArray(value)) return [];
+  const results = new Map<string, ManagedSkillContext>();
+  for (const item of value) {
+    const record = pickObject(item);
+    const skillId = asText(record.skillId);
+    const revisionId = asText(record.revisionId);
+    const slug = asText(record.slug);
+    if (!skillId || !revisionId || !slug) continue;
+    const sourceType = asText(record.sourceType) === 'custom' ? 'custom' : 'platform';
+    const normalized: ManagedSkillContext = {
+      sourceType,
+      skillId,
+      revisionId,
+      slug,
+      name: asText(record.name) || slug,
+      description: asText(record.description),
+      category: asText(record.category) || 'general',
+      renderedMarkdown: asText(record.renderedMarkdown),
+      revisionNumber:
+        typeof record.revisionNumber === 'number' && Number.isFinite(record.revisionNumber)
+          ? Math.floor(record.revisionNumber)
+          : null,
+      resourceSummary:
+        record.resourceSummary && typeof record.resourceSummary === 'object' && !Array.isArray(record.resourceSummary)
+          ? (record.resourceSummary as ManagedSkillContext['resourceSummary'])
+          : null,
+      governance: normalizeSkillGovernance(record.governance),
+    };
+    results.set(skillKey(normalized), normalized);
+  }
+  return Array.from(results.values());
+}
+
+export function normalizeManagedSkillCatalogEntries(value: unknown): ManagedSkillCatalogEntry[] {
+  if (!Array.isArray(value)) return [];
+  const results = new Map<string, ManagedSkillCatalogEntry>();
+  for (const item of value) {
+    const record = pickObject(item);
+    const skillId = asText(record.skillId);
+    const revisionId = asText(record.revisionId);
+    const slug = asText(record.slug);
+    if (!skillId || !revisionId || !slug) continue;
+    const sourceType = asText(record.sourceType) === 'custom' ? 'custom' : 'platform';
+    const normalized: ManagedSkillCatalogEntry = {
+      sourceType,
+      skillId,
+      revisionId,
+      slug,
+      name: asText(record.name) || slug,
+      description: asText(record.description),
+      category: asText(record.category) || 'general',
+      revisionNumber:
+        typeof record.revisionNumber === 'number' && Number.isFinite(record.revisionNumber)
+          ? Math.floor(record.revisionNumber)
+          : null,
+      resourceSummary:
+        record.resourceSummary && typeof record.resourceSummary === 'object' && !Array.isArray(record.resourceSummary)
+          ? (record.resourceSummary as ManagedSkillCatalogEntry['resourceSummary'])
+          : null,
+      governance: normalizeSkillGovernance(record.governance),
+    };
+    results.set(skillKey(normalized), normalized);
+  }
+  return Array.from(results.values());
+}
+
+export function managedSkillContextToCatalogEntry(skill: ManagedSkillContext): ManagedSkillCatalogEntry {
+  return {
+    sourceType: skill.sourceType,
+    skillId: skill.skillId,
+    revisionId: skill.revisionId,
+    slug: skill.slug,
+    name: skill.name,
+    description: skill.description,
+    category: skill.category,
+    revisionNumber: skill.revisionNumber,
+    resourceSummary: skill.resourceSummary || null,
+    governance: skill.governance || null,
+  };
+}
+
+export function mergeManagedSkillCatalogEntries(
+  primary: ManagedSkillCatalogEntry[],
+  fallback: ManagedSkillCatalogEntry[]
+): ManagedSkillCatalogEntry[] {
+  const results = new Map<string, ManagedSkillCatalogEntry>();
+  for (const item of primary) {
+    results.set(skillKey(item), item);
+  }
+  for (const item of fallback) {
+    const key = skillKey(item);
+    if (!results.has(key)) {
+      results.set(key, item);
+    }
+  }
+  return Array.from(results.values());
 }
 
 export function toIso(value: unknown): string | null {
@@ -228,12 +357,19 @@ export function buildManagedToolDefinitions() {
       type: 'function',
       function: {
         name: 'shell_execute',
-        description: 'Run a shell command inside the E2B sandbox workspace.',
+        description:
+          'Run a shell command inside the E2B sandbox workspace. Persistent local preview/dev server commands are automatically managed as background services in auto mode, with pid/log/url returned for debugging.',
         parameters: objectSchema(
           {
             command: { type: 'string', description: 'Shell command to execute.' },
             cwd: { type: 'string', description: 'Workspace-relative directory. Defaults to workspace root.' },
             timeoutMs: { type: 'integer', description: 'Timeout in milliseconds, max 120000.' },
+            runMode: {
+              type: 'string',
+              enum: ['auto', 'foreground', 'background_service'],
+              description:
+                'Execution mode. Default auto. Use background_service for long-running preview/dev servers; foreground rejects persistent service commands.',
+            },
           },
           ['command']
         ),
@@ -244,13 +380,13 @@ export function buildManagedToolDefinitions() {
       function: {
         name: 'debug_open_page',
         description:
-          'Start website debugging behavior by opening a target http/https URL in the sandbox Chromium debug session shown by n.eko. Use this when users ask to 启动网站调试功能 or open a page in the debug view.',
+          'Start website debugging behavior by opening a target http/https URL, or a file:// URL inside the workspace, in the sandbox Chromium debug session shown by n.eko. Before calling this for product/app QA, write or update a workspace test document such as docs/test-plan.md, then use this tool as the testing-phase browser entry. The tool verifies the target is reachable/readable and the CDP tab is ready before reporting success. After this, use Playwright/playwright-mcp against the same CDP 9222 browser for functional testing, record defects in the test document, repair, and retest before final delivery. Use this when users ask to 启动网站调试功能 or open a page in the debug view.',
         parameters: objectSchema(
           {
             url: {
               type: 'string',
               description:
-                'Target URL to open in Chromium. Must start with http:// or https:// and may include path/query/hash, e.g. http://127.0.0.1:3000/folder1/?tab=debug#section-2.',
+                'Target URL to open in Chromium. Use http:// or https:// for running services. For standalone HTML deliverables, file:// URLs are allowed only when the file is inside the workspace.',
             },
             ensureDebug: {
               type: 'boolean',
@@ -258,6 +394,81 @@ export function buildManagedToolDefinitions() {
             },
           },
           ['url']
+        ),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'browser_interact',
+        description:
+          'Perform one explicit Playwright-backed browser testing action in the same n.eko Chromium debug session after debug_open_page succeeds. Supported actions are direct projections of Playwright APIs: locator.click, getByText(...).click, mouse.click, locator.fill, keyboard.type, keyboard.press, mouse.wheel, locator.waitFor, getByText(...).waitFor, page.waitForLoadState, and page.waitForTimeout. Each call should describe exactly what user-visible action is being performed.',
+        parameters: objectSchema(
+          {
+            action: {
+              type: 'string',
+              enum: [
+                'locator_click',
+                'text_click',
+                'coordinate_click',
+                'locator_fill',
+                'keyboard_type',
+                'keyboard_press',
+                'mouse_wheel',
+                'wait_for_locator',
+                'wait_for_text',
+                'wait_for_load_state',
+                'wait_for_timeout',
+              ],
+              description: 'Playwright-backed browser action to perform.',
+            },
+            description: {
+              type: 'string',
+              description:
+                'Short user-facing action description, for example 打开网页后点击“新游戏”按钮, 按下 ArrowUp 键, 向下滚动页面.',
+            },
+            selector: {
+              type: 'string',
+              description:
+                'Playwright locator selector for locator_click, locator_fill, wait_for_locator, or optional scoped wait_for_text.',
+            },
+            text: {
+              type: 'string',
+              description:
+                'Text for text_click, locator_fill, keyboard_type, or wait_for_text.',
+            },
+            key: {
+              type: 'string',
+              description: 'Keyboard key for keyboard_press, for example ArrowUp, Enter, Escape, Tab.',
+            },
+            direction: {
+              type: 'string',
+              enum: ['up', 'down', 'left', 'right'],
+              description: 'Wheel direction for mouse_wheel.',
+            },
+            pixels: {
+              type: 'integer',
+              description: 'Wheel distance in pixels for mouse_wheel. Defaults to 600.',
+            },
+            x: {
+              type: 'number',
+              description: 'Optional viewport x coordinate for click.',
+            },
+            y: {
+              type: 'number',
+              description: 'Optional viewport y coordinate for click.',
+            },
+            loadState: {
+              type: 'string',
+              enum: ['domcontentloaded', 'load', 'networkidle'],
+              description: 'Load state for wait_for_load_state. Defaults to domcontentloaded.',
+            },
+            timeoutMs: {
+              type: 'integer',
+              description: 'Timeout for wait actions, max 30000.',
+            },
+          },
+          ['action']
         ),
       },
     },
@@ -309,6 +520,61 @@ export function buildManagedToolDefinitions() {
         name: 'get_application_deployment_status',
         description:
           'Query the latest managed deployment status, current URL, and deployment health for the current app.',
+        parameters: objectSchema({}),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'ensure_project_database',
+        description:
+          'Explicitly create or repair the fixed managed Railway Postgres database for the current user project/session, in the same Railway Environment as the app, inject database variables into the app service, and record an explicit database requirement for this session. Database engine selection is not part of this flow and should never be asked here. Use only when the user requirement clearly needs persistent relational data, accounts, records, authentication state, or SQL-backed storage.',
+        parameters: objectSchema({
+          reason: {
+            type: 'string',
+            description: 'Short reason why this project needs a database.',
+          },
+        }),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_project_database_status',
+        description:
+          'Check whether the current project already has Railway Postgres enabled. This never creates resources.',
+        parameters: objectSchema({}),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'inspect_project_database_schema',
+        description:
+          'Read the current Railway Postgres schema and table summary for the project. This never creates resources.',
+        parameters: objectSchema({}),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'ensure_project_storage_bucket',
+        description:
+          'Explicitly create or repair the fixed managed Railway Bucket for the current user project/session, in the same Railway Environment as the app, inject S3 variables into the app service, and record an explicit object-storage requirement for this session. Object-storage engine selection is not part of this flow and should never be asked here. Use only when the user requirement clearly needs file uploads, media, attachments, exports, or object storage.',
+        parameters: objectSchema({
+          reason: {
+            type: 'string',
+            description: 'Short reason why this project needs object storage.',
+          },
+        }),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_project_storage_status',
+        description:
+          'Check whether the current project already has a Railway Bucket enabled. This never creates resources and never returns plaintext secret keys.',
         parameters: objectSchema({}),
       },
     },
@@ -526,6 +792,11 @@ export function buildManagedToolDefinitions() {
               type: 'array',
               items: { type: 'string' },
               description: 'Optional suggested answer options.',
+            },
+            clarificationType: {
+              type: 'string',
+              description:
+                'Optional structured missing-requirement field: artifact_type, tech_stack, scope_boundary, integration_target, or acceptance_requirement.',
             },
           },
           ['question']

@@ -295,6 +295,51 @@ export interface UserMembership {
   updatedAt: string;
 }
 
+export interface MembershipUserListItem {
+  membership: UserMembership;
+  user: {
+    id: string;
+    email: string;
+    displayName: string;
+    status: string;
+  };
+  plan: {
+    id: string;
+    code: string;
+    name: string;
+    status: string;
+  };
+}
+
+export interface MembershipPagedResponse<T> {
+  page: number;
+  pageSize: number;
+  total: number;
+  items: T[];
+}
+
+export interface MembershipDailyRestoreHistoryItem {
+  restore: {
+    id: string;
+    userId: string;
+    membershipPlanId: string;
+    restoreDate: string;
+    restoreCredits: number;
+    creditTransactionId?: string | null;
+    createdAt: string;
+  };
+  user: {
+    id: string;
+    email: string;
+    displayName: string;
+  };
+  plan: {
+    id: string;
+    code: string;
+    name: string;
+  };
+}
+
 export interface AgentStageDistributionItem {
   stageKey: string;
   label: string;

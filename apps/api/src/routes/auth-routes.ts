@@ -3,6 +3,7 @@ import { appUserLegacyIdMappingDAO } from '../db/dao/app-user-legacy-id-mapping.
 import { taskCreationSessionDAO } from '../db/dao/task-creation-session.dao';
 import { appAuthService } from '../services/app-auth-service';
 import { appAuthLoginRateLimitService } from '../services/app-auth-login-rate-limit-service';
+import { runtimeEnvConfig } from '../config/runtime-env';
 import { getPublicErrorMessage } from '../utils/error-response';
 import {
   APP_SESSION_COOKIE_NAME,
@@ -91,6 +92,9 @@ function applyAuthDebugHeaders(
     wroteSessionCookie?: boolean;
   }
 ) {
+  if (!runtimeEnvConfig.capabilities.allowDebugEndpoints) {
+    return;
+  }
   const sessionCookieValues = readCookieValuesByNames(req, APP_SESSION_COOKIE_NAMES);
   const stateCookieValues = readCookieValuesByNames(req, APP_SESSION_STATE_COOKIE_NAMES);
   res.setHeader('X-Oneceo-Auth-Debug-Cookie-Names', listCookieNames(req).join(',') || 'none');
@@ -109,7 +113,7 @@ function logAuthDebug(
     wroteSessionCookie?: boolean;
   }
 ) {
-  if (process.env.NODE_ENV === 'production') {
+  if (!runtimeEnvConfig.capabilities.allowDebugEndpoints) {
     return;
   }
   const sessionCookieValues = readCookieValuesByNames(req, APP_SESSION_COOKIE_NAMES);
@@ -211,6 +215,16 @@ router.post('/register/send-code', requireJsonRequest, async (req, res) => {
       error: getPublicErrorMessage(error?.message || '验证码发送失败'),
     });
   }
+});
+
+router.get('/runtime-env', (_req, res) => {
+  return res.json({
+    success: true,
+    data: {
+      runtimeEnv: runtimeEnvConfig.runtimeEnv,
+      capabilities: runtimeEnvConfig.capabilities,
+    },
+  });
 });
 
 router.post('/login', requireJsonRequest, async (req, res) => {

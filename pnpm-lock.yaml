@@ -63,8 +63,8 @@ importers:
         specifier: ^2.15.4
         version: 2.15.4(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       undici:
-        specifier: ^6.19.4
-        version: 6.23.0
+        specifier: ^6.24.0
+        version: 6.25.0
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -145,8 +145,8 @@ importers:
         specifier: ^0.31.8
         version: 0.31.8
       drizzle-orm:
-        specifier: ^0.45.1
-        version: 0.45.1(@prisma/client@6.19.2(prisma@6.19.2(typescript@5.6.3))(typescript@5.6.3))(@types/pg@8.16.0)(pg@8.18.0)(prisma@6.19.2(typescript@5.6.3))
+        specifier: ^0.45.2
+        version: 0.45.2(@prisma/client@6.19.2(prisma@6.19.2(typescript@5.6.3))(typescript@5.6.3))(@types/pg@8.16.0)(pg@8.18.0)(prisma@6.19.2(typescript@5.6.3))
       e2b:
         specifier: ^2.8.4
         version: 2.12.1
@@ -169,8 +169,8 @@ importers:
         specifier: ^4.8.1
         version: 4.8.3
       undici:
-        specifier: ^6.19.4
-        version: 6.23.0
+        specifier: ^6.24.0
+        version: 6.25.0
       ws:
         specifier: ^8.19.0
         version: 8.19.0
@@ -4028,8 +4028,8 @@ packages:
     resolution: {integrity: sha512-O9EC/miwdnRDY10qRxM8P3Pg8hXe3LyU4ZipReKOgTwn4OqANmftj8XJz1UPUAS6NMHf0E2htjsbQujUTkncCg==}
     hasBin: true
 
-  drizzle-orm@0.45.1:
-    resolution: {integrity: sha512-Te0FOdKIistGNPMq2jscdqngBRfBpC8uMFVwqjf6gtTVJHIQ/dosgV/CLBU2N4ZJBsXL5savCba9b0YJskKdcA==}
+  drizzle-orm@0.45.2:
+    resolution: {integrity: sha512-kY0BSaTNYWnoDMVoyY8uxmyHjpJW1geOmBMdSSicKo9CIIWkSxMIj2rkeSR51b8KAPB7m+qysjuHme5nKP+E5Q==}
     peerDependencies:
       '@aws-sdk/client-rds-data': '>=3'
       '@cloudflare/workers-types': '>=4'
@@ -6118,8 +6118,8 @@ packages:
   undici-types@7.16.0:
     resolution: {integrity: sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw==}
 
-  undici@6.23.0:
-    resolution: {integrity: sha512-VfQPToRA5FZs/qJxLIinmU59u0r7LXqoJkCzinq3ckNJp3vKEh7jTWN589YQ5+aoAC/TGRLyJLCPKcLQbM8r9g==}
+  undici@6.25.0:
+    resolution: {integrity: sha512-ZgpWDC5gmNiuY9CnLVXEH8rl50xhRCuLNA97fAUnKi8RRuV4E6KG31pDTsLVUKnohJE0I3XDrTeEydAXRw47xg==}
     engines: {node: '>=18.17'}
 
   unified@11.0.5:
@@ -9981,7 +9981,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  drizzle-orm@0.45.1(@prisma/client@6.19.2(prisma@6.19.2(typescript@5.6.3))(typescript@5.6.3))(@types/pg@8.16.0)(pg@8.18.0)(prisma@6.19.2(typescript@5.6.3)):
+  drizzle-orm@0.45.2(@prisma/client@6.19.2(prisma@6.19.2(typescript@5.6.3))(typescript@5.6.3))(@types/pg@8.16.0)(pg@8.18.0)(prisma@6.19.2(typescript@5.6.3)):
     optionalDependencies:
       '@prisma/client': 6.19.2(prisma@6.19.2(typescript@5.6.3))(typescript@5.6.3)
       '@types/pg': 8.16.0
@@ -12464,7 +12464,7 @@ snapshots:
 
   undici-types@7.16.0: {}
 
-  undici@6.23.0: {}
+  undici@6.25.0: {}
 
   unified@11.0.5:
     dependencies:

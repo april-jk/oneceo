@@ -100,11 +100,11 @@ const OsacReleaseManagementSection = lazy(() =>
 const BillingManagementSection = lazy(() =>
   import('./components/BillingManagementSection').then((module) => ({ default: module.BillingManagementSection }))
 );
-const NotificationManagement = lazy(() =>
-  import('./components/NotificationManagement').then((module) => ({ default: module.NotificationManagement }))
+const MembershipManagementSection = lazy(() =>
+  import('./components/MembershipManagementSection').then((module) => ({ default: module.MembershipManagementSection }))
 );
 
-type SectionKey = 'kvm' | 'operations' | 'deployment' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit' | 'billing' | 'notification';
+type SectionKey = 'kvm' | 'operations' | 'deployment' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit' | 'billing' | 'membership';
 type NavGroupKey = 'runtime' | 'platform' | 'billing';
 type ToastTone = 'error' | 'success' | 'warning' | 'info';
 type SandboxDetailTab = 'overview' | 'files' | 'processes' | 'connectivity' | 'archive' | 'terminal';
@@ -495,14 +495,14 @@ const NAV_ITEMS: Array<{
     signal: '消费统计',
   },
   {
-    key: 'notification',
+    key: 'membership',
     group: 'platform',
-    label: '通知管理',
-    subtitle: '系统通知与下发',
-    tag: 'NTF',
-    iconKey: 'notification',
-    description: '管理系统通知，向用户下发通知。',
-    signal: '通知状态',
+    label: '会员管理',
+    subtitle: '会员类型与权益',
+    tag: 'MBR',
+    iconKey: 'billing',
+    description: '维护会员类型、默认积分和 Agent 权限。',
+    signal: '会员权益',
   },
 ];
 
@@ -12059,10 +12059,10 @@ export default function App() {
         </Suspense>
       );
     }
-    if (activeSection === 'notification') {
+    if (activeSection === 'membership') {
       return (
         <Suspense fallback={<div className="p-6">加载中...</div>}>
-          <NotificationManagement onNotify={pushToast} />
+          <MembershipManagementSection />
         </Suspense>
       );
     }

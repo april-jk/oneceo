@@ -246,6 +246,100 @@ export interface AuditDetailResponse {
   relatedEntries: AuditLogEntry[];
 }
 
+export interface MembershipPlan {
+  id: string;
+  code: string;
+  name: string;
+  status: string;
+  defaultCredits: number;
+  isDefault: boolean;
+  allowedAgentLevelsJson: string[] | unknown[];
+  benefitsJson: unknown[];
+  dailyAutoRestoreEnabled: boolean;
+  dailyAutoRestoreCredits: number;
+  description: string;
+  sortOrder: number;
+  effectiveFrom?: string | null;
+  effectiveUntil?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NewMembershipPlanPayload {
+  name: string;
+  status: string;
+  defaultCredits: number;
+  isDefault: boolean;
+  allowedAgentLevels: string[];
+  benefits: string[];
+  dailyAutoRestoreEnabled: boolean;
+  dailyAutoRestoreCredits: number;
+  description: string;
+  sortOrder: number;
+  effectiveFrom?: string | null;
+  effectiveUntil?: string | null;
+}
+
+export interface UserMembership {
+  id: string;
+  userId: string;
+  membershipPlanId: string;
+  status: string;
+  startedAt: string;
+  expiresAt?: string | null;
+  sourceType: string;
+  sourceId?: string | null;
+  assignedBy?: string | null;
+  assignedReason: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MembershipUserListItem {
+  membership: UserMembership;
+  user: {
+    id: string;
+    email: string;
+    displayName: string;
+    status: string;
+  };
+  plan: {
+    id: string;
+    code: string;
+    name: string;
+    status: string;
+  };
+}
+
+export interface MembershipPagedResponse<T> {
+  page: number;
+  pageSize: number;
+  total: number;
+  items: T[];
+}
+
+export interface MembershipDailyRestoreHistoryItem {
+  restore: {
+    id: string;
+    userId: string;
+    membershipPlanId: string;
+    restoreDate: string;
+    restoreCredits: number;
+    creditTransactionId?: string | null;
+    createdAt: string;
+  };
+  user: {
+    id: string;
+    email: string;
+    displayName: string;
+  };
+  plan: {
+    id: string;
+    code: string;
+    name: string;
+  };
+}
+
 export interface AgentStageDistributionItem {
   stageKey: string;
   label: string;

@@ -31,9 +31,23 @@ export type AppOauthProfile = {
 };
 
 export class AppAuthOauthService {
+  private resolveAvatarSourceByProvider(provider: AppOauthProvider) {
+    return provider === 'google' ? 'oauth_google' : 'oauth_github';
+  }
+
+  private shouldSyncOauthAvatar(currentAvatarSource: unknown, incomingAvatarUrl: string) {
+    const source = asText(currentAvatarSource).toLowerCase();
+    if (!incomingAvatarUrl) return false;
+    if (!source || source === 'default' || source === 'oauth_google' || source === 'oauth_github') {
+      return true;
+    }
+    return false;
+  }
+
   async resolveOrCreateUser(profile: AppOauthProfile, req?: express.Request) {
     const provider = normalizeProvider(profile.provider) as AppOauthProvider;
     const providerSubject = asText(profile.providerSubject);
+    const oauthAvatarSource = this.resolveAvatarSourceByProvider(provider);
     if (!providerSubject) {
       throw new Error('OAuth 授权缺少用户标识');
     }
@@ -44,6 +58,15 @@ export class AppAuthOauthService {
       if (nextDisplayName && nextDisplayName !== existingByAccount.displayName) {
         await appUserDAO.updateById(String(existingByAccount.id), {
           displayName: nextDisplayName,
+        });
+      }
+      const incomingAvatarUrl = asText(profile.avatarUrl);
+      if (this.shouldSyncOauthAvatar((existingByAccount as any).avatarSource, incomingAvatarUrl)) {
+        await appUserDAO.updateAvatar(String(existingByAccount.id), {
+          avatarUrl: incomingAvatarUrl,
+          avatarStorageKey: null,
+          avatarSource: incomingAvatarUrl ? oauthAvatarSource : 'default',
+          avatarUpdatedAt: new Date(),
         });
       }
       await appUserDAO.upsertOauthAccount({
@@ -73,6 +96,15 @@ export class AppAuthOauthService {
         displayName !== existingByEmail.displayName
           ? await appUserDAO.updateById(String(existingByEmail.id), { displayName })
           : existingByEmail;
+      const incomingAvatarUrl = asText(profile.avatarUrl);
+      if (this.shouldSyncOauthAvatar((nextUser as any).avatarSource, incomingAvatarUrl)) {
+        await appUserDAO.updateAvatar(String(nextUser.id), {
+          avatarUrl: incomingAvatarUrl,
+          avatarStorageKey: null,
+          avatarSource: incomingAvatarUrl ? oauthAvatarSource : 'default',
+          avatarUpdatedAt: new Date(),
+        });
+      }
       return this.createSessionForUser(String(nextUser.id), req);
     }
 
@@ -83,6 +115,8 @@ export class AppAuthOauthService {
       providerSubject,
       providerEmail: profile.email || email,
       avatarUrl: profile.avatarUrl || null,
+      avatarSource: profile.avatarUrl ? oauthAvatarSource : 'default',
+      avatarStorageKey: null,
     });
     return this.createSessionForUser(String(created.id), req);
   }

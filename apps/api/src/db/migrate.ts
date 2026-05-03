@@ -948,6 +948,14 @@ CREATE TABLE IF NOT EXISTS app_users (
 );
 ALTER TABLE app_users
   ADD COLUMN IF NOT EXISTS profile_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE app_users
+  ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+ALTER TABLE app_users
+  ADD COLUMN IF NOT EXISTS avatar_storage_key TEXT;
+ALTER TABLE app_users
+  ADD COLUMN IF NOT EXISTS avatar_source TEXT NOT NULL DEFAULT 'default';
+ALTER TABLE app_users
+  ADD COLUMN IF NOT EXISTS avatar_updated_at TIMESTAMP;
 
 CREATE TABLE IF NOT EXISTS app_user_oauth_accounts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

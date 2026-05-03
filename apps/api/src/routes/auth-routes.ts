@@ -1,4 +1,5 @@
 import express from 'express';
+import multer from 'multer';
 import { appUserLegacyIdMappingDAO } from '../db/dao/app-user-legacy-id-mapping.dao';
 import { taskCreationSessionDAO } from '../db/dao/task-creation-session.dao';
 import { appAuthService } from '../services/app-auth-service';
@@ -20,6 +21,12 @@ import { clearCookie, readCookieValuesByNames, setCookie } from '../utils/http-c
 import { isLegacyClientUserId, normalizeUserId } from '../utils/user-id';
 
 const router = express.Router();
+const avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024,
+  },
+});
 
 function asText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -495,6 +502,79 @@ router.patch('/profile', requireJsonRequest, async (req, res) => {
     return res.status(400).json({
       success: false,
       error: getPublicErrorMessage(error?.message || '更新用户资料失败'),
+    });
+  }
+});
+
+router.post('/avatar/upload', avatarUpload.single('file'), async (req, res) => {
+  try {
+    const current = (req as any).currentAppUser;
+    if (!current?.id) {
+      return res.status(401).json({
+        success: false,
+        error: '未登录或登录已失效',
+      });
+    }
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({
+        success: false,
+        error: '请选择头像文件',
+      });
+    }
+    const contentType = asText(file.mimetype).toLowerCase();
+    const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+    if (!allowedTypes.has(contentType)) {
+      return res.status(400).json({
+        success: false,
+        error: '仅支持 JPG/PNG/WebP 格式',
+      });
+    }
+    const user = await appAuthService.uploadAvatar(current.id, {
+      contentType,
+      originalName: asText(file.originalname) || 'avatar',
+      buffer: file.buffer,
+    });
+    setCookie(res, APP_SESSION_STATE_COOKIE_NAME, 'authenticated', buildAppSessionStateCookieOptions(req));
+    applyAuthDebugHeaders(req, res, {
+      currentUserId: current.id,
+      wroteSessionCookie: false,
+    });
+    return res.json({
+      success: true,
+      data: { user },
+    });
+  } catch (error: any) {
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '头像上传失败'),
+    });
+  }
+});
+
+router.delete('/avatar', async (req, res) => {
+  try {
+    const current = (req as any).currentAppUser;
+    if (!current?.id) {
+      return res.status(401).json({
+        success: false,
+        error: '未登录或登录已失效',
+      });
+    }
+    const user = await appAuthService.removeAvatar(current.id);
+    setCookie(res, APP_SESSION_STATE_COOKIE_NAME, 'authenticated', buildAppSessionStateCookieOptions(req));
+    applyAuthDebugHeaders(req, res, {
+      currentUserId: current.id,
+      wroteSessionCookie: false,
+    });
+    return res.json({
+      success: true,
+      data: { user },
+    });
+  } catch (error: any) {
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '头像移除失败'),
     });
   }
 });

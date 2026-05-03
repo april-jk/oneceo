@@ -121,3 +121,21 @@ jobs:
       - name: Run govulncheck
         working-directory: billing_model/sub2api/backend
         run: govulncheck ./...
+
+  config-scan:
+    name: Config Scan (Trivy misconfig)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Trivy CLI
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin
+
+      - name: Scan GitHub Actions workflow configuration
+        run: trivy config --severity HIGH,CRITICAL --exit-code 1 --no-progress .github/workflows
+
+      - name: Scan deployment and Docker configuration
+        run: trivy config --severity HIGH,CRITICAL --exit-code 1 --no-progress billing_model/sub2api

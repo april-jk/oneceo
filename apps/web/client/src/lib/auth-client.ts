@@ -10,6 +10,8 @@ export type AppAuthUser = {
   personalization?: AppUserPersonalization;
 };
 
+export type AppAuthProvider = "google" | "github";
+
 export type AppUserPersonalization = {
   preferredName: string;
   occupation: string;
@@ -242,6 +244,24 @@ export async function sendRegisterVerificationCode(input: {
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export async function startAppAuthOAuth(input: {
+  provider: AppAuthProvider;
+  redirect?: string;
+}): Promise<{ authUrl: string }> {
+  const url = new URL(`/api/auth/oauth/${input.provider}/start`, getApiBaseUrl() || window.location.origin);
+  if (input.redirect) {
+    url.searchParams.set("redirect", input.redirect);
+  }
+  const response = await fetch(url.toString(), {
+    credentials: "include",
+  });
+  const payload = (await response.json().catch(() => null)) as AuthEnvelope<{ authUrl: string }> | null;
+  if (!response.ok || payload?.success !== true || !payload.data?.authUrl) {
+    throw new Error(resolveErrorMessage(payload, `request failed: ${response.status}`));
+  }
+  return payload.data;
 }
 
 export async function logoutAppUser(): Promise<void> {

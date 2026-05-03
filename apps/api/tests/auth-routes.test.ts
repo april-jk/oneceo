@@ -4,10 +4,12 @@ import express from 'express';
 import { appUserLegacyIdMappingDAO } from '../src/db/dao/app-user-legacy-id-mapping.dao';
 import { taskCreationSessionDAO } from '../src/db/dao/task-creation-session.dao';
 import authRoutes from '../src/routes/auth-routes';
+import authOauthRoutes from '../src/routes/auth-oauth-routes';
 import { appAuthMiddleware } from '../src/middleware/app-auth-middleware';
 import { appAuthLoginRateLimitService } from '../src/services/app-auth-login-rate-limit-service';
 import { appAuthService } from '../src/services/app-auth-service';
 import {
+  APP_OAUTH_STATE_COOKIE_NAME,
   APP_SESSION_COOKIE_NAME,
   APP_SESSION_STATE_COOKIE_NAME,
   LEGACY_APP_SESSION_COOKIE_NAME,
@@ -32,6 +34,16 @@ const originalLoginBlockSeconds = process.env.APP_AUTH_LOGIN_BLOCK_SECONDS;
 const originalLoginEmailMaxFailures = process.env.APP_AUTH_LOGIN_EMAIL_MAX_FAILURES;
 const originalLoginIpMaxFailures = process.env.APP_AUTH_LOGIN_IP_MAX_FAILURES;
 const originalRedisEnabled = process.env.ONECEO_REDIS_ENABLED;
+const originalGoogleClientId = process.env.APP_AUTH_GOOGLE_CLIENT_ID;
+const originalGoogleClientSecret = process.env.APP_AUTH_GOOGLE_CLIENT_SECRET;
+const originalAppAuthOauthStateSecret = process.env.APP_AUTH_OAUTH_STATE_SECRET;
+const originalGithubDevClientId = process.env.APP_AUTH_GITHUB_DEV_CLIENT_ID;
+const originalGithubDevClientSecret = process.env.APP_AUTH_GITHUB_DEV_CLIENT_SECRET;
+const originalGithubStagingClientId = process.env.APP_AUTH_GITHUB_STAGING_CLIENT_ID;
+const originalGithubStagingClientSecret = process.env.APP_AUTH_GITHUB_STAGING_CLIENT_SECRET;
+const originalGithubProductClientId = process.env.APP_AUTH_GITHUB_PRODUCT_CLIENT_ID;
+const originalGithubProductClientSecret = process.env.APP_AUTH_GITHUB_PRODUCT_CLIENT_SECRET;
+const originalGithubCallbackBaseUrl = process.env.APP_AUTH_GITHUB_CALLBACK_BASE_URL;
 
 function restoreEnv(name: string, value: string | undefined) {
   if (value === undefined) {
@@ -59,6 +71,16 @@ afterEach(() => {
   restoreEnv('APP_AUTH_LOGIN_EMAIL_MAX_FAILURES', originalLoginEmailMaxFailures);
   restoreEnv('APP_AUTH_LOGIN_IP_MAX_FAILURES', originalLoginIpMaxFailures);
   restoreEnv('ONECEO_REDIS_ENABLED', originalRedisEnabled);
+  restoreEnv('APP_AUTH_GOOGLE_CLIENT_ID', originalGoogleClientId);
+  restoreEnv('APP_AUTH_GOOGLE_CLIENT_SECRET', originalGoogleClientSecret);
+  restoreEnv('APP_AUTH_OAUTH_STATE_SECRET', originalAppAuthOauthStateSecret);
+  restoreEnv('APP_AUTH_GITHUB_DEV_CLIENT_ID', originalGithubDevClientId);
+  restoreEnv('APP_AUTH_GITHUB_DEV_CLIENT_SECRET', originalGithubDevClientSecret);
+  restoreEnv('APP_AUTH_GITHUB_STAGING_CLIENT_ID', originalGithubStagingClientId);
+  restoreEnv('APP_AUTH_GITHUB_STAGING_CLIENT_SECRET', originalGithubStagingClientSecret);
+  restoreEnv('APP_AUTH_GITHUB_PRODUCT_CLIENT_ID', originalGithubProductClientId);
+  restoreEnv('APP_AUTH_GITHUB_PRODUCT_CLIENT_SECRET', originalGithubProductClientSecret);
+  restoreEnv('APP_AUTH_GITHUB_CALLBACK_BASE_URL', originalGithubCallbackBaseUrl);
 });
 
 async function startServer(): Promise<TestServer> {
@@ -66,6 +88,7 @@ async function startServer(): Promise<TestServer> {
   app.use(express.json());
   app.use(appAuthMiddleware);
   app.use('/api/auth', authRoutes);
+  app.use('/api/auth', authOauthRoutes);
 
   const server = await new Promise<import('node:http').Server>((resolve) => {
     const next = app.listen(0, () => resolve(next));
@@ -271,6 +294,47 @@ test('POST /api/auth/login returns user and app session cookie', async () => {
       currentUser: '1',
       wroteSessionCookie: '1',
     });
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/auth/oauth/google/start returns google auth url', async () => {
+  const server = await startServer();
+  process.env.APP_AUTH_GOOGLE_CLIENT_ID = 'google-client';
+  process.env.APP_AUTH_GOOGLE_CLIENT_SECRET = 'google-secret';
+  process.env.APP_AUTH_OAUTH_STATE_SECRET = 'oauth-state-secret';
+  process.env.APP_AUTH_GITHUB_PRODUCT_CLIENT_ID = 'github-client';
+  process.env.APP_AUTH_GITHUB_PRODUCT_CLIENT_SECRET = 'github-secret';
+  process.env.APP_AUTH_GITHUB_CALLBACK_BASE_URL = server.origin;
+
+  try {
+    const response = await fetch(`${server.origin}/api/auth/oauth/google/start?redirect=%2Fhome`);
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.match(payload.data.authUrl, /^https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth/);
+    assert.match(getSetCookieHeader(response), new RegExp(`${APP_OAUTH_STATE_COOKIE_NAME}=`));
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/auth/oauth/google/start rejects unsafe redirect target', async () => {
+  const server = await startServer();
+  process.env.APP_AUTH_GOOGLE_CLIENT_ID = 'google-client';
+  process.env.APP_AUTH_GOOGLE_CLIENT_SECRET = 'google-secret';
+  process.env.APP_AUTH_OAUTH_STATE_SECRET = 'oauth-state-secret';
+
+  try {
+    const response = await fetch(`${server.origin}/api/auth/oauth/google/start?redirect=https%3A%2F%2Fevil.example.com`);
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.match(payload.data.authUrl, /state=/);
+    assert.doesNotMatch(payload.data.authUrl, /evil\.example\.com/);
   } finally {
     await server.close();
   }

@@ -243,7 +243,11 @@
     "passwordMismatch": "The passwords do not match",
     "registerFailed": "Registration failed",
     "missingLoginUser": "The sign-in response did not include user information",
-    "missingRegisterUser": "The registration response did not include user information"
+    "missingRegisterUser": "The registration response did not include user information",
+    "googleSignIn": "Continue with Google",
+    "githubSignIn": "Continue with GitHub",
+    "googleSignUp": "Sign up with Google",
+    "githubSignUp": "Sign up with GitHub"
   },
   "attachments": {
     "removeAttachment": "Remove attachment {{name}}",

@@ -4,13 +4,13 @@ import { platformSkillImportService } from '../src/services/platform-skill-impor
 
 test('parseFolderImport extracts entry and chunked resources from skill folder', () => {
   const preview = platformSkillImportService.parseFolderImport({
-    rootFolderName: 'office-ppt',
+    rootFolderName: 'ppt-workflow',
     files: [
       {
         relativePath: 'SKILL.md',
         content: [
           '---',
-          'name: Office PPT',
+          'name: PPT Workflow',
           'description: Build presentation decks',
           '---',
           '',
@@ -30,8 +30,8 @@ test('parseFolderImport extracts entry and chunked resources from skill folder',
     ],
   });
 
-  assert.equal(preview.slug, 'office-ppt');
-  assert.equal(preview.name, 'Office PPT');
+  assert.equal(preview.slug, 'ppt-workflow');
+  assert.equal(preview.name, 'PPT Workflow');
   assert.equal(preview.entry.entryDescription, 'Build presentation decks');
   assert.equal(preview.resources.length, 2);
   assert.equal(preview.files.length, 2);

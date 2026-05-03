@@ -42,7 +42,7 @@ test("login still succeeds when a stale secure legacy session cookie is present"
   await page.goto(`${WEB_BASE_URL}/login?redirect=%2Fhome`, { waitUntil: "domcontentloaded" });
   await page.getByPlaceholder(/邮箱|email/i).fill(account.email);
   await page.getByPlaceholder(/密码|password/i).fill(account.password);
-  await page.getByRole("button", { name: /登录|sign in|log in/i }).click();
+  await page.getByRole("button", { name: /^登录$/ }).click();
 
   await expect(page).toHaveURL(/\/home(?:$|[?#])/, { timeout: 15_000 });
 

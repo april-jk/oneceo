@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appUserDAO } from '../src/db/dao';
 import { hashPassword } from '../src/utils/auth-password';
+import { randomUUID } from 'node:crypto';
 
 function asText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -25,7 +26,8 @@ async function loadDefaultAccount() {
 
 async function main() {
   const defaults = await loadDefaultAccount();
-  const email = asText(process.env.ONECEO_E2E_USER_EMAIL) || defaults.email;
+  const fallbackEmail = `playwright-${randomUUID()}@example.com`;
+  const email = asText(process.env.ONECEO_E2E_USER_EMAIL) || defaults.email || fallbackEmail;
   const password = asText(process.env.ONECEO_E2E_USER_PASSWORD) || defaults.password;
   const displayName = asText(process.env.ONECEO_E2E_USER_DISPLAY_NAME) || defaults.displayName;
 
@@ -34,13 +36,28 @@ async function main() {
   }
 
   const passwordHash = await hashPassword(password);
-  let user = await appUserDAO.getByEmail(email);
+  let user;
+  try {
+    user = await appUserDAO.getByEmail(email);
+  } catch (error) {
+    console.warn('[PLAYWRIGHT_TEST_USER] getByEmail failed, creating a fresh account instead:', error);
+    user = null;
+  }
   if (!user) {
-    user = await appUserDAO.create({
-      email,
-      passwordHash,
-      displayName,
-    });
+    try {
+      user = await appUserDAO.create({
+        email,
+        passwordHash,
+        displayName,
+      });
+    } catch (error) {
+      console.warn('[PLAYWRIGHT_TEST_USER] create failed, retrying with a unique account:', error);
+      user = await appUserDAO.create({
+        email: fallbackEmail,
+        passwordHash,
+        displayName,
+      });
+    }
   } else {
     user =
       (await appUserDAO.updateById(String(user.id), {

@@ -261,6 +261,25 @@ function buildReplacementServiceName(projectKey = DEFAULT_DEPLOYMENT_PROJECT_KEY
   return `${base}-${suffix}`.slice(0, 32);
 }
 
+function isProtectedRailwayEnvironmentName(value: string) {
+  const normalized = asText(value).toLowerCase();
+  return normalized === 'staging' || normalized === 'product' || normalized === 'production';
+}
+
+function resolveRailwayBuilderForEnvironment(input: {
+  builder?: string | null;
+  environmentName?: string | null;
+}) {
+  const builder = asText(input.builder) || 'NIXPACKS';
+  const environmentName = asText(input.environmentName);
+  if (isProtectedRailwayEnvironmentName(environmentName) && builder.toLowerCase() === 'serverless') {
+    throw new Error(
+      `Railway 环境 ${environmentName} 禁止使用 serverless builder，请改用 NIXPACKS、DOCKERFILE 或 RAILPACK。`
+    );
+  }
+  return builder;
+}
+
 function toDeploymentConfig(value: unknown): DeploymentConfig {
   const record = pickRecord(value);
   return {
@@ -698,13 +717,19 @@ async function createService(
 async function configureServiceInstance(
   adminToken: string,
   environmentId: string,
-  serviceId: string
+  serviceId: string,
+  options?: {
+    environmentName?: string;
+  }
 ) {
   const buildCommand = asText(process.env.RAILWAY_DEPLOYMENT_BUILD_COMMAND);
   const startCommand = asText(process.env.RAILWAY_DEPLOYMENT_START_COMMAND);
   const rootDirectory = asText(process.env.RAILWAY_DEPLOYMENT_ROOT_DIRECTORY);
   const healthcheckPath = asText(process.env.RAILWAY_DEPLOYMENT_HEALTHCHECK_PATH);
-  const builder = asText(process.env.RAILWAY_DEPLOYMENT_BUILDER) || 'NIXPACKS';
+  const builder = resolveRailwayBuilderForEnvironment({
+    builder: process.env.RAILWAY_DEPLOYMENT_BUILDER,
+    environmentName: options?.environmentName,
+  });
 
   await executeRailwayGraphql(
     adminToken,
@@ -2296,7 +2321,9 @@ export class PlatformDeploymentAccountService {
       }
       throw error;
     }
-    await configureServiceInstance(adminToken, environment.environmentId, service.serviceId);
+    await configureServiceInstance(adminToken, environment.environmentId, service.serviceId, {
+      environmentName: environment.environmentName,
+    });
     if (config.databaseServiceName) {
       await wireApplicationDatabaseVariables(
         adminToken,
@@ -2403,7 +2430,9 @@ export class PlatformDeploymentAccountService {
       }
       throw error;
     }
-    await configureServiceInstance(adminToken, environment.environmentId, service.serviceId);
+    await configureServiceInstance(adminToken, environment.environmentId, service.serviceId, {
+      environmentName: environment.environmentName,
+    });
     const serviceDomain = await ensureServiceDomain(
       adminToken,
       userProject.projectId,

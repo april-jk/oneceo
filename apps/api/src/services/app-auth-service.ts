@@ -5,6 +5,7 @@ import { altusMemoryContextService } from './altus-memory-context-service';
 import { appAuthEmailService } from './app-auth-email-service';
 import { hashPassword, verifyPassword } from '../utils/auth-password';
 import { createSessionToken, hashSessionToken, resolveSessionExpiry } from '../utils/auth-session';
+import { runtimeEnvConfig } from '../config/runtime-env';
 
 const REGISTER_VERIFICATION_PURPOSE = 'register';
 const DEFAULT_REGISTER_CODE_LENGTH = 6;
@@ -190,30 +191,38 @@ export class AppAuthService {
     if (!displayName) {
       throw new Error('显示名称不能为空');
     }
-    if (!verificationCode) {
+
+    const skipVerificationInDev = runtimeEnvConfig.capabilities.skipEmailVerificationOnRegister;
+    if (!skipVerificationInDev && !verificationCode) {
       throw new Error('请输入邮箱验证码');
     }
     const existing = await appUserDAO.getByEmail(email);
     if (existing) {
       throw new Error('该邮箱已注册');
     }
-    const verification = await appUserEmailVerificationDAO.getByEmailAndPurpose(email, REGISTER_VERIFICATION_PURPOSE);
-    if (!verification) {
-      throw new Error('请先获取邮箱验证码');
-    }
-    if (verification.consumedAt) {
-      throw new Error('验证码已使用，请重新获取');
-    }
-    if (verification.expiresAt.getTime() <= Date.now()) {
-      throw new Error('验证码已过期，请重新获取');
-    }
-    const validCode = await verifyPassword(verificationCode, verification.codeHash);
-    if (!validCode) {
-      throw new Error('验证码错误');
-    }
-    const consumed = await appUserEmailVerificationDAO.markConsumed(String(verification.id));
-    if (!consumed) {
-      throw new Error('验证码已失效，请重新获取');
+    if (!skipVerificationInDev) {
+      const verification = await appUserEmailVerificationDAO.getByEmailAndPurpose(email, REGISTER_VERIFICATION_PURPOSE);
+      if (!verification) {
+        throw new Error('请先获取邮箱验证码');
+      }
+      if (verification.consumedAt) {
+        throw new Error('验证码已使用，请重新获取');
+      }
+      if (verification.expiresAt.getTime() <= Date.now()) {
+        throw new Error('验证码已过期，请重新获取');
+      }
+      const validCode = await verifyPassword(verificationCode, verification.codeHash);
+      if (!validCode) {
+        throw new Error('验证码错误');
+      }
+      const consumed = await appUserEmailVerificationDAO.markConsumed(String(verification.id));
+      if (!consumed) {
+        throw new Error('验证码已失效，请重新获取');
+      }
+    } else {
+      console.info('[APP_AUTH_REGISTER] skip verification code because runtime env capability is enabled', {
+        runtimeEnv: runtimeEnvConfig.runtimeEnv,
+      });
     }
     const created = await appUserDAO.create({
       email,

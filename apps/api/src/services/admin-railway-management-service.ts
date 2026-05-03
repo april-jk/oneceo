@@ -42,6 +42,25 @@ function firstText(...values: unknown[]) {
   return '';
 }
 
+function isProtectedRailwayEnvironmentName(value: string) {
+  const normalized = asText(value).toLowerCase();
+  return normalized === 'staging' || normalized === 'product' || normalized === 'production';
+}
+
+function assertRailwayBuilderAllowed(input: {
+  builder?: string;
+  environmentName?: string | null;
+}) {
+  const builder = asText(input.builder);
+  if (!builder) return;
+  const environmentName = asText(input.environmentName);
+  if (isProtectedRailwayEnvironmentName(environmentName) && builder.toLowerCase() === 'serverless') {
+    throw new Error(
+      `Railway 环境 ${environmentName} 禁止使用 serverless builder，请改用 NIXPACKS、DOCKERFILE 或 RAILPACK。`
+    );
+  }
+}
+
 function resolveRailwayManagementToken() {
   const token = firstText(
     process.env.RAILWAY_API_TOKEN,
@@ -233,6 +252,7 @@ async function deleteRailwayService(serviceId: string, environmentId: string) {
 async function updateRailwayServiceInstance(input: {
   serviceId: string;
   environmentId: string;
+  environmentName?: string | null;
   patch: {
     builder?: string;
     buildCommand?: string;
@@ -243,6 +263,10 @@ async function updateRailwayServiceInstance(input: {
   };
 }) {
   const nextInput: Record<string, unknown> = {};
+  assertRailwayBuilderAllowed({
+    builder: input.patch.builder,
+    environmentName: input.environmentName,
+  });
   if (asText(input.patch.builder)) nextInput.builder = asText(input.patch.builder);
   if (input.patch.buildCommand !== undefined) nextInput.buildCommand = asText(input.patch.buildCommand) || null;
   if (input.patch.startCommand !== undefined) nextInput.startCommand = asText(input.patch.startCommand) || null;
@@ -738,6 +762,7 @@ export class AdminRailwayManagementService {
         await updateRailwayServiceInstance({
           serviceId: item.serviceId,
           environmentId: item.environmentId,
+          environmentName: item.environmentName,
           patch,
         });
         results.push({

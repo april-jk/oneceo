@@ -12,7 +12,9 @@ function resolveRedirectTarget() {
   if (typeof window === "undefined") {
     return "/home";
   }
-  return new URLSearchParams(window.location.search).get("redirect") || "/home";
+  const target =
+    new URLSearchParams(window.location.search).get("redirect") || "/home";
+  return target === "/" ? "/home" : target;
 }
 
 export default function Login() {

@@ -26,6 +26,35 @@ export const appUsers = pgTable(
   })
 );
 
+export const appUserOauthAccounts = pgTable(
+  'app_user_oauth_accounts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => appUsers.id, { onDelete: 'cascade' }),
+    provider: text('provider').notNull(),
+    providerSubject: text('provider_subject').notNull(),
+    providerEmail: text('provider_email'),
+    displayName: text('display_name'),
+    avatarUrl: text('avatar_url'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    providerSubjectUnique: uniqueIndex('idx_app_user_oauth_accounts_provider_subject').on(
+      table.provider,
+      table.providerSubject
+    ),
+    userProviderUnique: uniqueIndex('idx_app_user_oauth_accounts_user_provider').on(
+      table.userId,
+      table.provider
+    ),
+    userIdIdx: index('idx_app_user_oauth_accounts_user_id').on(table.userId),
+    providerIdx: index('idx_app_user_oauth_accounts_provider').on(table.provider),
+  })
+);
+
 export const appUserLegacyIdMappings = pgTable(
   'app_user_legacy_id_mappings',
   {

@@ -12,6 +12,7 @@ import osacRoutes from './routes/osac-routes';
 import llmProxyRoutes from './routes/llm-proxy-routes';
 import connectorRoutes from './routes/connector-routes';
 import authRoutes from './routes/auth-routes';
+import authOauthRoutes from './routes/auth-oauth-routes';
 import internalSkillRoutes from './routes/internal-skill-routes';
 import internalSandboxRoutes from './routes/internal-sandbox-routes';
 import internalConnectorGuideRoutes from './routes/internal-connector-guide-routes';
@@ -166,6 +167,7 @@ app.post('/api/projects', (req, res) => {
 
 // 任务创建相关 API
 app.use('/api/auth', authRoutes);
+app.use('/api/auth', authOauthRoutes);
 app.use('/api/task-creation', taskCreationRoutes);
 app.use('/api/altus-managed', altusManagedRoutes);
 app.use('/api/sandbox', sandboxRoutes);

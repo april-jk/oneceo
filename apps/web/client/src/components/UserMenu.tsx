@@ -41,6 +41,7 @@ export default function UserMenu() {
           variant="ghost"
           size="icon"
           className="h-9 w-9 rounded-full p-0"
+          aria-label={t("userMenu.avatarAlt")}
         >
             <Avatar className="h-9 w-9">
               <AvatarImage

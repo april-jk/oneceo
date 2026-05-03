@@ -663,6 +663,173 @@ test('startRun keeps user_response out of executing lifecycle when clarification
   );
 });
 
+test('startRun closes pending ask_user pairing before continuing from clarification answer', async () => {
+  const run = {
+    id: 'run-answer-close-1',
+    sessionId: 'session-answer-close-1',
+    status: 'queued',
+    model: 'altus-model',
+    stopReason: null,
+    startedAt: null,
+    completedAt: null,
+    updatedAt: new Date('2026-04-26T03:00:00.000Z'),
+  };
+  const pendingAskUser = {
+    runId: 'run-waiting-close-1',
+    sessionId: 'session-answer-close-1',
+    toolCallId: 'tool-ask-close-1',
+    toolName: 'ask_user' as const,
+    messageKey: 'managed:run-waiting-close-1:clarification',
+    question: '这次要交付的是网页应用、后端 API、本地脚本，还是完整业务系统？',
+  };
+
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    id: 'session-answer-close-1',
+    title: 'Close pending ask_user',
+    pendingQuestion: pendingAskUser.question,
+    pendingOptions: ['网页应用', '后端 API', '本地脚本', '完整业务系统'],
+    pendingClarificationType: 'artifact_type',
+    pendingAskUser,
+  }) as any);
+  mock.method(altusMemoryContextService, 'buildPromptSectionForRun', async () => ({
+    promptSection: '',
+    userMemory: null,
+    projectMemory: null,
+    sessionMemory: await taskSessionAltusMemoryService.getSessionAltusMemory('session-answer-close-1'),
+  }));
+  mock.method(taskSessionAltusMemoryService, 'getSessionAltusMemory', async () => ({
+    version: 0,
+    summary: {
+      goal: '',
+      latestOutcome: '',
+      openQuestions: [],
+    },
+    constraints: [],
+    decisions: [],
+    workingNotes: [],
+    updatedAt: '2026-04-21T16:00:00.000Z',
+  }));
+  mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  mock.method(taskSessionRunDAO, 'getLatestRun', async () => null);
+  mock.method(taskSessionRunDAO, 'createRun', async () => run as any);
+  mock.method(userSkillService, 'listAvailableSkills', async () => [] as any);
+  mock.method(taskSessionSkillStateService, 'prepareRunState', async () => ({
+    skillCatalog: [],
+    skills: [],
+    activeSkillsForTurn: [],
+    residentSkillSelections: [],
+    sessionSkillState: null,
+    residentSelectionsForSync: [],
+  }) as any);
+
+  const timelineCalls: Record<string, unknown>[] = [];
+  const taskIntentProfile = {
+    mode: 'neutral',
+    reason: 'unknown',
+    recentUserMessages: ['帮我做一个管理后台系统', '网页应用'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: true,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: false,
+    needsClarification: false,
+    clarificationQuestion: '',
+    clarificationType: 'none',
+    todoRequired: false,
+    todoReason: 'none',
+    clarificationTransition: {
+      nextState: 'ready_to_execute',
+      reason: 'answer_clarification',
+      assumptions: ['网页应用'],
+    },
+  };
+  const setupService = {
+    ensureSessionOwnership: mock.fn(async () => {}),
+    buildTaskIntentProfile: mock.fn(async () => taskIntentProfile),
+    captureConnectorSnapshot: mock.fn(async () => ({
+      snapshotId: 'snapshot-answer-close-1',
+      statuses: [],
+    })),
+    captureMcpToolSnapshot: mock.fn(async () => ({
+      snapshotId: 'mcp-snapshot-answer-close-1',
+      providers: [],
+    })),
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      timelineCalls.push(input);
+    }),
+    updateSessionLifecycle: mock.fn(async () => {}),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async () => ({ sequence: 1, payload: {} })),
+    toSummary: mock.fn(async (value: any) => ({
+      id: value.id,
+      sessionId: value.sessionId,
+      status: value.status,
+      model: value.model,
+      streamUrl: `/api/altus-managed/runs/${value.id}/stream`,
+      sequence: 1,
+    })),
+  };
+  let capturedState: any = null;
+  const coordinator = {
+    execute: mock.fn(async (state: any) => {
+      capturedState = state;
+    }),
+  };
+  const recoveryService = {
+    reconcileLatestRun: mock.fn(async () => null),
+    buildRecoverySnapshot: mock.fn(async () => ({
+      model: 'altus-model',
+      status: 'queued',
+      sequence: 1,
+      sandbox: { sandboxId: null, workspaceRoot: null, reused: false, updatedAt: null },
+      connectorRuntime: { providerIds: [], updatedAt: null },
+      stream: { latestSequence: 1, latestEventType: null },
+    })),
+  };
+  const redisStateService = {
+    registerRun: mock.fn(async () => {}),
+    setRecoverySnapshot: mock.fn(async () => {}),
+    touchHeartbeat: mock.fn(async () => {}),
+  };
+  const askUserPairingService = {
+    resolvePending: mock.fn(async () => pendingAskUser),
+    closePending: mock.fn(async () => ({
+      closed: true,
+      answerKind: 'direct_answer',
+      pending: pendingAskUser,
+    })),
+  };
+
+  const service = new AltusManagedRunEntryService(
+    setupService as any,
+    eventWriter as any,
+    {} as any,
+    coordinator as any,
+    redisStateService as any,
+    recoveryService as any,
+    askUserPairingService as any
+  );
+
+  await service.startRun('session-answer-close-1', 'user-answer-close-1', {
+    content: '网页应用',
+  });
+
+  assert.equal(askUserPairingService.resolvePending.mock.callCount(), 1);
+  assert.equal(askUserPairingService.closePending.mock.callCount(), 1);
+  const closeArgs = askUserPairingService.closePending.mock.calls[0]?.arguments[0] as any;
+  assert.equal(closeArgs.pending.toolCallId, 'tool-ask-close-1');
+  assert.equal(closeArgs.answerRunId, 'run-answer-close-1');
+  assert.equal(closeArgs.answerMessageKey, 'managed:run-answer-close-1:user_response');
+  assert.equal(closeArgs.taskIntentProfile, taskIntentProfile);
+  assert.equal((timelineCalls[0]?.metadata as any)?.clarificationAnswer, true);
+  assert.equal((timelineCalls[0]?.metadata as any)?.clarificationToolCallId, 'tool-ask-close-1');
+  assert.equal(capturedState?.input.clarificationAnswerKind, 'direct_answer');
+  assert.equal(capturedState?.input.closedClarificationToolCallId, 'tool-ask-close-1');
+});
+
 test('stopRun aborts active controller for in-flight run', async () => {
   const run = {
     id: 'run-2',

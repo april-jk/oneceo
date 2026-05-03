@@ -206,7 +206,7 @@ test('restores workspace from archived object and executes restore command', asy
   r2Map.set(archiveKey, Buffer.from('restored-archive-content', 'utf8'));
 
   const restored = await restoreWorkspaceIfArchived(sandboxId);
-  assert.equal(restored, true);
+  assert.equal(restored.status, 'restored');
   assert.equal(writeLog.length, 1);
   assert.ok(commandLog.some((item) => item.command.includes('find') && item.command.includes('-exec rm -rf')));
   assert.ok(commandLog.some((item) => item.command.includes('tar -xzf')));
@@ -256,8 +256,92 @@ test('restore skips live sandbox info lookup when tracked metadata already conta
   });
 
   const restored = await restoreWorkspaceIfArchived(sandboxId);
-  assert.equal(restored, false);
+  assert.equal(restored.status, 'not_required');
   assert.equal(getSandboxInfoMock.mock.callCount(), 0);
+});
+
+test('restore fails closed when archive is required but missing', async () => {
+  const sandboxId = 'sandbox-archive-service-required-missing';
+  envMap.set(sandboxId, {
+    sessionId: sandboxId,
+    metadata: {
+      taskSessionId: 'task-archive-required-missing',
+      opencodeWorkspaceRoot: '/workspace/task-archive-required-missing',
+      opencodeStateRoot: '/state/task-archive-required-missing',
+    },
+  });
+
+  const restored = await restoreWorkspaceIfArchived(sandboxId, {
+    taskSessionId: 'task-archive-required-missing',
+    restoreRequired: true,
+    reason: 'unit_test_required_restore',
+  });
+
+  assert.equal(restored.status, 'missing_required_archive');
+  assert.match(restored.reason, /restore_archive_missing/);
+});
+
+test('restore rejects archive from unexpected source sandbox', async () => {
+  const sandboxId = 'sandbox-archive-service-source-mismatch';
+  envMap.set(sandboxId, {
+    sessionId: sandboxId,
+    metadata: {
+      taskSessionId: 'task-archive-source-mismatch',
+      opencodeWorkspaceRoot: '/workspace/task-archive-source-mismatch',
+      opencodeStateRoot: '/state/task-archive-source-mismatch',
+    },
+  });
+
+  const metadataKey = 'sessions/task-archive-source-mismatch/metadata.json';
+  const archiveKey = 'sessions/task-archive-source-mismatch/workspace.tar.gz';
+  r2Map.set(
+    metadataKey,
+    Buffer.from(
+      JSON.stringify({
+        version: 3,
+        sandboxId: 'source-a',
+        sourceSandboxId: 'source-a',
+        taskSessionId: 'task-archive-source-mismatch',
+        workspaceRoot: '/workspace/task-archive-source-mismatch',
+        stateRoot: '/state/task-archive-source-mismatch',
+        archiveKey,
+      }),
+      'utf8'
+    )
+  );
+  r2Map.set(archiveKey, Buffer.from('source-mismatch-content', 'utf8'));
+
+  const restored = await restoreWorkspaceIfArchived(sandboxId, {
+    taskSessionId: 'task-archive-source-mismatch',
+    restoreRequired: true,
+    expectedSourceSandboxId: 'source-b',
+  });
+
+  assert.equal(restored.status, 'missing_required_archive');
+  assert.match(restored.reason, /restore_manifest_source_mismatch:source-a/);
+});
+
+test('restore does not silently fall back when requested snapshot key is missing', async () => {
+  const sandboxId = 'sandbox-archive-service-missing-snapshot';
+  envMap.set(sandboxId, {
+    sessionId: sandboxId,
+    metadata: {
+      taskSessionId: 'task-archive-missing-snapshot',
+      opencodeWorkspaceRoot: '/workspace/task-archive-missing-snapshot',
+      opencodeStateRoot: '/state/task-archive-missing-snapshot',
+    },
+  });
+  r2Map.set('sessions/task-archive-missing-snapshot/workspace.tar.gz', Buffer.from('latest-content', 'utf8'));
+
+  const restored = await restoreWorkspaceIfArchived(sandboxId, {
+    taskSessionId: 'task-archive-missing-snapshot',
+    snapshotKey: 'sessions/task-archive-missing-snapshot/snapshots/missing.tar.gz',
+    restoreRequired: true,
+  });
+
+  assert.equal(restored.status, 'missing_required_archive');
+  assert.match(restored.reason, /requested_snapshot_missing/);
+  assert.equal(writeLog.length, 0);
 });
 
 test('restores legacy v2 archive and migrates workspace .opencode into state root', async () => {
@@ -287,7 +371,7 @@ test('restores legacy v2 archive and migrates workspace .opencode into state roo
   r2Map.set(archiveKey, Buffer.from('legacy-archive-content', 'utf8'));
 
   const restored = await restoreWorkspaceIfArchived(sandboxId);
-  assert.equal(restored, true);
+  assert.equal(restored.status, 'restored');
   assert.ok(
     commandLog.some(
       (item) =>

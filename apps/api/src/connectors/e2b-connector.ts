@@ -230,14 +230,46 @@ async function pauseSandbox(sandboxId: string): Promise<void> {
 }
 
 async function readFile(sandboxId: string, filePath: string): Promise<Uint8Array> {
-  const sandbox = await connectSandbox(sandboxId);
-  const result = await (sandbox as any).files.read(filePath, { format: 'bytes' });
-  return result instanceof Uint8Array ? result : Uint8Array.from(result || []);
+  try {
+    return await withRetry('readFile', async () => {
+      try {
+        const sandbox = await connectSandbox(sandboxId);
+        const result = await (sandbox as any).files.read(filePath, { format: 'bytes' });
+        return result instanceof Uint8Array ? result : Uint8Array.from(result || []);
+      } catch (error) {
+        if (isRetriableError(error) || isSandboxUnavailableError(error)) {
+          sandboxCache.delete(sandboxId);
+        }
+        throw error;
+      }
+    });
+  } catch (error) {
+    if (isSandboxUnavailableError(error)) {
+      sandboxCache.delete(sandboxId);
+    }
+    throw error;
+  }
 }
 
 async function writeFile(sandboxId: string, filePath: string, data: Uint8Array | Buffer): Promise<void> {
-  const sandbox = await connectSandbox(sandboxId);
-  await (sandbox as any).files.write(filePath, data);
+  try {
+    await withRetry('writeFile', async () => {
+      try {
+        const sandbox = await connectSandbox(sandboxId);
+        await (sandbox as any).files.write(filePath, data);
+      } catch (error) {
+        if (isRetriableError(error) || isSandboxUnavailableError(error)) {
+          sandboxCache.delete(sandboxId);
+        }
+        throw error;
+      }
+    });
+  } catch (error) {
+    if (isSandboxUnavailableError(error)) {
+      sandboxCache.delete(sandboxId);
+    }
+    throw error;
+  }
 }
 
 function shellEscape(value: string): string {

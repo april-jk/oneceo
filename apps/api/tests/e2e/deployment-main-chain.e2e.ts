@@ -6,10 +6,12 @@ import path from 'node:path';
 
 import { e2bConnector } from '../../src/connectors/e2b-connector';
 import {
+  appUserDAO,
   sandboxExecutionEnvironmentDAO,
   taskCreationSessionDAO,
   taskSessionRunDAO,
 } from '../../src/db/dao';
+import { hashPassword } from '../../src/utils/auth-password';
 
 type JsonRecord = Record<string, any>;
 
@@ -22,6 +24,12 @@ type ApiResult<T> = {
 
 type CookieSession = {
   cookie: string;
+};
+
+type TestAccount = {
+  email: string;
+  password: string;
+  displayName: string;
 };
 
 type TestReport = {
@@ -56,6 +64,7 @@ const DEPLOY_TIMEOUT_MS = Math.max(5 * 60_000, Number(process.env.ONECEO_E2E_DEP
 const URL_TIMEOUT_MS = Math.max(60_000, Number(process.env.ONECEO_E2E_URL_TIMEOUT_MS || 5 * 60_000));
 const POLL_INTERVAL_MS = Math.max(2_000, Number(process.env.ONECEO_E2E_POLL_INTERVAL_MS || 5_000));
 const KEEP_RESOURCES = ['1', 'true', 'yes', 'on'].includes(String(process.env.ONECEO_E2E_KEEP_RESOURCES || '').trim().toLowerCase());
+const TEST_ACCOUNT_PATH = path.resolve(process.cwd(), '../web/e2e/playwright-test-account.json');
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -114,8 +123,58 @@ async function writeReport(report: TestReport) {
 function requireCookie(response: Response) {
   const setCookie = response.headers.get('set-cookie') || '';
   const match = setCookie.match(/app_session_v2_id=([^;]+)/);
-  assert.ok(match?.[1], 'register response should set app_session_v2_id cookie');
+  assert.ok(match?.[1], 'auth response should set app_session_v2_id cookie');
   return `app_session_v2_id=${match[1]}`;
+}
+
+async function loadTestAccount(): Promise<TestAccount> {
+  const raw = await fs.readFile(TEST_ACCOUNT_PATH, 'utf8');
+  const parsed = JSON.parse(raw) as Record<string, unknown>;
+  const email = asText(process.env.ONECEO_E2E_USER_EMAIL) || asText(parsed.email);
+  const password = asText(process.env.ONECEO_E2E_USER_PASSWORD) || asText(parsed.password);
+  const displayName =
+    asText(process.env.ONECEO_E2E_USER_DISPLAY_NAME) || asText(parsed.displayName) || 'Playwright Test User';
+  assert.ok(email, 'test account email is required');
+  assert.ok(password, 'test account password is required');
+  return {
+    email,
+    password,
+    displayName,
+  };
+}
+
+async function ensureTestAccount(account: TestAccount) {
+  const passwordHash = await hashPassword(account.password);
+  const existing = await appUserDAO.getByEmail(account.email);
+  if (!existing) {
+    return appUserDAO.create({
+      email: account.email,
+      passwordHash,
+      displayName: account.displayName,
+    });
+  }
+  return (
+    (await appUserDAO.updateById(String(existing.id), {
+      passwordHash,
+      displayName: account.displayName,
+      status: 'active',
+    })) || existing
+  );
+}
+
+async function loginWithAccount(account: TestAccount) {
+  const login = await requestJson<{ user: JsonRecord }>(`${API_BASE}/api/auth/login`, {
+    method: 'POST',
+    body: JSON.stringify({
+      email: account.email,
+      password: account.password,
+    }),
+    expectedStatus: 200,
+  });
+  assert.ok((login.body as ApiResult<{ user: JsonRecord }>).success, 'login should succeed');
+  return {
+    cookie: requireCookie(login.response),
+  };
 }
 
 async function requestJson<T>(
@@ -261,6 +320,7 @@ async function main() {
 
   const checkpoint = (name: string, status: 'passed' | 'failed', details?: Record<string, unknown>) => {
     report.checkpoints.push({ name, status, details });
+    console.log(`[e2e] checkpoint ${name}: ${status}`);
   };
 
   try {
@@ -269,29 +329,23 @@ async function main() {
     await waitForHealth();
     checkpoint('health', 'passed', { url: HEALTH_URL });
 
-    const email = `oneceo-e2e-${Date.now()}@example.com`;
-    const password = `Oneceo!${Date.now().toString(36)}`;
-    report.userEmail = email;
-
-    const register = await requestJson<{ user: JsonRecord }>(`${API_BASE}/api/auth/register`, {
-      method: 'POST',
-      body: JSON.stringify({
-        email,
-        password,
-        displayName: 'OneCEO E2E Runner',
-      }),
-      expectedStatus: 200,
+    const account = await loadTestAccount();
+    console.log(`[e2e] loaded test account: ${account.email}`);
+    report.userEmail = account.email;
+    await ensureTestAccount(account);
+    checkpoint('ensure_test_account', 'passed', {
+      email: account.email,
     });
-    cookieSession = { cookie: requireCookie(register.response) };
-    assert.ok((register.body as ApiResult<{ user: JsonRecord }>).success, 'register should succeed');
-    checkpoint('register', 'passed', {
-      email,
+    cookieSession = await loginWithAccount(account);
+    checkpoint('login', 'passed', {
+      email: account.email,
     });
 
     const session = await postApiData<JsonRecord>(`${API_BASE}/api/task-creation/sessions`, cookieSession.cookie, {
       title: 'Railway Umami Deployment E2E',
       mode: 'altus',
     });
+    console.log('[e2e] task session created');
     sessionId = asText(session.id || session.sessionId);
     report.sessionId = sessionId;
     assert.ok(sessionId, 'session id should exist');
@@ -301,6 +355,7 @@ async function main() {
       `${API_BASE}/api/task-creation/sessions/${sessionId}/runtime/start`,
       cookieSession.cookie
     );
+    console.log('[e2e] runtime start requested');
     orchestratorSessionId = asText(runtime.orchestratorSessionId || runtime.sessionId);
     report.orchestratorSessionId = orchestratorSessionId || undefined;
     checkpoint('runtime_start', 'passed', {
@@ -332,6 +387,7 @@ async function main() {
         source: 'deployment_main_chain_e2e',
       },
     });
+    console.log('[e2e] managed input submitted');
     const runId = asText(runStart?.run?.id || runStart?.run?.runId);
     report.runId = runId || undefined;
     assert.ok(runId, 'run id should exist');
@@ -386,6 +442,7 @@ async function main() {
       `${API_BASE}/api/task-creation/sessions/${sessionId}/deployment/template`,
       cookieSession.cookie
     );
+    console.log('[e2e] deployment template fetched');
     assert.ok(Boolean(baseline.workspaceDetected), 'deployment template should detect workspace');
     checkpoint('deployment_template_baseline', 'passed', {
       status: baseline.status || null,
@@ -398,6 +455,7 @@ async function main() {
       `${API_BASE}/api/task-creation/sessions/${sessionId}/deployment/deploy`,
       cookieSession.cookie
     );
+    console.log('[e2e] deployment requested');
     assert.ok(asText(deployPanel.bindingState), 'deploy panel should return bindingState');
     checkpoint('deployment_trigger', 'passed', {
       bindingState: deployPanel.bindingState || null,

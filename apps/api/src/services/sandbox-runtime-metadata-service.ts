@@ -26,7 +26,6 @@ function resolveExecutor(metadata: Record<string, unknown>): SandboxOsacExecutor
   const normalized = asText(metadata.sandboxExecutor || metadata.executor).toLowerCase();
   if (normalized === 'altus') return 'altus';
   if (normalized === 'codex') return 'codex';
-  if (normalized === 'claudecode') return 'claudecode';
   return 'opencode';
 }
 

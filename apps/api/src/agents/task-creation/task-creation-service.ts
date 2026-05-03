@@ -27,6 +27,7 @@ import { altusManagedSetupService } from '../../services/altus-managed-setup-ser
 import { deriveManagedTaskIntentProfile } from '../../services/altus-managed-prompt-service';
 import { readManagedSkillCatalog, readManagedSkillContext } from '../../services/altus-managed-shared';
 import { readSessionSkillState } from '../../services/task-session-skill-state-service';
+import { normalizeAgentModelTier, resolveAgentRuntimeProfile, toAgentRuntimeSnapshot } from '../../services/agent-runtime-profile-service';
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -669,12 +670,17 @@ export class TaskCreationService {
         const mcpToolSnapshot = await altusManagedSetupService.captureMcpToolSnapshot(this.sessionId);
         const sessionMemory = await taskCreationFileMemoryStore.getSession(this.sessionId);
         const executionShape = this.resolveExecutionShape(payload);
+        const runtimeProfile = resolveAgentRuntimeProfile({
+          tier: this.resolveModelTier(payload.metadata),
+          needsVision: this.metadataHasImageInput(payload.metadata),
+        });
+        const runtimeSnapshot = toAgentRuntimeSnapshot(runtimeProfile);
         const run = await taskSessionRunDAO.createRun({
           id: randomUUID(),
           sessionId: this.sessionId,
           status: 'queued',
           mode: 'managed',
-          model: this.resolveAltusModel(),
+          model: runtimeSnapshot.model,
           connectorSnapshotId: connectorSnapshot.snapshotId,
           mcpToolSnapshotId: mcpToolSnapshot.snapshotId,
           metadataJson: {
@@ -682,6 +688,9 @@ export class TaskCreationService {
             source: 'task_creation_service',
             executionMode: this.osacExecutionMode,
             artifactKind: executionShape.artifactKind,
+            modelTier: runtimeSnapshot.tier,
+            billingTargetKey: runtimeSnapshot.billingTargetKey,
+            runtimeSnapshot,
           },
         });
         const taskIntentProfile = deriveManagedTaskIntentProfile([
@@ -707,7 +716,10 @@ export class TaskCreationService {
           runId: run.id,
           sessionId: this.sessionId,
           userId: payload.userId,
-          model: run.model || this.resolveAltusModel(),
+          model: run.model || runtimeSnapshot.model,
+          billingTargetKey: runtimeSnapshot.billingTargetKey,
+          runtimeSnapshot,
+          runtimeTokenSource: runtimeProfile.tokenSource,
           userInput: this.buildExecutionBrief(payload, 'development'),
           messageType: 'user_input',
           sessionTitle: sessionMemory?.title || null,
@@ -808,13 +820,24 @@ export class TaskCreationService {
     return normalized;
   }
 
-  private resolveAltusModel(): string {
-    return (
-      asText(process.env.ALTUS_MANAGED_MODEL) ||
-      asText(process.env.AGENT_OPENAI_MODEL) ||
-      asText(process.env.OPENAI_MODEL) ||
-      'qwen3-max'
-    );
+  private resolveModelTier(metadata?: Record<string, unknown>) {
+    const nested = metadata?.metadata && typeof metadata.metadata === 'object' && !Array.isArray(metadata.metadata)
+      ? (metadata.metadata as Record<string, unknown>)
+      : undefined;
+    return normalizeAgentModelTier(metadata?.modelTier ?? nested?.modelTier);
+  }
+
+  private metadataHasImageInput(value: unknown): boolean {
+    if (!value) return false;
+    if (typeof value === 'string') return value.toLowerCase().startsWith('image/');
+    if (Array.isArray(value)) return value.some((item) => this.metadataHasImageInput(item));
+    if (typeof value === 'object') {
+      const record = value as Record<string, unknown>;
+      const mimeType = asText(record.mimeType || record.contentType).toLowerCase();
+      if (mimeType.startsWith('image/')) return true;
+      return Object.values(record).some((item) => this.metadataHasImageInput(item));
+    }
+    return false;
   }
 
   private buildExecutionRequirements(shape: TaskIntentShape): string[] {

@@ -21,6 +21,18 @@ function isE2bEnvironment(metadata: Record<string, unknown> | null | undefined):
   return String(metadata.sandboxProvider || '').toLowerCase() === 'e2b';
 }
 
+function asBoolean(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on';
+}
+
+function requiresArchiveBeforeClose(metadata: Record<string, unknown>): boolean {
+  const dirty = asBoolean(metadata.archiveDirty) || asBoolean(metadata.pendingArchiveUpdate);
+  if (dirty) return true;
+  return Boolean(metadata.taskSessionId && !metadata.r2ArchiveKey && !metadata.r2ArchiveSnapshotKey);
+}
+
 export function sanitizeSandboxEnvs(envs?: Record<string, string>): Record<string, string> | undefined {
   if (!envs) return undefined;
   const sanitized: Record<string, string> = {};
@@ -143,7 +155,16 @@ export class SandboxEnvironmentService {
     const metadata = ((environment.metadata || {}) as Record<string, unknown>) || {};
     const isE2b = isE2bEnvironment(metadata);
 
-    await sandboxExecutionEnvironmentDAO.updateStatus(sessionId, 'closing', environment.vmName || null);
+    const archiveRequiredBeforeClose = isE2b && this.shouldArchiveOnClose() && requiresArchiveBeforeClose(metadata);
+    if (archiveRequiredBeforeClose && !isArchiveStorageConfigured()) {
+      await setSandboxMetadata(sessionId, {
+        archiveStatus: 'failed',
+        archiveReason: 'close_environment',
+        archiveError: 'workspace_archive_required_before_close_failed: archive storage not configured',
+        workspaceLifecycleStatus: 'handoff_blocked',
+      }).catch(() => null);
+      throw new Error('workspace_archive_required_before_close_failed: archive storage not configured');
+    }
 
     if (isE2b && this.shouldArchiveOnClose() && isArchiveStorageConfigured()) {
       try {
@@ -158,12 +179,18 @@ export class SandboxEnvironmentService {
             archiveStatus: 'failed',
             archiveReason: 'close_environment',
             archiveError: message,
+            workspaceLifecycleStatus: archiveRequiredBeforeClose ? 'handoff_blocked' : undefined,
           });
         } catch (metaError) {
           console.warn('[SANDBOX_CLOSE] set archive failure metadata failed', sessionId, metaError);
         }
+        if (archiveRequiredBeforeClose) {
+          throw new Error(`workspace_archive_required_before_close_failed: ${message}`);
+        }
       }
     }
+
+    await sandboxExecutionEnvironmentDAO.updateStatus(sessionId, 'closing', environment.vmName || null);
 
     if (isE2b) {
       await sessionMcpRecoveryService

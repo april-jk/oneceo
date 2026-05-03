@@ -28,7 +28,8 @@
 
 ### `client/src/components/connect.vue`
 - 移除 logo / loading 动画
-- 仅保留最小化连接状态文字与登录表单
+- 仅保留最小化连接状态文字
+- 自动用匿名会话进入调试浏览器，不再展示登录表单，也不再依赖 URL 中的 `pwd` / `usr`
 
 ### `client/src/components/video.vue`
 - 移除顶部/底部菜单、emotes、分辨率/剪贴板组件

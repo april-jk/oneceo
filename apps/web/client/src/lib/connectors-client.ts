@@ -330,6 +330,10 @@ export async function completeConnectorProfileOauth(
     state: string;
     code: string;
     redirectUri: string;
+    teamId?: string;
+    configurationId?: string;
+    next?: string;
+    source?: string;
   }
 ): Promise<{
   profile?: ConnectorProfile;
@@ -412,6 +416,10 @@ export async function completeConnectorOauth(
     state: string;
     code: string;
     redirectUri: string;
+    teamId?: string;
+    configurationId?: string;
+    next?: string;
+    source?: string;
   }
 ): Promise<{
   account?: ConnectorOauthAccount;

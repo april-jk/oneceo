@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
-import { afterEach, mock, test } from 'node:test';
+import { afterEach, beforeEach, mock, test } from 'node:test';
 import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-memory-store';
-import { AltusRunCoordinator } from '../src/services/altus-run-coordinator';
+import {
+  AltusRunCoordinator,
+  normalizeManagedCompletionMarkdown,
+} from '../src/services/altus-run-coordinator';
 import { AltusManagedToolRuntime } from '../src/services/altus-managed-tool-runtime';
 import { AltusRunState } from '../src/services/altus-run-state';
 import { buildManagedMcpToolName } from '../src/services/altus-managed-shared';
@@ -10,6 +13,8 @@ import { osacAgentService } from '../src/services/osac-agent-service';
 import { sandboxSkillSyncService } from '../src/services/sandbox-skill-sync-service';
 import { taskSessionAltusMemoryService } from '../src/services/task-session-altus-memory-service';
 import { taskSessionSkillStateService } from '../src/services/task-session-skill-state-service';
+import { billingService } from '../src/services/billing-service';
+import { pricingService } from '../src/services/pricing-service';
 
 const originalFetch = global.fetch;
 
@@ -17,6 +22,37 @@ const originalFetch = global.fetch;
   instructionsSection: '',
   reminderSection: '',
   attachedConnectorKeys: [],
+});
+
+beforeEach(() => {
+  mock.method(billingService, 'hasEnoughCredits', async () => true);
+  mock.method(billingService, 'deductCredits', async () => ({
+    success: true,
+    balanceAfter: 1000,
+    transactionId: 'tx_test',
+  }));
+  mock.method(billingService, 'logTokenUsage', async () => undefined);
+  mock.method(pricingService, 'getActivePricing', async (model: string) => ({
+    id: 'pricing_test',
+    model,
+    modelProvider: 'agent',
+    promptPricePer1kTokens: 1,
+    completionPricePer1kTokens: 1,
+    isActive: true,
+    effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+    effectiveUntil: null,
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+  } as any));
+  mock.method(pricingService, 'getCacheRatiosForPricing', async () => ({
+    hit: 0.5,
+    creation: 0,
+  }));
+  mock.method(taskSessionSkillStateService, 'saveSandboxFileMemoryToDb', async () => undefined);
+  mock.method(taskSessionSkillStateService, 'markResidentSkillsMaterialized', async () => undefined);
+  mock.method(taskSessionAltusMemoryService, 'saveTimelineDerivedMemory', async () => null as any);
+  mock.method(taskSessionAltusMemoryService, 'markMaterialized', async (input: any) => input.state || null);
+  mock.method(taskSessionAltusMemoryService, 'saveSandboxFileMemoryToDb', async () => null as any);
 });
 
 afterEach(() => {
@@ -78,6 +114,36 @@ function createSseResponse(blocks: string[]) {
   });
 }
 
+test('normalizeManagedCompletionMarkdown converts bullet glyph lists to markdown lists', () => {
+  const markdown = normalizeManagedCompletionMarkdown(
+    [
+      '项目包含以下核心功能：',
+      '',
+      '• 完整的游戏前端：支持键盘和触摸操作 • 用户认证系统：支持注册和登录 • 数据库集成：保存分数和状态',
+      '',
+      '验证：',
+      '• 创建项目结构',
+      '• 运行健康检查',
+    ].join('\n')
+  );
+
+  assert.equal(
+    markdown,
+    [
+      '项目包含以下核心功能：',
+      '',
+      '- 完整的游戏前端：支持键盘和触摸操作',
+      '- 用户认证系统：支持注册和登录',
+      '- 数据库集成：保存分数和状态',
+      '',
+      '验证：',
+      '- 创建项目结构',
+      '- 运行健康检查',
+    ].join('\n')
+  );
+  assert.equal(normalizeManagedCompletionMarkdown('验证： • 已创建项目'), '验证：\n- 已创建项目');
+});
+
 test('readStreamedModelChoice emits assistant delta callbacks while accumulating final content', async () => {
   const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
   const assistantDeltas: Array<{ delta: string; fullText: string }> = [];
@@ -99,6 +165,215 @@ test('readStreamedModelChoice emits assistant delta callbacks while accumulating
     { delta: '你好', fullText: '你好' },
     { delta: '，世界', fullText: '你好，世界' },
   ]);
+});
+
+test('callModel sanitizes malformed assistant tool arguments at the final request boundary', async () => {
+  const capturedBodies: any[] = [];
+  global.fetch = mock.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+    capturedBodies.push(JSON.parse(String(init?.body || '{}')));
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: 'ok',
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const coordinator = new AltusRunCoordinator(
+    {} as any,
+    {} as any,
+    {} as any,
+    {} as any,
+    {
+      projectMessagesForModel: (messages: any[]) => messages,
+    } as any
+  );
+
+  await (coordinator as any).callModel({
+    messages: [
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'call-shell-1',
+            type: 'function',
+            function: {
+              name: 'shell_execute',
+              arguments: '{"command":"pnpm test"',
+            },
+          },
+          {
+            id: 'call-read-1',
+            type: 'function',
+            function: {
+              name: 'read_file',
+              arguments: JSON.stringify({ path: 'package.json' }),
+            },
+          },
+        ],
+      },
+    ],
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(capturedBodies[0]?.messages?.[0]?.tool_calls?.[0]?.function?.arguments, '{}');
+  assert.equal(
+    capturedBodies[0]?.messages?.[0]?.tool_calls?.[1]?.function?.arguments,
+    '{"path":"package.json"}'
+  );
+});
+
+test('execute feeds malformed current tool arguments back to the model instead of executing the tool', async () => {
+  const state = createState('run-invalid-current-tool-args', 'session-invalid-current-tool-args');
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-invalid-current-tool-args',
+      workspaceRoot: '/workspace/session-invalid-current-tool-args',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => undefined),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(
+      async (
+        _runId: string,
+        _sessionId: string,
+        _userId: string,
+        eventType: string,
+        payload: Record<string, unknown>
+      ) => {
+        eventCalls.push({ eventType, payload });
+        return {
+          sequence: eventCalls.length,
+          payload,
+        };
+      }
+    ),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message:
+              fetchCount === 1
+                ? {
+                    content: '',
+                    tool_calls: [
+                      {
+                        id: 'tool-invalid-shell-1',
+                        type: 'function',
+                        function: {
+                          name: 'shell_execute',
+                          arguments: '{"command":"pnpm test"',
+                        },
+                      },
+                    ],
+                  }
+                : {
+                    content: '',
+                    tool_calls: [
+                      {
+                        id: 'tool-complete-after-invalid-1',
+                        type: 'function',
+                        function: {
+                          name: 'complete_task',
+                          arguments: JSON.stringify({
+                            summary: '已恢复并完成。',
+                          }),
+                        },
+                      },
+                    ],
+                  },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async (_toolName: string, args: any) => ({
+    type: 'complete' as const,
+    summary: String(args.summary || '已完成。'),
+  }));
+  mock.method(taskSessionSkillStateService, 'markResidentSkillsMaterialized', async () => undefined);
+  mock.method(taskSessionAltusMemoryService, 'markMaterialized', async (input: any) => ({
+    ...(input.state || {}),
+    sandboxMaterialization: {
+      sandboxId: input.sandboxId,
+      workspaceRoot: input.workspaceRoot,
+      materializedAt: '2026-04-24T18:30:00.000Z',
+    },
+  }));
+  mock.method(taskSessionAltusMemoryService, 'saveSandboxFileMemoryToDb', async () => ({
+    version: 1,
+    summary: {
+      goal: '恢复非法工具参数',
+      latestOutcome: '已恢复并完成。',
+      openQuestions: [],
+    },
+    constraints: [],
+    decisions: [],
+    workingNotes: [],
+    updatedAt: '2026-04-24T18:31:00.000Z',
+  }));
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(fetchCount, 2);
+  assert.equal(executeMock.mock.callCount(), 1);
+  assert.equal(executeMock.mock.calls[0]?.arguments[0], 'complete_task');
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+  assert.equal(state.status, 'completed');
+
+  const invalidToolEvent = eventCalls.find(
+    (entry) => entry.eventType === 'tool_call_failed' && entry.payload.toolName === 'shell_execute'
+  );
+  assert.ok(invalidToolEvent);
+  assert.equal(invalidToolEvent.payload.error, '工具参数不是合法 JSON object，已要求模型重新生成工具调用。');
 });
 
 test('resolveDeploymentCompletionIntent accepts deployment status polling as completion evidence', () => {
@@ -189,6 +464,60 @@ test('buildPostToolRunStatusContent uses user-friendly wording instead of comman
   );
 });
 
+test('plain text capability answers complete without forcing tool calls', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+
+  assert.equal(
+    (coordinator as any).shouldAcceptPlainTextConversationCompletion(
+      '你能做什么',
+      '我可以帮你制作 PPT、开发 Web 应用、调试代码。请直接告诉我你希望我执行的具体任务。'
+    ),
+    true
+  );
+  assert.equal(
+    (coordinator as any).shouldAcceptPlainTextConversationCompletion(
+      '还能做什么',
+      '我还可以生成数据表格、编写报告、部署应用。只要你给出具体指令，我会开始处理。'
+    ),
+    true
+  );
+});
+
+test('plain text concrete-task prompts are treated as clarification instead of failure', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+
+  assert.equal(
+    (coordinator as any).isClarificationResponse(
+      'watson，请直接告诉我您希望我执行的具体任务，例如：“创建一个产品介绍PPT”。'
+    ),
+    true
+  );
+  assert.equal(
+    (coordinator as any).isClarificationResponse(
+      '只要您给出具体指令，我会立即开始处理。'
+    ),
+    true
+  );
+});
+
+test('plain text completed task summaries are not treated as clarification', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+
+  assert.equal(
+    (coordinator as any).isClarificationResponse(
+      [
+        '- 已为您创建一个基础的管理后台系统，包含仪表盘、用户管理和系统设置三个页面',
+        '- 系统采用 Express 作为后端服务器，前端使用原生 HTML/CSS/JavaScript 实现',
+        '- 已配置路由切换和健康检查端点 `/api/system/health`',
+        '- 应用已成功启动并可通过调试浏览器访问',
+        '',
+        '您可以点击上方调试链接查看运行效果。如需扩展功能，请告诉我具体需求。',
+      ].join('\n')
+    ),
+    false
+  );
+});
+
 test('deployment status evidence only unlocks completion after non-transient success state', () => {
   const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
   const intent = (coordinator as any).resolveDeploymentCompletionIntent('帮我部署当前项目');
@@ -210,6 +539,24 @@ test('deployment status evidence only unlocks completion after non-transient suc
       summary: 'deployment ready',
     }),
     true
+  );
+  assert.equal(
+    (coordinator as any).isManagedDeploymentEvidenceSuccessful(intent, {
+      toolName: 'get_application_deployment_status',
+      status: 'success',
+      deploymentStatus: 'failed',
+      summary: 'deployment failed',
+    }),
+    false
+  );
+  assert.equal(
+    (coordinator as any).isManagedDeploymentEvidenceSuccessful(intent, {
+      toolName: 'deploy_application',
+      status: 'success',
+      deploymentStatus: 'failed',
+      summary: 'deployment failed',
+    }),
+    false
   );
 });
 
@@ -475,11 +822,12 @@ test('execute completes after tool round and final assistant response', async ()
       workspaceRoot: '/workspace/session-coordinator-complete',
       reused: false,
     })),
-    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => {
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string, options?: any) => {
       assert.match(systemPrompt, /You are Altus/);
-      assert.match(systemPrompt, /Altus Memory Context/);
+      assert.match(String(options?.turnStatePrompt || ''), /Altus Memory Context/);
       return [
         { role: 'system', content: systemPrompt },
+        { role: 'system', content: options?.turnStatePrompt || '' },
         { role: 'user', content: input },
       ];
     }),
@@ -632,7 +980,7 @@ test('execute completes after tool round and final assistant response', async ()
 
   const timelineCall = setupCalls.find((entry) => entry.type === 'timeline') as any;
   assert.equal(timelineCall.input.messageType, 'assistant_message');
-  assert.equal(timelineCall.input.content, '2048 已完成并写入 workspace。\n\n验证:\n- 已写入 index.html');
+  assert.equal(timelineCall.input.content, '2048 已完成并写入 workspace。\n\n验证:\n\n- 已写入 index.html');
 
   assert.deepEqual(
     eventCalls.map((entry) => entry.eventType),
@@ -644,6 +992,9 @@ test('execute completes after tool round and final assistant response', async ()
   assert.match(String(eventCalls[4]?.payload.content || ''), /页面框架已经搭好|继续把样式和交互补完整/);
   assert.equal(eventCalls[5]?.payload.toolName, 'complete_task');
   assert.equal(eventCalls[6]?.payload.toolName, 'complete_task');
+  assert.equal((eventCalls[6]?.payload.toolResultEnvelope as any)?.status, 'complete');
+  assert.equal((eventCalls[6]?.payload.toolResultEnvelope as any)?.toolUseId, 'tool-complete-1');
+  assert.match(String((eventCalls[6]?.payload.toolResultEnvelope as any)?.contentForModel || ''), /2048 已完成/);
 });
 
 test('execute preserves richer assistant text when complete_task summary is concise', async () => {
@@ -693,7 +1044,9 @@ test('execute preserves richer assistant text when complete_task summary is conc
   };
 
   const detailedAssistantContent =
-    '已查询并汇总 2026 年 4 月 9 日美股市场要点：\n- 标普与纳指期货盘前走强\n- 市场关注通胀与降息路径\n- 盘前成交情绪偏谨慎';
+    '已查询并汇总 2026 年 4 月 9 日美股市场要点：\n\n• 标普与纳指期货盘前走强 • 市场关注通胀与降息路径 • 盘前成交情绪偏谨慎';
+  const normalizedDetailedAssistantContent =
+    '已查询并汇总 2026 年 4 月 9 日美股市场要点：\n\n- 标普与纳指期货盘前走强\n- 市场关注通胀与降息路径\n- 盘前成交情绪偏谨慎';
 
   global.fetch = mock.fn(async () => {
     return new Response(
@@ -740,7 +1093,7 @@ test('execute preserves richer assistant text when complete_task summary is conc
 
   const timelineCall = setupCalls.find((entry) => (entry as any).input?.messageType === 'assistant_message') as any;
   assert.ok(timelineCall);
-  assert.equal(timelineCall.input.content, detailedAssistantContent);
+  assert.equal(timelineCall.input.content, normalizedDetailedAssistantContent);
 });
 
 test('execute blocks deployment completion until managed deployment succeeds', async () => {
@@ -909,6 +1262,9 @@ test('execute blocks deployment completion until managed deployment succeeds', a
             summary: '发布完成',
             deploymentStatus: 'SUCCESS',
             url: 'https://example.up.railway.app',
+            deploymentFlow: {
+              state: 'succeeded',
+            },
           }),
         };
       }
@@ -969,7 +1325,120 @@ test('execute blocks deployment completion until managed deployment succeeds', a
   });
   assert.match(String(deployCompleted?.payload.internalView?.detail || ''), /工具: deploy_application/);
   assert.match(String(deployCompleted?.payload.internalView?.detail || ''), /deploymentStatus: SUCCESS/);
+  assert.match(String(deployCompleted?.payload.internalView?.detail || ''), /deploymentFlowState: succeeded/);
   assert.match(String(deployCompleted?.payload.internalView?.detail || ''), /url: https:\/\/example\.up\.railway\.app/);
+});
+
+test('execute blocks deployment completion when deployment tool success lacks succeeded reducer state', async () => {
+  const state = createState(
+    'run-coordinator-deployment-reducer-guard',
+    'session-coordinator-deployment-reducer-guard',
+    '帮我部署当前项目'
+  );
+  state.input.taskIntentProfile = {
+    mode: 'deployable_web_app',
+    reason: 'latest_deployable_request',
+    recentUserMessages: ['帮我部署当前项目'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: false,
+    deployRequested: true,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: true,
+  };
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-deployment-reducer-guard',
+      workspaceRoot: '/workspace/session-coordinator-deployment-reducer-guard',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => undefined),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return { sequence: eventCalls.length, payload };
+    }),
+  };
+  const lifecycleService = {
+    markRunning: mock.fn(async () => lifecycleCalls.push('running')),
+    markWaitingUser: mock.fn(async () => lifecycleCalls.push('waiting_user')),
+    markCompleted: mock.fn(async () => lifecycleCalls.push('completed')),
+    markFailed: mock.fn(async () => lifecycleCalls.push('failed')),
+    markStopped: mock.fn(async () => lifecycleCalls.push('stopped')),
+  };
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '', tool_calls: [{ id: 'tool-deploy-1', type: 'function', function: { name: 'deploy_application', arguments: JSON.stringify({}) } }] } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (fetchCount === 2) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '', tool_calls: [{ id: 'tool-complete-after-deploy', type: 'function', function: { name: 'complete_task', arguments: JSON.stringify({ summary: '应用已完成线上发布。' }) } }] } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (fetchCount === 3) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '', tool_calls: [{ id: 'tool-deploy-2', type: 'function', function: { name: 'deploy_application', arguments: JSON.stringify({}) } }] } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: '', tool_calls: [{ id: 'tool-complete-after-deploy', type: 'function', function: { name: 'complete_task', arguments: JSON.stringify({ summary: '应用已完成线上发布。' }) } }] } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+
+  let deployCallCount = 0;
+  mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'deploy_application') {
+      deployCallCount += 1;
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({
+          status: 'success',
+          summary: deployCallCount === 1 ? '发布工具返回成功但 reducer 尚未验证公网访问' : '发布完成',
+          deploymentStatus: 'SUCCESS',
+          url: 'https://example.up.railway.app',
+          deploymentFlow: {
+            state: deployCallCount === 1 ? 'verifying_public_access' : 'succeeded',
+          },
+        }),
+      };
+    }
+    return {
+      type: 'complete' as const,
+      summary: '应用已完成线上发布。',
+    };
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+  const blockedComplete = eventCalls.find(
+    (entry) => entry.eventType === 'tool_call_failed' && entry.payload.toolName === 'complete_task'
+  );
+  assert.ok(blockedComplete);
+  assert.equal(
+    blockedComplete.payload.error,
+    '线上部署尚未完成，Altus 将继续修复并重试发布。'
+  );
+  assert.equal(deployCallCount, 2);
 });
 
 test('execute emits deliverables_ready before final assistant message when complete_task returns attachments', async () => {
@@ -1102,7 +1571,7 @@ test('execute emits deliverables_ready before final assistant message when compl
     (entry) => (entry as any).input?.messageType === 'assistant_message'
   ) as any;
   assert.ok(assistantTimeline);
-  assert.equal(assistantTimeline.input.content, '已完成最终文档交付。\n\n验证:\n- 已输出 final.docx');
+  assert.equal(assistantTimeline.input.content, '已完成最终文档交付。\n\n验证:\n\n- 已输出 final.docx');
 });
 
 test('execute injects skill catalog prompt before active skill body', async () => {
@@ -1176,13 +1645,15 @@ test('execute injects skill catalog prompt before active skill body', async () =
       workspaceRoot: '/workspace/session-coordinator-skills',
       reused: false,
     })),
-    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => {
-      assert.match(systemPrompt, /# Available skills catalog/);
-      assert.match(systemPrompt, /office-ppt: 创建专业演示文稿/);
-      assert.match(systemPrompt, /# Active skills/);
-      assert.match(systemPrompt, /# Skill Brief/);
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string, options?: any) => {
+      const turnStatePrompt = String(options?.turnStatePrompt || '');
+      assert.match(turnStatePrompt, /# Available skills catalog/);
+      assert.match(turnStatePrompt, /office-ppt: 创建专业演示文稿/);
+      assert.match(turnStatePrompt, /# Active skills/);
+      assert.match(turnStatePrompt, /# Skill Brief/);
       return [
         { role: 'system', content: systemPrompt },
+        { role: 'system', content: turnStatePrompt },
         { role: 'user', content: input },
       ];
     }),
@@ -1497,12 +1968,187 @@ test('execute does not complete on plain assistant text and continues until comp
   assert.deepEqual(lifecycleCalls, ['running', 'completed']);
   assert.equal(state.status, 'completed');
   assert.equal(setupCalls.length, 1);
-  assert.equal((setupCalls[0] as any).input.content, '已确认当前工作空间为空，尚未进行文件创建。\n\n验证:\n- 工作空间目录已检查');
+  assert.equal((setupCalls[0] as any).input.content, '已确认当前工作空间为空，尚未进行文件创建。\n\n验证:\n\n- 工作空间目录已检查');
   assert.deepEqual(
     eventCalls.map((entry) => entry.eventType),
     ['run_status', 'run_status', 'run_status', 'run_status', 'tool_call_started', 'tool_call_completed', 'assistant_message']
   );
   assert.equal(eventCalls[2]?.payload.transitionReason, 'plain_text_continuation_prompted');
+});
+
+test('execute does not accept plain-text completion when the task still has an explicit deployment goal', async () => {
+  const state = createState(
+    'run-coordinator-deploy-plain-text-blocked',
+    'session-coordinator-deploy-plain-text-blocked',
+    '请直接构建并部署当前项目'
+  );
+  state.input.taskIntentProfile = {
+    ...state.input.taskIntentProfile,
+    mode: 'deployable_web_app',
+    reason: 'latest_deployable_request',
+    deployRequested: true,
+    deploymentAllowed: true,
+    platformCapabilityIntent: {
+      mode: 'execute',
+      intentKind: 'explicit_action',
+      topic: 'deployment',
+      capabilityKind: 'deploy',
+      directModeCapabilityId: 'deploy_session_website',
+      shouldExecute: true,
+      confidence: 0.92,
+      reason: '用户明确要求执行部署',
+    },
+  };
+
+  const lifecycleCalls: string[] = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-deploy-plain-text-blocked',
+      workspaceRoot: '/workspace/session-coordinator-deploy-plain-text-blocked',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => undefined),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return { sequence: eventCalls.length, payload };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => lifecycleCalls.push('running')),
+    markWaitingUser: mock.fn(async () => lifecycleCalls.push('waiting_user')),
+    markCompleted: mock.fn(async () => lifecycleCalls.push('completed')),
+    markFailed: mock.fn(async () => lifecycleCalls.push('failed')),
+    markStopped: mock.fn(async () => lifecycleCalls.push('stopped')),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    fetchCount += 1;
+    const payload = init?.body ? JSON.parse(String(init.body)) : null;
+    if (fetchCount === 2) {
+      const messages = Array.isArray(payload?.messages) ? payload.messages : [];
+      assert.equal(messages.at(-1)?.role, 'user');
+      assert.match(String(messages.at(-1)?.content || ''), /explicit deployment goal/i);
+    }
+    if (fetchCount === 1) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '项目已经准备好了，我现在总结一下。',
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (fetchCount === 2) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-deploy-after-plain-text',
+                    type: 'function',
+                    function: {
+                      name: 'deploy_application',
+                      arguments: JSON.stringify({}),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-complete-after-ready',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '应用已完成线上发布。',
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const executedTools: string[] = [];
+  mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    executedTools.push(toolName);
+    if (toolName === 'deploy_application') {
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({
+          toolName,
+          status: 'success',
+          bindingState: 'ready',
+          summary: '发布完成',
+          deploymentStatus: 'SUCCESS',
+          url: 'https://example.oneceo.space',
+          deploymentFlow: {
+            state: 'succeeded',
+          },
+        }),
+      };
+    }
+    return {
+      type: 'complete' as const,
+      summary: '应用已完成线上发布。',
+    };
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(fetchCount, 3);
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+  assert.deepEqual(executedTools, ['deploy_application', 'complete_task']);
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'run_status' &&
+        entry.payload.transitionReason === 'plain_text_continuation_prompted'
+    ),
+    true
+  );
 });
 
 test('execute accepts plain assistant text for pure memory identity questions', async () => {
@@ -1726,6 +2372,127 @@ test('execute requests clarification and transitions to waiting_user', async () 
   );
   assert.equal(eventCalls[3]?.payload.question, '你希望是网页版本还是原生版本？');
   assert.equal(eventCalls[3]?.payload.messageKey, 'managed:run-coordinator-clarify:clarification');
+});
+
+test('execute defers sibling tool calls when ask_user appears in same tool batch', async () => {
+  const state = createState('run-coordinator-clarify-sibling', 'session-coordinator-clarify-sibling');
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-sibling',
+      workspaceRoot: '/workspace/session-coordinator-clarify-sibling',
+      reused: true,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => {}),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  global.fetch = mock.fn(async () =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-ask-sibling',
+                  type: 'function',
+                  function: {
+                    name: 'ask_user',
+                    arguments: JSON.stringify({
+                      question: '这次要交付网页应用还是后端 API？',
+                    }),
+                  },
+                },
+                {
+                  id: 'tool-read-sibling',
+                  type: 'function',
+                  function: {
+                    name: 'read_file',
+                    arguments: JSON.stringify({
+                      path: 'README.md',
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    )
+  ) as typeof fetch;
+
+  const setPendingClarificationMock = mock.method(
+    taskCreationFileMemoryStore,
+    'setPendingClarification',
+    async () => {}
+  );
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => ({
+    type: 'ask_user' as const,
+    question: '这次要交付网页应用还是后端 API？',
+  }));
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeMock.mock.callCount(), 1);
+  assert.deepEqual(lifecycleCalls, ['running', 'waiting_user']);
+  assert.deepEqual(
+    eventCalls.map((entry) => entry.eventType),
+    ['run_status', 'run_status', 'tool_call_started', 'tool_call_completed', 'clarification_requested']
+  );
+  const deferredEvent = eventCalls.find((entry) => entry.payload.toolCallId === 'tool-read-sibling');
+  assert.equal((deferredEvent?.payload.result as any)?.status, 'deferred_until_user_answer');
+  assert.equal((deferredEvent?.payload.result as any)?.askUserToolCallId, 'tool-ask-sibling');
+  const pendingArgs = setPendingClarificationMock.mock.calls[0]?.arguments as any[];
+  assert.deepEqual(pendingArgs[4], {
+    runId: 'run-coordinator-clarify-sibling',
+    toolCallId: 'tool-ask-sibling',
+    messageKey: 'managed:run-coordinator-clarify-sibling:clarification',
+  });
+  const clarificationEvent = eventCalls[eventCalls.length - 1];
+  assert.equal(clarificationEvent?.payload.toolCallId, 'tool-ask-sibling');
 });
 
 test('execute converts plain assistant clarification into waiting_user', async () => {
@@ -2251,11 +3018,13 @@ test('execute recovers from connector guide block by loading the guide and retry
       workspaceRoot: '/workspace/session-coordinator-connector-guide-retry',
       reused: false,
     })),
-    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => {
-      assert.match(systemPrompt, /# Connector MCP Instructions/);
-      assert.match(systemPrompt, /# Relevant Connector Guides/);
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string, options?: any) => {
+      const turnStatePrompt = String(options?.turnStatePrompt || '');
+      assert.match(turnStatePrompt, /# Connector MCP Instructions/);
+      assert.match(turnStatePrompt, /# Relevant Connector Guides/);
       return [
         { role: 'system', content: systemPrompt },
+        { role: 'system', content: turnStatePrompt },
         { role: 'user', content: input },
       ];
     }),
@@ -2468,7 +3237,7 @@ test('execute recovers from connector guide block by loading the guide and retry
   const timelineCall = setupCalls.find((entry) => entry.type === 'timeline') as any;
   assert.equal(
     timelineCall.input.content,
-    '已先加载 connector guide，再成功读取 GitHub 仓库信息。\n\n验证:\n- 首次直连 GitHub MCP 被阻断\n- 加载 guide 后重试成功'
+    '已先加载 connector guide，再成功读取 GitHub 仓库信息。\n\n验证:\n\n- 首次直连 GitHub MCP 被阻断\n- 加载 guide 后重试成功'
   );
 });
 
@@ -2526,11 +3295,13 @@ test('execute recovers from connector guide block by loading the guide and retry
       workspaceRoot: '/workspace/session-coordinator-vercel-guide-retry',
       reused: false,
     })),
-    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => {
-      assert.match(systemPrompt, /# Connector MCP Instructions/);
-      assert.match(systemPrompt, /## vercel/);
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string, options?: any) => {
+      const turnStatePrompt = String(options?.turnStatePrompt || '');
+      assert.match(turnStatePrompt, /# Connector MCP Instructions/);
+      assert.match(turnStatePrompt, /## vercel/);
       return [
         { role: 'system', content: systemPrompt },
+        { role: 'system', content: turnStatePrompt },
         { role: 'user', content: input },
       ];
     }),
@@ -2743,7 +3514,7 @@ test('execute recovers from connector guide block by loading the guide and retry
   const timelineCall = setupCalls.find((entry) => entry.type === 'timeline') as any;
   assert.equal(
     timelineCall.input.content,
-    '已先加载 Vercel connector guide，再成功读取 Vercel 项目信息。\n\n验证:\n- 首次直连 Vercel MCP 被阻断\n- 加载 guide 后重试成功'
+    '已先加载 Vercel connector guide，再成功读取 Vercel 项目信息。\n\n验证:\n\n- 首次直连 Vercel MCP 被阻断\n- 加载 guide 后重试成功'
   );
 });
 
@@ -2752,6 +3523,7 @@ test('execute switches to vision model when conversation contains image blocks',
   process.env.ALTUS_MANAGED_VISION_MODEL = 'qwen3-vl-plus';
   try {
     const state = createState('run-coordinator-vision', 'session-coordinator-vision');
+    state.input.model = '';
 
     const setupService = {
       ensureSandbox: mock.fn(async () => ({

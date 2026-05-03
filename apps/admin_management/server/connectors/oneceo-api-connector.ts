@@ -134,6 +134,75 @@ export type DeploymentManagementOverviewResponse = {
   };
 };
 
+export type OperationsAnalyticsRangeKey = '24h' | '7d' | '30d' | '90d';
+
+export type OperationsAnalyticsExpandedMetric = {
+  name: string;
+  pageviews: number;
+  visitors: number;
+  visits: number;
+  bounces: number;
+  totaltime: number;
+};
+
+export type OperationsAnalyticsOverviewResponse = {
+  updatedAt: string;
+  range: {
+    key: OperationsAnalyticsRangeKey;
+    startAt: string;
+    endAt: string;
+    unit: 'hour' | 'day' | 'month' | 'year';
+    timezone: string;
+  };
+  source: {
+    umami: {
+      configured: boolean;
+      host: string;
+      teamId: string | null;
+      websiteId: string | null;
+    };
+    oneceoDb: {
+      configured: boolean;
+    };
+  };
+  traffic: {
+    stats: {
+      pageviews: number;
+      visits: number;
+      visitors: number;
+      bounces: number;
+      totaltime: number;
+    };
+    activeVisitors: number;
+    bounceRate: number;
+    averageVisitDurationSeconds: number;
+    pageviews: {
+      pageviews: Array<{ x: string; y: number }>;
+      sessions: Array<{ x: string; y: number }>;
+    };
+  };
+  acquisition: {
+    referrers: OperationsAnalyticsExpandedMetric[];
+    channels: OperationsAnalyticsExpandedMetric[];
+    entryPages: OperationsAnalyticsExpandedMetric[];
+  };
+  behavior: {
+    topPages: OperationsAnalyticsExpandedMetric[];
+    devices: OperationsAnalyticsExpandedMetric[];
+    events: OperationsAnalyticsExpandedMetric[];
+  };
+  business: {
+    metrics: Array<{
+      key: string;
+      label: string;
+      value: number;
+      source: 'umami' | 'oneceo_db';
+      unit?: 'count' | 'percent' | 'seconds';
+    }>;
+  };
+  alerts: string[];
+};
+
 export type DeploymentManagementListResponse = {
   records: AdminDeploymentRecord[];
   total: number;
@@ -908,6 +977,16 @@ export class OneceoApiConnector {
     if (filters?.taskSessionId) params.set('taskSessionId', filters.taskSessionId);
     const suffix = params.toString() ? `?${params.toString()}` : '';
     return this.request<DeploymentManagementOverviewResponse>(`/api/internal/admin/deployments/overview${suffix}`);
+  }
+
+  getOperationsAnalyticsOverview(filters?: { range?: OperationsAnalyticsRangeKey; timezone?: string }) {
+    const params = new URLSearchParams();
+    if (filters?.range) params.set('range', filters.range);
+    if (filters?.timezone) params.set('timezone', filters.timezone);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return this.request<OperationsAnalyticsOverviewResponse>(
+      `/api/internal/admin/operations/analytics/overview${suffix}`
+    );
   }
 
   listDeploymentRecords(filters?: {

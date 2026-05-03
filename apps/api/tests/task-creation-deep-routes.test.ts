@@ -18,6 +18,7 @@ import { taskSessionRedisCacheService } from '../src/services/task-session-redis
 import { osacAgentService } from '../src/services/osac-agent-service';
 import { opencodeEventStreamService } from '../src/services/opencode-event-stream-service';
 import { opencodeRemoteService } from '../src/services/opencode-remote-service';
+import { sessionMcpRecoveryService } from '../src/services/session-mcp-recovery-service';
 import { redisClientService } from '../src/services/redis-client-service';
 
 type TestServer = {
@@ -36,6 +37,7 @@ const sandboxEnvDaoAny = sandboxExecutionEnvironmentDAO as any;
 const osacAgentAny = osacAgentService as any;
 const opencodeEventStreamAny = opencodeEventStreamService as any;
 const opencodeRemoteAny = opencodeRemoteService as any;
+const recoveryAny = sessionMcpRecoveryService as any;
 
 const originalGetSessionDao = sessionDaoAny.getSession;
 const originalBindUserIfMissing = sessionDaoAny.bindUserIfMissing;
@@ -50,6 +52,7 @@ const originalGetSessionFile = fileStoreAny.getSession;
 const originalGetMessagesFileStore = fileStoreAny.getMessages;
 const originalAssertOwnership = sessionConnectorAny.assertSessionOwnership;
 const originalListSessionConnectors = sessionConnectorAny.listSessionConnectors;
+const originalAttachConnector = sessionConnectorAny.attachConnector;
 const originalDetachConnector = sessionConnectorAny.detachConnector;
 const originalListDeliverables = deliverableServiceAny.listSessionDeliverables;
 const originalGetRecentMessagesPage = redisCacheAny.getRecentMessagesPage;
@@ -66,6 +69,7 @@ const originalBindSession = opencodeEventStreamAny.bindSession;
 const originalSubscribeOpencodeEvent = opencodeEventStreamAny.subscribe;
 const originalSubscribeRemote = opencodeRemoteAny.subscribe;
 const originalLoadNativeMessageHistory = opencodeRemoteAny.loadNativeMessageHistory;
+const originalEnsureSessionRecovered = recoveryAny.ensureSessionRecovered;
 
 after(async () => {
   sessionDaoAny.getSession = originalGetSessionDao;
@@ -81,6 +85,7 @@ after(async () => {
   fileStoreAny.getMessages = originalGetMessagesFileStore;
   sessionConnectorAny.assertSessionOwnership = originalAssertOwnership;
   sessionConnectorAny.listSessionConnectors = originalListSessionConnectors;
+  sessionConnectorAny.attachConnector = originalAttachConnector;
   sessionConnectorAny.detachConnector = originalDetachConnector;
   deliverableServiceAny.listSessionDeliverables = originalListDeliverables;
   redisCacheAny.getRecentMessagesPage = originalGetRecentMessagesPage;
@@ -97,6 +102,7 @@ after(async () => {
   opencodeEventStreamAny.subscribe = originalSubscribeOpencodeEvent;
   opencodeRemoteAny.subscribe = originalSubscribeRemote;
   opencodeRemoteAny.loadNativeMessageHistory = originalLoadNativeMessageHistory;
+  recoveryAny.ensureSessionRecovered = originalEnsureSessionRecovered;
   await redisClientService.disconnect?.();
   await closeDatabaseConnection().catch(() => undefined);
 });
@@ -1280,6 +1286,60 @@ test('POST /api/task-creation/sessions/:sessionId/connectors/:connectorKey/attac
 
     assert.equal(response.status, 504);
     assert.equal(payload.error, 'OSAC 请求超时');
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /api/task-creation/sessions/:sessionId/connectors/:connectorKey/attach triggers recovery when attach lands in pending_recover', async () => {
+  const server = await startServer();
+  sessionConnectorAny.assertSessionOwnership = async () => undefined;
+  sessionDaoAny.getTaskDescription = async () => null;
+  sessionDaoAny.getRecentMessages = async () => [];
+  fileStoreAny.getSession = async (sessionId: string) => ({
+    ...ownerSession(sessionId),
+    runtime: {
+      orchestratorSessionId: 'orch-attach-1',
+    },
+  });
+  sessionConnectorAny.attachConnector = async () => ({
+    connectorKey: 'vercel',
+    runtimeStatus: 'pending_recover',
+    attached: true,
+  });
+  let listed = false;
+  sessionConnectorAny.listSessionConnectors = async () => {
+    listed = true;
+    return [
+      {
+        connectorKey: 'vercel',
+        runtimeStatus: 'connected',
+        attached: true,
+      },
+    ];
+  };
+  let recoveredArgs: unknown[] | null = null;
+  recoveryAny.ensureSessionRecovered = async (...args: unknown[]) => {
+    recoveredArgs = args;
+    return true;
+  };
+
+  try {
+    const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-attach/connectors/vercel/attach`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-test-user-id': 'owner-user',
+      },
+      body: JSON.stringify({ profileId: 'profile-vercel-1' }),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.deepEqual(recoveredArgs, ['s-attach', 'orch-attach-1']);
+    assert.equal(listed, true);
+    assert.equal(payload.data.connector.runtimeStatus, 'connected');
   } finally {
     await server.close();
   }

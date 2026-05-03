@@ -23,6 +23,7 @@ import {
 } from './railway-deployment-service';
 import {
   uploadTaskSessionWorkspaceToRailway,
+  inspectTaskSessionDeploymentTemplate,
   type DeploymentTemplateBaselineData,
   type DeploymentWorkspacePublishReport,
 } from './task-creation-deployment-source-service';
@@ -62,6 +63,11 @@ type TaskSessionDeploymentState = {
   environmentName?: string;
   serviceId?: string;
   serviceName?: string;
+  publicUrl?: string;
+  publicDomain?: string;
+  domainStatus?: string;
+  domainStatusMessage?: string;
+  publicReachabilityStartedAt?: string;
   resourceBinding?: DeploymentResourceBindingData;
 };
 
@@ -75,6 +81,60 @@ let deploymentSyncTimer: NodeJS.Timeout | null = null;
 let deploymentSyncRunning = false;
 const deploymentSyncRunningSessions = new Set<string>();
 const terminalSuccessDeploymentStatuses = new Set(['SUCCESS', 'DEPLOYED', 'ACTIVE']);
+const PUBLIC_REACHABILITY_SETTLING_TIMEOUT_MS = Math.max(
+  60_000,
+  Number(process.env.TASK_SESSION_DEPLOYMENT_PUBLIC_SETTLING_TIMEOUT_MS || 180_000)
+);
+
+function isLiveDeploymentDomainRefreshStatus(value: unknown) {
+  const status = asText(value).toLowerCase();
+  return (
+    status === 'failed' ||
+    status === 'repair_required' ||
+    status === 'pending_dns' ||
+    status === 'pending_certificate'
+  );
+}
+
+function hasStaleActiveDeploymentDomainMessage(input: {
+  domainStatus?: unknown;
+  domainStatusMessage?: unknown;
+}) {
+  return (
+    asText(input.domainStatus).toLowerCase() === 'active' &&
+    asText(input.domainStatusMessage).includes('等待 DNS 或证书生效')
+  );
+}
+
+function hasStaleDeploymentAnalyticsMetadata(input: {
+  analytics?: unknown;
+  publicDomain?: unknown;
+  publicUrl?: unknown;
+  latestStaticUrl?: unknown;
+  latestUrl?: unknown;
+  domains?: unknown;
+}) {
+  const analytics = pickRecord(input.analytics);
+  const analyticsDomain = asText(analytics.domain)
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '');
+  const websiteName = asText(analytics.websiteName);
+  const domains = Array.isArray(input.domains) ? input.domains : [];
+  const canonicalDomain = (
+    asText(input.publicDomain) ||
+    asText(input.publicUrl) ||
+    asText(input.latestStaticUrl) ||
+    asText(input.latestUrl) ||
+    asText(domains[0])
+  )
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '');
+  return (
+    Boolean(canonicalDomain && analyticsDomain && analyticsDomain !== canonicalDomain) ||
+    websiteName.includes('railway.app') ||
+    analyticsDomain.includes('railway.app')
+  );
+}
 
 function deploymentSyncKeyFor(taskSessionId: string) {
   return `deployment_sync:${taskSessionId}`;
@@ -171,6 +231,10 @@ function pickTaskSessionDeploymentPanelSnapshot(metadataRaw: unknown): RailwayDe
     latestStatus: asText(record.latestStatus) || undefined,
     latestUrl: asText(record.latestUrl) || undefined,
     latestStaticUrl: asText(record.latestStaticUrl) || undefined,
+    publicUrl: asText(record.publicUrl) || undefined,
+    publicDomain: asText(record.publicDomain) || undefined,
+    domainStatus: asText(record.domainStatus) || undefined,
+    domainStatusMessage: asText(record.domainStatusMessage) || undefined,
     activeDeploymentPending: record.activeDeploymentPending === true,
     domains,
     deployments: deployments as RailwayDeploymentPanelData['deployments'],
@@ -276,19 +340,30 @@ export async function resolveTaskSessionEnvironment(input: {
   };
 }
 
+export function resolveDeploymentResourceProjectKey(input: {
+  session?: Pick<FileSessionRecord, 'id' | 'projectId'> | null;
+  taskSessionId?: string;
+}) {
+  return (
+    asText(input.session?.projectId) ||
+    asText(input.taskSessionId) ||
+    asText(input.session?.id)
+  );
+}
+
 function buildDeploymentResourceBinding(
-  sessionProjectKey: string,
+  deploymentProjectKey: string,
   account: Awaited<ReturnType<typeof platformDeploymentAccountService.getProjectAccount>>
 ): DeploymentResourceBindingData | undefined {
   if (!account) return undefined;
-  const normalizedSessionProjectKey = asText(sessionProjectKey);
+  const normalizedDeploymentProjectKey = asText(deploymentProjectKey);
   const projectKey = asText(account.projectKey) || 'default';
   return {
     projectKey,
     isolationMode:
-      normalizedSessionProjectKey && projectKey === normalizedSessionProjectKey ? 'session' : 'default',
+      normalizedDeploymentProjectKey && projectKey === normalizedDeploymentProjectKey ? 'session' : 'default',
     projectModel: 'per_user',
-    environmentModel: 'per_session',
+    environmentModel: 'per_user_project',
     tokenKind: 'project',
     tokenScope: 'railway_project_environment',
     tokenManagedBy: 'oneceo_platform',
@@ -316,7 +391,10 @@ function pickTaskSessionDeploymentState(metadataRaw: unknown): TaskSessionDeploy
           isolationMode:
             asText(resourceBindingRaw.isolationMode) === 'session' ? 'session' : 'default',
           projectModel: 'per_user',
-          environmentModel: 'per_session',
+          environmentModel:
+            asText(resourceBindingRaw.environmentModel) === 'per_user_project'
+              ? 'per_user_project'
+              : 'per_session',
           tokenKind: 'project',
           tokenScope: 'railway_project_environment',
           tokenManagedBy: 'oneceo_platform',
@@ -343,6 +421,10 @@ function pickTaskSessionDeploymentState(metadataRaw: unknown): TaskSessionDeploy
     environmentName: asText(record.environmentName) || undefined,
     serviceId: asText(record.serviceId) || undefined,
     serviceName: asText(record.serviceName) || undefined,
+    publicUrl: asText(record.publicUrl) || undefined,
+    publicDomain: asText(record.publicDomain) || undefined,
+    domainStatus: asText(record.domainStatus) || undefined,
+    domainStatusMessage: asText(record.domainStatusMessage) || undefined,
     resourceBinding,
   };
 }
@@ -376,7 +458,9 @@ function buildStoredSnapshotFromState(
   const base = panel || buildStoredDeploymentStatePanel(state, analytics);
   const bindingState = state.bindingState || base.bindingState;
   const shouldKeepProvisioningPhase =
-    bindingState === 'provisioning' || base.activeDeploymentPending === true;
+    bindingState === 'provisioning' ||
+    bindingState === 'public_settling' ||
+    base.activeDeploymentPending === true;
   const shouldKeepProviderError = bindingState === 'repair_required' || bindingState === 'provider_error';
   return {
     ...base,
@@ -397,6 +481,12 @@ function buildStoredSnapshotFromState(
     environmentName: state.environmentName || base.environmentName,
     serviceId: state.serviceId || base.serviceId,
     serviceName: state.serviceName || base.serviceName,
+    publicUrl: state.publicUrl || base.publicUrl,
+    publicDomain: state.publicDomain || base.publicDomain,
+    domainStatus: state.domainStatus || base.domainStatus,
+    domainStatusMessage: state.domainStatusMessage || base.domainStatusMessage,
+    publicReachabilityStartedAt:
+      state.publicReachabilityStartedAt || base.publicReachabilityStartedAt,
     message: state.message || base.message,
     resourceBinding: state.resourceBinding || base.resourceBinding,
     analytics: analytics || base.analytics,
@@ -438,8 +528,16 @@ function buildStoredDeploymentStatePanel(
     environmentName: state.environmentName,
     serviceId: state.serviceId,
     serviceName: state.serviceName,
-    activeDeploymentPending: bindingState === 'provisioning',
-    domains: [],
+    latestUrl: state.publicUrl,
+    latestStaticUrl: state.publicUrl,
+    publicUrl: state.publicUrl,
+    publicDomain: state.publicDomain,
+    domainStatus: state.domainStatus,
+    domainStatusMessage: state.domainStatusMessage,
+    activeDeploymentPending:
+      bindingState === 'provisioning' || bindingState === 'public_settling',
+    publicReachabilityStartedAt: state.publicReachabilityStartedAt,
+    domains: state.publicUrl ? [state.publicUrl] : [],
     deployments: [],
     logs: [],
     missing: [],
@@ -448,36 +546,53 @@ function buildStoredDeploymentStatePanel(
   } satisfies RailwayDeploymentPanelData;
 }
 
-function pickFailedDeploymentStatus(panel: RailwayDeploymentPanelData | null | undefined) {
-  if (!panel) return '';
-  const selectedDeploymentId = asText(panel.deploymentId);
-  const selectedDeployment =
-    panel.deployments.find((item) => asText(item.id) === selectedDeploymentId) ||
-    panel.deployments[0] ||
-    null;
-  return asText(selectedDeployment?.status || panel.latestStatus).toUpperCase();
-}
-
 export function shouldRecycleRailwayServiceForFailedRedeploy(input: {
-  state?: Pick<TaskSessionDeploymentState, 'bindingState' | 'serviceId'> | null;
+  state?: Pick<TaskSessionDeploymentState, 'bindingState' | 'providerErrorCode' | 'serviceId'> | null;
   panel?: RailwayDeploymentPanelData | null;
 }) {
   const bindingState = asText(input.panel?.bindingState || input.state?.bindingState).toLowerCase();
-  if (bindingState === 'repair_required' || bindingState === 'provider_error') {
-    return true;
-  }
-
-  const serviceId = asText(input.panel?.serviceId || input.state?.serviceId);
-  if (!serviceId) {
+  if (bindingState !== 'repair_required') {
     return false;
   }
 
-  const deploymentStatus = pickFailedDeploymentStatus(input.panel);
-  return deploymentStatus === 'FAILED' || deploymentStatus === 'CRASHED';
+  const providerErrorCode = asText(input.panel?.providerErrorCode || input.state?.providerErrorCode);
+  return (
+    providerErrorCode === 'railway_environment_not_found' ||
+    providerErrorCode === 'railway_service_not_found'
+  );
+}
+
+export function shouldCleanupFailedDeploymentResources(input: {
+  currentPhase: RailwayDeploymentProvisioningPhase;
+  providerErrorCode?: RailwayDeploymentProviderErrorCode;
+  account?: { serviceId?: string; environmentId?: string } | null;
+  previousAccount?: { serviceId?: string; environmentId?: string } | null;
+  shouldRecycleFailedRedeploy?: boolean;
+}) {
+  if (!input.account?.serviceId) {
+    return false;
+  }
+
+  const providerErrorCode = asText(input.providerErrorCode);
+  if (
+    input.currentPhase === 'public_reachability' &&
+    providerErrorCode === 'deployment_provider_error'
+  ) {
+    return false;
+  }
+
+  return (
+    input.shouldRecycleFailedRedeploy === true ||
+    !input.previousAccount?.serviceId ||
+    input.previousAccount.serviceId !== input.account.serviceId ||
+    input.previousAccount.environmentId !== input.account.environmentId
+  );
 }
 
 function resolveDeploymentAnalyticsDomain(input: {
   metadata: Record<string, unknown>;
+  accountPublicUrl?: string;
+  accountPublicDomain?: string;
   accountDomain?: string;
   panel?: RailwayDeploymentPanelData | null;
 }) {
@@ -486,6 +601,8 @@ function resolveDeploymentAnalyticsDomain(input: {
     asText(input.panel?.latestStaticUrl) ||
     asText(input.panel?.latestUrl) ||
     asText(input.panel?.domains?.[0]) ||
+    asText(input.accountPublicUrl) ||
+    asText(input.accountPublicDomain) ||
     asText(analytics.domain) ||
     asText(input.accountDomain) ||
     ''
@@ -513,6 +630,140 @@ function buildDeploymentAnalyticsRuntimeConfig(input: {
   };
 }
 
+function extractPublishedAnalyticsConfig(html: string): {
+  host?: string;
+  websiteId?: string;
+  tag?: string;
+  publicDomain?: string;
+} | null {
+  const markerStart = html.indexOf('<!-- ONECEO_ANALYTICS:START -->');
+  const markerEnd = html.indexOf('<!-- ONECEO_ANALYTICS:END -->', Math.max(0, markerStart));
+  const source =
+    markerStart >= 0 && markerEnd > markerStart
+      ? html.slice(markerStart, markerEnd)
+      : html.slice(0, 200_000);
+  const frozenConfigMatch = source.match(/window\.__ONECEO_ANALYTICS__\s*=\s*Object\.freeze\((\{[\s\S]*?\})\);/);
+  if (frozenConfigMatch?.[1]) {
+    try {
+      const parsed = JSON.parse(frozenConfigMatch[1]) as Record<string, unknown>;
+      return {
+        host: asText(parsed.host || parsed.endpoint) || undefined,
+        websiteId: asText(parsed.websiteId) || undefined,
+        tag: asText(parsed.tag) || undefined,
+        publicDomain: asText(parsed.publicDomain) || undefined,
+      };
+    } catch {
+      // Fall through to attribute/string based extraction.
+    }
+  }
+  const websiteId =
+    source.match(/["']websiteId["']\s*:\s*["']([^"']+)["']/)?.[1] ||
+    source.match(/data-website-id=["']([^"']+)["']/)?.[1];
+  if (!asText(websiteId)) {
+    return null;
+  }
+  return {
+    websiteId: asText(websiteId),
+    host:
+      asText(source.match(/["']host["']\s*:\s*["']([^"']+)["']/)?.[1]) ||
+      asText(source.match(/data-host-url=["']([^"']+)["']/)?.[1]) ||
+      undefined,
+    tag:
+      asText(source.match(/["']tag["']\s*:\s*["']([^"']+)["']/)?.[1]) ||
+      asText(source.match(/data-tag=["']([^"']+)["']/)?.[1]) ||
+      undefined,
+    publicDomain: asText(source.match(/["']publicDomain["']\s*:\s*["']([^"']+)["']/)?.[1]) || undefined,
+  };
+}
+
+async function readPublishedAnalyticsConfig(panel: RailwayDeploymentPanelData): Promise<{
+  host?: string;
+  websiteId?: string;
+  tag?: string;
+  publicDomain?: string;
+} | null> {
+  const publicUrl =
+    asText(panel.latestStaticUrl) ||
+    asText(panel.latestUrl) ||
+    asText(panel.domains[0]);
+  if (!publicUrl) {
+    return null;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5_000);
+  try {
+    const response = await fetch(publicUrl, {
+      method: 'GET',
+      headers: {
+        accept: 'text/html,application/xhtml+xml,text/plain;q=0.8,*/*;q=0.1',
+        'user-agent': 'OneCEO-Deployment-Analytics-Reconcile/1.0',
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const text = (await response.text()).slice(0, 2_000_000);
+    return extractPublishedAnalyticsConfig(text);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function reconcilePublishedAnalyticsMetadata(input: {
+  orchestratorSessionId: string;
+  metadata: Record<string, unknown>;
+  panel: RailwayDeploymentPanelData;
+}): Promise<Record<string, unknown>> {
+  const published = await readPublishedAnalyticsConfig(input.panel);
+  const publishedWebsiteId = asText(published?.websiteId);
+  if (!publishedWebsiteId) {
+    return input.metadata;
+  }
+  const currentAnalytics = pickRecord(input.metadata.analytics);
+  const canonicalDomain = asText(input.panel.publicDomain) ||
+    asText(input.panel.latestStaticUrl || input.panel.latestUrl || input.panel.domains[0])
+      .replace(/^https?:\/\//, '')
+      .replace(/\/.*$/, '');
+  const publishedDomain = asText(published?.publicDomain)
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '');
+  const shouldKeepCurrentMetadata =
+    asText(currentAnalytics.websiteId) === publishedWebsiteId &&
+    (!canonicalDomain ||
+      asText(currentAnalytics.domain) === canonicalDomain ||
+      publishedDomain === canonicalDomain);
+  if (shouldKeepCurrentMetadata) {
+    return input.metadata;
+  }
+  const nextAnalytics = {
+    ...currentAnalytics,
+    provider: 'umami',
+    status: 'bound',
+    host: asText(published?.host) || asText(currentAnalytics.host),
+    websiteId: publishedWebsiteId,
+    tag: asText(published?.tag) || asText(currentAnalytics.tag) || 'production',
+    domain:
+      canonicalDomain ||
+      publishedDomain ||
+      asText(currentAnalytics.domain) ||
+      asText(input.panel.latestStaticUrl || input.panel.latestUrl || input.panel.domains[0])
+        .replace(/^https?:\/\//, '')
+        .replace(/\/.*$/, ''),
+    updatedAt: new Date().toISOString(),
+    lastError: undefined,
+  };
+  await setSandboxMetadata(input.orchestratorSessionId, {
+    analytics: nextAnalytics,
+  });
+  return {
+    ...input.metadata,
+    analytics: nextAnalytics,
+  };
+}
+
 async function prepareSessionAnalyticsBindingSafely(input: {
   sessionId: string;
   orchestratorSessionId: string;
@@ -528,6 +779,8 @@ async function prepareSessionAnalyticsBindingSafely(input: {
       account: input.account,
       domain: resolveDeploymentAnalyticsDomain({
         metadata: pickRecord(input.environmentMetadata),
+        accountPublicUrl: input.account.publicUrl,
+        accountPublicDomain: input.account.publicDomain,
         accountDomain: input.account.serviceDomain,
         panel: input.panel || null,
       }),
@@ -550,10 +803,23 @@ async function finalizeSessionAnalyticsBinding(input: {
   account: Awaited<ReturnType<typeof platformDeploymentAccountService.ensureUserAccount>>;
   panel: RailwayDeploymentPanelData;
 }) {
+  const latestEnvironment = input.orchestratorSessionId
+    ? await sandboxExecutionEnvironmentDAO.getBySessionId(input.orchestratorSessionId).catch(() => null)
+    : null;
+  const latestMetadata = latestEnvironment?.metadata ?? input.environmentMetadata;
+  const latestAnalytics = pickRecord(pickRecord(latestMetadata).analytics);
+  const panelAnalytics = pickRecord(input.panel.analytics);
+  const stableMetadata =
+    asText(latestAnalytics.websiteId) || !asText(panelAnalytics.websiteId)
+      ? latestMetadata
+      : {
+          ...pickRecord(latestMetadata),
+          analytics: panelAnalytics,
+        };
   await prepareSessionAnalyticsBindingSafely({
     sessionId: input.sessionId,
     orchestratorSessionId: input.orchestratorSessionId,
-    environmentMetadata: input.environmentMetadata,
+    environmentMetadata: stableMetadata,
     account: input.account,
     panel: input.panel,
   });
@@ -590,6 +856,7 @@ function shouldFollowupTaskSessionDeploymentSync(panel: RailwayDeploymentPanelDa
   return (
     panel.activeDeploymentPending ||
     panel.bindingState === 'provisioning' ||
+    panel.bindingState === 'public_settling' ||
     (panel.analytics?.status === 'pending_domain' &&
       Boolean(panel.latestStaticUrl || panel.latestUrl || panel.domains[0]))
   );
@@ -635,6 +902,7 @@ async function recoverTaskSessionDeploymentSyncBacklog() {
     const panel = pickTaskSessionDeploymentPanelSnapshot(metadata.deploymentPanel);
     const shouldSync =
       (state?.bindingState === 'provisioning') ||
+      (state?.bindingState === 'public_settling') ||
       (state?.bindingState === 'repair_required') ||
       (!panel && (Boolean(state?.projectId) || Boolean(state?.serviceId)));
     if (!shouldSync) continue;
@@ -661,8 +929,12 @@ async function waitForTaskSessionPublicReachabilityAndRefresh(input: {
     asText(input.panel.latestUrl) ||
     asText(input.panel.domains[0]);
   const latestStatus = asText(input.panel.latestStatus).toUpperCase();
+  const domainStatus = asText(input.panel.domainStatus).toLowerCase();
+  const publicDomainStillActivating =
+    domainStatus === 'pending_dns' || domainStatus === 'pending_certificate';
   const shouldProbe =
     Boolean(publicUrl) &&
+    !publicDomainStillActivating &&
     (input.panel.activeDeploymentPending === true ||
       asText(input.panel.bindingState) === 'ready' ||
       terminalSuccessDeploymentStatuses.has(latestStatus));
@@ -708,6 +980,24 @@ async function waitForTaskSessionPublicReachabilityAndRefresh(input: {
   }
 }
 
+function buildTaskSessionPublicReachabilitySettlingPanel(
+  panel: RailwayDeploymentPanelData,
+  message: string
+): RailwayDeploymentPanelData {
+  const startedAt = asText(panel.publicReachabilityStartedAt) || new Date().toISOString();
+  return {
+    ...panel,
+    bindingState: 'public_settling',
+    provisioningPhase: 'public_reachability',
+    providerErrorCode: undefined,
+    providerErrorMessage: undefined,
+    message: `发布完成，正在等待公网生效。${message}`,
+    lastVerifiedAt: new Date().toISOString(),
+    activeDeploymentPending: true,
+    publicReachabilityStartedAt: startedAt,
+  };
+}
+
 function buildTaskSessionPublicReachabilityFailurePanel(
   panel: RailwayDeploymentPanelData,
   message: string
@@ -721,6 +1011,7 @@ function buildTaskSessionPublicReachabilityFailurePanel(
     message,
     lastVerifiedAt: new Date().toISOString(),
     activeDeploymentPending: false,
+    publicReachabilityStartedAt: panel.publicReachabilityStartedAt,
   };
 }
 
@@ -744,6 +1035,7 @@ function promoteTaskSessionSuccessfulLiveDeployment(
     message: undefined,
     lastVerifiedAt: new Date().toISOString(),
     activeDeploymentPending: false,
+    publicReachabilityStartedAt: undefined,
   };
 }
 
@@ -760,9 +1052,14 @@ export async function validateTaskSessionDeploymentPublicReadiness(input: {
     asText(input.panel.latestUrl) ||
     asText(input.panel.domains[0]);
   const latestStatus = asText(input.panel.latestStatus).toUpperCase();
+  const domainStatus = asText(input.panel.domainStatus).toLowerCase();
+  const publicDomainStillActivating =
+    domainStatus === 'pending_dns' || domainStatus === 'pending_certificate';
   const shouldValidateTerminalSuccess =
     Boolean(publicUrl) &&
+    !publicDomainStillActivating &&
     (asText(input.panel.bindingState) === 'ready' ||
+      asText(input.panel.bindingState) === 'public_settling' ||
       terminalSuccessDeploymentStatuses.has(latestStatus));
   const shouldPromoteSuccessfulLiveDeployment =
     Boolean(publicUrl) &&
@@ -795,6 +1092,14 @@ export async function validateTaskSessionDeploymentPublicReadiness(input: {
       return input.panel;
     }
     const reason = error instanceof Error ? error.message : String(error);
+    const startedAt = asText(input.panel.publicReachabilityStartedAt) || new Date().toISOString();
+    const settlingElapsedMs = Math.max(0, Date.now() - Date.parse(startedAt || new Date().toISOString()));
+    if (settlingElapsedMs < PUBLIC_REACHABILITY_SETTLING_TIMEOUT_MS) {
+      return buildTaskSessionPublicReachabilitySettlingPanel(
+        input.panel,
+        '平台正在等待域名、证书和健康检查全部收敛。'
+      );
+    }
     return buildTaskSessionPublicReachabilityFailurePanel(
       input.panel,
       `部署平台已返回成功状态，但公网访问验证失败。${reason}`
@@ -934,6 +1239,10 @@ function buildPlatformDeployment(
     environmentName: account.environmentName,
     serviceId: account.serviceId,
     serviceName: account.serviceName,
+    publicUrl: account.publicUrl,
+    publicDomain: account.publicDomain,
+    domainStatus: account.domainStatus,
+    domainStatusMessage: account.domainStatusMessage,
     repository: account.githubRepoFullName,
   };
 }
@@ -963,7 +1272,9 @@ async function resolveLiveTaskSessionDeploymentPanel(input: {
   resolvedEnvironment?: TaskSessionDeploymentEnvironment;
   resolvedOrchestratorSessionId?: string | null;
 }): Promise<RailwayDeploymentPanelData> {
-  const projectKey = asText(input.session?.id);
+  const projectKey = resolveDeploymentResourceProjectKey({
+    session: input.session,
+  });
   const { environment } = await resolveTaskSessionEnvironment({
     session: input.session,
     orchestratorSessionId: input.resolvedOrchestratorSessionId,
@@ -971,7 +1282,18 @@ async function resolveLiveTaskSessionDeploymentPanel(input: {
   });
   const metadata = pickRecord(environment?.metadata);
   const savedState = pickTaskSessionDeploymentState(metadata.deploymentState);
-  const account = await platformDeploymentAccountService.getProjectAccount(input.userId, projectKey);
+  let account = await platformDeploymentAccountService.getProjectAccount(input.userId, projectKey);
+  if (
+    account?.serviceId &&
+    (!asText(account.publicUrl) ||
+      !asText(account.domainStatus) ||
+      asText(account.domainStatus) === 'failed' ||
+      asText(account.domainStatus) === 'repair_required' ||
+      asText(account.domainStatus) === 'pending_dns' ||
+      asText(account.domainStatus) === 'pending_certificate')
+  ) {
+    account = await platformDeploymentAccountService.ensureProjectAccount(input.userId, projectKey);
+  }
   if (!account) {
     const analytics = await buildTaskSessionAnalyticsPanel(metadata);
     if (savedState?.bindingState && savedState.bindingState !== 'uninitialized') {
@@ -1002,7 +1324,9 @@ async function resolveLiveTaskSessionDeploymentPanel(input: {
   const analytics = await buildTaskSessionAnalyticsPanel(metadata);
   const bindingState = panel.bindingState || savedState?.bindingState || 'ready';
   const shouldKeepProvisioningPhase =
-    bindingState === 'provisioning' || panel.activeDeploymentPending === true;
+    bindingState === 'provisioning' ||
+    bindingState === 'public_settling' ||
+    panel.activeDeploymentPending === true;
   const shouldKeepProviderError = bindingState === 'repair_required' || bindingState === 'provider_error';
   return {
     ...panel,
@@ -1072,7 +1396,16 @@ export async function buildTaskSessionDeploymentResponse(input: {
       (!savedPanel && savedState?.bindingState && savedState.bindingState !== 'uninitialized') ||
       savedPanel?.activeDeploymentPending === true ||
       savedPanel?.bindingState === 'provisioning' ||
+      savedPanel?.bindingState === 'public_settling' ||
+      savedPanel?.bindingState === 'provider_error' ||
+      isLiveDeploymentDomainRefreshStatus(savedPanel?.domainStatus) ||
+      hasStaleActiveDeploymentDomainMessage(savedPanel || {}) ||
+      hasStaleDeploymentAnalyticsMetadata(savedPanel || {}) ||
       savedState?.bindingState === 'provisioning' ||
+      savedState?.bindingState === 'public_settling' ||
+      savedState?.bindingState === 'provider_error' ||
+      isLiveDeploymentDomainRefreshStatus(savedState?.domainStatus) ||
+      hasStaleActiveDeploymentDomainMessage(savedState || {}) ||
       savedState?.bindingState === 'repair_required'
     );
   if (shouldRefreshLiveSnapshot) {
@@ -1105,9 +1438,12 @@ export async function buildTaskSessionDeploymentResponse(input: {
   }
   const account = await platformDeploymentAccountService.getProjectAccount(
     input.userId,
-    asText(input.session?.id)
+    resolveDeploymentResourceProjectKey({ session: input.session })
   );
-  const resourceBinding = buildDeploymentResourceBinding(asText(input.session?.id), account);
+  const resourceBinding = buildDeploymentResourceBinding(
+    resolveDeploymentResourceProjectKey({ session: input.session }),
+    account
+  );
   const analytics = await buildTaskSessionAnalyticsPanel(metadata);
   return {
     configured: Boolean(account),
@@ -1148,6 +1484,11 @@ function buildDeploymentStatePatchFromPanel(
     environmentName: panel.environmentName,
     serviceId: panel.serviceId,
     serviceName: panel.serviceName,
+    publicUrl: panel.publicUrl,
+    publicDomain: panel.publicDomain,
+    domainStatus: panel.domainStatus,
+    domainStatusMessage: panel.domainStatusMessage,
+    publicReachabilityStartedAt: panel.publicReachabilityStartedAt,
     resourceBinding: resourceBinding || panel.resourceBinding,
   };
 }
@@ -1175,7 +1516,12 @@ export async function refreshTaskSessionDeploymentSnapshot(input: {
   });
   const resourceBinding = panel.resourceBinding;
   const hasPublicUrl = Boolean(asText(panel.latestStaticUrl) || asText(panel.latestUrl) || panel.domains[0]);
-  const account = hasPublicUrl ? await platformDeploymentAccountService.getProjectAccount(input.userId, asText(input.session?.id)) : null;
+  const account = hasPublicUrl
+    ? await platformDeploymentAccountService.getProjectAccount(
+        input.userId,
+        resolveDeploymentResourceProjectKey({ session: input.session })
+      )
+    : null;
   if (hasPublicUrl && orchestratorSessionId && account) {
     await finalizeSessionAnalyticsBinding({
       sessionId: asText(input.session?.id),
@@ -1198,9 +1544,20 @@ export async function refreshTaskSessionDeploymentSnapshot(input: {
     panel: nextPanel,
     healthPath: asText(baseline.healthcheckPath) || undefined,
   });
+  const reconciledMetadata = await reconcilePublishedAnalyticsMetadata({
+    orchestratorSessionId,
+    metadata: refreshedMetadata,
+    panel: nextPanel,
+  });
+  if (reconciledMetadata !== refreshedMetadata) {
+    nextPanel = {
+      ...nextPanel,
+      analytics: await buildTaskSessionAnalyticsPanel(reconciledMetadata),
+    };
+  }
   await persistTaskSessionDeploymentState(
     orchestratorSessionId,
-    pickTaskSessionDeploymentState(refreshedMetadata.deploymentState || metadata.deploymentState),
+    pickTaskSessionDeploymentState(reconciledMetadata.deploymentState || metadata.deploymentState),
     buildDeploymentStatePatchFromPanel(nextPanel, resourceBinding || undefined)
   );
   await persistTaskSessionDeploymentPanelSnapshot(orchestratorSessionId, nextPanel);
@@ -1239,8 +1596,12 @@ export async function executeTaskSessionDeploymentAction(
   const savedPanel = pickTaskSessionDeploymentPanelSnapshot(environmentMetadata.deploymentPanel);
   let currentPhase: RailwayDeploymentProvisioningPhase = 'resource_provisioning';
   let account: Awaited<ReturnType<typeof platformDeploymentAccountService.ensureProjectAccount>> | null = null;
+  const deploymentProjectKey = resolveDeploymentResourceProjectKey({
+    session: input.session,
+    taskSessionId: input.taskSessionId,
+  });
   const previousAccount = await platformDeploymentAccountService
-    .getProjectAccount(input.userId, input.taskSessionId)
+    .getProjectAccount(input.userId, deploymentProjectKey)
     .catch(() => null);
   const userProject = await platformDeploymentAccountService.getUserProject(input.userId).catch(() => null);
   const shouldRecycleFailedRedeploy =
@@ -1250,14 +1611,13 @@ export async function executeTaskSessionDeploymentAction(
       panel: savedPanel,
     });
 
+  currentPhase = 'workspace_publish';
   savedState = await persistTaskSessionDeploymentState(orchestratorSessionId, savedState, {
     bindingState: 'provisioning',
     provisioningPhase: currentPhase,
     providerErrorCode: undefined,
     providerErrorMessage: undefined,
-    message: shouldRecycleFailedRedeploy
-      ? '检测到上次部署失败，平台正在回收旧的 Railway 服务并重新准备部署资源。'
-      : '平台正在准备 Railway 部署资源。',
+    message: '平台正在检查部署基线并准备发布当前工作区。',
     projectId: userProject?.projectId,
     projectName: userProject?.projectName,
     lastVerifiedAt: new Date().toISOString(),
@@ -1265,10 +1625,33 @@ export async function executeTaskSessionDeploymentAction(
   });
 
   try {
+    if (input.action !== 'rollback') {
+      const workspaceRoot =
+        asText(environmentMetadata.opencodeWorkspaceRoot) ||
+        asText(input.workspacePath) ||
+        resolveOpencodeWorkspacePath(input.taskSessionId);
+      if (!orchestratorSessionId || !workspaceRoot) {
+        throw new Error('deployment_preflight_not_ready:未找到可部署的工作区，请先生成项目文件');
+      }
+      const baseline = await inspectTaskSessionDeploymentTemplate({
+        orchestratorSessionId,
+        workspaceRoot,
+      });
+      await setSandboxMetadata(orchestratorSessionId, {
+        deploymentTemplateBaseline: baseline,
+      });
+      if (baseline.status !== 'ready') {
+        throw new Error(
+          `deployment_preflight_not_ready:${
+            baseline.errors.join('；') || '当前项目缺少稳定发布所需的部署基线'
+          }`
+        );
+      }
+    }
     account = shouldRecycleFailedRedeploy
-      ? await platformDeploymentAccountService.recycleProjectService(input.userId, input.taskSessionId)
-      : await platformDeploymentAccountService.ensureProjectAccount(input.userId, input.taskSessionId);
-    const resourceBinding = buildDeploymentResourceBinding(input.taskSessionId, account);
+      ? await platformDeploymentAccountService.recycleProjectService(input.userId, deploymentProjectKey)
+      : await platformDeploymentAccountService.ensureProjectAccount(input.userId, deploymentProjectKey);
+    const resourceBinding = buildDeploymentResourceBinding(deploymentProjectKey, account);
     savedState = await persistTaskSessionDeploymentState(orchestratorSessionId, savedState, {
       bindingState: 'provisioning',
       provisioningPhase: 'workspace_publish',
@@ -1378,17 +1761,6 @@ export async function executeTaskSessionDeploymentAction(
         session: input.session,
         orchestratorSessionId,
       });
-      await platformDeploymentAccountService
-        .pruneSupersededProjectResources(input.userId, account.projectKey, account.projectId)
-        .catch((cleanupError) => {
-          console.warn('[DEPLOYMENT_RETENTION_CLEANUP_FAILED]', {
-            taskSessionId: input.taskSessionId,
-            userId: input.userId,
-            projectKey: account?.projectKey,
-            projectId: account?.projectId,
-            error: cleanupError,
-          });
-        });
       await enqueueTaskSessionDeploymentSync({
         taskSessionId: input.taskSessionId,
         orchestratorSessionId,
@@ -1469,17 +1841,6 @@ export async function executeTaskSessionDeploymentAction(
       session: input.session,
       orchestratorSessionId,
     });
-    await platformDeploymentAccountService
-      .pruneSupersededProjectResources(input.userId, account.projectKey, account.projectId)
-      .catch((cleanupError) => {
-        console.warn('[DEPLOYMENT_RETENTION_CLEANUP_FAILED]', {
-          taskSessionId: input.taskSessionId,
-          userId: input.userId,
-          projectKey: account?.projectKey,
-          projectId: account?.projectId,
-          error: cleanupError,
-        });
-      });
     await enqueueTaskSessionDeploymentSync({
       taskSessionId: input.taskSessionId,
       orchestratorSessionId,
@@ -1495,14 +1856,13 @@ export async function executeTaskSessionDeploymentAction(
   } catch (error) {
     const message = getTaskSessionDeploymentErrorMessage(error);
     const classified = classifyRailwayDeploymentError(message);
-    const shouldCleanupFailedResources =
-      Boolean(account?.serviceId) &&
-      (
-        shouldRecycleFailedRedeploy ||
-        !previousAccount?.serviceId ||
-        previousAccount.serviceId !== account?.serviceId ||
-        previousAccount.environmentId !== account?.environmentId
-      );
+    const shouldCleanupFailedResources = shouldCleanupFailedDeploymentResources({
+      currentPhase,
+      providerErrorCode: classified.code,
+      account,
+      previousAccount,
+      shouldRecycleFailedRedeploy,
+    });
     await persistTaskSessionDeploymentState(orchestratorSessionId, savedState, {
       bindingState: classified.bindingState,
       provisioningPhase: currentPhase,
@@ -1516,12 +1876,12 @@ export async function executeTaskSessionDeploymentAction(
       serviceId: account?.serviceId || savedState?.serviceId,
       serviceName: account?.serviceName || savedState?.serviceName,
       resourceBinding:
-        buildDeploymentResourceBinding(input.taskSessionId, account) || savedState?.resourceBinding,
+        buildDeploymentResourceBinding(deploymentProjectKey, account) || savedState?.resourceBinding,
       lastVerifiedAt: new Date().toISOString(),
     });
     if (shouldCleanupFailedResources) {
       await platformDeploymentAccountService
-        .cleanupFailedProjectResources(input.userId, input.taskSessionId)
+        .cleanupFailedProjectResources(input.userId, deploymentProjectKey)
         .catch((cleanupError) => {
           console.warn('[FAILED_DEPLOYMENT_RESOURCE_CLEANUP_FAILED]', {
             taskSessionId: input.taskSessionId,

@@ -21,6 +21,28 @@ test('intercepts explicit deploy request in direct mode', async () => {
   assert.equal(decision.source, 'heuristic');
 });
 
+test('does not intercept deployment capability questions', async () => {
+  const agent = new DirectCapabilityInterceptAgent();
+  const decision = await agent.decide({
+    content: '能用vercel部署吗',
+    availableCapabilities: CAPABILITIES,
+  });
+
+  assert.equal(decision.action, 'passthrough');
+  assert.equal(decision.source, 'heuristic');
+});
+
+test('does not intercept deployment how-to advice requests', async () => {
+  const agent = new DirectCapabilityInterceptAgent();
+  const decision = await agent.decide({
+    content: '怎么部署到 Vercel？',
+    availableCapabilities: CAPABILITIES,
+  });
+
+  assert.equal(decision.action, 'passthrough');
+  assert.equal(decision.source, 'heuristic');
+});
+
 test('passes through regular development request', async () => {
   const agent = new DirectCapabilityInterceptAgent();
   const decision = await agent.decide({
@@ -54,3 +76,13 @@ test('intercepts deployment status request', async () => {
   assert.equal(decision.capabilityId, 'get_session_deployment_status');
 });
 
+test('does not intercept deployment status concept questions', async () => {
+  const agent = new DirectCapabilityInterceptAgent();
+  const decision = await agent.decide({
+    content: '部署状态是什么意思？',
+    availableCapabilities: CAPABILITIES,
+  });
+
+  assert.equal(decision.action, 'passthrough');
+  assert.equal(decision.source, 'heuristic');
+});

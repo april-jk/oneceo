@@ -8,6 +8,7 @@ const originalEnv = {
   UMAMI_USERNAME: process.env.UMAMI_USERNAME,
   UMAMI_PASSWORD: process.env.UMAMI_PASSWORD,
   UMAMI_PLATFORM_TEAM_ID: process.env.UMAMI_PLATFORM_TEAM_ID,
+  UMAMI_PLATFORM_WEBSITE_ID: process.env.UMAMI_PLATFORM_WEBSITE_ID,
   UMAMI_DEPLOYMENT_TEAM_ID: process.env.UMAMI_DEPLOYMENT_TEAM_ID,
 };
 
@@ -39,6 +40,22 @@ test('umami analytics requires deployment team for deployment scope', () => {
 
   assert.equal(umamiAnalyticsService.isConfigured('platform'), true);
   assert.equal(umamiAnalyticsService.isConfigured('deployment'), false);
+});
+
+test('platform website configuration requires the fixed OneCEO website id', () => {
+  process.env.UMAMI_ENABLED = 'true';
+  process.env.UMAMI_HOST_URL = 'https://analytics.oneceo.ai';
+  process.env.UMAMI_USERNAME = 'user';
+  process.env.UMAMI_PASSWORD = 'pass';
+  process.env.UMAMI_PLATFORM_TEAM_ID = 'team_platform';
+  delete process.env.UMAMI_PLATFORM_WEBSITE_ID;
+
+  assert.equal(umamiAnalyticsService.isConfigured('platform'), true);
+  assert.equal(umamiAnalyticsService.isPlatformWebsiteConfigured(), false);
+
+  process.env.UMAMI_PLATFORM_WEBSITE_ID = 'website_platform';
+  assert.equal(umamiAnalyticsService.getPlatformWebsiteId(), 'website_platform');
+  assert.equal(umamiAnalyticsService.isPlatformWebsiteConfigured(), true);
 });
 
 test('listWebsites uses the requested team scope', async () => {
@@ -74,7 +91,58 @@ test('listWebsites uses the requested team scope', async () => {
   assert.match(requested[1] || '', /teamId=team_platform/);
 });
 
-test('ensureWebsiteBinding reuses website inside target scope instead of stale cross-team website id', async () => {
+test('platform analytics methods read stats, pageviews and expanded metrics from the fixed website API', async () => {
+  process.env.UMAMI_ENABLED = 'true';
+  process.env.UMAMI_HOST_URL = 'https://analytics.oneceo.ai';
+  process.env.UMAMI_USERNAME = 'user';
+  process.env.UMAMI_PASSWORD = 'pass';
+  process.env.UMAMI_PLATFORM_TEAM_ID = 'team_platform';
+  process.env.UMAMI_PLATFORM_WEBSITE_ID = 'website_platform';
+
+  const requested: string[] = [];
+  global.fetch = (async (input: any) => {
+    const url = String(input);
+    requested.push(url);
+    if (url.endsWith('/api/auth/login')) {
+      return new Response(JSON.stringify({ token: 'token-123' }), { status: 200 });
+    }
+    if (url.includes('/stats?')) {
+      return new Response(JSON.stringify({ pageviews: 120, visits: 40, visitors: 30, bounces: 8, totaltime: 2000 }), { status: 200 });
+    }
+    if (url.includes('/pageviews?')) {
+      return new Response(JSON.stringify({
+        pageviews: [{ x: '2026-04-24T00:00:00Z', y: 12 }],
+        sessions: [{ x: '2026-04-24T00:00:00Z', y: 5 }],
+      }), { status: 200 });
+    }
+    if (url.includes('/metrics/expanded?')) {
+      return new Response(JSON.stringify([{ name: '/', pageviews: 80, visitors: 20, visits: 25, bounces: 3, totaltime: 900 }]), { status: 200 });
+    }
+    return new Response(JSON.stringify({ visitors: 2 }), { status: 200 });
+  }) as typeof fetch;
+
+  const range = { startAt: 1000, endAt: 2000, unit: 'hour' as const, timezone: 'Asia/Shanghai' };
+  const stats = await umamiAnalyticsService.getWebsiteStats('website_platform', range);
+  const activeVisitors = await umamiAnalyticsService.getWebsiteActiveVisitors('website_platform', { scope: 'platform' });
+  const pageviews = await umamiAnalyticsService.getWebsitePageviews('website_platform', range);
+  const metrics = await umamiAnalyticsService.getWebsiteMetric('website_platform', {
+    ...range,
+    type: 'path',
+    expanded: true,
+  });
+
+  assert.equal(stats?.pageviews, 120);
+  assert.equal(activeVisitors, 2);
+  assert.deepEqual(pageviews?.sessions, [{ x: '2026-04-24T00:00:00Z', y: 5 }]);
+  assert.equal(metrics[0].name, '/');
+  assert.ok(requested.some((url) => url.includes('/api/websites/website_platform/stats?startAt=1000&endAt=2000')));
+  assert.ok(requested.some((url) => url.includes('/api/websites/website_platform/pageviews?')));
+  assert.ok(requested.some((url) => url.includes('/api/websites/website_platform/metrics/expanded?')));
+});
+
+test('ensureWebsiteBinding updates existing website id when detail endpoint confirms target team', async () => {
+  process.env.UMAMI_DEPLOYMENT_TEAM_ID = 'team_deployment';
+  const originalGetWebsite = umamiAnalyticsService.getWebsite;
   const originalListWebsites = umamiAnalyticsService.listWebsites;
   const originalUpdateWebsite = umamiAnalyticsService.updateWebsite;
   const originalEnsureWebsite = umamiAnalyticsService.ensureWebsite;
@@ -82,6 +150,83 @@ test('ensureWebsiteBinding reuses website inside target scope instead of stale c
   const updates: Array<Record<string, unknown>> = [];
   const creates: Array<Record<string, unknown>> = [];
 
+  umamiAnalyticsService.getWebsite = async (websiteId, { scope } = {}) => {
+    assert.equal(scope, 'deployment');
+    assert.equal(websiteId, 'existing_website_id');
+    return {
+      id: websiteId,
+      name: 'Existing deployment site',
+      domain: 'old.example.com',
+      teamId: 'team_deployment',
+    };
+  };
+  umamiAnalyticsService.listWebsites = async () => {
+    assert.fail('listWebsites should not be called when existing website id is verified by detail endpoint');
+  };
+  umamiAnalyticsService.updateWebsite = async (websiteId, input) => {
+    updates.push({ websiteId, scope: input.scope, domain: input.domain });
+    return {
+      id: websiteId,
+      name: input.name,
+      domain: input.domain,
+      teamId: 'team_deployment',
+    };
+  };
+  umamiAnalyticsService.ensureWebsite = async (input) => {
+    creates.push({ scope: input.scope, domain: input.domain });
+    return {
+      id: 'created_website',
+      name: input.name,
+      domain: input.domain,
+      teamId: 'team_deployment',
+    };
+  };
+
+  try {
+    const website = await umamiAnalyticsService.ensureWebsiteBinding({
+      scope: 'deployment',
+      websiteId: 'existing_website_id',
+      name: 'Existing deployment site',
+      domain: 'https://new.example.com/path',
+    });
+
+    assert.equal(website.id, 'existing_website_id');
+    assert.deepEqual(updates, [
+      {
+        websiteId: 'existing_website_id',
+        scope: 'deployment',
+        domain: 'https://new.example.com/path',
+      },
+    ]);
+    assert.equal(creates.length, 0);
+  } finally {
+    umamiAnalyticsService.getWebsite = originalGetWebsite;
+    umamiAnalyticsService.listWebsites = originalListWebsites;
+    umamiAnalyticsService.updateWebsite = originalUpdateWebsite;
+    umamiAnalyticsService.ensureWebsite = originalEnsureWebsite;
+  }
+});
+
+test('ensureWebsiteBinding ignores existing website id when detail endpoint reports another team', async () => {
+  process.env.UMAMI_DEPLOYMENT_TEAM_ID = 'team_deployment';
+  const originalGetWebsite = umamiAnalyticsService.getWebsite;
+  const originalListWebsites = umamiAnalyticsService.listWebsites;
+  const originalUpdateWebsite = umamiAnalyticsService.updateWebsite;
+  const originalEnsureWebsite = umamiAnalyticsService.ensureWebsite;
+
+  const updates: Array<Record<string, unknown>> = [];
+  const creates: Array<Record<string, unknown>> = [];
+
+  umamiAnalyticsService.getWebsite = async (websiteId, { scope } = {}) => {
+    assert.equal(scope, 'deployment');
+    assert.equal(websiteId, 'platform_website_id');
+    return {
+      id: websiteId,
+      name: 'Platform site',
+      domain: 'oneceo.ai',
+      teamId: 'team_platform',
+    };
+  };
   umamiAnalyticsService.listWebsites = async ({ scope } = {}) => {
     assert.equal(scope, 'deployment');
     return [
@@ -115,7 +260,7 @@ test('ensureWebsiteBinding reuses website inside target scope instead of stale c
   try {
     const website = await umamiAnalyticsService.ensureWebsiteBinding({
       scope: 'deployment',
-      websiteId: 'stale_platform_team_website',
+      websiteId: 'platform_website_id',
       name: 'Existing deployment site',
       domain: 'https://new.example.com/path',
     });
@@ -130,6 +275,77 @@ test('ensureWebsiteBinding reuses website inside target scope instead of stale c
     ]);
     assert.equal(creates.length, 0);
   } finally {
+    umamiAnalyticsService.getWebsite = originalGetWebsite;
+    umamiAnalyticsService.listWebsites = originalListWebsites;
+    umamiAnalyticsService.updateWebsite = originalUpdateWebsite;
+    umamiAnalyticsService.ensureWebsite = originalEnsureWebsite;
+  }
+});
+
+test('ensureWebsiteBinding falls back to scoped domain match when existing website id is not found', async () => {
+  process.env.UMAMI_DEPLOYMENT_TEAM_ID = 'team_deployment';
+  const originalGetWebsite = umamiAnalyticsService.getWebsite;
+  const originalListWebsites = umamiAnalyticsService.listWebsites;
+  const originalUpdateWebsite = umamiAnalyticsService.updateWebsite;
+  const originalEnsureWebsite = umamiAnalyticsService.ensureWebsite;
+
+  const updates: Array<Record<string, unknown>> = [];
+  const creates: Array<Record<string, unknown>> = [];
+
+  umamiAnalyticsService.getWebsite = async (websiteId, { scope } = {}) => {
+    assert.equal(scope, 'deployment');
+    assert.equal(websiteId, 'missing_website_id');
+    return null;
+  };
+  umamiAnalyticsService.listWebsites = async ({ scope } = {}) => {
+    assert.equal(scope, 'deployment');
+    return [
+      {
+        id: 'website_in_deployment_team',
+        name: 'Existing deployment site',
+        domain: 'new.example.com',
+        teamId: 'team_deployment',
+      },
+    ];
+  };
+  umamiAnalyticsService.updateWebsite = async (websiteId, input) => {
+    updates.push({ websiteId, scope: input.scope, domain: input.domain });
+    return {
+      id: websiteId,
+      name: input.name,
+      domain: input.domain,
+      teamId: 'team_deployment',
+    };
+  };
+  umamiAnalyticsService.ensureWebsite = async (input) => {
+    creates.push({ scope: input.scope, domain: input.domain });
+    return {
+      id: 'created_website',
+      name: input.name,
+      domain: input.domain,
+      teamId: 'team_deployment',
+    };
+  };
+
+  try {
+    const website = await umamiAnalyticsService.ensureWebsiteBinding({
+      scope: 'deployment',
+      websiteId: 'missing_website_id',
+      name: 'Existing deployment site',
+      domain: 'https://new.example.com/path',
+    });
+
+    assert.equal(website.id, 'website_in_deployment_team');
+    assert.deepEqual(updates, [
+      {
+        websiteId: 'website_in_deployment_team',
+        scope: 'deployment',
+        domain: 'https://new.example.com/path',
+      },
+    ]);
+    assert.equal(creates.length, 0);
+  } finally {
+    umamiAnalyticsService.getWebsite = originalGetWebsite;
     umamiAnalyticsService.listWebsites = originalListWebsites;
     umamiAnalyticsService.updateWebsite = originalUpdateWebsite;
     umamiAnalyticsService.ensureWebsite = originalEnsureWebsite;

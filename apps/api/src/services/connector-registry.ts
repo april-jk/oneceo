@@ -7,11 +7,6 @@ import {
   type ConnectorOauthProvider,
   type RemoteMcpTransport,
 } from '../connectors/definitions';
-import {
-  buildSupabaseBridgeEnvironment,
-  buildSupabaseStdioBridgeCommand,
-} from '../connectors/bridges/supabase-stdio-bridge';
-
 export { CONNECTOR_KEYS, type ConnectorKey };
 
 export type ConnectorAuthMode = 'oauth' | 'token' | 'dsn' | 'none';
@@ -37,11 +32,15 @@ export type ConnectorConfigField = ConnectorDefinition['configFields'][number];
 export type ConnectorCatalogItem = ConnectorDefinition;
 
 export type ConnectorAccountSecret = {
+  source?: string;
   accessToken?: string;
   refreshToken?: string;
   tokenType?: string;
   scope?: string;
+  expiresAt?: string;
   dsn?: string;
+  composioMcpUrl?: string;
+  composioMcpHeaders?: Record<string, string>;
 };
 
 export type ConnectorProfileMaterial = {
@@ -67,6 +66,12 @@ export type ConnectorRuntimeConfig =
       environment?: Record<string, string>;
     }
   | {
+      type: 'hosted';
+      enabled: boolean;
+      provider: ConnectorKey;
+      capabilities?: string[];
+    }
+  | {
       type: 'remote';
       enabled: boolean;
       url: string;
@@ -76,40 +81,6 @@ export type ConnectorRuntimeConfig =
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
-}
-
-function toBool(value: string | undefined, fallback: boolean): boolean {
-  if (!value) return fallback;
-  const normalized = value.trim().toLowerCase();
-  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
-  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
-  return fallback;
-}
-
-function normalizeRepositoryFullName(value: unknown): string {
-  const text = asText(value);
-  if (!text) return '';
-  const parts = text
-    .split('/')
-    .map((item) => item.trim())
-    .filter(Boolean);
-  if (parts.length !== 2) return '';
-  return `${parts[0]}/${parts[1]}`;
-}
-
-function normalizeGithubRepositories(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const item of value) {
-    const normalized = normalizeRepositoryFullName(item);
-    if (!normalized) continue;
-    const key = normalized.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(normalized);
-  }
-  return result;
 }
 
 function parseHeadersTemplate(value: string | undefined): Record<string, string> {
@@ -144,104 +115,12 @@ function renderHeaders(
   return result;
 }
 
-function buildGithubStdioWrapperCommand(): string {
-  return [
-    "const readline = require('node:readline');",
-    "const { spawn } = require('node:child_process');",
-    "const allowedRepositories = (() => {",
-    "  try {",
-    "    const parsed = JSON.parse(process.env.ONECEO_GITHUB_ALLOWED_REPOSITORIES || '[]');",
-    "    if (!Array.isArray(parsed)) return new Set();",
-    "    return new Set(parsed.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean));",
-    "  } catch {",
-    "    return new Set();",
-    "  }",
-    "})();",
-    "const parseRepository = (value) => {",
-    "  const text = String(value || '').trim();",
-    "  if (!text) return '';",
-    "  const parts = text.split('/').map((part) => part.trim()).filter(Boolean);",
-    "  if (parts.length !== 2) return '';",
-    "  return `${parts[0]}/${parts[1]}`;",
-    "};",
-    "const collectRepositories = (value, target = new Set()) => {",
-    "  if (!value) return target;",
-    "  if (Array.isArray(value)) {",
-    "    for (const item of value) collectRepositories(item, target);",
-    "    return target;",
-    "  }",
-    "  if (typeof value !== 'object') return target;",
-    "  const record = value;",
-    "  const owner = typeof record.owner === 'string' ? record.owner : '';",
-    "  const repo = typeof record.repo === 'string' ? record.repo : '';",
-    "  const combined = parseRepository(owner && repo ? `${owner}/${repo}` : '');",
-    "  if (combined) target.add(combined);",
-    "  const directKeys = ['repository', 'repo', 'full_name'];",
-    "  for (const key of directKeys) {",
-    "    const normalized = parseRepository(record[key]);",
-    "    if (normalized) target.add(normalized);",
-    "  }",
-    "  for (const nested of Object.values(record)) collectRepositories(nested, target);",
-    "  return target;",
-    "};",
-    "const writeMessage = (message) => process.stdout.write(`${JSON.stringify(message)}\\n`);",
-    "const child = spawn('npx', ['-y', '@modelcontextprotocol/server-github'], {",
-    "  stdio: ['pipe', 'pipe', 'inherit'],",
-    "  env: {",
-    "    ...process.env,",
-    "    NPM_CONFIG_LOGLEVEL: process.env.NPM_CONFIG_LOGLEVEL || 'silent',",
-    '  },',
-    '});',
-    'let skippedBanner = false;',
-    "const childOutput = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });",
-    "childOutput.on('line', (line) => {",
-    "  if (!skippedBanner && line.trim() === 'GitHub MCP Server running on stdio') {",
-    '    skippedBanner = true;',
-    '    return;',
-    '  }',
-    '  skippedBanner = true;',
-    "  process.stdout.write(`${line}\\n`);",
-    '});',
-    "const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });",
-    "input.on('line', (line) => {",
-    '  if (!line) return;',
-    '  try {',
-    '    const message = JSON.parse(line);',
-    "    if (message && message.method === 'tools/call' && message.params && typeof message.params === 'object') {",
-    "      const args = message.params.arguments && typeof message.params.arguments === 'object' ? message.params.arguments : {};",
-    '      const repositories = Array.from(collectRepositories(args));',
-    '      const disallowed = repositories.filter((repo) => allowedRepositories.size > 0 && !allowedRepositories.has(String(repo).toLowerCase()));',
-    '      if (disallowed.length > 0) {',
-    "        writeMessage({",
-    "          jsonrpc: '2.0',",
-    '          id: message.id ?? null,',
-    "          error: { code: -32000, message: `GitHub repository access denied for this session: ${disallowed.join(', ')}` },",
-    '        });',
-    '        return;',
-    '      }',
-    '    }',
-    "    child.stdin.write(`${JSON.stringify(message)}\\n`);",
-    '  } catch {',
-    "    child.stdin.write(`${line}\\n`);",
-    '  }',
-    '});',
-    "input.on('close', () => child.stdin.end());",
-    "child.on('exit', (code, signal) => {",
-    '  if (signal) {',
-    '    process.kill(process.pid, signal);',
-    '    return;',
-    '  }',
-    '  process.exit(code ?? 0);',
-    '});',
-  ].join('\n');
-}
-
 function buildRemoteHeaders(
-  connectorKey: ConnectorKey,
   item: ConnectorCatalogItem,
   input: {
     accessToken?: string;
     teamId?: string;
+    projectUrl?: string;
   }
 ): Record<string, string> {
   const template = item.runtime.headersEnv
@@ -256,14 +135,14 @@ function buildRemoteHeaders(
     });
   }
   if (item.runtime.headerTemplate === 'supabase') {
-    return {
+    const headers: Record<string, string> = {
       Authorization: `Bearer ${accessToken}`,
     };
-  }
-  if (item.runtime.headerTemplate === 'figma') {
-    return {
-      'X-Figma-Token': accessToken,
-    };
+    const projectUrl = asText(input.projectUrl);
+    if (projectUrl) {
+      headers['x-supabase-url'] = projectUrl;
+    }
+    return headers;
   }
   if (item.runtime.headerTemplate === 'bearer-token') {
     return {
@@ -273,31 +152,13 @@ function buildRemoteHeaders(
   return {};
 }
 
-function buildRemoteUrl(
-  item: ConnectorCatalogItem,
-  input: {
-    connectorKey: ConnectorKey;
-    teamId?: string;
-  }
-): string {
+function buildRemoteUrl(item: ConnectorCatalogItem): string {
   const configured = item.runtime.urlEnv ? asText(process.env[item.runtime.urlEnv]) : '';
   const baseUrl = configured || asText(item.runtime.urlDefault);
   if (!baseUrl) {
-    throw new Error(`${item.name} MCP remote URL 未配置`);
+    throw new Error(`${item.name} MCP remote URL is not configured`);
   }
   const url = new URL(baseUrl);
-  if (input.connectorKey === 'vercel') {
-    const teamId = asText(input.teamId);
-    if (teamId) {
-      url.searchParams.set('teamId', teamId);
-    }
-  }
-  if (input.connectorKey === 'notion') {
-    const normalizedPath = url.pathname.replace(/\/+$/, '') || '/';
-    if (!normalizedPath.endsWith('/sse')) {
-      throw new Error('Notion MCP remote URL 必须配置为 SSE 端点（/sse）');
-    }
-  }
   return url.toString();
 }
 
@@ -313,7 +174,7 @@ export class ConnectorRegistry {
   getCatalogItem(connectorKey: string): ConnectorCatalogItem {
     const item = this.listCatalog().find((entry) => entry.key === connectorKey);
     if (!item) {
-      throw new Error(`未知连接器: ${connectorKey}`);
+      throw new Error(`Unknown connector: ${connectorKey}`);
     }
     return item;
   }
@@ -326,40 +187,20 @@ export class ConnectorRegistry {
     connectorKey: ConnectorKey;
     account: ConnectorProfileMaterial;
     sessionConfig?: Record<string, unknown> | null;
+    runtimeContext?: {
+      taskSessionId?: string;
+      userId?: string;
+    };
   }): ConnectorRuntimeConfig {
     const { connectorKey, account } = input;
     const item = this.getCatalogItem(connectorKey);
     const secret = account.secret || {};
     const configJson = account.configJson || {};
-    const sessionConfig = input.sessionConfig || {};
-
-    if (connectorKey === 'github') {
-      const accessToken = asText(secret.accessToken);
-      if (!accessToken) {
-        throw new Error('GitHub 连接器缺少 access token');
-      }
-      const repositories = normalizeGithubRepositories(
-        (sessionConfig as Record<string, unknown>).repositories
-      );
-      return {
-        type: 'local',
-        enabled: true,
-        command: ['node', '-e', buildGithubStdioWrapperCommand()],
-        environment: {
-          GITHUB_PERSONAL_ACCESS_TOKEN: accessToken,
-          GITHUB_TOKEN: accessToken,
-          GH_TOKEN: accessToken,
-          ONECEO_GITHUB_ALLOWED_REPOSITORIES: JSON.stringify(repositories),
-          NPM_CONFIG_LOGLEVEL: 'silent',
-          NPM_CONFIG_YES: 'true',
-        },
-      };
-    }
 
     if (connectorKey === 'postgres') {
       const dsn = asText(secret.dsn);
       if (!dsn) {
-        throw new Error('Postgres 连接器缺少 DSN');
+        throw new Error('Postgres connector requires DSN');
       }
       return {
         type: 'local',
@@ -368,39 +209,47 @@ export class ConnectorRegistry {
       };
     }
 
-    if (connectorKey === 'supabase') {
-      const accessToken = asText(secret.accessToken);
-      if (!accessToken) {
-        throw new Error('Supabase 连接器缺少 access token');
+    const accessToken = asText(secret.accessToken);
+    const refreshToken = asText(secret.refreshToken);
+    if (connectorKey === 'vercel') {
+      if (!accessToken && !refreshToken) {
+        throw new Error('Vercel connector requires access token or refresh token');
       }
-      const proxyEnabled = toBool(
-        process.env.ONECEO_PROXY_ENABLED ?? process.env.E2B_PROXY_ENABLED ?? 'true',
-        true
-      );
       return {
-        type: 'local',
+        type: 'hosted',
         enabled: true,
-        command: ['node', '-e', buildSupabaseStdioBridgeCommand()],
-        environment: buildSupabaseBridgeEnvironment({
-          accessToken,
-          projectUrl: asText(configJson.projectUrl) || asText(configJson.supabaseUrl),
-          mcpUrl: asText(configJson.mcpUrl),
-          proxyEnabled,
-        }),
+        provider: 'vercel',
+        capabilities: ['initialize', 'tools/list', 'tools/call'],
       };
     }
-
-    const accessToken = asText(secret.accessToken);
-    if (!accessToken) {
-      throw new Error(`${item.name} 连接器缺少 access token`);
+    if (item.composio?.provider === 'composio') {
+      if (account.authStatus !== 'authorized') {
+        throw new Error(`${item.name} connector is not authorized`);
+      }
+      if (
+        asText(account.metadataJson?.provider) !== 'composio' ||
+        !asText(secret.composioMcpUrl)
+      ) {
+        throw new Error(`${item.name} connector must be reconnected through Composio`);
+      }
+      return {
+        type: 'hosted',
+        enabled: true,
+        provider: connectorKey,
+        capabilities: ['initialize', 'tools/list', 'tools/call'],
+      };
     }
-    const url = buildRemoteUrl(item, {
-      connectorKey,
-      teamId: asText(configJson.teamId),
-    });
-    const headers = buildRemoteHeaders(connectorKey, item, {
+    if (!accessToken) {
+      throw new Error(`${item.name} connector requires access token`);
+    }
+    const url =
+      connectorKey === 'supabase' && asText(configJson.mcpUrl)
+        ? new URL(asText(configJson.mcpUrl)).toString()
+        : buildRemoteUrl(item);
+    const headers = buildRemoteHeaders(item, {
       accessToken,
       teamId: asText(configJson.teamId),
+      projectUrl: asText(configJson.projectUrl) || asText(configJson.supabaseUrl),
     });
     return {
       type: 'remote',

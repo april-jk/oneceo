@@ -558,6 +558,16 @@ export class OsacConnectionManager {
     }
   }
 
+  sendDirect(sessionId: string, message: OsacMessage): boolean {
+    const existing = this.connections.get(sessionId);
+    if (!existing || !existing.handle.isOpen()) {
+      return false;
+    }
+    existing.lastUsedAt = Date.now();
+    existing.handle.send(message);
+    return true;
+  }
+
   async request(
     sessionId: string,
     message: OsacMessage,

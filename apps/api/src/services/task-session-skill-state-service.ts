@@ -1,7 +1,13 @@
 import path from 'node:path';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { taskCreationSessionDAO } from '../db/dao/task-creation-session.dao';
-import type { ManagedSkillCatalogEntry, ManagedSkillContext } from './altus-managed-shared';
+import {
+  managedSkillContextToCatalogEntry,
+  mergeManagedSkillCatalogEntries,
+  normalizeManagedSkillContexts,
+  type ManagedSkillCatalogEntry,
+  type ManagedSkillContext,
+} from './altus-managed-shared';
 import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-service';
 import { taskSessionRedisCacheService } from './task-session-redis-cache-service';
 import { userSkillService } from './user-skill-service';
@@ -64,6 +70,7 @@ type PrepareRunStateInput = {
   skillCatalog: ManagedSkillCatalogEntry[];
   taskIntentProfile: AltusManagedTaskIntentProfile;
   submittedSelections?: unknown;
+  submittedSkillContexts?: unknown;
   messageType: 'user_input' | 'user_response';
 };
 
@@ -255,6 +262,38 @@ function filterSelectionsByCatalog(selections: SkillSelectionInput[], catalog: M
   return selections.filter((item) => selectionExistsInCatalog(item, catalog));
 }
 
+function isSameSelection(left: SkillSelectionInput, right: SkillSelectionInput) {
+  return (
+    left.sourceType === right.sourceType &&
+    left.skillId === right.skillId &&
+    left.revisionId === right.revisionId
+  );
+}
+
+function mergeResolvedSkillContexts(
+  resolved: ManagedSkillContext[],
+  fallbackContexts: ManagedSkillContext[],
+  activeSelections: SkillSelectionInput[]
+) {
+  const results = new Map<string, ManagedSkillContext>();
+  for (const skill of resolved) {
+    results.set(selectionKey(skill), skill);
+  }
+  for (const skill of fallbackContexts) {
+    const selection = {
+      sourceType: skill.sourceType,
+      skillId: skill.skillId,
+      revisionId: skill.revisionId,
+    } satisfies SkillSelectionInput;
+    if (!activeSelections.some((item) => isSameSelection(item, selection))) continue;
+    const key = selectionKey(selection);
+    if (!results.has(key)) {
+      results.set(key, skill);
+    }
+  }
+  return Array.from(results.values());
+}
+
 function shouldRetainPersistedBinding(binding: SessionSkillBinding, catalog: ManagedSkillCatalogEntry[]) {
   const entry = findCatalogEntry(binding, catalog);
   if (!entry) return false;
@@ -317,6 +356,24 @@ function isIntentTriggeredSkill(
     : [];
   if (triggers.length === 0) return false;
   if (triggers.includes('always')) return true;
+  const isDeploymentOrchestrator = governance.systemRole === 'deployment_orchestrator';
+  const deploymentRequested =
+    taskIntentProfile.deployRequested === true &&
+    taskIntentProfile.deploymentAllowed === true &&
+    !taskIntentProfile.explicitNoDeploy &&
+    !taskIntentProfile.explicitNoWeb;
+  const hasDeploymentTrigger = triggers.some((item) =>
+    item === 'deployment' ||
+    item === 'deployable_web_app' ||
+    item === 'deploy' ||
+    item === 'redeploy' ||
+    item === 'rollback' ||
+    item === 'status' ||
+    item === 'deployment_status'
+  );
+  if (isDeploymentOrchestrator) {
+    return deploymentRequested && hasDeploymentTrigger;
+  }
   if (taskIntentProfile.mode === 'deployable_web_app') {
     if (triggers.includes('deployment') || triggers.includes('deployable_web_app') || triggers.includes('web_app')) {
       return true;
@@ -417,7 +474,11 @@ export class TaskSessionSkillStateService {
   async prepareRunState(input: PrepareRunStateInput): Promise<PrepareRunStateResult> {
     const now = new Date().toISOString();
     const current = await this.getSessionSkillState(input.sessionId);
-    const catalog = Array.isArray(input.skillCatalog) ? input.skillCatalog : [];
+    const submittedSkillContexts = normalizeManagedSkillContexts(input.submittedSkillContexts);
+    const catalog = mergeManagedSkillCatalogEntries(
+      Array.isArray(input.skillCatalog) ? input.skillCatalog : [],
+      submittedSkillContexts.map((item) => managedSkillContextToCatalogEntry(item))
+    );
     const hasSubmittedSelections = input.submittedSelections !== undefined;
     const explicitSelections = filterSelectionsByCatalog(
       hasSubmittedSelections ? normalizeSelections(input.submittedSelections) : current.explicitSelections,
@@ -495,7 +556,12 @@ export class TaskSessionSkillStateService {
       })),
       ...intentSelections,
     ]);
-    const activeSkillsForTurn = await userSkillService.resolveSelectionsForSession(input.sessionId, activeSelections);
+    const resolvedActiveSkills = await userSkillService.resolveSelectionsForSession(input.sessionId, activeSelections);
+    const activeSkillsForTurn = mergeResolvedSkillContexts(
+      resolvedActiveSkills as ManagedSkillContext[],
+      submittedSkillContexts,
+      activeSelections
+    );
     const nextState: SessionSkillState = {
       ...current,
       explicitSelections,
@@ -506,7 +572,7 @@ export class TaskSessionSkillStateService {
     const savedState = await this.saveSessionSkillState(input.sessionId, nextState);
     return {
       skillCatalog: catalog,
-      activeSkillsForTurn: activeSkillsForTurn as ManagedSkillContext[],
+      activeSkillsForTurn,
       residentSkillSelections: residentSelections,
       sessionSkillState: savedState,
     };

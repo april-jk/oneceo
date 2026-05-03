@@ -160,6 +160,15 @@
 - 这样即使 sandbox 内的原始 HTML 预览暂时不可恢复，已成功发布的交付物仍然可以稳定预览，不会再出现“线上可访问，但交付预览卡片空白”的割裂状态。
 - 同一策略也同步补到了右侧 `OpencodePreviewPanel` 的文件预览中，保证 `Load files -> 选中 HTML 文件` 走到的也是同一条线上预览链路。
 
+### 5.6 当前补充修正（2026-04-24）
+
+- 对话区网页类交付卡片的 `Preview` 只承担缩略预览职责，不再作为可滚动网页浏览器使用。
+- `AltusArtifactPreviewCard` 使用固定桌面设计宽度计算 iframe 缩放比例，再按卡片容器高度反推 iframe 逻辑高度，确保网页内容在卡片内缩放展示。
+- 预览 iframe 禁用滚动与指针交互；用户需要完整交互时继续使用卡片工具条里的 `Open` 入口。
+- 全局 `ResizableHandle` 和预览文件分栏的拖动柄改为独立 grip：handle 使用透明热区与负外边距抵消布局占位，不再绘制可见分隔带；grip 本身无容器、无底纹、无边框，只在 hover / drag / focus 时显示，鼠标移出立即隐藏。
+- 首页对话区在桌面分栏模式下隐藏贴边原生滚动条，避免滚动条轨道继续被误认为拖动柄边缘线。
+- grip 显示状态直接响应 `react-resizable-panels` 写入的 `data-resize-handle-state=hover/drag` 与 `data-resize-handle-active`，避免普通 DOM hover 在扩展 hit area 下不触发导致拖动柄完全不可见。
+
 ## 6. 文件/网页预览的底层组件链
 
 ### 6.1 FileAttachment 是总分发器

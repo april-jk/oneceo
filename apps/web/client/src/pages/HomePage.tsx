@@ -21,6 +21,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { CreditBadge } from "@/components/CreditBadge";
 import UserMenu from "@/components/UserMenu";
 import type { TaskCreationPlatformSkill } from "@/lib/task-creation-client";
 import {
@@ -60,6 +61,8 @@ function QuickActionRow({
               key={`${action}-${index}`}
               variant="outline"
               className="h-11 shrink-0 rounded-xl border-border bg-background px-4 text-sm font-medium text-foreground shadow-sm transition-colors hover:border-foreground/15 hover:bg-accent"
+              data-umami-event="landing_quick_action_select"
+              data-umami-event-surface="home_page"
               onClick={() => onSelect(action)}
             >
               {action}
@@ -112,6 +115,7 @@ export default function HomePage() {
             </div>
           </div>
           <div className="flex items-center gap-4">
+            <CreditBadge />
             <UserMenu />
           </div>
         </div>
@@ -192,9 +196,27 @@ export default function HomePage() {
                         <TooltipContent><p>{t("homePage.selectModel")}</p></TooltipContent>
                       </Tooltip>
                       <DropdownMenuContent align="start" className="w-40">
-                        <DropdownMenuItem onClick={() => setSelectedModel("lite")}>{t("homePage.models.lite")}</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setSelectedModel("pro")}>{t("homePage.models.pro")}</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setSelectedModel("max")}>{t("homePage.models.max")}</DropdownMenuItem>
+                        <DropdownMenuItem
+                          data-umami-event="landing_model_select"
+                          data-umami-event-model="lite"
+                          onClick={() => setSelectedModel("lite")}
+                        >
+                          {t("homePage.models.lite")}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          data-umami-event="landing_model_select"
+                          data-umami-event-model="pro"
+                          onClick={() => setSelectedModel("pro")}
+                        >
+                          {t("homePage.models.pro")}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          data-umami-event="landing_model_select"
+                          data-umami-event-model="max"
+                          onClick={() => setSelectedModel("max")}
+                        >
+                          {t("homePage.models.max")}
+                        </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
@@ -216,6 +238,8 @@ export default function HomePage() {
                           disabled={!message.trim() && attachments.length === 0}
                           size="icon"
                           className="h-9 w-9 rounded-xl bg-foreground hover:bg-foreground/90 disabled:opacity-50"
+                          data-umami-event="landing_prompt_submit"
+                          data-umami-event-surface="home_page"
                         >
                           <Send className="w-4 h-4" />
                         </Button>

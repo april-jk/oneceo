@@ -88,6 +88,22 @@ function asText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function normalizeTriggerText(value: unknown) {
+  return asText(value).toLowerCase();
+}
+
+const PRESENTATION_INTENT_KEYWORDS = [
+  'ppt',
+  'pptx',
+  'powerpoint',
+  'presentation',
+  'slide deck',
+  'slides',
+  '演示文稿',
+  '幻灯片',
+  '汇报稿',
+] as const;
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
 }
@@ -356,6 +372,18 @@ function isIntentTriggeredSkill(
     : [];
   if (triggers.length === 0) return false;
   if (triggers.includes('always')) return true;
+  const recentText = normalizeTriggerText((taskIntentProfile.recentUserMessages || []).join('\n'));
+  const hasPresentationTrigger = triggers.some((item) =>
+    item === 'ppt' ||
+    item === 'pptx' ||
+    item === 'powerpoint' ||
+    item === 'presentation' ||
+    item === 'slides' ||
+    item === '演示文稿'
+  );
+  if (hasPresentationTrigger && PRESENTATION_INTENT_KEYWORDS.some((keyword) => recentText.includes(keyword))) {
+    return true;
+  }
   const isDeploymentOrchestrator = governance.systemRole === 'deployment_orchestrator';
   const deploymentRequested =
     taskIntentProfile.deployRequested === true &&

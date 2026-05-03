@@ -66,6 +66,12 @@ const AUTO_ACTIVATION_TRIGGER_OPTIONS: SkillGovernanceOption[] = [
   },
   { value: 'env', label: '环境变量', description: '用户要求管理 Vercel 项目环境变量。', category: 'deployment' },
   { value: 'domain', label: '域名', description: '用户要求管理 Vercel 项目域名。', category: 'deployment' },
+  { value: 'ppt', label: 'PPT', description: '用户要求生成、规划或准备 PPT。', category: 'office' },
+  { value: 'pptx', label: 'PPTX', description: '用户要求生成或处理 PowerPoint 文件。', category: 'office' },
+  { value: 'powerpoint', label: 'PowerPoint', description: '用户明确提到 PowerPoint。', category: 'office' },
+  { value: 'presentation', label: '演示文稿', description: '用户要求制作演示文稿或 slides。', category: 'office' },
+  { value: 'slides', label: 'Slides', description: '用户明确提到 slides。', category: 'office' },
+  { value: '演示文稿', label: '演示文稿', description: '用户用中文要求演示文稿。', category: 'office' },
 ];
 
 const VERCEL_MCP_TOOL_OPTIONS: SkillGovernanceOption[] = [

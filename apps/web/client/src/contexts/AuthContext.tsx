@@ -4,11 +4,13 @@ import {
   type AppAuthUser,
   loginAppUser,
   logoutAppUser,
+  removeAppUserAvatar,
   registerAppUser,
   resolveAppAuthSession,
   startAppAuthOAuth,
   sendRegisterVerificationCode,
   type AppUserPersonalization,
+  uploadAppUserAvatar,
   updateAppUserProfile,
 } from "@/lib/auth-client";
 
@@ -38,6 +40,8 @@ type AuthContextValue = {
     displayName?: string;
     personalization?: AppUserPersonalization;
   }) => Promise<AppAuthUser>;
+  uploadAvatar: (file: File) => Promise<AppAuthUser>;
+  removeAvatar: () => Promise<AppAuthUser>;
   logout: () => Promise<void>;
   refresh: () => Promise<AppAuthUser | null>;
 };
@@ -113,6 +117,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     updateProfile: async (input) => {
       const nextUser = await updateAppUserProfile(input);
+      setUser(nextUser);
+      setStatus("authenticated");
+      return nextUser;
+    },
+    uploadAvatar: async (file) => {
+      const nextUser = await uploadAppUserAvatar(file);
+      setUser(nextUser);
+      setStatus("authenticated");
+      return nextUser;
+    },
+    removeAvatar: async () => {
+      const nextUser = await removeAppUserAvatar();
       setUser(nextUser);
       setStatus("authenticated");
       return nextUser;

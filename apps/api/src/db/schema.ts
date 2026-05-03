@@ -785,6 +785,142 @@ export const userConnectorProfiles = pgTable(
   })
 );
 
+export const customApiDefinitions = pgTable(
+  'custom_api_definitions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    ownerUserId: text('owner_user_id').notNull(),
+    scope: text('scope').notNull().default('user'),
+    slug: text('slug').notNull(),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    baseUrl: text('base_url').notNull(),
+    authMode: text('auth_mode').notNull().default('none'),
+    defaultHeadersJson: jsonb('default_headers_json').notNull().default(sql`'{}'::jsonb`),
+    allowedHostsJson: jsonb('allowed_hosts_json').notNull().default(sql`'[]'::jsonb`),
+    status: text('status').notNull().default('draft'),
+    createdBy: text('created_by').notNull(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    ownerSlugUnique: uniqueIndex('idx_custom_api_definitions_owner_slug').on(table.ownerUserId, table.slug),
+    ownerStatusIdx: index('idx_custom_api_definitions_owner_status').on(table.ownerUserId, table.status),
+  })
+);
+
+export const customApiEndpointTools = pgTable(
+  'custom_api_endpoint_tools',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    definitionId: uuid('definition_id')
+      .notNull()
+      .references(() => customApiDefinitions.id, { onDelete: 'cascade' }),
+    toolSlug: text('tool_slug').notNull(),
+    displayName: text('display_name').notNull(),
+    description: text('description').notNull().default(''),
+    method: text('method').notNull(),
+    pathTemplate: text('path_template').notNull(),
+    operationType: text('operation_type').notNull().default('read'),
+    inputSchemaJson: jsonb('input_schema_json').notNull(),
+    requestMappingJson: jsonb('request_mapping_json').notNull().default(sql`'{}'::jsonb`),
+    responseMappingJson: jsonb('response_mapping_json').notNull().default(sql`'{}'::jsonb`),
+    riskLevel: text('risk_level').notNull().default('low'),
+    computedRiskLevel: text('computed_risk_level').notNull().default('low'),
+    riskReportJson: jsonb('risk_report_json').notNull().default(sql`'{}'::jsonb`),
+    confirmationPolicy: text('confirmation_policy').notNull().default('none'),
+    reviewStatus: text('review_status').notNull().default('draft'),
+    reviewedBy: text('reviewed_by'),
+    reviewedAt: timestamp('reviewed_at'),
+    reviewNotes: text('review_notes'),
+    createdBy: text('created_by').notNull(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    definitionToolUnique: uniqueIndex('idx_custom_api_endpoint_tools_definition_slug').on(
+      table.definitionId,
+      table.toolSlug
+    ),
+    reviewStatusIdx: index('idx_custom_api_endpoint_tools_review_status').on(table.reviewStatus),
+    definitionStatusIdx: index('idx_custom_api_endpoint_tools_definition_status').on(
+      table.definitionId,
+      table.reviewStatus
+    ),
+  })
+);
+
+export const customApiConfirmations = pgTable(
+  'custom_api_confirmations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id').notNull(),
+    taskSessionId: text('task_session_id').notNull(),
+    endpointToolId: uuid('endpoint_tool_id')
+      .notNull()
+      .references(() => customApiEndpointTools.id, { onDelete: 'cascade' }),
+    toolName: text('tool_name').notNull(),
+    argumentsHash: text('arguments_hash').notNull(),
+    effectiveRiskLevel: text('effective_risk_level').notNull(),
+    confirmationText: text('confirmation_text').notNull(),
+    confirmedBy: text('confirmed_by').notNull(),
+    expiresAt: timestamp('expires_at').notNull(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    confirmationLookupIdx: index('idx_custom_api_confirmations_lookup').on(
+      table.userId,
+      table.taskSessionId,
+      table.endpointToolId
+    ),
+  })
+);
+
+export const customApiCallAuditLogs = pgTable(
+  'custom_api_call_audit_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id').notNull(),
+    taskSessionId: text('task_session_id').notNull(),
+    runId: text('run_id'),
+    definitionId: uuid('definition_id').references(() => customApiDefinitions.id, { onDelete: 'set null' }),
+    endpointToolId: uuid('endpoint_tool_id').references(() => customApiEndpointTools.id, { onDelete: 'set null' }),
+    connectorProfileId: text('connector_profile_id').notNull(),
+    toolName: text('tool_name').notNull(),
+    method: text('method').notNull(),
+    operationType: text('operation_type').notNull(),
+    requestId: text('request_id').notNull(),
+    callerType: text('caller_type').notNull().default('agent'),
+    declaredRiskLevel: text('declared_risk_level').notNull(),
+    computedRiskLevel: text('computed_risk_level').notNull(),
+    runtimeRiskLevel: text('runtime_risk_level').notNull(),
+    effectiveRiskLevel: text('effective_risk_level').notNull(),
+    resolvedUrlHash: text('resolved_url_hash'),
+    resolvedUrlRedacted: text('resolved_url_redacted'),
+    requestBodyHash: text('request_body_hash'),
+    requestBodyRedactedPreview: text('request_body_redacted_preview'),
+    responseBodyRedactedPreview: text('response_body_redacted_preview'),
+    responseStatus: integer('response_status'),
+    durationMs: integer('duration_ms'),
+    confirmationId: text('confirmation_id'),
+    actorContextJson: jsonb('actor_context_json'),
+    status: text('status').notNull().default('started'),
+    resultSummary: text('result_summary'),
+    errorCode: text('error_code'),
+    debugExpiresAt: timestamp('debug_expires_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    sessionCreatedIdx: index('idx_custom_api_call_audit_logs_session_created').on(
+      table.taskSessionId,
+      table.createdAt
+    ),
+    toolCreatedIdx: index('idx_custom_api_call_audit_logs_tool_created').on(table.endpointToolId, table.createdAt),
+    requestIdIdx: index('idx_custom_api_call_audit_logs_request_id').on(table.requestId),
+  })
+);
+
 export const userPlatformSkillBindings = pgTable(
   'user_platform_skill_bindings',
   {
@@ -866,6 +1002,7 @@ export const taskSessionConnectorBindings = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     taskSessionId: text('task_session_id').notNull(),
     connectorKey: text('connector_key').notNull(),
+    connectorInstanceKey: text('connector_instance_key').notNull(),
     profileId: text('profile_id'),
     desiredState: text('desired_state').notNull().default('detached'),
     runtimeStatus: text('runtime_status').notNull().default('unknown'),
@@ -889,7 +1026,11 @@ export const taskSessionConnectorBindings = pgTable(
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },
   (table) => ({
-    taskSessionConnectorUnique: uniqueIndex('idx_task_session_connector_bindings_session_connector').on(
+    taskSessionConnectorInstanceUnique: uniqueIndex('idx_task_session_connector_bindings_session_instance').on(
+      table.taskSessionId,
+      table.connectorInstanceKey
+    ),
+    taskSessionConnectorIdx: index('idx_task_session_connector_bindings_session_connector').on(
       table.taskSessionId,
       table.connectorKey
     ),
@@ -1224,6 +1365,14 @@ export type UserConnectorAccount = typeof userConnectorAccounts.$inferSelect;
 export type NewUserConnectorAccount = typeof userConnectorAccounts.$inferInsert;
 export type UserConnectorProfile = typeof userConnectorProfiles.$inferSelect;
 export type NewUserConnectorProfile = typeof userConnectorProfiles.$inferInsert;
+export type CustomApiDefinition = typeof customApiDefinitions.$inferSelect;
+export type NewCustomApiDefinition = typeof customApiDefinitions.$inferInsert;
+export type CustomApiEndpointTool = typeof customApiEndpointTools.$inferSelect;
+export type NewCustomApiEndpointTool = typeof customApiEndpointTools.$inferInsert;
+export type CustomApiConfirmation = typeof customApiConfirmations.$inferSelect;
+export type NewCustomApiConfirmation = typeof customApiConfirmations.$inferInsert;
+export type CustomApiCallAuditLog = typeof customApiCallAuditLogs.$inferSelect;
+export type NewCustomApiCallAuditLog = typeof customApiCallAuditLogs.$inferInsert;
 
 export type UserPlatformSkillBinding = typeof userPlatformSkillBindings.$inferSelect;
 export type NewUserPlatformSkillBinding = typeof userPlatformSkillBindings.$inferInsert;
@@ -1496,3 +1645,66 @@ export type CreditActivationCodeUse = typeof creditActivationCodeUses.$inferSele
 export type NewCreditActivationCodeUse = typeof creditActivationCodeUses.$inferInsert;
 export type CreditActivationCodeGroup = typeof creditActivationCodeGroups.$inferSelect;
 export type NewCreditActivationCodeGroup = typeof creditActivationCodeGroups.$inferInsert;
+
+/**
+ * 通知主表
+ *
+ * 存储系统通知内容和下发策略
+ */
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    title: text('title').notNull(),
+    content: text('content').notNull(),
+    type: text('type').notNull().default('system'), // system, billing, task, security
+    priority: text('priority').notNull().default('normal'), // low, normal, high, urgent
+    targetType: text('target_type').notNull().default('all'), // all, specific_users
+    targetUserIds: jsonb('target_user_ids'), // 当 target_type='specific_users' 时存储用户 ID 列表
+    status: text('status').notNull().default('draft'), // draft, published, archived
+    publishedAt: timestamp('published_at'),
+    expiresAt: timestamp('expires_at'),
+    metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
+    createdBy: uuid('created_by').references(() => adminUsers.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    typeIdx: index('idx_notifications_type').on(table.type),
+    statusIdx: index('idx_notifications_status').on(table.status),
+    createdAtIdx: index('idx_notifications_created_at').on(table.createdAt),
+  })
+);
+
+/**
+ * 用户通知关联表
+ *
+ * 存储每个用户与通知的关联关系及已读状态
+ */
+export const userNotifications = pgTable(
+  'user_notifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => appUsers.id, { onDelete: 'cascade' }),
+    notificationId: uuid('notification_id')
+      .notNull()
+      .references(() => notifications.id, { onDelete: 'cascade' }),
+    isRead: boolean('is_read').notNull().default(false),
+    readAt: timestamp('read_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userNotificationUnique: uniqueIndex('idx_user_notifications_user_notification')
+      .on(table.userId, table.notificationId),
+    userIdx: index('idx_user_notifications_user_id').on(table.userId),
+    notificationIdx: index('idx_user_notifications_notification_id').on(table.notificationId),
+    userReadIdx: index('idx_user_notifications_user_read').on(table.userId, table.isRead),
+  })
+);
+
+export type Notification = typeof notifications.$inferSelect;
+export type NewNotification = typeof notifications.$inferInsert;
+export type UserNotification = typeof userNotifications.$inferSelect;
+export type NewUserNotification = typeof userNotifications.$inferInsert;

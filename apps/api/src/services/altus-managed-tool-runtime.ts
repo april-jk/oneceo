@@ -7,6 +7,7 @@ import { cloudflareTurnService } from './cloudflare-turn-service';
 import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
 import { osacAgentService } from './osac-agent-service';
 import { connectorGuideService } from './connector-guide-service';
+import { pptRenderToolService } from './ppt-render-tool-service';
 import { markSandboxDirty, touchSandbox } from './sandbox-activity-service';
 import { taskSessionSkillStateService } from './task-session-skill-state-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
@@ -85,6 +86,45 @@ function asStringArray(value: unknown, maxItems: number) {
     if (result.length >= maxItems) break;
   }
   return result;
+}
+
+function findActiveSkillForResourceLoad(
+  activeSkills: ManagedSkillContext[],
+  input: { skillId: string; revisionId: string }
+) {
+  const normalized = normalizeSkillResourceLoadInput(input);
+  const exactMatch = activeSkills.find(
+    (item) => item.skillId === normalized.skillId && item.revisionId === normalized.revisionId
+  );
+  if (exactMatch) return exactMatch;
+  return activeSkills.find(
+    (item) => item.slug === normalized.skillId && String(item.revisionNumber ?? '') === normalized.revisionId
+  );
+}
+
+function normalizeSkillResourceLoadInput(input: { skillId: string; revisionId: string }) {
+  return {
+    skillId: normalizeSkillResourceLoadSkillId(input.skillId),
+    revisionId: normalizeSkillResourceLoadRevisionId(input.revisionId),
+  };
+}
+
+function normalizeSkillResourceLoadSkillId(value: string) {
+  const text = value.trim().replace(/^id=/i, '');
+  const catalogMatch = /^skill-catalog:platform:([^:]+)(?::[^:]+)?$/i.exec(text);
+  if (catalogMatch?.[1]) return catalogMatch[1];
+  const platformMatch = /^skill:platform:([^:]+)(?::[^:]+)?$/i.exec(text);
+  if (platformMatch?.[1]) return platformMatch[1];
+  return text;
+}
+
+function normalizeSkillResourceLoadRevisionId(value: string) {
+  const text = value.trim().replace(/^id=/i, '');
+  const catalogMatch = /^skill-catalog:platform:[^:]+:([^:]+)$/i.exec(text);
+  if (catalogMatch?.[1]) return catalogMatch[1];
+  const revisionMatch = /^revision:platform:([^:]+)$/i.exec(text);
+  if (revisionMatch?.[1]) return revisionMatch[1];
+  return text;
 }
 
 function normalizeShellRunMode(value: unknown): ShellRunMode {
@@ -472,6 +512,36 @@ function isLegacySlackMcpShellCommand(value: string) {
   );
 }
 
+function isCustomApiBypassShellCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('curl ') ||
+    normalized.includes('wget ') ||
+    normalized.includes('set custom_api') ||
+    normalized.includes('custom_api_token') ||
+    normalized.includes('custom_api_api_key') ||
+    normalized.includes('authorization: bearer')
+  );
+}
+
+function isCustomMcpBypassShellCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('curl ') ||
+    normalized.includes('wget ') ||
+    normalized.includes('npx ') ||
+    normalized.includes('node ') ||
+    normalized.includes('python ') ||
+    normalized.includes('docker ') ||
+    normalized.includes('stdio') ||
+    normalized.includes('custom_mcp_token') ||
+    normalized.includes('custom_mcp_api_key') ||
+    normalized.includes('authorization: bearer')
+  );
+}
+
 function extractLeadingCdTarget(value: string) {
   const raw = asText(value).trim();
   if (!raw.toLowerCase().startsWith('cd ')) {
@@ -488,6 +558,7 @@ function extractLeadingCdTarget(value: string) {
 export class AltusManagedToolRuntime {
   private readonly posix = path.posix;
   private readonly loadedConnectorGuides = new Set<string>();
+  private readonly renderedPptxAttachmentPaths = new Set<string>();
 
   private hasActiveSkill(slug: string) {
     return this.input.activeSkills.some((item) => asText(item.slug) === slug);
@@ -659,6 +730,20 @@ export class AltusManagedToolRuntime {
       }
     }
     return Array.from(deduped.values());
+  }
+
+  private assertPptxAttachmentsWereRendered(attachments: ManagedCompletionAttachment[]) {
+    if (!this.hasActiveSkill('ppt-workflow')) {
+      return;
+    }
+    const pptxAttachments = attachments.filter((item) => item.path.toLowerCase().endsWith('.pptx'));
+    if (pptxAttachments.length === 0) {
+      return;
+    }
+    const missing = pptxAttachments.filter((item) => !this.renderedPptxAttachmentPaths.has(item.path));
+    if (missing.length > 0) {
+      throw new Error('complete_task_pptx_requires_render_pptx_from_instructions');
+    }
   }
 
   private parseTodos(raw: unknown) {
@@ -1199,6 +1284,30 @@ export class AltusManagedToolRuntime {
         );
       }
       if (
+        isCustomApiBypassShellCommand(command) &&
+        (await connectorGuideService.getActiveGuideForConnector(this.input.sessionId, 'custom_api'))
+      ) {
+        throw new Error(
+          [
+            'custom_api_shell_broker_bypass_blocked: Custom API is attached through the oneceo API broker.',
+            'Do not call external Custom API endpoints from shell or place Custom API tokens in the sandbox.',
+            'Call load_connector_guide(connectorKey=custom_api), then use the attached custom_api MCP tools.',
+          ].join('\n')
+        );
+      }
+      if (
+        isCustomMcpBypassShellCommand(command) &&
+        (await connectorGuideService.getActiveGuideForConnector(this.input.sessionId, 'custom_mcp'))
+      ) {
+        throw new Error(
+          [
+            'custom_mcp_shell_broker_bypass_blocked: Custom MCP is attached through the oneceo API broker.',
+            'Do not run local stdio MCP servers, curl remote MCP URLs, or place Custom MCP secrets in the sandbox.',
+            'Call load_connector_guide(connectorKey=custom_mcp), then use the attached custom_mcp provider tools.',
+          ].join('\n')
+        );
+      }
+      if (
         this.hasActiveSkill('deployment-orchestrator') &&
         isLocalPreviewOrDevCommand(command)
       ) {
@@ -1650,9 +1759,7 @@ export class AltusManagedToolRuntime {
       if (!skillId || !revisionId || !resourcePath) {
         throw new Error('load_skill_resource_missing_arguments');
       }
-      const activeSkill = this.input.activeSkills.find(
-        (item) => item.skillId === skillId && item.revisionId === revisionId
-      );
+      const activeSkill = findActiveSkillForResourceLoad(this.input.activeSkills, { skillId, revisionId });
       if (!activeSkill) {
         throw new Error('load_skill_resource_skill_not_active');
       }
@@ -1672,7 +1779,33 @@ export class AltusManagedToolRuntime {
           resourcePath: result.resourcePath,
           resourceType: result.resourceType,
           skillResourcePath: result.skillResourcePath,
+          contentMarkdown: result.contentMarkdown,
+          usageHint: 'Use contentMarkdown directly before reading skillResourcePath from the sandbox.',
         }),
+      };
+    }
+
+    if (toolName === 'render_pptx_from_instructions') {
+      if (!this.hasActiveSkill('ppt-workflow')) {
+        throw new Error('render_pptx_from_instructions_ppt_workflow_not_active');
+      }
+      const result = await pptRenderToolService.render({
+        sessionId: this.input.sessionId,
+        sandboxId: this.input.sandboxId,
+        workspaceRoot: this.input.workspaceRoot,
+        instructions: rawArgs.instructions,
+        outputFileName: asText(rawArgs.outputFileName) || null,
+      });
+      if (result.status === 'completed') {
+        if (result.pptxPath) {
+          this.renderedPptxAttachmentPaths.add(result.pptxPath);
+        }
+        await this.sandboxActivityDeps.markSandboxDirty(this.input.sandboxId, 'ppt_render');
+      }
+      return {
+        type: 'result',
+        activatedSkills,
+        content: JSON.stringify(result),
       };
     }
 
@@ -1720,6 +1853,7 @@ export class AltusManagedToolRuntime {
         ? rawArgs.verification.map((item) => asText(item)).filter(Boolean).slice(0, 8)
         : [];
       const attachments = this.parseCompletionAttachments(rawArgs.attachments);
+      this.assertPptxAttachmentsWereRendered(attachments);
       return {
         type: 'complete',
         activatedSkills,

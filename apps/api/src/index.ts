@@ -15,6 +15,7 @@ import authRoutes from './routes/auth-routes';
 import internalSkillRoutes from './routes/internal-skill-routes';
 import internalSandboxRoutes from './routes/internal-sandbox-routes';
 import internalConnectorGuideRoutes from './routes/internal-connector-guide-routes';
+import internalCustomApiRoutes from './routes/internal-custom-api-routes';
 import internalRuntimeArtifactRoutes from './routes/internal-runtime-artifact-routes';
 import internalAdminAuthRoutes from './routes/internal-admin-auth-routes';
 import internalAdminAppUserRoutes from './routes/internal-admin-app-user-routes';
@@ -24,6 +25,8 @@ import internalTaskCreationRoutes from './routes/internal-task-creation-routes';
 import billingRoutes from './routes/billing-routes';
 import internalBillingRoutes from './routes/internal-billing-routes';
 import activationCodeRoutes from './routes/activation-code-routes';
+import notificationRoutes from './routes/notification-routes';
+import internalNotificationRoutes from './routes/internal-notification-routes';
 import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
 import { closeDatabaseConnection, testDatabaseConnection } from './config/database';
 import { getPublicErrorMessage } from './utils/error-response';
@@ -170,6 +173,7 @@ app.use('/api/connectors', connectorRoutes);
 app.use('/api/internal', internalSkillRoutes);
 app.use('/api/internal', internalSandboxRoutes);
 app.use('/api/internal', internalConnectorGuideRoutes);
+app.use('/api/internal', internalCustomApiRoutes);
 app.use('/api/internal', internalRuntimeArtifactRoutes);
 app.use('/api/internal', internalAdminAuthRoutes);
 app.use('/api/internal', internalAdminAppUserRoutes);
@@ -179,6 +183,8 @@ app.use('/api/internal', internalTaskCreationRoutes);
 app.use('/api/billing', billingRoutes);
 app.use('/api/internal/billing', internalBillingRoutes);
 app.use('/api/activation-codes', activationCodeRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/internal/notifications', internalNotificationRoutes);
 
 // 任务相关 API
 app.get('/api/tasks', (req, res) => {

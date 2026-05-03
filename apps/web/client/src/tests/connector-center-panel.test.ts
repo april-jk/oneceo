@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   cleanupConnectorQuery,
+  FIGMA_FIXED_CALLBACK_PATH,
   GITHUB_FIXED_CALLBACK_PATH,
   normalizeEditableProfileId,
   resolveAuthorizedRepositoryLabel,
@@ -50,6 +51,10 @@ describe("connector center panel profile id normalization", () => {
     expect(VERCEL_FIXED_CALLBACK_PATH).toBe("/vercel/callback");
   });
 
+  it("uses the fixed Figma callback path", () => {
+    expect(FIGMA_FIXED_CALLBACK_PATH).toBe("/figma/callback");
+  });
+
   it("recognizes Slack fixed callback pages as connector OAuth callbacks", () => {
     const params = new URLSearchParams("code=oauth-code&state=oauth-state");
     const callback = resolveConnectorOauthCallbackContext("http://localhost/slack/callback", params);
@@ -73,6 +78,15 @@ describe("connector center panel profile id normalization", () => {
     const callback = resolveConnectorOauthCallbackContext("http://localhost/vercel/callback", params);
 
     expect(callback.connector).toBe("vercel");
+    expect(callback.isFixedCallback).toBe(true);
+    expect(callback.shouldHandle).toBe(true);
+  });
+
+  it("recognizes Figma fixed callback pages as connector OAuth callbacks", () => {
+    const params = new URLSearchParams("code=oauth-code&state=oauth-state");
+    const callback = resolveConnectorOauthCallbackContext("http://localhost/figma/callback", params);
+
+    expect(callback.connector).toBe("figma");
     expect(callback.isFixedCallback).toBe(true);
     expect(callback.shouldHandle).toBe(true);
   });
@@ -103,6 +117,14 @@ describe("connector center panel profile id normalization", () => {
         targetSessionId: "session-vercel-1",
       })
     ).toBe("/session/session-vercel-1");
+  });
+
+  it("redirects Figma callback pages back to the target session after cleanup", () => {
+    expect(
+      cleanupConnectorQuery("/figma/callback", "?code=oauth-code&state=oauth-state", {
+        targetSessionId: "session-figma-1",
+      })
+    ).toBe("/session/session-figma-1");
   });
 
   it("shows the selected GitHub repository name when profile config has repositories", () => {

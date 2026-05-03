@@ -25,6 +25,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import { normalizeLanguage } from "@/i18n";
 import {
+  Bell,
   ChevronLeft,
   Copy,
   Diamond,
@@ -52,6 +53,7 @@ import {
 } from "@/lib/altus-settings";
 import { toast } from "sonner";
 import {
+  CLOSE_SETTINGS_DIALOG_EVENT,
   OPEN_SETTINGS_DIALOG_EVENT,
   type OpenSettingsDialogDetail,
   type SettingsTab,
@@ -255,6 +257,67 @@ function AppearancePreview({ theme }: { theme: ThemePreference }) {
   );
 }
 
+function SettingsSection({
+  eyebrow,
+  title,
+  description,
+  children,
+  className,
+  contentClassName,
+  actions,
+}: {
+  eyebrow?: string;
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+  className?: string;
+  contentClassName?: string;
+  actions?: React.ReactNode;
+}) {
+  return (
+    <section
+      className={cn(
+        "rounded-[20px] border border-border/70 bg-background shadow-sm",
+        className,
+      )}
+    >
+      <div className="flex flex-col gap-3 border-b border-border/60 px-5 py-4 md:flex-row md:items-start md:justify-between md:px-6">
+        <div className="min-w-0">
+          {eyebrow ? (
+            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/80">
+              {eyebrow}
+            </div>
+          ) : null}
+          <h3 className="mt-1 text-[17px] font-semibold tracking-[-0.01em] text-foreground">
+            {title}
+          </h3>
+          {description ? (
+            <p className="mt-1 max-w-[62ch] text-sm leading-6 text-muted-foreground">
+              {description}
+            </p>
+          ) : null}
+        </div>
+        {actions ? <div className="shrink-0">{actions}</div> : null}
+      </div>
+      <div className={cn("px-5 py-5 md:px-6", contentClassName)}>{children}</div>
+    </section>
+  );
+}
+
+function CounterText({
+  current,
+  limit,
+}: {
+  current: number;
+  limit: number;
+}) {
+  return (
+    <div className="text-right text-[11px] font-medium tabular-nums text-muted-foreground">
+      {current} / {limit}
+    </div>
+  );
+}
+
 export function SettingsPanel({
   activeTab,
   onActiveTabChange,
@@ -365,6 +428,47 @@ export function SettingsPanel({
       ] as Array<{ value: ThemePreference; label: string }>,
     [i18n.resolvedLanguage, t],
   );
+  const primaryInputClassName =
+    "h-11 rounded-xl border-border/70 bg-background/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]";
+  const primaryTextareaClassName =
+    "rounded-xl border-border/70 bg-background/80 leading-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]";
+  const navItems = [
+    {
+      value: "personalization" as const,
+      label: t("settings.personalizationTab"),
+      icon: Pencil,
+    },
+    {
+      value: "account" as const,
+      label: t("settings.accountTab"),
+      icon: UserRound,
+    },
+    {
+      value: "model" as const,
+      label: t("settings.modelTab"),
+      icon: SlidersHorizontal,
+    },
+    {
+      value: "settings" as const,
+      label: t("settings.settingsTab"),
+      icon: Settings2,
+    },
+    {
+      value: "skills" as const,
+      label: t("settings.skillsTab"),
+      icon: Wrench,
+    },
+    {
+      value: "connectors" as const,
+      label: t("settings.connectorsTab"),
+      icon: Plug,
+    },
+    {
+      value: "billing" as const,
+      label: "积分与消费",
+      icon: Diamond,
+    },
+  ];
 
   const handleLanguageChange = (lang: string) => {
     void i18n.changeLanguage(normalizeLanguage(lang));
@@ -470,118 +574,88 @@ export function SettingsPanel({
   };
 
   return (
-    <div className="h-full">
+    <div className="h-full bg-background">
       <Tabs
         value={activeTab}
         onValueChange={(value) => onActiveTabChange(value as SettingsTab)}
         className="h-full"
       >
         <div className="flex h-full flex-col md:flex-row">
-          <aside className="md:w-[240px] shrink-0 border-b md:border-b-0 md:border-r border-border bg-muted/30 flex flex-col min-h-0">
-            <div className="hidden md:flex items-center px-6 pt-6 pb-4">
-              <div className="text-base font-semibold text-foreground">
-                {t("settings.title")}
-              </div>
-            </div>
-            <div className="px-4 md:px-3 pb-4 md:pb-6 flex-1 min-h-0">
-              <TabsList className="flex h-full flex-shrink-0 items-start justify-start self-stretch px-1.5 overflow-x-auto md:overflow-x-visible md:overflow-y-auto w-full md:flex-col md:gap-3 gap-3 bg-transparent">
-                <div className="flex md:gap-2 gap-3 md:flex-col items-start self-stretch">
-                  <TabsTrigger
-                    value="personalization"
-                    className="flex px-2 py-2.5 items-center text-[14px] leading-5 text-foreground max-md:whitespace-nowrap md:h-9 md:gap-2 md:self-stretch md:px-4 md:rounded-lg hover:bg-muted/60 data-[state=active]:bg-muted/60 data-[state=active]:font-medium max-md:border-b-2 max-md:border-foreground"
-                  >
-                    <span className="hidden md:block text-muted-foreground data-[state=active]:text-foreground">
-                      <Pencil className="h-4 w-4" />
-                    </span>
-                    <span className="truncate">
-                      {t("settings.personalizationTab")}
-                    </span>
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="account"
-                    className="flex px-2 py-2.5 items-center text-[14px] leading-5 text-foreground max-md:whitespace-nowrap md:h-9 md:gap-2 md:self-stretch md:px-4 md:rounded-lg hover:bg-muted/60 data-[state=active]:bg-muted/60 data-[state=active]:font-medium max-md:border-b-2 max-md:border-foreground"
-                  >
-                    <span className="hidden md:block text-muted-foreground data-[state=active]:text-foreground">
-                      <UserRound className="h-4 w-4" />
-                    </span>
-                    <span className="truncate">{t("settings.accountTab")}</span>
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="model"
-                    className="flex px-2 py-2.5 items-center text-[14px] leading-5 text-foreground max-md:whitespace-nowrap md:h-9 md:gap-2 md:self-stretch md:px-4 md:rounded-lg hover:bg-muted/60 data-[state=active]:bg-muted/60 data-[state=active]:font-medium max-md:border-b-2 max-md:border-foreground"
-                  >
-                    <span className="hidden md:block text-muted-foreground data-[state=active]:text-foreground">
-                      <SlidersHorizontal className="h-4 w-4" />
-                    </span>
-                    <span className="truncate">{t("settings.modelTab")}</span>
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="settings"
-                    className="flex px-2 py-2.5 items-center text-[14px] leading-5 text-foreground max-md:whitespace-nowrap md:h-9 md:gap-2 md:self-stretch md:px-4 md:rounded-lg hover:bg-muted/60 data-[state=active]:bg-muted/60 data-[state=active]:font-medium max-md:border-b-2 max-md:border-foreground"
-                  >
-                    <span className="hidden md:block text-muted-foreground data-[state=active]:text-foreground">
-                      <Settings2 className="h-4 w-4" />
-                    </span>
-                    <span className="truncate">
-                      {t("settings.settingsTab")}
-                    </span>
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="skills"
-                    className="flex px-2 py-2.5 items-center text-[14px] leading-5 text-foreground max-md:whitespace-nowrap md:h-9 md:gap-2 md:self-stretch md:px-4 md:rounded-lg hover:bg-muted/60 data-[state=active]:bg-muted/60 data-[state=active]:font-medium max-md:border-b-2 max-md:border-foreground"
-                  >
-                    <span className="hidden md:block text-muted-foreground data-[state=active]:text-foreground">
-                      <Wrench className="h-4 w-4" />
-                    </span>
-                    <span className="truncate">{t("settings.skillsTab")}</span>
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="connectors"
-                    className="flex px-2 py-2.5 items-center text-[14px] leading-5 text-foreground max-md:whitespace-nowrap md:h-9 md:gap-2 md:self-stretch md:px-4 md:rounded-lg hover:bg-muted/60 data-[state=active]:bg-muted/60 data-[state=active]:font-medium max-md:border-b-2 max-md:border-foreground"
-                  >
-                    <span className="hidden md:block text-muted-foreground data-[state=active]:text-foreground">
-                      <Plug className="h-4 w-4" />
-                    </span>
-                    <span className="truncate">
-                      {t("settings.connectorsTab")}
-                    </span>
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="billing"
-                    className="flex px-2 py-2.5 items-center text-[14px] leading-5 text-foreground max-md:whitespace-nowrap md:h-9 md:gap-2 md:self-stretch md:px-4 md:rounded-lg hover:bg-muted/60 data-[state=active]:bg-muted/60 data-[state=active]:font-medium max-md:border-b-2 max-md:border-foreground"
-                  >
-                    <span className="hidden md:block text-muted-foreground data-[state=active]:text-foreground">
-                      <Diamond className="h-4 w-4" />
-                    </span>
-                    <span className="truncate">积分与消费</span>
-                  </TabsTrigger>
+          <aside className="shrink-0 border-b border-border/70 bg-background md:min-w-[236px] md:max-w-[236px] md:border-b-0 md:border-r md:m-4 md:mr-0 md:rounded-l-[22px]">
+            <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-4 md:px-3 md:pb-5 md:pt-5">
+              <TabsList className="flex h-full w-full flex-shrink-0 items-start justify-start gap-3 self-stretch overflow-x-auto bg-transparent px-0 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden md:flex-col md:overflow-x-visible md:overflow-y-auto">
+                <div className="flex items-start gap-3 self-stretch md:flex-col md:gap-1.5">
+                  {navItems.map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <TabsTrigger
+                        key={item.value}
+                        value={item.value}
+                        className="group flex items-center gap-2.5 border border-transparent px-2 py-2.5 text-[14px] leading-5 text-foreground max-md:whitespace-nowrap md:h-11 md:self-stretch md:justify-start md:rounded-xl md:px-3.5 md:hover:border-border/80 md:hover:bg-background/80 md:data-[state=active]:bg-background md:data-[state=active]:shadow-sm max-md:border-b-2 max-md:border-transparent max-md:data-[state=active]:border-foreground"
+                      >
+                        <span className="hidden rounded-lg border border-transparent p-1.5 text-muted-foreground transition-colors md:flex md:group-data-[state=active]:bg-muted md:group-data-[state=active]:text-foreground">
+                          <Icon className="h-4 w-4" />
+                        </span>
+                        <span className="truncate font-medium">{item.label}</span>
+                      </TabsTrigger>
+                    );
+                  })}
                 </div>
               </TabsList>
             </div>
           </aside>
 
-          <div className="flex-1 min-w-0 flex flex-col bg-background">
-            <div className="flex-1 overflow-y-auto px-6 py-6 md:px-8 md:py-8 space-y-10">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background md:m-4 md:ml-0 md:rounded-r-[22px] md:border md:border-border/60">
+            <div className="h-full flex-1 overflow-y-auto px-4 py-4 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden md:px-6 md:py-6">
               <TabsContent value="personalization" className="mt-0">
-                <div className="mx-auto flex w-full max-w-[760px] flex-col gap-8 pb-6">
-                  <div className="border-b border-border/70 pb-6">
-                    <h2 className="text-[26px] font-semibold tracking-tight text-foreground">
-                      {t("settings.personalizationTitle")}
-                    </h2>
-                    <p className="mt-2 max-w-[560px] text-sm leading-6 text-muted-foreground">
-                      {t("settings.personalizationDescription")}
-                    </p>
-                  </div>
-
-                  <section className="space-y-4 border-b border-border/60 pb-8">
-                    <div>
-                      <h3 className="text-base font-semibold text-foreground">
-                        {t("settings.identitySectionTitle")}
-                      </h3>
-                      <p className="mt-1 text-sm text-muted-foreground">
-                        {t("settings.identitySectionDescription")}
-                      </p>
+                <div className="mx-auto flex w-full max-w-[720px] flex-col gap-6 pb-6">
+                  <SettingsSection
+                    eyebrow="Prompt memory"
+                    title={t("settings.personalizationTitle")}
+                    description={t("settings.personalizationDescription")}
+                    actions={
+                      <div className="rounded-full border border-border/70 bg-muted/50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                        User profile context
+                      </div>
+                    }
+                    contentClassName="space-y-5"
+                  >
+                    <div className="grid gap-3 rounded-2xl border border-border/60 bg-muted/20 p-4 md:grid-cols-3">
+                      <div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/75">
+                          Identity
+                        </div>
+                        <div className="mt-2 text-sm leading-6 text-foreground">
+                          {personalizationDraft.preferredName ||
+                            t("settings.preferredNamePlaceholder")}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/75">
+                          Role
+                        </div>
+                        <div className="mt-2 text-sm leading-6 text-foreground">
+                          {personalizationDraft.occupation ||
+                            t("settings.occupationPlaceholder")}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/75">
+                          Locale
+                        </div>
+                        <div className="mt-2 text-sm leading-6 text-foreground">
+                          {personalizationDraft.location ||
+                            t("settings.locationPlaceholder")}
+                        </div>
+                      </div>
                     </div>
+                  </SettingsSection>
+
+                  <SettingsSection
+                    eyebrow="Identity"
+                    title={t("settings.identitySectionTitle")}
+                    description={t("settings.identitySectionDescription")}
+                  >
                     <div className="grid gap-4 md:grid-cols-2">
                       <div className="space-y-2">
                         <Label htmlFor="personalization-preferred-name">
@@ -598,12 +672,12 @@ export function SettingsPanel({
                           }
                           maxLength={PERSONALIZATION_LIMITS.preferredName}
                           placeholder={t("settings.preferredNamePlaceholder")}
-                          className="h-10 rounded-lg border-border/80 bg-muted/20"
+                          className={primaryInputClassName}
                         />
-                        <div className="text-right text-xs text-muted-foreground">
-                          {personalizationDraft.preferredName.length} /{" "}
-                          {PERSONALIZATION_LIMITS.preferredName}
-                        </div>
+                        <CounterText
+                          current={personalizationDraft.preferredName.length}
+                          limit={PERSONALIZATION_LIMITS.preferredName}
+                        />
                       </div>
                       <div className="space-y-2">
                         <Label htmlFor="personalization-occupation">
@@ -620,12 +694,12 @@ export function SettingsPanel({
                           }
                           maxLength={PERSONALIZATION_LIMITS.occupation}
                           placeholder={t("settings.occupationPlaceholder")}
-                          className="h-10 rounded-lg border-border/80 bg-muted/20"
+                          className={primaryInputClassName}
                         />
-                        <div className="text-right text-xs text-muted-foreground">
-                          {personalizationDraft.occupation.length} /{" "}
-                          {PERSONALIZATION_LIMITS.occupation}
-                        </div>
+                        <CounterText
+                          current={personalizationDraft.occupation.length}
+                          limit={PERSONALIZATION_LIMITS.occupation}
+                        />
                       </div>
                       <div className="space-y-2">
                         <Label htmlFor="personalization-identity">
@@ -642,12 +716,12 @@ export function SettingsPanel({
                           }
                           maxLength={PERSONALIZATION_LIMITS.identity}
                           placeholder={t("settings.identityPlaceholder")}
-                          className="h-10 rounded-lg border-border/80 bg-muted/20"
+                          className={primaryInputClassName}
                         />
-                        <div className="text-right text-xs text-muted-foreground">
-                          {personalizationDraft.identity.length} /{" "}
-                          {PERSONALIZATION_LIMITS.identity}
-                        </div>
+                        <CounterText
+                          current={personalizationDraft.identity.length}
+                          limit={PERSONALIZATION_LIMITS.identity}
+                        />
                       </div>
                       <div className="space-y-2 md:col-span-2">
                         <Label htmlFor="personalization-location">
@@ -664,25 +738,21 @@ export function SettingsPanel({
                           }
                           maxLength={PERSONALIZATION_LIMITS.location}
                           placeholder={t("settings.locationPlaceholder")}
-                          className="h-10 rounded-lg border-border/80 bg-muted/20"
+                          className={primaryInputClassName}
                         />
-                        <div className="text-right text-xs text-muted-foreground">
-                          {personalizationDraft.location.length} /{" "}
-                          {PERSONALIZATION_LIMITS.location}
-                        </div>
+                        <CounterText
+                          current={personalizationDraft.location.length}
+                          limit={PERSONALIZATION_LIMITS.location}
+                        />
                       </div>
                     </div>
-                  </section>
+                  </SettingsSection>
 
-                  <section className="space-y-4 border-b border-border/60 pb-8">
-                    <div>
-                      <h3 className="text-base font-semibold text-foreground">
-                        {t("settings.aboutSectionTitle")}
-                      </h3>
-                      <p className="mt-1 text-sm text-muted-foreground">
-                        {t("settings.aboutSectionDescription")}
-                      </p>
-                    </div>
+                  <SettingsSection
+                    eyebrow="Background"
+                    title={t("settings.aboutSectionTitle")}
+                    description={t("settings.aboutSectionDescription")}
+                  >
                     <div className="space-y-2">
                       <Label htmlFor="personalization-background">
                         {t("settings.backgroundLabel")}
@@ -699,12 +769,12 @@ export function SettingsPanel({
                         maxLength={PERSONALIZATION_LIMITS.background}
                         rows={6}
                         placeholder={t("settings.backgroundPlaceholder")}
-                        className="min-h-[160px] rounded-lg border-border/80 bg-muted/20 leading-6"
+                        className={cn("min-h-[160px]", primaryTextareaClassName)}
                       />
-                      <div className="text-right text-xs text-muted-foreground">
-                        {personalizationDraft.background.length} /{" "}
-                        {PERSONALIZATION_LIMITS.background}
-                      </div>
+                      <CounterText
+                        current={personalizationDraft.background.length}
+                        limit={PERSONALIZATION_LIMITS.background}
+                      />
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="personalization-preferences">
@@ -722,24 +792,25 @@ export function SettingsPanel({
                         maxLength={PERSONALIZATION_LIMITS.preferences}
                         rows={5}
                         placeholder={t("settings.preferencesPlaceholder")}
-                        className="min-h-[132px] rounded-lg border-border/80 bg-muted/20 leading-6"
+                        className={cn("min-h-[132px]", primaryTextareaClassName)}
                       />
-                      <div className="text-right text-xs text-muted-foreground">
-                        {personalizationDraft.preferences.length} /{" "}
-                        {PERSONALIZATION_LIMITS.preferences}
-                      </div>
+                      <CounterText
+                        current={personalizationDraft.preferences.length}
+                        limit={PERSONALIZATION_LIMITS.preferences}
+                      />
                     </div>
-                  </section>
+                  </SettingsSection>
 
-                  <section className="space-y-4 pb-4">
-                    <div>
-                      <h3 className="text-base font-semibold text-foreground">
-                        {t("settings.instructionsSectionTitle")}
-                      </h3>
-                      <p className="mt-1 text-sm text-muted-foreground">
-                        {t("settings.instructionsSectionDescription")}
-                      </p>
-                    </div>
+                  <SettingsSection
+                    eyebrow="Execution hints"
+                    title={t("settings.instructionsSectionTitle")}
+                    description={t("settings.instructionsSectionDescription")}
+                    actions={
+                      <div className="hidden rounded-full border border-border/70 bg-background/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground md:block">
+                        Feeds future task creation
+                      </div>
+                    }
+                  >
                     <div className="space-y-2">
                       <Label htmlFor="personalization-response-preferences">
                         {t("settings.responsePreferencesLabel")}
@@ -758,16 +829,16 @@ export function SettingsPanel({
                         placeholder={t(
                           "settings.responsePreferencesPlaceholder",
                         )}
-                        className="min-h-[180px] rounded-lg border-border/80 bg-muted/20 leading-6"
+                        className={cn("min-h-[180px]", primaryTextareaClassName)}
                       />
-                      <div className="text-right text-xs text-muted-foreground">
-                        {personalizationDraft.responsePreferences.length} /{" "}
-                        {PERSONALIZATION_LIMITS.responsePreferences}
-                      </div>
+                      <CounterText
+                        current={personalizationDraft.responsePreferences.length}
+                        limit={PERSONALIZATION_LIMITS.responsePreferences}
+                      />
                     </div>
-                  </section>
+                  </SettingsSection>
 
-                  <div className="flex items-center justify-end gap-3 border-t border-border/70 pt-5">
+                  <div className="flex items-center justify-end gap-3 border-t border-border/70 px-1 pt-5">
                     <Button
                       type="button"
                       variant="outline"
@@ -792,21 +863,18 @@ export function SettingsPanel({
               </TabsContent>
 
               {/* Settings Tab */}
-              <TabsContent value="settings" className="space-y-8 mt-0">
-                <div className="space-y-4 pb-6 border-b border-border/60">
-                  <div>
-                    <Label className="text-sm font-medium">
-                      {t("settings.languageLabel")}
-                    </Label>
-                    <p className="text-sm text-muted-foreground">
-                      {t("settings.languageDescription")}
-                    </p>
-                  </div>
+              <TabsContent value="settings" className="mt-0">
+                <div className="mx-auto flex w-full max-w-[720px] flex-col gap-6 pb-6">
+                  <SettingsSection
+                    eyebrow="Environment"
+                    title={t("settings.languageLabel")}
+                    description={t("settings.languageDescription")}
+                  >
                   <Select
                     value={currentLanguage}
                     onValueChange={handleLanguageChange}
                   >
-                    <SelectTrigger className="w-full max-w-xs rounded-xl">
+                    <SelectTrigger className="w-full max-w-xs rounded-xl border-border/70 bg-background/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent className="rounded-xl">
@@ -818,18 +886,14 @@ export function SettingsPanel({
                       </SelectItem>
                     </SelectContent>
                   </Select>
-                </div>
+                  </SettingsSection>
 
-                <div className="space-y-4 pb-6 border-b border-border/60">
-                  <div>
-                    <Label className="text-sm font-medium">
-                      {t("settings.appearanceLabel")}
-                    </Label>
-                    <p className="text-sm text-muted-foreground">
-                      {t("settings.appearanceDescription")}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-4 sm:gap-6">
+                  <SettingsSection
+                    eyebrow="Theme"
+                    title={t("settings.appearanceLabel")}
+                    description={t("settings.appearanceDescription")}
+                  >
+                  <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                     {appearanceOptions.map((option) => {
                       const selected = theme === option.value;
 
@@ -839,11 +903,11 @@ export function SettingsPanel({
                           type="button"
                           aria-pressed={selected}
                           onClick={() => setTheme(option.value)}
-                          className="flex flex-col items-center gap-[10px] text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                          className="flex flex-col items-start gap-3 rounded-2xl border border-border/70 bg-background p-3 text-left text-[13px] transition-[border-color,box-shadow] hover:border-border hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                         >
                           <span
                             className={cn(
-                              "block h-[60px] w-[90px] overflow-hidden rounded-lg border bg-card text-left transition-colors",
+                              "block h-[80px] w-full overflow-hidden rounded-xl border bg-card text-left transition-colors",
                               selected
                                 ? "border-2 border-primary shadow-sm"
                                 : "border-border hover:border-primary/60",
@@ -851,70 +915,79 @@ export function SettingsPanel({
                           >
                             <AppearancePreview theme={option.value} />
                           </span>
-                          <span
-                            className={cn(
-                              "text-center transition-colors",
-                              selected
-                                ? "text-foreground"
-                                : "text-muted-foreground",
-                            )}
-                          >
-                            {option.label}
+                          <span className="flex w-full items-center justify-between gap-3">
+                            <span
+                              className={cn(
+                                "transition-colors",
+                                selected
+                                  ? "text-foreground"
+                                  : "text-muted-foreground",
+                              )}
+                            >
+                              {option.label}
+                            </span>
+                            {selected ? (
+                              <span className="rounded-full border border-border/70 bg-muted/50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-foreground">
+                                Active
+                              </span>
+                            ) : null}
                           </span>
                         </button>
                       );
                     })}
                   </div>
-                </div>
+                  </SettingsSection>
 
-                <div className="space-y-4">
-                  <div>
-                    <Label className="text-sm font-medium">
-                      {t("settings.notificationsLabel")}
-                    </Label>
-                    <p className="text-sm text-muted-foreground">
-                      {t("settings.notificationsDescription")}
-                    </p>
+                  <SettingsSection
+                    eyebrow="Signals"
+                    title={t("settings.notificationsLabel")}
+                    description={t("settings.notificationsDescription")}
+                  >
+                  <div className="divide-y divide-border/60 overflow-hidden rounded-2xl border border-border/60 bg-muted/20">
+                    <div className="flex items-center justify-between px-4 py-4">
+                      <div className="flex items-center gap-3">
+                        <Mail className="h-4 w-4 text-muted-foreground" />
+                        <Label htmlFor="email-notifications" className="text-sm">
+                          {t("settings.emailNotifications")}
+                        </Label>
+                      </div>
+                      <Switch
+                        id="email-notifications"
+                        checked={emailNotifications}
+                        onCheckedChange={setEmailNotifications}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between px-4 py-4">
+                      <div className="flex items-center gap-3">
+                        <Bell className="h-4 w-4 text-muted-foreground" />
+                        <Label htmlFor="push-notifications" className="text-sm">
+                          {t("settings.pushNotifications")}
+                        </Label>
+                      </div>
+                      <Switch
+                        id="push-notifications"
+                        checked={pushNotifications}
+                        onCheckedChange={setPushNotifications}
+                      />
+                    </div>
                   </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="email-notifications" className="text-sm">
-                      {t("settings.emailNotifications")}
-                    </Label>
-                    <Switch
-                      id="email-notifications"
-                      checked={emailNotifications}
-                      onCheckedChange={setEmailNotifications}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="push-notifications" className="text-sm">
-                      {t("settings.pushNotifications")}
-                    </Label>
-                    <Switch
-                      id="push-notifications"
-                      checked={pushNotifications}
-                      onCheckedChange={setPushNotifications}
-                    />
-                  </div>
+                  </SettingsSection>
                 </div>
               </TabsContent>
 
               {/* Model Tab */}
-              <TabsContent value="model" className="space-y-8 mt-0">
-                <div className="space-y-4">
-                  <div>
-                    <Label className="text-sm font-medium">
-                      {t("settings.altusControlLabel")}
-                    </Label>
-                    <p className="text-sm text-muted-foreground">
-                      {t("settings.altusControlDescription")}
-                    </p>
-                  </div>
+              <TabsContent value="model" className="mt-0">
+                <div className="mx-auto flex w-full max-w-[720px] flex-col gap-6 pb-6">
+                <SettingsSection
+                  eyebrow="Runtime"
+                  title={t("settings.altusControlLabel")}
+                  description={t("settings.altusControlDescription")}
+                >
                   <Select
                     value={altusMode}
                     onValueChange={(value) => setAltusMode(value as AltusMode)}
                   >
-                    <SelectTrigger className="w-full max-w-xs rounded-xl">
+                    <SelectTrigger className="w-full max-w-xs rounded-xl border-border/70 bg-background/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent className="rounded-xl">
@@ -926,20 +999,16 @@ export function SettingsPanel({
                       </SelectItem>
                     </SelectContent>
                   </Select>
-                </div>
+                </SettingsSection>
 
                 {shouldShowExecutorSettings ? (
-                  <div className="space-y-4 border-t border-border/60 pt-6">
-                    <div>
-                      <Label className="text-sm font-medium">
-                        {t("settings.executorLabel")}
-                      </Label>
-                      <p className="text-sm text-muted-foreground">
-                        {t("settings.executorDescription")}
-                      </p>
-                    </div>
+                  <SettingsSection
+                    eyebrow="Executor"
+                    title={t("settings.executorLabel")}
+                    description={t("settings.executorDescription")}
+                  >
                     <Select value={executor} onValueChange={setExecutor}>
-                      <SelectTrigger className="w-full max-w-xs rounded-xl">
+                      <SelectTrigger className="w-full max-w-xs rounded-xl border-border/70 bg-background/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent className="rounded-xl">
@@ -951,24 +1020,21 @@ export function SettingsPanel({
                         </SelectItem>
                       </SelectContent>
                     </Select>
-                  </div>
+                  </SettingsSection>
                 ) : null}
 
                 {executor === "codex" && altusMode === "sandbox" ? (
-                  <div className="space-y-4 rounded-2xl border border-border/60 bg-muted/20 p-4">
-                    <div>
-                      <Label className="text-sm font-medium">
-                        {t("settings.codexModeLabel")}
-                      </Label>
-                      <p className="text-sm text-muted-foreground">
-                        {t("settings.codexModeDescription")}
-                      </p>
-                    </div>
+                  <SettingsSection
+                    eyebrow="Codex"
+                    title={t("settings.codexModeLabel")}
+                    description={t("settings.codexModeDescription")}
+                    className="bg-muted/20"
+                  >
                     <Select
                       value={codexExecutionMode}
                       onValueChange={setCodexExecutionMode}
                     >
-                      <SelectTrigger className="w-full max-w-xs rounded-xl">
+                      <SelectTrigger className="w-full max-w-xs rounded-xl border-border/70 bg-background/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent className="rounded-xl">
@@ -980,20 +1046,22 @@ export function SettingsPanel({
                         </SelectItem>
                       </SelectContent>
                     </Select>
-                  </div>
+                  </SettingsSection>
                 ) : null}
+                </div>
               </TabsContent>
 
               {/* Account Tab */}
               <TabsContent value="account" className="mt-0 h-full">
-                <div className="flex min-h-full flex-col px-0 md:px-2">
-                  <div className="flex min-h-full w-full flex-1 flex-col md:mx-auto md:max-w-[768px]">
+                <div className="flex min-h-full flex-col">
+                  <div className="flex min-h-full w-full flex-1 flex-col md:mx-auto md:max-w-[720px]">
                     <div className="flex flex-1 flex-col items-start self-stretch pb-4 pt-2 md:pt-2">
                       {accountView === "overview" ? (
                         <div className="flex w-full flex-col gap-5">
+                          <div className="rounded-[20px] border border-border/70 bg-background p-5 shadow-sm md:p-6">
                           <div className="flex flex-col justify-between gap-4 border-b border-border/60 pb-6 md:flex-row md:items-center">
                             <div className="flex min-w-0 flex-1 items-center gap-4">
-                              <Avatar className="h-16 w-16 border border-border/70">
+                              <Avatar className="h-16 w-16 border border-border/70 shadow-[0_8px_20px_rgba(15,23,42,0.08)]">
                                 <AvatarImage
                                   src={
                                     user?.email
@@ -1051,9 +1119,12 @@ export function SettingsPanel({
                             </div>
                           </div>
 
-                          <div className="rounded-lg border border-border bg-muted/20 px-4">
-                            <div className="flex flex-col gap-3 border-b border-border/70 py-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="mt-5 rounded-2xl border border-border/60 bg-muted/20 px-4 md:px-5">
+                            <div className="flex flex-col gap-3 border-b border-border/70 py-4 sm:flex-row sm:items-center sm:justify-between">
                               <div className="flex flex-col gap-1">
+                                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/75">
+                                  Plan
+                                </div>
                                 <div className="text-base font-semibold leading-6 text-foreground">
                                   {t("account.planFree")}
                                 </div>
@@ -1076,38 +1147,39 @@ export function SettingsPanel({
                             </div>
 
                             <div className="grid gap-4 py-4 sm:grid-cols-3">
-                              <div className="space-y-1">
+                              <div className="rounded-xl border border-border/60 bg-muted/15 p-4">
                                 <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                                   <ShieldCheck className="h-4 w-4 text-muted-foreground" />
                                   <span>{t("account.accountStatus")}</span>
                                 </div>
-                                <div className="text-sm text-muted-foreground">
+                                <div className="mt-2 text-sm text-muted-foreground">
                                   {accountStatusText}
                                 </div>
                               </div>
-                              <div className="space-y-1">
+                              <div className="rounded-xl border border-border/60 bg-muted/15 p-4">
                                 <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                                   <Mail className="h-4 w-4 text-muted-foreground" />
                                   <span>{t("account.authMethod")}</span>
                                 </div>
-                                <div className="text-sm text-muted-foreground">
+                                <div className="mt-2 text-sm text-muted-foreground">
                                   {t("account.authMethodEmail")}
                                 </div>
                               </div>
-                              <div className="space-y-1">
+                              <div className="rounded-xl border border-border/60 bg-muted/15 p-4">
                                 <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                                   <ShieldCheck className="h-4 w-4 text-muted-foreground" />
                                   <span>{t("account.sessionIsolation")}</span>
                                 </div>
-                                <div className="text-sm text-muted-foreground">
+                                <div className="mt-2 text-sm text-muted-foreground">
                                   {t("account.sessionIsolationEnabled")}
                                 </div>
                               </div>
                             </div>
                           </div>
+                          </div>
                         </div>
                       ) : (
-                        <div className="flex w-full flex-col gap-5">
+                        <div className="flex w-full flex-col gap-5 rounded-[20px] border border-border/70 bg-background p-5 shadow-sm md:p-6">
                           <div className="flex items-center gap-3 border-b border-border/60 pb-5">
                             <Button
                               type="button"
@@ -1173,7 +1245,7 @@ export function SettingsPanel({
                                   {t("account.usernameLabel")}
                                 </span>
                                 <div className="flex flex-col gap-3 md:flex-row md:items-center">
-                                  <div className="group flex h-10 flex-1 items-center gap-3 rounded-lg border border-border bg-muted/30 px-4">
+                                  <div className="group flex h-11 flex-1 items-center gap-3 rounded-xl border border-border/70 bg-background/80 px-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]">
                                     <input
                                       ref={accountNameInputRef}
                                       maxLength={20}
@@ -1376,18 +1448,12 @@ export function SettingsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col w-[min(921px,calc(100vw-32px))] max-w-[921px] md:w-[min(973px,calc(100vw-32px))] md:max-w-[973px] h-[min(576px,calc(100vh-64px))] md:h-[min(608px,calc(100vh-64px))] rounded-[28px] p-0 overflow-hidden border shadow-xl"
+        className="top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col w-[min(921px,calc(100vw-32px))] max-w-[921px] md:w-[min(973px,calc(100vw-32px))] md:max-w-[973px] h-[min(576px,calc(100vh-64px))] md:h-[min(608px,calc(100vh-64px))] rounded-[30px] border border-border p-0 overflow-hidden shadow-xl"
       >
         <DialogHeader className="sr-only">
           <DialogTitle>{t("settings.title")}</DialogTitle>
           <DialogDescription>{t("settings.description")}</DialogDescription>
         </DialogHeader>
-        <button
-          onClick={() => onOpenChange(false)}
-          className="absolute right-6 top-6 z-10 rounded-md p-1 hover:bg-muted transition-colors"
-        >
-          <X className="h-5 w-5" />
-        </button>
         <div className="flex-1 min-h-0">
           <SettingsPanel
             activeTab={activeTab}
@@ -1480,6 +1546,18 @@ export function GlobalSettingsDialogHost() {
         OPEN_SETTINGS_DIALOG_EVENT,
         handleOpen as EventListener,
       );
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleClose = () => {
+      setOpen(false);
+      setConnectorTargetSessionId(null);
+      setHighlightedConnector(null);
+    };
+    window.addEventListener(CLOSE_SETTINGS_DIALOG_EVENT, handleClose);
+    return () => {
+      window.removeEventListener(CLOSE_SETTINGS_DIALOG_EVENT, handleClose);
     };
   }, []);
 

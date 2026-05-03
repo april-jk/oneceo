@@ -211,6 +211,41 @@ function buildSecretPayload(
   existing?: ConnectorAccountSecret | null
 ): ConnectorAccountSecret | null {
   const current = existing || {};
+  if (connectorKey === 'custom_api') {
+    const accessToken =
+      asText(credentials.accessToken) ||
+      asText(credentials.apiKey) ||
+      asText(credentials.token) ||
+      asText(current.accessToken);
+    const username = asText(credentials.username) || asText((current as any).username);
+    const password = asText(credentials.password) || asText((current as any).password);
+    const headerName = asText(credentials.headerName) || asText((current as any).headerName);
+    if (!accessToken && (!username || !password)) return null;
+    return {
+      accessToken: accessToken || undefined,
+      ...(headerName ? { headerName } : {}),
+      ...(username ? { username } : {}),
+      ...(password ? { password } : {}),
+    } as ConnectorAccountSecret;
+  }
+  if (connectorKey === 'custom_mcp') {
+    const headers =
+      credentials.headers && typeof credentials.headers === 'object' && !Array.isArray(credentials.headers)
+        ? (credentials.headers as Record<string, unknown>)
+        : {};
+    const customMcpHeaders: Record<string, string> = {};
+    for (const [key, value] of Object.entries(headers)) {
+      const headerName = asText(key);
+      const headerValue = asText(value);
+      if (headerName && headerValue) {
+        customMcpHeaders[headerName] = headerValue;
+      }
+    }
+    return {
+      customMcpHeaders,
+      accessToken: Object.keys(customMcpHeaders).length > 0 ? '__custom_mcp_headers__' : '__custom_mcp_no_auth__',
+    } as ConnectorAccountSecret;
+  }
   if (connectorKey === 'postgres') {
     const dsn = asText(credentials.dsn) || asText(current.dsn);
     return dsn ? { dsn } : null;
@@ -426,6 +461,47 @@ function shouldForceFigmaComposioReconnect(row: UserConnectorProfileRow): boolea
     asText(secret?.source) === 'composio' &&
     asText(secret?.composioMcpUrl)
   );
+}
+
+const COMPOSIO_CALLBACK_PATHS: Partial<Record<ConnectorKey, string>> = {
+  github: '/github/callback',
+  notion: '/notion/callback',
+  supabase: '/supabase/callback',
+  slack: '/slack/callback',
+  figma: '/figma/callback',
+};
+
+function resolveComposioCallbackBaseUrl(): string {
+  const baseUrl =
+    asText(process.env.COMPOSIO_OAUTH_CALLBACK_BASE_URL) ||
+    asText(process.env.FRONTEND_URL);
+  if (!baseUrl) {
+    throw new Error('COMPOSIO_OAUTH_CALLBACK_BASE_URL or FRONTEND_URL is required for Composio OAuth');
+  }
+  const parsed = new URL(baseUrl);
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('COMPOSIO_OAUTH_CALLBACK_BASE_URL must be an http(s) URL');
+  }
+  parsed.pathname = parsed.pathname.replace(/\/+$/, '');
+  parsed.search = '';
+  parsed.hash = '';
+  return parsed.toString().replace(/\/+$/, '');
+}
+
+export function resolveComposioOauthCallbackUrl(
+  connectorKey: ConnectorKey,
+  inputRedirectUri: string
+): URL {
+  const callbackPath = COMPOSIO_CALLBACK_PATHS[connectorKey];
+  if (!callbackPath) {
+    throw new Error(`${connectorKey} Composio OAuth callback path is not configured`);
+  }
+  const callbackUrl = new URL(callbackPath, `${resolveComposioCallbackBaseUrl()}/`);
+  const input = asText(inputRedirectUri);
+  if (input) {
+    callbackUrl.search = new URL(input).search;
+  }
+  return callbackUrl;
 }
 
 function resolveOauthRedirectUri(
@@ -1053,11 +1129,8 @@ export class UserConnectorService {
         status: 'pending',
         expiresAt: new Date(Date.now() + 30 * 60 * 1000),
       } as any);
-      const callbackUrl = input.redirectUri ? new URL(input.redirectUri) : null;
-      callbackUrl?.searchParams.set('state', state);
-      if (!callbackUrl) {
-        throw new Error(`${catalogItem.name} Composio OAuth requires redirectUri`);
-      }
+      const callbackUrl = resolveComposioOauthCallbackUrl(connectorKey, input.redirectUri);
+      callbackUrl.searchParams.set('state', state);
       const auth = await composioConnectorService.startAuthorization({
         connectorKey,
         userId,

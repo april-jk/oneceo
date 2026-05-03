@@ -36,7 +36,6 @@ jobs:
           --config p/typescript
           --config p/secrets
           apps/api/src
-
   secret-scan:
     name: Secret Scan (gitleaks)
     runs-on: ubuntu-latest

@@ -3,6 +3,7 @@ import { randomInt } from 'node:crypto';
 import { appUserDAO, appUserEmailVerificationDAO, appUserSessionDAO } from '../db/dao';
 import { altusMemoryContextService } from './altus-memory-context-service';
 import { appAuthEmailService } from './app-auth-email-service';
+import { managedImageObjectService } from './managed-image-object-service';
 import { hashPassword, verifyPassword } from '../utils/auth-password';
 import { createSessionToken, hashSessionToken, resolveSessionExpiry } from '../utils/auth-session';
 import { runtimeEnvConfig } from '../config/runtime-env';
@@ -97,17 +98,35 @@ function extractAppUserPersonalization(profileJson: unknown): AppUserPersonaliza
   return normalizeAppUserPersonalization(root.personalization);
 }
 
+async function resolvePublicAvatarUrl(user: Awaited<ReturnType<typeof appUserDAO.getById>>) {
+  if (!user) return null;
+  const avatarStorageKey = asText((user as any).avatarStorageKey);
+  if (avatarStorageKey) {
+    try {
+      return await managedImageObjectService.getSignedDownloadUrl(avatarStorageKey);
+    } catch (error) {
+      console.warn('[APP_AUTH_AVATAR] failed to resolve signed avatar url:', error);
+      return null;
+    }
+  }
+  const avatarUrl = asText((user as any).avatarUrl);
+  return avatarUrl || null;
+}
+
 function generateVerificationCode(length = DEFAULT_REGISTER_CODE_LENGTH) {
   const max = 10 ** length;
   return String(randomInt(0, max)).padStart(length, '0');
 }
 
-function toPublicUser(user: Awaited<ReturnType<typeof appUserDAO.getById>>) {
+async function toPublicUser(user: Awaited<ReturnType<typeof appUserDAO.getById>>) {
   if (!user) return null;
+  const avatarUrl = await resolvePublicAvatarUrl(user);
   return {
     id: String(user.id),
     email: user.email,
     displayName: user.displayName,
+    avatarUrl,
+    avatarSource: user.avatarSource || 'default',
     personalization: extractAppUserPersonalization((user as any).profileJson),
     status: user.status,
     createdAt: user.createdAt?.toISOString?.() || new Date().toISOString(),
@@ -274,7 +293,7 @@ export class AppAuthService {
     return {
       token,
       session,
-      user: toPublicUser(user),
+      user: await toPublicUser(user),
     };
   }
 
@@ -289,7 +308,7 @@ export class AppAuthService {
     }
     return {
       session,
-      user: toPublicUser(user),
+      user: await toPublicUser(user),
     };
   }
 
@@ -335,7 +354,68 @@ export class AppAuthService {
 
     await altusMemoryContextService.invalidateUserMemory(userId);
 
-    return toPublicUser(updated);
+    return await toPublicUser(updated);
+  }
+
+  async uploadAvatar(
+    userId: string,
+    input: {
+      contentType: string;
+      originalName: string;
+      buffer: Buffer;
+    }
+  ) {
+    const current = await appUserDAO.getById(userId);
+    if (!current) {
+      throw new Error('用户不存在');
+    }
+    const objectKey = managedImageObjectService.buildObjectKey({
+      sessionId: `app-user-${userId}`,
+      messageKey: 'avatar',
+      attachmentName: input.originalName,
+    });
+    const previousAvatarStorageKey = asText((current as any).avatarStorageKey);
+    await managedImageObjectService.uploadImage({
+      objectKey,
+      body: input.buffer,
+      contentType: input.contentType,
+      originalName: input.originalName,
+    });
+    const updated = await appUserDAO.updateAvatar(userId, {
+      avatarUrl: null,
+      avatarStorageKey: objectKey,
+      avatarSource: 'manual',
+      avatarUpdatedAt: new Date(),
+    });
+    if (!updated) {
+      await managedImageObjectService.deleteImage(objectKey).catch(() => null);
+      throw new Error('头像更新失败');
+    }
+    if (previousAvatarStorageKey && previousAvatarStorageKey !== objectKey) {
+      await managedImageObjectService.deleteImage(previousAvatarStorageKey).catch(() => null);
+    }
+    return await toPublicUser(updated);
+  }
+
+  async removeAvatar(userId: string) {
+    const current = await appUserDAO.getById(userId);
+    if (!current) {
+      throw new Error('用户不存在');
+    }
+    const previousAvatarStorageKey = asText((current as any).avatarStorageKey);
+    const updated = await appUserDAO.updateAvatar(userId, {
+      avatarUrl: null,
+      avatarStorageKey: null,
+      avatarSource: 'default',
+      avatarUpdatedAt: new Date(),
+    });
+    if (!updated) {
+      throw new Error('头像移除失败');
+    }
+    if (previousAvatarStorageKey) {
+      await managedImageObjectService.deleteImage(previousAvatarStorageKey).catch(() => null);
+    }
+    return await toPublicUser(updated);
   }
 }
 

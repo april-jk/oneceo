@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useSearch } from "wouter";
 import {
@@ -327,7 +327,7 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   const { t, i18n } = useTranslation();
   const [, setLocation] = useLocation();
-  const { user, logout, updateProfile } = useAuth();
+  const { user, logout, updateProfile, uploadAvatar, removeAvatar } = useAuth();
   const { theme, setTheme } = useTheme();
   const [emailNotifications, setEmailNotifications] = useState(true);
   const [pushNotifications, setPushNotifications] = useState(true);
@@ -335,6 +335,7 @@ export function SettingsPanel({
   const [codexExecutionMode, setCodexExecutionMode] = useState("sdk");
   const [accountDisplayNameDraft, setAccountDisplayNameDraft] = useState("");
   const [accountSaving, setAccountSaving] = useState(false);
+  const [avatarSaving, setAvatarSaving] = useState(false);
   const [personalizationDraft, setPersonalizationDraft] =
     useState<AppUserPersonalization>(EMPTY_PERSONALIZATION);
   const [personalizationSaving, setPersonalizationSaving] = useState(false);
@@ -347,6 +348,7 @@ export function SettingsPanel({
   // 预留后续直通模式扩展，保持此枚举语义稳定。
   const [altusMode, setAltusMode] = useState<AltusMode>(DEFAULT_ALTUS_MODE);
   const accountNameInputRef = useRef<HTMLInputElement | null>(null);
+  const accountAvatarInputRef = useRef<HTMLInputElement | null>(null);
   const EXECUTOR_STORAGE_KEY = "altus_executor";
   const CODEX_EXECUTION_MODE_STORAGE_KEY = "codex_execution_mode";
 
@@ -405,6 +407,7 @@ export function SettingsPanel({
   const accountDisplayNameChanged =
     accountDisplayNameDraft.trim() !== (user?.displayName || "").trim();
   const accountDisplayNameValid = Boolean(accountDisplayNameDraft.trim());
+  const accountAvatarUrl = user?.avatarUrl || undefined;
   const personalizationBaseline = useMemo(
     () => normalizePersonalization(user?.personalization),
     [user?.personalization],
@@ -571,6 +574,51 @@ export function SettingsPanel({
     } finally {
       setAccountSaving(false);
     }
+  };
+
+  const handleAvatarFileChange = async (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      toast.error(t("account.avatarFormatInvalid"));
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error(t("account.avatarSizeExceeded"));
+      return;
+    }
+    try {
+      setAvatarSaving(true);
+      await uploadAvatar(file);
+      toast.success(t("account.avatarUploadSuccess"));
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : t("account.avatarUploadFailed"),
+      );
+    } finally {
+      setAvatarSaving(false);
+    }
+  };
+
+  const handleRemoveAvatar = async () => {
+    try {
+      setAvatarSaving(true);
+      await removeAvatar();
+      toast.success(t("account.avatarRemoveSuccess"));
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : t("account.avatarRemoveFailed"),
+      );
+    } finally {
+      setAvatarSaving(false);
+    }
+  };
+
+  const handleOpenAvatarPicker = () => {
+    accountAvatarInputRef.current?.click();
   };
 
   return (
@@ -1063,11 +1111,7 @@ export function SettingsPanel({
                             <div className="flex min-w-0 flex-1 items-center gap-4">
                               <Avatar className="h-16 w-16 border border-border/70 shadow-[0_8px_20px_rgba(15,23,42,0.08)]">
                                 <AvatarImage
-                                  src={
-                                    user?.email
-                                      ? `https://avatar.vercel.sh/${encodeURIComponent(user.email)}`
-                                      : undefined
-                                  }
+                                  src={accountAvatarUrl}
                                   alt={
                                     user?.displayName ||
                                     user?.email ||
@@ -1205,12 +1249,8 @@ export function SettingsPanel({
                             <div className="flex flex-col gap-6 border-b border-border/60 py-4 sm:flex-row sm:items-center">
                               <div className="group relative h-20 w-20 overflow-hidden rounded-full border border-border/70">
                                 <Avatar className="h-20 w-20 rounded-full">
-                                  <AvatarImage
-                                    src={
-                                      user?.email
-                                        ? `https://avatar.vercel.sh/${encodeURIComponent(user.email)}`
-                                        : undefined
-                                    }
+                                <AvatarImage
+                                    src={accountAvatarUrl}
                                     alt={
                                       user?.displayName ||
                                       user?.email ||
@@ -1228,16 +1268,46 @@ export function SettingsPanel({
                                 </Avatar>
                                 <button
                                   type="button"
-                                  onClick={() =>
-                                    handleUnavailableAction(
-                                      t("account.avatarUploadUnavailable"),
-                                    )
-                                  }
+                                  onClick={handleOpenAvatarPicker}
+                                  disabled={avatarSaving}
                                   className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 transition-opacity group-hover:opacity-100"
                                   aria-label={t("account.editAvatar")}
                                 >
                                   <Pencil className="h-5 w-5 text-white" />
                                 </button>
+                                <input
+                                  ref={accountAvatarInputRef}
+                                  type="file"
+                                  accept="image/jpeg,image/png,image/webp"
+                                  className="hidden"
+                                  onChange={(event) =>
+                                    void handleAvatarFileChange(event)
+                                  }
+                                />
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  onClick={handleOpenAvatarPicker}
+                                  disabled={avatarSaving}
+                                  className="h-8 rounded-lg px-3 text-sm"
+                                >
+                                  {avatarSaving
+                                    ? t("common.loading")
+                                    : t("account.changeAvatar")}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  onClick={() => void handleRemoveAvatar()}
+                                  disabled={avatarSaving || !user?.avatarUrl}
+                                  className="h-8 rounded-lg px-3 text-sm"
+                                >
+                                  {avatarSaving
+                                    ? t("common.loading")
+                                    : t("account.removeAvatar")}
+                                </Button>
                               </div>
 
                               <div className="flex min-w-0 flex-1 flex-col gap-2">
@@ -1313,8 +1383,8 @@ export function SettingsPanel({
                                 >
                                   {t("account.emailReadonly")}
                                 </Button>
+                                </div>
                               </div>
-                            </div>
 
                             <div className="flex flex-col gap-3 border-b border-border/60 py-4 sm:flex-row sm:items-center sm:justify-between">
                               <div className="flex flex-col gap-1">

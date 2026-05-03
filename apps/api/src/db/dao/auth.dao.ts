@@ -47,6 +47,8 @@ class AppUserDAO {
     providerSubject: string;
     providerEmail?: string | null;
     avatarUrl?: string | null;
+    avatarSource?: string | null;
+    avatarStorageKey?: string | null;
     profileJson?: Record<string, unknown>;
   }) {
     const [created] = await db
@@ -55,6 +57,10 @@ class AppUserDAO {
         email: normalizeEmail(input.email),
         passwordHash: hashLikeOauthPassword(input.provider, input.providerSubject),
         displayName: input.displayName.trim(),
+        avatarUrl: input.avatarUrl || null,
+        avatarStorageKey: input.avatarStorageKey || null,
+        avatarSource: input.avatarSource?.trim() || 'default',
+        avatarUpdatedAt: input.avatarUrl ? new Date() : null,
         profileJson: input.profileJson || {},
       })
       .returning();
@@ -137,6 +143,10 @@ class AppUserDAO {
       displayName?: string;
       profileJson?: Record<string, unknown>;
       status?: string;
+      avatarUrl?: string | null;
+      avatarStorageKey?: string | null;
+      avatarSource?: string;
+      avatarUpdatedAt?: Date | null;
     }
   ) {
     const nextValues: Record<string, unknown> = {
@@ -154,6 +164,18 @@ class AppUserDAO {
     if (typeof input.status === 'string' && input.status.trim()) {
       nextValues.status = input.status.trim();
     }
+    if (Object.prototype.hasOwnProperty.call(input, 'avatarUrl')) {
+      nextValues.avatarUrl = input.avatarUrl ?? null;
+    }
+    if (Object.prototype.hasOwnProperty.call(input, 'avatarStorageKey')) {
+      nextValues.avatarStorageKey = input.avatarStorageKey ?? null;
+    }
+    if (typeof input.avatarSource === 'string' && input.avatarSource.trim()) {
+      nextValues.avatarSource = input.avatarSource.trim();
+    }
+    if (Object.prototype.hasOwnProperty.call(input, 'avatarUpdatedAt')) {
+      nextValues.avatarUpdatedAt = input.avatarUpdatedAt ?? null;
+    }
     const [updated] = await db
       .update(appUsers)
       .set(nextValues)
@@ -169,6 +191,29 @@ class AppUserDAO {
       .where(eq(appUsers.id, id as any))
       .returning();
     return updated;
+  }
+
+  async updateAvatar(
+    id: string,
+    input: {
+      avatarUrl: string | null;
+      avatarStorageKey: string | null;
+      avatarSource: string;
+      avatarUpdatedAt: Date | null;
+    }
+  ) {
+    const [updated] = await db
+      .update(appUsers)
+      .set({
+        avatarUrl: input.avatarUrl,
+        avatarStorageKey: input.avatarStorageKey,
+        avatarSource: input.avatarSource.trim(),
+        avatarUpdatedAt: input.avatarUpdatedAt,
+        updatedAt: new Date(),
+      })
+      .where(eq(appUsers.id, id as any))
+      .returning();
+    return updated || null;
   }
 }
 

@@ -1,4 +1,4 @@
-import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { randomUUID } from 'node:crypto';
@@ -108,6 +108,18 @@ export class ManagedImageObjectService {
     return getSignedUrl(getManagedImageClient(), command, {
       expiresIn: getSignedUrlTtlSeconds(),
     });
+  }
+
+  async deleteImage(objectKey: string): Promise<void> {
+    if (!isManagedImageObjectKey(objectKey)) {
+      return;
+    }
+    await getManagedImageClient().send(
+      new DeleteObjectCommand({
+        Bucket: managedImageBucketName(),
+        Key: objectKey,
+      })
+    );
   }
 }
 

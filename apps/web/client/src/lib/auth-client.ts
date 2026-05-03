@@ -6,6 +6,8 @@ export type AppAuthUser = {
   id: string;
   email: string;
   displayName: string;
+  avatarUrl?: string | null;
+  avatarSource?: string | null;
   status?: string;
   personalization?: AppUserPersonalization;
 };
@@ -283,6 +285,33 @@ export async function updateAppUserProfile(input: {
     throw new Error(i18n.t("account.profileUpdateFailed"));
   }
   return result.user;
+}
+
+export async function uploadAppUserAvatar(file: File): Promise<AppAuthUser> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await fetch(`${getApiBaseUrl()}/api/auth/avatar/upload`, {
+    method: "POST",
+    body: formData,
+    credentials: "include",
+  });
+  const payload = (await response.json().catch(() => null)) as AuthEnvelope<AuthPayload> | null;
+  if (!response.ok || payload?.success !== true || !payload.data?.user) {
+    throw new Error(resolveErrorMessage(payload, `request failed: ${response.status}`));
+  }
+  return payload.data.user;
+}
+
+export async function removeAppUserAvatar(): Promise<AppAuthUser> {
+  const response = await fetch(`${getApiBaseUrl()}/api/auth/avatar`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  const payload = (await response.json().catch(() => null)) as AuthEnvelope<AuthPayload> | null;
+  if (!response.ok || payload?.success !== true || !payload.data?.user) {
+    throw new Error(resolveErrorMessage(payload, `request failed: ${response.status}`));
+  }
+  return payload.data.user;
 }
 
 async function linkLegacyClientIdentityIfNeeded() {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
-import { Eye, EyeOff, LockKeyhole, Mail, UserRound } from "lucide-react";
+import { Eye, EyeOff, Github, Globe, LockKeyhole, Mail, UserRound } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -16,7 +16,7 @@ function resolveRedirectTarget() {
 }
 
 export default function Register() {
-  const { register, sendRegisterCode, status } = useAuth();
+  const { register, sendRegisterCode, startOAuth, status } = useAuth();
   const { t } = useTranslation();
   const [, setLocation] = useLocation();
   const redirectTarget = useMemo(resolveRedirectTarget, []);
@@ -88,6 +88,11 @@ export default function Register() {
     } finally {
       setSendingCode(false);
     }
+  };
+
+  const handleOAuth = async (provider: "google" | "github") => {
+    setError(null);
+    await startOAuth({ provider, redirect: redirectTarget });
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -336,6 +341,17 @@ export default function Register() {
               {submitting ? t("auth.creatingAccount") : t("auth.createAccount")}
             </Button>
           </form>
+
+          <div className="mt-4 grid gap-2">
+            <Button type="button" variant="outline" className="h-[46px] w-full" onClick={() => void handleOAuth("google")}>
+              <Globe className="mr-2 size-4" />
+              {t("auth.googleSignUp")}
+            </Button>
+            <Button type="button" variant="outline" className="h-[46px] w-full" onClick={() => void handleOAuth("github")}>
+              <Github className="mr-2 size-4" />
+              {t("auth.githubSignUp")}
+            </Button>
+          </div>
 
           <p className="mt-5 text-center text-sm text-muted-foreground">
             {t("auth.hasAccount")}

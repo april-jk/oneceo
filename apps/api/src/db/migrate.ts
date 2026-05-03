@@ -949,6 +949,24 @@ CREATE TABLE IF NOT EXISTS app_users (
 ALTER TABLE app_users
   ADD COLUMN IF NOT EXISTS profile_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 
+CREATE TABLE IF NOT EXISTS app_user_oauth_accounts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  provider_subject TEXT NOT NULL,
+  provider_email TEXT,
+  display_name TEXT,
+  avatar_url TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+ALTER TABLE app_user_oauth_accounts
+  ADD COLUMN IF NOT EXISTS provider_email TEXT;
+ALTER TABLE app_user_oauth_accounts
+  ADD COLUMN IF NOT EXISTS display_name TEXT;
+ALTER TABLE app_user_oauth_accounts
+  ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+
 CREATE TABLE IF NOT EXISTS app_user_projects (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
@@ -1032,6 +1050,14 @@ CREATE TABLE IF NOT EXISTS admin_user_sessions (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_email ON app_users(email);
 CREATE INDEX IF NOT EXISTS idx_app_users_status ON app_users(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_oauth_accounts_provider_subject
+  ON app_user_oauth_accounts(provider, provider_subject);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_oauth_accounts_user_provider
+  ON app_user_oauth_accounts(user_id, provider);
+CREATE INDEX IF NOT EXISTS idx_app_user_oauth_accounts_user_id
+  ON app_user_oauth_accounts(user_id);
+CREATE INDEX IF NOT EXISTS idx_app_user_oauth_accounts_provider
+  ON app_user_oauth_accounts(provider);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_projects_user_name
   ON app_user_projects(user_id, name);
 CREATE INDEX IF NOT EXISTS idx_app_user_projects_user_id ON app_user_projects(user_id);

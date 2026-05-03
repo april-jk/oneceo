@@ -4,6 +4,7 @@ import {
   adminUserSessions,
   adminUsers,
   appUserEmailVerifications,
+  appUserOauthAccounts,
   appUserSessions,
   appUsers,
 } from '../schema';
@@ -14,6 +15,10 @@ function normalizeEmail(value: string) {
 
 function normalizeLoginName(value: string) {
   return value.trim().toLowerCase();
+}
+
+function hashLikeOauthPassword(provider: string, providerSubject: string) {
+  return `oauth:${provider.trim().toLowerCase()}:${providerSubject.trim()}`;
 }
 
 class AppUserDAO {
@@ -35,6 +40,37 @@ class AppUserDAO {
     return created;
   }
 
+  async createOauthUser(input: {
+    email: string;
+    displayName: string;
+    provider: string;
+    providerSubject: string;
+    providerEmail?: string | null;
+    avatarUrl?: string | null;
+    profileJson?: Record<string, unknown>;
+  }) {
+    const [created] = await db
+      .insert(appUsers)
+      .values({
+        email: normalizeEmail(input.email),
+        passwordHash: hashLikeOauthPassword(input.provider, input.providerSubject),
+        displayName: input.displayName.trim(),
+        profileJson: input.profileJson || {},
+      })
+      .returning();
+
+    await db.insert(appUserOauthAccounts).values({
+      userId: created.id as any,
+      provider: input.provider.trim(),
+      providerSubject: input.providerSubject.trim(),
+      providerEmail: input.providerEmail || null,
+      displayName: input.displayName.trim() || null,
+      avatarUrl: input.avatarUrl || null,
+    });
+
+    return created;
+  }
+
   async getByEmail(email: string) {
     const [record] = await db.select().from(appUsers).where(eq(appUsers.email, normalizeEmail(email)));
     return record;
@@ -42,6 +78,55 @@ class AppUserDAO {
 
   async getById(id: string) {
     const [record] = await db.select().from(appUsers).where(eq(appUsers.id, id as any));
+    return record;
+  }
+
+  async getByOauthAccount(provider: string, providerSubject: string) {
+    const [record] = await db
+      .select({
+        user: appUsers,
+      })
+      .from(appUserOauthAccounts)
+      .innerJoin(appUsers, eq(appUsers.id, appUserOauthAccounts.userId))
+      .where(
+        and(
+          eq(appUserOauthAccounts.provider, provider.trim()),
+          eq(appUserOauthAccounts.providerSubject, providerSubject.trim())
+        )
+      );
+    return record?.user || null;
+  }
+
+  async upsertOauthAccount(input: {
+    userId: string;
+    provider: string;
+    providerSubject: string;
+    providerEmail?: string | null;
+    displayName?: string | null;
+    avatarUrl?: string | null;
+  }) {
+    const [record] = await db
+      .insert(appUserOauthAccounts)
+      .values({
+        userId: input.userId as any,
+        provider: input.provider.trim(),
+        providerSubject: input.providerSubject.trim(),
+        providerEmail: input.providerEmail || null,
+        displayName: input.displayName || null,
+        avatarUrl: input.avatarUrl || null,
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: [appUserOauthAccounts.provider, appUserOauthAccounts.providerSubject],
+        set: {
+          userId: input.userId as any,
+          providerEmail: input.providerEmail || null,
+          displayName: input.displayName || null,
+          avatarUrl: input.avatarUrl || null,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
     return record;
   }
 

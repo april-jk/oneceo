@@ -22,7 +22,7 @@
     "@aws-sdk/client-s3": "^3.888.0",
     "@aws-sdk/lib-storage": "^3.888.0",
     "@aws-sdk/s3-request-presigner": "^3.1000.0",
-    "@langchain/community": "^1.1.10",
+    "@langchain/community": "^1.1.18",
     "@langchain/core": "^1.1.18",
     "@langchain/openai": "^1.2.4",
     "@oneceo/shared": "workspace:*",

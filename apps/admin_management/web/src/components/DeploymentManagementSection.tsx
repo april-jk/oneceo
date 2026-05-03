@@ -123,6 +123,39 @@ function formatExternalLinkLabel(value?: string | null) {
   return value.replace(/^https?:\/\//, '');
 }
 
+function readDeploymentAnalyticsValue(
+  analytics: Record<string, unknown> | undefined,
+  key: string,
+  fallback = '-',
+) {
+  const value = analytics?.[key];
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (typeof value === 'string' && value.trim()) return value;
+  return fallback;
+}
+
+function deploymentAnalyticsStatusLabel(analytics: Record<string, unknown> | undefined) {
+  const status = typeof analytics?.status === 'string' ? analytics.status : '';
+  if (status === 'tracking') return '跟踪中';
+  if (status === 'bound') return '已绑定';
+  if (status === 'not_configured') return '未配置';
+  if (status === 'missing_url') return '缺少访问地址';
+  if (status === 'disabled') return '未启用';
+  return status || '-';
+}
+
+function deploymentVisibilityLabel(record: DeploymentRecord) {
+  return record.latestUrl || record.latestStaticUrl || record.panel.domains.length > 0
+    ? '公开可访问'
+    : '等待首次发布';
+}
+
+function deploymentPreparationLabel(panel: DeploymentRecord['panel']) {
+  if (panel.missing.length > 0) return `缺少 ${panel.missing.join('、')}`;
+  if (panel.configured) return '已准备完成';
+  return '正在准备';
+}
+
 function buildQuery(filters: DeploymentManagementViewState['filters']) {
   return {
     limit: LIST_LIMIT,
@@ -555,7 +588,14 @@ export function DeploymentManagementSection({
             ['users', '用户视图'],
             ['railway', 'Railway 视图'],
           ] as Array<[DeploymentManagementViewKey, string]>).map(([key, label]) => (
-            <button key={key} type="button" className={view === key ? 'active' : ''} onClick={() => setView(key)}>
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={view === key}
+              className={view === key ? 'active' : ''}
+              onClick={() => setView(key)}
+            >
               <strong>{label}</strong>
             </button>
           ))}
@@ -971,12 +1011,12 @@ export function DeploymentManagementSection({
       </main>
 
       {railwayDialogMode ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeRailwayDialog}>
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="deployment-railway-dialog-title" onClick={closeRailwayDialog}>
           <div className="modal-card deployment-bulk-modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-header">
               <div>
                 <p className="section-tag">Railway 批量操作</p>
-                <h2>
+                <h2 id="deployment-railway-dialog-title">
                   {railwayDialogMode === 'configure'
                     ? '批量变更服务配置'
                     : railwayDialogMode === 'variables'
@@ -1081,12 +1121,12 @@ export function DeploymentManagementSection({
       ) : null}
 
       {detailDialogOpen ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setDetailDialogOpen(false)}>
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="deployment-detail-dialog-title" onClick={() => setDetailDialogOpen(false)}>
           <div className="modal-card deployment-detail-modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-header">
               <div>
                 <p className="section-tag">部署详情</p>
-                <h2>{detailTitle}</h2>
+                <h2 id="deployment-detail-dialog-title">{detailTitle}</h2>
                 <p className="panel-caption mono">{selectedTaskSessionId || '-'}</p>
               </div>
               <div className="section-actions">
@@ -1104,7 +1144,14 @@ export function DeploymentManagementSection({
                 ['relations', '关联'],
                 ['raw', '原始'],
               ] as Array<[DeploymentManagementDetailTab, string]>).map(([key, label]) => (
-                <button key={key} type="button" className={detailTab === key ? 'active' : ''} onClick={() => setDetailTab(key)}>
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  aria-selected={detailTab === key}
+                  className={detailTab === key ? 'active' : ''}
+                  onClick={() => setDetailTab(key)}
+                >
                   <strong>{label}</strong>
                 </button>
               ))}
@@ -1188,6 +1235,61 @@ export function DeploymentManagementSection({
                         </button>
                       ) : null}
                     </div>
+                  </article>
+
+                  <article className="sub-panel deployment-sensed-data-panel">
+                    <div className="user-management-record-head">
+                      <strong>当前平台已感知的数据</strong>
+                      <span className={`state-chip ${deploymentStatusTone(detail.statusCategory)}`}>
+                        {deploymentStatusLabel(detail.statusCategory)}
+                      </span>
+                    </div>
+                    <dl className="user-management-record-grid">
+                      <div>
+                        <dt>项目</dt>
+                        <dd>{detail.panel.projectName || detail.panel.projectId || detail.projectName || '-'}</dd>
+                      </div>
+                      <div>
+                        <dt>服务</dt>
+                        <dd>{detail.panel.serviceName || detail.panel.serviceId || detail.serviceName || '-'}</dd>
+                      </div>
+                      <div>
+                        <dt>当前版本状态</dt>
+                        <dd>{detail.panel.latestStatus || detail.latestStatus || '-'}</dd>
+                      </div>
+                      <div>
+                        <dt>最近同步</dt>
+                        <dd>{formatDateTime(detail.panel.lastVerifiedAt || detail.lastVerifiedAt || detail.updatedAt)}</dd>
+                      </div>
+                      <div>
+                        <dt>站点可见性</dt>
+                        <dd>{deploymentVisibilityLabel(detail)}</dd>
+                      </div>
+                      <div>
+                        <dt>部署准备</dt>
+                        <dd>{deploymentPreparationLabel(detail.panel)}</dd>
+                      </div>
+                      <div>
+                        <dt>统计接入</dt>
+                        <dd>{deploymentAnalyticsStatusLabel(detail.panel.analytics)}</dd>
+                      </div>
+                      <div>
+                        <dt>近 30 天 PV</dt>
+                        <dd>{readDeploymentAnalyticsValue(detail.panel.analytics, 'pageviews', '0')}</dd>
+                      </div>
+                      <div>
+                        <dt>近 30 天 Visits</dt>
+                        <dd>{readDeploymentAnalyticsValue(detail.panel.analytics, 'visits', '0')}</dd>
+                      </div>
+                      <div>
+                        <dt>近 30 天 Visitors</dt>
+                        <dd>{readDeploymentAnalyticsValue(detail.panel.analytics, 'visitors', '0')}</dd>
+                      </div>
+                      <div>
+                        <dt>实时访客</dt>
+                        <dd>{readDeploymentAnalyticsValue(detail.panel.analytics, 'activeVisitors', '0')}</dd>
+                      </div>
+                    </dl>
                   </article>
                 </div>
               ) : null}

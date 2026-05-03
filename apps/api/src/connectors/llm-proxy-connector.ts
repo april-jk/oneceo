@@ -2,6 +2,11 @@ import { getPublicErrorMessage } from '../utils/error-response';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import type { IncomingHttpHeaders, IncomingMessage } from 'node:http';
+import { sanitizeOpenAiChatCompletionPayload } from '../utils/openai-chat-sanitizer';
+import {
+  LLM_PROXY_INTERNAL_OVERRIDE_HEADER,
+  isValidLlmProxyInternalOverrideToken,
+} from '../services/llm-proxy-internal-auth';
 
 type ProxyConfig = {
   upstreamBaseUrl: string;
@@ -50,7 +55,13 @@ type OpenAiChatCompletionRequest = {
 
 type AnthropicMessageRequest = {
   model: string;
-  system?: string;
+  system?:
+    | string
+    | Array<{
+        type: 'text';
+        text: string;
+        cache_control?: { type: 'ephemeral' };
+      }>;
   messages: Array<{
     role: 'user' | 'assistant';
     content:
@@ -97,6 +108,13 @@ type AnthropicMessageResponse = {
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cached_tokens?: number;
+    prompt_tokens_details?: {
+      cached_tokens?: number;
+      cache_creation_input_tokens?: number;
+    };
   };
   stop_reason?: string | null;
   error?: {
@@ -105,6 +123,45 @@ type AnthropicMessageResponse = {
     code?: string;
   };
 };
+
+function readNumericField(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function extractCachedPromptTokens(usage: Record<string, unknown> | undefined | null): number {
+  if (!usage || typeof usage !== 'object') return 0;
+  const details = usage.prompt_tokens_details && typeof usage.prompt_tokens_details === 'object'
+    ? usage.prompt_tokens_details as Record<string, unknown>
+    : null;
+  return (
+    readNumericField(details?.cached_tokens) ??
+    readNumericField(usage.cached_tokens) ??
+    readNumericField(usage.cache_read_input_tokens) ??
+    0
+  );
+}
+
+function extractCacheCreationTokens(usage: Record<string, unknown> | undefined | null): number {
+  if (!usage || typeof usage !== 'object') return 0;
+  const details = usage.prompt_tokens_details && typeof usage.prompt_tokens_details === 'object'
+    ? usage.prompt_tokens_details as Record<string, unknown>
+    : null;
+  const cacheCreation = details?.cache_creation && typeof details.cache_creation === 'object'
+    ? details.cache_creation as Record<string, unknown>
+    : null;
+  return (
+    readNumericField(details?.cache_creation_input_tokens) ??
+    readNumericField(cacheCreation?.cache_creation_input_tokens) ??
+    readNumericField(cacheCreation?.ephemeral_5m_input_tokens) ??
+    readNumericField(usage.cache_creation_input_tokens) ??
+    0
+  );
+}
 
 type AnthropicStreamEvent = {
   event: string;
@@ -121,6 +178,20 @@ type OpenAiStreamChunk = {
     delta: Record<string, unknown>;
     finish_reason: string | null;
   }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    prompt_tokens_details?: {
+      cached_tokens?: number;
+      cache_creation_input_tokens?: number;
+      cache_creation?: {
+        cache_creation_input_tokens?: number;
+        ephemeral_5m_input_tokens?: number;
+      };
+    };
+    cache_creation_input_tokens?: number;
+  };
 };
 
 type AnthropicStreamState = {
@@ -160,6 +231,46 @@ function loadConfig(): ProxyConfig {
     upstreamBaseUrl: upstreamBaseUrl.replace(/\/+$/, ''),
     upstreamToken: process.env.LLM_PROXY_UPSTREAM_API_KEY || null,
     upstreamApiType,
+    timeoutMs: Number(process.env.LLM_PROXY_TIMEOUT_MS || 60000),
+    maxRetries: Math.max(0, Number(process.env.LLM_PROXY_RETRIES || 1)),
+    retryDelayMs: Math.max(0, Number(process.env.LLM_PROXY_RETRY_DELAY_MS || 250)),
+    retryJitterMs: Math.max(0, Number(process.env.LLM_PROXY_RETRY_JITTER_MS || 120)),
+  };
+}
+
+const INTERNAL_OVERRIDE_HEADER_PREFIX = 'x-oneceo-internal-llm-';
+
+function isTrustedLoopbackRequest(req: any): boolean {
+  const address = String(req?.socket?.remoteAddress || req?.ip || '').trim();
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+}
+
+function isSafeEnvName(value: string): boolean {
+  return /^[A-Z0-9_]+$/.test(value);
+}
+
+function loadConfigForRequest(req: any): ProxyConfig {
+  const overrideToken = getHeaderValue(req.headers || {}, LLM_PROXY_INTERNAL_OVERRIDE_HEADER);
+  if (!isTrustedLoopbackRequest(req) || !isValidLlmProxyInternalOverrideToken(overrideToken)) {
+    return loadConfig();
+  }
+
+  const upstreamBaseUrl = getHeaderValue(req.headers || {}, `${INTERNAL_OVERRIDE_HEADER_PREFIX}upstream-base-url`);
+  const upstreamApiType = getHeaderValue(req.headers || {}, `${INTERNAL_OVERRIDE_HEADER_PREFIX}upstream-api-type`);
+  const upstreamTokenSource = getHeaderValue(req.headers || {}, `${INTERNAL_OVERRIDE_HEADER_PREFIX}upstream-token-source`);
+  const nextApiType = String(upstreamApiType || process.env.LLM_PROXY_UPSTREAM_API_TYPE || 'openai').trim().toLowerCase() === 'anthropic' ? 'anthropic' : 'openai';
+  const nextTokenSource = String(upstreamTokenSource || '').trim();
+  const resolvedBaseUrl = String(upstreamBaseUrl || process.env.LLM_PROXY_UPSTREAM_BASE_URL || '').trim().replace(/\/+$/, '');
+  if (!resolvedBaseUrl) {
+    throw new Error('LLM proxy upstream base URL is not configured');
+  }
+
+  return {
+    upstreamBaseUrl: resolvedBaseUrl,
+    upstreamApiType: nextApiType,
+    upstreamToken: nextTokenSource && isSafeEnvName(nextTokenSource)
+      ? process.env[nextTokenSource] || null
+      : process.env.LLM_PROXY_UPSTREAM_API_KEY || null,
     timeoutMs: Number(process.env.LLM_PROXY_TIMEOUT_MS || 60000),
     maxRetries: Math.max(0, Number(process.env.LLM_PROXY_RETRIES || 1)),
     retryDelayMs: Math.max(0, Number(process.env.LLM_PROXY_RETRY_DELAY_MS || 250)),
@@ -240,7 +351,8 @@ function toSseData(value: unknown) {
 function createChunk(
   state: AnthropicStreamState,
   delta: Record<string, unknown>,
-  finishReason: string | null = null
+  finishReason: string | null = null,
+  usage?: OpenAiStreamChunk['usage']
 ): OpenAiStreamChunk {
   return {
     id: state.id,
@@ -254,6 +366,7 @@ function createChunk(
         finish_reason: finishReason,
       },
     ],
+    ...(usage ? { usage } : {}),
   };
 }
 
@@ -299,6 +412,17 @@ function parseJsonBody<T>(body: unknown): T {
     return body as T;
   }
   throw new Error('Invalid JSON body');
+}
+
+export function sanitizeOpenAiChatCompletionProxyBody(path: string, body: unknown): unknown {
+  if (path !== '/v1/chat/completions') return body;
+  try {
+    const payload = parseJsonBody<OpenAiChatCompletionRequest>(body);
+    const sanitizedPayload = sanitizeOpenAiChatCompletionPayload(payload);
+    return sanitizedPayload === payload ? body : Buffer.from(JSON.stringify(sanitizedPayload), 'utf-8');
+  } catch {
+    return body;
+  }
 }
 
 function extractTextContent(content: unknown): string {
@@ -454,6 +578,7 @@ function normalizeToolChoice(
 }
 
 export function toAnthropicRequest(payload: OpenAiChatCompletionRequest): AnthropicMessageRequest {
+  payload = sanitizeOpenAiChatCompletionPayload(payload);
   const model = String(payload.model || '').trim();
   if (!model) {
     throw new Error('Missing model');
@@ -553,7 +678,9 @@ export function toAnthropicRequest(payload: OpenAiChatCompletionRequest): Anthro
 
   return {
     model,
-    ...(system ? { system } : {}),
+    ...(system
+      ? { system: [{ type: 'text' as const, text: system, cache_control: { type: 'ephemeral' as const } }] }
+      : {}),
     messages: normalizedMessages,
     ...(normalizeOpenAiTools(payload) ? { tools: normalizeOpenAiTools(payload) } : {}),
     ...(normalizeOpenAiTools(payload) ? { tool_choice: normalizeToolChoice(payload.tool_choice) } : {}),
@@ -586,6 +713,8 @@ export function toOpenAiChatCompletion(response: AnthropicMessageResponse) {
     }));
   const promptTokens = Number(response.usage?.input_tokens || 0);
   const completionTokens = Number(response.usage?.output_tokens || 0);
+  const cachedPromptTokens = extractCachedPromptTokens(response.usage as Record<string, unknown> | undefined);
+  const cacheCreationTokens = extractCacheCreationTokens(response.usage as Record<string, unknown> | undefined);
   return {
     id: response.id || `chatcmpl_${Date.now()}`,
     object: 'chat.completion',
@@ -605,6 +734,15 @@ export function toOpenAiChatCompletion(response: AnthropicMessageResponse) {
       prompt_tokens: promptTokens,
       completion_tokens: completionTokens,
       total_tokens: promptTokens + completionTokens,
+      ...(cachedPromptTokens > 0 || cacheCreationTokens > 0
+        ? {
+            prompt_tokens_details: {
+              ...(cachedPromptTokens > 0 ? { cached_tokens: cachedPromptTokens } : {}),
+              ...(cacheCreationTokens > 0 ? { cache_creation_input_tokens: cacheCreationTokens } : {}),
+            },
+          }
+        : {}),
+      ...(cacheCreationTokens > 0 ? { cache_creation_input_tokens: cacheCreationTokens } : {}),
     },
   };
 }
@@ -736,7 +874,32 @@ export function transformAnthropicStreamEvent(
 
   if (streamEvent.event === 'message_delta') {
     const stopReason = normalizeFinishReason(String(payload.delta?.stop_reason || ''));
-    outputs.push(toSseData(createChunk(state, {}, stopReason)));
+    const anthropicUsage = payload.delta?.usage || payload.usage;
+    let usage: OpenAiStreamChunk['usage'] | undefined;
+    if (anthropicUsage && typeof anthropicUsage === 'object') {
+      const u = anthropicUsage as Record<string, unknown>;
+      const promptTokens = typeof u.input_tokens === 'number' ? u.input_tokens : undefined;
+      const completionTokens = typeof u.output_tokens === 'number' ? u.output_tokens : undefined;
+      if (promptTokens !== undefined && completionTokens !== undefined) {
+        usage = {
+          prompt_tokens: promptTokens,
+          completion_tokens: completionTokens,
+          total_tokens: (promptTokens || 0) + (completionTokens || 0),
+        };
+        const cacheRead = extractCachedPromptTokens(u);
+        const cacheCreation = extractCacheCreationTokens(u);
+        if (cacheRead > 0 || cacheCreation > 0) {
+          usage.prompt_tokens_details = {
+            ...(cacheRead > 0 ? { cached_tokens: cacheRead } : {}),
+            ...(cacheCreation > 0 ? { cache_creation_input_tokens: cacheCreation } : {}),
+          };
+        }
+        if (cacheCreation > 0) {
+          usage.cache_creation_input_tokens = cacheCreation;
+        }
+      }
+    }
+    outputs.push(toSseData(createChunk(state, {}, stopReason, usage)));
     return outputs;
   }
 
@@ -957,7 +1120,7 @@ export class LlmProxyConnector {
     let upstreamUrl = '';
     const debug = String(process.env.LLM_PROXY_DEBUG || '').toLowerCase() === 'true';
     try {
-      config = loadConfig();
+      config = loadConfigForRequest(req);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'LLM 代理未配置';
       res.status(500).json(toOpenAiError(getPublicErrorMessage(message), 'config_error', 'config_error'));
@@ -991,6 +1154,8 @@ export class LlmProxyConnector {
         if (!value) continue;
         if (key.toLowerCase() === 'host') continue;
         if (key.toLowerCase() === 'content-length') continue;
+        if (key.toLowerCase().startsWith(INTERNAL_OVERRIDE_HEADER_PREFIX)) continue;
+        if (key.toLowerCase() === LLM_PROXY_INTERNAL_OVERRIDE_HEADER) continue;
         headers[key] = Array.isArray(value) ? value.join(',') : String(value);
       }
       // Keep upstream response body readable for downstream callers (curl/opencode).
@@ -1009,6 +1174,7 @@ export class LlmProxyConnector {
       if (!requestHeaders.connection) {
         requestHeaders.connection = 'keep-alive';
       }
+      const requestBody = sanitizeOpenAiChatCompletionProxyBody(req.path, req.body);
 
       let finalResponse: IncomingMessage | null = null;
       let finalError: unknown = null;
@@ -1039,8 +1205,8 @@ export class LlmProxyConnector {
 
             upstreamRequest.on('error', (error) => reject(error));
 
-            if (req.method !== 'GET' && req.method !== 'HEAD' && req.body !== undefined) {
-              upstreamRequest.write(req.body);
+            if (req.method !== 'GET' && req.method !== 'HEAD' && requestBody !== undefined) {
+              upstreamRequest.write(requestBody);
             }
 
             upstreamRequest.end();

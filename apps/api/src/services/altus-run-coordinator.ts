@@ -20,7 +20,13 @@ import {
   AltusManagedContextBudgetService,
   altusManagedContextBudgetService,
 } from './altus-managed-context-budget-service';
+import { altusManagedContextService } from './altus-managed-context-service';
 import { AltusManagedToolExecutor } from './altus-managed-tool-executor';
+import {
+  buildManagedToolResultEnvelope,
+  stringifyManagedToolResultEnvelope,
+} from './altus-managed-tool-result-envelope';
+import { altusManagedDynamicContextBlockService } from './altus-managed-dynamic-context-blocks';
 import { AltusRunState } from './altus-run-state';
 import {
   type AltusRunRecoveryMode,
@@ -34,6 +40,23 @@ import {
   TaskSessionDeliverableService,
   taskSessionDeliverableService,
 } from './task-session-deliverable-service';
+import {
+  taskSessionWebsitePreviewSnapshotService,
+  type WebsitePreviewSnapshot,
+  type TaskSessionWebsitePreviewSnapshotService,
+} from './task-session-website-preview-snapshot-service';
+import {
+  isValidOpenAiToolCallArguments,
+  normalizeOpenAiToolCallArguments,
+} from '../utils/openai-chat-sanitizer';
+import { classifyPlatformCapabilityIntent } from './platform-capability-intent-service';
+import { billingService } from './billing-service';
+import { pricingService } from './pricing-service';
+import type { AgentRuntimeSnapshot } from './agent-runtime-profile-service';
+import {
+  LLM_PROXY_INTERNAL_OVERRIDE_HEADER,
+  getLlmProxyInternalOverrideToken,
+} from './llm-proxy-internal-auth';
 
 const DELIVERABLES_READY_TEXT = '交付文件已生成';
 const DEPLOYMENT_COMPLETION_BLOCKED_PREFIX = 'deployment_completion_blocked:';
@@ -48,6 +71,11 @@ const DEPLOYMENT_PENDING_STATUSES = new Set([
   'pending',
   'provisioning',
 ]);
+const DEPLOYMENT_FAILED_STATUSES = new Set([
+  'failed',
+  'crashed',
+  'removed',
+]);
 
 type DeploymentCompletionIntent = {
   mode: 'none' | 'deploy' | 'redeploy' | 'rollback';
@@ -58,7 +86,9 @@ type DeploymentCompletionIntent = {
 type DeploymentCompletionEvidence = {
   toolName: string;
   status: string;
+  bindingState: string;
   deploymentStatus: string;
+  deploymentFlowState: string;
   summary: string;
 };
 
@@ -72,6 +102,54 @@ type DeploymentToolViewProjection = {
     detail: string;
   };
 };
+
+function normalizeInlineBulletGlyphLine(line: string): string {
+  const bulletCount = (line.match(/•/g) || []).length;
+  const trimmed = line.trimStart();
+  if (bulletCount < 2) {
+    if (trimmed.startsWith('•')) {
+      return `${line.slice(0, line.length - trimmed.length)}- ${trimmed.slice(1).trimStart()}`;
+    }
+    const bulletIndex = line.indexOf('•');
+    const prefix = bulletIndex >= 0 ? line.slice(0, bulletIndex).trimEnd() : '';
+    const item = bulletIndex >= 0 ? line.slice(bulletIndex + 1).trim() : '';
+    if (prefix && /[:：]$/.test(prefix) && item) {
+      return `${prefix}\n- ${item}`;
+    }
+    return line;
+  }
+  const firstBulletIndex = line.indexOf('•');
+  const prefix = line.slice(0, firstBulletIndex).trimEnd();
+  const items = line
+    .slice(firstBulletIndex)
+    .split(/\s*•\s*/g)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (items.length < 2) {
+    return line;
+  }
+  const list = items.map((item) => `- ${item}`).join('\n');
+  return prefix ? `${prefix}\n${list}` : list;
+}
+
+export function normalizeManagedCompletionMarkdown(value: string): string {
+  return asText(value)
+    .replace(/\r\n?/g, '\n')
+    .trim()
+    .split('\n')
+    .map((line) => normalizeInlineBulletGlyphLine(line))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function normalizeManagedCompletionCheck(value: string): string {
+  return normalizeManagedCompletionMarkdown(value)
+    .split('\n')
+    .map((line) => line.trim().replace(/^[-*•]\s+/, '').trim())
+    .filter(Boolean)
+    .join('；');
+}
 
 type StreamedToolCallDelta = {
   index?: number;
@@ -99,6 +177,65 @@ function basenameLike(value: unknown) {
   const normalized = text.replace(/\/+$/, '');
   const parts = normalized.split('/');
   return parts[parts.length - 1] || normalized;
+}
+
+function buildBrowserInteractionSummary(args: Record<string, unknown>) {
+  const action = asText(args.action).toLowerCase();
+  const description = asText(args.description);
+  if (description) return description;
+  const selector = asText(args.selector);
+  const text = asText(args.text);
+  const key = asText(args.key);
+  const direction = asText(args.direction).toLowerCase() || 'down';
+  const loadState = asText(args.loadState) || 'domcontentloaded';
+  const pixels = Number(args.pixels);
+  const target = text || selector;
+
+  if (action === 'locator_click') {
+    if (selector) return `点击 ${selector}`;
+    return '点击页面元素';
+  }
+  if (action === 'text_click') {
+    if (text) return `点击 ${text}`;
+    return '点击指定文本';
+  }
+  if (action === 'coordinate_click') {
+    return '点击页面指定位置';
+  }
+  if (action === 'locator_fill') {
+    if (selector && text) return `在 ${selector} 输入“${text}”`;
+    return selector ? `填写 ${selector}` : '填写表单输入框';
+  }
+  if (action === 'keyboard_type') {
+    return text ? `键盘输入“${text}”` : '键盘输入文本';
+  }
+  if (action === 'keyboard_press') {
+    return key ? `按下 ${key} 键` : '按下键盘按键';
+  }
+  if (action === 'mouse_wheel') {
+    const directionLabel =
+      direction === 'up'
+        ? '向上滚动'
+        : direction === 'left'
+          ? '向左滚动'
+          : direction === 'right'
+            ? '向右滚动'
+            : '向下滚动';
+    return Number.isFinite(pixels) && pixels > 0 ? `${directionLabel} ${Math.floor(pixels)} 像素` : directionLabel;
+  }
+  if (action === 'wait_for_locator') {
+    return selector ? `等待 ${selector} 可见` : '等待页面元素可见';
+  }
+  if (action === 'wait_for_text') {
+    return text ? `等待页面出现“${text}”` : '等待页面出现指定内容';
+  }
+  if (action === 'wait_for_load_state') {
+    return `等待页面进入 ${loadState} 状态`;
+  }
+  if (action === 'wait_for_timeout') {
+    return '等待页面稳定';
+  }
+  return target ? `执行 Playwright 操作：${target}` : '执行 Playwright 浏览器操作';
 }
 
 type ExtractedJsonStringField = {
@@ -184,23 +321,38 @@ function buildWriteFileProgress(rawArguments: string) {
 
 function sanitizeMessagesForModel(messages: ChatMessage[]): ChatMessage[] {
   return messages.map((message) => {
-    if (!Array.isArray(message.content)) {
-      return message;
+    let nextMessage = message;
+    if (Array.isArray(message.content)) {
+      nextMessage = {
+        ...nextMessage,
+        content: message.content.map((part) => {
+          if (part?.type !== 'image_url') {
+            return part;
+          }
+          return {
+            type: 'image_url' as const,
+            image_url: {
+              url: part.image_url.url,
+            },
+          };
+        }),
+      };
     }
-    return {
-      ...message,
-      content: message.content.map((part) => {
-        if (part?.type !== 'image_url') {
-          return part;
-        }
-        return {
-          type: 'image_url' as const,
-          image_url: {
-            url: part.image_url.url,
+
+    if (Array.isArray(message.tool_calls)) {
+      nextMessage = {
+        ...nextMessage,
+        tool_calls: message.tool_calls.map((toolCall) => ({
+          ...toolCall,
+          function: {
+            ...toolCall.function,
+            arguments: normalizeOpenAiToolCallArguments(toolCall?.function?.arguments),
           },
-        };
-      }),
-    };
+        })),
+      };
+    }
+
+    return nextMessage;
   });
 }
 
@@ -217,10 +369,13 @@ export class AltusRunCoordinator {
     private readonly eventWriter: AltusRunEventWriter = altusRunEventWriter,
     private readonly lifecycleService: AltusRunLifecycleService = altusRunLifecycleService,
     private readonly deliverableService: TaskSessionDeliverableService = taskSessionDeliverableService,
-    private readonly budgetService: AltusManagedContextBudgetService = altusManagedContextBudgetService
+    private readonly budgetService: AltusManagedContextBudgetService = altusManagedContextBudgetService,
+    private readonly websitePreviewSnapshotService: TaskSessionWebsitePreviewSnapshotService = taskSessionWebsitePreviewSnapshotService
   ) {}
 
   private getModelName(messages: ChatMessage[], fallbackModel?: string | null) {
+    const explicitModel = asText(fallbackModel);
+    if (explicitModel) return explicitModel;
     const needsVision = hasVisionInput(messages);
     if (needsVision) {
       return (
@@ -231,7 +386,6 @@ export class AltusRunCoordinator {
     }
     return (
       asText(process.env.ALTUS_MANAGED_MODEL) ||
-      asText(fallbackModel) ||
       asText(process.env.AGENT_OPENAI_MODEL) ||
       asText(process.env.OPENAI_MODEL) ||
       'claude-haiku-4-5-20251001'
@@ -261,6 +415,258 @@ export class AltusRunCoordinator {
   private async delay(ms: number) {
     if (ms <= 0) return;
     await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private readUsageNumber(value: unknown): number | undefined {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    }
+    return undefined;
+  }
+
+  /**
+   * 计费：根据模型调用估算并扣减积分
+   */
+private async chargeForModelCall(state: AltusRunState, input: {
+    messages: ChatMessage[];
+    assistant: { content?: string | null; tool_calls?: ToolCall[]; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens?: number; cache_creation_input_tokens?: number }; cached_tokens?: number; cache_creation_input_tokens?: number } };
+    model: string;
+  }) {
+    const userId = state.input.userId;
+    const sessionId = state.input.sessionId;
+    const runId = state.input.runId;
+    let promptTokens: number;
+    let completionTokens: number;
+    let cachedPromptTokens = 0;
+    let cacheCreationTokens = 0;
+    let billingTargetKey = '';
+    let creditsConsumed = 0;
+    let pricingSnapshot: Record<string, unknown> | undefined;
+
+    try {
+
+      const usage = input.assistant?.usage;
+      if (usage && typeof usage.prompt_tokens === 'number' && typeof usage.completion_tokens === 'number') {
+        promptTokens = usage.prompt_tokens;
+        completionTokens = usage.completion_tokens;
+        cachedPromptTokens = this.readUsageNumber(usage.prompt_tokens_details?.cached_tokens) || this.readUsageNumber(usage.cached_tokens) || 0;
+        cacheCreationTokens = this.readUsageNumber(usage.prompt_tokens_details?.cache_creation_input_tokens) || this.readUsageNumber(usage.cache_creation_input_tokens) || 0;
+
+        // 负数归零保护
+        cachedPromptTokens = Math.max(0, cachedPromptTokens);
+        cacheCreationTokens = Math.max(0, cacheCreationTokens);
+
+        // 缓存 token 总和不超过 promptTokens
+        if (cachedPromptTokens + cacheCreationTokens > promptTokens) {
+          const ratio = promptTokens / (cachedPromptTokens + cacheCreationTokens);
+          cachedPromptTokens = Math.floor(cachedPromptTokens * ratio);
+          cacheCreationTokens = Math.floor(cacheCreationTokens * ratio);
+        }
+      } else {
+        // 无真实 usage 时回退到字符估算（每 4 字符 ≈ 1 token）
+        const promptText = JSON.stringify(input.messages);
+        promptTokens = Math.ceil(promptText.length / 4);
+        const completionText = JSON.stringify(input.assistant);
+        completionTokens = Math.ceil(completionText.length / 4);
+      }
+
+      const nonCachedPromptTokens = Math.max(0, promptTokens - cachedPromptTokens - cacheCreationTokens);
+
+      billingTargetKey = state.input.billingTargetKey || input.model;
+      // 获取定价：Agent managed run 按业务 SKU 查价，token 日志保留实际模型。
+      const pricing = await pricingService.getActivePricing(billingTargetKey);
+      if (!pricing) {
+        throw new Error(`billing_pricing_missing:${billingTargetKey}`);
+      }
+      const cacheRatio = await pricingService.getCacheRatiosForPricing(pricing);
+      pricingSnapshot = {
+        ...pricing,
+        billingTarget: billingTargetKey,
+        actualModel: input.model,
+        cacheRatio,
+      };
+
+      // 计算积分消耗（含缓存）
+      creditsConsumed = pricingService.calculateCredits(
+        {
+          promptTokens,
+          cachedPromptTokens,
+          nonCachedPromptTokens,
+          cacheCreationTokens,
+          completionTokens,
+        },
+        pricing,
+        cacheRatio || undefined
+      );
+
+      // 扣减积分
+      const result = await billingService.deductCredits(userId, creditsConsumed, {
+        sessionId,
+        runId,
+        model: billingTargetKey,
+        description: `Managed Run 调用: ${billingTargetKey}`,
+        metadataJson: {
+          billingTarget: billingTargetKey,
+          actualModel: input.model,
+          runtimeSnapshot: state.input.runtimeSnapshot || null,
+          pricingSnapshot,
+        },
+      });
+
+      const isBilled = result.success;
+      if (isBilled) {
+        console.log(`[Billing] 扣费成功: ${creditsConsumed} 积分, 余额: ${result.balanceAfter}, run: ${runId}`);
+      } else {
+        console.error(`[Billing] 扣费失败（余额不足），仍记录 token 使用日志: ${creditsConsumed} 积分, run: ${runId}`);
+      }
+
+      // 无论扣费成功与否，都记录 token 使用日志（止血：避免漏费无记录）
+      await billingService.logTokenUsage({
+        userId,
+        sessionId,
+        runId,
+        model: input.model,
+        promptTokens,
+        cachedPromptTokens,
+        nonCachedPromptTokens,
+        cacheCreationTokens,
+        completionTokens,
+        totalTokens: promptTokens + completionTokens,
+        creditsConsumed,
+        pricingSnapshot,
+        metadataJson: {
+          billingTarget: billingTargetKey,
+          runtimeSnapshot: state.input.runtimeSnapshot || null,
+          billed: isBilled,
+          ...(isBilled ? {} : { unbilledReason: 'insufficient_credits' }),
+        },
+      });
+
+      if (!isBilled) {
+        throw new Error(`insufficient_credits: 用户 ${userId} 余额不足，无法继续运行`);
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('insufficient_credits:')) {
+        throw error;
+      }
+      if (error instanceof Error && error.message.startsWith('billing_pricing_missing:')) {
+        throw error;
+      }
+      console.error('[Billing] 计费失败，准备重试:', error);
+      // 非余额不足的计费失败——尝试重试一次（可能是临时 DB 连接问题）
+      // 仅在已计算出扣费金额时才重试（变量在 try 块内声明，可能尚未赋值）
+      if (typeof creditsConsumed === 'number' && billingTargetKey) {
+        try {
+          const retryResult = await billingService.deductCredits(userId, creditsConsumed, {
+            sessionId,
+            runId,
+            model: billingTargetKey,
+            description: `Managed Run 调用(重试): ${billingTargetKey}`,
+            metadataJson: {
+              billingTarget: billingTargetKey,
+              actualModel: input.model,
+              runtimeSnapshot: state.input.runtimeSnapshot || null,
+              retryReason: error instanceof Error ? error.message : String(error),
+            },
+          });
+          if (retryResult.success) {
+            console.info('[Billing] 计费重试成功');
+            // 重试成功，记录 token 使用日志
+            await billingService.logTokenUsage({
+              userId,
+              sessionId,
+              runId,
+              model: input.model,
+              promptTokens: promptTokens!,
+              cachedPromptTokens,
+              nonCachedPromptTokens: Math.max(0, promptTokens! - cachedPromptTokens - cacheCreationTokens),
+              cacheCreationTokens,
+              completionTokens: completionTokens!,
+              totalTokens: promptTokens! + completionTokens!,
+              creditsConsumed,
+              pricingSnapshot,
+              metadataJson: {
+                billingTarget: billingTargetKey,
+                runtimeSnapshot: state.input.runtimeSnapshot || null,
+                billed: true,
+                retry: true,
+              },
+            });
+          } else {
+            console.error('[Billing] 计费重试返回余额不足，用户可能漏费:', {
+              userId,
+              creditsConsumed,
+              model: billingTargetKey,
+              sessionId: state.input.sessionId,
+            });
+            // 重试也余额不足，仍记录 token 使用日志（止血）
+            await billingService.logTokenUsage({
+              userId,
+              sessionId,
+              runId,
+              model: input.model,
+              promptTokens: promptTokens!,
+              cachedPromptTokens,
+              nonCachedPromptTokens: Math.max(0, promptTokens! - cachedPromptTokens - cacheCreationTokens),
+              cacheCreationTokens,
+              completionTokens: completionTokens!,
+              totalTokens: promptTokens! + completionTokens!,
+              creditsConsumed,
+              pricingSnapshot,
+              metadataJson: {
+                billingTarget: billingTargetKey,
+                runtimeSnapshot: state.input.runtimeSnapshot || null,
+                billed: false,
+                unbilledReason: 'insufficient_credits',
+                retryFailed: true,
+              },
+            });
+          }
+        } catch (retryError) {
+          // 重试也失败，记录到异常日志但不终止主流程
+          console.error('[Billing] 计费重试也失败，用户可能漏费:', {
+            userId,
+            creditsConsumed,
+            model: billingTargetKey,
+            sessionId: state.input.sessionId,
+            originalError: error instanceof Error ? error.message : String(error),
+            retryError: retryError instanceof Error ? retryError.message : String(retryError),
+          });
+          // 重试异常，仍记录 token 使用日志（止血）
+          await billingService.logTokenUsage({
+            userId,
+            sessionId,
+            runId,
+            model: input.model,
+            promptTokens: promptTokens!,
+            cachedPromptTokens,
+            nonCachedPromptTokens: Math.max(0, promptTokens! - cachedPromptTokens - cacheCreationTokens),
+            cacheCreationTokens,
+            completionTokens: completionTokens!,
+            totalTokens: promptTokens! + completionTokens!,
+            creditsConsumed,
+            pricingSnapshot,
+            metadataJson: {
+              billingTarget: billingTargetKey,
+              runtimeSnapshot: state.input.runtimeSnapshot || null,
+              billed: false,
+              unbilledReason: 'deduct_retry_error',
+              retryFailed: true,
+              retryError: retryError instanceof Error ? retryError.message : String(retryError),
+            },
+          }).catch(logErr => {
+            console.error('[Billing] 重试路径 token 日志写入失败:', logErr instanceof Error ? logErr.message : String(logErr));
+          });
+        }
+      } else {
+        console.error('[Billing] 计费失败且无法重试（扣费参数尚未计算完成）:', {
+          userId,
+          originalError: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   private async flushSandboxSkillMemory(
@@ -370,6 +776,7 @@ export class AltusRunCoordinator {
     const normalized = asText(content);
     if (!normalized) return false;
     if (/[?？]/.test(normalized)) return true;
+    if (this.looksLikeCompletedTaskSummary(normalized)) return false;
     const keywords = [
       'please clarify',
       'please confirm',
@@ -379,11 +786,16 @@ export class AltusRunCoordinator {
       'what would you like',
       'which option',
       'please specify',
+      'tell me what you want me to do',
       '请说明',
       '请确认',
       '请告诉我',
+      '请直接告诉我',
+      '请明确',
       '请问',
       '请补充',
+      '给出具体指令',
+      '具体任务',
       '为了更有针对性',
       '希望优化哪些方面',
       '是否需要',
@@ -396,10 +808,76 @@ export class AltusRunCoordinator {
     return keywords.some((keyword) => lower.includes(keyword.toLowerCase()));
   }
 
+  private looksLikeCompletedTaskSummary(content: string) {
+    const normalized = asText(content);
+    if (!normalized) return false;
+    const lower = normalized.toLowerCase();
+    const completionSignals = [
+      '已为您',
+      '已为你',
+      '已完成',
+      '已经完成',
+      '已成功',
+      '成功启动',
+      '交付文件已生成',
+      '任务完成',
+      '可通过调试',
+      '调试浏览器访问',
+      'completed',
+      'successfully',
+    ];
+    const artifactSignals = [
+      '系统',
+      '应用',
+      '页面',
+      '文件',
+      '项目',
+      '功能',
+      '部署',
+      '健康检查',
+      'artifact',
+      'app',
+      'project',
+      'file',
+    ];
+    return (
+      completionSignals.some((signal) => lower.includes(signal.toLowerCase())) &&
+      artifactSignals.some((signal) => lower.includes(signal.toLowerCase()))
+    );
+  }
+
+  private isPlainTextCapabilityQuestion(userInput: string) {
+    const normalized = asText(userInput).toLowerCase();
+    if (!normalized) return false;
+    const capabilityKeywords = [
+      '你能做什么',
+      '你可以做什么',
+      '你会做什么',
+      '能做什么',
+      '还能做什么',
+      '有什么功能',
+      '怎么用',
+      '如何使用',
+      '什么？',
+      '什么?',
+      'what can you do',
+      'what else can you do',
+      'what do you do',
+      'how can i use you',
+      'help',
+      'capabilities',
+    ];
+    return capabilityKeywords.some((keyword) => normalized.includes(keyword));
+  }
+
   private shouldAcceptPlainTextConversationCompletion(userInput: string, assistantContent: string) {
     const normalizedInput = asText(userInput).toLowerCase();
     const normalizedAssistant = asText(assistantContent);
     if (!normalizedInput || !normalizedAssistant) return false;
+
+    if (this.isPlainTextCapabilityQuestion(normalizedInput)) {
+      return true;
+    }
 
     const conversationKeywords = [
       '我是谁',
@@ -459,12 +937,22 @@ export class AltusRunCoordinator {
     return !this.isClarificationResponse(normalizedAssistant);
   }
 
-  private buildContinuationReminder(assistantContent: string) {
-    const reminder = [
-      'System reminder: continue from the latest tool result.',
-      'Do not repeat the request or ask for optional clarification unless the task is truly blocked.',
-      'Choose the next required tool call immediately, or call complete_task if the work is already done and verified.',
-    ];
+  private buildContinuationReminder(
+    assistantContent: string,
+    deploymentIntent?: DeploymentCompletionIntent
+  ) {
+    const reminder = deploymentIntent?.requiresManagedSuccess
+      ? [
+          'System reminder: continue from the latest tool result.',
+          'The current request has an explicit deployment goal.',
+          'Do not finish with plain text or complete_task until the managed deployment is actually ready online.',
+          'Choose the next required deployment tool call immediately: deploy_application, redeploy_application, or get_application_deployment_status.',
+        ]
+      : [
+          'System reminder: continue from the latest tool result.',
+          'Do not repeat the request or ask for optional clarification unless the task is truly blocked.',
+          'Choose the next required tool call immediately, or call complete_task if the work is already done and verified.',
+        ];
     const excerpt = truncate(asText(assistantContent), 600);
     if (!excerpt) {
       return reminder.join(' ');
@@ -552,23 +1040,11 @@ export class AltusRunCoordinator {
       };
     }
 
-    const includesAny = (keywords: string[]) => keywords.some((keyword) => normalized.includes(keyword));
-    if (
-      includesAny([
-        '不要部署',
-        '不需要部署',
-        '无需部署',
-        '不要发布',
-        '不需要发布',
-        '无需发布',
-        '不要上线',
-        '无需上线',
-        'do not deploy',
-        "don't deploy",
-        'no deploy',
-        'do not publish',
-      ])
-    ) {
+    const capabilityIntent =
+      taskIntentProfile?.deploymentAllowed && taskIntentProfile.platformCapabilityIntent?.mode === 'execute'
+        ? taskIntentProfile.platformCapabilityIntent
+        : classifyPlatformCapabilityIntent(userInput);
+    if (capabilityIntent.mode !== 'execute') {
       return {
         mode: 'none',
         acceptedToolNames: [],
@@ -576,15 +1052,7 @@ export class AltusRunCoordinator {
       };
     }
 
-    if (
-      includesAny([
-        '回滚',
-        '回退部署',
-        '恢复上一个部署',
-        'rollback',
-        'revert deployment',
-      ])
-    ) {
+    if (capabilityIntent.capabilityKind === 'rollback') {
       return {
         mode: 'rollback',
         acceptedToolNames: ['rollback_application_deployment', 'get_application_deployment_status'],
@@ -592,16 +1060,7 @@ export class AltusRunCoordinator {
       };
     }
 
-    if (
-      includesAny([
-        '重新部署',
-        '重部署',
-        '再部署',
-        '重新发布',
-        '再次发布',
-        'redeploy',
-      ])
-    ) {
+    if (capabilityIntent.capabilityKind === 'redeploy') {
       return {
         mode: 'redeploy',
         acceptedToolNames: ['redeploy_application', 'deploy_application', 'get_application_deployment_status'],
@@ -609,15 +1068,7 @@ export class AltusRunCoordinator {
       };
     }
 
-    if (
-      includesAny([
-        '部署',
-        '发布',
-        '上线',
-        'deploy',
-        'go live',
-      ])
-    ) {
+    if (capabilityIntent.capabilityKind === 'deploy' || capabilityIntent.capabilityKind === 'deployment_status') {
       return {
         mode: 'deploy',
         acceptedToolNames: ['deploy_application', 'redeploy_application', 'get_application_deployment_status'],
@@ -640,7 +1091,9 @@ export class AltusRunCoordinator {
       return {
         toolName: asText(parsed.toolName),
         status: asText(parsed.status).toLowerCase(),
+        bindingState: asText(parsed.bindingState).toLowerCase(),
         deploymentStatus: asText(parsed.deploymentStatus).toLowerCase(),
+        deploymentFlowState: asText((parsed.deploymentFlow as Record<string, unknown> | undefined)?.state).toLowerCase(),
         summary: asText(parsed.summary),
       };
     } catch {
@@ -661,6 +1114,15 @@ export class AltusRunCoordinator {
     if (evidence.status !== 'success') {
       return false;
     }
+    if (evidence.bindingState === 'public_settling' || evidence.bindingState === 'provisioning') {
+      return false;
+    }
+    if (evidence.deploymentFlowState && evidence.deploymentFlowState !== 'succeeded') {
+      return false;
+    }
+    if (DEPLOYMENT_FAILED_STATUSES.has(evidence.deploymentStatus)) {
+      return false;
+    }
     if (evidence.toolName !== 'get_application_deployment_status') {
       return true;
     }
@@ -673,7 +1135,9 @@ export class AltusRunCoordinator {
   ) {
     const lastTool = evidence?.toolName || 'none';
     const lastStatus = evidence?.status || 'unknown';
+    const lastBindingState = evidence?.bindingState || 'unknown';
     const lastDeploymentStatus = evidence?.deploymentStatus || 'unknown';
+    const lastDeploymentFlowState = evidence?.deploymentFlowState || 'unknown';
     const mode = intent.mode || 'deploy';
     return [
       DEPLOYMENT_COMPLETION_BLOCKED_PREFIX,
@@ -681,7 +1145,9 @@ export class AltusRunCoordinator {
       'managed deployment is not successful yet',
       `last_tool=${lastTool}`,
       `last_status=${lastStatus}`,
+      `last_binding_state=${lastBindingState}`,
       `last_deployment_status=${lastDeploymentStatus}`,
+      `last_deployment_flow_state=${lastDeploymentFlowState}`,
       'do_not_treat_debug_open_page_or_local_server_as_deploy_success',
       'repair_and_call_the_managed_deployment_tool_again',
     ].join(' ');
@@ -706,6 +1172,12 @@ export class AltusRunCoordinator {
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       const repair = parsed.repair && typeof parsed.repair === 'object' ? (parsed.repair as Record<string, unknown>) : {};
       const debug = parsed.debug && typeof parsed.debug === 'object' ? (parsed.debug as Record<string, unknown>) : {};
+      const deploymentFlow = parsed.deploymentFlow && typeof parsed.deploymentFlow === 'object'
+        ? (parsed.deploymentFlow as Record<string, unknown>)
+        : {};
+      const projectProfile = parsed.projectProfile && typeof parsed.projectProfile === 'object'
+        ? (parsed.projectProfile as Record<string, unknown>)
+        : {};
       const summary = asText(parsed.summary);
       const status = asText(parsed.status);
       const phase = asText(parsed.phase);
@@ -727,8 +1199,12 @@ export class AltusRunCoordinator {
       if (summary) publicLines.push(summary);
       if (status === 'retryable_repair_required') {
         publicLines.push(
-          repairCategory === 'resource_binding'
+          repairCategory === 'deployment_failed'
+            ? '线上部署尚未成功，Altus 正在根据部署状态和公网访问结果修复后重试。'
+            : repairCategory === 'resource_binding'
             ? 'Altus 正在优先修复平台部署资源绑定，并将在资源恢复后重试发布。'
+            : repairCategory === 'deployment_pending'
+            ? '发布完成，正在等待公网生效。'
             : 'Altus 正在按平台部署基线自动修复后重试。'
         );
       } else if (deploymentStatus) {
@@ -738,12 +1214,16 @@ export class AltusRunCoordinator {
         publicLines.push(`访问地址：${url}`);
       }
       const publicDetail = publicLines.filter(Boolean).join('\n');
-      const publicPreview = url
-        ? `访问地址 ${url}`
-        : status === 'retryable_repair_required'
-          ? repairCategory === 'resource_binding'
-            ? '已识别到平台部署资源问题，Altus 正在修复绑定后重试。'
-            : '已识别到发布配置问题，Altus 正在自动修复后重试。'
+      const publicPreview = status === 'retryable_repair_required'
+        ? repairCategory === 'deployment_failed'
+          ? '线上部署未成功，Altus 正在修复后重试。'
+          : repairCategory === 'resource_binding'
+          ? '已识别到平台部署资源问题，Altus 正在修复绑定后重试。'
+          : repairCategory === 'deployment_pending'
+          ? '发布完成，正在等待公网生效。'
+          : '已识别到发布配置问题，Altus 正在自动修复后重试。'
+        : url
+          ? `访问地址 ${url}`
           : summary || this.buildToolEventContent(toolName, 'completed');
 
       const internalLines: string[] = [];
@@ -753,6 +1233,9 @@ export class AltusRunCoordinator {
       if (deploymentStatus) internalLines.push(`deploymentStatus: ${deploymentStatus}`);
       if (url) internalLines.push(`url: ${url}`);
       if (deploymentId) internalLines.push(`deploymentId: ${deploymentId}`);
+      if (asText(deploymentFlow.state)) internalLines.push(`deploymentFlowState: ${asText(deploymentFlow.state)}`);
+      if (asText(projectProfile.runtimeFamily)) internalLines.push(`runtimeFamily: ${asText(projectProfile.runtimeFamily)}`);
+      if (asText(projectProfile.deployability)) internalLines.push(`deployability: ${asText(projectProfile.deployability)}`);
       if (repairCategory) internalLines.push(`repairCategory: ${repairCategory}`);
       if (repairChecks.length > 0) internalLines.push(`repairChecks: ${repairChecks.join(', ')}`);
       if (suggestedActions.length > 0) internalLines.push(`suggestedActions: ${suggestedActions.join(' | ')}`);
@@ -804,6 +1287,11 @@ export class AltusRunCoordinator {
       if (status === 'completed') return '部署状态查询已完成';
       return '部署状态查询暂未完成';
     }
+    if (toolName === 'browser_interact') {
+      if (status === 'started' || status === 'progress') return '正在执行浏览器交互';
+      if (status === 'completed') return '浏览器交互已完成';
+      return '浏览器交互失败';
+    }
     if (status === 'started') return `调用工具 ${toolName}`;
     if (status === 'completed') return `工具 ${toolName} 已完成`;
     if (status === 'failed') return `工具 ${toolName} 失败`;
@@ -826,6 +1314,9 @@ export class AltusRunCoordinator {
     const lowerDisplayPath = displayPath.toLowerCase();
 
     if (input.outcome === 'failed') {
+      if (toolName === 'browser_interact') {
+        return `${buildBrowserInteractionSummary(args)} 没成功，我会检查页面状态后继续`;
+      }
       if (toolName === 'shell_execute') {
         return '刚才那一步执行没成功，我换个方式继续';
       }
@@ -890,7 +1381,10 @@ export class AltusRunCoordinator {
       return '这一步已经跑完了，我继续处理后面的内容';
     }
     if (toolName === 'debug_open_page') {
-      return '页面已经打开，我正在确认实际效果';
+      return '页面已经打开，我正在按测试文档确认功能是否符合要求';
+    }
+    if (toolName === 'browser_interact') {
+      return `${buildBrowserInteractionSummary(args)}，页面已响应`;
     }
     if (toolName === 'get_application_deployment_status') {
       return '部署状态我已经拿到了，正在确认是否一切正常';
@@ -909,7 +1403,30 @@ export class AltusRunCoordinator {
       return '线上部署尚未完成，Altus 将继续修复并重试发布。';
     }
     if (errorMessage.startsWith('deployment_tool_not_allowed_without_explicit_request')) {
-      return '当前任务没有明确部署请求，Altus 已阻止误触发部署，并将继续按交付物生成处理。';
+      return '这次只是部署相关咨询，我不会在没有明确指令时触发部署工具。';
+    }
+    if (toolName === 'debug_open_page') {
+      if (errorMessage.includes('__ONECEO_DEBUG_TARGET_UNREACHABLE__')) {
+        return '调试页面目标地址暂不可访问，Altus 将继续检查本地服务端口和启动命令。';
+      }
+      if (errorMessage.includes('__ONECEO_DEBUG_TARGET_FILE_MISSING__')) {
+        return '调试页面目标文件不存在，Altus 将继续检查交付文件路径。';
+      }
+      if (errorMessage.includes('__ONECEO_DEBUG_TARGET_BAD_STATUS__')) {
+        return '调试页面目标地址返回异常状态，Altus 将继续检查页面服务错误并修复。';
+      }
+      if (errorMessage.includes('__ONECEO_DEBUG_TARGET_TAB_NOT_READY__')) {
+        return '调试浏览器还没有打开正确页面，Altus 将继续检查调试浏览器连接并重试。';
+      }
+      if (errorMessage.includes('__ONECEO_DEBUG_OPEN_PAGE_FAILED__')) {
+        return '调试浏览器打开页面失败，Altus 将继续检查远程调试服务并重试。';
+      }
+      if (errorMessage.includes('debug_open_page_debug_not_ready')) {
+        return '远程调试服务尚未就绪，Altus 将继续恢复调试环境。';
+      }
+      if (/exit status\s+\d+/i.test(errorMessage)) {
+        return '调试页面校验未返回具体状态，Altus 将重新检查目标页面和调试服务。';
+      }
     }
     if (!this.isDeploymentTool(toolName)) {
       return errorMessage;
@@ -929,6 +1446,7 @@ export class AltusRunCoordinator {
       question: string;
       options?: string[];
       clarificationType?: Exclude<AltusManagedTaskIntentProfile['clarificationType'], 'none'>;
+      toolCallId?: string;
     }
   ) {
     const clarificationMessageKey = `managed:${state.input.runId}:clarification`;
@@ -936,7 +1454,14 @@ export class AltusRunCoordinator {
       state.input.sessionId,
       input.question,
       input.options,
-      input.clarificationType
+      input.clarificationType,
+      input.toolCallId
+        ? {
+            runId: state.input.runId,
+            toolCallId: input.toolCallId,
+            messageKey: clarificationMessageKey,
+          }
+        : undefined
     );
     await this.setupService.persistTimelineMessage({
       sessionId: state.input.sessionId,
@@ -948,6 +1473,7 @@ export class AltusRunCoordinator {
         options: input.options,
         clarificationType: input.clarificationType,
         runId: state.input.runId,
+        toolCallId: input.toolCallId,
       },
       messageKey: clarificationMessageKey,
     });
@@ -962,6 +1488,8 @@ export class AltusRunCoordinator {
       clarificationType: input.clarificationType,
       content: input.question,
       messageKey: clarificationMessageKey,
+      toolName: input.toolCallId ? 'ask_user' : undefined,
+      toolCallId: input.toolCallId,
       transitionReason: 'clarification_requested',
       }
     );
@@ -972,6 +1500,58 @@ export class AltusRunCoordinator {
     };
   }
 
+  private async completeDeferredSiblingToolCalls(input: {
+    state: AltusRunState;
+    toolCalls: ToolCall[];
+    currentToolCallId: string;
+    completedToolCallIds: Set<string>;
+  }) {
+    for (const sibling of input.toolCalls) {
+      const toolCallId = asText(sibling?.id);
+      const toolName = asText(sibling?.function?.name);
+      if (!toolCallId || toolCallId === input.currentToolCallId || input.completedToolCallIds.has(toolCallId)) {
+        continue;
+      }
+      const args = parseToolArguments(asText(sibling?.function?.arguments));
+      const toolResultEnvelope = buildManagedToolResultEnvelope({
+        status: 'deferred',
+        runId: input.state.input.runId,
+        toolUseId: toolCallId,
+        toolName,
+        modelRoundId: 'clarification_deferred',
+        args,
+        content: 'deferred_until_user_answer',
+        contentForUser: '补充信息确认前暂缓执行同批次工具',
+        result: {
+          status: 'deferred_until_user_answer',
+          reason: 'ask_user_in_same_tool_batch',
+          askUserToolCallId: input.currentToolCallId,
+        },
+      });
+      await this.eventWriter.appendRunEvent(
+        input.state.input.runId,
+        input.state.input.sessionId,
+        input.state.input.userId,
+        'tool_call_completed',
+        {
+          toolName,
+          content: '补充信息确认前暂缓执行同批次工具',
+          arguments: args,
+          toolCallId,
+          toolResultEnvelope,
+          result: {
+            status: 'deferred_until_user_answer',
+            reason: 'ask_user_in_same_tool_batch',
+            askUserToolCallId: input.currentToolCallId,
+          },
+          outputPreview: 'deferred_until_user_answer',
+          transitionReason: 'clarification_requested',
+        }
+      );
+      input.completedToolCallIds.add(toolCallId);
+    }
+  }
+
   private async callModel(input: {
     messages: ChatMessage[];
     signal: AbortSignal;
@@ -979,14 +1559,33 @@ export class AltusRunCoordinator {
     onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
     onAssistantTextDelta?: (deltaText: string, fullText: string) => Promise<void> | void;
     fallbackModel?: string | null;
-  }) {
+    runtimeSnapshot?: AgentRuntimeSnapshot | null;
+    runtimeTokenSource?: string | null;
+  }): Promise<{
+    content?: string | null;
+    tool_calls?: ToolCall[];
+    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens?: number; cache_creation_input_tokens?: number }; cached_tokens?: number; cache_creation_input_tokens?: number };
+  }> {
+    const runtime = input.runtimeSnapshot;
     const baseUrl = `http://127.0.0.1:${process.env.PORT || '4000'}/api/llm-proxy/v1/chat/completions`;
     const projectedMessages = this.budgetService.projectMessagesForModel(input.messages);
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (runtime?.baseUrl) {
+      headers[LLM_PROXY_INTERNAL_OVERRIDE_HEADER] = getLlmProxyInternalOverrideToken();
+      headers['x-oneceo-internal-llm-upstream-base-url'] = runtime.baseUrl;
+    }
+    if (runtime?.apiType) {
+      headers['x-oneceo-internal-llm-upstream-api-type'] = runtime.apiType;
+    }
+    if (input.runtimeTokenSource) {
+      headers[LLM_PROXY_INTERNAL_OVERRIDE_HEADER] = getLlmProxyInternalOverrideToken();
+      headers['x-oneceo-internal-llm-upstream-token-source'] = input.runtimeTokenSource;
+    }
     const response = await fetch(baseUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({
         model: this.getModelName(projectedMessages, input.fallbackModel),
         messages: sanitizeMessagesForModel(projectedMessages),
@@ -1020,9 +1619,10 @@ export class AltusRunCoordinator {
     if (!choice || typeof choice !== 'object') {
       throw new Error('managed_model_empty_choice');
     }
-    return choice as {
-      content?: string | null;
-      tool_calls?: ToolCall[];
+    return {
+      content: choice.content,
+      tool_calls: choice.tool_calls,
+      usage: payload?.usage,
     };
   }
 
@@ -1034,7 +1634,13 @@ export class AltusRunCoordinator {
     onAssistantTextDelta?: (deltaText: string, fullText: string) => Promise<void> | void;
     onRetryableError?: (error: unknown, attempt: number, delayMs: number) => Promise<void> | void;
     fallbackModel?: string | null;
-  }) {
+    runtimeSnapshot?: AgentRuntimeSnapshot | null;
+    runtimeTokenSource?: string | null;
+  }): Promise<{
+    content?: string | null;
+    tool_calls?: ToolCall[];
+    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens?: number; cache_creation_input_tokens?: number }; cached_tokens?: number; cache_creation_input_tokens?: number };
+  }> {
     const maxAttempts = Math.max(1, this.getModelRetryLimit() + 1);
     let lastError: unknown = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -1164,11 +1770,16 @@ export class AltusRunCoordinator {
     signal: AbortSignal;
     onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
     onAssistantTextDelta?: (deltaText: string, fullText: string) => Promise<void> | void;
-  }) {
+  }): Promise<{
+    content?: string | null;
+    tool_calls?: ToolCall[];
+    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens?: number; cache_creation_input_tokens?: number }; cached_tokens?: number; cache_creation_input_tokens?: number };
+  }> {
     const decoder = new TextDecoder();
     let buffer = '';
     let assistantContent = '';
     const toolCallsByIndex = new Map<number, StreamedToolCallState>();
+    let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens?: number; cache_creation_input_tokens?: number }; cached_tokens?: number; cache_creation_input_tokens?: number } | undefined;
 
     const flushBlock = async (rawBlock: string) => {
       const parsed = this.parseSseBlock(rawBlock);
@@ -1178,6 +1789,29 @@ export class AltusRunCoordinator {
       const payload = parsed.payload;
       if (payload?.error && typeof payload.error === 'object') {
         throw new Error(JSON.stringify(payload));
+      }
+
+      // 捕获流式响应中的 usage（部分 provider 在最后一个 chunk 返回）
+      if (payload?.usage && typeof payload.usage === 'object') {
+        const u = payload.usage as any;
+        if (typeof u.prompt_tokens === 'number' && typeof u.completion_tokens === 'number') {
+          usage = {
+            prompt_tokens: u.prompt_tokens,
+            completion_tokens: u.completion_tokens,
+            total_tokens: u.total_tokens ?? u.prompt_tokens + u.completion_tokens,
+          };
+          const cachedTokens = this.readUsageNumber(u.prompt_tokens_details?.cached_tokens) || this.readUsageNumber(u.cached_tokens) || 0;
+          const cacheCreationTokens = this.readUsageNumber(u.prompt_tokens_details?.cache_creation_input_tokens) || this.readUsageNumber(u.cache_creation_input_tokens) || 0;
+          if (cachedTokens > 0 || cacheCreationTokens > 0) {
+            usage.prompt_tokens_details = {
+              ...(cachedTokens > 0 ? { cached_tokens: cachedTokens } : {}),
+              ...(cacheCreationTokens > 0 ? { cache_creation_input_tokens: cacheCreationTokens } : {}),
+            };
+          }
+          if (cacheCreationTokens > 0) {
+            usage.cache_creation_input_tokens = cacheCreationTokens;
+          }
+        }
       }
 
       const choice = payload?.choices?.[0];
@@ -1224,6 +1858,7 @@ export class AltusRunCoordinator {
           return {
             content: assistantContent,
             tool_calls: this.toToolCalls(toolCallsByIndex),
+            usage,
           };
         }
       }
@@ -1237,23 +1872,32 @@ export class AltusRunCoordinator {
     return {
       content: assistantContent,
       tool_calls: this.toToolCalls(toolCallsByIndex),
+      usage,
     };
   }
 
   private buildCompletionMessage(summary: string, verification?: string[]) {
-    const normalizedSummary = truncate(asText(summary), 8000) || '任务已处理完成。';
+    const normalizedSummary =
+      normalizeManagedCompletionMarkdown(truncate(asText(summary), 8000)) || '任务已处理完成。';
     const checks = Array.isArray(verification)
-      ? verification.map((item) => truncate(asText(item), 500)).filter(Boolean).slice(0, 8)
+      ? verification
+          .map((item) => truncate(asText(item), 500))
+          .filter(Boolean)
+          .slice(0, 8)
+          .map((item) => normalizeManagedCompletionCheck(item))
+          .filter(Boolean)
       : [];
     if (checks.length === 0) {
       return normalizedSummary;
     }
-    return `${normalizedSummary}\n\n验证:\n${checks.map((item) => `- ${item}`).join('\n')}`;
+    return `${normalizedSummary}\n\n验证:\n\n${checks.map((item) => `- ${item}`).join('\n')}`;
   }
 
   private resolveFinalAssistantContent(assistantContent: string, completionMessage: string): string {
-    const normalizedAssistantContent = truncate(asText(assistantContent), 24000).trim();
-    const normalizedCompletionMessage = asText(completionMessage);
+    const normalizedAssistantContent = normalizeManagedCompletionMarkdown(
+      truncate(asText(assistantContent), 24000)
+    );
+    const normalizedCompletionMessage = normalizeManagedCompletionMarkdown(asText(completionMessage));
     if (!normalizedAssistantContent) {
       return normalizedCompletionMessage;
     }
@@ -1304,6 +1948,7 @@ export class AltusRunCoordinator {
       connectors: state.input.connectors as any,
       taskIntentProfile: state.input.taskIntentProfile,
       connectorGuideSections,
+      includeRuntimeState: false,
     });
     writeConnectorDebugLog('[ALTUS_RUN_PROMPT_READY]', {
       taskSessionId: state.input.sessionId,
@@ -1314,8 +1959,37 @@ export class AltusRunCoordinator {
     });
     const skillCatalogPrompt = altusManagedPromptService.buildSkillCatalogPrompt(state.input.skillCatalog);
     const skillPrompt = altusManagedPromptService.buildSkillContextPrompt(state.input.skills);
-    const compositeSystemPrompt = [
-      systemPrompt,
+    const dynamicContextPrompt = altusManagedDynamicContextBlockService.renderBlockIndex([
+      ...altusManagedDynamicContextBlockService.buildSkillBlocks({
+        activeSkills: state.input.skills,
+        catalog: state.input.skillCatalog,
+      }),
+      ...altusManagedDynamicContextBlockService.buildMcpBlocks({
+        providers: state.input.mcpProviders,
+      }),
+      ...altusManagedDynamicContextBlockService.buildMemoryBlocks({
+        userMemory: state.input.userMemory,
+        projectMemory: state.input.projectMemory,
+        sessionMemory: state.input.sessionAltusMemory,
+        runtimeMemoryPrompt: state.input.memoryContextPrompt,
+        skillMemory: state.input.sessionSkillState?.fileMemorySnapshot,
+      }),
+    ]);
+    const runtimeContextPrompt = altusManagedPromptService.buildRuntimeContextPrompt({
+      sessionId: state.input.sessionId,
+      sessionTitle: state.input.sessionTitle,
+      workspaceRoot: state.workspaceRoot,
+      connectors: state.input.connectors as any,
+      taskIntentProfile: state.input.taskIntentProfile,
+      connectorGuideSections,
+      turnStatePrompt: altusManagedContextService.buildTurnStatePrompt({
+        currentMessageType: state.input.messageType || 'user_input',
+        taskIntentProfile: state.input.taskIntentProfile,
+      }),
+    });
+    const turnStatePrompt = [
+      runtimeContextPrompt,
+      dynamicContextPrompt,
       state.input.memoryContextPrompt || '',
       skillCatalogPrompt,
       skillPrompt,
@@ -1325,21 +1999,46 @@ export class AltusRunCoordinator {
     const messages = await this.setupService.buildConversationMessages(
       state.input.sessionId,
       state.input.userInput,
-      compositeSystemPrompt
+      systemPrompt,
+      {
+        turnStatePrompt,
+      }
     );
     let plainTextRecoveryUsed = false;
     const assistantStreamMessageKey = `managed:${state.input.runId}:assistant`;
+    const finalAssistantMessageKey = `managed:${state.input.runId}:assistant:final`;
     const deploymentCompletionIntent = this.resolveDeploymentCompletionIntent(
       state.input.userInput,
       state.input.taskIntentProfile
     );
     let lastDeploymentEvidence: DeploymentCompletionEvidence | null = null;
+    let debugOpenPageSucceeded = false;
     const maxToolRounds = this.getMaxToolRounds();
     let nextRoundStatusContent = '正在分析并执行任务';
 
     for (let round = 0; round < maxToolRounds; round += 1) {
       if (signal.aborted) {
         throw new Error('managed_run_aborted');
+      }
+
+      // 每轮循环前余额预检（止损：避免余额耗尽后白调 LLM）
+      const loopUserId = state.input.userId;
+      if (loopUserId) {
+        const hasEnough = await billingService.hasEnoughCredits(loopUserId, 0);
+        if (!hasEnough) {
+          const credits = await billingService.getUserCredits(loopUserId);
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            loopUserId,
+            'run_status',
+            {
+              status: 'failed',
+              content: `积分不足，无法继续运行。当前余额: ${credits?.balance || 0} 积分`,
+            }
+          );
+          throw new Error(`insufficient_credits: 积分不足，无法继续运行`);
+        }
       }
 
       const currentRound = round + 1;
@@ -1379,11 +2078,20 @@ export class AltusRunCoordinator {
       await this.setupService.refreshInlineImageUrls(messages);
 
       const toolProgressLengths = new Map<string, number>();
+      const modelName = this.getModelName(messages, state.input.model);
+      const billingTargetKey = state.input.billingTargetKey || modelName;
+      const activePricing = await pricingService.getActivePricing(billingTargetKey);
+      if (!activePricing) {
+        throw new Error(`billing_pricing_missing:${billingTargetKey}`);
+      }
+
       const assistant = await this.callModelWithRetry({
         messages,
         signal,
         mcpProviders: state.input.mcpProviders,
         fallbackModel: state.input.model,
+        runtimeSnapshot: state.input.runtimeSnapshot || null,
+        runtimeTokenSource: state.input.runtimeTokenSource || null,
         onRetryableError: async (error, attempt, delayMs) => {
           const parsed = this.extractModelError(error);
           await this.syncLoopSnapshot(state, {
@@ -1456,8 +2164,31 @@ export class AltusRunCoordinator {
           );
         },
       });
+
+      // 计费
+      await this.chargeForModelCall(state, {
+        messages,
+        assistant,
+        model: modelName,
+      });
+
       const assistantContent = truncate(asText(assistant.content), 24000);
-      const toolCalls = Array.isArray(assistant.tool_calls) ? assistant.tool_calls : [];
+      const rawToolCalls = Array.isArray(assistant.tool_calls) ? assistant.tool_calls : [];
+      const invalidToolCallIds = new Set<string>();
+      const toolCalls = rawToolCalls.map((toolCall) => {
+        const rawArguments = toolCall?.function?.arguments;
+        const toolCallId = asText(toolCall?.id);
+        if (!isValidOpenAiToolCallArguments(rawArguments) && toolCallId) {
+          invalidToolCallIds.add(toolCallId);
+        }
+        return {
+          ...toolCall,
+          function: {
+            ...toolCall.function,
+            arguments: normalizeOpenAiToolCallArguments(rawArguments),
+          },
+        };
+      });
 
       if (toolCalls.length === 0) {
         if (assistantContent && this.isClarificationResponse(assistantContent)) {
@@ -1474,6 +2205,7 @@ export class AltusRunCoordinator {
         }
         if (
           assistantContent &&
+          !deploymentCompletionIntent.requiresManagedSuccess &&
           this.shouldAcceptPlainTextConversationCompletion(state.input.userInput, assistantContent)
         ) {
           await this.syncLoopSnapshot(state, {
@@ -1500,6 +2232,38 @@ export class AltusRunCoordinator {
             state,
             assistantContent,
             assistantStreamMessageKey,
+          );
+        }
+        if (
+          assistantContent &&
+          currentRound > 1 &&
+          !deploymentCompletionIntent.requiresManagedSuccess &&
+          this.looksLikeCompletedTaskSummary(assistantContent)
+        ) {
+          await this.syncLoopSnapshot(state, {
+            lastTransitionReason: 'plain_text_conversation_completed',
+            recoveryMode: 'none',
+            currentRound,
+            maxRounds: maxToolRounds,
+            plainTextRecoveryUsed,
+          });
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            state.input.userId,
+            'run_status',
+            {
+              status: 'running',
+              content: '识别为纯文本完成总结，已完成当前任务',
+              transitionReason: 'plain_text_conversation_completed',
+              currentRound,
+              maxRounds: maxToolRounds,
+            }
+          );
+          return this.finalizePlainTextConversationCompletion(
+            state,
+            assistantContent,
+            finalAssistantMessageKey,
           );
         }
         if (assistantContent) {
@@ -1536,7 +2300,7 @@ export class AltusRunCoordinator {
         }
         messages.push({
           role: 'user',
-          content: this.buildContinuationReminder(assistantContent),
+          content: this.buildContinuationReminder(assistantContent, deploymentCompletionIntent),
         });
         plainTextRecoveryUsed = true;
         await this.syncLoopSnapshot(state, {
@@ -1570,14 +2334,76 @@ export class AltusRunCoordinator {
         tool_calls: toolCalls,
       });
 
+      const completedToolCallIds = new Set<string>();
       for (const toolCall of toolCalls) {
         const toolName = asText(toolCall?.function?.name);
         if (!toolName) continue;
         const args = parseToolArguments(asText(toolCall?.function?.arguments));
+        if (invalidToolCallIds.has(toolCall.id)) {
+          const errorContent = '工具参数不是合法 JSON object，已要求模型重新生成工具调用。';
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            state.input.userId,
+            'tool_call_failed',
+            {
+              toolName,
+              content: this.buildToolEventContent(toolName, 'failed'),
+              arguments: args,
+              toolCallId: toolCall.id,
+              toolResultEnvelope: buildManagedToolResultEnvelope({
+                status: 'error',
+                runId: state.input.runId,
+                toolUseId: toolCall.id,
+                toolName,
+                modelRoundId: currentRound,
+                args,
+                errorCode: 'invalid_tool_arguments_json',
+                errorMessage: 'Tool arguments must be a JSON object string.',
+                content: errorContent,
+                contentForUser: errorContent,
+              }),
+              error: errorContent,
+              transitionReason: 'tool_failed_but_recoverable',
+            }
+          );
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            name: toolName,
+            content: stringifyManagedToolResultEnvelope(
+              buildManagedToolResultEnvelope({
+                status: 'error',
+                runId: state.input.runId,
+                toolUseId: toolCall.id,
+                toolName,
+                modelRoundId: currentRound,
+                args,
+                errorCode: 'invalid_tool_arguments_json',
+                errorMessage: 'Tool arguments must be a JSON object string.',
+                content: errorContent,
+                contentForUser: errorContent,
+              })
+            ),
+          });
+          completedToolCallIds.add(toolCall.id);
+          nextRoundStatusContent = '模型生成的工具参数格式不合法，已要求重新生成';
+          await this.syncLoopSnapshot(state, {
+            lastTransitionReason: 'tool_failed_but_recoverable',
+            recoveryMode: 'tool_repair',
+            currentRound,
+            maxRounds: maxToolRounds,
+            plainTextRecoveryUsed,
+            lastToolName: toolName,
+            lastToolCallId: toolCall.id,
+          });
+          continue;
+        }
         const envelope = await toolExecutor.executeToolCall({
           toolCall,
           args,
           signal,
+          modelRoundId: currentRound,
           onResult: (result) => {
             let postToolTransitionReason: AltusRunTransitionReason = 'tool_result_continue';
             let postToolRecoveryMode: AltusRunRecoveryMode = 'none';
@@ -1598,6 +2424,9 @@ export class AltusRunCoordinator {
                 }
               }
               Object.assign(eventPayload, this.buildDeploymentToolViewProjection(toolName, result.content) || {});
+            }
+            if (toolName === 'debug_open_page') {
+              debugOpenPageSucceeded = true;
             }
 
             return {
@@ -1637,6 +2466,12 @@ export class AltusRunCoordinator {
             executionResult.activatedSkills,
             toolName,
           );
+          const autoAttachedDeltaBlocks = altusManagedDynamicContextBlockService.buildIncludedContextManifest(
+            altusManagedDynamicContextBlockService.buildSkillBlocks({
+              autoAttachedSkills: executionResult.activatedSkills,
+              toolName,
+            })
+          );
           messages.push({
             role: 'system',
             content: autoAttachedPrompt,
@@ -1655,6 +2490,8 @@ export class AltusRunCoordinator {
               skillRevisionIds: executionResult.activatedSkills.map((item) => item.revisionId),
               skillSlugs: executionResult.activatedSkills.map((item) => item.slug),
               promptMarkdown: autoAttachedPrompt,
+              contextBlocks: autoAttachedDeltaBlocks.blocks,
+              contextBlocksHash: autoAttachedDeltaBlocks.hash,
             },
             messageKey: `managed:${state.input.runId}:auto_attached_skills:${toolName}:${toolCall.id}`,
           });
@@ -1671,12 +2508,20 @@ export class AltusRunCoordinator {
               skillRevisionIds: executionResult.activatedSkills.map((item) => item.revisionId),
               skillSlugs: executionResult.activatedSkills.map((item) => item.slug),
               promptMarkdown: autoAttachedPrompt,
+              contextBlocks: autoAttachedDeltaBlocks.blocks,
+              contextBlocksHash: autoAttachedDeltaBlocks.hash,
             }
           );
         }
 
         if (envelope.status === 'ask_user') {
           const result = envelope.result;
+            await this.completeDeferredSiblingToolCalls({
+              state,
+              toolCalls,
+              currentToolCallId: toolCall.id,
+              completedToolCallIds,
+            });
             await this.syncLoopSnapshot(state, {
               lastTransitionReason: 'clarification_requested',
               recoveryMode: 'awaiting_user',
@@ -1689,6 +2534,8 @@ export class AltusRunCoordinator {
             return this.requestClarification(state, {
               question: result.question,
               options: result.options,
+              clarificationType: result.clarificationType,
+              toolCallId: toolCall.id,
             });
         }
 
@@ -1717,6 +2564,18 @@ export class AltusRunCoordinator {
                 content: this.buildToolEventContent(toolName, 'failed'),
                 arguments: args,
                 toolCallId: toolCall.id,
+                toolResultEnvelope: buildManagedToolResultEnvelope({
+                  status: 'error',
+                  runId: state.input.runId,
+                  toolUseId: toolCall.id,
+                  toolName,
+                  modelRoundId: currentRound,
+                  args,
+                  errorCode: 'completion_blocked',
+                  errorMessage: blockedMessage,
+                  content: blockedEventError,
+                  contentForUser: blockedEventError,
+                }),
                 error: blockedEventError,
                 transitionReason: 'deployment_completion_blocked',
                 userView: {
@@ -1742,10 +2601,22 @@ export class AltusRunCoordinator {
               role: 'tool',
               tool_call_id: toolCall.id,
               name: toolName,
-              content: JSON.stringify({
-                error: blockedMessage,
-              }),
+              content: stringifyManagedToolResultEnvelope(
+                buildManagedToolResultEnvelope({
+                  status: 'error',
+                  runId: state.input.runId,
+                  toolUseId: toolCall.id,
+                  toolName,
+                  modelRoundId: currentRound,
+                  args,
+                  errorCode: 'completion_blocked',
+                  errorMessage: blockedMessage,
+                  content: blockedEventError,
+                  contentForUser: blockedEventError,
+                })
+              ),
             });
+            completedToolCallIds.add(toolCall.id);
             continue;
           }
 
@@ -1760,9 +2631,20 @@ export class AltusRunCoordinator {
               attachments: result.attachments || [],
             });
             state.deliverables = deliverables;
+            const previewSnapshot: WebsitePreviewSnapshot | null =
+              await this.websitePreviewSnapshotService.captureManagedRunPreview({
+                sessionId: state.input.sessionId,
+                runId: state.input.runId,
+                sandboxId: state.sandboxId,
+                workspaceRoot: state.workspaceRoot,
+                taskIntentProfile: state.input.taskIntentProfile,
+                attachments: result.attachments || [],
+                deliverables,
+                debugOpenPageSucceeded,
+              });
             const completionMessage = this.buildCompletionMessage(result.summary, result.verification);
             const finalContent = this.resolveFinalAssistantContent(assistantContent, completionMessage);
-            if (deliverables.length > 0) {
+            if (deliverables.length > 0 || previewSnapshot) {
               await this.setupService.persistTimelineMessage({
                 sessionId: state.input.sessionId,
                 role: 'system',
@@ -1777,6 +2659,7 @@ export class AltusRunCoordinator {
                   executor: 'altus',
                   executionMode: 'managed',
                   deliverables,
+                  previewSnapshot,
                 },
                 messageKey: `managed:${state.input.runId}:deliverables_ready`,
               });
@@ -1788,22 +2671,10 @@ export class AltusRunCoordinator {
                 {
                   content: DELIVERABLES_READY_TEXT,
                   deliverables,
+                  previewSnapshot,
                 }
               );
             }
-            await this.setupService.persistTimelineMessage({
-              sessionId: state.input.sessionId,
-              role: 'agent',
-              messageType: 'assistant_message',
-              content: finalContent,
-              metadata: {
-                agent: 'altus',
-                runId: state.input.runId,
-                verification: result.verification,
-                deliverables,
-              },
-              messageKey: assistantStreamMessageKey,
-            });
             await this.eventWriter.appendRunEvent(
               state.input.runId,
               state.input.sessionId,
@@ -1814,6 +2685,29 @@ export class AltusRunCoordinator {
               content: this.buildToolEventContent(toolName, 'completed'),
               arguments: args,
               toolCallId: toolCall.id,
+              toolResultEnvelope: buildManagedToolResultEnvelope({
+                status: 'complete',
+                runId: state.input.runId,
+                toolUseId: toolCall.id,
+                toolName,
+                modelRoundId: currentRound,
+                args,
+                content: JSON.stringify({
+                  summary: result.summary,
+                  verification: result.verification,
+                  attachments: result.attachments,
+                  deliverables,
+                  previewSnapshot,
+                }),
+                contentForUser: completionMessage,
+                result: {
+                  summary: result.summary,
+                  verification: result.verification,
+                  attachments: result.attachments,
+                  deliverables,
+                  previewSnapshot,
+                },
+              }),
               transitionReason: deliverables.length > 0 ? 'completed_with_deliverables' : 'completed_without_deliverables',
               outputPreview: truncate(
                 JSON.stringify({
@@ -1821,11 +2715,30 @@ export class AltusRunCoordinator {
                   verification: result.verification,
                   attachments: result.attachments,
                   deliverables,
+                  previewSnapshot,
                 }),
                 4000
               ),
+              previewSnapshot,
               }
             );
+            await this.setupService.persistTimelineMessage({
+              sessionId: state.input.sessionId,
+              role: 'agent',
+              messageType: 'assistant_message',
+              content: finalContent,
+              metadata: {
+                agent: 'altus',
+                executor: 'altus',
+                executionMode: 'managed',
+                eventType: 'assistant_message',
+                runId: state.input.runId,
+                verification: result.verification,
+                deliverables,
+                previewSnapshot,
+              },
+              messageKey: finalAssistantMessageKey,
+            });
             await this.eventWriter.appendRunEvent(
               state.input.runId,
               state.input.sessionId,
@@ -1833,8 +2746,9 @@ export class AltusRunCoordinator {
               'assistant_message',
               {
               content: finalContent,
-              messageKey: assistantStreamMessageKey,
+              messageKey: finalAssistantMessageKey,
               deliverables,
+              previewSnapshot,
               }
             );
             return { outcome: 'completed' as const, content: finalContent, deliverables };
@@ -1846,8 +2760,9 @@ export class AltusRunCoordinator {
             role: 'tool',
             tool_call_id: toolCall.id,
             name: toolName,
-            content: result.content,
+            content: stringifyManagedToolResultEnvelope(envelope.toolResultEnvelope),
           });
+          completedToolCallIds.add(toolCall.id);
           nextRoundStatusContent = this.buildPostToolRunStatusContent({
             toolName,
             args,
@@ -1887,10 +2802,9 @@ export class AltusRunCoordinator {
             role: 'tool',
             tool_call_id: toolCall.id,
             name: toolName,
-            content: JSON.stringify({
-              error: envelope.rawError,
-            }),
+            content: stringifyManagedToolResultEnvelope(envelope.toolResultEnvelope),
           });
+          completedToolCallIds.add(toolCall.id);
         }
       }
     }
@@ -1926,6 +2840,26 @@ export class AltusRunCoordinator {
         });
         await this.lifecycleService.markWaitingUser(state);
         return;
+      }
+
+      // 余额检查
+      const userId = state.input.userId;
+      if (userId) {
+        const hasEnough = await billingService.hasEnoughCredits(userId, 0);
+        if (!hasEnough) {
+          const credits = await billingService.getUserCredits(userId);
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            userId,
+            'run_status',
+            {
+              status: 'failed',
+              content: `积分不足，无法启动运行。当前余额: ${credits?.balance || 0} 积分`,
+            }
+          );
+          throw new Error(`insufficient_credits: 积分不足，无法启动运行`);
+        }
       }
 
       await this.eventWriter.appendRunEvent(

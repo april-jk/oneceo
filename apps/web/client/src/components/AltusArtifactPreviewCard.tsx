@@ -1,21 +1,22 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   getWorkspaceFile,
   getTaskCreationDeploymentInfo,
-  headWorkspaceRawFile,
+  getTaskCreationPreviewSnapshotUrl,
   getWorkspaceRawFileUrl,
   startTaskCreationRuntime,
   type TaskCreationDeploymentInfo,
-  waitWorkspaceRawFileReady,
+  type TaskCreationWebsitePreviewSnapshot,
   type WorkspaceFile,
 } from "@/lib/task-creation-client";
 import { cn } from "@/lib/utils";
 import i18n from "@/i18n";
 import {
   appendPreviewCacheBust,
-  mapWorkspaceRawPreviewHeadResult,
+  checkWorkspaceHtmlPreviewReady,
+  waitWorkspaceHtmlPreviewReady,
   type WorkspaceHtmlPreviewState,
 } from "@/lib/workspace-preview";
 import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
@@ -35,12 +36,36 @@ export type AltusArtifactFile = {
 
 type AltusArtifactPreviewCardProps = {
   sessionId: string;
+  runId?: string;
   artifacts: AltusArtifactFile[];
+  previewSnapshot?: TaskCreationWebsitePreviewSnapshot | null;
   displayMode?: "artifact-browser" | "web-preview";
   onOpenViewer?: (path: string) => void;
   onDeployRequested?: (path: string) => Promise<void> | void;
   runtimeSwitchBlocked?: boolean;
 };
+
+const WEB_PREVIEW_DESIGN_WIDTH = 1280;
+const WEB_PREVIEW_DEFAULT_HEIGHT = 720;
+
+export function getScaledWebPreviewFrame(
+  containerWidth: number,
+  containerHeight: number,
+) {
+  if (containerWidth <= 0 || containerHeight <= 0) {
+    return {
+      width: WEB_PREVIEW_DESIGN_WIDTH,
+      height: WEB_PREVIEW_DEFAULT_HEIGHT,
+      scale: 1,
+    };
+  }
+  const scale = Math.min(containerWidth / WEB_PREVIEW_DESIGN_WIDTH, 1);
+  return {
+    width: Math.ceil(containerWidth / scale),
+    height: Math.ceil(containerHeight / scale),
+    scale,
+  };
+}
 
 function getFilename(path: string): string {
   const normalized = String(path || "").replace(/\\/g, "/");
@@ -75,9 +100,84 @@ export function resolveArtifactDeploymentPreviewUrl(
   );
 }
 
+function ScaledWebPreviewFrame({
+  src,
+  title,
+  sandbox,
+}: {
+  src: string;
+  title: string;
+  sandbox?: string;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [containerSize, setContainerSize] = useState({
+    width: 0,
+    height: 0,
+  });
+  const frame = getScaledWebPreviewFrame(
+    containerSize.width,
+    containerSize.height,
+  );
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element) return;
+
+    const updateSize = () => {
+      const rect = element.getBoundingClientRect();
+      const nextSize = {
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      };
+      setContainerSize((current) => {
+        if (
+          current.width === nextSize.width &&
+          current.height === nextSize.height
+        ) {
+          return current;
+        }
+        return nextSize;
+      });
+    };
+
+    updateSize();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateSize);
+      return () => window.removeEventListener("resize", updateSize);
+    }
+
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div ref={containerRef} className="absolute inset-0 overflow-hidden bg-white">
+      <iframe
+        src={src}
+        title={title}
+        className="absolute left-0 top-0 max-w-none border-0"
+        sandbox={sandbox}
+        scrolling="no"
+        style={{
+          width: `${frame.width}px`,
+          height: `${frame.height}px`,
+          transform: `scale(${frame.scale})`,
+          transformOrigin: "top left",
+          background: "white",
+          pointerEvents: "none",
+        }}
+      />
+    </div>
+  );
+}
+
 export default function AltusArtifactPreviewCard({
   sessionId,
+  runId,
   artifacts,
+  previewSnapshot,
   displayMode = "artifact-browser",
   onOpenViewer,
   onDeployRequested,
@@ -108,12 +208,13 @@ export default function AltusArtifactPreviewCard({
     }
     return normalizedArtifacts;
   }, [displayMode, normalizedArtifacts]);
+  const hasSnapshotMetadata = Boolean(previewSnapshot?.kind === "website_screenshot");
 
   const defaultPath =
     visibleArtifacts.find((artifact) => isWebArtifact(artifact.path))?.path ||
     visibleArtifacts[0]?.path ||
     "";
-  const defaultTab = visibleArtifacts.some((artifact) => isWebArtifact(artifact.path))
+  const defaultTab = visibleArtifacts.some((artifact) => isWebArtifact(artifact.path)) || hasSnapshotMetadata
     ? "preview"
     : "code";
   const [selectedPath, setSelectedPath] = useState(defaultPath);
@@ -127,6 +228,7 @@ export default function AltusArtifactPreviewCard({
   const [webPreviewMessage, setWebPreviewMessage] = useState("");
   const [webPreviewReloading, setWebPreviewReloading] = useState(false);
   const [webPreviewNonce, setWebPreviewNonce] = useState(0);
+  const [snapshotImageFailed, setSnapshotImageFailed] = useState(false);
 
   useEffect(() => {
     setSelectedPath(defaultPath);
@@ -185,13 +287,41 @@ export default function AltusArtifactPreviewCard({
   const selectedOpenUrl = selectedIsWebArtifact
     ? deploymentPreviewUrl || effectiveRawSelectedUrl
     : effectiveRawSelectedUrl;
-  const hasPreviewTab = Boolean(previewPath);
-  const previewCheckEnabled = Boolean(
-    activeTab === "preview" && previewPath && !deploymentPreviewUrl,
+  const snapshotHasCapturedMetadata = Boolean(
+    runId &&
+      previewSnapshot?.kind === "website_screenshot" &&
+      previewSnapshot.status === "captured",
   );
-  const frameClass = selectedIsWebArtifact
+  const snapshotCaptured = Boolean(
+    snapshotHasCapturedMetadata && previewSnapshot?.storageKey && !snapshotImageFailed,
+  );
+  const snapshotUnavailableForComplexWeb = Boolean(
+    previewSnapshot?.kind === "website_screenshot" &&
+      (previewSnapshot.status === "capture_failed" ||
+        previewSnapshot.status === "storage_failed" ||
+        (previewSnapshot.status === "capture_unavailable" && !previewPath) ||
+        (previewSnapshot.status === "captured" &&
+          (!previewSnapshot.storageKey || snapshotImageFailed))),
+  );
+  const snapshotUrl =
+    snapshotCaptured && runId
+      ? getTaskCreationPreviewSnapshotUrl(sessionId, runId)
+      : "";
+  const hasPreviewTab = Boolean(previewPath || hasSnapshotMetadata);
+  const previewCheckEnabled = Boolean(
+    activeTab === "preview" &&
+      previewPath &&
+      !deploymentPreviewUrl &&
+      !snapshotCaptured &&
+      !snapshotUnavailableForComplexWeb,
+  );
+  const frameClass = selectedIsWebArtifact || hasSnapshotMetadata
     ? "group relative w-full overflow-hidden rounded-xl border bg-card pt-10 min-h-[240px] sm:h-[400px] max-h-[640px]"
     : "group relative w-full overflow-hidden rounded-xl border bg-card pt-10 min-h-[320px]";
+
+  useEffect(() => {
+    setSnapshotImageFailed(false);
+  }, [previewSnapshot?.storageKey, runId]);
 
   useEffect(() => {
     if (!visibleArtifacts.some((artifact) => isWebArtifact(artifact.path))) {
@@ -218,6 +348,11 @@ export default function AltusArtifactPreviewCard({
   }, [runtimeSwitchBlocked, sessionId, visibleArtifacts]);
 
   useEffect(() => {
+    if (snapshotCaptured || snapshotUnavailableForComplexWeb) {
+      setWebPreviewState("ready");
+      setWebPreviewMessage("");
+      return;
+    }
     if (deploymentPreviewUrl) {
       setWebPreviewState("ready");
       setWebPreviewMessage("");
@@ -226,7 +361,7 @@ export default function AltusArtifactPreviewCard({
     setWebPreviewState("checking");
     setWebPreviewMessage("");
     setWebPreviewNonce(Date.now());
-  }, [deploymentPreviewUrl, previewPath]);
+  }, [deploymentPreviewUrl, previewPath, snapshotCaptured, snapshotUnavailableForComplexWeb]);
 
   useEffect(() => {
     if (!previewCheckEnabled || !previewPath) {
@@ -235,9 +370,8 @@ export default function AltusArtifactPreviewCard({
     let cancelled = false;
     setWebPreviewState("checking");
     setWebPreviewMessage("");
-    void headWorkspaceRawFile(sessionId, previewPath).then((result) => {
+    void checkWorkspaceHtmlPreviewReady(sessionId, previewPath).then((mapped) => {
       if (cancelled) return;
-      const mapped = mapWorkspaceRawPreviewHeadResult(result);
       setWebPreviewState(mapped.state);
       setWebPreviewMessage(mapped.message);
     });
@@ -260,11 +394,10 @@ export default function AltusArtifactPreviewCard({
     setWebPreviewMessage("");
     try {
       await startTaskCreationRuntime(sessionId);
-      const result = await waitWorkspaceRawFileReady(sessionId, previewPath, {
+      const mapped = await waitWorkspaceHtmlPreviewReady(sessionId, previewPath, {
         attempts: 8,
         intervalMs: 600,
       });
-      const mapped = mapWorkspaceRawPreviewHeadResult(result);
       setWebPreviewState(mapped.state);
       setWebPreviewMessage(mapped.message);
       if (mapped.state === "ready") {
@@ -290,7 +423,7 @@ export default function AltusArtifactPreviewCard({
     }
   };
 
-  if (visibleArtifacts.length === 0) {
+  if (visibleArtifacts.length === 0 && !hasSnapshotMetadata) {
     return null;
   }
 
@@ -312,7 +445,11 @@ export default function AltusArtifactPreviewCard({
               <div className={frameClass}>
                 <div className="absolute top-0 left-0 right-0 z-10 flex h-10 items-center justify-between border-b bg-accent px-3">
                   <div className="min-w-0 text-sm font-medium truncate">
-                    {getFilename(selectedArtifact?.path || previewPath || "artifact")}
+                    {getFilename(
+                      selectedArtifact?.path ||
+                        previewPath ||
+                        i18n.t("previewPanel.artifactPreview.websiteSnapshotTitle"),
+                    )}
                   </div>
                   {selectedArtifact && onDeployRequested ? (
                     <Button
@@ -388,19 +525,57 @@ export default function AltusArtifactPreviewCard({
                   </div>
 
                   <TabsContent value="preview" className="relative h-full data-[state=inactive]:hidden">
-                    {previewPath ? (
+                    {previewPath || hasSnapshotMetadata ? (
                       <div className="absolute inset-0">
-                        {webPreviewState === "ready" ? (
-                          <iframe
+                        {snapshotCaptured && snapshotUrl ? (
+                          <div className="absolute inset-0 flex items-center justify-center bg-muted/20">
+                            <img
+                              src={snapshotUrl}
+                              alt={i18n.t("previewPanel.artifactPreview.websiteSnapshotAlt")}
+                              className="h-full w-full object-contain"
+                              draggable={false}
+                              onError={() => setSnapshotImageFailed(true)}
+                            />
+                          </div>
+                        ) : snapshotUnavailableForComplexWeb ? (
+                          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-muted/20 px-6 text-center">
+                            <div className="max-w-md text-sm text-muted-foreground">
+                              {previewSnapshot?.message ||
+                                i18n.t("previewPanel.artifactPreview.websiteSnapshotUnavailable")}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setActiveTab("code")}
+                              >
+                                {i18n.t("previewPanel.viewSource")}
+                              </Button>
+                              {selectedOpenUrl ? (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() =>
+                                    window.open(selectedOpenUrl, "_blank", "noopener,noreferrer")
+                                  }
+                                >
+                                  <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                                  {i18n.t("previewPanel.artifactPreview.open")}
+                                </Button>
+                              ) : null}
+                            </div>
+                          </div>
+                        ) : webPreviewState === "ready" ? (
+                          <ScaledWebPreviewFrame
                             src={selectedPreviewUrl}
                             title={`${getFilename(previewPath)} preview`}
-                            className="absolute inset-0 h-full w-full border-0"
                             sandbox={
                               deploymentPreviewUrl
                                 ? undefined
                                 : "allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
                             }
-                            style={{ background: "white" }}
                           />
                         ) : (
                           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-muted/20 px-6 text-center">

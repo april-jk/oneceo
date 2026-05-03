@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import {
   appendPreviewCacheBust,
+  extractWorkspaceHtmlPreviewAssetPaths,
   mapWorkspaceRawPreviewHeadResult,
 } from "../lib/workspace-preview";
 import i18n from "../i18n";
@@ -63,4 +64,18 @@ test("issue39: cache bust appends query correctly", async () => {
   expect(appendPreviewCacheBust("http://localhost:4000/a.html?v=1", 456)).toBe(
     "http://localhost:4000/a.html?v=1&_preview=456",
   );
+});
+
+test("issue39: html preview checks local css and script assets before rendering", async () => {
+  expect(
+    extractWorkspaceHtmlPreviewAssetPaths(
+      [
+        '<link rel="stylesheet" href="./styles.css?v=1">',
+        '<link rel="icon" href="./favicon.ico">',
+        '<script src="../shared/app.js#main"></script>',
+        '<script src="https://cdn.example/app.js"></script>',
+      ].join("\n"),
+      "game-2048/public/index.html",
+    ),
+  ).toEqual(["game-2048/public/styles.css", "game-2048/shared/app.js"]);
 });

@@ -36,13 +36,24 @@ export type ArchiveWorkspaceResult = {
   codexArchiveVerifiedRollout?: string;
 };
 
-type ArchiveManifest = {
+export type ArchiveManifest = {
   version: number;
   sandboxId: string;
+  sourceSandboxId?: string;
   taskSessionId?: string;
   archivedAt: string;
+  createdAt?: string;
   workspaceRoot: string;
   stateRoot?: string;
+  executor?: string;
+  template?: string;
+  fileCount?: number;
+  totalSizeBytes?: number;
+  archiveSha256?: string;
+  workspaceTreeHash?: string;
+  archiveReason?: string;
+  archiveStorageStatus?: string;
+  dirtySequence?: number;
   codexArchiveHome?: string;
   codexDotCodexPath?: string;
   codexArchivedExecutorSessionId?: string;
@@ -89,7 +100,16 @@ export type SandboxArchiveDownloadSpec = {
 
 type RestoreWorkspaceOptions = {
   snapshotKey?: string;
+  taskSessionId?: string;
+  restoreRequired?: boolean;
+  expectedSourceSandboxId?: string;
+  reason?: string;
 };
+
+export type RestoreWorkspaceResult =
+  | { status: 'not_required'; reason?: string }
+  | { status: 'restored'; archiveKey: string; manifest?: Partial<ArchiveManifest> }
+  | { status: 'missing_required_archive'; reason: string };
 
 type SandboxArchiveServiceDeps = {
   e2bConnector: typeof e2bConnector;
@@ -192,6 +212,17 @@ function shellEscape(value: string): string {
 
 function sha256(buffer: Buffer): string {
   return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+function parseNumber(value: unknown): number | undefined {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function extractFirstLineNumber(output: unknown): number | undefined {
+  const text = asText(output);
+  const first = text.split(/\r?\n/).find((line) => line.trim());
+  return parseNumber(first);
 }
 
 async function ensureCodexStateReady(
@@ -540,9 +571,31 @@ export async function archiveSandboxWorkspace(
 
   const tarPath = `/tmp/workspace_backup_${Date.now()}.tar.gz`;
   const bundleRoot = `/tmp/workspace_bundle_${Date.now()}`;
+  let fileCount: number | undefined;
+  let totalSizeBytes: number | undefined;
+  try {
+    const fileCountResult: any = await sandboxArchiveServiceDeps.e2bConnector.runCommand(
+      sandboxId,
+      `find ${shellEscape(workspaceRoot)} ${shellEscape(stateRoot)} -type f 2>/dev/null | wc -l`,
+      { timeoutMs: 30000 }
+    );
+    fileCount = extractFirstLineNumber(fileCountResult?.stdout || fileCountResult?.output);
+  } catch (error) {
+    console.warn('[SANDBOX_ARCHIVE] file count probe failed', sandboxId, error);
+  }
+  try {
+    const sizeResult: any = await sandboxArchiveServiceDeps.e2bConnector.runCommand(
+      sandboxId,
+      `du -sb ${shellEscape(workspaceRoot)} ${shellEscape(stateRoot)} 2>/dev/null | awk '{s += $1} END {print s+0}'`,
+      { timeoutMs: 30000 }
+    );
+    totalSizeBytes = extractFirstLineNumber(sizeResult?.stdout || sizeResult?.output);
+  } catch (error) {
+    console.warn('[SANDBOX_ARCHIVE] total size probe failed', sandboxId, error);
+  }
   const tarCommand = `
-set -euo pipefail
-mkdir -p ${shellEscape(workspaceRoot)} ${shellEscape(stateRoot)}
+	set -euo pipefail
+	mkdir -p ${shellEscape(workspaceRoot)} ${shellEscape(stateRoot)}
 rm -rf ${shellEscape(bundleRoot)}
 mkdir -p ${shellEscape(bundleRoot)}
 ln -s ${shellEscape(workspaceRoot)} ${shellEscape(`${bundleRoot}/workspace`)}
@@ -571,10 +624,20 @@ rm -rf ${shellEscape(bundleRoot)}
   const manifest: ArchiveManifest = {
     version: 3,
     sandboxId,
+    sourceSandboxId: sandboxId,
     taskSessionId: taskSessionId || undefined,
     archivedAt,
+    createdAt: archivedAt,
     workspaceRoot,
     stateRoot,
+    executor: sandboxExecutor || undefined,
+    template: asText((existingMetadata as any)?.e2b?.template || (existingMetadata as any).template) || undefined,
+    fileCount,
+    totalSizeBytes,
+    archiveSha256: hash,
+    archiveReason: reason,
+    archiveStorageStatus: 'stored',
+    dirtySequence: parseNumber((existingMetadata as any).dirtySequence || (existingMetadata as any).archiveDirtySequence),
     codexArchiveHome,
     codexDotCodexPath,
     codexArchivedExecutorSessionId: codexExecutorSessionId || undefined,
@@ -652,16 +715,21 @@ rm -rf ${shellEscape(bundleRoot)}
 export async function restoreWorkspaceIfArchived(
   sandboxId: string,
   options?: RestoreWorkspaceOptions
-): Promise<boolean> {
+): Promise<RestoreWorkspaceResult> {
   if (!isArchiveEnabled() || !isArchiveStorageConfigured()) {
-    return false;
+    return options?.restoreRequired
+      ? { status: 'missing_required_archive', reason: 'archive_storage_unavailable' }
+      : { status: 'not_required', reason: 'archive_storage_unavailable' };
   }
 
-  const { workspaceRoot, stateRoot, codexArchiveHome, codexDotCodexPath, taskSessionId } =
-    await resolveWorkspaceRoot(sandboxId);
+  const resolvedWorkspace = await resolveWorkspaceRoot(sandboxId);
+  const { workspaceRoot, stateRoot, codexArchiveHome, codexDotCodexPath } = resolvedWorkspace;
+  const taskSessionId = asText(options?.taskSessionId) || resolvedWorkspace.taskSessionId;
   const metadataKey = buildMetadataKey(taskSessionId, sandboxId);
   let manifest: Partial<ArchiveManifest> | undefined;
   const requestedSnapshotKey = asText(options?.snapshotKey);
+  const restoreRequired = options?.restoreRequired === true;
+  const expectedSourceSandboxId = asText(options?.expectedSourceSandboxId);
   const baseRestoreCandidates = uniqueNonEmptyKeys([
     requestedSnapshotKey,
     buildArchiveKey(taskSessionId, sandboxId),
@@ -671,6 +739,12 @@ export async function restoreWorkspaceIfArchived(
     sandboxArchiveServiceDeps.existsInR2(metadataKey),
     findFirstExistingR2Key(baseRestoreCandidates),
   ]);
+  if (requestedSnapshotKey && baseRestoreKey !== requestedSnapshotKey) {
+    return {
+      status: 'missing_required_archive',
+      reason: `requested_snapshot_missing:${requestedSnapshotKey}`,
+    };
+  }
 
   if (metadataExists) {
     try {
@@ -685,7 +759,21 @@ export async function restoreWorkspaceIfArchived(
     restoreKey = await findFirstExistingR2Key(listRestoreCandidates(taskSessionId, sandboxId, manifest));
   }
   if (!restoreKey) {
-    return false;
+    return restoreRequired
+      ? {
+          status: 'missing_required_archive',
+          reason: requestedSnapshotKey ? `requested_snapshot_missing:${requestedSnapshotKey}` : 'restore_archive_missing',
+        }
+      : { status: 'not_required', reason: 'restore_archive_missing' };
+  }
+  if (expectedSourceSandboxId && manifest) {
+    const manifestSource = asText((manifest as any).sourceSandboxId) || asText((manifest as any).sandboxId);
+    if (manifestSource && manifestSource !== expectedSourceSandboxId) {
+      return {
+        status: 'missing_required_archive',
+        reason: `restore_manifest_source_mismatch:${manifestSource}`,
+      };
+    }
   }
 
   const archiveBytes = await sandboxArchiveServiceDeps.downloadFromR2(restoreKey);
@@ -726,6 +814,7 @@ export async function restoreWorkspaceIfArchived(
 
   await sandboxArchiveServiceDeps.setSandboxMetadata(sandboxId, {
     restoreStatus: 'restored',
+    workspaceLifecycleStatus: 'restored_verified',
     restoreAt: new Date().toISOString(),
     r2ArchiveKey: buildArchiveKey(taskSessionId, sandboxId),
     r2RestoreSourceKey: restoreKey,
@@ -767,7 +856,11 @@ export async function restoreWorkspaceIfArchived(
     }
   }
 
-  return true;
+  return {
+    status: 'restored',
+    archiveKey: restoreKey,
+    manifest,
+  };
 }
 
 export async function resolveTaskSessionIdBySandbox(sandboxId: string): Promise<string | null> {

@@ -13,6 +13,7 @@ import {
   DEFAULT_USER_MANAGEMENT_SORT,
   DEFAULT_USER_MANAGEMENT_VIEW_STATE,
 } from './adminViewState';
+import { AdminButton, AdminDetailShell, AdminTabs, DangerConfirmDialog, IdToken, StatusBadge } from './admin-ui';
 import type {
   UserDetailTab,
   UserManagementFilters,
@@ -27,6 +28,38 @@ type UserDetailJumpOrigin = {
   trail: string;
 };
 
+type UserBillingDetail = {
+  credits: {
+    balance: number;
+    totalEarned: number;
+    totalConsumed: number;
+    lastRechargeAt?: string | null;
+  };
+  usageRecords: {
+    items: Array<{
+      id: string;
+      sessionId: string;
+      sessionTitle: string;
+      totalCredits: number;
+      totalTokens?: number | null;
+      callCount: number;
+      lastUsedAt: string;
+    }>;
+    total: number;
+  };
+  acquisitionHistory: {
+    items: Array<{
+      id: string;
+      type: string;
+      amount: number;
+      balanceAfter: number;
+      description?: string | null;
+      createdAt: string;
+    }>;
+    total: number;
+  };
+};
+
 type Props = {
   onError: (message: string | null) => void;
   onUpdatedAtChange?: (value: string | null) => void;
@@ -36,6 +69,15 @@ type Props = {
   onOpenDeployment?: (taskSessionId: string, origin?: UserDetailJumpOrigin) => void;
   persistedState?: UserManagementViewState | null;
   onStateChange?: (state: UserManagementViewState) => void;
+};
+
+type UserStatusDangerAction = {
+  userId: string;
+  currentStatus: string;
+  nextStatus: 'active' | 'disabled';
+  label: string;
+  displayName?: string | null;
+  actionLabel: string;
 };
 
 const DEFAULT_FILTERS = DEFAULT_USER_MANAGEMENT_FILTERS;
@@ -340,7 +382,14 @@ export function UserManagementSection({
   const [detailLoading, setDetailLoading] = useState(false);
   const [deploymentRecords, setDeploymentRecords] = useState<DeploymentRecord[]>([]);
   const [deploymentLoading, setDeploymentLoading] = useState(false);
+  const [billingDetail, setBillingDetail] = useState<UserBillingDetail | null>(null);
+  const [billingLoading, setBillingLoading] = useState(false);
+  const [adjustAmount, setAdjustAmount] = useState('');
+  const [adjustReason, setAdjustReason] = useState('');
+  const [adjustLoading, setAdjustLoading] = useState(false);
+  const [adjustMessage, setAdjustMessage] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
   const [actionBusy, setActionBusy] = useState<'status' | null>(null);
+  const [statusDangerAction, setStatusDangerAction] = useState<UserStatusDangerAction | null>(null);
   const [summaryRefreshing, setSummaryRefreshing] = useState(false);
   const [summaryFetchedAt, setSummaryFetchedAt] = useState<string | null>(null);
   const [summaryClock, setSummaryClock] = useState(() => Date.now());
@@ -412,21 +461,33 @@ export function UserManagementSection({
   }, [detailTab, drawerOpen, filters, onStateChange, selectedUserId, selectedUserLabel, sort]);
 
   useEffect(() => {
-    if (!selectedUserId) return;
-    if (!response || loading) return;
-    if (!users.some((item) => item.id === selectedUserId)) {
-      setSelectedUserId(null);
-      setSelectedUserLabel(null);
-      setDetail(null);
-      setDrawerOpen(false);
-    }
-  }, [loading, response, selectedUserId, users]);
-
-  useEffect(() => {
     if (!drawerOpen || !selectedUserId) return;
     if (detail?.user?.id === selectedUserId) return;
     void loadDetail(selectedUserId);
   }, [detail?.user?.id, drawerOpen, loadDetail, selectedUserId]);
+
+  const loadBillingDetail = useCallback(async (userId: string) => {
+    setBillingLoading(true);
+    try {
+      const response = await fetch(`/api/internal/billing/users/${encodeURIComponent(userId)}/billing-detail`, {
+        credentials: 'include',
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error || '用户计费详情加载失败');
+      }
+      const next = await response.json() as UserBillingDetail;
+      setBillingDetail(next);
+      onError(null);
+      return next;
+    } catch (error) {
+      setBillingDetail(null);
+      onError(error instanceof Error ? error.message : '用户计费详情加载失败');
+      return null;
+    } finally {
+      setBillingLoading(false);
+    }
+  }, [onError]);
 
   useEffect(() => {
     if (!drawerOpen || detailTab !== 'deployments' || !selectedUserId) return;
@@ -452,6 +513,23 @@ export function UserManagementSection({
       cancelled = true;
     };
   }, [detailTab, drawerOpen, onError, selectedUserId]);
+
+  useEffect(() => {
+    if (!drawerOpen || detailTab !== 'billing' || !selectedUserId) return;
+    let cancelled = false;
+    void loadBillingDetail(selectedUserId).then(() => {
+      if (cancelled) return;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [detailTab, drawerOpen, loadBillingDetail, selectedUserId]);
+
+  useEffect(() => {
+    setAdjustAmount('');
+    setAdjustReason('');
+    setAdjustMessage(null);
+  }, [selectedUserId]);
 
   useEffect(() => {
     if (detail?.user?.id === selectedUserId) {
@@ -484,8 +562,11 @@ export function UserManagementSection({
         });
         setDeploymentRecords(next.records);
       }
+      if (detailTab === 'billing') {
+        await loadBillingDetail(selectedUserId);
+      }
     }
-  }, [detailTab, drawerOpen, filters, loadDetail, loadUsers, selectedUserId, sort]);
+  }, [detailTab, drawerOpen, filters, loadBillingDetail, loadDetail, loadUsers, selectedUserId, sort]);
 
   useEffect(() => {
     onRegisterRefresh?.(handleExternalRefresh);
@@ -501,6 +582,7 @@ export function UserManagementSection({
       setSelectedUserLabel(listItem?.displayName || listItem?.email || userId);
       setDetail(null);
       setDeploymentRecords([]);
+      setBillingDetail(null);
       setDrawerOpen(true);
       setDetailTab('overview');
     },
@@ -535,10 +617,9 @@ export function UserManagementSection({
     });
   }, []);
 
-  const handleStatusToggle = useCallback(async () => {
-    const userId = detail?.user?.id || selectedUserId;
-    const nextStatus = detail?.user?.status === 'disabled' ? 'active' : 'disabled';
-    if (!userId) return;
+  const handleStatusToggle = useCallback(async (payload: UserStatusDangerAction) => {
+    const userId = payload.userId;
+    const nextStatus = payload.nextStatus;
 
     setActionBusy('status');
     try {
@@ -551,14 +632,58 @@ export function UserManagementSection({
     } finally {
       setActionBusy(null);
     }
-  }, [detail?.user?.id, detail?.user?.status, filters, loadUsers, onError, selectedUserId]);
+  }, [filters, loadUsers, onError]);
+
+  const handleAdjustCredits = useCallback(async () => {
+    const userId = detail?.user?.id || selectedUserId;
+    const amount = Number(adjustAmount);
+    if (!userId) return;
+    if (!Number.isInteger(amount) || amount <= 0) {
+      setAdjustMessage({ tone: 'error', text: '调整金额必须是大于 0 的整数' });
+      return;
+    }
+
+    setAdjustLoading(true);
+    setAdjustMessage(null);
+    try {
+      const response = await fetch(`/api/internal/billing/users/${encodeURIComponent(userId)}/adjust`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          amount,
+          reason: adjustReason.trim() || '人工调整',
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(payload?.error || payload?.message || '调整积分失败');
+      }
+
+      setAdjustAmount('');
+      setAdjustReason('');
+      setAdjustMessage({ tone: 'success', text: `已增加 ${amount.toLocaleString()} credits，调整后余额 ${Number(payload?.balanceAfter ?? 0).toLocaleString()} credits` });
+      await loadBillingDetail(userId);
+      await loadUsers(filters, sort);
+      onError(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '调整积分失败';
+      setAdjustMessage({ tone: 'error', text: message });
+      onError(message);
+    } finally {
+      setAdjustLoading(false);
+    }
+  }, [adjustAmount, adjustReason, detail?.user?.id, filters, loadBillingDetail, loadUsers, onError, selectedUserId, sort]);
 
   const summary = response?.summary;
   const summaryAge = formatCompactRelativeTime(summaryFetchedAt, summaryClock);
   const detailUser = detail?.user || selectedListItem;
+  const statusConfirmText = detailUser?.email || detailUser?.id || selectedUserId || '';
+  const nextStatusLabel = detailUser?.status === 'disabled' ? '启用用户' : '禁用用户';
   const currentSortLabel = SORT_LABEL_MAP[sort.key] || '上次登录';
   const latestSessionRecord = detail?.recentSessions[0] || null;
   const recentSessions = detail?.recentSessions || [];
+  const canSubmitAdjust = Boolean(selectedUserId || detail?.user?.id) && Boolean(adjustAmount.trim()) && !adjustLoading;
   const detailJumpOrigin = detailUser
     ? {
         section: 'user' as const,
@@ -733,14 +858,14 @@ export function UserManagementSection({
                                 </button>
                               </div>
                               <p>{item.email}</p>
-                              <small title={item.id}>{truncateMiddle(item.id, 10, 8)}</small>
+                              <IdToken value={item.id} head={10} tail={8} />
                             </div>
                           </td>
                           <td>
                             <div className="user-management-table-cell-stack">
-                              <span className={`state-chip ${item.status === 'active' ? 'status-running' : 'status-error'}`}>
+                              <StatusBadge tone={item.status === 'active' ? 'success' : 'danger'}>
                                 {userStatusLabel(item.status)}
-                              </span>
+                              </StatusBadge>
                               <small>{item.status === 'active' ? '账号可用' : '账号已禁用'}</small>
                             </div>
                           </td>
@@ -790,60 +915,21 @@ export function UserManagementSection({
               </tbody>
             </table>
           </div>
+          <div className="admin-mobile-card-list" aria-label="用户移动列表">
+            {loading ? <p className="empty">正在加载用户列表...</p> : users.length === 0 ? <p className="empty">当前筛选条件下没有匹配用户</p> : users.map((item) => (
+              <article key={item.id} className="admin-mobile-card">
+                <div className="admin-mobile-card-head"><strong>{item.displayName}</strong><StatusBadge tone={item.status === 'active' ? 'success' : 'danger'}>{userStatusLabel(item.status)}</StatusBadge></div>
+                <div className="admin-mobile-card-meta"><span>{item.email}</span><span>对话 {item.conversationCount}</span><span>Sandbox {item.sandboxCount}</span></div>
+                <IdToken value={item.id} head={10} tail={8} />
+                <AdminButton variant="link" onClick={() => void openDetail(item.id)}>查看详情</AdminButton>
+              </article>
+            ))}
+          </div>
         </section>
       </main>
 
       {drawerOpen ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setDrawerOpen(false)}>
-          <aside
-            className="modal-card user-management-modal"
-            aria-labelledby="user-management-detail-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="modal-header user-management-modal-header">
-              <div className="user-management-modal-heading">
-                <p className="section-tag">用户详情</p>
-                <h2 id="user-management-detail-title">{detailUser?.displayName || '用户详情'}</h2>
-                <p className="panel-caption">{detailUser?.email || selectedUserId || '-'}</p>
-              </div>
-              <div className="user-management-modal-actions">
-                <button
-                  type="button"
-                  className="primary-btn"
-                  onClick={() => void handleStatusToggle()}
-                  disabled={actionBusy !== null || detailLoading || !detailUser}
-                >
-                  {actionBusy === 'status'
-                    ? '处理中...'
-                    : detailUser?.status === 'disabled'
-                      ? '启用用户'
-                      : '禁用用户'}
-                </button>
-                <button type="button" className="icon-btn" aria-label="关闭用户详情" onClick={() => setDrawerOpen(false)}>
-                  <span aria-hidden="true">×</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="user-management-tab-strip">
-              {([
-                ['overview', '概览'],
-                ['conversations', '对话'],
-                ['sandboxes', 'Sandbox'],
-                ['deployments', '部署'],
-              ] as Array<[UserDetailTab, string]>).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  className={`secondary-btn ${detailTab === key ? 'active' : ''}`}
-                  onClick={() => setDetailTab(key)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            <div className="modal-body user-management-modal-body">
+        <AdminDetailShell open={drawerOpen} onClose={() => setDrawerOpen(false)} title={detailUser?.displayName || '用户详情'} eyebrow="用户详情" subtitle={detailUser?.email || selectedUserId || '-'} status={detailUser ? <StatusBadge tone={detailUser.status === 'active' ? 'success' : 'danger'}>{userStatusLabel(detailUser.status)}</StatusBadge> : null} actions={<AdminButton variant={detailUser?.status === 'disabled' ? 'primary' : 'dangerSoft'} loading={actionBusy === 'status'} onClick={() => detailUser && setStatusDangerAction({ userId: detailUser.id, currentStatus: detailUser.status, nextStatus: detailUser.status === 'disabled' ? 'active' : 'disabled', label: detailUser.email || detailUser.id, displayName: detailUser.displayName, actionLabel: nextStatusLabel })} disabled={actionBusy !== null || detailLoading || !detailUser}>{nextStatusLabel}</AdminButton>} tabs={<AdminTabs<UserDetailTab> value={detailTab} onChange={(value) => setDetailTab(value)} items={[{ key: 'overview', label: '概览' }, { key: 'billing', label: '积分' }, { key: 'conversations', label: '对话' }, { key: 'sandboxes', label: 'Sandbox' }, { key: 'deployments', label: '部署' }]} />} className="user-management-modal" contentClassName="user-management-modal-body" size="xl">
               {detailLoading ? <p className="user-management-empty">正在加载用户详情...</p> : null}
               {!detailLoading && detail && detailTab === 'overview' ? (
                 <div className="user-management-overview-layout">
@@ -886,19 +972,11 @@ export function UserManagementSection({
                     <dl className="user-management-overview-facts">
                       <div>
                         <dt>用户 ID</dt>
-                        <dd className="mono">{detail.user?.id || '-'}</dd>
+                        <dd><IdToken value={detail.user?.id} /></dd>
                       </div>
                       <div>
                         <dt>最近来源 IP</dt>
                         <dd className="mono">{latestSessionRecord?.ipAddress || '-'}</dd>
-                      </div>
-                      <div>
-                        <dt>账号状态</dt>
-                        <dd>{userStatusLabel(detail.user?.status)}</dd>
-                      </div>
-                      <div>
-                        <dt>登录状态</dt>
-                        <dd>{loginStatusLabel({ activeSessionCount: detail.stats.activeSessionCount, lastLoginAt: detail.user?.lastLoginAt })}</dd>
                       </div>
                     </dl>
                     {detail.revokedSessionCount ? (
@@ -912,8 +990,7 @@ export function UserManagementSection({
                     <div className="user-management-overview-login-compact">
                       <div className="user-management-overview-login-head">
                         <div>
-                          <p className="section-tag">登录摘要</p>
-                          <p className="panel-caption">最近登录与访问信息已合并到账号摘要。</p>
+                          <p className="panel-caption user-management-overview-copy">最近登录记录</p>
                         </div>
                         <span className="user-management-overview-record-count">最近 {detail.recentSessions.length} 条</span>
                       </div>
@@ -967,6 +1044,156 @@ export function UserManagementSection({
                     : <DetailListEmpty title="当前用户暂无对话记录" />)
                 : null}
 
+              {!detailLoading && detail && detailTab === 'billing' ? (
+                billingLoading ? (
+                  <DetailListEmpty title="正在加载计费详情..." />
+                ) : billingDetail ? (
+                  <div className="user-billing-ledger">
+                    <section className="user-billing-ledger-head">
+                      <div>
+                        <p className="section-tag">积分账本</p>
+                        <h3 className="user-billing-ledger-title">{detail.user?.displayName || detail.user?.email || '用户积分账户'}</h3>
+                        <p className="panel-caption user-management-overview-copy">余额、调整操作、使用明细与获取历史集中展示。</p>
+                      </div>
+                      <div className="user-billing-balance-card">
+                        <span>当前余额</span>
+                        <strong>{billingDetail.credits.balance.toLocaleString()}</strong>
+                        <small>credits</small>
+                      </div>
+                    </section>
+
+                    <section className="user-billing-summary-strip">
+                      <div>
+                        <span>累计获得</span>
+                        <strong>+{billingDetail.credits.totalEarned.toLocaleString()}</strong>
+                        <small>历史累计入账</small>
+                      </div>
+                      <div>
+                        <span>累计消费</span>
+                        <strong>-{billingDetail.credits.totalConsumed.toLocaleString()}</strong>
+                        <small>{billingDetail.usageRecords.total} 个消费会话</small>
+                      </div>
+                      <div>
+                        <span>最后充值</span>
+                        <strong title={formatDateTime(billingDetail.credits.lastRechargeAt)}>{formatCompactRelativeTime(billingDetail.credits.lastRechargeAt, summaryClock)}</strong>
+                        <small>最近入账参考</small>
+                      </div>
+                    </section>
+
+                    <section className="user-billing-section user-billing-adjust-section">
+                      <div className="user-billing-section-head">
+                        <div>
+                          <h3>人工调整</h3>
+                          <p className="panel-caption">为当前用户人工增加积分，并记录调整原因。</p>
+                        </div>
+                      </div>
+                      <div className="user-billing-adjust-form">
+                        <label>
+                          <span>增加积分</span>
+                          <input
+                            type="number"
+                            min={1}
+                            step={1}
+                            value={adjustAmount}
+                            onChange={(event) => setAdjustAmount(event.target.value)}
+                            placeholder="输入正整数"
+                          />
+                        </label>
+                        <label>
+                          <span>调整原因</span>
+                          <input
+                            type="text"
+                            value={adjustReason}
+                            onChange={(event) => setAdjustReason(event.target.value)}
+                            placeholder="例如：人工充值 / 测试补偿"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className="secondary-btn user-billing-adjust-submit"
+                          onClick={() => void handleAdjustCredits()}
+                          disabled={!canSubmitAdjust}
+                        >
+                          {adjustLoading ? '调整中...' : '确认调整'}
+                        </button>
+                      </div>
+                      {adjustMessage ? (
+                        <p
+                          className={`user-billing-adjust-message ${adjustMessage.tone === 'error' ? 'error' : 'success'}`}
+                        >
+                          {adjustMessage.text}
+                        </p>
+                      ) : null}
+                    </section>
+
+                    <section className="user-billing-section">
+                      <div className="user-billing-section-head">
+                        <div>
+                          <h3>使用明细</h3>
+                          <p className="panel-caption">按 session 聚合展示，不在用户侧暴露模型信息。</p>
+                        </div>
+                        <span className="user-management-overview-record-count">共 {billingDetail.usageRecords.total} 个 session</span>
+                      </div>
+                      {billingDetail.usageRecords.items.length > 0 ? (
+                        <div className="user-billing-table user-billing-usage-table">
+                          {billingDetail.usageRecords.items.map((item) => (
+                            <div key={item.id} className="user-billing-row user-billing-usage-row">
+                              <div className="user-billing-row-main">
+                                <button
+                                  type="button"
+                                  className="record-title-link"
+                                  onClick={() => {
+                                    if (onOpenConversation && detailJumpOrigin) onOpenConversation(item.sessionId, detailJumpOrigin);
+                                  }}
+                                >
+                                  {item.sessionTitle || '未命名会话'}
+                                </button>
+                                <span className="mono">{truncateMiddle(item.sessionId, 10, 8)}</span>
+                              </div>
+                              <strong className="user-billing-amount negative">-{item.totalCredits.toLocaleString()}</strong>
+                              <span>{Number(item.totalTokens || 0).toLocaleString()} tokens</span>
+                              <span>{item.callCount} 次调用</span>
+                              <span title={formatDateTime(item.lastUsedAt)}>{formatCompactRelativeTime(item.lastUsedAt, summaryClock)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <DetailListEmpty title="当前用户暂无积分使用记录" />
+                      )}
+                    </section>
+
+                    <section className="user-billing-section">
+                      <div className="user-billing-section-head">
+                        <div>
+                          <h3>获取历史</h3>
+                          <p className="panel-caption">充值、活动赠送、后台调整等积分入账记录。</p>
+                        </div>
+                        <span className="user-management-overview-record-count">共 {billingDetail.acquisitionHistory.total} 条</span>
+                      </div>
+                      {billingDetail.acquisitionHistory.items.length > 0 ? (
+                        <div className="user-billing-table user-billing-acquisition-table">
+                          {billingDetail.acquisitionHistory.items.map((item) => (
+                            <div key={item.id} className="user-billing-row user-billing-acquisition-row">
+                              <div className="user-billing-row-main">
+                                <strong>{item.description || (item.type === 'recharge' ? '积分充值' : '积分入账')}</strong>
+                                <span>{item.type}</span>
+                              </div>
+                              <strong className="user-billing-amount positive">+{item.amount.toLocaleString()}</strong>
+                              <span>余额 {item.balanceAfter.toLocaleString()}</span>
+                              <span title={formatDateTime(item.createdAt)}>{formatCompactRelativeTime(item.createdAt, summaryClock)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <DetailListEmpty title="当前用户暂无积分获取记录" />
+                      )}
+                    </section>
+                  </div>
+                ) : (
+                  <DetailListEmpty title="用户计费详情加载失败" />
+                )
+              ) : null}
+
               {!detailLoading && detail && detailTab === 'sandboxes'
                 ? (detail.recentSandboxes.length > 0
                     ? detail.recentSandboxes.map((item) => (
@@ -1000,10 +1227,9 @@ export function UserManagementSection({
                         ))
                       : <DetailListEmpty title="当前用户暂无部署记录" />)
                 : null}
-            </div>
-          </aside>
-        </div>
+          </AdminDetailShell>
       ) : null}
+      <DangerConfirmDialog open={Boolean(statusDangerAction)} title={`${statusDangerAction?.actionLabel || nextStatusLabel}确认`} objectLabel="用户" objectId={statusDangerAction?.userId || selectedUserId} objectName={statusDangerAction?.label || statusDangerAction?.displayName} actionLabel={statusDangerAction?.actionLabel || nextStatusLabel} confirmText={statusDangerAction?.label || statusConfirmText} reasonRequired loading={actionBusy === 'status'} reversibility="partially_reversible" impactItems={statusDangerAction?.currentStatus === 'disabled' ? ['用户将恢复登录与业务访问能力'] : ['用户将无法继续登录或访问用户态能力']} nonImpactItems={['不会删除用户数据', '不会修改计费账本']} onCancel={() => setStatusDangerAction(null)} onConfirm={async () => { if (statusDangerAction) await handleStatusToggle(statusDangerAction); setStatusDangerAction(null); }} />
     </>
   );
 }

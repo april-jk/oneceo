@@ -239,7 +239,8 @@ export default function Sidebar({
   const [location, setLocation] = useLocation();
   const currentPath = React.useMemo(() => location.split("?")[0] || location, [location]);
   const { t } = useTranslation();
-  const { user } = useAuth();
+  const { user, credits } = useAuth();
+  const creditBalanceLabel = credits ? credits.balance.toLocaleString() : "--";
   const { projects: manualProjects } = useSharedManualProjects(user?.id);
   const [expandedProjectGroups, setExpandedProjectGroups] = React.useState<string[]>([]);
   const [expandedProjects, setExpandedProjects] = React.useState<string[]>([]);
@@ -1253,6 +1254,8 @@ export default function Sidebar({
                   onClick={() => {
                     setLocation(`/new-task?new=${Date.now()}`);
                   }}
+                  data-umami-event="sidebar_new_task_click"
+                  data-umami-event-target="/new-task"
                 >
                   <Icon className="w-4 h-4" />
                   {!collapsed && (
@@ -1275,6 +1278,8 @@ export default function Sidebar({
                         ? "bg-sidebar-accent text-sidebar-accent-foreground"
                         : "text-sidebar-foreground hover:bg-sidebar-accent/50"
                   } ${collapsed ? "" : "min-w-0 overflow-hidden"}`}
+                  data-umami-event="sidebar_nav_click"
+                  data-umami-event-target={item.href}
                 >
                   <Icon className="w-4 h-4" />
                   {!collapsed && (
@@ -1665,7 +1670,7 @@ export default function Sidebar({
                     </span>
                   </div>
                   <span className="text-sm font-bold text-foreground">
-                    13,639
+                    {creditBalanceLabel}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">

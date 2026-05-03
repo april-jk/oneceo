@@ -1,13 +1,13 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 
-export type SessionDriver = 'altus' | 'opencode' | 'codex' | 'claudecode';
+export type SessionDriver = 'altus' | 'opencode' | 'codex';
 export type CodexExecutionMode = 'sdk' | 'ws';
 export type CodexTransportMode = 'sdk' | 'app_server';
 
 export function deriveSessionDriver(input: {
   mode?: 'altus' | 'sandbox' | string;
-  executor?: 'opencode' | 'claudecode' | 'codex' | string;
+  executor?: 'opencode' | 'codex' | string;
   fallbackDriver?: SessionDriver | string;
 }): SessionDriver | undefined {
   const mode = typeof input.mode === 'string' ? input.mode.trim() : '';
@@ -19,16 +19,16 @@ export function deriveSessionDriver(input: {
   }
 
   if (mode === 'sandbox') {
-    if (executor === 'opencode' || executor === 'codex' || executor === 'claudecode') {
+    if (executor === 'opencode' || executor === 'codex') {
       return executor;
     }
-    if (fallback === 'opencode' || fallback === 'codex' || fallback === 'claudecode') {
+    if (fallback === 'opencode' || fallback === 'codex') {
       return fallback;
     }
     return undefined;
   }
 
-  if (fallback === 'altus' || fallback === 'opencode' || fallback === 'codex' || fallback === 'claudecode') {
+  if (fallback === 'altus' || fallback === 'opencode' || fallback === 'codex') {
     return fallback;
   }
 
@@ -67,12 +67,12 @@ export interface FileSessionRecord {
   phaseCycle?: number;
   mode?: 'altus' | 'sandbox';
   driver?: SessionDriver;
-  executor?: 'opencode' | 'claudecode' | 'codex' | string;
+  executor?: 'opencode' | 'codex' | string;
   codexExecutionMode?: CodexExecutionMode;
   runtime?: {
     generation?: number;
     orchestratorSessionId?: string;
-    executor?: 'opencode' | 'claudecode' | 'codex' | string;
+    executor?: 'opencode' | 'codex' | string;
     workspaceRoot?: string;
     transport?: CodexTransportMode | string;
     executorSessionId?: string;
@@ -92,6 +92,14 @@ export interface FileSessionRecord {
     | 'scope_boundary'
     | 'integration_target'
     | 'acceptance_requirement';
+  pendingAskUser?: {
+    runId: string;
+    toolCallId: string;
+    toolName: 'ask_user';
+    messageKey: string;
+    question: string;
+    createdAt: string;
+  };
   pendingResume?: {
     stage: NonNullable<FileSessionRecord['stage']>;
     reason?: string;
@@ -584,7 +592,7 @@ class TaskCreationFileMemoryStore {
   }
 
   async updateSessionDriver(sessionId: string, driver: FileSessionRecord['driver']): Promise<void> {
-    if (!driver) return;
+    if (driver !== 'altus' && driver !== 'opencode' && driver !== 'codex') return;
     await this.withLock(async () => {
       const memory = await this.readMemory();
       const session = memory.sessions.find((s) => s.id === sessionId);
@@ -643,6 +651,31 @@ class TaskCreationFileMemoryStore {
       session.titleResolvedAt = nextResolvedAt;
       session.updatedAt = new Date().toISOString();
       await this.writeMemory(memory);
+
+      // 同步标题到数据库 metadata_json，确保消费历史等 DB 查询能获取到正确标题
+      try {
+        const { db } = await import('../../config/database');
+        const { taskCreationSessions } = await import('../../db/schema');
+        const { eq } = await import('drizzle-orm');
+        const [existing] = await db
+          .select({ metadataJson: taskCreationSessions.metadataJson })
+          .from(taskCreationSessions)
+          .where(eq(taskCreationSessions.id, sessionId))
+          .limit(1);
+        if (existing) {
+          const currentMeta = (existing.metadataJson as Record<string, unknown>) || {};
+          await db
+            .update(taskCreationSessions)
+            .set({
+              metadataJson: { ...currentMeta, title: nextTitle },
+              updatedAt: new Date(),
+            })
+            .where(eq(taskCreationSessions.id, sessionId));
+        }
+      } catch (syncErr) {
+        // 数据库同步失败不影响主流程（文件存储已更新）
+        console.error('同步会话标题到数据库失败:', syncErr);
+      }
     });
   }
 
@@ -768,7 +801,7 @@ class TaskCreationFileMemoryStore {
     runtime: {
       generation?: number;
       orchestratorSessionId?: string;
-      executor?: 'opencode' | 'claudecode' | 'codex' | string;
+      executor?: 'opencode' | 'codex' | string;
       workspaceRoot?: string;
       transport?: CodexTransportMode | string;
       executorSessionId?: string;
@@ -914,7 +947,12 @@ class TaskCreationFileMemoryStore {
     sessionId: string,
     question: string,
     options?: string[],
-    clarificationType?: FileSessionRecord['pendingClarificationType']
+    clarificationType?: FileSessionRecord['pendingClarificationType'],
+    askUser?: {
+      runId: string;
+      toolCallId: string;
+      messageKey: string;
+    }
   ): Promise<void> {
     await this.withLock(async () => {
       const memory = await this.readMemory();
@@ -923,6 +961,16 @@ class TaskCreationFileMemoryStore {
       session.pendingQuestion = question;
       session.pendingOptions = options;
       session.pendingClarificationType = clarificationType;
+      session.pendingAskUser = askUser
+        ? {
+            runId: askUser.runId,
+            toolCallId: askUser.toolCallId,
+            toolName: 'ask_user',
+            messageKey: askUser.messageKey,
+            question,
+            createdAt: new Date().toISOString(),
+          }
+        : undefined;
       session.status = 'waiting_user';
       session.stage = 'clarifying';
       session.updatedAt = new Date().toISOString();
@@ -938,6 +986,7 @@ class TaskCreationFileMemoryStore {
       session.pendingQuestion = undefined;
       session.pendingOptions = undefined;
       session.pendingClarificationType = undefined;
+      session.pendingAskUser = undefined;
       if (session.status === 'waiting_user') {
         session.status = 'in_progress';
       }

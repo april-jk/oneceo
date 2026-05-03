@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { tavilyConnector } from '../connectors/tavily-connector';
 import { ensureNekoDebug } from './sandbox-debug-service';
@@ -15,6 +16,10 @@ import {
   type AltusManagedDeploymentToolName,
 } from './altus-managed-deployment-tool-service';
 import {
+  altusManagedResourceToolService,
+  type AltusManagedResourceToolName,
+} from './altus-managed-resource-tool-service';
+import {
   asText,
   buildManagedMcpToolName,
   type ManagedCompletionAttachment,
@@ -23,10 +28,17 @@ import {
   type ManagedSkillContext,
 } from './altus-managed-shared';
 import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-service';
+import type { TaskClarificationType } from './task-intent-shape-service';
 
 export type ManagedToolResult =
   | { type: 'result'; content: string; activatedSkills?: ManagedSkillContext[] }
-  | { type: 'ask_user'; question: string; options?: string[]; activatedSkills?: ManagedSkillContext[] }
+  | {
+      type: 'ask_user';
+      question: string;
+      options?: string[];
+      clarificationType?: Exclude<TaskClarificationType, 'none'>;
+      activatedSkills?: ManagedSkillContext[];
+    }
   | {
       type: 'complete';
       summary: string;
@@ -36,6 +48,7 @@ export type ManagedToolResult =
     };
 
 type ManagedTodoStatus = 'pending' | 'in_progress' | 'completed';
+type ShellRunMode = 'auto' | 'foreground' | 'background_service';
 
 type ManagedTodoItem = {
   content: string;
@@ -74,6 +87,12 @@ function asStringArray(value: unknown, maxItems: number) {
   return result;
 }
 
+function normalizeShellRunMode(value: unknown): ShellRunMode {
+  const text = asText(value).toLowerCase();
+  if (text === 'foreground' || text === 'background_service') return text;
+  return 'auto';
+}
+
 function isManagedTodoStatus(value: string): value is ManagedTodoStatus {
   return value === 'pending' || value === 'in_progress' || value === 'completed';
 }
@@ -88,22 +107,228 @@ function truncate(value: string, limit = 16000) {
   return `${value.slice(0, limit)}\n...[truncated]`;
 }
 
-function normalizeDebugTargetUrl(value: unknown) {
-  const raw = asText(value);
+type NormalizedDebugTarget = {
+  targetUrl: string;
+  protocol: 'http' | 'https' | 'file';
+  localFilePath?: string;
+};
+
+type BrowserInteractAction =
+  | 'locator_click'
+  | 'text_click'
+  | 'coordinate_click'
+  | 'locator_fill'
+  | 'keyboard_type'
+  | 'keyboard_press'
+  | 'mouse_wheel'
+  | 'wait_for_locator'
+  | 'wait_for_text'
+  | 'wait_for_load_state'
+  | 'wait_for_timeout';
+
+function isInsidePath(parent: string, child: string) {
+  const relative = path.posix.relative(parent, child);
+  return relative === '' || (!!relative && !relative.startsWith('..') && !path.posix.isAbsolute(relative));
+}
+
+function normalizeDebugTargetUrl(value: unknown, workspaceRoot: string): NormalizedDebugTarget {
+  const raw = asText(value).trim();
   if (!raw) {
     throw new Error('debug_open_page_missing_url');
   }
+  const hasScheme = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(raw);
+  const looksLikeLocalOrIp =
+    /^(localhost|(?:\d{1,3}\.){3}\d{1,3}|\[[0-9a-f:]+\])(?::\d+)?(?:[/?#].*)?$/i.test(raw);
+  const candidate = raw.startsWith('//')
+    ? `http:${raw}`
+    : looksLikeLocalOrIp
+      ? `http://${raw}`
+      : hasScheme
+        ? raw
+        : `https://${raw}`;
   let parsed: URL;
   try {
-    parsed = new URL(raw);
+    parsed = new URL(candidate);
   } catch {
     throw new Error(`debug_open_page_invalid_url:Please provide a full URL like http://127.0.0.1:3000/folder1/`);
   }
   const protocol = parsed.protocol.toLowerCase();
+  if (protocol === 'file:') {
+    const workspace = path.posix.resolve(workspaceRoot);
+    const localFilePath = path.posix.resolve(decodeURIComponent(parsed.pathname));
+    if (!isInsidePath(workspace, localFilePath)) {
+      throw new Error('debug_open_page_file_outside_workspace:Only workspace files can be opened in the debug browser');
+    }
+    return {
+      targetUrl: pathToFileURL(localFilePath).toString(),
+      protocol: 'file',
+      localFilePath,
+    };
+  }
   if (protocol !== 'http:' && protocol !== 'https:') {
     throw new Error('debug_open_page_invalid_protocol:Only http:// or https:// is allowed');
   }
-  return parsed.toString();
+  return {
+    targetUrl: parsed.toString(),
+    protocol: protocol === 'https:' ? 'https' : 'http',
+  };
+}
+
+function normalizeBrowserInteractAction(value: unknown): BrowserInteractAction {
+  const text = asText(value).toLowerCase();
+  if (
+    text === 'locator_click' ||
+    text === 'text_click' ||
+    text === 'coordinate_click' ||
+    text === 'locator_fill' ||
+    text === 'keyboard_type' ||
+    text === 'keyboard_press' ||
+    text === 'mouse_wheel' ||
+    text === 'wait_for_locator' ||
+    text === 'wait_for_text' ||
+    text === 'wait_for_load_state' ||
+    text === 'wait_for_timeout'
+  ) {
+    return text;
+  }
+  throw new Error('browser_interact_invalid_action');
+}
+
+function normalizeScrollDirection(value: unknown) {
+  const text = asText(value).toLowerCase();
+  if (text === 'up' || text === 'left' || text === 'right') return text;
+  return 'down';
+}
+
+function normalizeLoadState(value: unknown) {
+  const text = asText(value).toLowerCase();
+  if (text === 'load' || text === 'networkidle') return text;
+  return 'domcontentloaded';
+}
+
+function buildBrowserInteractCommand(input: {
+  action: BrowserInteractAction;
+  selector?: string;
+  text?: string;
+  key?: string;
+  direction?: string;
+  loadState?: string;
+  pixels?: number;
+  x?: number | null;
+  y?: number | null;
+  timeoutMs?: number;
+  description?: string;
+  cdpPort: number;
+}) {
+  const payload = {
+    action: input.action,
+    selector: asText(input.selector),
+    text: asText(input.text),
+    key: asText(input.key),
+    direction: normalizeScrollDirection(input.direction),
+    loadState: normalizeLoadState(input.loadState),
+    pixels: Math.max(1, Math.min(Math.floor(Number(input.pixels) || 600), 5000)),
+    x: typeof input.x === 'number' && Number.isFinite(input.x) ? input.x : null,
+    y: typeof input.y === 'number' && Number.isFinite(input.y) ? input.y : null,
+    timeoutMs: Math.max(100, Math.min(Math.floor(Number(input.timeoutMs) || 5000), 30000)),
+    description: asText(input.description),
+    cdpEndpoint: `http://127.0.0.1:${input.cdpPort}`,
+  };
+
+  return `
+set -euo pipefail
+export NODE_PATH="$(npm root -g 2>/dev/null || true)"
+ONECEO_BROWSER_ACTION=${shellEscape(JSON.stringify(payload))} node <<'NODE'
+const { chromium } = require('playwright');
+
+const payload = JSON.parse(process.env.ONECEO_BROWSER_ACTION || '{}');
+
+async function pickPage(browser) {
+  for (const context of browser.contexts()) {
+    const pages = context.pages();
+    const meaningful = pages.filter((page) => {
+      const url = page.url();
+      return url && url !== 'about:blank';
+    });
+    if (meaningful.length > 0) return meaningful[meaningful.length - 1];
+    if (pages.length > 0) return pages[pages.length - 1];
+  }
+  throw new Error('browser_interact_no_page');
+}
+
+async function main() {
+  const browser = await chromium.connectOverCDP(payload.cdpEndpoint);
+  try {
+    const page = await pickPage(browser);
+    const timeout = Number(payload.timeoutMs || 5000);
+    const selector = String(payload.selector || '');
+    const text = String(payload.text || '');
+    const action = String(payload.action || '');
+
+    if (action === 'locator_click') {
+      if (!selector) throw new Error('browser_interact_locator_click_missing_selector');
+      await page.locator(selector).first().click({ timeout });
+    } else if (action === 'text_click') {
+      if (!text) throw new Error('browser_interact_text_click_missing_text');
+      await page.getByText(text, { exact: false }).first().click({ timeout });
+    } else if (action === 'coordinate_click') {
+      if (typeof payload.x !== 'number' || typeof payload.y !== 'number') {
+        throw new Error('browser_interact_coordinate_click_missing_point');
+      }
+      await page.mouse.click(payload.x, payload.y);
+    } else if (action === 'locator_fill') {
+      if (!selector) throw new Error('browser_interact_locator_fill_missing_selector');
+      if (!text) throw new Error('browser_interact_locator_fill_missing_text');
+      await page.locator(selector).first().fill(text, { timeout });
+    } else if (action === 'keyboard_type') {
+      if (!text) throw new Error('browser_interact_keyboard_type_missing_text');
+      await page.keyboard.type(text);
+    } else if (action === 'keyboard_press') {
+      if (!payload.key) throw new Error('browser_interact_keyboard_press_missing_key');
+      await page.keyboard.press(String(payload.key));
+    } else if (action === 'mouse_wheel') {
+      const pixels = Number(payload.pixels || 600);
+      const direction = String(payload.direction || 'down');
+      const dx = direction === 'left' ? -pixels : direction === 'right' ? pixels : 0;
+      const dy = direction === 'up' ? -pixels : direction === 'down' ? pixels : 0;
+      await page.mouse.wheel(dx, dy);
+    } else if (action === 'wait_for_locator') {
+      if (!selector) throw new Error('browser_interact_wait_for_locator_missing_selector');
+      await page.locator(selector).first().waitFor({ state: 'visible', timeout });
+    } else if (action === 'wait_for_text') {
+      if (!text) throw new Error('browser_interact_wait_for_text_missing_text');
+      if (selector) {
+        await page.locator(selector).filter({ hasText: text }).first().waitFor({ state: 'visible', timeout });
+      } else {
+        await page.getByText(text, { exact: false }).first().waitFor({ state: 'visible', timeout });
+      }
+    } else if (action === 'wait_for_load_state') {
+      await page.waitForLoadState(String(payload.loadState || 'domcontentloaded'), { timeout });
+    } else if (action === 'wait_for_timeout') {
+      await page.waitForTimeout(timeout);
+    } else {
+      throw new Error('browser_interact_invalid_action');
+    }
+
+    await page.waitForLoadState('domcontentloaded', { timeout: Math.min(timeout, 5000) }).catch(() => undefined);
+    console.log(JSON.stringify({
+      ok: true,
+      action,
+      description: payload.description || '',
+      url: page.url(),
+      title: await page.title().catch(() => ''),
+    }));
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
+}
+
+main().catch((error) => {
+  console.error(error && error.stack ? error.stack : String(error));
+  process.exit(1);
+});
+NODE
+`;
 }
 
 function isManagedDeploymentToolName(value: string): value is AltusManagedDeploymentToolName {
@@ -112,6 +337,16 @@ function isManagedDeploymentToolName(value: string): value is AltusManagedDeploy
     value === 'redeploy_application' ||
     value === 'rollback_application_deployment' ||
     value === 'get_application_deployment_status'
+  );
+}
+
+function isManagedResourceToolName(value: string): value is AltusManagedResourceToolName {
+  return (
+    value === 'ensure_project_database' ||
+    value === 'get_project_database_status' ||
+    value === 'inspect_project_database_schema' ||
+    value === 'ensure_project_storage_bucket' ||
+    value === 'get_project_storage_status'
   );
 }
 
@@ -162,6 +397,78 @@ function isPersistentLocalServerCommand(value: string) {
     normalized.includes('bun dev') ||
     normalized.includes('vite dev') ||
     normalized === 'vite'
+  );
+}
+
+function sanitizeBackgroundServiceCommand(value: string) {
+  let command = asText(value).trim();
+  command = command.replace(/^\s*nohup\s+/i, '');
+  command = command.replace(/\s*&\s*$/g, '').trim();
+  return command;
+}
+
+function inferServicePort(command: string) {
+  const normalized = normalizeCommandForMatch(command);
+  const portEnv = command.match(/\bPORT=(\d{2,5})\b/);
+  if (portEnv) return Number(portEnv[1]);
+  const longPort = command.match(/(?:--port|-p)\s+(\d{2,5})\b/);
+  if (longPort) return Number(longPort[1]);
+  const httpServer = command.match(/python3?\s+-m\s+http\.server(?:\s+(\d{2,5}))?/i);
+  if (httpServer) return Number(httpServer[1] || 8000);
+  if (normalized.includes('vite') || normalized.includes('pnpm dev') || normalized.includes('npm run dev')) {
+    return 5173;
+  }
+  return 0;
+}
+
+function isLegacyNotionMcpShellCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('@notionhq/mcp-cli') ||
+    normalized.includes('notion-mcp') ||
+    normalized.includes('mcp.notion.com') ||
+    normalized.includes('notion mcp cli')
+  );
+}
+
+function isLegacyFigmaMcpShellCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('figma-mcp') ||
+    normalized.includes('figma mcp') ||
+    normalized.includes('@composio/cli add') && normalized.includes('figma') ||
+    normalized.includes('x-figma-token') ||
+    normalized.includes('figma_personal_access_token') ||
+    normalized.includes('figma access token')
+  );
+}
+
+function isLegacySupabaseMcpShellCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('supabase-mcp') ||
+    normalized.includes('supabase mcp') ||
+    (normalized.includes('@composio/cli add') && normalized.includes('supabase')) ||
+    normalized.includes('mcp.supabase.com') ||
+    normalized.includes('supabase_access_token') ||
+    normalized.includes('supabase personal access token')
+  );
+}
+
+function isLegacySlackMcpShellCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('slack-mcp') ||
+    normalized.includes('slack mcp') ||
+    (normalized.includes('@composio/cli add') && normalized.includes('slack')) ||
+    normalized.includes('mcp.slack.com') ||
+    normalized.includes('slack_access_token') ||
+    normalized.includes('slack bot token') ||
+    normalized.includes('slack user token')
   );
 }
 
@@ -235,6 +542,40 @@ export class AltusManagedToolRuntime {
         ]
       >
     );
+  }
+
+  private buildRawMcpToolMap() {
+    const providers = Array.isArray(this.input.mcpProviders) ? this.input.mcpProviders : [];
+    const singletons = new Map<
+      string,
+      { providerId: string; toolName: string; displayName: string; connectorKey: string | null }
+    >();
+    const duplicates = new Set<string>();
+
+    for (const provider of providers) {
+      for (const tool of Array.isArray(provider.tools) ? provider.tools : []) {
+        const rawToolName = asText(tool.toolName);
+        if (!rawToolName) {
+          continue;
+        }
+        if (duplicates.has(rawToolName)) {
+          continue;
+        }
+        if (singletons.has(rawToolName)) {
+          singletons.delete(rawToolName);
+          duplicates.add(rawToolName);
+          continue;
+        }
+        singletons.set(rawToolName, {
+          providerId: provider.providerId,
+          toolName: rawToolName,
+          displayName: tool.title || rawToolName,
+          connectorKey: asText(provider.connectorKey) || null,
+        });
+      }
+    }
+
+    return singletons;
   }
 
   private normalizeMcpFailureMessage(input: {
@@ -442,6 +783,120 @@ export class AltusManagedToolRuntime {
     await this.markWorkspaceDirty('managed_frontend_build_prepare');
   }
 
+  private parseShellFlag(stdout: string, key: string) {
+    const flags = this.parseInspectionFlags(stdout);
+    return flags.get(key) || '';
+  }
+
+  private async startControlledBackgroundService(
+    command: string,
+    cwd: string,
+    signal?: AbortSignal
+  ) {
+    const serviceCommand = sanitizeBackgroundServiceCommand(command);
+    if (!serviceCommand) {
+      throw new Error('shell_execute_background_service_missing_command');
+    }
+    const port = inferServicePort(serviceCommand);
+    const serviceId = `managed-${this.input.sessionId}-${Date.now()}`;
+    const serviceDir = `/tmp/oneceo-managed-services/${this.input.sessionId}`;
+    const logPath = `${serviceDir}/${serviceId}.log`;
+    const pidPath = `${serviceDir}/${serviceId}.pid`;
+    const serviceUrl = port > 0 ? `http://127.0.0.1:${port}/` : '';
+    const script = [
+      `service_id=${shellEscape(serviceId)}`,
+      `service_dir=${shellEscape(serviceDir)}`,
+      `log_path=${shellEscape(logPath)}`,
+      `pid_path=${shellEscape(pidPath)}`,
+      `service_command=${shellEscape(serviceCommand)}`,
+      `service_port=${port}`,
+      'mkdir -p "$service_dir"',
+      'service_status="starting"',
+      'if [ "$service_port" -gt 0 ] && (ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null || true) | grep -q ":${service_port} "; then',
+      '  service_status="already_running"',
+      '  echo "__ONECEO_SERVICE_ALREADY_RUNNING__=1"',
+      'else',
+      '  setsid sh -lc "$service_command" > "$log_path" 2>&1 < /dev/null &',
+      '  service_pid=$!',
+      '  echo "$service_pid" > "$pid_path"',
+      '  echo "__ONECEO_SERVICE_PID__=$service_pid"',
+      '  sleep 1',
+      '  if ! kill -0 "$service_pid" 2>/dev/null; then',
+      '    service_status="start_failed"',
+      '    echo "__ONECEO_SERVICE_START_FAILED__=1"',
+      '    tail -n 80 "$log_path" 2>/dev/null || true',
+      '  fi',
+      'fi',
+      'if [ "$service_status" != "start_failed" ] && [ "$service_port" -gt 0 ]; then',
+      '  service_url="http://127.0.0.1:${service_port}/"',
+      '  health_ready=0',
+      '  for i in 1 2 3 4 5 6 7 8; do',
+      '    if curl -k -L -sS --max-time 2 -o /tmp/oneceo_service_probe_${service_port}.html -w "%{http_code}" "$service_url" 2>/tmp/oneceo_service_probe_${service_port}.err | grep -Eq "^(2|3)[0-9][0-9]$"; then',
+      '      health_ready=1',
+      '      break',
+      '    fi',
+      '    sleep 1',
+      '  done',
+      '  if [ "$health_ready" = "1" ]; then',
+      '    service_status="ready"',
+      '    echo "__ONECEO_SERVICE_URL__=$service_url"',
+      '  else',
+      '    service_status="health_pending"',
+      '    echo "__ONECEO_SERVICE_HEALTH_PENDING__=$service_url"',
+      '    cat /tmp/oneceo_service_probe_${service_port}.err 2>/dev/null || true',
+      '    tail -n 80 "$log_path" 2>/dev/null || true',
+      '  fi',
+      'fi',
+      'echo "__ONECEO_SERVICE_ID__=$service_id"',
+      'echo "__ONECEO_SERVICE_STATUS__=$service_status"',
+      'echo "__ONECEO_SERVICE_PORT__=$service_port"',
+      'echo "__ONECEO_SERVICE_LOG__=$log_path"',
+      'echo "__ONECEO_SERVICE_PID_FILE__=$pid_path"',
+      'exit 0',
+    ].join('\n');
+    const result = await this.runShell(
+      script,
+      {
+        cwd,
+        timeoutMs: 20000,
+      },
+      signal
+    );
+    const stdout = truncate(asText((result as any)?.stdout), 6000);
+    const stderr = truncate(asText((result as any)?.stderr), 2000);
+    if (stdout.includes('__ONECEO_SERVICE_START_FAILED__')) {
+      throw new Error(`shell_execute_background_service_start_failed:${stderr || stdout || 'unknown error'}`);
+    }
+    const status = this.parseShellFlag(stdout, '__ONECEO_SERVICE_STATUS__') || 'unknown';
+    const pid = this.parseShellFlag(stdout, '__ONECEO_SERVICE_PID__');
+    const url =
+      this.parseShellFlag(stdout, '__ONECEO_SERVICE_URL__') ||
+      this.parseShellFlag(stdout, '__ONECEO_SERVICE_HEALTH_PENDING__') ||
+      serviceUrl;
+    await this.markWorkspaceDirty('managed_shell_background_service');
+    return {
+      type: 'result' as const,
+      content: JSON.stringify({
+        cwd: this.relativeForDisplay(this.resolveWorkspacePath(cwd, { allowWorkspaceRoot: true })),
+        exitCode: 0,
+        stdout,
+        stderr,
+        runMode: 'background_service',
+        service: {
+          id: serviceId,
+          status,
+          command: serviceCommand,
+          pid: pid ? Number(pid) : null,
+          port: port || null,
+          url: url || null,
+          logPath,
+          pidPath,
+        },
+        nextSuggestedTool: url ? 'debug_open_page' : undefined,
+      }),
+    };
+  }
+
   private compactSearchContent(value: string, limit = 1200) {
     return truncate(asText(value), limit);
   }
@@ -460,6 +915,15 @@ export class AltusManagedToolRuntime {
   private findAutoAttachableSkillsForTool(toolName: string) {
     const normalizedToolName = asText(toolName).toLowerCase();
     if (!normalizedToolName) return [];
+    const toolNameCandidates = new Set([normalizedToolName]);
+    const managedMcpMatch = normalizedToolName.match(/^mcp__(.+)__[a-f0-9]{12}$/);
+    if (managedMcpMatch?.[1]) {
+      toolNameCandidates.add(managedMcpMatch[1]);
+    }
+    const managedMcpTool = this.buildMcpToolMap().get(normalizedToolName);
+    if (managedMcpTool?.toolName) {
+      toolNameCandidates.add(asText(managedMcpTool.toolName).toLowerCase());
+    }
     const activeKeys = new Set(
       this.input.activeSkills.map((item) => `${item.sourceType}:${item.skillId}:${item.revisionId}`)
     );
@@ -467,7 +931,9 @@ export class AltusManagedToolRuntime {
     return availableSkills.filter((skill) => {
       const governance = skill.governance;
       if (!governance?.autoActivation?.enabled) return false;
-      if (!governance.autoActivation.toolNames.includes(normalizedToolName)) return false;
+      if (!governance.autoActivation.toolNames.some((name) => toolNameCandidates.has(asText(name).toLowerCase()))) {
+        return false;
+      }
       const key = `${skill.sourceType}:${skill.skillId}:${skill.revisionId}`;
       return !activeKeys.has(key);
     });
@@ -619,7 +1085,8 @@ export class AltusManagedToolRuntime {
       };
     }
 
-    const mcpTool = this.buildMcpToolMap().get(toolName);
+    const mcpTool =
+      this.buildMcpToolMap().get(toolName) || this.buildRawMcpToolMap().get(toolName);
     if (mcpTool) {
       if (mcpTool.connectorKey) {
         const activeGuide = await connectorGuideService.getActiveGuideForConnector(
@@ -682,9 +1149,53 @@ export class AltusManagedToolRuntime {
       if (!command) {
         throw new Error('shell_execute_missing_command');
       }
-      if (isPersistentLocalServerCommand(command)) {
+      const runMode = normalizeShellRunMode(rawArgs.runMode);
+      if (
+        isLegacyNotionMcpShellCommand(command) &&
+        (await connectorGuideService.getActiveGuideForConnector(this.input.sessionId, 'notion'))
+      ) {
         throw new Error(
-          'shell_execute_persistent_local_server_blocked:检测到本地常驻服务启动命令。managed shell_execute 不适合直接拉起这类本地预览或开发服务，请改用专用调试工具，或继续执行不会常驻的检查命令。'
+          [
+            'notion_legacy_mcp_shell_blocked:当前会话的 Notion 已通过 oneceo API broker + Composio Tool Router 挂载。',
+            '禁止在 sandbox 内安装或运行 @notionhq/mcp-cli / notion-mcp / mcp.notion.com。',
+            '请先调用 load_connector_guide(connectorKey=notion)，然后使用已挂载的 notion__COMPOSIO_SEARCH_TOOLS、notion__COMPOSIO_GET_TOOL_SCHEMAS、notion__COMPOSIO_MULTI_EXECUTE_TOOL。',
+          ].join('\n')
+        );
+      }
+      if (
+        isLegacyFigmaMcpShellCommand(command) &&
+        (await connectorGuideService.getActiveGuideForConnector(this.input.sessionId, 'figma'))
+      ) {
+        throw new Error(
+          [
+            'figma_legacy_mcp_shell_blocked: Figma is attached through oneceo API broker + Composio Tool Router.',
+            'Do not install or run local Figma MCP tooling, and do not place Figma tokens in the sandbox.',
+            'Call load_connector_guide(connectorKey=figma), then use the attached figma__COMPOSIO_SEARCH_TOOLS and related Figma router tools.',
+          ].join('\n')
+        );
+      }
+      if (
+        isLegacySupabaseMcpShellCommand(command) &&
+        (await connectorGuideService.getActiveGuideForConnector(this.input.sessionId, 'supabase'))
+      ) {
+        throw new Error(
+          [
+            'supabase_legacy_mcp_shell_blocked: Supabase is attached through oneceo API broker + Composio Tool Router.',
+            'Do not install or run local Supabase MCP tooling, and do not place Supabase or Composio tokens in the sandbox.',
+            'Call load_connector_guide(connectorKey=supabase), then use the attached supabase__COMPOSIO_SEARCH_TOOLS and related Supabase router tools.',
+          ].join('\n')
+        );
+      }
+      if (
+        isLegacySlackMcpShellCommand(command) &&
+        (await connectorGuideService.getActiveGuideForConnector(this.input.sessionId, 'slack'))
+      ) {
+        throw new Error(
+          [
+            'slack_legacy_mcp_shell_blocked: Slack is attached through oneceo API broker + Composio Tool Router.',
+            'Do not install or run local Slack MCP tooling, and do not place Slack or Composio tokens in the sandbox.',
+            'Call load_connector_guide(connectorKey=slack), then use the attached slack__COMPOSIO_SEARCH_TOOLS and related Slack router tools.',
+          ].join('\n')
         );
       }
       if (
@@ -696,6 +1207,17 @@ export class AltusManagedToolRuntime {
         );
       }
       const cwd = asText(rawArgs.cwd) || '.';
+      if (isPersistentLocalServerCommand(command)) {
+        if (runMode === 'foreground') {
+          throw new Error(
+            'shell_execute_persistent_local_server_foreground_blocked:检测到本地常驻服务启动命令。请使用 runMode=background_service 或保持 runMode=auto 交给平台托管。'
+          );
+        }
+        return {
+          activatedSkills,
+          ...(await this.startControlledBackgroundService(command, cwd, signal)),
+        };
+      }
       await this.prepareFrontendBuildWorkspace(command, cwd, signal);
       const result = await this.runShell(command, {
         cwd,
@@ -718,7 +1240,8 @@ export class AltusManagedToolRuntime {
     }
 
     if (toolName === 'debug_open_page') {
-      const targetUrl = normalizeDebugTargetUrl(rawArgs.url);
+      const normalizedTarget = normalizeDebugTargetUrl(rawArgs.url, this.input.workspaceRoot);
+      const targetUrl = normalizedTarget.targetUrl;
       const ensureDebug = rawArgs.ensureDebug === undefined ? true : asBoolean(rawArgs.ensureDebug);
       const cdpPort = asPositiveInt(process.env.NEKO_CDP_PORT, 9222, 65535);
       let debugInfo: Awaited<ReturnType<typeof ensureNekoDebug>> | null = null;
@@ -746,18 +1269,87 @@ export class AltusManagedToolRuntime {
       }
 
       const encodedUrl = encodeURIComponent(targetUrl);
+      const escapedTargetUrl = shellEscape(targetUrl);
       const command = [
         `cdp_port=${cdpPort}`,
+        `target_url=${escapedTargetUrl}`,
+        `target_protocol=${shellEscape(normalizedTarget.protocol)}`,
+        `target_file=${shellEscape(normalizedTarget.localFilePath || '')}`,
         `encoded_url=${shellEscape(encodedUrl)}`,
-        'endpoint="http://127.0.0.1:${cdp_port}/json/new?${encoded_url}"',
-        'if curl -fsS -X PUT "$endpoint"; then',
-        '  echo "\\n__OPENED_BY__=PUT"',
-        'elif curl -fsS "$endpoint"; then',
-        '  echo "\\n__OPENED_BY__=GET"',
+        'debug_status="ok"',
+        'probe_file="/tmp/oneceo_debug_target_probe_${cdp_port}.html"',
+        'if [ "$target_protocol" = "file" ]; then',
+        '  if [ -f "$target_file" ]; then',
+        '    probe_effective_url="$target_url"',
+        '    echo "__ONECEO_DEBUG_TARGET_FILE_READY__=$target_file"',
+        '  else',
+        '    debug_status="target_file_missing"',
+        '    echo "__ONECEO_DEBUG_TARGET_FILE_MISSING__=$target_file"',
+        '  fi',
         'else',
-        '  echo "__ONECEO_DEBUG_OPEN_PAGE_FAILED__"',
-        '  exit 1',
+        '  probe_result=$(curl -k -L -sS --max-time 8 -o "$probe_file" -w "%{http_code} %{url_effective}" "$target_url" 2>&1) || debug_status="target_unreachable"',
+        '  if [ "$debug_status" = "target_unreachable" ]; then',
+        '    echo "__ONECEO_DEBUG_TARGET_UNREACHABLE__"',
+        '    echo "$probe_result"',
+        '  else',
+        '    probe_status=$(printf "%s" "$probe_result" | awk \'{print $1}\')',
+        '    probe_effective_url=$(printf "%s" "$probe_result" | cut -d" " -f2-)',
+        '    case "$probe_status" in',
+        '      2*|3*) ;;',
+        '      *)',
+        '        debug_status="target_bad_status"',
+        '        echo "__ONECEO_DEBUG_TARGET_BAD_STATUS__=$probe_status"',
+        '        head -c 800 "$probe_file" 2>/dev/null || true',
+        '        ;;',
+        '    esac',
+        '  fi',
         'fi',
+        'endpoint="http://127.0.0.1:${cdp_port}/json/new?${encoded_url}"',
+        'if [ "$debug_status" = "ok" ]; then',
+        '  if curl -fsS -X PUT "$endpoint"; then',
+        '    echo "\\n__OPENED_BY__=PUT"',
+        '  elif curl -fsS "$endpoint"; then',
+        '    echo "\\n__OPENED_BY__=GET"',
+        '  else',
+        '    debug_status="open_failed"',
+        '    echo "__ONECEO_DEBUG_OPEN_PAGE_FAILED__"',
+        '  fi',
+        'fi',
+        'if [ "$debug_status" = "ok" ]; then',
+        '  tab_ready=0',
+        '  for i in 1 2 3 4 5; do',
+        '    curl -fsS --max-time 2 "http://127.0.0.1:${cdp_port}/json/list" > /tmp/oneceo_debug_tabs_${cdp_port}.json 2>/dev/null || true',
+        '    if python3 - "$target_url" "${probe_effective_url:-}" /tmp/oneceo_debug_tabs_${cdp_port}.json <<\'PY\'',
+        'import json, sys',
+        'target = sys.argv[1]',
+        'effective = sys.argv[2]',
+        'path = sys.argv[3]',
+        'try:',
+        '    tabs = json.load(open(path, "r", encoding="utf-8"))',
+        'except Exception:',
+        '    sys.exit(1)',
+        'for tab in tabs if isinstance(tabs, list) else []:',
+        '    url = str(tab.get("url") or "")',
+        '    title = str(tab.get("title") or "")',
+        '    if url == target or (effective and url == effective):',
+        '        print("__ONECEO_DEBUG_TARGET_TAB_READY__=" + title[:160])',
+        '        sys.exit(0)',
+        'sys.exit(1)',
+        'PY',
+        '    then',
+        '      tab_ready=1',
+        '      break',
+        '    fi',
+        '    sleep 1',
+        '  done',
+        '  if [ "$tab_ready" != "1" ]; then',
+        '    debug_status="tab_not_ready"',
+        '    echo "__ONECEO_DEBUG_TARGET_TAB_NOT_READY__"',
+        '    cat /tmp/oneceo_debug_tabs_${cdp_port}.json 2>/dev/null || true',
+        '  fi',
+        'fi',
+        'echo "__ONECEO_DEBUG_RESULT__=${debug_status}"',
+        'exit 0',
       ].join('\n');
 
       const result = await this.runShell(
@@ -771,7 +1363,15 @@ export class AltusManagedToolRuntime {
       const exitCode = Number((result as any)?.exitCode ?? -1);
       const stdout = truncate(asText((result as any)?.stdout), 4000);
       const stderr = truncate(asText((result as any)?.stderr), 2000);
-      if (exitCode !== 0 || stdout.includes('__ONECEO_DEBUG_OPEN_PAGE_FAILED__')) {
+      if (
+        exitCode !== 0 ||
+        !stdout.includes('__ONECEO_DEBUG_RESULT__=ok') ||
+        stdout.includes('__ONECEO_DEBUG_OPEN_PAGE_FAILED__') ||
+        stdout.includes('__ONECEO_DEBUG_TARGET_UNREACHABLE__') ||
+        stdout.includes('__ONECEO_DEBUG_TARGET_FILE_MISSING__') ||
+        stdout.includes('__ONECEO_DEBUG_TARGET_BAD_STATUS__') ||
+        stdout.includes('__ONECEO_DEBUG_TARGET_TAB_NOT_READY__')
+      ) {
         throw new Error(`debug_open_page_failed:${stderr || stdout || 'unknown error'}`);
       }
 
@@ -786,6 +1386,59 @@ export class AltusManagedToolRuntime {
           status: debugInfo?.status || 'unknown',
           sandboxId: this.input.sandboxId,
           cdpPort,
+          protocol: normalizedTarget.protocol,
+          localFilePath: normalizedTarget.localFilePath,
+          output: stdout,
+        }),
+      };
+    }
+
+    if (toolName === 'browser_interact') {
+      const action = normalizeBrowserInteractAction(rawArgs.action);
+      const cdpPort = asPositiveInt(process.env.NEKO_CDP_PORT, 9222, 65535);
+      const xRaw = Number(rawArgs.x);
+      const yRaw = Number(rawArgs.y);
+      const command = buildBrowserInteractCommand({
+        action,
+        selector: asText(rawArgs.selector),
+        text: asText(rawArgs.text),
+        key: asText(rawArgs.key),
+        direction: asText(rawArgs.direction),
+        loadState: asText(rawArgs.loadState),
+        pixels: asPositiveInt(rawArgs.pixels, 600, 5000),
+        x: Number.isFinite(xRaw) ? xRaw : null,
+        y: Number.isFinite(yRaw) ? yRaw : null,
+        timeoutMs: asPositiveInt(rawArgs.timeoutMs, 5000, 30000),
+        description: asText(rawArgs.description),
+        cdpPort,
+      });
+      const result = await this.runShell(
+        command,
+        {
+          cwd: this.input.workspaceRoot,
+          timeoutMs: asPositiveInt(rawArgs.timeoutMs, 5000, 30000) + 10_000,
+        },
+        signal
+      );
+      const exitCode = Number((result as any)?.exitCode ?? -1);
+      const stdout = truncate(asText((result as any)?.stdout), 4000);
+      const stderr = truncate(asText((result as any)?.stderr), 2000);
+      if (exitCode !== 0) {
+        throw new Error(`browser_interact_failed:${stderr || stdout || 'unknown error'}`);
+      }
+      return {
+        type: 'result',
+        activatedSkills,
+        content: JSON.stringify({
+          action,
+          description: asText(rawArgs.description),
+          selector: asText(rawArgs.selector),
+          text: asText(rawArgs.text),
+          key: asText(rawArgs.key),
+          direction: asText(rawArgs.direction),
+          loadState: normalizeLoadState(rawArgs.loadState),
+          pixels: asPositiveInt(rawArgs.pixels, 600, 5000),
+          cdpPort,
           output: stdout,
         }),
       };
@@ -799,6 +1452,20 @@ export class AltusManagedToolRuntime {
         sandboxId: this.input.sandboxId,
         workspaceRoot: this.input.workspaceRoot,
         notes: asText(rawArgs.notes),
+      });
+      return {
+        type: 'result',
+        activatedSkills,
+        content: JSON.stringify(result),
+      };
+    }
+
+    if (isManagedResourceToolName(toolName)) {
+      const result = await altusManagedResourceToolService.execute({
+        action: toolName,
+        sessionId: this.input.sessionId,
+        userId: this.input.userId,
+        reason: asText(rawArgs.reason),
       });
       return {
         type: 'result',
@@ -1017,11 +1684,21 @@ export class AltusManagedToolRuntime {
       const options = Array.isArray(rawArgs.options)
         ? rawArgs.options.map((item) => asText(item)).filter(Boolean).slice(0, 6)
         : [];
+      const clarificationType = asText(rawArgs.clarificationType);
+      const normalizedClarificationType =
+        clarificationType === 'artifact_type' ||
+        clarificationType === 'tech_stack' ||
+        clarificationType === 'scope_boundary' ||
+        clarificationType === 'integration_target' ||
+        clarificationType === 'acceptance_requirement'
+          ? clarificationType
+          : undefined;
       return {
         type: 'ask_user',
         activatedSkills,
         question,
         options: options.length > 0 ? options : undefined,
+        clarificationType: normalizedClarificationType,
       };
     }
 

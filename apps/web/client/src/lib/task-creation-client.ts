@@ -16,8 +16,8 @@ export type TaskCreationSessionSummary = {
   status?: string;
   stage?: string;
   phase?: string;
-  driver?: "altus" | "opencode" | "claudecode" | "codex";
-  executor?: "opencode" | "claudecode" | "codex";
+  driver?: "altus" | "opencode" | "codex";
+  executor?: "opencode" | "codex";
   codexExecutionMode?: "sdk" | "ws";
   updatedAt?: string;
 };
@@ -58,7 +58,7 @@ export type CreateTaskCreationSessionInput = {
   sessionId?: string;
   title?: string;
   mode?: "sandbox" | "altus";
-  executor?: "opencode" | "claudecode" | "codex";
+  executor?: "opencode" | "codex";
   codexExecutionMode?: "sdk" | "ws";
   projectId?: string | null;
   initialMessage?: string;
@@ -208,6 +208,29 @@ export type TaskCreationDeliverableArtifact = {
   downloadPath?: string;
 };
 
+export type TaskCreationWebsitePreviewSnapshot = {
+  kind: "website_screenshot";
+  status:
+    | "captured"
+    | "capture_unavailable"
+    | "capture_failed"
+    | "storage_failed";
+  storageKey?: string;
+  mimeType?: "image/png";
+  width?: number;
+  height?: number;
+  capturedAt?: string;
+  reasonCode?: string;
+  message?: string;
+  source?: {
+    sandboxId?: string;
+    port?: number;
+    url?: string;
+    command?: string;
+    logPath?: string;
+  };
+};
+
 export type RemoteAttachmentProvider = "website" | "google-drive" | "onedrive";
 
 export type TaskCreationDebugInfo = {
@@ -263,11 +286,68 @@ export type TaskCreationAnalyticsInfo = {
   error?: string;
 };
 
+export type TaskCreationDeploymentAnalyticsRangeKey = "24h" | "7d" | "30d";
+
+export type TaskCreationDeploymentAnalyticsMetric = {
+  name: string;
+  pageviews: number;
+  visitors: number;
+  visits: number;
+  bounces: number;
+  totaltime: number;
+};
+
+export type TaskCreationDeploymentAnalyticsTimeseriesPoint = {
+  x: string;
+  y: number;
+};
+
+export type TaskCreationDeploymentAnalyticsOverview = {
+  updatedAt: string;
+  configured: boolean;
+  enabled: boolean;
+  status:
+    | "bound"
+    | "tracking"
+    | "pending"
+    | "pending_domain"
+    | "unconfigured"
+    | "error"
+    | "empty";
+  message?: string;
+  error?: string;
+  range: {
+    key: TaskCreationDeploymentAnalyticsRangeKey;
+    startAt: string;
+    endAt: string;
+    unit?: "hour" | "day" | "month" | "year";
+    timezone: string;
+  };
+  stats: {
+    pageviews: number;
+    visits: number;
+    visitors: number;
+    bounces: number;
+    totaltime: number;
+  };
+  activeVisitors: number;
+  bounceRate: number;
+  averageVisitDurationSeconds: number;
+  pageviews: {
+    pageviews: TaskCreationDeploymentAnalyticsTimeseriesPoint[];
+    sessions: TaskCreationDeploymentAnalyticsTimeseriesPoint[];
+  };
+  topPages: TaskCreationDeploymentAnalyticsMetric[];
+  referrers: TaskCreationDeploymentAnalyticsMetric[];
+  regions: TaskCreationDeploymentAnalyticsMetric[];
+  devices: TaskCreationDeploymentAnalyticsMetric[];
+};
+
 export type TaskCreationDeploymentResourceBinding = {
   projectKey: string;
   isolationMode: "session" | "default";
   projectModel: "per_user";
-  environmentModel: "per_session";
+  environmentModel: "per_user_project" | "per_session";
   tokenKind: "project";
   tokenScope: "railway_project_environment";
   tokenManagedBy: "oneceo_platform";
@@ -374,15 +454,52 @@ export type TaskCreationDatabaseColumn = {
 export type TaskCreationDatabaseInfo = {
   configured: boolean;
   provider: "railway_postgres";
-  serviceId: string;
-  serviceName: string;
+  status?: "not_configured" | "ready" | "error";
+  serviceId?: string;
+  serviceName?: string;
   volumeId?: string;
   volumeName?: string;
   latestDeploymentStatus?: string;
   latestDeploymentAt?: string;
-  connection: TaskCreationDatabaseConnectionInfo;
+  connection?: TaskCreationDatabaseConnectionInfo;
   tables: TaskCreationDatabaseTable[];
 };
+
+export type TaskCreationStorageStatus = {
+  configured: boolean;
+  provider: "railway_bucket";
+  status: "not_configured" | "ready" | "error";
+  projectKey: string;
+  bucket?: {
+    id: string;
+    name: string;
+    endpoint: string;
+    publicUrl?: string;
+    accessKeyId: string;
+    secretAccessKey?: string;
+  };
+  applicationVariables?: {
+    wired: boolean;
+    keys: string[];
+  };
+  files?: Array<{
+    key: string;
+    sizeBytes?: number;
+    lastModifiedAt?: string;
+  }>;
+  accessModel?: string;
+  lastCheckedAt?: string;
+};
+
+export type TaskCreationStorageUploadTarget = {
+  key: string;
+  method: "POST";
+  url: string;
+  fields: Record<string, string>;
+  expiresInSeconds: number;
+};
+
+export const TASK_CREATION_STORAGE_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
 
 export type TaskCreationDatabaseRowLocator = {
   ctid?: string;
@@ -414,13 +531,13 @@ export type TaskCreationSessionDetail = {
   status?: string;
   stage?: string;
   phase?: string;
-  driver?: "altus" | "opencode" | "claudecode" | "codex";
-  executor?: "opencode" | "claudecode" | "codex";
+  driver?: "altus" | "opencode" | "codex";
+  executor?: "opencode" | "codex";
   codexExecutionMode?: "sdk" | "ws";
   runtime?: {
     generation?: number;
     orchestratorSessionId?: string;
-    executor?: "opencode" | "claudecode" | "codex";
+    executor?: "opencode" | "codex";
     transport?: "sdk" | "app_server";
     executorSessionId?: string;
     opencodeSessionId?: string;
@@ -495,15 +612,6 @@ export type WorkspaceRawHeadResult = {
   ok: boolean;
   status: number;
   networkError?: boolean;
-};
-
-export type CodexRuntimeConfig = {
-  baseUrl: string;
-  model: string;
-  apiKey: string;
-  configToml: string;
-  authJson: string;
-  updatedAt?: string;
 };
 
 async function fetchJson<T>(url: string, init?: RequestInit, options?: { timeoutMs?: number }): Promise<T> {
@@ -727,36 +835,6 @@ export async function createTaskCreationSession(
   }
   const result = (await response.json()) as { data?: TaskCreationSessionSummary };
   return result?.data || null;
-}
-
-export async function getCodexRuntimeConfig(): Promise<CodexRuntimeConfig> {
-  const url = `${getApiBaseUrl()}/api/task-creation/codex/runtime-config`;
-  const result = await fetchJson<{ data?: CodexRuntimeConfig }>(url);
-  if (result?.data) return result.data;
-  throw new Error("failed to load codex runtime config");
-}
-
-export async function updateCodexRuntimeConfig(input: {
-  baseUrl?: string;
-  model?: string;
-  apiKey?: string;
-  configToml?: string;
-  authJson?: string;
-}): Promise<CodexRuntimeConfig> {
-  const url = `${getApiBaseUrl()}/api/task-creation/codex/runtime-config`;
-  const response = await fetch(url, {
-    method: "PUT",
-    headers: buildClientIdentityHeaders({
-      "Content-Type": "application/json",
-    }),
-    body: JSON.stringify(input || {}),
-  });
-  if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
-  }
-  const result = (await response.json()) as { data?: CodexRuntimeConfig };
-  if (result?.data) return result.data;
-  throw new Error("failed to save codex runtime config");
 }
 
 export async function listTaskCreationMessages(sessionId: string): Promise<TaskCreationHistoryMessage[]> {
@@ -1206,6 +1284,20 @@ export async function getTaskCreationDeploymentInfo(
   return result?.data || null;
 }
 
+export async function getTaskCreationDeploymentAnalytics(
+  sessionId: string,
+  range: TaskCreationDeploymentAnalyticsRangeKey
+): Promise<TaskCreationDeploymentAnalyticsOverview | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const params = new URLSearchParams();
+  params.set("range", range);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/analytics?${params.toString()}`;
+  const result = await fetchJson<{ data?: TaskCreationDeploymentAnalyticsOverview }>(
+    url
+  );
+  return result?.data || null;
+}
+
 export async function getTaskCreationDeploymentTemplateBaseline(
   sessionId: string
 ): Promise<TaskCreationDeploymentTemplateBaseline | null> {
@@ -1266,9 +1358,141 @@ export async function getTaskCreationDatabaseInfo(
   sessionId: string
 ): Promise<TaskCreationDatabaseInfo | null> {
   const safeSessionId = encodeURIComponent(sessionId);
-  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/database`;
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/database/status`;
   const result = await fetchJson<{ data?: TaskCreationDatabaseInfo }>(url);
   return result?.data || null;
+}
+
+export async function ensureTaskCreationDatabase(
+  sessionId: string
+): Promise<TaskCreationDatabaseInfo | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/database/ensure`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({}),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationDatabaseInfo };
+  return result?.data || null;
+}
+
+export async function getTaskCreationStorageStatus(
+  sessionId: string,
+  options?: { revealSecrets?: boolean }
+): Promise<TaskCreationStorageStatus | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const params = new URLSearchParams();
+  if (options?.revealSecrets) params.set("reveal", "1");
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/storage/status${suffix}`;
+  const result = await fetchJson<{ data?: TaskCreationStorageStatus }>(url);
+  return result?.data || null;
+}
+
+export async function ensureTaskCreationStorage(
+  sessionId: string,
+  options?: { revealSecrets?: boolean }
+): Promise<TaskCreationStorageStatus | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/storage/ensure`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      revealSecrets: Boolean(options?.revealSecrets),
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationStorageStatus };
+  return result?.data || null;
+}
+
+export async function createTaskCreationStorageUploadTarget(
+  sessionId: string,
+  file: File
+): Promise<TaskCreationStorageUploadTarget> {
+  if (file.size > TASK_CREATION_STORAGE_UPLOAD_MAX_BYTES) {
+    throw new Error(`file too large: max ${Math.floor(TASK_CREATION_STORAGE_UPLOAD_MAX_BYTES / (1024 * 1024))}MB`);
+  }
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/storage/upload-target`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      fileName: file.name,
+      fileSize: file.size,
+      contentType: file.type || "application/octet-stream",
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationStorageUploadTarget };
+  if (!result?.data) {
+    throw new Error("upload target empty");
+  }
+  return result.data;
+}
+
+export async function uploadTaskCreationStorageFile(
+  target: TaskCreationStorageUploadTarget,
+  file: File
+): Promise<void> {
+  const formData = new FormData();
+  Object.entries(target.fields || {}).forEach(([key, value]) => {
+    formData.append(key, value);
+  });
+  formData.append("file", file, file.name);
+
+  await fetch(target.url, {
+    method: target.method,
+    body: formData,
+    mode: "no-cors",
+  }).catch((error) => {
+    throw error instanceof Error ? error : new Error("network error");
+  });
+}
+
+export async function deleteTaskCreationStorageFile(
+  sessionId: string,
+  key: string
+): Promise<TaskCreationStorageStatus | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/storage/files`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({ key }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationStorageStatus };
+  return result?.data || null;
+}
+
+export function getTaskCreationStorageFileDownloadUrl(
+  sessionId: string,
+  key: string
+): string {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const params = new URLSearchParams({ key });
+  return `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/storage/files/download?${params.toString()}`;
 }
 
 export async function getTaskCreationDatabaseRows(
@@ -1380,7 +1604,7 @@ export async function interruptTaskCreationRuntime(
 ): Promise<{
   interrupted: boolean;
   phase?: "intent_processing" | "executor_processing";
-  executor?: "opencode" | "claudecode" | "codex";
+  executor?: "opencode" | "codex";
   orchestratorSessionId?: string;
   executorSessionId?: string;
   reason?: string;
@@ -1405,7 +1629,7 @@ export async function interruptTaskCreationRuntime(
     data?: {
       interrupted?: boolean;
       phase?: "intent_processing" | "executor_processing";
-      executor?: "opencode" | "claudecode" | "codex";
+      executor?: "opencode" | "codex";
       orchestratorSessionId?: string;
       executorSessionId?: string;
       reason?: string;
@@ -1541,6 +1765,33 @@ export async function headWorkspaceRawFile(
   }
 }
 
+export async function getWorkspaceRawTextFile(
+  sessionId: string,
+  filePath: string,
+): Promise<WorkspaceRawHeadResult & { text: string }> {
+  const url = getWorkspaceRawFileUrl(sessionId, filePath);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      headers: buildClientIdentityHeaders(),
+    });
+    return {
+      ok: response.ok,
+      status: response.status,
+      text: response.ok ? await response.text() : "",
+    };
+  } catch {
+    return {
+      ok: false,
+      status: 0,
+      networkError: true,
+      text: "",
+    };
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     globalThis.setTimeout(resolve, ms);
@@ -1581,6 +1832,12 @@ export function getTaskCreationDeliverableDownloadUrl(sessionId: string, artifac
   const safeSessionId = encodeURIComponent(sessionId);
   const safeArtifactId = encodeURIComponent(artifactId);
   return `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deliverables/${safeArtifactId}/download`;
+}
+
+export function getTaskCreationPreviewSnapshotUrl(sessionId: string, runId: string): string {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const safeRunId = encodeURIComponent(runId);
+  return `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/preview-snapshots/${safeRunId}/website.png`;
 }
 
 export async function listTaskCreationDeliverables(

@@ -34,8 +34,11 @@ import {
   Search,
   Plug,
   Terminal,
+  Bug,
+  Rocket,
   ChevronDown,
   ChevronRight,
+  Check,
   Trash2,
   X,
 } from "lucide-react";
@@ -75,7 +78,9 @@ import AltusArtifactPreviewCard, {
   type AltusArtifactFile,
 } from "@/components/AltusArtifactPreviewCard";
 import TaskDeliverableCard from "@/components/TaskDeliverableCard";
+import { SessionCreditBar } from "@/components/SessionCreditBar";
 import AltusRunReplayDrawer, {
+  type AltusDrawerView,
   type AltusReplayAction,
   type AltusReplayFile,
 } from "@/components/AltusRunReplayDrawer";
@@ -109,6 +114,7 @@ import {
   type TaskCreationDeliverableArtifact,
   type TaskCreationPlatformSkill,
   type TaskCreationUploadedAttachment as UploadedTaskAttachment,
+  type TaskCreationWebsitePreviewSnapshot,
 } from "@/lib/task-creation-client";
 import { getMyConnectorAccounts } from "@/lib/connectors-client";
 import {
@@ -142,8 +148,16 @@ import type { TaskProjectSelection } from "@/lib/task-project-selection";
 import i18n from "@/i18n";
 import { useLocation, useSearch } from "wouter";
 import { Streamdown } from "streamdown";
+import { useAuth } from "@/contexts/AuthContext";
 
 type PageMode = "input" | "chat";
+const BILLING_TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "stopped"]);
+
+function isInsufficientCreditsError(error: unknown) {
+  const text = error instanceof Error ? error.message : String(error || "");
+  return /INSUFFICIENT_CREDITS|积分不足|\b402\b/i.test(text);
+}
+
 type PersistedMessageScrollAnchor = {
   anchorMessageKey: string | null;
   anchorOffsetTop: number;
@@ -307,6 +321,7 @@ const NO_PROJECT_VALUE = "__no_project__";
 
 export default function Home() {
   const { t } = useTranslation();
+  const { refreshCredits } = useAuth();
   const MESSAGE_SCROLL_CACHE_PREFIX = "task_creation_history_scroll:";
   const PREVIEW_STATE_CACHE_PREFIX = "task_creation_preview_state:";
   const [location, setLocation] = useLocation();
@@ -353,8 +368,12 @@ export default function Home() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [altusReplayRunId, setAltusReplayRunId] = useState<string | null>(null);
   const [altusReplayIndex, setAltusReplayIndex] = useState(0);
+  const [altusReplayView, setAltusReplayView] =
+    useState<AltusDrawerView>("actions");
   const [pendingAltusReplayToolCallId, setPendingAltusReplayToolCallId] =
     useState<string | null>(null);
+  const refreshCreditsRef = useRef(refreshCredits);
+  const lastCreditRefreshRunStatusRef = useRef<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">(
     "pro",
   );
@@ -482,6 +501,7 @@ export default function Home() {
     isConnected,
     isProcessing,
     managedRunActive,
+    managedRunStatus,
     isInterrupting,
     messages,
     hasOlderHistory,
@@ -508,6 +528,20 @@ export default function Home() {
       console.error("任务创建失败:", error);
     },
   });
+
+  useEffect(() => {
+    refreshCreditsRef.current = refreshCredits;
+  }, [refreshCredits]);
+
+  useEffect(() => {
+    if (!managedRunStatus || !BILLING_TERMINAL_RUN_STATUSES.has(managedRunStatus)) {
+      lastCreditRefreshRunStatusRef.current = null;
+      return;
+    }
+    if (lastCreditRefreshRunStatusRef.current === managedRunStatus) return;
+    lastCreditRefreshRunStatusRef.current = managedRunStatus;
+    void refreshCreditsRef.current();
+  }, [managedRunStatus]);
 
   const slashQuery = useMemo(() => parseTrailingSlashQuery(message), [message]);
 
@@ -1124,6 +1158,7 @@ export default function Home() {
           sessionId: activeSessionId || undefined,
           metadata: buildManagedTaskInputMetadata({
             originalInput: displayText,
+            modelTier: selectedModel || "pro",
             skills: mergedSkills,
             mcpReferences: selectedMcp,
             fileCount: uploadableAttachments.length,
@@ -1180,6 +1215,9 @@ export default function Home() {
           ? error.message
           : t("homeWorkspace.attachmentSendFailed"),
       );
+      if (isInsufficientCreditsError(error)) {
+        void refreshCreditsRef.current();
+      }
     }
   }
 
@@ -1288,6 +1326,7 @@ export default function Home() {
           sessionId: activeSessionId,
           metadata: buildManagedTaskInputMetadata({
             originalInput: displayText,
+            modelTier: selectedModel || "pro",
             skills: mergedSkills,
             mcpReferences: selectedMcp,
             fileCount: uploadableAttachments.length,
@@ -1346,6 +1385,9 @@ export default function Home() {
           ? error.message
           : t("homeWorkspace.attachmentSendFailed"),
       );
+      if (isInsufficientCreditsError(error)) {
+        void refreshCreditsRef.current();
+      }
     }
   }
 
@@ -1366,6 +1408,20 @@ export default function Home() {
   const chatItems = useMemo(
     () => collapseRepeatedChatAuthors(buildChatItems(messages)),
     [messages],
+  );
+  const visibleChatItems = useMemo(
+    () =>
+      groupManagedActivityItems(
+        chatItems.filter(
+          (item) =>
+            item.kind !== "managed_status" || item.displayInTimeline !== false,
+        ),
+      ),
+    [chatItems],
+  );
+  const managedProcessingText = useMemo(
+    () => getActiveManagedStatusText(chatItems),
+    [chatItems],
   );
   const altusMode = readAltusMode();
   const managedAltusMode = altusMode === "managed";
@@ -1735,11 +1791,12 @@ export default function Home() {
     runId: string,
     options?: {
       toolCallId?: string | null;
-      view?: "actions" | "files";
+      view?: AltusDrawerView;
     },
   ) => {
     if (!runId) return;
     setAltusReplayRunId(runId);
+    setAltusReplayView(options?.view || "actions");
     setPreviewOpen(true);
     setPreviewMaximized(false);
     if (options?.toolCallId) {
@@ -1879,6 +1936,8 @@ export default function Home() {
             0,
             (activeAltusReplay?.actions.length || 1) - 1,
           )}
+          activeView={altusReplayView}
+          onActiveViewChange={setAltusReplayView}
           onSelectIndex={setAltusReplayIndex}
           onJumpToLatest={() =>
             setAltusReplayIndex(
@@ -1979,7 +2038,7 @@ export default function Home() {
           onScroll={() => {
             void handleMessageScroll();
           }}
-          className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-5"
+          className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
         >
           <div className="mx-auto w-full space-y-4">
             {isLoadingOlderHistory && (
@@ -2013,7 +2072,7 @@ export default function Home() {
             )}
 
             <AnimatePresence>
-              {chatItems.map((item, index) => (
+              {visibleChatItems.map((item, index) => (
                 <MessageBubble
                   key={item.messageKey || `chat-item-${index}`}
                   item={item}
@@ -2030,7 +2089,7 @@ export default function Home() {
               <NoticeMessage
                 tone="info"
                 icon={<Loader2 className="w-4 h-4 animate-spin" />}
-                text={t("homeWorkspace.agentProcessing")}
+                text={managedProcessingText || t("homeWorkspace.agentProcessing")}
               />
             )}
 
@@ -2049,6 +2108,11 @@ export default function Home() {
           className="mt-auto shrink-0 bg-background/90 backdrop-blur"
         >
           <div className="px-6 py-3">
+            {sessionId ? (
+              <div className="mx-auto mb-2 w-[92%] max-w-full">
+                <SessionCreditBar sessionId={sessionId} refreshKey={managedRunStatus} />
+              </div>
+            ) : null}
             {slashSuggestionPanel ? (
               <div className="mx-auto mb-2 w-[92%] max-w-full">
                 {slashSuggestionPanel}
@@ -2551,7 +2615,7 @@ export default function Home() {
                     </ResizablePanel>
                     <ResizableHandle
                       withHandle
-                      className="w-1.5 bg-transparent after:w-1.5 after:rounded-full after:bg-transparent hover:after:bg-transparent data-[resize-handle-active]:after:bg-transparent [&>div]:hidden"
+                      className="bg-transparent after:bg-transparent"
                       onDragging={handlePreviewResizeDragging}
                     />
                     <ResizablePanel
@@ -2598,6 +2662,8 @@ export default function Home() {
           files={activeAltusReplay.files}
           currentIndex={activeAltusReplayIndex}
           latestIndex={Math.max(0, activeAltusReplay.actions.length - 1)}
+          activeView={altusReplayView}
+          onActiveViewChange={setAltusReplayView}
           onSelectIndex={setAltusReplayIndex}
           onJumpToLatest={() =>
             setAltusReplayIndex(
@@ -2691,6 +2757,12 @@ export type ChatItem =
       showAuthor?: boolean;
     }
   | {
+      kind: "managed_status";
+      text: string;
+      messageKey?: string;
+      displayInTimeline?: boolean;
+    }
+  | {
       kind: "capsule";
       label: string;
       tone: "system" | "intent" | "planning" | "execution" | "review" | "error";
@@ -2722,10 +2794,38 @@ export type ChatItem =
       messageKey?: string;
     }
   | {
+      kind: "managed_activity_group";
+      title: string;
+      messageKey?: string;
+      defaultExpanded?: boolean;
+      items: Array<
+        | {
+            kind: "managed_status";
+            text: string;
+            messageKey?: string;
+            displayInTimeline?: boolean;
+          }
+        | {
+            kind: "managed_tool";
+            runId: string;
+            toolCallId: string;
+            eventType: string;
+            toolName: string;
+            status: "running" | "completed" | "failed" | "unknown";
+            summary?: string;
+            detail?: string;
+            artifactPaths?: string[];
+            metadata?: Record<string, unknown>;
+            messageKey?: string;
+          }
+      >;
+    }
+  | {
       kind: "managed_artifact_card";
       sessionId: string;
       runId: string;
       artifacts: AltusArtifactFile[];
+      previewSnapshot?: TaskCreationWebsitePreviewSnapshot | null;
       messageKey?: string;
     }
   | {
@@ -2973,6 +3073,11 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
   const lastCodexDiffIndexByTurn = new Map<string, number>();
   const managedArtifactsByRun = new Map<string, AltusArtifactFile[]>();
   const emittedManagedCompletionRuns = new Set<string>();
+  let managedStatusBuffer: {
+    text: string;
+    messageKey?: string;
+    displayInTimeline: boolean;
+  } | null = null;
 
   const getPartIdFromMetadata = (metadata: Record<string, unknown>): string => {
     const explicit = asText(metadata.partId);
@@ -3235,6 +3340,44 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     progressBuffer = null;
   };
 
+  const flushManagedStatus = (options?: {
+    displayInTimeline?: boolean;
+    skipHidden?: boolean;
+  }) => {
+    if (!managedStatusBuffer) return;
+    const displayInTimeline =
+      options?.displayInTimeline ?? managedStatusBuffer.displayInTimeline;
+    if (options?.skipHidden && !displayInTimeline) {
+      managedStatusBuffer = null;
+      return;
+    }
+    items.push({
+      kind: "managed_status",
+      text: managedStatusBuffer.text,
+      messageKey: managedStatusBuffer.messageKey,
+      displayInTimeline,
+    });
+    managedStatusBuffer = null;
+  };
+
+  const clearManagedStatus = () => {
+    managedStatusBuffer = null;
+  };
+
+  const replaceManagedStatus = (
+    text: string,
+    messageKey?: string,
+    options?: { displayInTimeline?: boolean },
+  ) => {
+    const normalized = normalizeForDedup(text);
+    if (!normalized) return;
+    managedStatusBuffer = {
+      text,
+      messageKey,
+      displayInTimeline: options?.displayInTimeline ?? true,
+    };
+  };
+
   const pushProgress = (
     rawLabel: string,
     displayLabel: string,
@@ -3252,6 +3395,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     if (message.type === "user_input" || message.type === "user_response") {
+      clearManagedStatus();
       flushProgress();
       const resolvedUser = resolveUserMessageReferences({
         content: message.content || "",
@@ -3273,6 +3417,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         emittedManagedCompletionRuns,
       });
       if (managedCompletionCard) {
+        clearManagedStatus();
         flushProgress();
         items.push(managedCompletionCard);
       }
@@ -3280,6 +3425,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       const parsed = extractCapsule(message.content || "");
       if (parsed) {
         if (isProgressStatusLabel(parsed.label) && !parsed.rest.trim()) {
+          clearManagedStatus();
           pushProgress(
             parsed.label,
             parsed.label,
@@ -3288,6 +3434,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           );
           continue;
         }
+        clearManagedStatus();
         flushProgress();
         items.push({
           kind: "capsule",
@@ -3296,26 +3443,35 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           messageKey: message.messageKey,
         });
         if (parsed.rest.trim()) {
+          const displayName = resolveAgentDisplayName({
+            agent: message.agent,
+            metadata: message.metadata,
+            messageKey: message.messageKey,
+          });
           pushAgentMarkdown(
-            `**${resolveAgentDisplayName({
-              agent: message.agent,
-              metadata: message.metadata,
-              messageKey: message.messageKey,
-            })}**\n\n${parsed.rest}`,
+            displayName === "Altus"
+              ? parsed.rest
+              : `**${displayName}**\n\n${parsed.rest}`,
             message.messageKey,
+            displayName === "Altus" ? displayName : undefined,
           );
         }
         continue;
       }
 
       flushProgress();
+      clearManagedStatus();
+      const displayName = resolveAgentDisplayName({
+        agent: message.agent,
+        metadata: message.metadata,
+        messageKey: message.messageKey,
+      });
       pushAgentMarkdown(
-        `**${resolveAgentDisplayName({
-          agent: message.agent,
-          metadata: message.metadata,
-          messageKey: message.messageKey,
-        })}**\n\n${message.content || ""}`,
+        displayName === "Altus"
+          ? message.content || ""
+          : `**${displayName}**\n\n${message.content || ""}`,
         message.messageKey,
+        displayName === "Altus" ? displayName : undefined,
       );
       continue;
     }
@@ -3328,6 +3484,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         emittedManagedCompletionRuns,
       });
       if (managedCompletionCard) {
+        clearManagedStatus();
         flushProgress();
         items.push(managedCompletionCard);
       }
@@ -3337,18 +3494,24 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       }
 
       if (isManagedStartingStatusMessage(message)) {
+        flushProgress();
+        replaceManagedStatus(rawLabel, message.messageKey, {
+          displayInTimeline: false,
+        });
         continue;
       }
 
       if (isManagedNarrationStatusMessage(message)) {
         flushProgress();
-        pushAgentPlain(rawLabel, "Altus", message.messageKey);
+        replaceManagedStatus(rawLabel, message.messageKey);
         continue;
       }
       const tone = message.tone || getCapsuleTone(rawLabel);
       if (isProgressStatusLabel(rawLabel)) {
+        clearManagedStatus();
         pushProgress(rawLabel, rawLabel, tone, message.messageKey);
       } else {
+        clearManagedStatus();
         flushProgress();
         items.push({
           kind: "capsule",
@@ -3390,6 +3553,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           managedEventType === "tool_call_completed" ||
           managedEventType === "tool_call_failed"
         ) {
+          flushManagedStatus({ skipHidden: true });
           flushProgress();
           items.push({
             kind: "managed_tool",
@@ -3415,6 +3579,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           continue;
         }
         if (managedEventType === "artifact_updated") {
+          clearManagedStatus();
           flushProgress();
           items.push({
             kind: "capsule",
@@ -3442,6 +3607,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         (message.content || "").trim();
 
       if (eventType === "turn.started") {
+        clearManagedStatus();
         const progressLabel = `${executorLabel} ${i18n.t("homeWorkspace.executionStarted")}`;
         pushProgress(
           progressLabel,
@@ -3456,6 +3622,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         const turnStatus = asText(metadata.turnStatus).toLowerCase();
         const errorMessage = asText(metadata.errorMessage) || content;
         if (message.stage === "failed" || turnStatus === "failed") {
+          clearManagedStatus();
           flushProgress();
           items.push({
             kind: "capsule",
@@ -3467,6 +3634,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           });
           continue;
         }
+        clearManagedStatus();
         flushProgress();
         items.push({
           kind: "capsule",
@@ -3478,6 +3646,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       }
 
       if (eventType === "turn.failed" || eventType === "turn.interrupted") {
+        clearManagedStatus();
         flushProgress();
         items.push({
           kind: "capsule",
@@ -3496,6 +3665,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         if (!content) {
           continue;
         }
+        clearManagedStatus();
         pushCodexExplanation(content, message.messageKey, executorLabel, {
           collapsedMarkdown: extractCodexPlanCollapsedMarkdown(content),
         });
@@ -3511,6 +3681,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       }
 
       flushProgress();
+      clearManagedStatus();
       if (itemType === "command_execution" || itemType === "commandexecution") {
         const commandText =
           asText(metadata.command) ||
@@ -3775,6 +3946,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
 
     if (message.type === "opencode_event") {
       flushProgress();
+      clearManagedStatus();
       const metadata = toRecord(message.metadata);
       const eventInfo = getOpencodeEventInfo(metadata);
       const content = (message.content || "").trim();
@@ -3859,6 +4031,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     }
 
     if (message.type === "error") {
+      clearManagedStatus();
       flushProgress();
       pushAgentMarkdown(
         `**${i18n.t("homeWorkspace.errorTitle")}**\n\n> ${message.message || i18n.t("homeWorkspace.requestFailedRetry")}`,
@@ -3868,6 +4041,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     }
 
     if (message.type === "clarification_request") {
+      clearManagedStatus();
       flushProgress();
       const question =
         message.question || i18n.t("homeWorkspace.provideMoreInfo");
@@ -3920,6 +4094,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     }
 
     if (message.type === "plan_generated") {
+      clearManagedStatus();
       flushProgress();
       pushAgentMarkdown(
         `**${i18n.t("homeWorkspace.planGenerated")}**\n\n${i18n.t("homeWorkspace.projectLabel")}：${message.plan?.project?.title || i18n.t("homeWorkspace.unnamedProject")}`,
@@ -3927,6 +4102,8 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       );
     }
   }
+
+  flushManagedStatus({ displayInTimeline: false });
 
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
@@ -3946,10 +4123,157 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
 function isAuthorNeutralSeparator(item: ChatItem): boolean {
   return (
     item.kind === "capsule" ||
+    item.kind === "managed_status" ||
     item.kind === "managed_tool" ||
+    item.kind === "managed_activity_group" ||
     item.kind === "managed_artifact_card" ||
     item.kind === "managed_deliverable_card"
   );
+}
+
+export function getActiveManagedStatusText(items: ChatItem[]): string {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item?.kind === "managed_status") {
+      return item.text;
+    }
+  }
+  return "";
+}
+
+type ManagedActivityTimelineItem = Extract<
+  ChatItem,
+  { kind: "managed_status" | "managed_tool" }
+>;
+
+function isManagedActivityTimelineItem(
+  item: ChatItem,
+): item is ManagedActivityTimelineItem {
+  return item.kind === "managed_status" || item.kind === "managed_tool";
+}
+
+function getManagedActivityTitle(
+  items: ManagedActivityTimelineItem[],
+) {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (!item) continue;
+    if (item.kind === "managed_status" && item.text.trim()) return item.text;
+    if (item.kind === "managed_tool" && item.toolName !== "complete_task") {
+      return (
+        getManagedToolPurposeSummary(item.toolName, item.metadata) ||
+        item.summary?.trim() ||
+        getManagedToolDisplayName(item.toolName) ||
+        i18n.t("homeWorkspace.toolCall")
+      );
+    }
+  }
+  return i18n.t("homeWorkspace.agentProcessing");
+}
+
+function getManagedActivityState(
+  items: ManagedActivityTimelineItem[],
+) {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item?.kind !== "managed_tool") continue;
+    if (item.status === "failed") return "failed";
+    if (item.status === "running") return "running";
+    if (item.status === "completed") return "completed";
+  }
+  return "completed";
+}
+
+function hasManagedTodoActivity(items: ManagedActivityTimelineItem[]) {
+  return items.some(
+    (item) => item.kind === "managed_tool" && item.toolName === "todowrite",
+  );
+}
+
+function normalizeManagedStageTitle(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function getManagedTodoStageTitle(item: ManagedActivityTimelineItem) {
+  if (item.kind !== "managed_tool" || item.toolName !== "todowrite") {
+    return "";
+  }
+  const activeTodo = readManagedTodoItems(item.metadata).find(
+    (todo) => todo.status === "in_progress",
+  );
+  return activeTodo
+    ? normalizeManagedStageTitle(activeTodo.activeForm || activeTodo.content)
+    : "";
+}
+
+export function groupManagedActivityItems(items: ChatItem[]): ChatItem[] {
+  const grouped: ChatItem[] = [];
+  let buffer: ManagedActivityTimelineItem[] = [];
+  let bufferTitle = "";
+
+  const flush = () => {
+    if (buffer.length === 0) return;
+    const groupItems = buffer;
+    grouped.push({
+      kind: "managed_activity_group",
+      title: bufferTitle || getManagedActivityTitle(groupItems),
+      messageKey: groupItems.map((item) => item.messageKey).filter(Boolean).join("|"),
+      defaultExpanded: !hasManagedTodoActivity(groupItems),
+      items: groupItems,
+    });
+    buffer = [];
+    bufferTitle = "";
+  };
+
+  for (const item of items) {
+    if (isManagedActivityTimelineItem(item)) {
+      const todoStageTitle = getManagedTodoStageTitle(item);
+      if (todoStageTitle) {
+        const isSameStage =
+          bufferTitle &&
+          normalizeManagedStageTitle(bufferTitle) ===
+            normalizeManagedStageTitle(todoStageTitle);
+        if (!isSameStage) {
+          flush();
+          bufferTitle = todoStageTitle;
+        }
+      }
+      buffer.push(item);
+      continue;
+    }
+    flush();
+    grouped.push(item);
+  }
+  flush();
+
+  let latestTodoGroupIndex = -1;
+  let latestTodoHasInProgress = false;
+  grouped.forEach((item, index) => {
+    if (item.kind !== "managed_activity_group") return;
+    for (const entry of item.items) {
+      if (entry.kind !== "managed_tool" || entry.toolName !== "todowrite") {
+        continue;
+      }
+      latestTodoGroupIndex = index;
+      latestTodoHasInProgress = readManagedTodoItems(entry.metadata).some(
+        (todo) => todo.status === "in_progress",
+      );
+    }
+  });
+
+  if (latestTodoGroupIndex >= 0) {
+    grouped.forEach((item, index) => {
+      if (
+        item.kind === "managed_activity_group" &&
+        hasManagedTodoActivity(item.items)
+      ) {
+        item.defaultExpanded =
+          latestTodoHasInProgress && index === latestTodoGroupIndex;
+      }
+    });
+  }
+
+  return grouped;
 }
 
 export function collapseRepeatedChatAuthors(items: ChatItem[]): ChatItem[] {
@@ -4695,7 +5019,7 @@ function MessageBubble({
     runId: string,
     options?: {
       toolCallId?: string | null;
-      view?: "actions" | "files";
+      view?: AltusDrawerView;
     },
   ) => void;
   onOpenWorkspacePreview?: (path: string) => void;
@@ -4899,13 +5223,32 @@ function MessageBubble({
     );
   }
 
+  if (item.kind === "managed_activity_group") {
+    return (
+      <div data-message-key={item.messageKey}>
+        <ManagedActivityGroup
+          item={item}
+          onOpenReplay={(runId, toolCallId, toolName) =>
+            onOpenManagedReplay?.(runId, {
+              toolCallId,
+              view: resolveManagedToolReplayView(toolName),
+            })
+          }
+        />
+      </div>
+    );
+  }
+
   if (item.kind === "managed_tool") {
     return (
       <div data-message-key={item.messageKey}>
         <ManagedToolCard
           item={item}
-          onOpenReplay={(runId, toolCallId) =>
-            onOpenManagedReplay?.(runId, { toolCallId, view: "actions" })
+          onOpenReplay={(runId, toolCallId, toolName) =>
+            onOpenManagedReplay?.(runId, {
+              toolCallId,
+              view: resolveManagedToolReplayView(toolName),
+            })
           }
         />
       </div>
@@ -4917,7 +5260,9 @@ function MessageBubble({
       <div data-message-key={item.messageKey}>
         <AltusArtifactPreviewCard
           sessionId={item.sessionId}
+          runId={item.runId}
           artifacts={item.artifacts}
+          previewSnapshot={item.previewSnapshot}
           onOpenViewer={onOpenWorkspacePreview}
           onDeployRequested={onDeployArtifact}
           runtimeSwitchBlocked={runtimeSwitchBlocked}
@@ -4935,6 +5280,10 @@ function MessageBubble({
         />
       </div>
     );
+  }
+
+  if (item.kind === "managed_status") {
+    return null;
   }
 
   if (item.kind === "agent_plain") {
@@ -6568,29 +6917,164 @@ function getManagedToolStatusPresentation(status: string) {
   } as const;
 }
 
+function getManagedToolIcon(toolName: string): LucideIcon {
+  if (toolName === "shell_execute") return Terminal;
+  if (toolName === "debug_open_page") return Bug;
+  if (isManagedDeploymentTool(toolName)) return Rocket;
+  if (toolName === "write_file") return FilePenLine;
+  if (toolName === "read_file") return FileText;
+  if (toolName === "search_code") return Search;
+  if (toolName === "list_directory") return FolderSearch2;
+  if (toolName === "ask_user") return Sparkles;
+  return FileSearch;
+}
+
+function ManagedActivityGroup({
+  item,
+  onOpenReplay,
+}: {
+  item: Extract<ChatItem, { kind: "managed_activity_group" }>;
+  onOpenReplay?: (runId: string, toolCallId: string, toolName: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(item.defaultExpanded ?? true);
+  useEffect(() => {
+    setExpanded(item.defaultExpanded ?? true);
+  }, [item.defaultExpanded, item.messageKey]);
+  const toolCount = item.items.filter((entry) => entry.kind === "managed_tool").length;
+  const completedToolCount = item.items.filter(
+    (entry) => entry.kind === "managed_tool" && entry.status === "completed",
+  ).length;
+  const activityState = getManagedActivityState(item.items);
+  const StatusIcon =
+    activityState === "failed"
+      ? X
+      : activityState === "running"
+        ? Loader2
+        : Check;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.18 }}
+      className="w-full"
+    >
+      <div className="flex max-w-[min(100%,44rem)] flex-col gap-0">
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          className="group/header flex w-full items-center justify-between gap-3 rounded-lg px-1 py-1 text-left text-sm text-foreground transition hover:bg-muted/35"
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            <span
+              className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full ${
+                activityState === "failed"
+                  ? "bg-destructive text-destructive-foreground"
+                  : activityState === "running"
+                    ? "bg-muted text-muted-foreground"
+                    : "bg-muted-foreground text-background"
+              }`}
+            >
+              <StatusIcon
+                className={`h-2.5 w-2.5 ${
+                  activityState === "running" ? "animate-spin" : ""
+                }`}
+              />
+            </span>
+            <span className="truncate font-medium" title={item.title}>
+              {item.title}
+            </span>
+            <ChevronDown
+              className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${
+                expanded ? "rotate-180" : ""
+              }`}
+            />
+          </div>
+          {toolCount > 0 ? (
+            <span className="shrink-0 text-[12px] text-muted-foreground opacity-0 transition group-hover/header:opacity-100">
+              {completedToolCount}/{toolCount}
+            </span>
+          ) : null}
+        </button>
+        {expanded ? (
+          <div className="flex">
+            <div className="relative w-6 shrink-0">
+              <div className="absolute left-2 top-0 bottom-0 border-l border-dashed border-border" />
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col gap-2 overflow-hidden pt-2">
+              {item.items.map((entry, index) =>
+                entry.kind === "managed_status" ? (
+                  <p
+                    key={entry.messageKey || `managed-status-${index}`}
+                    className="text-[14px] leading-6 text-muted-foreground"
+                  >
+                    {entry.text}
+                  </p>
+                ) : (
+                  <ManagedActivityToolRow
+                    key={entry.messageKey || entry.toolCallId || `managed-tool-${index}`}
+                    item={entry}
+                    onOpenReplay={onOpenReplay}
+                  />
+                ),
+              )}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </motion.div>
+  );
+}
+
+function ManagedActivityToolRow({
+  item,
+  onOpenReplay,
+}: {
+  item: Extract<ChatItem, { kind: "managed_tool" }>;
+  onOpenReplay?: (runId: string, toolCallId: string, toolName: string) => void;
+}) {
+  const Icon = getManagedToolIcon(item.toolName);
+  const title =
+    getManagedToolPurposeSummary(item.toolName, item.metadata) ||
+    item.summary?.trim() ||
+    getManagedToolDisplayName(item.toolName);
+  const statusUi = getManagedToolStatusPresentation(item.status);
+
+  return (
+    <div className="group flex w-full items-center gap-2">
+      <div className="h-7 min-w-0 flex-1">
+        <button
+          type="button"
+          onClick={() => {
+            if (onOpenReplay && item.runId && item.toolCallId) {
+              onOpenReplay(item.runId, item.toolCallId, item.toolName);
+            }
+          }}
+          className="inline-flex h-full max-w-full items-center gap-1 overflow-hidden rounded-full border border-border/70 bg-background/85 px-2.5 py-1 text-left transition hover:bg-muted/40"
+        >
+          <span
+            className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md ${statusUi.iconClass}`}
+          >
+            <Icon className="h-3.5 w-3.5" />
+          </span>
+          <span className="truncate text-[13px] text-muted-foreground" title={title}>
+            {title}
+          </span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ManagedToolCard({
   item,
   onOpenReplay,
 }: {
   item: Extract<ChatItem, { kind: "managed_tool" }>;
-  onOpenReplay?: (runId: string, toolCallId: string) => void;
+  onOpenReplay?: (runId: string, toolCallId: string, toolName: string) => void;
 }) {
   const displayName = getManagedToolDisplayName(item.toolName);
-  const icon =
-    item.toolName === "shell_execute"
-      ? Terminal
-      : item.toolName === "write_file"
-        ? FilePenLine
-        : item.toolName === "read_file"
-          ? FileText
-          : item.toolName === "search_code"
-            ? Search
-            : item.toolName === "list_directory"
-              ? FolderSearch2
-              : item.toolName === "ask_user"
-                ? Sparkles
-                : FileSearch;
-  const Icon = icon;
+  const Icon = getManagedToolIcon(item.toolName);
   const statusLabel =
     item.status === "failed"
       ? i18n.t("homeWorkspace.failedShort")
@@ -6651,7 +7135,7 @@ function ManagedToolCard({
           type="button"
           onClick={() => {
             if (onOpenReplay && item.runId && item.toolCallId) {
-              onOpenReplay(item.runId, item.toolCallId);
+              onOpenReplay(item.runId, item.toolCallId, item.toolName);
             }
           }}
           className={`w-full max-w-[min(100%,42rem)] rounded-2xl border px-4 py-3 text-left transition ${chipToneClass}`}
@@ -6713,7 +7197,7 @@ function ManagedToolCard({
             type="button"
             onClick={() => {
               if (onOpenReplay && item.runId && item.toolCallId) {
-                onOpenReplay(item.runId, item.toolCallId);
+                onOpenReplay(item.runId, item.toolCallId, item.toolName);
               }
             }}
             data-managed-tool-layout={
@@ -6894,7 +7378,6 @@ function getExecutorDisplayName(metadataRaw: unknown) {
   const executor = asText(metadata.executor).toLowerCase();
   if (executor === "codex") return "Codex";
   if (executor === "altus") return "Altus";
-  if (executor === "claudecode") return "ClaudeCode";
   if (executor === "opencode") return "OpenCode";
   return i18n.t("homeWorkspace.executorLabel");
 }
@@ -6971,6 +7454,47 @@ function collectManagedWebArtifacts(input: {
   return Array.from(unique.values());
 }
 
+function extractManagedPreviewSnapshot(
+  metadataRaw: unknown,
+): TaskCreationWebsitePreviewSnapshot | null {
+  const metadata = toRecord(metadataRaw);
+  const raw = toRecord(metadata.previewSnapshot);
+  const status = asText(raw.status);
+  if (
+    raw.kind !== "website_screenshot" ||
+    ![
+      "captured",
+      "capture_unavailable",
+      "capture_failed",
+      "storage_failed",
+    ].includes(status)
+  ) {
+    return null;
+  }
+  const source = toRecord(raw.source);
+  const portValue = Number(source.port);
+  const widthValue = Number(raw.width);
+  const heightValue = Number(raw.height);
+  return {
+    kind: "website_screenshot",
+    status: status as TaskCreationWebsitePreviewSnapshot["status"],
+    storageKey: asText(raw.storageKey) || undefined,
+    mimeType: raw.mimeType === "image/png" ? "image/png" : undefined,
+    width: Number.isFinite(widthValue) ? widthValue : undefined,
+    height: Number.isFinite(heightValue) ? heightValue : undefined,
+    capturedAt: asText(raw.capturedAt) || undefined,
+    reasonCode: asText(raw.reasonCode) || undefined,
+    message: asText(raw.message) || undefined,
+    source: {
+      sandboxId: asText(source.sandboxId) || undefined,
+      port: Number.isFinite(portValue) ? portValue : undefined,
+      url: asText(source.url) || undefined,
+      command: asText(source.command) || undefined,
+      logPath: asText(source.logPath) || undefined,
+    },
+  };
+}
+
 export function buildManagedCompletionCardItem(input: {
   message: AgentMessage;
   managedArtifactsByRun: Map<string, AltusArtifactFile[]>;
@@ -6991,17 +7515,19 @@ export function buildManagedCompletionCardItem(input: {
 
   const eventType = asText(metadata.eventType).toLowerCase();
   const deliverables = extractManagedDeliverables(metadata);
+  const previewSnapshot = extractManagedPreviewSnapshot(metadata);
   const managedArtifacts = managedArtifactsByRun.get(runId) || [];
   const webArtifacts = collectManagedWebArtifacts({
     deliverables,
     managedArtifacts,
   });
   const shouldEmitFromDeliverablesContext = deliverables.length > 0;
+  const hasPreviewSnapshot = Boolean(previewSnapshot);
   const isRunCompletedContext =
     message.type === "status_update" && eventType === "run_completed";
   if (
-    (shouldEmitFromDeliverablesContext || isRunCompletedContext) &&
-    webArtifacts.length > 0
+    (shouldEmitFromDeliverablesContext || isRunCompletedContext || hasPreviewSnapshot) &&
+    (webArtifacts.length > 0 || hasPreviewSnapshot)
   ) {
     emittedManagedCompletionRuns.add(runId);
     return {
@@ -7009,6 +7535,7 @@ export function buildManagedCompletionCardItem(input: {
       sessionId,
       runId,
       artifacts: webArtifacts,
+      previewSnapshot,
       messageKey: `managed:${runId}:artifact_card`,
     };
   }
@@ -7028,7 +7555,7 @@ export function buildManagedCompletionCardItem(input: {
     return null;
   }
 
-  if (webArtifacts.length === 0) {
+  if (webArtifacts.length === 0 && !hasPreviewSnapshot) {
     return null;
   }
 
@@ -7038,6 +7565,7 @@ export function buildManagedCompletionCardItem(input: {
     sessionId,
     runId,
     artifacts: webArtifacts,
+    previewSnapshot,
     messageKey: `managed:${runId}:artifact_card`,
   };
 }
@@ -7332,6 +7860,18 @@ function inferManagedArtifactPreviewType(
   return /\.(html?)$/i.test(path) ? "web" : "code";
 }
 
+export function resolveManagedToolReplayView(
+  toolName: string,
+): AltusDrawerView {
+  if (toolName === "debug_open_page" || toolName === "browser_interact") {
+    return "debug";
+  }
+  if (isManagedDeploymentTool(toolName)) {
+    return "deployment";
+  }
+  return "actions";
+}
+
 function isManagedDeploymentTool(toolName: string) {
   return (
     toolName === "deploy_application" ||
@@ -7355,6 +7895,145 @@ function readManagedDeploymentToolOutput(metadataRaw: unknown) {
     deploymentId: asText(output.deploymentId),
     repairCategory: asText(repair.category),
   };
+}
+
+function buildManagedBrowserInteractPurpose(args: Record<string, unknown>) {
+  const action = asText(args.action).toLowerCase();
+  const description = asText(args.description);
+  if (description) return description;
+  const selector = asText(args.selector);
+  const text = asText(args.text);
+  const key = asText(args.key);
+  const direction = asText(args.direction).toLowerCase() || "down";
+  const loadState = asText(args.loadState) || "domcontentloaded";
+  const pixelsRaw = Number(args.pixels);
+  const target = text || selector;
+
+  if (action === "locator_click") {
+    return selector ? `点击 ${selector}` : "点击页面元素";
+  }
+  if (action === "text_click") {
+    return text ? `点击 ${text}` : "点击指定文本";
+  }
+  if (action === "coordinate_click") {
+    return "点击页面指定位置";
+  }
+  if (action === "locator_fill") {
+    if (selector && text) return `在 ${selector} 输入“${text}”`;
+    return selector ? `填写 ${selector}` : "填写表单输入框";
+  }
+  if (action === "keyboard_type") {
+    return text ? `键盘输入“${text}”` : "键盘输入文本";
+  }
+  if (action === "keyboard_press") {
+    return key ? `按下 ${key} 键` : "按下键盘按键";
+  }
+  if (action === "mouse_wheel") {
+    const directionLabel =
+      direction === "up"
+        ? "向上滚动"
+        : direction === "left"
+          ? "向左滚动"
+          : direction === "right"
+            ? "向右滚动"
+            : "向下滚动";
+    return Number.isFinite(pixelsRaw) && pixelsRaw > 0
+      ? `${directionLabel} ${Math.floor(pixelsRaw)} 像素`
+      : directionLabel;
+  }
+  if (action === "wait_for_locator") {
+    return selector ? `等待 ${selector} 可见` : "等待页面元素可见";
+  }
+  if (action === "wait_for_text") {
+    return text ? `等待页面出现“${text}”` : "等待页面出现指定内容";
+  }
+  if (action === "wait_for_load_state") {
+    return `等待页面进入 ${loadState} 状态`;
+  }
+  if (action === "wait_for_timeout") {
+    return "等待页面稳定";
+  }
+  return target ? `执行 Playwright 操作：${target}` : "执行 Playwright 浏览器操作";
+}
+
+export function getManagedToolPurposeSummary(
+  toolName: string,
+  metadataRaw: unknown,
+) {
+  const metadata = toRecord(metadataRaw);
+  const args = toRecord(metadata.arguments);
+  const output = parseManagedToolOutputPreview(metadata.outputPreview);
+  const progress = readManagedWriteFileProgress(metadata);
+  const path = asText(args.path) || asText(output.path) || progress.path;
+  const command = asText(args.command);
+  const query = asText(args.query);
+  const target = asText(args.path) || asText(output.path);
+  const filename = path ? getFilename(path) || path : "";
+
+  if (toolName === "shell_execute") {
+    if (/pnpm|npm|yarn|tsc|typecheck|type-check|check|test|vitest|playwright/i.test(command)) {
+      return "检查项目是否正常运行";
+    }
+    if (/ls|find|tree|pwd|cat|sed|tail|head|rg|grep/i.test(command)) {
+      return "检查项目文件和运行日志";
+    }
+    if (/dev|serve|preview|start|node|vite/i.test(command)) {
+      return "启动或检查本地预览服务";
+    }
+    return "执行项目命令";
+  }
+
+  if (toolName === "write_file") {
+    if (filename) return `更新${filename}`;
+    return "更新项目文件";
+  }
+
+  if (toolName === "read_file") {
+    if (filename) return `读取${filename}检查内容`;
+    return "读取项目文件";
+  }
+
+  if (toolName === "list_directory") {
+    if (target) return "检查项目目录结构";
+    return "查看项目目录";
+  }
+
+  if (toolName === "search_code") {
+    if (query) return "搜索相关代码位置";
+    return "搜索项目代码";
+  }
+
+  if (toolName === "todowrite") {
+    const todos = readManagedTodoItems(metadataRaw);
+    const activeTodo = todos.find((todo) => todo.status === "in_progress");
+    if (activeTodo) return activeTodo.activeForm || activeTodo.content;
+    return "更新任务清单";
+  }
+
+  if (toolName === "browser_interact") {
+    return buildManagedBrowserInteractPurpose(args);
+  }
+
+  if (toolName === "ask_user") {
+    return "请求补充必要信息";
+  }
+
+  if (isManagedDeploymentTool(toolName)) {
+    const projectedView = readManagedToolViewProjection(metadata);
+    const deploymentOutput = readManagedDeploymentToolOutput(metadata);
+    if (projectedView.userSummary) return projectedView.userSummary;
+    if (deploymentOutput.summary) return deploymentOutput.summary;
+    if (toolName === "get_application_deployment_status") return "检查部署状态";
+    if (toolName === "rollback_application_deployment") return "回滚部署版本";
+    if (toolName === "redeploy_application") return "重新部署应用";
+    return "部署应用";
+  }
+
+  if (toolName === "complete_task") {
+    return "完成任务并整理结果";
+  }
+
+  return getManagedToolDisplayName(toolName);
 }
 
 function extractManagedArtifactPath(
@@ -7384,6 +8063,10 @@ function getManagedToolDisplayName(toolName: string) {
       return i18n.t("homeWorkspace.codeSearch");
     case "ask_user":
       return i18n.t("homeWorkspace.requestClarification");
+    case "debug_open_page":
+      return i18n.t("replayDrawer.tabs.debug");
+    case "browser_interact":
+      return "浏览器操作";
     case "deploy_application":
       return i18n.t("homeWorkspace.deployApplication");
     case "redeploy_application":
@@ -7696,6 +8379,34 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
     }
   };
 
+  if (toolName === "complete_task") {
+    const blocks: string[] = [];
+    const summary = asText(args.summary);
+    if (summary) {
+      blocks.push(summary);
+    }
+    if (Array.isArray(args.verification)) {
+      const checks = (args.verification as unknown[])
+        .map((item) => asText(item))
+        .filter(Boolean);
+      if (checks.length > 0) {
+        blocks.push(
+          [
+            `${i18n.t("homeWorkspace.verificationLabel")}:`,
+            "",
+            checks.map((item) => `- ${item.replace(/\n/g, "\n  ")}`).join("\n"),
+          ].join("\n"),
+        );
+      }
+    }
+    if (error) {
+      blocks.push(`${i18n.t("homeWorkspace.failureReasonLabel")}:\n\n${error}`);
+    }
+    return (
+      blocks.join("\n\n").trim() || formatManagedToolSummary(toolName, metadata)
+    );
+  }
+
   lines.push(
     `${i18n.t("homeWorkspace.toolLabel")}: ${getManagedToolDisplayName(toolName)} (${toolName})`,
   );
@@ -7788,15 +8499,6 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
         .filter(Boolean)
         .join(" / ");
       pushLine(i18n.t("homeWorkspace.suggestedOptionsLabel"), options);
-    }
-  } else if (toolName === "complete_task") {
-    pushLine(i18n.t("homeWorkspace.completionSummaryLabel"), args.summary);
-    if (Array.isArray(args.verification)) {
-      const checks = (args.verification as unknown[])
-        .map((item) => asText(item))
-        .filter(Boolean)
-        .join(" / ");
-      pushLine(i18n.t("homeWorkspace.verificationLabel"), checks);
     }
   } else {
     pushLine(i18n.t("homeWorkspace.summaryLabel"), asText(metadata.content));

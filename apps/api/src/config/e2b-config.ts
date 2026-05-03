@@ -10,6 +10,9 @@ export type E2bConfig = {
   opencodeHost: string;
 };
 
+const DEFAULT_E2B_TEMPLATE = 'opencode-browseruse-playwright-mcp-v1-20260426';
+const DEFAULT_E2B_CODEX_WS_TEMPLATE = 'codex-ws-browseruse-playwright-sandbox-v1-20260426';
+
 function toBool(value: string | undefined, fallback: boolean): boolean {
   if (!value) return fallback;
   const normalized = value.trim().toLowerCase();
@@ -26,14 +29,12 @@ function toNumber(value: string | undefined, fallback: number): number {
 
 export const e2bConfig: E2bConfig = {
   apiKey: process.env.E2B_API_KEY ? process.env.E2B_API_KEY.trim() : null,
-  template:
-    (process.env.E2B_TEMPLATE || 'opencode-playwright-mcp-v7-osac-prebuilt-20260421').trim() ||
-    'opencode-playwright-mcp-v7-osac-prebuilt-20260421',
+  template: (process.env.E2B_TEMPLATE || DEFAULT_E2B_TEMPLATE).trim() || DEFAULT_E2B_TEMPLATE,
   codexTemplate:
     (process.env.E2B_CODEX_TEMPLATE || process.env.E2B_TEMPLATE_CODEX || 'codex').trim() || 'codex',
   codexWsTemplate:
-    (process.env.E2B_CODEX_WS_TEMPLATE || process.env.E2B_TEMPLATE_CODEX_WS || 'codex-ws-playwright-sandbox-v1').trim() ||
-    'codex-ws-playwright-sandbox-v1',
+    (process.env.E2B_CODEX_WS_TEMPLATE || process.env.E2B_TEMPLATE_CODEX_WS || DEFAULT_E2B_CODEX_WS_TEMPLATE).trim() ||
+    DEFAULT_E2B_CODEX_WS_TEMPLATE,
   timeoutMs: Math.max(10_000, toNumber(process.env.E2B_TIMEOUT_MS, 30 * 60 * 1000)),
   allowInternetAccess: toBool(process.env.E2B_ALLOW_INTERNET, true),
   allowPublicTraffic: toBool(process.env.E2B_ALLOW_PUBLIC_TRAFFIC, true),

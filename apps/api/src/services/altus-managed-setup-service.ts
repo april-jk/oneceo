@@ -18,10 +18,20 @@ import {
   deriveManagedTaskIntentProfile,
   type AltusManagedTaskIntentProfile,
 } from './altus-managed-prompt-service';
+import { classifyPlatformCapabilityIntent } from './platform-capability-intent-service';
 import { classifyTaskIntentShape, type TaskClarificationType, type TaskIntentShape } from './task-intent-shape-service';
 import { buildAttachmentContextPrompt } from './task-attachment-service';
 import { managedImageObjectService, type ManagedImageObjectService } from './managed-image-object-service';
 import { isSameUserId } from '../utils/user-id';
+import {
+  altusClarificationPolicyReducer,
+  type ClarificationReducerResult,
+} from './altus-clarification-policy-reducer';
+import { altusClarificationTransitionAgent } from './altus-clarification-transition-agent';
+import {
+  altusManagedContextService,
+  buildManagedConversationEntries,
+} from './altus-managed-context-service';
 
 const INLINE_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const INLINE_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
@@ -118,9 +128,49 @@ const NO_INTEGRATION_RESPONSE_KEYWORDS = [
   '独立实现',
   '不和现有系统打通',
 ];
+const CLARIFICATION_DELEGATION_RESPONSE_KEYWORDS = [
+  '按你觉得',
+  '你决定',
+  '你来定',
+  '默认',
+  '没有指定',
+  '没指定',
+  '都可以',
+  '随便',
+  '合适的方式',
+  '仓库现有',
+  '现有技术栈',
+] as const;
+const NEW_TURN_RESPONSE_KEYWORDS = [
+  '帮我',
+  '请帮',
+  '查查',
+  '查一下',
+  '搜索',
+  '检索',
+  '最近',
+  '年报',
+  '报告',
+  '行业',
+  '开发者',
+  '谁开发',
+  '你是谁',
+  '能做什么',
+  '还能做什么',
+  '做什么',
+  '什么？',
+  '什么?',
+  'what',
+  'search',
+  'research',
+  'report',
+] as const;
 const ACCEPTANCE_RESPONSE_KEYWORDS = [
   '只要源码',
   '源码',
+  '只要代码',
+  '完整代码',
+  '完成代码',
   '本地可运行',
   '本地运行',
   '测试通过',
@@ -143,6 +193,15 @@ const ROOT_STACK_FILES = [
   'Cargo.toml',
   'pom.xml',
 ] as const;
+const COMPOSIO_BROKERED_RUNTIME_TRANSPORT = 'api_brokered_mcp';
+const COMPOSIO_BROKERED_CONNECTORS = new Set(['github', 'notion', 'slack', 'figma', 'supabase']);
+
+function isSnapshotRuntimeTransportSupported(binding: { connectorKey?: unknown; runtimeTransport?: unknown }) {
+  if (!COMPOSIO_BROKERED_CONNECTORS.has(asText(binding.connectorKey))) {
+    return true;
+  }
+  return asText(binding.runtimeTransport) === COMPOSIO_BROKERED_RUNTIME_TRANSPORT;
+}
 
 type WorkspaceTechStackHints = {
   constrained: boolean;
@@ -156,12 +215,31 @@ type FinalClarificationDecision = {
   clarificationOptions?: string[];
 };
 
+type TransitionResolvedProfileInput = {
+  baseProfile: AltusManagedTaskIntentProfile;
+  shape: TaskIntentShape;
+  todoDecision: Pick<AltusManagedTaskIntentProfile, 'todoRequired' | 'todoReason'>;
+  reduced: ClarificationReducerResult;
+  currentText: string;
+  texts: string[];
+};
+
 function includesAnyKeyword(text: string, keywords: readonly string[]) {
   return keywords.some((keyword) => text.includes(keyword));
 }
 
 function normalizeText(value: unknown) {
   return asText(value).toLowerCase();
+}
+
+function isPlatformCapabilityAdvisoryText(text: string) {
+  const mode = classifyPlatformCapabilityIntent(text).mode;
+  return (
+    mode === 'answer_capability' ||
+    mode === 'explain_how_to' ||
+    mode === 'discuss_requirement' ||
+    mode === 'explain_concept'
+  );
 }
 
 function coversArtifactType(text: string) {
@@ -185,6 +263,30 @@ function coversIntegrationTarget(text: string) {
 
 function coversAcceptanceRequirement(text: string) {
   return includesAnyKeyword(text, ACCEPTANCE_RESPONSE_KEYWORDS);
+}
+
+function shouldTreatPendingClarificationAsNewTurn(
+  text: string,
+  pendingClarificationType: Exclude<TaskClarificationType, 'none'>,
+  workspaceHints: WorkspaceTechStackHints
+) {
+  const normalized = normalizeText(text);
+  if (!normalized) return false;
+  if (includesAnyKeyword(normalized, CLARIFICATION_DELEGATION_RESPONSE_KEYWORDS)) {
+    return false;
+  }
+  if (coversClarificationType(pendingClarificationType, normalized, workspaceHints)) {
+    return false;
+  }
+  if (
+    coversArtifactType(normalized) ||
+    coversScopeBoundary(normalized) ||
+    coversIntegrationTarget(normalized) ||
+    coversAcceptanceRequirement(normalized)
+  ) {
+    return false;
+  }
+  return includesAnyKeyword(normalized, NEW_TURN_RESPONSE_KEYWORDS);
 }
 
 function coversClarificationType(
@@ -503,24 +605,82 @@ function resolveClarificationDecision(input: {
   };
 }
 
-function normalizeHistoryRole(role: unknown): 'system' | 'user' | 'assistant' | null {
-  const normalized = asText(role).toLowerCase();
-  if (normalized === 'system') return 'system';
-  if (normalized === 'user') return 'user';
-  if (normalized === 'assistant' || normalized === 'agent') return 'assistant';
-  return null;
+function shouldUseClarificationTransitionAgent(input: {
+  baseProfile: AltusManagedTaskIntentProfile;
+  shape: TaskIntentShape;
+  pendingClarificationType?: TaskClarificationType | null;
+}) {
+  return Boolean(
+    (input.pendingClarificationType && input.pendingClarificationType !== 'none') ||
+      input.baseProfile.needsClarification ||
+      input.shape.needsClarification ||
+      input.shape.candidateClarificationType !== 'none'
+  );
 }
 
-function isHistoryMessageRelevant(input: { role: unknown; messageType: unknown }) {
-  const role = normalizeHistoryRole(input.role);
-  const messageType = asText(input.messageType);
-  if (!role) return false;
-  if (messageType === 'session_started') return false;
-  if (messageType === 'status_update') return false;
-  if (messageType === 'executor_event') return false;
-  if (messageType === 'opencode_event') return false;
-  if (messageType === 'error' || messageType === 'opencode_error') return false;
-  return true;
+function buildProfileFromTransition(input: TransitionResolvedProfileInput): AltusManagedTaskIntentProfile {
+  const fallbackQuestion = input.reduced.accepted
+    ? ''
+    : input.reduced.question;
+  if (!input.reduced.accepted) {
+    return {
+      ...input.baseProfile,
+      ...input.todoDecision,
+      needsClarification: true,
+      clarificationType: input.reduced.clarificationType || input.shape.candidateClarificationType || 'none',
+      clarificationQuestion: fallbackQuestion,
+      clarificationOptions: input.reduced.options,
+      clarificationTransition: {
+        nextState: input.reduced.nextState,
+        reason: input.reduced.reason,
+      },
+    };
+  }
+
+  if (input.reduced.nextState === 'clarifying') {
+    return {
+      ...input.baseProfile,
+      ...input.todoDecision,
+      needsClarification: true,
+      clarificationType: input.reduced.clarificationType || input.shape.candidateClarificationType || 'none',
+      clarificationQuestion: input.reduced.question || input.shape.candidateClarificationQuestion,
+      clarificationOptions: input.reduced.options,
+      clarificationTransition: {
+        nextState: 'clarifying',
+        reason: input.reduced.reason,
+        assumptions: input.reduced.assumptions,
+      },
+    };
+  }
+
+  const effectiveTexts =
+    input.reduced.nextState === 'new_turn' && input.currentText ? [input.currentText] : input.texts;
+  const effectiveBaseProfile =
+    input.reduced.nextState === 'new_turn'
+      ? deriveManagedTaskIntentProfile(effectiveTexts)
+      : input.baseProfile;
+  const effectiveShape =
+    input.reduced.nextState === 'new_turn'
+      ? classifyTaskIntentShape(effectiveTexts)
+      : input.shape;
+  const effectiveTodoDecision =
+    input.reduced.nextState === 'new_turn'
+      ? resolveTodoDecision(effectiveShape)
+      : input.todoDecision;
+
+  return {
+    ...effectiveBaseProfile,
+    ...effectiveTodoDecision,
+    needsClarification: false,
+    clarificationType: 'none',
+    clarificationQuestion: '',
+    clarificationOptions: undefined,
+    clarificationTransition: {
+      nextState: input.reduced.nextState,
+      reason: input.reduced.reason,
+      assumptions: input.reduced.assumptions,
+    },
+  };
 }
 
 function collectAttachmentContextPrompt(history: Array<{ metadata?: unknown }>): string {
@@ -725,6 +885,13 @@ export class AltusManagedSetupService {
   }
 
   async captureConnectorSnapshot(sessionId: string, userId: string) {
+    await sessionConnectorService.waitForAttachIdle(sessionId).catch(() => false);
+    const memory = await taskCreationFileMemoryStore.getSession(sessionId).catch(() => null);
+    const orchestratorSessionId = asText(memory?.runtime?.orchestratorSessionId);
+    if (orchestratorSessionId) {
+      await sessionMcpRecoveryService.ensureSessionRecovered(sessionId, orchestratorSessionId).catch(() => null);
+    }
+    await sessionConnectorService.waitForAttachIdle(sessionId).catch(() => false);
     let statuses = await sessionConnectorService.listSessionConnectors(sessionId, userId).catch(() => []);
     const attached = statuses
       .filter((item) => item.attached)
@@ -747,13 +914,15 @@ export class AltusManagedSetupService {
   }
 
   async captureMcpToolSnapshot(sessionId: string) {
+    await sessionConnectorService.waitForAttachIdle(sessionId).catch(() => false);
     const bindings = await taskSessionConnectorBindingDAO.listByTaskSessionId(sessionId).catch(() => []);
     const providers = bindings
       .filter(
         (item) =>
           item.desiredState === 'attached' &&
           asText(item.runtimeStatus).toLowerCase() === 'connected' &&
-          asText(item.runtimeProviderId)
+          asText(item.runtimeProviderId) &&
+          isSnapshotRuntimeTransportSupported(item)
       )
       .map((item) => ({
         connectorKey: item.connectorKey,
@@ -923,21 +1092,22 @@ export class AltusManagedSetupService {
   async buildConversationMessages(
     sessionId: string,
     currentInput: string,
-    systemPrompt: string
+    systemPrompt: string,
+    options: {
+      turnStatePrompt?: string | null;
+    } = {}
   ): Promise<ChatMessage[]> {
     const history = await taskCreationSessionDAO.getMessages(sessionId);
     const attachmentContextPrompt = collectAttachmentContextPrompt(history);
     const todoContextPrompt = buildTodoContextPrompt(history);
     const inlineImageCache = new Map<string, ChatMessageContentPart>();
-    const relevantHistory = history
-      .filter((item) => isHistoryMessageRelevant({ role: item.role, messageType: item.messageType }))
-      .slice(-24);
+    const relevantHistory = buildManagedConversationEntries(history, { limit: 24 });
     const relevant: ChatMessage[] = [];
 
     for (const item of relevantHistory) {
-      const role = normalizeHistoryRole(item.role);
+      const role = item.role;
       if (!role) continue;
-      const textContent = asText(item.content);
+      const textContent = item.content;
       if (role !== 'user') {
         if (!textContent) continue;
         relevant.push({
@@ -980,7 +1150,13 @@ export class AltusManagedSetupService {
     const shouldAppendCurrentInput =
       latestHistory?.role !== 'user' || extractMessageTextContent(latestHistory.content) !== asText(currentInput);
 
-    return [
+    const turnStateMessage = asText(options.turnStatePrompt)
+      ? {
+          role: 'system' as const,
+          content: asText(options.turnStatePrompt),
+        }
+      : null;
+    const baseMessages: ChatMessage[] = [
       {
         role: 'system' as const,
         content: systemPrompt,
@@ -1002,14 +1178,23 @@ export class AltusManagedSetupService {
           ]
         : []),
       ...relevant,
-      ...(shouldAppendCurrentInput
-        ? [
-            {
-              role: 'user' as const,
-              content: currentInput,
-            },
-      ]
-        : []),
+    ];
+    const currentUserMessage: ChatMessage | null = shouldAppendCurrentInput
+      ? {
+          role: 'user' as const,
+          content: currentInput,
+        }
+      : null;
+
+    if (turnStateMessage && !currentUserMessage && baseMessages[baseMessages.length - 1]?.role === 'user') {
+      const lastMessage = baseMessages[baseMessages.length - 1];
+      return [...baseMessages.slice(0, -1), turnStateMessage, lastMessage];
+    }
+
+    return [
+      ...baseMessages,
+      ...(turnStateMessage ? [turnStateMessage] : []),
+      ...(currentUserMessage ? [currentUserMessage] : []),
     ];
   }
 
@@ -1019,36 +1204,126 @@ export class AltusManagedSetupService {
     messageType: 'user_input' | 'user_response' = 'user_input'
   ): Promise<AltusManagedTaskIntentProfile> {
     const history = await taskCreationSessionDAO.getMessages(sessionId);
-    const relevantUserTexts = history
-      .filter(
-        (item) =>
-          normalizeHistoryRole(item.role) === 'user' &&
-          isHistoryMessageRelevant({ role: item.role, messageType: item.messageType })
-      )
-      .map((item) => asText(item.content))
-      .filter(Boolean)
-      .slice(-8);
     const currentText = asText(currentInput);
-    const latestHistoryText = relevantUserTexts[relevantUserTexts.length - 1] || '';
-    const texts =
-      currentText && currentText !== latestHistoryText
-        ? [...relevantUserTexts, currentText]
-        : relevantUserTexts;
+    const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId).catch(() => null);
+    const pendingClarificationType = sessionMemory?.pendingClarificationType || null;
+    if (currentText && isPlatformCapabilityAdvisoryText(currentText)) {
+      const currentTexts = [currentText];
+      const advisoryProfile = deriveManagedTaskIntentProfile(currentTexts);
+      const advisoryShape = classifyTaskIntentShape(currentTexts);
+      return {
+        ...advisoryProfile,
+        ...resolveTodoDecision(advisoryShape),
+        needsClarification: false,
+        clarificationType: 'none',
+        clarificationQuestion: '',
+        clarificationOptions: undefined,
+        clarificationTransition:
+          pendingClarificationType
+            ? {
+                nextState: 'advisory',
+                reason: 'platform_capability_advisory_current_turn',
+              }
+            : advisoryProfile.clarificationTransition,
+      };
+    }
+    const contextProjection = altusManagedContextService.buildProjection(history, {
+      currentInput: currentText,
+      currentMessageType: messageType,
+      pendingClarificationType,
+      pendingQuestion: sessionMemory?.pendingQuestion || null,
+      pendingOptions: Array.isArray(sessionMemory?.pendingOptions) ? sessionMemory.pendingOptions : null,
+      clarificationTranscriptLimit: 10,
+      userTextLimit: 8,
+    });
+    const recentTransitionMessages = contextProjection.clarificationTranscript;
+    const texts = contextProjection.userTexts;
+    const latestHistoryText = contextProjection.latestUserText;
     const baseProfile = deriveManagedTaskIntentProfile(texts);
     const shape = classifyTaskIntentShape(texts);
     const workspaceHints = await deriveWorkspaceTechStackHints(resolveOpencodeWorkspacePath(sessionId));
-    const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId).catch(() => null);
+    if (shouldUseClarificationTransitionAgent({ baseProfile, shape, pendingClarificationType })) {
+      try {
+        const proposal = await altusClarificationTransitionAgent.propose({
+          currentText: currentText || latestHistoryText,
+          recentUserTexts: texts,
+          recentMessages: recentTransitionMessages,
+          pendingClarificationType,
+          pendingQuestion: sessionMemory?.pendingQuestion || null,
+          pendingOptions: Array.isArray(sessionMemory?.pendingOptions) ? sessionMemory.pendingOptions : null,
+          shape,
+        });
+        if (proposal) {
+          const reduced = altusClarificationPolicyReducer.reduce(
+            {
+              status: pendingClarificationType ? 'clarifying' : 'none',
+              pendingClarificationType,
+              pendingQuestion: sessionMemory?.pendingQuestion || null,
+            },
+            proposal
+          );
+          if (
+            reduced.accepted ||
+            reduced.reason !== 'invalid_transition' ||
+            Boolean(pendingClarificationType)
+          ) {
+            return buildProfileFromTransition({
+              baseProfile,
+              shape,
+              todoDecision: resolveTodoDecision(shape),
+              reduced,
+              currentText,
+              texts,
+            });
+          }
+        }
+      } catch (error) {
+        console.warn('[altus] clarification transition agent failed; falling back to deterministic gate', error);
+      }
+    }
+    if (
+      messageType === 'user_response' &&
+      pendingClarificationType &&
+      currentText &&
+      coversClarificationType(pendingClarificationType, normalizeText(currentText), workspaceHints)
+    ) {
+      return buildProfileFromTransition({
+        baseProfile,
+        shape,
+        todoDecision: resolveTodoDecision(shape),
+        reduced: {
+          accepted: true,
+          nextState: 'ready_to_execute',
+          clearedPending: true,
+          assumptions: [currentText],
+          reason: 'answered_pending_clarification',
+        },
+        currentText,
+        texts,
+      });
+    }
+    const treatAsNewTurn = Boolean(
+      messageType === 'user_response' &&
+        pendingClarificationType &&
+        shouldTreatPendingClarificationAsNewTurn(currentText, pendingClarificationType, workspaceHints)
+    );
+    const effectiveTexts = treatAsNewTurn && currentText ? [currentText] : texts;
+    const effectiveMessageType = treatAsNewTurn ? 'user_input' : messageType;
+    const effectiveBaseProfile = treatAsNewTurn
+      ? deriveManagedTaskIntentProfile(effectiveTexts)
+      : baseProfile;
+    const effectiveShape = treatAsNewTurn ? classifyTaskIntentShape(effectiveTexts) : shape;
     const clarificationDecision = resolveClarificationDecision({
-      shape,
+      shape: effectiveShape,
       currentText: normalizeText(currentText),
-      messageType,
-      pendingClarificationType: sessionMemory?.pendingClarificationType || null,
+      messageType: effectiveMessageType,
+      pendingClarificationType: treatAsNewTurn ? null : pendingClarificationType,
       workspaceHints,
     });
-    const todoDecision = resolveTodoDecision(shape);
+    const todoDecision = resolveTodoDecision(effectiveShape);
 
     return {
-      ...baseProfile,
+      ...effectiveBaseProfile,
       ...todoDecision,
       needsClarification: clarificationDecision.needsClarification,
       clarificationType: clarificationDecision.clarificationType,

@@ -40,6 +40,13 @@
 - 若处于模板迁移链路且恢复失败，必须直接报错中断，禁止继续进入空工作区执行。
 - 任务会话去重关闭旧 sandbox 时，应走 `closeEnvironment` 生命周期（包含归档），避免直接 `killSandbox` 跳过归档导致恢复源缺失。
 
+## 2026-04 n.eko 匿名调试入口
+
+- n.eko 调试只作为 sandbox 内浏览器画面回传入口使用，不承担用户身份认证。
+- 服务端配置固定使用 `member.provider: "noauth"`，禁止再生成 `multiuser` 密码配置。
+- 调试 URL 必须保持为 `https://8081-<sandboxId>.e2b.app` 形式，禁止拼接 `pwd` / `usr` 等登录参数。
+- n.eko 客户端补丁应自动发起匿名连接，并隐藏登录表单，避免偶发显示登录页阻断调试链路。
+
 ## 实施步骤（单沙箱验证）
 
 ### 1) 运行临时脚本（本地）
@@ -95,7 +102,7 @@ GET /api/task-creation/sessions/<taskSessionId>/debug
 - Xvfb Display：`NEKO_DISPLAY`（默认 `:0`）
 - `NEKO_WEBRTC_FORCE_MUX`：默认 `true`（推荐，E2B 场景优先）。
 - `NEKO_WEBRTC_TCPMUX`：默认 `8082`。
-- `NEKO_WEBRTC_UDPMUX`：默认 `0`（可按需开启）。
+- `NEKO_WEBRTC_UDPMUX`：默认 `8083`。TURN 场景下浏览器常返回 `udp4 relay` candidate，必须启用 UDP mux，否则 n.eko/Pion 会忽略 UDP candidate 并导致 ICE 失败。
 - `NEKO_WEBRTC_EPR`：默认 `0`（禁用；仅明确需要时再启用端口段）。
 - `NEKO_AUTO_NAT1TO1`：默认 `false`（仅在确认需要时开启）。
 

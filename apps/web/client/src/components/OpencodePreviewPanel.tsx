@@ -1,5 +1,6 @@
 import {
   default as React,
+  forwardRef,
   useCallback,
   useEffect,
   useMemo,
@@ -11,13 +12,15 @@ import {
 import i18n from "@/i18n";
 import { Button } from "@/components/ui/button";
 import {
-  BarChart3,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Calendar,
   Copy,
   Database,
   Download,
+  Eye,
+  EyeOff,
   ExternalLink,
   File,
   FileAudio,
@@ -32,7 +35,6 @@ import {
   Globe,
   Globe2,
   HardDrive,
-  History,
   KeyRound,
   Loader2,
   Pencil,
@@ -40,15 +42,31 @@ import {
   RefreshCw,
   Lock,
   Unlock,
+  Upload,
   Rocket,
   ScrollText,
   Settings2,
-  ShieldCheck,
   TableProperties,
+  TrendingUp,
   Trash2,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { AgentMessage } from "@/hooks/useTaskCreationAgent";
 import {
   buildPreviewItems,
@@ -58,13 +76,20 @@ import {
 import { Streamdown } from "streamdown";
 import {
   deleteTaskCreationDatabaseRow,
+  ensureTaskCreationDatabase,
+  ensureTaskCreationStorage,
   getTaskCreationDatabaseInfo,
   getTaskCreationDatabaseRows,
+  getTaskCreationDeploymentAnalytics,
   getTaskCreationDeploymentInfo,
   getTaskCreationDeploymentTemplateBaseline,
   getTaskCreationDebugInfo,
-  headWorkspaceRawFile,
-  waitWorkspaceRawFileReady,
+  getTaskCreationStorageStatus,
+  createTaskCreationStorageUploadTarget,
+  TASK_CREATION_STORAGE_UPLOAD_MAX_BYTES,
+  deleteTaskCreationStorageFile,
+  getTaskCreationStorageFileDownloadUrl,
+  uploadTaskCreationStorageFile,
   insertTaskCreationDatabaseRow,
   rotateTaskCreationDeploymentToken,
   startTaskCreationRuntime,
@@ -77,8 +102,10 @@ import {
   type TaskCreationDatabaseRowLocator,
   type TaskCreationDatabaseRowsPage,
   type TaskCreationDeploymentInfo,
+  type TaskCreationDeploymentAnalyticsOverview,
   type TaskCreationDeploymentTemplateBaseline,
   type TaskCreationDebugInfo,
+  type TaskCreationStorageStatus,
   type WorkspaceFile,
   type WorkspaceTree,
   type WorkspaceTreeItem,
@@ -91,7 +118,8 @@ import {
 } from "@/components/ui/resizable";
 import {
   appendPreviewCacheBust,
-  mapWorkspaceRawPreviewHeadResult,
+  checkWorkspaceHtmlPreviewReady,
+  waitWorkspaceHtmlPreviewReady,
   type WorkspaceHtmlPreviewState,
 } from "@/lib/workspace-preview";
 import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
@@ -223,6 +251,18 @@ export function useWorkspaceFilePreviewState({
   const normalizeWorkspacePath = (value: string) =>
     normalizeWorkspaceRelativePath(value, sessionId);
 
+  const ensureRuntimeForWorkspaceRead = async () => {
+    if (runtimeReady !== false || !ensureRuntimeRef.current) {
+      return;
+    }
+    try {
+      await ensureRuntimeRef.current();
+    } catch {
+      // Historical file reads can still be served from archive/cache even when
+      // a runtime cannot be started for this session.
+    }
+  };
+
   const mergeWorkspaceItems = (
     currentItems: WorkspaceTreeItem[],
     incomingItems: WorkspaceTreeItem[],
@@ -351,11 +391,7 @@ export function useWorkspaceFilePreviewState({
     const normalizedPath = normalizeWorkspacePath(path);
     if (!normalizedPath) return;
     if (runtimeReady === false) {
-      if (ensureRuntimeRef.current) {
-        await ensureRuntimeRef.current();
-      } else {
-        return;
-      }
+      await ensureRuntimeForWorkspaceRead();
     }
     const requestSequence = fileRequestSequenceRef.current + 1;
     fileRequestSequenceRef.current = requestSequence;
@@ -427,7 +463,7 @@ export function useWorkspaceFilePreviewState({
     }
     if (runtimeReady === false) {
       if (mode === "manual" && ensureRuntimeRef.current) {
-        await ensureRuntimeRef.current();
+        await ensureRuntimeForWorkspaceRead();
       } else {
         setTree(null);
         setDirState({});
@@ -1396,6 +1432,67 @@ function formatPreviewTimestamp(value?: string | null) {
   return `${hours}:${minutes}`;
 }
 
+function formatFileSize(value?: number) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return "—";
+  }
+  if (value === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let current = value;
+  let unitIndex = 0;
+  while (current >= 1024 && unitIndex < units.length - 1) {
+    current /= 1024;
+    unitIndex += 1;
+  }
+  const digits = current >= 10 || unitIndex === 0 ? 0 : 1;
+  return `${current.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+function getStorageFileIcon(key: string) {
+  const normalized = key.trim().toLowerCase();
+  if (
+    normalized.endsWith(".png") ||
+    normalized.endsWith(".jpg") ||
+    normalized.endsWith(".jpeg") ||
+    normalized.endsWith(".gif") ||
+    normalized.endsWith(".webp") ||
+    normalized.endsWith(".svg")
+  ) {
+    return FileImage;
+  }
+  if (
+    normalized.endsWith(".mp4") ||
+    normalized.endsWith(".mov") ||
+    normalized.endsWith(".webm")
+  ) {
+    return FileVideo;
+  }
+  if (normalized.endsWith(".mp3") || normalized.endsWith(".wav")) {
+    return FileAudio;
+  }
+  if (normalized.endsWith(".json")) {
+    return FileJson2;
+  }
+  if (
+    normalized.endsWith(".ts") ||
+    normalized.endsWith(".tsx") ||
+    normalized.endsWith(".js") ||
+    normalized.endsWith(".jsx") ||
+    normalized.endsWith(".css") ||
+    normalized.endsWith(".html")
+  ) {
+    return FileCode2;
+  }
+  if (
+    normalized.endsWith(".md") ||
+    normalized.endsWith(".txt") ||
+    normalized.endsWith(".csv")
+  ) {
+    return FileText;
+  }
+  return File;
+}
+
 function formatMetricCount(value?: number | null, fallback: string = "--") {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return fallback;
@@ -1403,6 +1500,18 @@ function formatMetricCount(value?: number | null, fallback: string = "--") {
   return new Intl.NumberFormat(i18n.language === "zh" ? "zh-CN" : "en-US").format(
     value,
   );
+}
+
+function formatDurationSeconds(value?: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return i18n.t("previewPanel.deployment.dashboard.noMetricValue");
+  }
+  const minutes = Math.floor(value / 60);
+  const seconds = value % 60;
+  if (i18n.language === "zh") {
+    return minutes > 0 ? `${minutes}分钟 ${seconds}秒` : `${seconds}秒`;
+  }
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 }
 
 function getDeploymentAnalyticsPresentation(
@@ -1865,10 +1974,19 @@ export function FilePreview({
           tree &&
           tree.items.length > 0 &&
           sessionId)),
-  );
+      );
   const effectiveHtmlPreviewUrl = appendPreviewCacheBust(
     htmlPreviewUrl,
     htmlPreviewNonce,
+  );
+  const hasWorkspacePreviewState = Boolean(
+    loading ||
+      contentLoading ||
+      selectedPath ||
+      file ||
+      contentError ||
+      error ||
+      (tree && tree.items.length > 0),
   );
 
   useEffect(() => {
@@ -1919,9 +2037,8 @@ export function FilePreview({
     let cancelled = false;
     setHtmlPreviewState("checking");
     setHtmlPreviewMessage("");
-    void headWorkspaceRawFile(sessionId, selectedPath).then((result) => {
+    void checkWorkspaceHtmlPreviewReady(sessionId, selectedPath).then((mapped) => {
       if (cancelled) return;
-      const mapped = mapWorkspaceRawPreviewHeadResult(result);
       setHtmlPreviewState(mapped.state);
       setHtmlPreviewMessage(mapped.message);
     });
@@ -1942,11 +2059,10 @@ export function FilePreview({
     setHtmlPreviewMessage("");
     try {
       await startTaskCreationRuntime(sessionId);
-      const result = await waitWorkspaceRawFileReady(sessionId, selectedPath, {
+      const mapped = await waitWorkspaceHtmlPreviewReady(sessionId, selectedPath, {
         attempts: 8,
         intervalMs: 600,
       });
-      const mapped = mapWorkspaceRawPreviewHeadResult(result);
       setHtmlPreviewState(mapped.state);
       setHtmlPreviewMessage(mapped.message);
       if (mapped.state === "ready") {
@@ -1979,7 +2095,7 @@ export function FilePreview({
     }, 1200);
   };
 
-  if (!runtimeReady) {
+  if (!runtimeReady && !hasWorkspacePreviewState) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-2">
         <span>{i18n.t("previewPanel.filePreviewNotLoaded")}</span>
@@ -1989,13 +2105,20 @@ export function FilePreview({
           onClick={onRefresh}
           disabled={runtimeStarting}
         >
-          {runtimeStarting ? i18n.t("common.loading") : i18n.t("previewPanel.loadFiles")}
+          {runtimeStarting ? (
+            <>
+              <WorkspaceFileLoadGlyph className="mr-1.5 h-3.5 w-3.5" />
+              {i18n.t("common.loading")}
+            </>
+          ) : (
+            i18n.t("previewPanel.loadFiles")
+          )}
         </Button>
       </div>
     );
   }
   if (loading) {
-    return <EmptyState text={i18n.t("previewPanel.loadingFileTree")} />;
+    return <WorkspaceFileLoadingState text={i18n.t("previewPanel.loadingFileTree")} />;
   }
   if (error) {
     return (
@@ -2007,12 +2130,22 @@ export function FilePreview({
       </div>
     );
   }
-  if (!tree || tree.items.length === 0) {
+  const previewTree =
+    tree && tree.items.length > 0
+      ? tree
+      : selectedPath
+        ? {
+            root: tree?.root || "",
+            items: [{ path: selectedPath, type: "file" as const }],
+          }
+        : null;
+
+  if (!previewTree || previewTree.items.length === 0) {
     return <EmptyState text={i18n.t("previewPanel.noFiles")} />;
   }
 
-  const nodes = buildTree(tree.items);
-  const projectPrefix = detectProjectRootPrefix(tree.items);
+  const nodes = buildTree(previewTree.items);
+  const projectPrefix = detectProjectRootPrefix(previewTree.items);
   const projectNode =
     projectPrefix && nodes.length > 0
       ? nodes.find((node) => node.type === "dir" && node.path === projectPrefix) || null
@@ -2058,7 +2191,7 @@ export function FilePreview({
           </div>
         </div>
       </ResizablePanel>
-      <ResizableHandle className="w-[2px] bg-border/80 transition-colors hover:bg-[var(--brand-soft-foreground)] data-[resize-handle-state=drag]:bg-[var(--brand-solid)]" />
+      <ResizableHandle withHandle className="border-0 bg-transparent" />
       <ResizablePanel defaultSize={72} minSize={55}>
         <div className="h-full min-h-0 overflow-hidden bg-background p-3">
           {selectedPath ? (
@@ -2145,9 +2278,7 @@ export function FilePreview({
               </div>
               <div className="min-h-0 flex-1 overflow-hidden">
                 {contentLoading ? (
-                  <div className="px-3 py-3 text-xs text-muted-foreground">
-                    {i18n.t("common.loading")}
-                  </div>
+                  <WorkspaceFileLoadingState text={i18n.t("common.loading")} />
                 ) : previewType === "html" && !isBinary ? (
                   htmlView === "preview" ? (
                     <div className="h-full min-h-0 overflow-auto overscroll-contain p-3">
@@ -2592,13 +2723,9 @@ export function DeploymentPreview({
   templateBaselineError,
   loading,
   error,
-  actionLoading,
   selectedDeploymentId,
   onRefresh,
   onSelectDeployment,
-  onDeploy,
-  onRedeploy,
-  onRollback,
   tokenRotationLoading,
   onRotateDeploymentToken,
 }: {
@@ -2754,12 +2881,6 @@ export function DeploymentPreview({
         .map((entry) => entry as readonly [string, string]),
     ),
   );
-  const primaryActionText =
-    actionLoading === "deploy"
-      ? i18n.t("previewPanel.deployment.publishing")
-      : hasSuccessfulDeployment
-        ? i18n.t("previewPanel.deployment.publishNewVersion")
-        : i18n.t("previewPanel.deployment.publishNow");
   const successCount =
     info?.deployments.filter((item) => item.status === "SUCCESS").length ?? 0;
   const failedCount =
@@ -2787,12 +2908,6 @@ export function DeploymentPreview({
             icon={Rocket}
             label={i18n.t("previewPanel.deployment.sections.overview")}
             onClick={() => setSection("overview")}
-          />
-          <DeploymentMenuButton
-            active={section === "dashboard"}
-            icon={BarChart3}
-            label={i18n.t("previewPanel.deployment.sections.dashboard")}
-            onClick={() => setSection("dashboard")}
           />
           <DeploymentMenuButton
             active={section === "database"}
@@ -2839,49 +2954,41 @@ export function DeploymentPreview({
         </Button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-auto overscroll-contain px-4 py-4 space-y-4">
+      <div
+        className={cn(
+          "flex-1 min-h-0 overflow-auto overscroll-contain px-4 py-4 space-y-4",
+          section === "settings" &&
+            "[scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden",
+        )}
+      >
         {error ? <div className="text-xs text-rose-600">{error}</div> : null}
         {info?.message ? (
           <div className="text-xs text-muted-foreground">{info.message}</div>
         ) : null}
 
         {section === "overview" ? (
-          <DeploymentOverviewSection
-            info={info}
-            statusMeta={statusMeta}
-            currentDeployment={currentDeployment}
-            currentDeploymentId={currentDeploymentId}
-            accessEntries={accessEntries}
-            primaryAccessUrl={primaryAccessUrl}
-            runtimeUrl={runtimeUrl}
-            staticUrl={staticUrl}
-            actionLoading={actionLoading}
-            loading={loading}
-            primaryActionText={primaryActionText}
-            onDeploy={onDeploy}
-            onRedeploy={onRedeploy}
-            onRollback={onRollback}
-            onRefresh={onRefresh}
-            onSelectDeployment={onSelectDeployment}
-          />
-        ) : null}
-
-        {section === "dashboard" ? (
-          <DeploymentDashboardSection
-            sessionId={sessionId}
-            info={info}
-            templateBaseline={templateBaseline}
-            templateBaselineLoading={templateBaselineLoading}
-            templateBaselineError={templateBaselineError}
-            statusMeta={statusMeta}
-            successCount={successCount}
-            failedCount={failedCount}
-            totalDeployments={totalDeployments}
-            successRate={successRate}
-            currentDeployment={currentDeployment}
-            latestTimestamp={latestTimestamp}
-            accessEntries={accessEntries}
-          />
+          <>
+            <DeploymentOverviewSection
+              info={info}
+              statusMeta={statusMeta}
+              currentDeploymentId={currentDeploymentId}
+              primaryAccessUrl={primaryAccessUrl}
+              loading={loading}
+              onRefresh={onRefresh}
+              onManageAccess={() => {
+                setSection("settings");
+                setSettingsSection("domain");
+              }}
+            />
+            <DeploymentDashboardSection
+              sessionId={sessionId}
+              info={info}
+              currentDeploymentId={currentDeploymentId}
+              accessEntries={accessEntries}
+              loading={loading}
+              onRefresh={onRefresh}
+            />
+          </>
         ) : null}
 
         {section === "database" ? (
@@ -2893,7 +3000,7 @@ export function DeploymentPreview({
         ) : null}
 
         {section === "storage" ? (
-          <DeploymentStorageSection info={info} statusMeta={statusMeta} />
+          <DeploymentStorageSection sessionId={sessionId} statusMeta={statusMeta} />
         ) : null}
 
         {section === "settings" ? (
@@ -2916,7 +3023,6 @@ export function DeploymentPreview({
 
 type DeploymentWorkbenchSection =
   | "overview"
-  | "dashboard"
   | "database"
   | "storage"
   | "settings";
@@ -2930,6 +3036,7 @@ type DeploymentSettingsSection =
   | "keys"
   | "github";
 
+type DeploymentAnalyticsTimeRange = "24h" | "7d" | "30d";
 type DeploymentStatusMeta = {
   label: string;
   description: string;
@@ -2941,1302 +3048,582 @@ type DeploymentStatusMeta = {
 function DeploymentOverviewSection({
   info,
   statusMeta,
-  currentDeployment,
   currentDeploymentId,
-  accessEntries,
   primaryAccessUrl,
-  runtimeUrl,
-  staticUrl,
-  actionLoading,
   loading,
-  primaryActionText,
-  onDeploy,
-  onRedeploy,
-  onRollback,
   onRefresh,
-  onSelectDeployment,
+  onManageAccess,
 }: {
   info: TaskCreationDeploymentInfo | null;
   statusMeta: DeploymentStatusMeta;
-  currentDeployment: TaskCreationDeploymentInfo["deployments"][number] | null;
   currentDeploymentId: string;
-  accessEntries: Array<[string, string] | readonly [string, string]>;
   primaryAccessUrl: string;
-  runtimeUrl: string;
-  staticUrl: string;
-  actionLoading: "deploy" | "redeploy" | "rollback" | null;
   loading: boolean;
-  primaryActionText: string;
-  onDeploy: () => void;
-  onRedeploy: () => void;
-  onRollback: () => void;
   onRefresh: (deploymentId?: string) => void;
-  onSelectDeployment: (deploymentId: string) => void;
+  onManageAccess: () => void;
 }) {
-  const [releaseListExpanded, setReleaseListExpanded] = useState(false);
-  const deployments = info?.deployments || [];
-  const visibleDeployments = releaseListExpanded
-    ? deployments.slice(0, 12)
-    : currentDeployment
-      ? [
-          currentDeployment,
-          ...deployments
-            .filter((item) => item.id !== currentDeployment.id)
-            .slice(0, 3),
-        ]
-      : deployments.slice(0, 4);
-  const logEntries = (info?.logs || []).slice(-4).reverse();
-  const currentVersionTimestamp =
-    formatPreviewTimestamp(currentDeployment?.createdAt) ||
-    currentDeployment?.createdAt ||
-    i18n.t("previewPanel.deployment.overview.waitingFirstRelease");
-  const primaryDomainCount = Math.max(accessEntries.length - 1, 0);
-  const stableReleaseCount = deployments.filter(
-    (item) => item.status === "SUCCESS",
-  ).length;
-  const compactPrimaryActionText =
-    primaryActionText === i18n.t("previewPanel.deployment.publishing")
-      ? i18n.t("previewPanel.deployment.overview.publishingShort")
-      : i18n.t("previewPanel.deployment.overview.publishShort");
-  const compactActionButtonClass =
-    "h-7 gap-1 rounded-md px-2 text-[11px] leading-none has-[>svg]:px-2";
-  const compactActionIconClass = "size-3.5";
+  const siteName =
+    info?.projectName ||
+    info?.serviceName ||
+    i18n.t("previewPanel.deployment.dashboard.unnamedSite");
+  const displayUrl = primaryAccessUrl
+    ? primaryAccessUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")
+    : i18n.t("previewPanel.deployment.overview.firstReleaseGeneratesUrl");
 
   return (
-    <div className="grid gap-3">
-      <section className="min-w-0 rounded-lg border border-border/70 bg-card">
-        <div className="flex h-full min-h-0 flex-col p-3 sm:p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0 flex-1 space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-[11px] font-medium text-muted-foreground">
-                  <Rocket className="size-3.5 text-muted-foreground" />
-                  {i18n.t("previewPanel.deployment.sections.overview")}
-                </div>
-                <div
-                  className={cn(
-                    "rounded-full border px-2.5 py-1 text-[11px]",
-                    statusMeta.badgeClass,
-                  )}
-                  >
-                    {info?.activeDeploymentPending
-                      ? i18n.t("previewPanel.deployment.overview.inProgress")
-                      : i18n.t("previewPanel.deployment.overview.settled")}
-                  </div>
-              </div>
-              <div>
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <div
-                      className={cn("size-2 rounded-full", statusMeta.dotClass)}
-                    />
-                    <h3 className="truncate text-lg font-semibold text-foreground">
-                      {statusMeta.label}
-                    </h3>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    <Button
-                      size="sm"
-                      className={compactActionButtonClass}
-                      onClick={onDeploy}
-                      disabled={!info?.canDeploy || Boolean(actionLoading)}
-                    >
-                      {actionLoading === "deploy" ? (
-                        <Loader2
-                          className={cn(
-                            compactActionIconClass,
-                            "animate-spin",
-                          )}
-                        />
-                      ) : (
-                        <Rocket className={compactActionIconClass} />
-                      )}
-                      {compactPrimaryActionText}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className={compactActionButtonClass}
-                      onClick={onRedeploy}
-                      disabled={!currentDeploymentId || Boolean(actionLoading)}
-                    >
-                      {actionLoading === "redeploy" ? (
-                        <Loader2
-                          className={cn(
-                            compactActionIconClass,
-                            "animate-spin",
-                          )}
-                        />
-                      ) : (
-                        <History className={compactActionIconClass} />
-                      )}
-                      {i18n.t("previewPanel.deployment.overview.redeploy")}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className={compactActionButtonClass}
-                      onClick={onRollback}
-                      disabled={!currentDeploymentId || Boolean(actionLoading)}
-                    >
-                      {actionLoading === "rollback" ? (
-                        <Loader2
-                          className={cn(
-                            compactActionIconClass,
-                            "animate-spin",
-                          )}
-                        />
-                      ) : null}
-                      {i18n.t("previewPanel.deployment.overview.rollback")}
-                    </Button>
-                  </div>
-                </div>
-                <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-                  {statusMeta.description}
-                </p>
-              </div>
-            </div>
+    <section className="min-w-0 rounded-xl border border-border/70 bg-card p-4 sm:p-5">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/50 text-foreground">
+            <Globe2 className="size-5" />
           </div>
-
-          <div className="mt-3 grid gap-3 sm:grid-cols-3">
-            <DashboardMiniStat
-              label={i18n.t("previewPanel.deployment.overview.currentVersion")}
-              value={currentVersionTimestamp}
-              subtle
-            />
-            <DashboardMiniStat
-              label={i18n.t("previewPanel.deployment.overview.accessEntries")}
-              value={
-                primaryAccessUrl
-                  ? `${accessEntries.length} ${i18n.t("previewPanel.deployment.overview.accessEntries")}`
-                  : i18n.t("previewPanel.deployment.overview.waitingGenerate")
-              }
-              subtle
-            />
-            <DashboardMiniStat
-              label={i18n.t("previewPanel.deployment.overview.releaseRecords")}
-              value={
-                deployments.length
-                  ? i18n.t("previewPanel.deployment.dashboard.recordsCount", {
-                      count: deployments.length,
-                    })
-                  : i18n.t("previewPanel.deployment.noRecord")
-              }
-              subtle
-            />
-          </div>
-
-          <div className="mt-3 rounded-md border border-border/70 bg-muted/30 p-3 sm:p-4">
-            <div className="flex flex-col gap-3">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                    <Globe className="size-4 text-muted-foreground" />
-                    {i18n.t("previewPanel.deployment.overview.primaryAccessUrl")}
-                  </div>
-                  {primaryAccessUrl ? (
-                    <a
-                      href={primaryAccessUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-2 block break-all text-sm text-[var(--brand-link)] hover:text-[var(--brand-link-hover)]"
-                    >
-                      {primaryAccessUrl}
-                    </a>
-                  ) : (
-                    <p className="mt-2 text-sm text-muted-foreground">
-                      {i18n.t(
-                        "previewPanel.deployment.overview.firstReleaseGeneratesUrl",
-                      )}
-                    </p>
-                  )}
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  {primaryAccessUrl ? (
-                    <Button asChild>
-                      <a
-                        href={primaryAccessUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        <ExternalLink className="size-4" />
-                        {i18n.t("previewPanel.deployment.overview.openSite")}
-                      </a>
-                    </Button>
-                  ) : null}
-                  <Button
-                    variant="outline"
-                    onClick={() => onRefresh(currentDeploymentId || undefined)}
-                    disabled={loading}
-                    >
-                      <RefreshCw
-                        className={cn("size-4", loading ? "animate-spin" : "")}
-                      />
-                    {i18n.t("previewPanel.deployment.overview.refreshResult")}
-                  </Button>
-                </div>
-              </div>
-
-              <div className="grid gap-2">
-                {accessEntries.length ? (
-                  accessEntries.map(([label, value]) => (
-                    <a
-                      key={`${label}-${value}`}
-                      href={value}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2 transition-colors hover:border-border hover:bg-muted/30"
-                    >
-                      <div className="min-w-0">
-                        <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                          {label}
-                        </div>
-                        <div className="mt-1 break-all text-sm text-foreground">
-                          {value}
-                        </div>
-                      </div>
-                      <ExternalLink className="size-4 shrink-0 text-muted-foreground" />
-                    </a>
-                  ))
-                ) : (
-                  <div className="rounded-md border border-dashed border-border bg-card px-3 py-8 text-center text-sm text-muted-foreground">
-                    {i18n.t("previewPanel.deployment.overview.noAccessibleEntry")}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-2 rounded-md border border-dashed border-border bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
-            {primaryAccessUrl
-              ? i18n.t("previewPanel.deployment.overview.accessSummary", {
-                  count: accessEntries.length,
-                  domainCount: primaryDomainCount,
-                })
-              : i18n.t("previewPanel.deployment.overview.focusedClosure")}
-          </div>
-        </div>
-      </section>
-
-      <section className="min-w-0 rounded-lg border border-border/70 bg-card">
-        <div className="flex h-full min-h-0 flex-col">
-          <div className="border-b border-border px-4 py-3">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
-                  {i18n.t("previewPanel.deployment.overview.releaseCard")}
-                </div>
-                <div className="mt-2 text-base font-semibold text-foreground">
-                  {currentDeployment?.commitMessage ||
-                    i18n.t("previewPanel.deployment.overview.waitingFirstRelease")}
-                </div>
-                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  <span>
-                    {currentDeployment?.commitAuthor ||
-                      i18n.t("previewPanel.deployment.overview.platformAutoPublish")}
-                  </span>
-                  <span className="size-1 rounded-full bg-slate-300" />
-                  <span>{currentVersionTimestamp}</span>
-                  {currentDeployment?.id ? (
-                    <>
-                      <span className="size-1 rounded-full bg-slate-300" />
-                      <span className="font-mono">
-                        {currentDeployment.id.slice(0, 8)}
-                      </span>
-                    </>
-                  ) : null}
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {runtimeUrl ? (
-                  <Button variant="outline" asChild>
-                    <a href={runtimeUrl} target="_blank" rel="noreferrer">
-                      <ExternalLink className="size-4" />
-                      {i18n.t("previewPanel.deployment.runtimeUrl")}
-                    </a>
-                  </Button>
-                ) : null}
-                {staticUrl && staticUrl !== runtimeUrl ? (
-                  <Button variant="outline" asChild>
-                    <a href={staticUrl} target="_blank" rel="noreferrer">
-                      <ExternalLink className="size-4" />
-                      {i18n.t("previewPanel.deployment.siteUrl")}
-                    </a>
-                  </Button>
-                ) : null}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex min-h-0 flex-1 flex-col gap-3 p-3 sm:p-4">
-            <div className="rounded-md border border-border/70 bg-muted/30 p-3">
-              <div className="grid gap-3 sm:grid-cols-3">
-                <DashboardMiniStat
-                  label={i18n.t("previewPanel.deployment.overview.onlineStatus")}
-                  value={currentDeployment?.status || info?.latestStatus || "UNKNOWN"}
-                />
-                <DashboardMiniStat
-                  label={i18n.t("previewPanel.deployment.overview.recentLogs")}
-                  value={
-                    logEntries.length
-                      ? i18n.t("previewPanel.deployment.dashboard.recordsCount", {
-                          count: logEntries.length,
-                        })
-                      : i18n.t("previewPanel.deployment.overview.none")
-                  }
-                />
-                <DashboardMiniStat
-                  label={i18n.t("previewPanel.deployment.overview.rollbackCapacity")}
-                  value={
-                    stableReleaseCount
-                      ? i18n.t("previewPanel.deployment.overview.stableVersions", {
-                          count: stableReleaseCount,
-                        })
-                      : i18n.t("previewPanel.deployment.overview.none")
-                  }
-                />
-              </div>
-            </div>
-
-            <div className="min-h-0 rounded-md border border-border/70">
-              <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
-                <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                  <History className="size-4 text-muted-foreground" />
-                  {i18n.t("previewPanel.deployment.overview.releaseList")}
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground">
-                    {i18n.t("previewPanel.deployment.dashboard.recordsCount", {
-                      count: deployments.length,
-                    })}
-                  </span>
-                  {deployments.length > 4 ? (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setReleaseListExpanded((current) => !current)
-                      }
-                      className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:border-border hover:text-foreground"
-                    >
-                      {releaseListExpanded
-                        ? i18n.t("previewPanel.deployment.overview.collapse")
-                        : i18n.t("previewPanel.deployment.overview.expand")}
-                      <ChevronDown
-                        className={cn(
-                          "size-3 transition-transform",
-                          releaseListExpanded ? "rotate-180" : "",
-                        )}
-                      />
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-              <div
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <h3 className="truncate text-[18px] font-semibold leading-6 text-foreground">
+                {siteName}
+              </h3>
+              <span
                 className={cn(
-                  "space-y-2 overflow-auto px-4 py-2.5",
-                  releaseListExpanded ? "max-h-[280px]" : "max-h-[208px]",
+                  "shrink-0 rounded-full border px-2.5 py-1 text-[11px]",
+                  statusMeta.badgeClass,
                 )}
               >
-                {visibleDeployments.length ? (
-                  visibleDeployments.map((item) => {
-                    const itemSelected = item.id === currentDeployment?.id;
-                    const itemStatusClass =
-                      item.status === "SUCCESS"
-                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                        : item.status === "FAILED" || item.status === "CRASHED"
-                          ? "border-rose-200 bg-rose-50 text-rose-700"
-                          : "border-amber-200 bg-amber-50 text-amber-700";
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => onSelectDeployment(item.id)}
-                        className={cn(
-                          "w-full rounded-md border px-3 py-3 text-left transition-colors",
-                          itemSelected
-                            ? "border-slate-900 bg-muted/30"
-                            : "border-border hover:bg-muted/30",
-                        )}
-                      >
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span
-                                className={cn(
-                                  "rounded-full border px-2 py-0.5 text-[11px]",
-                                  itemStatusClass,
-                                )}
-                              >
-                                {item.status}
-                              </span>
-                              <span className="font-mono text-[11px] text-muted-foreground">
-                                {item.id.slice(0, 8)}
-                              </span>
-                            </div>
-                            <div className="mt-2 text-sm font-medium text-foreground">
-                              {item.commitMessage ||
-                                i18n.t(
-                                  "previewPanel.deployment.overview.triggeredByOneceo",
-                                )}
-                            </div>
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            {formatPreviewTimestamp(item.createdAt) ||
-                              item.createdAt ||
-                              i18n.t("previewPanel.deployment.overview.unknownTime")}
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })
-                ) : (
-                  <div className="rounded-md border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-                    {i18n.t("previewPanel.deployment.noRecord")}
-                  </div>
-                )}
-              </div>
+                {statusMeta.label}
+              </span>
             </div>
-
-            <div className="min-h-0 overflow-hidden rounded-md border border-border/70 bg-slate-950 text-slate-100">
-              <div className="flex items-center justify-between gap-3 border-b border-slate-800 px-4 py-2.5">
-                <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-                  <ScrollText className="size-4 text-muted-foreground" />
-                  {i18n.t("previewPanel.deployment.overview.releaseLog")}
-                </div>
-                <div className="text-[11px] text-muted-foreground">
-                  {i18n.t("previewPanel.deployment.overview.onlyRecentContent")}
-                </div>
+            {primaryAccessUrl ? (
+              <div className="mt-1 flex max-w-full min-w-0 items-center gap-1">
+                <a
+                  href={primaryAccessUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="min-w-0 truncate text-[13px] leading-[18px] text-muted-foreground hover:text-foreground hover:underline"
+                >
+                  {displayUrl}
+                </a>
+                <button
+                  type="button"
+                  className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label={i18n.t("previewPanel.deployment.overview.manageAccess")}
+                  title={i18n.t("previewPanel.deployment.overview.manageAccess")}
+                  onClick={onManageAccess}
+                >
+                  <Pencil className="size-3.5" />
+                </button>
               </div>
-              {logEntries.length ? (
-                <div className="max-h-[176px] overflow-auto overscroll-contain px-4 py-2.5">
-                  <div className="space-y-3">
-                    {logEntries.map((entry, index) => (
-                      <div
-                        key={`${entry.timestamp || "log"}-${index}`}
-                        className="rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2"
-                      >
-                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                          {entry.timestamp ? (
-                            <span>
-                              {formatPreviewTimestamp(entry.timestamp) ||
-                                entry.timestamp}
-                            </span>
-                          ) : null}
-                          {entry.severity ? (
-                            <span className="rounded-full border border-slate-700 px-1.5 py-0.5 uppercase tracking-[0.08em] text-slate-300">
-                              {entry.severity}
-                            </span>
-                          ) : null}
-                        </div>
-                        <div className="mt-2 break-words font-mono text-[11px] leading-5 text-slate-100">
-                          {entry.message}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <div className="px-4 py-10 text-sm text-muted-foreground">
-                  {info?.configured
-                    ? i18n.t("previewPanel.deployment.overview.noCurrentLog")
-                    : i18n.t("previewPanel.deployment.overview.logsAfterReady")}
-                </div>
-              )}
-            </div>
+            ) : (
+              <div className="mt-1 text-[13px] leading-[18px] text-muted-foreground">
+                {displayUrl}
+              </div>
+            )}
           </div>
         </div>
-      </section>
-    </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 gap-1 rounded-lg px-2 text-sm"
+            onClick={() => onRefresh(currentDeploymentId || undefined)}
+            disabled={loading}
+          >
+            <RefreshCw className={cn("size-4", loading ? "animate-spin" : "")} />
+            {i18n.t("previewPanel.deployment.overview.refreshResult")}
+          </Button>
+          {primaryAccessUrl ? (
+            <Button asChild size="sm" className="h-8 gap-1 rounded-lg px-2 text-sm">
+              <a href={primaryAccessUrl} target="_blank" rel="noreferrer">
+                <ExternalLink className="size-4" />
+                {i18n.t("previewPanel.deployment.overview.openSite")}
+              </a>
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-xl border border-border/70 px-4 py-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <Globe className="size-4" />
+              {primaryAccessUrl
+                ? i18n.t("previewPanel.deployment.overview.publicAccess")
+                : i18n.t("previewPanel.deployment.overview.waitingFirstRelease")}
+            </div>
+            <p className="mt-1 text-[13px] leading-[18px] text-muted-foreground">
+              {primaryAccessUrl
+                ? i18n.t("previewPanel.deployment.overview.publicAccessDescription")
+                : i18n.t("previewPanel.deployment.overview.firstReleaseGeneratesUrl")}
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 rounded-lg px-2 text-sm"
+            onClick={onManageAccess}
+          >
+            {i18n.t("previewPanel.deployment.overview.manageAccess")}
+          </Button>
+        </div>
+      </div>
+    </section>
   );
 }
 
 function DeploymentDashboardSection({
   sessionId,
   info,
-  templateBaseline,
-  templateBaselineLoading,
-  templateBaselineError,
-  statusMeta,
-  successCount,
-  failedCount,
-  totalDeployments,
-  successRate,
-  currentDeployment,
-  latestTimestamp,
+  currentDeploymentId,
   accessEntries,
+  loading,
+  onRefresh,
 }: {
   sessionId?: string | null;
   info: TaskCreationDeploymentInfo | null;
-  templateBaseline: TaskCreationDeploymentTemplateBaseline | null;
-  templateBaselineLoading: boolean;
-  templateBaselineError: string | null;
-  statusMeta: DeploymentStatusMeta;
-  successCount: number;
-  failedCount: number;
-  totalDeployments: number;
-  successRate: string;
-  currentDeployment: TaskCreationDeploymentInfo["deployments"][number] | null;
-  latestTimestamp: string;
+  currentDeploymentId: string;
   accessEntries: Array<[string, string] | readonly [string, string]>;
+  loading: boolean;
+  onRefresh: (deploymentId?: string) => void;
 }) {
-  const [mode, setMode] = useState<"deployments" | "site">("deployments");
+  const [timeRange, setTimeRange] =
+    useState<DeploymentAnalyticsTimeRange>("24h");
+  const [analyticsDetail, setAnalyticsDetail] =
+    useState<TaskCreationDeploymentAnalyticsOverview | null>(null);
+  const [analyticsDetailLoading, setAnalyticsDetailLoading] = useState(false);
+  const [analyticsDetailError, setAnalyticsDetailError] = useState<string | null>(
+    null,
+  );
+  const primaryUrl = accessEntries[0]?.[1] || "";
+  const analyticsPresentation = getDeploymentAnalyticsPresentation(
+    info?.analytics,
+    Boolean(primaryUrl),
+  );
+  const hasAnalyticsMetrics =
+    info?.analytics?.status === "tracking" || info?.analytics?.status === "bound";
+  const pageviewsValue = analyticsDetail
+    ? formatMetricCount(analyticsDetail.stats.pageviews, "0")
+    : hasAnalyticsMetrics
+      ? formatMetricCount(info?.analytics?.pageviews, "0")
+      : analyticsPresentation.trafficValue;
+  const visitsValue = analyticsDetail
+    ? formatMetricCount(analyticsDetail.stats.visits, "0")
+    : hasAnalyticsMetrics
+      ? formatMetricCount(info?.analytics?.visits, "0")
+      : analyticsPresentation.integrationValue;
+  const visitorsValue = analyticsDetail
+    ? formatMetricCount(analyticsDetail.stats.visitors, "0")
+    : hasAnalyticsMetrics
+      ? formatMetricCount(info?.analytics?.visitors, "0")
+      : analyticsPresentation.integrationValue;
+  const averageDurationValue = analyticsDetail
+    ? formatDurationSeconds(analyticsDetail.averageVisitDurationSeconds)
+    : i18n.t("previewPanel.deployment.dashboard.noMetricValue");
+  const bounceRateValue = analyticsDetail
+    ? `${analyticsDetail.bounceRate}%`
+    : i18n.t("previewPanel.deployment.dashboard.noMetricValue");
+  const realtimeValue = analyticsDetail
+    ? formatMetricCount(analyticsDetail.activeVisitors, "0")
+    : analyticsPresentation.realtimeValue;
+  const effectiveHasAnalyticsMetrics = Boolean(
+    analyticsDetail &&
+      (analyticsDetail.stats.pageviews > 0 ||
+        analyticsDetail.stats.visits > 0 ||
+        analyticsDetail.stats.visitors > 0 ||
+        analyticsDetail.activeVisitors > 0),
+  ) || hasAnalyticsMetrics;
 
-  if (mode === "site") {
-    const siteName =
-      info?.projectName ||
-      info?.serviceName ||
-      i18n.t("previewPanel.deployment.dashboard.unnamedSite");
-    const primaryUrl = accessEntries[0]?.[1] || "";
-    const recentLogs = info?.logs.slice(-3) || [];
-    const siteVisibilityLabel = primaryUrl
-      ? i18n.t("previewPanel.deployment.dashboard.publicAccessible")
-      : i18n.t("previewPanel.deployment.dashboard.waitingFirstRelease");
-    const analyticsPresentation = getDeploymentAnalyticsPresentation(
-      info?.analytics,
-      Boolean(primaryUrl),
-    );
-    const hasAnalyticsMetrics =
-      info?.analytics?.status === "tracking" || info?.analytics?.status === "bound";
-    const visitsValue =
-      hasAnalyticsMetrics
-        ? formatMetricCount(info?.analytics?.visits, "0")
-        : analyticsPresentation.integrationValue;
-    const visitorsValue =
-      hasAnalyticsMetrics
-        ? formatMetricCount(info?.analytics?.visitors, "0")
-        : analyticsPresentation.integrationValue;
-    return (
-      <div className="space-y-4">
-        <section className="rounded-lg border border-border/70 bg-card p-4 sm:p-5">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-            <div className="min-w-0">
-              <div className="flex items-start gap-3">
-                <div className="flex size-11 shrink-0 items-center justify-center rounded-md border border-border bg-muted/50 text-foreground">
-                  <Globe2 className="size-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="text-lg font-semibold text-foreground">
-                      {siteName}
-                    </h3>
-                    <span
-                      className={cn(
-                        "rounded-full border px-2.5 py-1 text-[11px]",
-                        statusMeta.badgeClass,
-                      )}
-                    >
-                      {statusMeta.label}
-                    </span>
-                  </div>
-                  {primaryUrl ? (
-                    <a
-                      href={primaryUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-1 flex items-center gap-1 truncate text-sm text-muted-foreground hover:text-foreground hover:underline"
-                    >
-                      {primaryUrl}
-                      <ExternalLink className="size-3.5 shrink-0" />
-                    </a>
-                  ) : (
-                    <div className="mt-1 text-sm text-muted-foreground">
-                      {i18n.t("previewPanel.deployment.dashboard.siteUrlMissing")}
-                    </div>
-                  )}
-                  <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-                    {i18n.t(
-                      "previewPanel.deployment.dashboard.siteViewDescription",
-                    )}
-                  </p>
-                </div>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 self-start">
-              <DashboardModeToggle mode={mode} onChange={setMode} />
-              {primaryUrl ? (
-                <Button asChild size="sm" className="h-8 text-xs">
-                  <a href={primaryUrl} target="_blank" rel="noreferrer">
-                    {i18n.t("previewPanel.deployment.overview.openSite")}
-                  </a>
-                </Button>
-              ) : null}
-            </div>
-          </div>
+  useEffect(() => {
+    if (!sessionId || !primaryUrl) {
+      setAnalyticsDetail(null);
+      setAnalyticsDetailError(null);
+      return;
+    }
+    let cancelled = false;
+    setAnalyticsDetailLoading(true);
+    setAnalyticsDetailError(null);
+    getTaskCreationDeploymentAnalytics(sessionId, timeRange)
+      .then((result) => {
+        if (cancelled) return;
+        setAnalyticsDetail(result);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setAnalyticsDetail(null);
+        setAnalyticsDetailError(
+          error instanceof Error
+            ? error.message
+            : i18n.t("previewPanel.deployment.dashboard.analyticsLoadFailed"),
+        );
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setAnalyticsDetailLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, primaryUrl, timeRange]);
 
-          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <DeploymentMetricCard
-              title={i18n.t("previewPanel.deployment.dashboard.accessStatus")}
-              value={siteVisibilityLabel}
-              subtitle={
-                primaryUrl
-                  ? i18n.t(
-                      "previewPanel.deployment.dashboard.accessReadyDescription",
-                    )
-                  : i18n.t(
-                      "previewPanel.deployment.dashboard.defaultAccessDescription",
-                    )
-              }
-            />
-            <DeploymentMetricCard
-              title={i18n.t("previewPanel.deployment.dashboard.latestVersion")}
-              value={
-                currentDeployment?.commitMessage ||
-                (currentDeployment?.id
-                  ? currentDeployment.id.slice(0, 8)
-                  : i18n.t("previewPanel.deployment.dashboard.waitingFirstVersion"))
-              }
-              subtitle={
-                formatPreviewTimestamp(currentDeployment?.createdAt) ||
-                currentDeployment?.createdAt ||
-                i18n.t("previewPanel.deployment.dashboard.noReleaseHistory")
-              }
-            />
-            <DeploymentMetricCard
-              title={i18n.t("previewPanel.deployment.dashboard.accessEntryCount")}
-              value={`${accessEntries.length}`}
-              subtitle={
-                accessEntries.length
-                  ? i18n.t("previewPanel.deployment.dashboard.boundDomainCount", {
-                      count: info?.domains.length || 0,
-                    })
-                  : i18n.t("previewPanel.deployment.dashboard.noEntries")
-              }
-            />
-            <DeploymentMetricCard
-              title={i18n.t("previewPanel.deployment.dashboard.pageviews30d")}
-              value={analyticsPresentation.trafficValue}
-              subtitle={analyticsPresentation.trafficSubtitle}
-            />
-          </div>
-        </section>
-
-        <section className="rounded-lg border border-border/70 bg-card">
-          <div className="border-b border-border px-4 py-4 sm:px-5">
-            <div className="text-sm font-semibold text-foreground">
-              {i18n.t("previewPanel.deployment.dashboard.sensedDataTitle")}
-            </div>
-            <div className="mt-1 text-xs text-muted-foreground">
-              {i18n.t("previewPanel.deployment.dashboard.sensedDataDescription")}
-            </div>
-          </div>
-          <div className="grid gap-4 p-4 sm:p-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-            <div className="space-y-4">
-              <div className="rounded-md border border-border/70 bg-muted/30 p-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                  <Globe className="size-4 text-muted-foreground" />
-                  {i18n.t("previewPanel.deployment.dashboard.accessEntries")}
-                </div>
-                <div className="mt-3 space-y-2">
-                  {accessEntries.length ? (
-                    accessEntries.map(([label, url]) => (
-                      <a
-                        key={`${label}:${url}`}
-                        href={url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="flex items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground transition-colors hover:border-border hover:bg-muted/30"
-                      >
-                        <div className="min-w-0">
-                          <div className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
-                            {label}
-                          </div>
-                          <div className="mt-1 break-all text-foreground">
-                            {url}
-                          </div>
-                        </div>
-                        <ExternalLink className="size-4 shrink-0 text-muted-foreground" />
-                      </a>
-                    ))
-                  ) : (
-                    <div className="rounded-md border border-dashed border-border px-3 py-8 text-center text-sm text-muted-foreground">
-                      {sessionId
-                        ? i18n.t("previewPanel.deployment.dashboard.noAccessEntries")
-                        : i18n.t(
-                            "previewPanel.deployment.dashboard.noSessionForEntries",
-                          )}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-2">
-                <DeploymentInfoCard
-                  title={i18n.t("previewPanel.deployment.dashboard.project")}
-                  value={
-                    info?.projectName ||
-                    info?.projectId ||
-                    i18n.t("previewPanel.deployment.dashboard.unconfigured")
-                  }
-                  extra={
-                    info?.projectId
-                      ? i18n.t("previewPanel.deployment.dashboard.projectId", {
-                          id: info.projectId,
-                        })
-                      : undefined
-                  }
-                  mono={Boolean(info?.projectId && info?.projectName)}
-                />
-                <DeploymentInfoCard
-                  title={i18n.t("previewPanel.deployment.dashboard.service")}
-                  value={
-                    info?.serviceName ||
-                    info?.serviceId ||
-                    i18n.t("previewPanel.deployment.dashboard.unconfigured")
-                  }
-                  extra={
-                    info?.serviceId
-                      ? i18n.t("previewPanel.deployment.dashboard.serviceId", {
-                          id: info.serviceId,
-                        })
-                      : i18n.t(
-                          "previewPanel.deployment.dashboard.waitingServiceBinding",
-                        )
-                  }
-                  mono={Boolean(info?.serviceId && info?.serviceName)}
-                />
-                <DeploymentInfoCard
-                  title={i18n.t(
-                    "previewPanel.deployment.dashboard.currentVersionStatus",
-                  )}
-                  value={
-                    currentDeployment?.status || info?.latestStatus || "UNKNOWN"
-                  }
-                  extra={statusMeta.description}
-                />
-                <DeploymentInfoCard
-                  title={i18n.t("previewPanel.deployment.dashboard.latestSync")}
-                  value={latestTimestamp}
-                  extra={
-                    totalDeployments
-                      ? i18n.t("previewPanel.deployment.dashboard.publishSummary", {
-                          count: totalDeployments,
-                          rate: successRate,
-                        })
-                      : i18n.t(
-                          "previewPanel.deployment.dashboard.noPublishHistory",
-                        )
-                  }
-                />
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div className="rounded-md border border-border/70 bg-muted/30 p-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                  <BarChart3 className="size-4 text-muted-foreground" />
-                  {i18n.t("previewPanel.deployment.dashboard.siteAnalytics")}
-                </div>
-                <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  <DeploymentMiniStatus
-                    label={i18n.t(
-                      "previewPanel.deployment.dashboard.analyticsIntegration",
-                    )}
-                    value={analyticsPresentation.integrationValue}
-                  />
-                  <DeploymentMiniStatus
-                    label={i18n.t(
-                      "previewPanel.deployment.dashboard.realtimeVisitors",
-                    )}
-                    value={analyticsPresentation.realtimeValue}
-                  />
-                  <DeploymentMiniStatus
-                    label={i18n.t("previewPanel.deployment.dashboard.visits30d")}
-                    value={visitsValue}
-                  />
-                  <DeploymentMiniStatus
-                    label={i18n.t(
-                      "previewPanel.deployment.dashboard.visitors30d",
-                    )}
-                    value={visitorsValue}
-                  />
-                </div>
-                <div className="mt-3 text-xs leading-5 text-muted-foreground">
-                  {analyticsPresentation.integrationSubtitle}
-                </div>
-              </div>
-
-              <div className="rounded-md border border-border/70 bg-muted/30 p-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                  <ScrollText className="size-4 text-muted-foreground" />
-                  {i18n.t("previewPanel.deployment.dashboard.recentLogs")}
-                </div>
-                <div className="mt-3 space-y-2">
-                  {recentLogs.length ? (
-                    recentLogs.map((entry, index) => (
-                      <div
-                        key={`${entry.timestamp || "log"}-${index}`}
-                        className="rounded-md border border-border bg-card px-3 py-2"
-                      >
-                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                          {entry.timestamp ? (
-                            <span>
-                              {formatPreviewTimestamp(entry.timestamp) ||
-                                entry.timestamp}
-                            </span>
-                          ) : null}
-                          {entry.severity ? (
-                            <span className="rounded-full border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-                              {entry.severity}
-                            </span>
-                          ) : null}
-                        </div>
-                        <div className="mt-1 text-sm leading-6 text-foreground">
-                          {entry.message}
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="rounded-md border border-dashed border-border px-3 py-8 text-center text-sm text-muted-foreground">
-                      {i18n.t("previewPanel.deployment.dashboard.noRecentLogs")}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="rounded-md border border-border/70 bg-muted/30 p-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                  <ShieldCheck className="size-4 text-muted-foreground" />
-                  {i18n.t("previewPanel.deployment.dashboard.platformDecision")}
-                </div>
-                <div className="mt-3 grid gap-3">
-                  <DeploymentMiniStatus
-                    label={i18n.t("previewPanel.deployment.dashboard.siteVisibility")}
-                    value={siteVisibilityLabel}
-                  />
-                  <DeploymentMiniStatus
-                    label={i18n.t("previewPanel.deployment.dashboard.siteStats")}
-                    value={analyticsPresentation.integrationValue}
-                  />
-                  <DeploymentMiniStatus
-                    label={i18n.t(
-                      "previewPanel.deployment.dashboard.realtimeVisitors",
-                    )}
-                    value={analyticsPresentation.realtimeValue}
-                  />
-                  <DeploymentMiniStatus
-                    label={i18n.t(
-                      "previewPanel.deployment.dashboard.deploymentPreparation",
-                    )}
-                    value={
-                      info?.missing.length
-                        ? i18n.t("previewPanel.deployment.dashboard.missingItems", {
-                            items: info.missing.join("、"),
-                          })
-                        : info?.configured
-                          ? i18n.t("previewPanel.deployment.dashboard.ready")
-                          : i18n.t("previewPanel.deployment.dashboard.preparing")
-                    }
-                  />
-                </div>
-                <div className="mt-3 text-xs leading-5 text-muted-foreground">
-                  {analyticsPresentation.realtimeSubtitle}
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="rounded-lg border border-border/70 bg-card">
-          <div className="border-b border-border px-4 py-4 sm:px-5">
-            <div className="text-sm font-semibold text-foreground">
-              {i18n.t("previewPanel.deployment.dashboard.analyticsTitle")}
-            </div>
-            <div className="mt-1 text-xs text-muted-foreground">
-              {i18n.t("previewPanel.deployment.dashboard.analyticsDescription")}
-            </div>
-          </div>
-          <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4 sm:p-5">
-            <DeploymentMetricCard
-              title={i18n.t("previewPanel.deployment.dashboard.pageTraffic")}
-              value={analyticsPresentation.trafficValue}
-              subtitle={analyticsPresentation.trafficSubtitle}
-            />
-            <DeploymentMetricCard
-              title={i18n.t("previewPanel.deployment.dashboard.visitSessions")}
-              value={visitsValue}
-              subtitle={i18n.t(
-                "previewPanel.deployment.dashboard.visitSessionsDescription",
-              )}
-            />
-            <DeploymentMetricCard
-              title={i18n.t("previewPanel.deployment.dashboard.visitorCount")}
-              value={visitorsValue}
-              subtitle={i18n.t(
-                "previewPanel.deployment.dashboard.visitorCountDescription",
-              )}
-            />
-            <DeploymentMetricCard
-              title={i18n.t(
-                "previewPanel.deployment.dashboard.realtimeVisitors",
-              )}
-              value={analyticsPresentation.realtimeValue}
-              subtitle={analyticsPresentation.realtimeSubtitle}
-            />
-          </div>
-        </section>
-      </div>
-    );
-  }
+  const topPageRows = analyticsDetail?.topPages.length
+    ? analyticsDetail.topPages.map((item) => ({
+        label: item.name,
+        value: formatMetricCount(item.visitors, "0"),
+      }))
+    : effectiveHasAnalyticsMetrics
+      ? [
+          {
+            label: "/",
+            value: visitorsValue,
+          },
+        ]
+      : [];
+  const referrerRows =
+    analyticsDetail?.referrers.map((item) => ({
+      label: item.name,
+      value: formatMetricCount(item.visitors, "0"),
+    })) || [];
+  const regionRows =
+    analyticsDetail?.regions.map((item) => ({
+      label: item.name,
+      value: formatMetricCount(item.visitors, "0"),
+    })) || [];
+  const deviceRows = analyticsDetail?.devices.length
+    ? analyticsDetail.devices.map((item) => ({
+        label: item.name,
+        value: formatMetricCount(item.visitors, "0"),
+      }))
+    : [
+        {
+          label: i18n.t("previewPanel.deployment.dashboard.realtimeVisitors"),
+          value: realtimeValue,
+        },
+      ];
+  const metricItems = [
+    {
+      label: i18n.t("previewPanel.deployment.dashboard.pageviews"),
+      value: pageviewsValue,
+    },
+    {
+      label: i18n.t("previewPanel.deployment.dashboard.visits"),
+      value: visitsValue,
+    },
+    {
+      label: i18n.t("previewPanel.deployment.dashboard.visitors"),
+      value: visitorsValue,
+    },
+    {
+      label: i18n.t("previewPanel.deployment.dashboard.duration"),
+      value: averageDurationValue,
+    },
+    {
+      label: i18n.t("previewPanel.deployment.dashboard.bounceRate"),
+      value: bounceRateValue,
+    },
+  ];
+  const timeRangeOptions: Array<{
+    value: DeploymentAnalyticsTimeRange;
+    label: string;
+  }> = [
+    {
+      value: "24h",
+      label: i18n.t("previewPanel.deployment.dashboard.last24Hours"),
+    },
+    {
+      value: "7d",
+      label: i18n.t("previewPanel.deployment.dashboard.last7Days"),
+    },
+    {
+      value: "30d",
+      label: i18n.t("previewPanel.deployment.dashboard.last30Days"),
+    },
+  ];
+  const selectedTimeRangeLabel =
+    timeRangeOptions.find((item) => item.value === timeRange)?.label ||
+    timeRangeOptions[0].label;
+  const analyticsStatusDescription = analyticsDetailLoading
+    ? i18n.t("previewPanel.deployment.dashboard.analyticsLoading")
+    : analyticsDetailError
+      ? analyticsDetailError
+      : "";
+  const detailPanels = [
+    {
+      id: "topPages" as const,
+      title: i18n.t("previewPanel.deployment.dashboard.topPages"),
+      firstColumn: i18n.t("previewPanel.deployment.dashboard.page"),
+      rows: topPageRows,
+    },
+    {
+      id: "referrers" as const,
+      title: i18n.t("previewPanel.deployment.dashboard.referrers"),
+      firstColumn: i18n.t("previewPanel.deployment.dashboard.referrer"),
+      rows: referrerRows,
+    },
+    {
+      id: "regions" as const,
+      title: i18n.t("previewPanel.deployment.dashboard.regions"),
+      firstColumn: i18n.t("previewPanel.deployment.dashboard.region"),
+      rows: regionRows,
+    },
+    {
+      id: "devices" as const,
+      title: i18n.t("previewPanel.deployment.dashboard.devices"),
+      firstColumn: i18n.t("previewPanel.deployment.dashboard.device"),
+      rows: deviceRows,
+    },
+  ];
 
   return (
-    <div className="space-y-4">
-      <section className="overflow-hidden rounded-lg border border-border/70 bg-card">
-        <div className="border-b border-border p-4 sm:p-5">
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-              <div className="min-w-0">
-                <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
-                  {i18n.t("previewPanel.deployment.dashboard.deploymentData")}
-                </div>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <h3 className="text-xl font-semibold text-foreground">
-                    {i18n.t("previewPanel.deployment.dashboard.currentStatus", {
-                      status: statusMeta.label,
-                    })}
-                  </h3>
-                  <span
-                    className={cn(
-                      "rounded-full border px-2.5 py-1 text-[11px]",
-                      statusMeta.badgeClass,
-                    )}
-                  >
-                    {info?.activeDeploymentPending
-                      ? i18n.t("previewPanel.deployment.dashboard.statusPublishing")
-                      : i18n.t("previewPanel.deployment.dashboard.statusSynced")}
-                  </span>
-                </div>
-                <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-                  {statusMeta.description}
-                </p>
-              </div>
-              <DashboardModeToggle mode={mode} onChange={setMode} />
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <div className="rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
-                {i18n.t("previewPanel.deployment.dashboard.latestSyncShort")}:{" "}
-                <span className="font-medium text-foreground">
-                  {latestTimestamp}
-                </span>
-              </div>
-              <div className="rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
-                {i18n.t("previewPanel.deployment.dashboard.rollbackVersions")}:{" "}
-                <span className="font-medium text-foreground">
-                  {successCount}
-                </span>
-              </div>
-              <div className="rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
-                {i18n.t("previewPanel.deployment.dashboard.accessEntriesShort")}:{" "}
-                <span className="font-medium text-foreground">
-                  {accessEntries.length}
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="grid gap-px bg-slate-200 grid-cols-2 lg:grid-cols-4">
-          <CompactDeploymentMetric
-            label={i18n.t("previewPanel.deployment.dashboard.successRate")}
-            value={successRate}
-            hint={
-              totalDeployments
-                ? i18n.t("previewPanel.deployment.dashboard.recordsCount", {
-                    count: totalDeployments,
-                  })
-                : i18n.t("previewPanel.deployment.noRecord")
-            }
-          />
-          <CompactDeploymentMetric
-            label={i18n.t("previewPanel.deployment.dashboard.successVersions")}
-            value={`${successCount}`}
-            hint={
-              successCount
-                ? i18n.t("previewPanel.deployment.dashboard.stableRollbackHint")
-                : i18n.t("previewPanel.deployment.dashboard.waitingStableVersion")
-            }
-          />
-          <CompactDeploymentMetric
-            label={i18n.t("previewPanel.deployment.dashboard.failedVersions")}
-            value={`${failedCount}`}
-            hint={
-              failedCount
-                ? i18n.t("previewPanel.deployment.dashboard.reviewFailedLogs")
-                : i18n.t("previewPanel.deployment.dashboard.noFailedVersions")
-            }
-          />
-          <CompactDeploymentMetric
-            label={i18n.t("previewPanel.deployment.dashboard.accessEntriesShort")}
-            value={`${accessEntries.length}`}
-            hint={
-              accessEntries.length
-                ? i18n.t("previewPanel.deployment.dashboard.onlineAddressReady")
-                : i18n.t("previewPanel.deployment.dashboard.waitingFirstRelease")
-            }
-          />
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="border-b border-border px-4 py-4 sm:px-5">
-          <div className="text-sm font-semibold text-foreground">
-            {i18n.t("previewPanel.deployment.dashboard.currentLiveVersion")}
-          </div>
-          <div className="mt-1 text-xs text-muted-foreground">
-            {i18n.t(
-              "previewPanel.deployment.dashboard.currentLiveVersionDescription",
-            )}
-          </div>
-        </div>
-        <div className="space-y-4 p-4 sm:p-5">
-          <div className="rounded-md border border-border/70 bg-muted/30 p-4">
-            <div className="flex flex-col gap-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
-                  {i18n.t("previewPanel.deployment.dashboard.versionNotes")}
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span
-                    className={cn(
-                      "rounded-full border px-2 py-1 text-[11px]",
-                      statusMeta.badgeClass,
-                    )}
-                  >
-                    {currentDeployment?.status ||
-                      info?.latestStatus ||
-                      "UNKNOWN"}
-                  </span>
-                  {info?.activeDeploymentPending ? (
-                    <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-700">
-                      {i18n.t("previewPanel.deployment.dashboard.waitingComplete")}
-                    </span>
-                  ) : null}
-                </div>
-              </div>
-              <div className="text-base font-semibold text-foreground">
-                {currentDeployment?.commitMessage ||
-                  i18n.t("previewPanel.deployment.overview.waitingFirstRelease")}
-              </div>
-              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <span>
-                  {currentDeployment?.commitAuthor ||
-                    i18n.t("previewPanel.deployment.overview.platformAutoPublish")}
-                </span>
-                <span className="size-1 rounded-full bg-slate-300" />
-                <span>
-                  {formatPreviewTimestamp(currentDeployment?.createdAt) ||
-                    currentDeployment?.createdAt ||
-                    i18n.t("previewPanel.deployment.overview.unknownTime")}
-                </span>
-                {currentDeployment?.id ? (
-                  <>
-                    <span className="size-1 rounded-full bg-slate-300" />
-                    <span className="font-mono">
-                      {currentDeployment.id.slice(0, 8)}
-                    </span>
-                  </>
-                ) : null}
-              </div>
-            </div>
-          </div>
-
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
-            <div className="rounded-md border border-border/70 p-4">
-              <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
-                {i18n.t("previewPanel.deployment.dashboard.accessEntries")}
-              </div>
-              <div className="mt-3 space-y-2">
-                {accessEntries.length ? (
-                  accessEntries.slice(0, 3).map(([label, url]) => (
-                    <a
-                      key={`${label}:${url}`}
-                      href={url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex items-center justify-between gap-3 rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-sm text-foreground transition-colors hover:border-border hover:bg-muted/30"
-                    >
-                      <span className="truncate">{label}</span>
-                      <ExternalLink className="size-4 shrink-0 text-muted-foreground" />
-                    </a>
-                  ))
-                ) : (
-                  <div className="rounded-md border border-dashed border-border px-3 py-6 text-sm text-muted-foreground">
-                    {i18n.t("previewPanel.deployment.overview.noAccessibleEntry")}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="rounded-md border border-border/70 p-4">
-              <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
-                {i18n.t("previewPanel.deployment.dashboard.publishOverview")}
-              </div>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <DashboardMiniStat
-                  label={i18n.t("previewPanel.deployment.dashboard.successVersions")}
-                  value={`${successCount}`}
-                />
-                <DashboardMiniStat
-                  label={i18n.t("previewPanel.deployment.dashboard.failedVersions")}
-                  value={`${failedCount}`}
-                />
-                <DashboardMiniStat
-                  label={i18n.t("previewPanel.deployment.dashboard.accessEntriesShort")}
-                  value={`${accessEntries.length}`}
-                />
-                <DashboardMiniStat
-                  label={i18n.t("previewPanel.deployment.dashboard.recentActivity")}
-                  value={latestTimestamp}
-                  subtle
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="border-b border-border px-4 py-4 sm:px-5">
-          <div className="text-sm font-semibold text-foreground">
-            {i18n.t("previewPanel.deployment.dashboard.operationsDecision")}
-          </div>
-          <div className="mt-1 text-xs text-muted-foreground">
-            {i18n.t(
-              "previewPanel.deployment.dashboard.operationsDecisionDescription",
-            )}
-          </div>
-        </div>
-        <div className="grid gap-3 p-4 sm:p-5 md:grid-cols-3">
-          <InsightCard
-            title={i18n.t("previewPanel.deployment.dashboard.currentVersionInsight")}
-            description={
-              currentDeployment?.status === "SUCCESS"
-                ? i18n.t(
-                    "previewPanel.deployment.dashboard.currentVersionStable",
-                  )
-                : info?.activeDeploymentPending
-                  ? i18n.t(
-                      "previewPanel.deployment.dashboard.currentVersionPending",
-                    )
-                  : i18n.t(
-                      "previewPanel.deployment.dashboard.currentVersionMissing",
-                    )
-            }
-          />
-          <InsightCard
-            title={i18n.t("previewPanel.deployment.dashboard.entryStatus")}
-            description={
-              accessEntries.length
-                ? i18n.t("previewPanel.deployment.dashboard.entryStatusCount", {
-                    count: accessEntries.length,
-                  })
-                : i18n.t("previewPanel.deployment.dashboard.entryStatusMissing")
-            }
-          />
-          <InsightCard
-            title={i18n.t("previewPanel.deployment.dashboard.rollbackSpace")}
-            description={
-              successCount > 1
-                ? i18n.t(
-                    "previewPanel.deployment.dashboard.rollbackSpaceMany",
-                    { count: successCount },
-                  )
-                : successCount === 1
-                  ? i18n.t(
-                      "previewPanel.deployment.dashboard.rollbackSpaceSingle",
-                    )
-                  : i18n.t(
-                      "previewPanel.deployment.dashboard.rollbackSpaceNone",
-                    )
-            }
-          />
-        </div>
-      </section>
-
-      <DeploymentTemplateBaselineSection
-        baseline={templateBaseline}
-        loading={templateBaselineLoading}
-        error={templateBaselineError}
-      />
-
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="flex flex-col gap-2 border-b border-border px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+    <section className="rounded-xl border border-border/70 bg-card">
+      <div className="border-b border-border px-4 py-4 sm:px-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <div className="text-sm font-semibold text-foreground">
-              {i18n.t("previewPanel.deployment.dashboard.recentReleaseTimeline")}
+            <div className="text-base font-medium leading-6 text-foreground">
+              {i18n.t("previewPanel.deployment.dashboard.siteAnalytics")}
             </div>
-            <div className="mt-1 text-xs text-muted-foreground">
-              {i18n.t(
-                "previewPanel.deployment.dashboard.recentReleaseTimelineDescription",
-              )}
-            </div>
+            {analyticsStatusDescription ? (
+              <div className="mt-1 text-xs text-muted-foreground">
+                {analyticsStatusDescription}
+              </div>
+            ) : null}
           </div>
-          <div className="text-xs text-muted-foreground">
-            {i18n.t("previewPanel.deployment.dashboard.recordsCount", {
-              count: info?.deployments.length || 0,
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9 gap-1 rounded-lg"
+            onClick={() => onRefresh(currentDeploymentId || undefined)}
+            disabled={loading}
+          >
+            <RefreshCw className={cn("size-4", loading ? "animate-spin" : "")} />
+            {i18n.t("previewPanel.deployment.dashboard.refresh")}
+          </Button>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex h-9 items-center gap-2 rounded-[10px] border border-border px-4 text-sm text-foreground transition-colors hover:bg-muted/40"
+              >
+                <Calendar className="size-4" />
+                {selectedTimeRangeLabel}
+                <ChevronDown className="size-3.5 text-muted-foreground" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-44">
+              <DropdownMenuRadioGroup
+                value={timeRange}
+                onValueChange={(value) =>
+                  setTimeRange(value as DeploymentAnalyticsTimeRange)
+                }
+              >
+                {timeRangeOptions.map((item) => (
+                  <DropdownMenuRadioItem key={item.value} value={item.value}>
+                    {item.label}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+        </div>
+      </div>
+
+      <div className="p-4 sm:p-5">
+        <div className="overflow-hidden rounded-[14px] border border-border/70">
+          <div className="grid sm:grid-cols-5">
+            {metricItems.map((item, index) => (
+              <button
+                key={item.label}
+                type="button"
+                className={cn(
+                  "flex min-w-0 flex-col gap-1 border-border/70 px-4 py-4 text-left transition-colors hover:bg-muted/20",
+                  index > 0 ? "border-t sm:border-l sm:border-t-0" : "",
+                  index > 0 ? "bg-muted/25" : "",
+                )}
+              >
+                <span className="truncate text-[12px] uppercase leading-5 text-muted-foreground">
+                  {item.label}
+                </span>
+                <span className="break-words text-base font-semibold leading-5 text-foreground">
+                  {item.value}
+                </span>
+                {hasAnalyticsMetrics ? (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600">
+                    <TrendingUp className="size-3.5" />
+                    {i18n.t("previewPanel.deployment.dashboard.liveData")}
+                  </span>
+                ) : null}
+              </button>
+            ))}
+          </div>
+          <div className="h-64 border-t border-border/70 p-4">
+            <DeploymentAnalyticsChart
+              hasData={effectiveHasAnalyticsMetrics}
+              label={i18n.t("previewPanel.deployment.dashboard.pageviews")}
+              value={pageviewsValue}
+              timeRangeLabel={selectedTimeRangeLabel}
+              points={analyticsDetail?.pageviews.pageviews || []}
+            />
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          {detailPanels.map((panel) => (
+            <DeploymentAnalyticsListPanel
+              key={panel.id}
+              title={panel.title}
+              firstColumn={panel.firstColumn}
+              secondColumn={i18n.t("previewPanel.deployment.dashboard.visitors")}
+              rows={panel.rows}
+              timeRangeLabel={selectedTimeRangeLabel}
+            />
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function DeploymentAnalyticsChart({
+  hasData,
+  label,
+  value,
+  timeRangeLabel,
+  points,
+}: {
+  hasData: boolean;
+  label: string;
+  value: string;
+  timeRangeLabel: string;
+  points: TaskCreationDeploymentAnalyticsOverview["pageviews"]["pageviews"];
+}) {
+  const chartPath = buildDeploymentAnalyticsChartPath(points, hasData);
+  const areaPath = `${chartPath} L620 220 L20 220 Z`;
+  return (
+    <div className="relative h-full w-full overflow-hidden rounded-b-[12px] bg-card">
+      <svg
+        className="h-full w-full"
+        viewBox="0 0 640 240"
+        role="img"
+        aria-label={`${label}: ${value}`}
+        preserveAspectRatio="none"
+      >
+        {[40, 90, 140, 190].map((y) => (
+          <line
+            key={y}
+            x1="0"
+            x2="640"
+            y1={y}
+            y2={y}
+            stroke="currentColor"
+            className="text-border"
+            strokeDasharray="4 8"
+          />
+        ))}
+        <path
+          d={chartPath}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="3"
+          className="text-foreground"
+        />
+        <path
+          d={areaPath}
+          className="fill-muted"
+          opacity="0.55"
+        />
+      </svg>
+      <div className="absolute left-4 top-4 rounded-[10px] border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
+        <div className="text-foreground">
+          {label}: {value}
+        </div>
+        <div className="mt-1">
+          {hasData
+            ? i18n.t("previewPanel.deployment.dashboard.liveDataForRange", {
+                range: timeRangeLabel,
+              })
+            : i18n.t("previewPanel.deployment.dashboard.waitingAnalyticsData")}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function buildDeploymentAnalyticsChartPath(
+  points: TaskCreationDeploymentAnalyticsOverview["pageviews"]["pageviews"],
+  hasData: boolean,
+) {
+  if (!hasData || !points.length) {
+    return "M20 182 C105 182 130 182 205 182 C285 182 305 182 385 182 C462 182 486 182 620 182";
+  }
+  const values = points.map((point) => point.y).filter((value) => Number.isFinite(value));
+  const max = Math.max(...values, 1);
+  const width = 600;
+  const left = 20;
+  const top = 42;
+  const height = 150;
+  const normalized = points.map((point, index) => {
+    const x = left + (points.length === 1 ? width : (width / (points.length - 1)) * index);
+    const y = top + height - (Math.max(point.y, 0) / max) * height;
+    return { x, y };
+  });
+  return normalized
+    .map((point, index) =>
+      `${index === 0 ? "M" : "L"}${point.x.toFixed(1)} ${point.y.toFixed(1)}`,
+    )
+    .join(" ");
+}
+
+function DeploymentAnalyticsListPanel({
+  title,
+  firstColumn,
+  secondColumn,
+  rows,
+  timeRangeLabel,
+}: {
+  title: string;
+  firstColumn: string;
+  secondColumn: string;
+  rows: Array<{ label: string; value: string }>;
+  timeRangeLabel: string;
+}) {
+  return (
+    <div className="flex h-56 flex-col gap-3 rounded-xl border border-border/70 p-4">
+      <div className="text-sm text-muted-foreground">{title}</div>
+      <div className="grid grid-cols-[1fr_auto] text-[11px] uppercase tracking-[0.04em] text-muted-foreground">
+        <span>{firstColumn}</span>
+        <span className="text-right">{secondColumn}</span>
+      </div>
+      <div className="min-h-0 flex-1">
+        {rows.length ? (
+          <div className="flex flex-col">
+            {rows.map((row) => (
+              <div
+                key={`${title}-${row.label}`}
+                className="relative border-b border-border/70 last:border-b-0"
+              >
+                <div className="absolute inset-0 rounded-[2px] bg-muted/60" />
+                <div className="relative grid grid-cols-[1fr_auto] items-center gap-3 px-3 py-2">
+                  <span className="truncate text-sm text-foreground">
+                    {row.label}
+                  </span>
+                  <span className="text-right text-sm tabular-nums text-muted-foreground">
+                    {row.value}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="flex h-full items-center justify-center rounded-md border border-dashed border-border text-sm text-muted-foreground">
+            {i18n.t("previewPanel.deployment.dashboard.noBreakdownDataForRange", {
+              range: timeRangeLabel,
             })}
           </div>
-        </div>
-        <div className="p-5">
-          {info?.deployments.length ? (
-            <div className="space-y-4">
-              {info.deployments.slice(0, 6).map((item, index) => (
-                <div key={item.id} className="relative pl-6">
-                  {index < Math.min(info.deployments.length, 6) - 1 ? (
-                    <div className="absolute left-[7px] top-7 h-[calc(100%+12px)] w-px bg-slate-200" />
-                  ) : null}
-                  <div className="absolute left-0 top-1.5 size-4 rounded-full border border-border bg-card">
-                    <div
-                      className={cn(
-                        "mx-auto mt-[3px] size-2 rounded-full",
-                        item.status === "SUCCESS"
-                          ? "bg-emerald-500"
-                          : item.status === "FAILED" ||
-                              item.status === "CRASHED"
-                            ? "bg-rose-500"
-                            : "bg-amber-500",
-                      )}
-                    />
-                  </div>
-                  <div className="flex flex-col gap-2 rounded-md border border-border/70 bg-muted/30 px-4 py-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium text-foreground">
-                        {item.commitMessage ||
-                          i18n.t(
-                            "previewPanel.deployment.overview.triggeredByOneceo",
-                          )}
-                      </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                        <span>
-                          {item.commitAuthor ||
-                            i18n.t(
-                              "previewPanel.deployment.overview.platformAutoPublish",
-                            )}
-                        </span>
-                        <span className="size-1 rounded-full bg-slate-300" />
-                        <span>
-                          {formatPreviewTimestamp(item.createdAt) ||
-                            item.createdAt ||
-                            i18n.t("previewPanel.deployment.overview.unknownTime")}
-                        </span>
-                        <span className="size-1 rounded-full bg-slate-300" />
-                        <span className="font-mono">{item.id.slice(0, 8)}</span>
-                      </div>
-                    </div>
-                    <span className="shrink-0 rounded-full border border-border bg-card px-2 py-1 text-[11px] text-foreground">
-                      {item.status}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="rounded-md border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
-              {i18n.t("previewPanel.deployment.dashboard.noTimeline")}
-            </div>
-          )}
-        </div>
-      </section>
+        )}
+      </div>
     </div>
   );
 }
@@ -4261,6 +3648,8 @@ function DeploymentDatabaseSection({
     "insert" | "update" | "delete" | null
   >(null);
   const [databaseError, setDatabaseError] = useState<string | null>(null);
+  const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
+  const [connectionSecretsVisible, setConnectionSecretsVisible] = useState(false);
   const [rowsError, setRowsError] = useState<string | null>(null);
   const [activeTableId, setActiveTableId] = useState<string | null>(null);
   const [panelMode, setPanelMode] = useState<"record" | "insert" | "settings">(
@@ -4271,6 +3660,7 @@ function DeploymentDatabaseSection({
   const [selectedRowValues, setSelectedRowValues] = useState<
     Record<string, string>
   >({});
+  const [visibleColumnNames, setVisibleColumnNames] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
@@ -4331,11 +3721,14 @@ function DeploymentDatabaseSection({
               matchRowLocator(row, selectedRowLocator, result.columns),
             )
           : null;
-        const nextRow = currentRow || result.rows[0];
-        const nextLocator = buildRowLocator(nextRow, result.columns);
-        setSelectedRowLocator(nextLocator);
-        if (panelMode === "record") {
-          setSelectedRowValues(buildEditorValues(result.columns, nextRow));
+        if (currentRow) {
+          const nextLocator = buildRowLocator(currentRow, result.columns);
+          setSelectedRowLocator(nextLocator);
+          if (panelMode === "record") {
+            setSelectedRowValues(buildEditorValues(result.columns, currentRow));
+          }
+        } else if (panelMode === "record") {
+          setSelectedRowLocator(null);
         }
       } catch (error) {
         if (cancelled) return;
@@ -4356,11 +3749,38 @@ function DeploymentDatabaseSection({
     };
   }, [sessionId, activeTableId, page]);
 
+  useEffect(() => {
+    if (!rowsPage?.columns.length) {
+      setVisibleColumnNames([]);
+      return;
+    }
+    setVisibleColumnNames((current) => {
+      if (!current.length) {
+        return rowsPage.columns.map((column) => column.name);
+      }
+      const available = new Set(rowsPage.columns.map((column) => column.name));
+      const next = current.filter((name) => available.has(name));
+      return next.length ? next : rowsPage.columns.map((column) => column.name);
+    });
+  }, [rowsPage?.columns]);
+
   const activeTable =
     databaseInfo?.tables.find((table) => table.id === activeTableId) ||
     databaseInfo?.tables[0] ||
     null;
+  const databaseConnection = databaseInfo?.connection || null;
   const editorColumns = rowsPage?.columns || [];
+  const shouldShowRecordDetail =
+    panelMode === "insert" || (panelMode === "record" && Boolean(selectedRowLocator));
+  const visibleColumns = useMemo(() => {
+    if (!rowsPage?.columns.length) return [];
+    if (!visibleColumnNames.length) return rowsPage.columns;
+    const visibleSet = new Set(visibleColumnNames);
+    const filtered = rowsPage.columns.filter((column) =>
+      visibleSet.has(column.name),
+    );
+    return filtered.length ? filtered : rowsPage.columns;
+  }, [rowsPage?.columns, visibleColumnNames]);
 
   const handleRefresh = async () => {
     if (!sessionId) return;
@@ -4390,6 +3810,30 @@ function DeploymentDatabaseSection({
     }
   };
 
+  const openConnectionDialog = useCallback(() => {
+    setConnectionDialogOpen(true);
+  }, []);
+
+  const handleEnableDatabase = async () => {
+    if (!sessionId) return;
+    setDatabaseLoading(true);
+    setDatabaseError(null);
+    try {
+      const result = await ensureTaskCreationDatabase(sessionId);
+      setDatabaseInfo(result);
+      setActiveTableId(result?.tables[0]?.id || null);
+      setPanelMode("settings");
+    } catch (error) {
+      setDatabaseError(
+        error instanceof Error
+          ? error.message
+          : i18n.t("previewPanel.deployment.database.enableFailed"),
+      );
+    } finally {
+      setDatabaseLoading(false);
+    }
+  };
+
   const handleSelectRow = (row: Record<string, unknown>) => {
     if (!rowsPage) return;
     const locator = buildRowLocator(row, rowsPage.columns);
@@ -4404,6 +3848,12 @@ function DeploymentDatabaseSection({
     setSelectedRowLocator(null);
     setSelectedRowValues(buildEditorValues(rowsPage.columns));
   };
+
+  const handleHideRecordDetail = useCallback(() => {
+    if (panelMode !== "record" && panelMode !== "insert") return;
+    setSelectedRowLocator(null);
+    setPanelMode("record");
+  }, [panelMode]);
 
   const handleCopy = async (key: string, value: string) => {
     try {
@@ -4510,15 +3960,75 @@ function DeploymentDatabaseSection({
     );
   }
 
+  if (databaseInfo && !databaseInfo.configured) {
+    return (
+      <div className="space-y-4">
+        <DeploymentResourceHeroCard
+          icon={<Database className="size-5" />}
+          title={i18n.t("previewPanel.deployment.database.notConfiguredTitle")}
+          description={i18n.t(
+            "previewPanel.deployment.database.notConfiguredDescription",
+          )}
+          action={
+            <Button
+              onClick={() => void handleEnableDatabase()}
+              disabled={databaseLoading}
+              className="shrink-0"
+            >
+              {databaseLoading ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Database className="size-4" />
+              )}
+              {i18n.t("previewPanel.deployment.database.enable")}
+            </Button>
+          }
+        >
+          <DeploymentPlaceholderGrid
+            items={[
+              {
+                title: i18n.t(
+                  "previewPanel.deployment.database.databaseStatus",
+                ),
+                description: i18n.t(
+                  "previewPanel.deployment.database.notConfiguredDescription",
+                ),
+              },
+              {
+                title: i18n.t(
+                  "previewPanel.deployment.database.connectionInfo",
+                ),
+                description: i18n.t(
+                  "previewPanel.deployment.database.canCopyToClient",
+                ),
+              },
+              {
+                title: i18n.t(
+                  "previewPanel.deployment.database.settings",
+                ),
+                description: i18n.t(
+                  "previewPanel.deployment.database.readyNoTables",
+                ),
+              },
+            ]}
+          />
+        </DeploymentResourceHeroCard>
+        {databaseError ? (
+          <div className="text-sm text-rose-600">{databaseError}</div>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
-    <div className="grid gap-4 xl:grid-cols-[180px_minmax(0,1fr)_320px]">
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="relative flex h-full flex-col">
+    <div className="h-full overflow-hidden rounded-xl border border-border/70 bg-card">
+      <div className="flex h-full items-stretch overflow-hidden">
+        <section className="relative flex h-full w-[180px] shrink-0 flex-col px-2 pb-0 pt-3">
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 right-0 border-r border-border"
+            className="pointer-events-none absolute inset-0 border-r border-border"
           />
-          <div className="flex-1 space-y-2 overflow-y-auto overscroll-contain p-3">
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain">
             {databaseLoading && !databaseInfo ? (
               <div className="px-3 py-2 text-sm text-muted-foreground">
                 {i18n.t("previewPanel.deployment.database.preparing")}
@@ -4534,20 +4044,22 @@ function DeploymentDatabaseSection({
                   setPanelMode("record");
                 }}
                 className={cn(
-                  "flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left transition-colors",
+                  "flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left transition-colors",
                   activeTableId === table.id
-                    ? "bg-muted/50 text-foreground"
+                    ? "bg-muted/60 text-foreground"
                     : "text-foreground hover:bg-muted/30",
                 )}
               >
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium">
+                <div className="min-w-0 flex-1" title={table.name}>
+                  <div
+                    className={cn(
+                      "truncate text-sm",
+                      activeTableId === table.id ? "font-medium" : "font-normal",
+                    )}
+                  >
                     {table.name}
                   </div>
                 </div>
-                <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
-                  {table.sourceLabel}
-                </span>
               </button>
             ))}
             {!databaseLoading && !databaseInfo?.tables.length ? (
@@ -4556,26 +4068,276 @@ function DeploymentDatabaseSection({
               </div>
             ) : null}
           </div>
-          <div className="border-t border-border p-3">
+          <div className="px-2 py-4">
             <Button
               variant="outline"
-              className="w-full justify-center text-sm"
-              onClick={() => setPanelMode("settings")}
+              className="h-8 w-full justify-center text-sm"
+              onClick={openConnectionDialog}
             >
-              <TableProperties className="size-4" />
+              <Database className="size-4" />
               {i18n.t("previewPanel.deployment.database.settings")}
             </Button>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-          <div>
-            <div className="text-sm font-semibold text-foreground">
+        <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <div className="flex items-center justify-between gap-3 px-4 py-3">
+            <div className="text-[13px] font-normal text-foreground">
               {activeTable
                 ? activeTable.name
                 : i18n.t("previewPanel.deployment.database.database")}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" className="h-8 text-xs">
+                    <TableProperties className="size-4" />
+                    {i18n.t("previewPanel.deployment.database.columnCount", {
+                      count: visibleColumns.length || 0,
+                    })}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-56 rounded-2xl p-2">
+                  <div className="space-y-1">
+                    {rowsPage?.columns.map((column) => {
+                      const checked = visibleColumnNames.includes(column.name);
+                      const canHide =
+                        checked && visibleColumnNames.length > 1;
+                      return (
+                        <div
+                          key={column.name}
+                          className="flex items-center justify-between gap-3 rounded-lg px-3 py-2"
+                        >
+                          <div className="min-w-0 flex-1 text-sm text-foreground">
+                            <span className="truncate">{column.name}</span>
+                          </div>
+                          <Switch
+                            checked={checked}
+                            onCheckedChange={(nextChecked) => {
+                              setVisibleColumnNames((current) => {
+                                if (nextChecked) {
+                                  if (current.includes(column.name)) {
+                                    return current;
+                                  }
+                                  const ordered =
+                                    rowsPage?.columns
+                                      .map((item) => item.name)
+                                      .filter((name) =>
+                                        name === column.name || current.includes(name),
+                                      ) || [];
+                                  return ordered;
+                                }
+                                if (!canHide) return current;
+                                return current.filter((name) => name !== column.name);
+                              });
+                            }}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => void handleRefresh()}
+              >
+                <RefreshCw className="size-4" />
+                {i18n.t("previewPanel.deployment.database.refresh")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={handleCreateNew}
+              >
+                <Plus className="size-4" />
+                {i18n.t("previewPanel.deployment.database.newRecord")}
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                className="size-8"
+                onClick={openConnectionDialog}
+              >
+                <TableProperties className="size-4" />
+              </Button>
+            </div>
+          </div>
+
+          {databaseError ? (
+            <div className="px-4 pb-2 text-xs text-rose-600">{databaseError}</div>
+          ) : null}
+          {rowsError ? (
+            <div className="px-4 pb-2 text-xs text-rose-600">{rowsError}</div>
+          ) : null}
+
+          <div className="flex min-h-0 flex-1 flex-col pb-12">
+            {activeTable && rowsPage ? (
+              <>
+                <div
+                  className="relative flex-1 overflow-auto"
+                  onClick={(event) => {
+                    if (
+                      panelMode !== "record" &&
+                      panelMode !== "insert"
+                    ) {
+                      return;
+                    }
+                    if (panelMode === "record" && !selectedRowLocator) return;
+                    const target = event.target as HTMLElement;
+                    if (
+                      target.closest("tbody tr") ||
+                      target.closest("button") ||
+                      target.closest("input") ||
+                      target.closest("textarea") ||
+                      target.closest("select")
+                    ) {
+                      return;
+                    }
+                    handleHideRecordDetail();
+                  }}
+                >
+                  <table className="min-w-full border-separate border-spacing-0 text-sm">
+                    <thead className="sticky top-0 z-10 bg-card">
+                      <tr>
+                        {visibleColumns.map((column) => (
+                          <th
+                            key={column.name}
+                            className="border-b border-border px-3 py-2 text-left font-medium text-muted-foreground"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span>{column.name}</span>
+                              {column.isPrimaryKey ? (
+                                <KeyRound className="size-3.5 text-muted-foreground" />
+                              ) : null}
+                            </div>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rowsLoading ? (
+                        <tr>
+                          <td
+                            colSpan={Math.max(visibleColumns.length, 1)}
+                            className="px-4 py-16 text-center text-muted-foreground"
+                          >
+                            {i18n.t("previewPanel.deployment.database.loadingData")}
+                          </td>
+                        </tr>
+                      ) : rowsPage.rows.length ? (
+                        rowsPage.rows.map((row, index) => {
+                          const locator = buildRowLocator(row, rowsPage.columns);
+                          const active = selectedRowLocator
+                            ? matchRowLocator(
+                                row,
+                                selectedRowLocator,
+                                rowsPage.columns,
+                              )
+                            : false;
+                          return (
+                            <tr
+                              key={String(row._oneceo_ctid || index)}
+                              className={cn(
+                                "cursor-pointer transition-colors",
+                                active ? "bg-muted/30" : "hover:bg-muted/40",
+                              )}
+                              onClick={() => handleSelectRow(row)}
+                            >
+                              {visibleColumns.map((column) => (
+                                <td
+                                  key={column.name}
+                                  className="border-b border-border/70 px-3 py-2 align-top text-foreground"
+                                >
+                                  <div className="max-w-[220px] truncate">
+                                    {formatDatabaseCell(row[column.name])}
+                                  </div>
+                                </td>
+                              ))}
+                            </tr>
+                          );
+                        })
+                      ) : (
+                        <tr>
+                          <td
+                            colSpan={Math.max(visibleColumns.length, 1)}
+                            className="px-4 py-16 text-center text-muted-foreground"
+                          >
+                            {i18n.t("previewPanel.deployment.database.noTableData")}
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <span>
+                        {i18n.t("previewPanel.deployment.database.rows", {
+                          count: rowsPage.total,
+                        })}
+                      </span>
+                      <span className="size-1 rounded-full bg-slate-300" />
+                      <span>
+                        {i18n.t("previewPanel.deployment.database.rowsPerPage", {
+                          count: rowsPage.pageSize,
+                        })}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        disabled={rowsPage.page <= 1}
+                        onClick={() =>
+                          setPage((current) => Math.max(1, current - 1))
+                        }
+                      >
+                        <ChevronLeft className="size-4" />
+                        {i18n.t("previewPanel.deployment.database.previousPage")}
+                      </Button>
+                      <span>
+                        {i18n.t("previewPanel.deployment.database.pageIndicator", {
+                          page: rowsPage.page,
+                          total: rowsPage.totalPages,
+                        })}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        disabled={rowsPage.page >= rowsPage.totalPages}
+                        onClick={() => setPage((current) => current + 1)}
+                      >
+                        {i18n.t("previewPanel.deployment.database.nextPage")}
+                        <ChevronRight className="size-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="px-4 py-20 text-center text-sm text-muted-foreground">
+                {databaseLoading
+                  ? i18n.t("previewPanel.deployment.database.connecting")
+                  : i18n.t("previewPanel.deployment.database.selectTableHint")}
+              </div>
+            )}
+          </div>
+        </section>
+
+        {shouldShowRecordDetail ? (
+        <section className="w-[320px] shrink-0 border-l border-border bg-card">
+          <div className="border-b border-border px-4 py-3">
+            <div className="text-sm font-semibold text-foreground">
+              {panelMode === "insert"
+                ? i18n.t("previewPanel.deployment.database.newRecord")
+                : i18n.t("previewPanel.deployment.database.recordDetail")}
             </div>
             <div className="mt-1 text-xs text-muted-foreground">
               {activeTable
@@ -4583,295 +4345,16 @@ function DeploymentDatabaseSection({
                 : i18n.t("previewPanel.deployment.database.waitSelectTable")}
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" className="h-8 text-xs">
-              <TableProperties className="size-4" />
-              {i18n.t("previewPanel.deployment.database.columnCount", {
-                count: rowsPage?.columns.length || 0,
-              })}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 text-xs"
-              onClick={() => void handleRefresh()}
-            >
-              <RefreshCw className="size-4" />
-              {i18n.t("previewPanel.deployment.database.refresh")}
-            </Button>
-            <Button size="sm" className="h-8 text-xs" onClick={handleCreateNew}>
-              <Plus className="size-4" />
-              {i18n.t("previewPanel.deployment.database.newRecord")}
-            </Button>
-          </div>
-        </div>
 
-        {databaseError ? (
-          <div className="px-4 pt-3 text-xs text-rose-600">{databaseError}</div>
-        ) : null}
-        {rowsError ? (
-          <div className="px-4 pt-3 text-xs text-rose-600">{rowsError}</div>
-        ) : null}
-
-        <div className="min-h-0">
-          {activeTable && rowsPage ? (
-            <>
-              <div className="max-h-[520px] overflow-auto">
-                <table className="min-w-full border-separate border-spacing-0 text-sm">
-                  <thead className="sticky top-0 z-10 bg-card">
-                    <tr>
-                      {rowsPage.columns.map((column) => (
-                        <th
-                          key={column.name}
-                          className="border-b border-border px-3 py-2 text-left font-medium text-muted-foreground"
-                        >
-                          <div className="flex items-center gap-2">
-                            <span>{column.name}</span>
-                            {column.isPrimaryKey ? (
-                              <KeyRound className="size-3.5 text-muted-foreground" />
-                            ) : null}
-                          </div>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rowsLoading ? (
-                      <tr>
-                        <td
-                          colSpan={Math.max(rowsPage.columns.length, 1)}
-                          className="px-4 py-16 text-center text-muted-foreground"
-                        >
-                          {i18n.t("previewPanel.deployment.database.loadingData")}
-                        </td>
-                      </tr>
-                    ) : rowsPage.rows.length ? (
-                      rowsPage.rows.map((row, index) => {
-                        const locator = buildRowLocator(row, rowsPage.columns);
-                        const active = selectedRowLocator
-                          ? matchRowLocator(
-                              row,
-                              selectedRowLocator,
-                              rowsPage.columns,
-                            )
-                          : index === 0;
-                        return (
-                          <tr
-                            key={String(row._oneceo_ctid || index)}
-                            className={cn(
-                              "cursor-pointer transition-colors",
-                              active ? "bg-muted/30" : "hover:bg-muted/40",
-                            )}
-                            onClick={() => handleSelectRow(row)}
-                          >
-                            {rowsPage.columns.map((column) => (
-                              <td
-                                key={column.name}
-                                className="border-b border-border/70 px-3 py-2 align-top text-foreground"
-                              >
-                                <div className="max-w-[220px] truncate">
-                                  {formatDatabaseCell(row[column.name])}
-                                </div>
-                              </td>
-                            ))}
-                          </tr>
-                        );
-                      })
-                    ) : (
-                      <tr>
-                        <td
-                          colSpan={Math.max(rowsPage.columns.length, 1)}
-                          className="px-4 py-16 text-center text-muted-foreground"
-                        >
-                          {i18n.t("previewPanel.deployment.database.noTableData")}
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3 text-xs text-muted-foreground">
-                <div className="flex items-center gap-2">
-                  <span>
-                    {i18n.t("previewPanel.deployment.database.rows", {
-                      count: rowsPage.total,
-                    })}
-                  </span>
-                  <span className="size-1 rounded-full bg-slate-300" />
-                  <span>
-                    {i18n.t("previewPanel.deployment.database.rowsPerPage", {
-                      count: rowsPage.pageSize,
-                    })}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 text-xs"
-                    disabled={rowsPage.page <= 1}
-                    onClick={() =>
-                      setPage((current) => Math.max(1, current - 1))
-                    }
-                  >
-                    <ChevronLeft className="size-4" />
-                    {i18n.t("previewPanel.deployment.database.previousPage")}
-                  </Button>
-                  <span>
-                    {i18n.t("previewPanel.deployment.database.pageIndicator", {
-                      page: rowsPage.page,
-                      total: rowsPage.totalPages,
-                    })}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 text-xs"
-                    disabled={rowsPage.page >= rowsPage.totalPages}
-                    onClick={() => setPage((current) => current + 1)}
-                  >
-                    {i18n.t("previewPanel.deployment.database.nextPage")}
-                    <ChevronRight className="size-4" />
-                  </Button>
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="px-4 py-20 text-center text-sm text-muted-foreground">
-              {databaseLoading
-                ? i18n.t("previewPanel.deployment.database.connecting")
-                : i18n.t("previewPanel.deployment.database.selectTableHint")}
-            </div>
-          )}
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="border-b border-border px-4 py-3">
-          <div className="text-sm font-semibold text-foreground">
-            {panelMode === "settings"
-              ? i18n.t("previewPanel.deployment.database.connectionInfo")
-              : panelMode === "insert"
-                ? i18n.t("previewPanel.deployment.database.newRecord")
-                : i18n.t("previewPanel.deployment.database.recordDetail")}
-          </div>
-          <div className="mt-1 text-xs text-muted-foreground">
-            {panelMode === "settings"
-              ? i18n.t("previewPanel.deployment.database.canCopyToClient")
-              : activeTable
-                ? `${activeTable.schema}.${activeTable.name}`
-                : i18n.t("previewPanel.deployment.database.waitSelectTable")}
-          </div>
-        </div>
-
-        <div className="space-y-4 p-4">
-          {panelMode === "settings" && databaseInfo ? (
-            <>
-              <div className="grid gap-3">
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.database.connectionUrl")}
-                  value={
-                    databaseInfo.connection.publicConnectionUrl ||
-                    databaseInfo.connection.connectionUrl
-                  }
-                  copied={copiedField === "url"}
-                  onCopy={() =>
-                    void handleCopy(
-                      "url",
-                      databaseInfo.connection.publicConnectionUrl ||
-                        databaseInfo.connection.connectionUrl,
-                    )
-                  }
-                />
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.database.host")}
-                  value={databaseInfo.connection.host}
-                  copied={copiedField === "host"}
-                  onCopy={() =>
-                    void handleCopy("host", databaseInfo.connection.host)
-                  }
-                />
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.database.port")}
-                  value={databaseInfo.connection.port}
-                  copied={copiedField === "port"}
-                  onCopy={() =>
-                    void handleCopy("port", databaseInfo.connection.port)
-                  }
-                />
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.database.username")}
-                  value={databaseInfo.connection.username}
-                  copied={copiedField === "username"}
-                  onCopy={() =>
-                    void handleCopy(
-                      "username",
-                      databaseInfo.connection.username,
-                    )
-                  }
-                />
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.database.password")}
-                  value={databaseInfo.connection.password}
-                  copied={copiedField === "password"}
-                  onCopy={() =>
-                    void handleCopy(
-                      "password",
-                      databaseInfo.connection.password,
-                    )
-                  }
-                  sensitive
-                />
-                <ConnectionInfoField
-                  label={i18n.t("previewPanel.deployment.database.databaseName")}
-                  value={databaseInfo.connection.database}
-                  copied={copiedField === "database"}
-                  onCopy={() =>
-                    void handleCopy(
-                      "database",
-                      databaseInfo.connection.database,
-                    )
-                  }
-                />
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-2">
-                <DeploymentMiniStatus
-                  label={i18n.t("previewPanel.deployment.database.databaseStatus")}
-                  value={databaseInfo.latestDeploymentStatus || "UNKNOWN"}
-                />
-                <DeploymentMiniStatus
-                  label={i18n.t("previewPanel.deployment.database.connectionMode")}
-                  value={databaseInfo.connection.sslMode.toUpperCase()}
-                />
-                <DeploymentMiniStatus
-                  label={i18n.t("previewPanel.deployment.database.volumeLabel")}
-                  value={
-                    databaseInfo.volumeName ||
-                    i18n.t("previewPanel.deployment.database.mounted")
-                  }
-                />
-                <DeploymentMiniStatus
-                  label={i18n.t("previewPanel.deployment.database.appDeployment")}
-                  value={
-                    info?.configured
-                      ? statusMeta.label
-                      : i18n.t(
-                          "previewPanel.deployment.database.deploymentPreparing",
-                        )
-                  }
-                />
-              </div>
-            </>
-          ) : rowsPage ? (
-            <>
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-sm font-medium text-foreground">
-                  {panelMode === "insert"
-                    ? i18n.t("previewPanel.deployment.database.prepareInsert")
-                    : i18n.t("previewPanel.deployment.database.selectedRecord")}
-                </div>
-                {panelMode !== "settings" ? (
+          <div className="space-y-4 p-4">
+            {rowsPage ? (
+              <>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm font-medium text-foreground">
+                    {panelMode === "insert"
+                      ? i18n.t("previewPanel.deployment.database.prepareInsert")
+                      : i18n.t("previewPanel.deployment.database.selectedRecord")}
+                  </div>
                   <div className="flex items-center gap-2">
                     {panelMode === "record" ? (
                       <Button
@@ -4908,118 +4391,152 @@ function DeploymentDatabaseSection({
                       </Button>
                     ) : null}
                   </div>
-                ) : null}
+                </div>
+
+                <div className="space-y-3">
+                  {editorColumns.map((column) => (
+                    <DatabaseFieldEditor
+                      key={column.name}
+                      column={column}
+                      value={selectedRowValues[column.name] || ""}
+                      disabled={
+                        panelMode === "record" ? column.isPrimaryKey : false
+                      }
+                      onChange={(nextValue) =>
+                        setSelectedRowValues((current) => ({
+                          ...current,
+                          [column.name]: nextValue,
+                        }))
+                      }
+                    />
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-2 pt-2">
+                  <Button
+                    size="sm"
+                    className="h-8 text-xs"
+                    disabled={Boolean(actionLoading)}
+                    onClick={() => void handleSave()}
+                  >
+                    {actionLoading === "insert" || actionLoading === "update" ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : null}
+                    {panelMode === "insert"
+                      ? i18n.t("previewPanel.deployment.database.writeRecord")
+                      : i18n.t("previewPanel.deployment.database.saveChanges")}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <div className="py-10 text-center text-sm text-muted-foreground">
+                {databaseLoading
+                  ? i18n.t("previewPanel.deployment.database.preparingPanel")
+                  : i18n.t("previewPanel.deployment.database.waitPanelReady")}
+              </div>
+            )}
+          </div>
+        </section>
+        ) : null}
+      </div>
+
+      <Dialog
+        open={connectionDialogOpen}
+        onOpenChange={(open) => {
+          setConnectionDialogOpen(open);
+          if (!open) {
+            setConnectionSecretsVisible(false);
+          }
+        }}
+      >
+        <DialogContent className="max-w-3xl rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {i18n.t("previewPanel.deployment.database.manageConnectionTitle")}
+            </DialogTitle>
+            <DialogDescription>
+              {i18n.t(
+                "previewPanel.deployment.database.manageConnectionDescription",
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          {databaseConnection ? (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-950">
+                {i18n.t("previewPanel.deployment.database.secretWarning")}
               </div>
 
-              <div className="space-y-3">
-                {editorColumns.map((column) => (
-                  <DatabaseFieldEditor
-                    key={column.name}
-                    column={column}
-                    value={selectedRowValues[column.name] || ""}
-                    disabled={
-                      panelMode === "record" ? column.isPrimaryKey : false
-                    }
-                    onChange={(nextValue) =>
-                      setSelectedRowValues((current) => ({
-                        ...current,
-                        [column.name]: nextValue,
-                      }))
-                    }
+              <div className="rounded-xl border border-border/70 bg-card p-4">
+                <div className="space-y-4">
+                  <ConnectionDialogField
+                  label={i18n.t("previewPanel.deployment.database.connectionUrl")}
+                  value={
+                    databaseConnection.publicConnectionUrl ||
+                    databaseConnection.connectionUrl
+                  }
+                  copied={copiedField === "url"}
+                  onCopy={() =>
+                    void handleCopy(
+                      "url",
+                      databaseConnection.publicConnectionUrl ||
+                        databaseConnection.connectionUrl,
+                    )
+                  }
+                  sensitive
+                  revealed={connectionSecretsVisible}
                   />
-                ))}
+                  <ConnectionDialogField
+                  label={i18n.t("previewPanel.deployment.database.host")}
+                  value={databaseConnection.host}
+                  copied={copiedField === "host"}
+                  onCopy={() => void handleCopy("host", databaseConnection.host)}
+                  />
+                  <ConnectionDialogField
+                  label={i18n.t("previewPanel.deployment.database.port")}
+                  value={databaseConnection.port}
+                  copied={copiedField === "port"}
+                  onCopy={() => void handleCopy("port", databaseConnection.port)}
+                  />
+                  <ConnectionDialogField
+                  label={i18n.t("previewPanel.deployment.database.username")}
+                  value={databaseConnection.username}
+                  copied={copiedField === "username"}
+                  onCopy={() =>
+                    void handleCopy("username", databaseConnection.username)
+                  }
+                  />
+                  <ConnectionDialogField
+                  label={i18n.t("previewPanel.deployment.database.password")}
+                  value={databaseConnection.password}
+                  copied={copiedField === "password"}
+                  onCopy={() =>
+                    void handleCopy("password", databaseConnection.password)
+                  }
+                  sensitive
+                  revealed={connectionSecretsVisible}
+                  onToggleSensitive={() =>
+                    setConnectionSecretsVisible((current) => !current)
+                  }
+                />
+                  <ConnectionDialogField
+                  label={i18n.t("previewPanel.deployment.database.databaseName")}
+                  value={databaseConnection.database}
+                  copied={copiedField === "database"}
+                  onCopy={() =>
+                    void handleCopy("database", databaseConnection.database)
+                  }
+                  />
+                </div>
               </div>
-
-              <div className="flex items-center gap-2 pt-2">
-                <Button
-                  size="sm"
-                  className="h-8 text-xs"
-                  disabled={Boolean(actionLoading)}
-                  onClick={() => void handleSave()}
-                >
-                  {actionLoading === "insert" || actionLoading === "update" ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : null}
-                  {panelMode === "insert"
-                    ? i18n.t("previewPanel.deployment.database.writeRecord")
-                    : i18n.t("previewPanel.deployment.database.saveChanges")}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 text-xs"
-                  onClick={() => setPanelMode("settings")}
-                >
-                  {i18n.t("previewPanel.deployment.database.viewConnectionInfo")}
-                </Button>
-              </div>
-            </>
+            </div>
           ) : (
-            <div className="py-10 text-center text-sm text-muted-foreground">
-              {databaseLoading
-                ? i18n.t("previewPanel.deployment.database.preparingPanel")
-                : i18n.t("previewPanel.deployment.database.waitPanelReady")}
+            <div className="py-8 text-center text-sm text-muted-foreground">
+              {i18n.t("previewPanel.deployment.database.waitPanelReady")}
             </div>
           )}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function DashboardModeToggle({
-  mode,
-  onChange,
-}: {
-  mode: "deployments" | "site";
-  onChange: (mode: "deployments" | "site") => void;
-}) {
-  return (
-    <div className="relative z-10 flex rounded-md border border-border/70 bg-muted/30 p-1 text-xs text-muted-foreground">
-      <button
-        type="button"
-        onClick={() => onChange("deployments")}
-        className={cn(
-          "rounded-md px-3 py-1.5 transition-colors",
-          mode === "deployments"
-            ? "bg-card text-foreground shadow-sm"
-            : "hover:text-foreground",
-        )}
-      >
-        {i18n.t("previewPanel.deployment.dashboard.deploymentData")}
-      </button>
-      <button
-        type="button"
-        onClick={() => onChange("site")}
-        className={cn(
-          "rounded-md px-3 py-1.5 transition-colors",
-          mode === "site"
-            ? "bg-card text-foreground shadow-sm"
-            : "hover:text-foreground",
-        )}
-      >
-        {i18n.t("previewPanel.deployment.dashboard.siteData")}
-      </button>
-    </div>
-  );
-}
-
-function CompactDeploymentMetric({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: string;
-  hint: string;
-}) {
-  return (
-    <div className="bg-card px-5 py-4">
-      <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
-        {label}
-      </div>
-      <div className="mt-2 text-2xl font-semibold text-foreground">{value}</div>
-      <div className="mt-1 text-xs text-muted-foreground">{hint}</div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -5036,18 +4553,18 @@ function DashboardMiniStat({
   return (
     <div
       className={cn(
-        "rounded-md border px-3 py-3",
+        "min-w-0 rounded-md border px-3 py-3",
         subtle
           ? "border-border/70 bg-muted/40"
           : "border-border bg-card",
       )}
     >
-      <div className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
+      <div className="truncate text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
         {label}
       </div>
       <div
         className={cn(
-          "mt-2 text-sm font-medium",
+          "mt-2 break-words text-sm font-medium leading-5",
           subtle ? "text-muted-foreground" : "text-foreground",
         )}
       >
@@ -5065,46 +4582,134 @@ function InsightCard({
   description: string;
 }) {
   return (
-    <div className="rounded-md border border-border/70 bg-muted/30 p-4">
+    <div className="min-w-0 rounded-md border border-border/70 bg-muted/30 p-4">
       <div className="text-sm font-medium text-foreground">{title}</div>
-      <p className="mt-2 text-sm leading-6 text-muted-foreground">{description}</p>
+      <p className="mt-2 text-sm leading-6 text-muted-foreground">
+        {description}
+      </p>
     </div>
   );
 }
 
-function ConnectionInfoField({
+function DeploymentResourceHeroCard({
+  icon,
+  title,
+  description,
+  action,
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+  action?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <section className="rounded-lg border border-border/70 bg-card p-5">
+      <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start gap-4">
+            <div className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/30 text-foreground">
+              {icon}
+            </div>
+            <div className="min-w-0">
+              <div className="text-base font-semibold text-foreground">
+                {title}
+              </div>
+              <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
+                {description}
+              </p>
+            </div>
+          </div>
+        </div>
+        {action ? (
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {action}
+          </div>
+        ) : null}
+      </div>
+      {children ? <div className="mt-5">{children}</div> : null}
+    </section>
+  );
+}
+
+function DeploymentPlaceholderGrid({
+  items,
+}: {
+  items: Array<{ title: string; description: string }>;
+}) {
+  return (
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {items.map((item) => (
+        <DeploymentPlaceholderCard
+          key={item.title}
+          title={item.title}
+          description={item.description}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ConnectionDialogField({
   label,
   value,
   copied,
   onCopy,
   sensitive = false,
+  revealed = true,
+  onToggleSensitive,
 }: {
   label: string;
   value: string;
   copied: boolean;
   onCopy: () => void;
   sensitive?: boolean;
+  revealed?: boolean;
+  onToggleSensitive?: () => void;
 }) {
+  const displayValue =
+    sensitive && !revealed ? "••••••••••••••••" : value;
+
   return (
-    <div className="rounded-md border border-border/70 bg-muted/30 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-xs uppercase tracking-[0.08em] text-muted-foreground">
-          {label}
+    <div className="space-y-2">
+      <div className="text-sm font-medium text-foreground">{label}</div>
+      <div className="flex items-center gap-2 rounded-lg border border-border/70 bg-muted/30 px-3 py-3">
+        <div className="min-w-0 flex-1 break-all font-mono text-xs text-foreground">
+          {displayValue}
         </div>
+        {sensitive && onToggleSensitive ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8 shrink-0"
+            onClick={onToggleSensitive}
+            aria-label={
+              revealed
+                ? i18n.t("previewPanel.deployment.database.hideSensitive")
+                : i18n.t("previewPanel.deployment.database.showSensitive")
+            }
+          >
+            {revealed ? (
+              <EyeOff className="size-4" />
+            ) : (
+              <Eye className="size-4" />
+            )}
+          </Button>
+        ) : null}
         <Button
-          variant="outline"
-          size="sm"
-          className="h-7 text-[11px]"
+          variant="ghost"
+          size="icon"
+          className="size-8 shrink-0"
           onClick={onCopy}
+          aria-label={
+            copied
+              ? i18n.t("previewPanel.deployment.database.copied")
+              : i18n.t("previewPanel.deployment.database.copy")
+          }
         >
-          <Copy className="size-3.5" />
-          {copied
-            ? i18n.t("previewPanel.deployment.database.copied")
-            : i18n.t("previewPanel.deployment.database.copy")}
+          <Copy className="size-4" />
         </Button>
-      </div>
-      <div className="mt-2 break-all font-mono text-xs text-foreground">
-        {sensitive ? value : value}
       </div>
     </div>
   );
@@ -5248,88 +4853,561 @@ function buildMutationValues(
 }
 
 function DeploymentStorageSection({
-  info,
+  sessionId,
   statusMeta,
 }: {
-  info: TaskCreationDeploymentInfo | null;
+  sessionId?: string | null;
   statusMeta: DeploymentStatusMeta;
 }) {
-  return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
-          {i18n.t("previewPanel.deployment.storage.title")}
-        </div>
-        <div className="grid gap-3 p-4 md:grid-cols-2">
-          <DeploymentMetricCard
-            title={i18n.t("previewPanel.deployment.storage.storageStatus")}
-            value={i18n.t("previewPanel.deployment.storage.reservedEntry")}
-            subtitle={i18n.t(
-              "previewPanel.deployment.storage.reservedEntryDescription",
-            )}
-          />
-          <DeploymentMetricCard
-            title={i18n.t("previewPanel.deployment.storage.recommendedUsage")}
-            value={i18n.t(
-              "previewPanel.deployment.storage.recommendedUsageValue",
-            )}
-            subtitle={i18n.t(
-              "previewPanel.deployment.storage.recommendedUsageDescription",
-            )}
-          />
-          <div className="rounded-md border border-border/70 bg-muted/30 p-4 md:col-span-2">
-            <div className="text-sm font-semibold text-foreground">
-              {i18n.t("previewPanel.deployment.storage.visibleState")}
+  const [storageStatus, setStorageStatus] =
+    useState<TaskCreationStorageStatus | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
+  const [connectionSecretsVisible, setConnectionSecretsVisible] = useState(false);
+  const [selectedFileKey, setSelectedFileKey] = useState<string | null>(null);
+  const [storageActionLoading, setStorageActionLoading] = useState<
+    "upload" | "delete" | null
+  >(null);
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const loadStorage = useCallback(
+    async (revealSecrets = false) => {
+      if (!sessionId) return;
+      setLoading(true);
+      setError(null);
+      try {
+        const result = await getTaskCreationStorageStatus(sessionId, {
+          revealSecrets,
+        });
+        setStorageStatus(result);
+      } catch (loadError) {
+        setError(
+          loadError instanceof Error
+            ? loadError.message
+            : i18n.t("previewPanel.deployment.storage.loadFailed"),
+        );
+      } finally {
+        setLoading(false);
+      }
+    },
+    [sessionId],
+  );
+
+  useEffect(() => {
+    void loadStorage(false);
+  }, [loadStorage]);
+
+  const handleEnsureStorage = async () => {
+    if (!sessionId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await ensureTaskCreationStorage(sessionId);
+      setStorageStatus(result);
+    } catch (ensureError) {
+      setError(
+        ensureError instanceof Error
+          ? ensureError.message
+          : i18n.t("previewPanel.deployment.storage.enableFailed"),
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRevealSecrets = async () => {
+    await loadStorage(true);
+  };
+
+  const handleOpenConnectionDialog = async () => {
+    setConnectionDialogOpen(true);
+    if (!storageStatus?.bucket?.secretAccessKey) {
+      await handleRevealSecrets();
+    }
+  };
+
+  const handleCopy = async (key: string, value?: string) => {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedField(key);
+      window.setTimeout(
+        () => setCopiedField((current) => (current === key ? null : current)),
+        1200,
+      );
+    } catch {
+      // ignore clipboard errors in preview panel
+    }
+  };
+
+  const handleSelectUpload = () => {
+    fileInputRef.current?.click();
+  };
+
+  const waitForUploadedFile = useCallback(
+    async (fileKey: string) => {
+      if (!sessionId) return null;
+      const deadline = Date.now() + 15000;
+      let latest: TaskCreationStorageStatus | null = null;
+      while (Date.now() < deadline) {
+        latest = await getTaskCreationStorageStatus(sessionId);
+        if (latest?.files?.some((item) => item.key === fileKey)) {
+          return latest;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 800));
+      }
+      return latest;
+    },
+    [sessionId],
+  );
+
+  const handleUploadFile = async (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!sessionId || !file) return;
+    if (file.size > TASK_CREATION_STORAGE_UPLOAD_MAX_BYTES) {
+      setError(i18n.t("previewPanel.deployment.storage.uploadTooLarge"));
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      setStorageActionLoading("upload");
+      setUploadingFile(true);
+      const uploadTarget = await createTaskCreationStorageUploadTarget(sessionId, file);
+      await uploadTaskCreationStorageFile(uploadTarget, file);
+      const refreshed = await waitForUploadedFile(uploadTarget.key);
+      if (refreshed) {
+        setStorageStatus(refreshed);
+      } else {
+        await loadStorage(false);
+      }
+    } catch (uploadError) {
+      setError(
+        uploadError instanceof Error
+          ? uploadError.message
+          : i18n.t("previewPanel.deployment.storage.uploadFailed"),
+      );
+    } finally {
+      setUploadingFile(false);
+      setStorageActionLoading(null);
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteFile = async () => {
+    if (!sessionId || !selectedFileKey) return;
+    setLoading(true);
+    setStorageActionLoading("delete");
+    setError(null);
+    try {
+      const result = await deleteTaskCreationStorageFile(sessionId, selectedFileKey);
+      setStorageStatus(result);
+      setSelectedFileKey(null);
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : i18n.t("previewPanel.deployment.storage.deleteFailed"),
+      );
+    } finally {
+      setStorageActionLoading(null);
+      setLoading(false);
+    }
+  };
+
+  const handleDownloadFile = () => {
+    if (!sessionId || !selectedFile) return;
+    const link = document.createElement("a");
+    link.href = getTaskCreationStorageFileDownloadUrl(sessionId, selectedFile.key);
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.click();
+  };
+
+  if (!sessionId) {
+    return (
+      <EmptyState text={i18n.t("previewPanel.deployment.storage.missingSession")} />
+    );
+  }
+
+  const bucket = storageStatus?.bucket || null;
+  const bucketFiles = storageStatus?.files || [];
+  const selectedFile =
+    bucketFiles.find((fileItem) => fileItem.key === selectedFileKey) || null;
+
+  if (!storageStatus?.configured) {
+    return (
+      <section className="rounded-xl border border-border/70 bg-card p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-base font-semibold text-foreground">
+              {i18n.t("previewPanel.deployment.storage.notConfiguredTitle")}
             </div>
-            <div className="mt-2 grid gap-3 md:grid-cols-3">
-              <DeploymentMiniStatus
-                label={i18n.t("previewPanel.deployment.storage.appAccess")}
-                value={statusMeta.label}
-              />
-              <DeploymentMiniStatus
-                label={i18n.t("previewPanel.deployment.storage.defaultDomain")}
-                value={
-                  info?.domains.length
-                    ? i18n.t("previewPanel.deployment.storage.generated")
-                    : i18n.t("previewPanel.deployment.storage.pendingPublish")
-                }
-              />
-              <DeploymentMiniStatus
-                label={i18n.t("previewPanel.deployment.storage.objectStorage")}
-                value={i18n.t("previewPanel.deployment.storage.futurePlan")}
-              />
+            <div className="mt-1 text-sm text-muted-foreground">
+              {i18n.t("previewPanel.deployment.storage.notConfiguredDescription")}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={() => void loadStorage(Boolean(bucket?.secretAccessKey))}
+              disabled={loading}
+            >
+              {loading ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <RefreshCw className="size-4" />
+              )}
+              {i18n.t("previewPanel.deployment.storage.refresh")}
+            </Button>
+            <Button
+              size="sm"
+              className="h-8 text-xs"
+              onClick={() => void handleEnsureStorage()}
+              disabled={loading}
+            >
+              {loading ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <HardDrive className="size-4" />
+              )}
+              {i18n.t("previewPanel.deployment.storage.enable")}
+            </Button>
+          </div>
+        </div>
+        {error ? <div className="mt-4 text-sm text-rose-600">{error}</div> : null}
+      </section>
+    );
+  }
+
+  return (
+    <div className="h-full overflow-hidden rounded-xl border border-border/70 bg-card">
+      <div className="flex h-full items-stretch overflow-hidden">
+        <div className="relative flex h-full w-[220px] shrink-0 flex-col border-r border-border">
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 py-3">
+            <button
+              type="button"
+              title={bucket?.name || i18n.t("previewPanel.deployment.storage.title")}
+              className="flex w-full items-center gap-3 rounded-md bg-muted/60 px-3 py-2 text-left"
+            >
+              <HardDrive className="size-4 shrink-0 text-foreground" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium text-foreground">
+                  {bucket?.name || i18n.t("previewPanel.deployment.storage.title")}
+                </div>
+              </div>
+              <div className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
+                {formatMetricCount(bucketFiles.length, "0")}
+              </div>
+            </button>
+          </div>
+          <div className="border-t border-border px-3 py-4">
+            <Button
+              variant="outline"
+              className="h-8 w-full justify-center text-xs"
+              onClick={() => void handleOpenConnectionDialog()}
+            >
+              <KeyRound className="size-4" />
+              {i18n.t("previewPanel.deployment.storage.manageConnectionTitle")}
+            </Button>
+          </div>
+        </div>
+
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+            <div className="text-[13px] font-normal text-foreground">
+              {i18n.t("previewPanel.deployment.storage.filesTitle")}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={handleSelectUpload}
+                disabled={loading}
+              >
+                {loading ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Upload className="size-4" />
+                )}
+                {i18n.t("previewPanel.deployment.storage.upload")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => void loadStorage(Boolean(bucket?.secretAccessKey))}
+                disabled={loading}
+              >
+                {loading ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-4" />
+                )}
+                {i18n.t("previewPanel.deployment.storage.refresh")}
+              </Button>
+            </div>
+          </div>
+
+          {error ? (
+            <div className="px-4 pt-3 text-xs text-rose-600">{error}</div>
+          ) : null}
+
+          {uploadingFile ? (
+            <div className="border-b border-border px-4 py-3">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" />
+                <span>{i18n.t("previewPanel.deployment.storage.uploading")}</span>
+              </div>
+            </div>
+          ) : null}
+
+          <div
+            className="relative min-h-0 flex-1 overflow-auto"
+            onClick={(event) => {
+              if (event.target === event.currentTarget) {
+                setSelectedFileKey(null);
+              }
+            }}
+          >
+            {bucketFiles.length ? (
+              <table className="w-full min-w-[720px] table-auto border-collapse">
+                <thead>
+                  <tr className="border-b border-border bg-muted/20 text-left">
+                    <th className="px-4 py-3 text-xs font-medium text-muted-foreground">
+                      {i18n.t("previewPanel.deployment.storage.fileName")}
+                    </th>
+                    <th className="w-[140px] px-4 py-3 text-xs font-medium text-muted-foreground">
+                      {i18n.t("previewPanel.deployment.storage.fileSize")}
+                    </th>
+                    <th className="w-[120px] px-4 py-3 text-xs font-medium text-muted-foreground">
+                      {i18n.t("previewPanel.deployment.storage.lastModified")}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bucketFiles.map((fileItem) => {
+                    const FileIcon = getStorageFileIcon(fileItem.key);
+                    return (
+                      <tr
+                        key={fileItem.key}
+                        className={cn(
+                          "cursor-pointer border-b border-border/70 transition-colors hover:bg-muted/20",
+                          selectedFileKey === fileItem.key ? "bg-muted/30" : null,
+                        )}
+                        title={fileItem.key}
+                        onClick={() => setSelectedFileKey(fileItem.key)}
+                      >
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-3">
+                            <FileIcon className="size-4 shrink-0 text-muted-foreground" />
+                            <div className="min-w-0 truncate text-sm text-foreground">
+                              {fileItem.key}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-sm text-muted-foreground">
+                          {formatFileSize(fileItem.sizeBytes)}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-muted-foreground">
+                          {formatPreviewTimestamp(fileItem.lastModifiedAt) || "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              <div className="flex h-full min-h-[260px] items-center justify-center px-6 text-sm text-muted-foreground">
+                {i18n.t("previewPanel.deployment.storage.emptyFiles")}
+              </div>
+            )}
+          </div>
+
+          {selectedFile ? (
+            <div className="border-t border-border bg-muted/10 px-4 py-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-foreground">
+                    {i18n.t("previewPanel.deployment.storage.filePreviewTitle")}
+                  </div>
+                  <div
+                    className="mt-2 truncate text-sm text-foreground"
+                    title={selectedFile.key}
+                  >
+                    {selectedFile.key}
+                  </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                    <DeploymentMiniStatus
+                      label={i18n.t("previewPanel.deployment.storage.fileName")}
+                      value={selectedFile.key}
+                    />
+                    <DeploymentMiniStatus
+                      label={i18n.t("previewPanel.deployment.storage.fileSize")}
+                      value={formatFileSize(selectedFile.sizeBytes)}
+                    />
+                    <DeploymentMiniStatus
+                      label={i18n.t("previewPanel.deployment.storage.lastModified")}
+                      value={selectedFile.lastModifiedAt || "—"}
+                    />
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={() => setSelectedFileKey(null)}
+                  >
+                    {i18n.t("previewPanel.deployment.storage.closePreview")}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={handleDownloadFile}
+                  >
+                    {i18n.t("previewPanel.deployment.storage.downloadFile")}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs text-rose-600 hover:text-rose-700"
+                    onClick={() => void handleDeleteFile()}
+                    disabled={loading || storageActionLoading === "delete"}
+                  >
+                    {storageActionLoading === "delete" ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="size-4" />
+                    )}
+                    {i18n.t("previewPanel.deployment.storage.deleteFile")}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="flex items-center justify-between border-t border-border px-4 py-3 text-xs text-muted-foreground">
+            <div>
+              {i18n.t("previewPanel.deployment.storage.fileCount", {
+                count: bucketFiles.length,
+              })}
+            </div>
+            <div className="flex items-center gap-2">
+              <span>{i18n.t("previewPanel.deployment.storage.storageStatus")}</span>
+              <span className="text-foreground">{i18n.t("previewPanel.deployment.storage.ready")}</span>
+              <span className="h-1 w-1 rounded-full bg-border" />
+              <span>{statusMeta.label}</span>
             </div>
           </div>
         </div>
-      </section>
+      </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        onChange={handleUploadFile}
+      />
 
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
-          {i18n.t("previewPanel.deployment.storage.scenarioPlanning")}
-        </div>
-        <div className="space-y-3 p-4">
-          <DeploymentPlaceholderCard
-            title={i18n.t("previewPanel.deployment.storage.userUpload")}
-            description={i18n.t(
-              "previewPanel.deployment.storage.userUploadDescription",
-            )}
-          />
-          <DeploymentPlaceholderCard
-            title={i18n.t(
-              "previewPanel.deployment.storage.buildArtifactSeparation",
-            )}
-            description={i18n.t(
-              "previewPanel.deployment.storage.buildArtifactSeparationDescription",
-            )}
-          />
-          <DeploymentPlaceholderCard
-            title={i18n.t("previewPanel.deployment.storage.accessPolicy")}
-            description={i18n.t(
-              "previewPanel.deployment.storage.accessPolicyDescription",
-            )}
-          />
-        </div>
-      </section>
+      <Dialog
+        open={connectionDialogOpen}
+        onOpenChange={(open) => {
+          setConnectionDialogOpen(open);
+          if (!open) {
+            setConnectionSecretsVisible(false);
+            setStorageStatus((current) =>
+              current?.bucket
+                ? {
+                    ...current,
+                    bucket: {
+                      ...current.bucket,
+                      secretAccessKey: undefined,
+                    },
+                  }
+                : current,
+            );
+          }
+        }}
+      >
+        <DialogContent className="max-w-3xl rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {i18n.t("previewPanel.deployment.storage.manageConnectionTitle")}
+            </DialogTitle>
+            <DialogDescription>
+              {i18n.t("previewPanel.deployment.storage.manageConnectionDescription")}
+            </DialogDescription>
+          </DialogHeader>
+
+          {bucket ? (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-950">
+                {i18n.t("previewPanel.deployment.storage.secretWarning")}
+              </div>
+
+              <div className="rounded-xl border border-border/70 bg-card p-4">
+                <div className="space-y-4">
+                  <ConnectionDialogField
+                    label={i18n.t("previewPanel.deployment.storage.bucketName")}
+                    value={bucket.name}
+                    copied={copiedField === "bucket"}
+                    onCopy={() => void handleCopy("bucket", bucket.name)}
+                  />
+                  <ConnectionDialogField
+                    label={i18n.t("previewPanel.deployment.storage.endpoint")}
+                    value={bucket.endpoint}
+                    copied={copiedField === "endpoint"}
+                    onCopy={() => void handleCopy("endpoint", bucket.endpoint)}
+                  />
+                  {bucket.publicUrl ? (
+                    <ConnectionDialogField
+                      label={i18n.t("previewPanel.deployment.storage.publicUrl")}
+                      value={bucket.publicUrl}
+                      copied={copiedField === "publicUrl"}
+                      onCopy={() => void handleCopy("publicUrl", bucket.publicUrl)}
+                    />
+                  ) : null}
+                  <ConnectionDialogField
+                    label={i18n.t("previewPanel.deployment.storage.accessKeyId")}
+                    value={bucket.accessKeyId}
+                    copied={copiedField === "accessKeyId"}
+                    onCopy={() => void handleCopy("accessKeyId", bucket.accessKeyId)}
+                    sensitive
+                    revealed={connectionSecretsVisible}
+                  />
+                  <ConnectionDialogField
+                    label={i18n.t("previewPanel.deployment.storage.secretAccessKey")}
+                    value={bucket.secretAccessKey || ""}
+                    copied={copiedField === "secretAccessKey"}
+                    onCopy={() =>
+                      void handleCopy("secretAccessKey", bucket.secretAccessKey)
+                    }
+                    sensitive
+                    revealed={connectionSecretsVisible}
+                    onToggleSensitive={() =>
+                      setConnectionSecretsVisible((current) => !current)
+                    }
+                  />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="py-8 text-center text-sm text-muted-foreground">
+              {i18n.t("previewPanel.deployment.storage.waitPanelReady")}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -5371,74 +5449,165 @@ function DeploymentSettingsSectionPanel({
     i18n.t("previewPanel.deployment.settings.managedRepoMissing");
   const repositoryBranch =
     resourceBinding?.repositoryBranch || "main";
+  const settingsScrollOffset = 228;
+  const contentContainerRef = useRef<HTMLDivElement | null>(null);
+  const programmaticScrollRef = useRef(false);
+  const programmaticScrollTimerRef = useRef<number | null>(null);
+  const sectionRefs = useRef<
+    Record<DeploymentSettingsSection, HTMLDivElement | null>
+  >({
+    general: null,
+    domain: null,
+    notifications: null,
+    payment: null,
+    seo: null,
+    keys: null,
+    github: null,
+  });
+  const settingAnchors: Array<{
+    key: DeploymentSettingsSection;
+    label: string;
+  }> = [
+    {
+      key: "general",
+      label: i18n.t("previewPanel.deployment.settings.general"),
+    },
+    {
+      key: "domain",
+      label: i18n.t("previewPanel.deployment.settings.domain"),
+    },
+    {
+      key: "notifications",
+      label: i18n.t("previewPanel.deployment.settings.notifications"),
+    },
+    {
+      key: "payment",
+      label: i18n.t("previewPanel.deployment.settings.payment"),
+    },
+    { key: "seo", label: "SEO" },
+    {
+      key: "keys",
+      label: i18n.t("previewPanel.deployment.settings.keys"),
+    },
+    { key: "github", label: "GitHub" },
+  ];
+
+  const scrollToSettingsSection = useCallback(
+    (value: DeploymentSettingsSection) => {
+      onSettingsSectionChange(value);
+      const node = sectionRefs.current[value];
+      if (!node) return;
+      const container = contentContainerRef.current;
+      if (!container) {
+        node.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
+      programmaticScrollRef.current = true;
+      if (programmaticScrollTimerRef.current !== null) {
+        window.clearTimeout(programmaticScrollTimerRef.current);
+      }
+      container.scrollTo({
+        top: Math.max(0, node.offsetTop - settingsScrollOffset),
+        behavior: "smooth",
+      });
+      programmaticScrollTimerRef.current = window.setTimeout(() => {
+        programmaticScrollRef.current = false;
+        programmaticScrollTimerRef.current = null;
+      }, 450);
+    },
+    [onSettingsSectionChange],
+  );
+
+  useEffect(() => {
+    const node = sectionRefs.current[settingsSection];
+    const container = contentContainerRef.current;
+    if (!node || !container) return;
+    const targetTop = Math.max(0, node.offsetTop - settingsScrollOffset);
+    if (Math.abs(container.scrollTop - targetTop) < 8) return;
+    container.scrollTo({ top: targetTop });
+  }, [settingsScrollOffset, settingsSection]);
+
+  useEffect(() => {
+    const container = contentContainerRef.current;
+    if (!container) return;
+
+    const syncActiveAnchor = () => {
+      if (programmaticScrollRef.current) return;
+      const sections = settingAnchors
+        .map((item) => ({
+          key: item.key,
+          node: sectionRefs.current[item.key],
+        }))
+        .filter(
+          (
+            item,
+          ): item is {
+            key: DeploymentSettingsSection;
+            node: HTMLDivElement;
+          } => Boolean(item.node),
+        );
+      if (!sections.length) return;
+
+      const anchorLine = container.scrollTop + settingsScrollOffset;
+      let activeKey = sections[0].key;
+      for (const section of sections) {
+        if (section.node.offsetTop <= anchorLine) {
+          activeKey = section.key;
+        } else {
+          break;
+        }
+      }
+
+      if (activeKey !== settingsSection) {
+        onSettingsSectionChange(activeKey);
+      }
+    };
+
+    container.addEventListener("scroll", syncActiveAnchor, {
+      passive: true,
+    });
+    syncActiveAnchor();
+
+    return () => {
+      container.removeEventListener("scroll", syncActiveAnchor);
+      if (programmaticScrollTimerRef.current !== null) {
+        window.clearTimeout(programmaticScrollTimerRef.current);
+        programmaticScrollTimerRef.current = null;
+      }
+    };
+  }, [
+    onSettingsSectionChange,
+    settingAnchors,
+    settingsScrollOffset,
+    settingsSection,
+  ]);
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)]">
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
-          {i18n.t("previewPanel.deployment.sections.settings")}
-        </div>
-        <div className="flex gap-2 overflow-x-auto p-3 xl:flex-col xl:overflow-visible">
-          <DeploymentSettingsButton
-            active={settingsSection === "general"}
-            label={i18n.t("previewPanel.deployment.settings.general")}
-            onClick={() => onSettingsSectionChange("general")}
-          />
-          <DeploymentSettingsButton
-            active={settingsSection === "domain"}
-            label={i18n.t("previewPanel.deployment.settings.domain")}
-            onClick={() => onSettingsSectionChange("domain")}
-          />
-          <DeploymentSettingsButton
-            active={settingsSection === "notifications"}
-            label={i18n.t("previewPanel.deployment.settings.notifications")}
-            onClick={() => onSettingsSectionChange("notifications")}
-          />
-          <DeploymentSettingsButton
-            active={settingsSection === "payment"}
-            label={i18n.t("previewPanel.deployment.settings.payment")}
-            onClick={() => onSettingsSectionChange("payment")}
-          />
-          <DeploymentSettingsButton
-            active={settingsSection === "seo"}
-            label="SEO"
-            onClick={() => onSettingsSectionChange("seo")}
-          />
-          <DeploymentSettingsButton
-            active={settingsSection === "keys"}
-            label={i18n.t("previewPanel.deployment.settings.keys")}
-            onClick={() => onSettingsSectionChange("keys")}
-          />
-          <DeploymentSettingsButton
-            active={settingsSection === "github"}
-            label="GitHub"
-            onClick={() => onSettingsSectionChange("github")}
-          />
+    <div className="grid gap-4 xl:grid-cols-[200px_minmax(0,1fr)] xl:items-start">
+      <section className="xl:sticky xl:top-4 xl:self-start">
+        <div className="flex gap-2 overflow-x-auto p-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden xl:flex-col xl:overflow-visible">
+          {settingAnchors.map((item) => (
+            <DeploymentSettingsButton
+              key={item.key}
+              active={settingsSection === item.key}
+              label={item.label}
+              onClick={() => scrollToSettingsSection(item.key)}
+            />
+          ))}
         </div>
       </section>
 
-      <section className="rounded-lg border border-border/70 bg-card">
-        <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
-          {settingsSection === "general"
-            ? i18n.t("previewPanel.deployment.settings.general")
-            : null}
-          {settingsSection === "domain"
-            ? i18n.t("previewPanel.deployment.settings.domain")
-            : null}
-          {settingsSection === "notifications"
-            ? i18n.t("previewPanel.deployment.settings.notifications")
-            : null}
-          {settingsSection === "payment"
-            ? i18n.t("previewPanel.deployment.settings.payment")
-            : null}
-          {settingsSection === "seo" ? "SEO" : null}
-          {settingsSection === "keys"
-            ? i18n.t("previewPanel.deployment.settings.keys")
-            : null}
-          {settingsSection === "github" ? "GitHub" : null}
-        </div>
-        <div className="p-4">
-          {settingsSection === "general" ? (
+      <section className="overflow-hidden bg-transparent">
+        <div
+          ref={contentContainerRef}
+          className="space-y-4 overflow-auto px-1 pb-1 pt-10 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden xl:max-h-[calc(100vh-240px)]"
+        >
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.general = node;
+            }}
+            title={i18n.t("previewPanel.deployment.settings.general")}
+          >
             <div className="grid gap-3 md:grid-cols-2">
               <DeploymentInfoCard
                 title={i18n.t("previewPanel.deployment.settings.siteName")}
@@ -5477,9 +5646,14 @@ function DeploymentSettingsSectionPanel({
                 }
               />
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
 
-          {settingsSection === "domain" ? (
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.domain = node;
+            }}
+            title={i18n.t("previewPanel.deployment.settings.domain")}
+          >
             <div className="space-y-3">
               <DeploymentInfoCard
                 title={i18n.t("previewPanel.deployment.settings.primaryAccessUrl")}
@@ -5514,9 +5688,14 @@ function DeploymentSettingsSectionPanel({
                 )}
               </div>
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
 
-          {settingsSection === "notifications" ? (
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.notifications = node;
+            }}
+            title={i18n.t("previewPanel.deployment.settings.notifications")}
+          >
             <div className="grid gap-3 md:grid-cols-2">
               <DeploymentInfoCard
                 title={i18n.t(
@@ -5553,9 +5732,14 @@ function DeploymentSettingsSectionPanel({
                 )}
               />
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
 
-          {settingsSection === "payment" ? (
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.payment = node;
+            }}
+            title={i18n.t("previewPanel.deployment.settings.payment")}
+          >
             <div className="grid gap-3 md:grid-cols-2">
               <DeploymentInfoCard
                 title={i18n.t("previewPanel.deployment.settings.billingMode")}
@@ -5572,9 +5756,7 @@ function DeploymentSettingsSectionPanel({
               <DeploymentInfoCard
                 title={i18n.t("previewPanel.deployment.settings.usageAlert")}
                 value={i18n.t("previewPanel.deployment.settings.comingSoon")}
-                extra={i18n.t(
-                  "previewPanel.deployment.settings.comingSoon",
-                )}
+                extra={i18n.t("previewPanel.deployment.settings.comingSoon")}
               />
               <DeploymentInfoCard
                 title={i18n.t(
@@ -5586,9 +5768,14 @@ function DeploymentSettingsSectionPanel({
                 )}
               />
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
 
-          {settingsSection === "seo" ? (
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.seo = node;
+            }}
+            title="SEO"
+          >
             <div className="grid gap-3 md:grid-cols-2">
               <DeploymentInfoCard
                 title={i18n.t("previewPanel.deployment.settings.siteTitle")}
@@ -5624,9 +5811,14 @@ function DeploymentSettingsSectionPanel({
                 extra={i18n.t("previewPanel.deployment.settings.siteMapDescription")}
               />
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
 
-          {settingsSection === "keys" ? (
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.keys = node;
+            }}
+            title={i18n.t("previewPanel.deployment.settings.keys")}
+          >
             <div className="space-y-3">
               <div className="grid gap-3 md:grid-cols-2">
                 <DeploymentInfoCard
@@ -5723,9 +5915,14 @@ function DeploymentSettingsSectionPanel({
                 </Button>
               </div>
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
 
-          {settingsSection === "github" ? (
+          <DeploymentSettingsAnchorSection
+            ref={(node: HTMLDivElement | null) => {
+              sectionRefs.current.github = node;
+            }}
+            title="GitHub"
+          >
             <div className="space-y-3">
               <div className="grid gap-3 md:grid-cols-2">
                 <DeploymentInfoCard
@@ -5789,12 +5986,36 @@ function DeploymentSettingsSectionPanel({
                 />
               )}
             </div>
-          ) : null}
+          </DeploymentSettingsAnchorSection>
         </div>
       </section>
     </div>
   );
 }
+
+const DeploymentSettingsAnchorSection = forwardRef<
+  HTMLDivElement,
+  {
+    title: string;
+    children: ReactNode;
+  }
+>(function DeploymentSettingsAnchorSection(
+  { title, children },
+  ref,
+) {
+  return (
+    <div
+      ref={ref}
+      className="scroll-mt-56 rounded-xl border border-border/60 bg-transparent p-4 md:p-5"
+    >
+      <div className="mb-4 flex items-center gap-3">
+        <div className="h-8 w-1 rounded-full bg-foreground/85" />
+        <div className="text-sm font-semibold text-foreground">{title}</div>
+      </div>
+      {children}
+    </div>
+  );
+});
 
 function DeploymentMenuButton({
   active,
@@ -5838,13 +6059,19 @@ function DeploymentSettingsButton({
       type="button"
       onClick={onClick}
       className={cn(
-        "rounded-md border px-3 py-2 text-left text-sm transition-colors whitespace-nowrap",
+        "group relative rounded-lg border px-3 py-2.5 text-left text-sm transition-all whitespace-nowrap",
         active
-          ? "border-border bg-muted/50 text-foreground"
-          : "border-transparent bg-transparent text-muted-foreground hover:border-border hover:bg-muted/30",
+          ? "border-border/80 bg-transparent text-foreground"
+          : "border-transparent bg-transparent text-muted-foreground hover:border-border/60 hover:text-foreground",
       )}
     >
-      {label}
+      <span
+        className={cn(
+          "absolute inset-y-2 left-1 w-1 rounded-full transition-colors",
+          active ? "bg-foreground/90" : "bg-transparent group-hover:bg-border",
+        )}
+      />
+      <span className="block truncate pl-3">{label}</span>
     </button>
   );
 }
@@ -6072,16 +6299,20 @@ function DeploymentMetricCard({
   return (
     <div
       className={cn(
-        "rounded-md border border-border/70 bg-muted/30 p-3",
+        "min-w-0 rounded-md border border-border/70 bg-muted/30 p-3",
         className,
       )}
     >
-      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+      <div className="truncate text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
         {title}
       </div>
-      <div className="mt-2 text-sm font-semibold text-foreground">{value}</div>
+      <div className="mt-2 break-words text-sm font-semibold leading-5 text-foreground">
+        {value}
+      </div>
       {subtitle ? (
-        <div className="mt-1 text-xs leading-5 text-muted-foreground">{subtitle}</div>
+        <div className="mt-1 line-clamp-3 text-xs leading-5 text-muted-foreground">
+          {subtitle}
+        </div>
       ) : null}
     </div>
   );
@@ -6099,8 +6330,8 @@ function DeploymentInfoCard({
   mono?: boolean;
 }) {
   return (
-    <div className="rounded-md border border-border/70 bg-muted/30 p-4">
-      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+    <div className="min-w-0 rounded-md border border-border/70 bg-muted/30 p-4">
+      <div className="truncate text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
         {title}
       </div>
       <div
@@ -6112,7 +6343,9 @@ function DeploymentInfoCard({
         {value}
       </div>
       {extra ? (
-        <div className="mt-1 text-xs leading-5 text-muted-foreground">{extra}</div>
+        <div className="mt-1 break-words text-xs leading-5 text-muted-foreground">
+          {extra}
+        </div>
       ) : null}
     </div>
   );
@@ -6126,11 +6359,13 @@ function DeploymentMiniStatus({
   value: string;
 }) {
   return (
-    <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-3">
-      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+    <div className="min-w-0 rounded-md border border-border/70 bg-muted/20 px-3 py-3">
+      <div className="truncate text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
         {label}
       </div>
-      <div className="mt-1 text-sm font-medium text-foreground">{value}</div>
+      <div className="mt-1 break-words text-sm font-medium leading-5 text-foreground">
+        {value}
+      </div>
     </div>
   );
 }
@@ -6170,9 +6405,12 @@ export function DebugPreview({
   const [debugLocked, setDebugLocked] = useState(true);
   const [bridgeReady, setBridgeReady] = useState(false);
   const [bridgeWaitExpired, setBridgeWaitExpired] = useState(false);
+  const [startRequested, setStartRequested] = useState(false);
+  const [frameLoading, setFrameLoading] = useState(false);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
 
   const requestStartDebug = () => {
+    setStartRequested(true);
     if (onRequestStartDebugByMessage) {
       onRequestStartDebugByMessage();
       return;
@@ -6245,6 +6483,7 @@ export function DebugPreview({
     setDebugLocked(true);
     setBridgeReady(false);
     setBridgeWaitExpired(false);
+    setFrameLoading(Boolean(debugUrl));
     if (!debugUrl) return;
     const timer = window.setTimeout(() => {
       setBridgeWaitExpired(true);
@@ -6253,6 +6492,16 @@ export function DebugPreview({
       window.clearTimeout(timer);
     };
   }, [debugUrl]);
+
+  useEffect(() => {
+    if (info?.ready && info?.url) {
+      setStartRequested(false);
+      return;
+    }
+    if (info?.status === "failed" || error) {
+      setStartRequested(false);
+    }
+  }, [error, info?.ready, info?.status, info?.url]);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
@@ -6290,30 +6539,35 @@ export function DebugPreview({
 
   const isFailed = info?.status === "failed";
   const lockControlEnabled = bridgeReady;
+  const connectionPending = Boolean(starting || loading || startRequested);
 
   if (!runtimeReady) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-3">
-        <span>
-          {starting
-            ? i18n.t("previewPanel.debug.startingRuntime")
-            : i18n.t("previewPanel.debug.runtimeNotStarted")}
-        </span>
+        {connectionPending ? (
+          <DebugConnectionLoadingState
+            text={i18n.t("previewPanel.debug.startingRuntime")}
+          />
+        ) : (
+          <span>{i18n.t("previewPanel.debug.runtimeNotStarted")}</span>
+        )}
         <Button
           variant="outline"
           size="sm"
           onClick={() => {
             requestStartDebug();
           }}
-          disabled={starting}
+          disabled={connectionPending}
         >
-          {i18n.t("previewPanel.debug.startDebug")}
+          {connectionPending
+            ? i18n.t("previewPanel.debug.enabling")
+            : i18n.t("previewPanel.debug.startDebug")}
         </Button>
       </div>
     );
   }
   if (loading) {
-    return <EmptyState text={i18n.t("previewPanel.debug.loading")} />;
+    return <DebugConnectionLoadingState text={i18n.t("previewPanel.debug.loading")} />;
   }
   if (error && (!info?.ready || !info?.url)) {
     return (
@@ -6325,9 +6579,9 @@ export function DebugPreview({
           onClick={() => {
             requestStartDebug();
           }}
-          disabled={starting}
+          disabled={connectionPending}
         >
-          {starting
+          {connectionPending
             ? i18n.t("previewPanel.debug.retrying")
             : i18n.t("previewPanel.debug.reenable")}
         </Button>
@@ -6335,23 +6589,27 @@ export function DebugPreview({
     );
   }
   if (!info?.ready || !info.url) {
+    const pendingMessage =
+      info?.message ||
+      (isFailed
+        ? i18n.t("previewPanel.debug.connectionFailed")
+        : i18n.t("previewPanel.debug.serviceNotReady"));
     return (
       <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-3">
-        <span>
-          {info?.message ||
-            (isFailed
-              ? i18n.t("previewPanel.debug.connectionFailed")
-              : i18n.t("previewPanel.debug.serviceNotReady"))}
-        </span>
+        {connectionPending && !isFailed ? (
+          <DebugConnectionLoadingState text={pendingMessage} />
+        ) : (
+          <span>{pendingMessage}</span>
+        )}
         <Button
           variant="outline"
           size="sm"
           onClick={() => {
             requestStartDebug();
           }}
-          disabled={starting}
+          disabled={connectionPending}
         >
-          {starting
+          {connectionPending
             ? i18n.t("previewPanel.debug.enabling")
             : isFailed
               ? i18n.t("previewPanel.debug.retryEnable")
@@ -6427,11 +6685,20 @@ export function DebugPreview({
             className="h-full w-full"
             allow="autoplay; clipboard-read; clipboard-write; fullscreen; microphone; camera; display-capture"
             onLoad={() => {
+              setFrameLoading(false);
               if (lockControlEnabled) {
                 requestNekoLockState(debugLocked);
               }
             }}
           />
+          {frameLoading ? (
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/88 backdrop-blur-sm">
+              <DebugConnectionLoadingState
+                text={i18n.t("previewPanel.debug.loading")}
+                compact
+              />
+            </div>
+          ) : null}
           {debugLocked ? (
             <button
               type="button"
@@ -7349,5 +7616,192 @@ function EmptyState({ text }: { text: string }) {
     <div className="h-full flex items-center justify-center text-xs text-muted-foreground">
       {text}
     </div>
+  );
+}
+
+function WorkspaceFileLoadingState({ text }: { text: string }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex h-full min-h-[180px] flex-col items-center justify-center gap-3 px-6 text-center text-xs text-muted-foreground"
+    >
+      <WorkspaceFileLoadGlyph className="h-10 w-10" />
+      <span>{text}</span>
+    </div>
+  );
+}
+
+function WorkspaceFileLoadGlyph({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 48 48"
+      className={cn("shrink-0 text-[var(--brand-link)]", className)}
+      fill="none"
+      aria-hidden="true"
+    >
+      <path
+        d="M15 7.5h13.5L36 15v25.5H15z"
+        className="stroke-current"
+        strokeWidth="2"
+        strokeLinejoin="round"
+        opacity="0.72"
+      />
+      <path
+        d="M28.5 7.5V15H36"
+        className="stroke-current"
+        strokeWidth="2"
+        strokeLinejoin="round"
+        opacity="0.38"
+      />
+      <path
+        d="M19 23h16"
+        className="stroke-current"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeDasharray="16"
+      >
+        <animate
+          attributeName="stroke-dashoffset"
+          values="16;0;16"
+          dur="1.55s"
+          repeatCount="indefinite"
+        />
+        <animate
+          attributeName="opacity"
+          values="0.18;0.82;0.18"
+          dur="1.55s"
+          repeatCount="indefinite"
+        />
+      </path>
+      <path
+        d="M19 29h11"
+        className="stroke-current"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeDasharray="11"
+      >
+        <animate
+          attributeName="stroke-dashoffset"
+          values="11;0;11"
+          dur="1.55s"
+          begin="0.18s"
+          repeatCount="indefinite"
+        />
+        <animate
+          attributeName="opacity"
+          values="0.16;0.7;0.16"
+          dur="1.55s"
+          begin="0.18s"
+          repeatCount="indefinite"
+        />
+      </path>
+      <circle cx="34.5" cy="34.5" r="2.4" className="fill-current">
+        <animate
+          attributeName="opacity"
+          values="0.25;1;0.25"
+          dur="1.15s"
+          repeatCount="indefinite"
+        />
+      </circle>
+    </svg>
+  );
+}
+
+function DebugConnectionLoadingState({
+  text,
+  compact = false,
+}: {
+  text: string;
+  compact?: boolean;
+}) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={cn(
+        "flex flex-col items-center justify-center text-center text-xs text-muted-foreground",
+        compact ? "gap-2 px-4 py-3" : "h-full min-h-[180px] gap-3 px-6",
+      )}
+    >
+      <DebugConnectionGlyph className={compact ? "h-9 w-9" : "h-12 w-12"} />
+      <span>{text}</span>
+    </div>
+  );
+}
+
+function DebugConnectionGlyph({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 56 56"
+      className={cn("shrink-0 text-[var(--brand-link)]", className)}
+      fill="none"
+      aria-hidden="true"
+    >
+      <rect
+        x="13"
+        y="16"
+        width="30"
+        height="20"
+        rx="3.5"
+        className="stroke-current"
+        strokeWidth="2"
+        opacity="0.74"
+      />
+      <path
+        d="M23 41h10M28 36v5"
+        className="stroke-current"
+        strokeWidth="2"
+        strokeLinecap="round"
+        opacity="0.42"
+      />
+      <path
+        d="M22 26h12"
+        className="stroke-current"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeDasharray="12"
+      >
+        <animate
+          attributeName="stroke-dashoffset"
+          values="12;0;12"
+          dur="1.45s"
+          repeatCount="indefinite"
+        />
+        <animate
+          attributeName="opacity"
+          values="0.22;0.85;0.22"
+          dur="1.45s"
+          repeatCount="indefinite"
+        />
+      </path>
+      <circle
+        cx="41"
+        cy="18"
+        r="3"
+        className="fill-current"
+      >
+        <animate
+          attributeName="opacity"
+          values="0.3;1;0.3"
+          dur="1.05s"
+          repeatCount="indefinite"
+        />
+      </circle>
+      <path
+        d="M44.5 14.5c2.2 2.2 2.2 5.8 0 8M48.5 10.5c4.4 4.4 4.4 11.6 0 16"
+        className="stroke-current"
+        strokeWidth="2"
+        strokeLinecap="round"
+        opacity="0.5"
+      >
+        <animate
+          attributeName="opacity"
+          values="0.15;0.65;0.15"
+          dur="1.45s"
+          repeatCount="indefinite"
+        />
+      </path>
+    </svg>
   );
 }

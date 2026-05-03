@@ -4,7 +4,7 @@ import { osacBootstrapConfig } from '../config/osac-bootstrap-config';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 import { platformRuntimeArtifactService } from './platform-runtime-artifact-service';
 
-export type SandboxOsacExecutor = 'opencode' | 'codex' | 'claudecode' | 'altus';
+export type SandboxOsacExecutor = 'opencode' | 'codex' | 'altus';
 
 function pickString(value: unknown): string | null {
   if (typeof value === 'string' && value.trim()) return value.trim();

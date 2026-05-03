@@ -72,6 +72,39 @@ test('managed prompt explicitly skips pre-execution todo for simple tasks when t
   assert.match(prompt, /do not call `todowrite` just because the request sounds non-trivial/i);
 });
 
+test('managed prompt defaults debug and testing to Playwright on the same n.eko browser', () => {
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-debug-tool-choice',
+    sessionTitle: 'debug tool choice',
+    workspaceRoot: '/workspace/session-debug-tool-choice',
+    connectors: [],
+  });
+
+  assert.match(prompt, /Browser Use CLI is preinstalled in the sandbox/i);
+  assert.match(prompt, /Treat website debugging as entry into a testing workflow/i);
+  assert.match(prompt, /Before the first debug_open_page call, write or update a workspace test document/i);
+  assert.match(prompt, /docs\/test-plan\.md/i);
+  assert.match(prompt, /requirements, target flows, test cases, acceptance criteria, and a results section/i);
+  assert.match(prompt, /explicitly enter the testing phase/i);
+  assert.match(prompt, /browser_interact/i);
+  assert.match(prompt, /locator_click, text_click, coordinate_click, locator_fill, keyboard_type, keyboard_press, mouse_wheel/i);
+  assert.match(prompt, /cover the core user flows implied by the request/i);
+  assert.match(prompt, /record the failure in the test document, return to repair/i);
+  assert.match(prompt, /use Playwright \/ playwright-mcp by default to inspect or test the same n\.eko Chromium session through CDP 9222/i);
+  assert.match(prompt, /Do not launch a separate browser instance/i);
+  assert.match(prompt, /not about:blank, a Chrome error page, or an unexpected fallback route/i);
+  assert.match(prompt, /Use Browser Use for exploratory external-site access and interaction only/i);
+  assert.match(prompt, /Use Playwright \/ playwright-mcp by default for debugging, deterministic testing/i);
+  assert.match(prompt, /Do not install browser-use, Playwright, or @playwright\/mcp at task time/i);
+});
+
+test('managed task intent requires todo workflow for explicit debug trigger', () => {
+  const profile = deriveManagedTaskIntentProfile(['启动网站调试功能']);
+
+  assert.equal(profile.todoRequired, true);
+  assert.equal(profile.todoReason, 'debug_chain');
+});
+
 test('managed task intent profile carries a hard clarification gate for broad business-system requests', () => {
   const profile = deriveManagedTaskIntentProfile([
     '帮我做一个企业管理系统。',
@@ -194,6 +227,30 @@ test('managed prompt requires deployment tools and auto-repair loop for publish 
   assert.match(prompt, /keep deployment debug details internal/i);
 });
 
+test('managed prompt fixes managed database engine to Railway Postgres', () => {
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-db-fixed-test',
+    sessionTitle: 'db fixed contract',
+    workspaceRoot: '/workspace/session-db-fixed-test',
+    connectors: [],
+  });
+
+  assert.match(prompt, /database always means the fixed managed Railway Postgres/i);
+  assert.match(prompt, /do not ask the user to choose mysql \/ sqlite \/ other engines/i);
+});
+
+test('managed prompt fixes managed storage engine to Railway Bucket', () => {
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-storage-fixed-test',
+    sessionTitle: 'storage fixed contract',
+    workspaceRoot: '/workspace/session-storage-fixed-test',
+    connectors: [],
+  });
+
+  assert.match(prompt, /object storage always means the fixed managed Railway Bucket/i);
+  assert.match(prompt, /do not ask the user to choose r2 \/ s3 \/ minio \/ other storage engines/i);
+});
+
 test('managed prompt derives non-deployable artifact intent and emits a hard no-deploy contract', () => {
   const profile = deriveManagedTaskIntentProfile([
     '请帮我写一个 HTML 邮件模板，用于报价通知邮件。只需要输出源码文件，不需要做网站，也不要部署。',
@@ -236,6 +293,45 @@ test('managed prompt does not authorize deployment for website source tasks with
   assert.match(prompt, /is not an explicit deployment request/i);
   assert.match(prompt, /does not by itself authorize deployment/i);
   assert.doesNotMatch(prompt, /use `deploy_application` for first publish or publishing the latest workspace changes/i);
+});
+
+test('managed prompt treats deployment capability questions as advisory, not deploy authorization', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '能用vercel部署吗',
+  ]);
+
+  assert.equal(profile.mode, 'neutral');
+  assert.equal(profile.deployRequested, false);
+  assert.equal(profile.deploymentAllowed, false);
+  assert.equal(profile.platformCapabilityIntent?.intentKind, 'capability_question');
+  assert.equal(profile.platformCapabilityIntent?.mode, 'answer_capability');
+  assert.equal(profile.platformCapabilityIntent?.topic, 'vercel');
+  assert.equal(profile.platformCapabilityIntent?.shouldExecute, false);
+
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-vercel-capability-question',
+    sessionTitle: 'vercel capability question',
+    workspaceRoot: '/workspace/session-vercel-capability-question',
+    connectors: [],
+    taskIntentProfile: profile,
+  });
+
+  assert.match(prompt, /# Platform capability advisory contract/);
+  assert.match(prompt, /Answer the user naturally and directly/i);
+  assert.doesNotMatch(prompt, /# Deployment trigger contract/);
+  assert.doesNotMatch(prompt, /is not an explicit deployment request/i);
+  assert.match(prompt, /Do not say deployment is blocked, disabled, not enabled, unauthorized, or prevented/i);
+});
+
+test('managed prompt authorizes deployment only for explicit action wording', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '帮我部署当前项目',
+  ]);
+
+  assert.equal(profile.deployRequested, true);
+  assert.equal(profile.deploymentAllowed, true);
+  assert.equal(profile.platformCapabilityIntent?.intentKind, 'explicit_action');
+  assert.equal(profile.platformCapabilityIntent?.capabilityKind, 'deploy');
 });
 
 test('managed prompt builds minimal skill catalog index without full body', () => {

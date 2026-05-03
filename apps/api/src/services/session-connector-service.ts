@@ -5,6 +5,7 @@ import {
   taskSessionConnectorBindingDAO,
   taskSessionRunDAO,
 } from '../db/dao';
+import { buildConnectorInstanceKey } from '../db/dao/task-session-connector-binding.dao';
 import {
   type ConnectorKey,
   type ConnectorRuntimeStatus,
@@ -28,6 +29,8 @@ export type SessionConnectorConfig = {
 
 export type SessionConnectorStatus = {
   connectorKey: ConnectorKey;
+  connectorInstanceKey: string;
+  isConnectorInstance?: boolean;
   name: string;
   icon: string;
   authMode: string;
@@ -161,6 +164,10 @@ function serverNameFor(connectorKey: ConnectorKey, taskSessionId: string) {
 
 function providerIdFor(taskSessionId: string, connectorKey: ConnectorKey, profileId: string) {
   return `task_session:${taskSessionId}:connector:${connectorKey}:profile:${profileId}`;
+}
+
+function statusInstanceKey(status: Pick<SessionConnectorStatus, 'connectorKey' | 'connectorInstanceKey'>) {
+  return status.connectorInstanceKey || status.connectorKey;
 }
 
 function extractTaskSessionId(metadata: Record<string, unknown>): string {
@@ -317,8 +324,8 @@ function isOsacRequestTimeoutError(error: unknown): boolean {
 export class SessionConnectorService {
   private attachLocks = new Map<string, Promise<SessionConnectorStatus | undefined>>();
 
-  private attachLockKey(taskSessionId: string, connectorKey: ConnectorKey) {
-    return `${taskSessionId}:${connectorKey}`;
+  private attachLockKey(taskSessionId: string, connectorInstanceKey: string) {
+    return `${taskSessionId}:${connectorInstanceKey}`;
   }
 
   async waitForAttachIdle(taskSessionId: string, connectorKey?: ConnectorKey, timeoutMs = 75000) {
@@ -326,7 +333,7 @@ export class SessionConnectorService {
     while (Date.now() - startedAt < timeoutMs) {
       const pending = Array.from(this.attachLocks.entries()).filter(([key]) => {
         if (connectorKey) {
-          return key === this.attachLockKey(taskSessionId, connectorKey);
+          return key.startsWith(`${taskSessionId}:${connectorKey}`);
         }
         return key.startsWith(`${taskSessionId}:`);
       });
@@ -382,9 +389,8 @@ export class SessionConnectorService {
     errorMessage: string;
     eventPayload?: Record<string, unknown>;
   }) {
-    await taskSessionConnectorBindingDAO.updateRuntime(
-      input.taskSessionId,
-      input.connectorKey,
+    await taskSessionConnectorBindingDAO.updateRuntimeByBindingId(
+      input.bindingId,
       this.buildAttachFailureRuntimePatch({
         runtimeStatus: input.runtimeStatus,
         runtimeEnvVersion: input.runtimeEnvVersion,
@@ -649,6 +655,7 @@ export class SessionConnectorService {
     account: Awaited<ReturnType<typeof userConnectorService.getUserAccount>>;
     profiles: Awaited<ReturnType<typeof userConnectorService.listUserProfiles>>;
     binding?: {
+      connectorInstanceKey?: string | null;
       profileId?: string | null;
       desiredState: string;
       runtimeStatus: string;
@@ -682,9 +689,16 @@ export class SessionConnectorService {
       connectorProfiles.find((item) => item.profileId === input.account.defaultProfileId) ||
       connectorProfiles.find((item) => item.isDefault) ||
       connectorProfiles[0];
+    const connectorInstanceKey =
+      asText(input.binding?.connectorInstanceKey) ||
+      (input.connectorKey === 'custom_mcp' && selectedProfile?.profileId
+        ? buildConnectorInstanceKey(input.connectorKey, selectedProfile.profileId)
+        : input.connectorKey);
     return {
       connectorKey: input.connectorKey,
-      name: catalogItem.name,
+      connectorInstanceKey,
+      isConnectorInstance: connectorInstanceKey !== input.connectorKey,
+      name: input.connectorKey === 'custom_mcp' ? selectedProfile?.profileName || catalogItem.name : catalogItem.name,
       icon: catalogItem.icon,
       authMode: input.account.authMode,
       available: catalogItem.available,
@@ -749,7 +763,13 @@ export class SessionConnectorService {
     if (runtimeProbeEnabled && requiresRuntimeProbe) {
       runtime = await this.resolveRuntimeContext(taskSessionId).catch(() => null);
     }
-    const bindingMap = new Map(bindings.map((item) => [item.connectorKey, item]));
+    const bindingMap = new Map(bindings.map((item) => [item.connectorInstanceKey || item.connectorKey, item]));
+    const firstBindingByConnectorKey = new Map<string, (typeof bindings)[number]>();
+    for (const binding of bindings) {
+      if (!firstBindingByConnectorKey.has(binding.connectorKey)) {
+        firstBindingByConnectorKey.set(binding.connectorKey, binding);
+      }
+    }
     let liveMap = new Map<string, SessionMcpProviderStatus>();
     if (runtime) {
       liveMap = await this.getRuntimeMcpMap(runtime).catch((error) => {
@@ -775,24 +795,49 @@ export class SessionConnectorService {
           config: {},
         } as Awaited<ReturnType<typeof userConnectorService.getUserAccount>>);
       const serverName = serverNameFor(item.key, taskSessionId);
+      const binding = firstBindingByConnectorKey.get(item.key);
       return this.buildStatus({
         taskSessionId,
         connectorKey: item.key,
         account,
         profiles,
-        binding: bindingMap.get(item.key) as any,
-        live: liveMap.get(asText(bindingMap.get(item.key)?.runtimeProviderId)),
+        binding: binding as any,
+        live: liveMap.get(asText(binding?.runtimeProviderId)),
       });
     });
+    const customMcpAccount =
+      accounts.find((entry) => entry.connectorKey === 'custom_mcp') ||
+      ({
+        connectorKey: 'custom_mcp',
+        authMode: connectorRegistry.getCatalogItem('custom_mcp').authMode,
+        authStatus: connectorRegistry.getCatalogItem('custom_mcp').available ? 'not_configured' : 'unavailable',
+        config: {},
+      } as Awaited<ReturnType<typeof userConnectorService.getUserAccount>>);
+    const customMcpBindings = bindings.filter(
+      (binding) => binding.connectorKey === 'custom_mcp' && asText(binding.profileId)
+    );
+    const customMcpStatuses = customMcpBindings
+      .map((binding) =>
+        this.buildStatus({
+          taskSessionId,
+          connectorKey: 'custom_mcp',
+          account: customMcpAccount,
+          profiles,
+          binding: binding as any,
+          live: liveMap.get(asText(binding.runtimeProviderId)),
+        })
+      )
+      .filter((status) => !statuses.some((item) => item.connectorInstanceKey === status.connectorInstanceKey));
+    const projectedStatuses = [...statuses, ...customMcpStatuses];
     await taskSessionRedisCacheService
       .setConnectorProjection({
         sessionId: taskSessionId,
         userId,
-        items: statuses,
-        summary: this.summarizeStatuses(statuses),
+        items: projectedStatuses,
+        summary: this.summarizeStatuses(projectedStatuses),
       })
       .catch(() => null);
-    return statuses;
+    return projectedStatuses;
   }
 
   summarizeStatuses(statuses: SessionConnectorStatus[]) {
@@ -814,7 +859,8 @@ export class SessionConnectorService {
     sessionConfig: Record<string, unknown> = {},
     orchestratorSessionId?: string
   ) {
-    const lockKey = this.attachLockKey(taskSessionId, connectorKey);
+    const connectorInstanceKey = buildConnectorInstanceKey(connectorKey, profileId);
+    const lockKey = this.attachLockKey(taskSessionId, connectorInstanceKey);
     const previous = this.attachLocks.get(lockKey) || Promise.resolve(undefined);
     if (this.attachLocks.has(lockKey)) {
       writeConnectorDebugLog('[CONNECTOR_ATTACH_LOCK_WAIT]', {
@@ -855,6 +901,7 @@ export class SessionConnectorService {
     sessionConfig: Record<string, unknown> = {},
     orchestratorSessionId?: string
   ) {
+    const connectorInstanceKey = buildConnectorInstanceKey(connectorKey, profileId);
     await connectorStorageBootstrap.ensureReady();
     writeConnectorDebugLog('[CONNECTOR_ATTACH_SERVICE_START]', {
       taskSessionId,
@@ -891,11 +938,15 @@ export class SessionConnectorService {
         );
       }
     }
-    const existingBinding = await taskSessionConnectorBindingDAO.getByTaskSessionAndConnectorKey(taskSessionId, connectorKey);
+    const existingBinding = await taskSessionConnectorBindingDAO.getByTaskSessionAndInstanceKey(
+      taskSessionId,
+      connectorInstanceKey
+    );
     if (profileMaterial.authStatus !== 'authorized') {
       await taskSessionConnectorBindingDAO.upsert({
         taskSessionId,
         connectorKey,
+        connectorInstanceKey,
         profileId,
         desiredState: 'detached',
         runtimeStatus: 'needs_auth',
@@ -947,6 +998,7 @@ export class SessionConnectorService {
       await taskSessionConnectorBindingDAO.upsert({
         taskSessionId,
         connectorKey,
+        connectorInstanceKey,
         profileId,
         desiredState: 'attached',
         runtimeStatus: 'pending_recover',
@@ -967,7 +1019,7 @@ export class SessionConnectorService {
       });
       await connectorGuideService.recomputeSessionGuides(taskSessionId);
       return (await this.listSessionConnectors(taskSessionId, userId)).find(
-        (item) => item.connectorKey === connectorKey
+        (item) => statusInstanceKey(item) === connectorInstanceKey
       );
     }
     writeConnectorDebugLog('[CONNECTOR_ATTACH_RUNTIME_READY]', {
@@ -981,6 +1033,7 @@ export class SessionConnectorService {
     const binding = await taskSessionConnectorBindingDAO.upsert({
       taskSessionId,
       connectorKey,
+      connectorInstanceKey,
       profileId,
       desiredState: 'attached',
       runtimeStatus: 'connecting',
@@ -1088,6 +1141,7 @@ export class SessionConnectorService {
             providerId,
             taskSessionId,
             connectorKey,
+            connectorInstanceKey,
             providerLabel: catalogItem.name,
             transport: providerConfig.transport,
             overwrite: true,
@@ -1225,7 +1279,7 @@ export class SessionConnectorService {
         stateHandled: true,
       });
     }
-    await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
+    await taskSessionConnectorBindingDAO.updateRuntimeByBindingId(binding.id, {
       runtimeAttachedToolsJson: attached?.tools || [],
       runtimeStatus: mapRuntimeStatus(attached?.status || 'connected'),
       recoveryQueuedAt: null,
@@ -1282,8 +1336,8 @@ export class SessionConnectorService {
     });
 
     const statuses = await this.listSessionConnectors(taskSessionId, userId);
-    const current = statuses.find((item) => item.connectorKey === connectorKey);
-    await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
+    const current = statuses.find((item) => statusInstanceKey(item) === connectorInstanceKey);
+    await taskSessionConnectorBindingDAO.updateRuntimeByBindingId(binding.id, {
       runtimeStatus: current?.runtimeStatus || 'connected',
       profileId,
       orchestratorSessionId: runtime.orchestratorSessionId,
@@ -1301,7 +1355,7 @@ export class SessionConnectorService {
       lastError: null,
     });
     return (await this.listSessionConnectors(taskSessionId, userId)).find(
-      (item) => item.connectorKey === connectorKey
+      (item) => statusInstanceKey(item) === connectorInstanceKey
     );
   }
 
@@ -1309,19 +1363,29 @@ export class SessionConnectorService {
     taskSessionId: string,
     userId: string,
     connectorKey: ConnectorKey,
+    profileId?: string | null,
     orchestratorSessionId?: string
   ) {
+    const normalizedProfileId = asText(profileId);
+    if (connectorKey === 'custom_mcp' && !normalizedProfileId) {
+      throw new Error('Detach custom MCP requires profileId.');
+    }
+    const connectorInstanceKey = buildConnectorInstanceKey(connectorKey, normalizedProfileId || undefined);
     await connectorStorageBootstrap.ensureReady();
     await this.assertSessionOwnership(taskSessionId, userId);
     await this.invalidateConnectorProjection(taskSessionId);
     const runtime = await this.resolveRuntimeContext(taskSessionId, orchestratorSessionId);
     const serverName = serverNameFor(connectorKey, taskSessionId);
-    const existingBinding = await taskSessionConnectorBindingDAO.getByTaskSessionAndConnectorKey(taskSessionId, connectorKey);
+    const existingBinding = await taskSessionConnectorBindingDAO.getByTaskSessionAndInstanceKey(
+      taskSessionId,
+      connectorInstanceKey
+    );
     const providerId = asText(existingBinding?.runtimeProviderId);
     const binding = await taskSessionConnectorBindingDAO.upsert({
       taskSessionId,
       connectorKey,
-      profileId: null,
+      connectorInstanceKey,
+      profileId: normalizedProfileId || null,
       desiredState: 'detached',
       runtimeStatus: runtime ? 'connecting' : 'detached',
       orchestratorSessionId: asText(orchestratorSessionId) || runtime?.orchestratorSessionId || null,
@@ -1374,7 +1438,7 @@ export class SessionConnectorService {
           );
         }
       } catch (error) {
-        await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
+        await taskSessionConnectorBindingDAO.updateRuntimeByBindingId(binding.id, {
           runtimeStatus: 'failed',
           orchestratorSessionId: runtime.orchestratorSessionId,
           serverName,
@@ -1393,9 +1457,9 @@ export class SessionConnectorService {
         throw error;
       }
       const removed = providerId ? await this.waitForRuntimeServerAbsence(runtime, providerId) : true;
-      await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
+      await taskSessionConnectorBindingDAO.updateRuntimeByBindingId(binding.id, {
         runtimeStatus: removed ? 'disconnected' : 'failed',
-        profileId: null,
+        profileId: normalizedProfileId || null,
         orchestratorSessionId: runtime.orchestratorSessionId,
         serverName,
         runtimeProviderId: removed ? null : providerId || null,
@@ -1420,9 +1484,9 @@ export class SessionConnectorService {
       }
     }
     if (!runtime) {
-      await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
+      await taskSessionConnectorBindingDAO.updateRuntimeByBindingId(binding.id, {
         runtimeStatus: 'detached',
-        profileId: null,
+        profileId: normalizedProfileId || null,
         orchestratorSessionId: null,
         runtimeProviderId: null,
         runtimeAttachedToolsJson: [],
@@ -1437,7 +1501,7 @@ export class SessionConnectorService {
     }
     await connectorGuideService.recomputeSessionGuides(taskSessionId);
     return (await this.listSessionConnectors(taskSessionId, userId)).find(
-      (item) => item.connectorKey === connectorKey
+      (item) => statusInstanceKey(item) === connectorInstanceKey
     );
   }
 
@@ -1468,7 +1532,7 @@ export class SessionConnectorService {
           orchestratorSessionId
         );
       } catch (error) {
-        await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, binding.connectorKey as ConnectorKey, {
+        await taskSessionConnectorBindingDAO.updateRuntimeByBindingId(binding.id, {
           runtimeStatus: 'failed',
           orchestratorSessionId,
           serverName: serverNameFor(binding.connectorKey as ConnectorKey, taskSessionId),
@@ -1493,7 +1557,7 @@ export class SessionConnectorService {
       const catalogItem = connectorRegistry.getCatalogItem(connectorKey);
       if (!catalogItem.activityMatcherVerified) continue;
       if (!connectorRegistry.matchesToolUsage(connectorKey, toolName)) continue;
-      await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
+      await taskSessionConnectorBindingDAO.updateRuntimeByBindingId(binding.id, {
         runtimeStatus: 'connected',
         orchestratorSessionId,
         serverName: serverNameFor(connectorKey, taskSessionId),
@@ -1567,6 +1631,7 @@ export class SessionConnectorService {
           binding.taskSessionId,
           userId,
           binding.connectorKey,
+          profileId,
           binding.orchestratorSessionId
         );
         return {

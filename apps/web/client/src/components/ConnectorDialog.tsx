@@ -50,6 +50,7 @@ import {
 import {
   clearSessionConnectorDraftState,
   ensureSessionConnectorDraftId,
+  buildConnectorDraftKey,
   listSessionConnectorDraftEntries,
   removeSessionConnectorDraftEntry,
   updateSessionConnectorDraftMetadata,
@@ -110,6 +111,10 @@ function groupProfilesByConnector(profiles: ConnectorProfile[]) {
     acc[profile.connectorKey].push(profile);
     return acc;
   }, {});
+}
+
+function asText(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function repositorySelectionKey(connectorKey: ConnectorKey, profileId: string | null) {
@@ -212,6 +217,15 @@ function sameRepositories(left?: string[], right?: string[]) {
   return leftNormalized.every((item, index) => item === rightNormalized[index]);
 }
 
+type ConnectorDialogEntry = {
+  rowKey: string;
+  item: ConnectorCatalogItem;
+  session: SessionConnectorStatus | undefined;
+  connectorProfiles: ConnectorProfile[];
+  selectedProfileId: string | null;
+  selectedProfile: ConnectorProfile | null;
+};
+
 function resolvePreferredProfileId(
   connectorProfiles: ConnectorProfile[],
   session?: SessionConnectorStatus,
@@ -275,13 +289,13 @@ export default function ConnectorDialog({
     {}
   );
   const [sessionStatusOverrides, setSessionStatusOverrides] = useState<
-    Partial<Record<ConnectorKey, SessionConnectorStatus>>
+    Record<string, SessionConnectorStatus | undefined>
   >({});
   const [profileSelection, setProfileSelection] = useState<
     Partial<Record<ConnectorKey, string | null>>
   >({});
   const [loading, setLoading] = useState(false);
-  const [actingKey, setActingKey] = useState<ConnectorKey | null>(null);
+  const [actingKey, setActingKey] = useState<string | null>(null);
   const [githubRepositories, setGithubRepositories] = useState<
     Record<string, GithubConnectorRepository[]>
   >({});
@@ -312,7 +326,7 @@ export default function ConnectorDialog({
       if (sessionId) {
         const sessionData = await getSessionConnectors(sessionId);
         nextSessionStatuses = Object.fromEntries(
-          sessionData.items.map((item) => [item.connectorKey, item])
+          sessionData.items.map((item) => [item.connectorInstanceKey || item.connectorKey, item])
         );
       } else {
         const draftEntries = listSessionConnectorDraftEntries();
@@ -326,7 +340,9 @@ export default function ConnectorDialog({
           const repositories = Array.isArray(entry.sessionConfig?.repositories)
             ? (entry.sessionConfig?.repositories as string[])
             : [];
-          nextSessionStatuses[entry.connectorKey] = buildOptimisticSessionStatus({
+          const draftKey = buildConnectorDraftKey(entry.connectorKey, entry.profileId);
+          if (!draftKey) continue;
+          nextSessionStatuses[draftKey] = buildOptimisticSessionStatus({
             item: catalogItem,
             session: undefined,
             connectorProfiles,
@@ -340,10 +356,7 @@ export default function ConnectorDialog({
       const mergedSessionStatuses = {
         ...nextSessionStatuses,
       } as Record<string, SessionConnectorStatus>;
-      for (const [connectorKey, override] of Object.entries(sessionStatusOverrides) as [
-        ConnectorKey,
-        SessionConnectorStatus | undefined,
-      ][]) {
+      for (const [connectorKey, override] of Object.entries(sessionStatusOverrides)) {
         if (!override) continue;
         mergedSessionStatuses[connectorKey] = override;
       }
@@ -394,9 +407,9 @@ export default function ConnectorDialog({
     [profiles]
   );
 
-  const mergedConnectors = useMemo(
-    () =>
-      catalog
+  const mergedConnectors = useMemo<ConnectorDialogEntry[]>(
+    () => {
+      const appEntries = catalog
         .filter((item) => item.category === "app")
         .map((item) => {
         const connectorProfiles = profilesByConnector[item.key] || [];
@@ -409,13 +422,37 @@ export default function ConnectorDialog({
           connectorProfiles.find((profile) => profile.profileId === selectedProfileId) || null;
 
         return {
+          rowKey: item.key,
           item,
           session: sessionStatuses[item.key],
           connectorProfiles,
           selectedProfileId,
           selectedProfile,
         };
-      }),
+      });
+
+      const customMcpCatalogItem = catalog.find((item) => item.key === "custom_mcp");
+      const customMcpProfiles = profilesByConnector.custom_mcp || [];
+      const customMcpEntries = customMcpCatalogItem
+        ? customMcpProfiles.map((profile) => ({
+            rowKey: `custom_mcp:${profile.profileId}`,
+            item: {
+              ...customMcpCatalogItem,
+              name: profile.profileName,
+              description:
+                asText(profile.config?.description) ||
+                asText(profile.config?.serverUrl) ||
+                customMcpCatalogItem.description,
+            },
+            session: sessionStatuses[`custom_mcp:${profile.profileId}`],
+            connectorProfiles: [profile],
+            selectedProfileId: profile.profileId,
+            selectedProfile: profile,
+          }))
+        : [];
+
+      return [...appEntries, ...customMcpEntries];
+    },
     [catalog, profileSelection, profilesByConnector, sessionStatuses]
   );
 
@@ -512,7 +549,12 @@ export default function ConnectorDialog({
   };
 
   const attachedConnectors = useMemo(
-    () => mergedConnectors.filter(({ session }) => Boolean(session?.attached)),
+    () =>
+      mergedConnectors.filter(({ item, session, selectedProfileId }) =>
+        item.key === "custom_mcp"
+          ? Boolean(session?.attached && session?.attachedProfileId === selectedProfileId)
+          : Boolean(session?.attached)
+      ),
     [mergedConnectors]
   );
 
@@ -534,6 +576,8 @@ export default function ConnectorDialog({
     repositories?: string[];
   }): SessionConnectorStatus => ({
     connectorKey: item.key,
+    connectorInstanceKey: buildConnectorDraftKey(item.key, selectedProfileId) || item.key,
+    isConnectorInstance: item.key === "custom_mcp" && Boolean(selectedProfileId),
     name: session?.name || item.name,
     icon: session?.icon || item.icon,
     authMode: session?.authMode || item.authMode,
@@ -555,13 +599,14 @@ export default function ConnectorDialog({
   });
 
   const applySessionStatusOverride = (status: SessionConnectorStatus) => {
+    const key = status.connectorInstanceKey || status.connectorKey;
     setSessionStatusOverrides((prev) => ({
       ...prev,
-      [status.connectorKey]: status,
+      [key]: status,
     }));
     setSessionStatuses((prev) => ({
       ...prev,
-      [status.connectorKey]: status,
+      [key]: status,
     }));
   };
 
@@ -571,11 +616,13 @@ export default function ConnectorDialog({
     mode: "attach" | "detach",
     sessionConfig?: Record<string, unknown>
   ) => {
-    setActingKey(connectorKey);
+    const actionKey = buildConnectorDraftKey(connectorKey, profileId) || connectorKey;
+    const currentSession = sessionStatuses[actionKey] || sessionStatuses[connectorKey];
+    setActingKey(actionKey);
     try {
       if (!sessionId) {
         if (mode === "detach") {
-          const next = removeSessionConnectorDraftEntry(connectorKey);
+          const next = removeSessionConnectorDraftEntry(connectorKey, profileId);
           const draftId = next?.draftId || ensureSessionConnectorDraftId();
           const entries = next ? listSessionConnectorDraftEntries() : [];
           if (next) {
@@ -590,13 +637,13 @@ export default function ConnectorDialog({
             buildOptimisticSessionStatus({
               item: catalog.find((entry) => entry.key === connectorKey) || {
                 key: connectorKey,
-                name: sessionStatuses[connectorKey]?.name || connectorKey,
-                icon: sessionStatuses[connectorKey]?.icon || "plug",
-                authMode: sessionStatuses[connectorKey]?.authMode || "oauth",
+                name: currentSession?.name || connectorKey,
+                icon: currentSession?.icon || "plug",
+                authMode: currentSession?.authMode || "oauth",
                 available: true,
                 category: "app",
               } as ConnectorCatalogItem,
-              session: sessionStatuses[connectorKey],
+              session: currentSession,
               connectorProfiles: profilesByConnector[connectorKey] || [],
               selectedProfileId: profileId,
               selectedProfile:
@@ -626,13 +673,13 @@ export default function ConnectorDialog({
           buildOptimisticSessionStatus({
             item: catalog.find((entry) => entry.key === connectorKey) || {
               key: connectorKey,
-              name: sessionStatuses[connectorKey]?.name || connectorKey,
-              icon: sessionStatuses[connectorKey]?.icon || "plug",
-              authMode: sessionStatuses[connectorKey]?.authMode || "oauth",
+              name: currentSession?.name || connectorKey,
+              icon: currentSession?.icon || "plug",
+              authMode: currentSession?.authMode || "oauth",
               available: true,
               category: "app",
             } as ConnectorCatalogItem,
-            session: sessionStatuses[connectorKey],
+            session: currentSession,
             connectorProfiles: profilesByConnector[connectorKey] || [],
             selectedProfileId: profileId,
             selectedProfile:
@@ -652,13 +699,13 @@ export default function ConnectorDialog({
           buildOptimisticSessionStatus({
             item: catalog.find((entry) => entry.key === connectorKey) || {
               key: connectorKey,
-              name: sessionStatuses[connectorKey]?.name || connectorKey,
-              icon: sessionStatuses[connectorKey]?.icon || "plug",
-              authMode: sessionStatuses[connectorKey]?.authMode || "oauth",
+              name: currentSession?.name || connectorKey,
+              icon: currentSession?.icon || "plug",
+              authMode: currentSession?.authMode || "oauth",
               available: true,
               category: "app",
             } as ConnectorCatalogItem,
-            session: sessionStatuses[connectorKey],
+            session: currentSession,
             connectorProfiles: profilesByConnector[connectorKey] || [],
             selectedProfileId: profileId,
             selectedProfile:
@@ -669,9 +716,9 @@ export default function ConnectorDialog({
             repositories: [],
           })
         );
-        await detachSessionConnector(sessionId, connectorKey);
+        await detachSessionConnector(sessionId, connectorKey, { profileId });
         if (mode === "detach") {
-          const draftState = removeSessionConnectorDraftEntry(connectorKey);
+          const draftState = removeSessionConnectorDraftEntry(connectorKey, profileId);
           if (draftState?.draftId) {
             await saveSessionConnectorDraft(draftState.draftId, listSessionConnectorDraftEntries());
           }
@@ -682,13 +729,13 @@ export default function ConnectorDialog({
           buildOptimisticSessionStatus({
             item: catalog.find((entry) => entry.key === connectorKey) || {
               key: connectorKey,
-              name: sessionStatuses[connectorKey]?.name || connectorKey,
-              icon: sessionStatuses[connectorKey]?.icon || "plug",
-              authMode: sessionStatuses[connectorKey]?.authMode || "oauth",
+              name: currentSession?.name || connectorKey,
+              icon: currentSession?.icon || "plug",
+              authMode: currentSession?.authMode || "oauth",
               available: true,
               category: "app",
             } as ConnectorCatalogItem,
-            session: sessionStatuses[connectorKey],
+            session: currentSession,
             connectorProfiles: profilesByConnector[connectorKey] || [],
             selectedProfileId: profileId,
             selectedProfile:
@@ -703,7 +750,7 @@ export default function ConnectorDialog({
           profileId,
           sessionConfig,
         });
-        const draftState = removeSessionConnectorDraftEntry(connectorKey);
+        const draftState = removeSessionConnectorDraftEntry(connectorKey, profileId);
         if (draftState?.draftId) {
           await saveSessionConnectorDraft(draftState.draftId, listSessionConnectorDraftEntries());
         } else {
@@ -792,11 +839,11 @@ export default function ConnectorDialog({
                 <Plug className="h-4 w-4 text-muted-foreground" />
               ) : (
                 <div className="flex items-center justify-center pl-0.5">
-                  {attachedConnectors.slice(0, 3).map(({ item }, index) => {
+                  {attachedConnectors.slice(0, 3).map(({ rowKey, item }, index) => {
                     const AttachedIcon = resolveConnectorIcon(item.icon) || Link2;
                     return (
                       <span
-                        key={item.key}
+                        key={rowKey}
                         className={cn(
                           "flex h-4.5 w-4.5 items-center justify-center rounded-[8px] border border-background/90 bg-background ring-1 ring-border/30",
                           index > 0 ? "-ml-1" : ""
@@ -840,13 +887,14 @@ export default function ConnectorDialog({
               <ScrollArea className="h-full">
                 <div className="space-y-0.5 p-1">
                   {mergedConnectors.map(
-                    ({ item, session, connectorProfiles, selectedProfileId, selectedProfile }) => {
-                      const busy = actingKey === item.key;
-                      const checked = Boolean(session?.attached);
+                    ({ rowKey, item, session, connectorProfiles, selectedProfileId, selectedProfile }) => {
+                      const busy = actingKey === rowKey;
                       const attachedToSelected =
                         Boolean(session?.attached) &&
                         session?.attachedProfileId === selectedProfileId;
                       const isGithub = item.key === "github";
+                      const isCustomMcp = item.key === "custom_mcp";
+                      const checked = isCustomMcp ? attachedToSelected : Boolean(session?.attached);
                       const DetailIcon = resolveConnectorIcon(item.icon) || Link2;
                       const canAttach =
                         item.available &&
@@ -870,17 +918,27 @@ export default function ConnectorDialog({
                       );
 
                       return (
-                        <div key={item.key} className="flex flex-col gap-0.5">
+                        <div key={rowKey} className="flex flex-col gap-0.5">
                           <div
                             className={cn(
                               "flex h-[36px] items-center justify-between gap-2 rounded-[8px] px-2 pl-1 transition hover:bg-muted/45",
-                              detailKey === item.key && !isGithub ? "bg-muted/45" : ""
+                              detailKey === item.key && !isGithub && !isCustomMcp ? "bg-muted/45" : ""
                             )}
                           >
                             <button
                               type="button"
                               className="flex h-full min-w-0 flex-1 items-center gap-1 text-left"
                               onClick={() => {
+                                if (isCustomMcp) {
+                                  openSettingsDialog({
+                                    tab: "connectors",
+                                    connectorKey: "custom_mcp",
+                                    targetSessionId: sessionId,
+                                  });
+                                  setDetailKey(null);
+                                  setOpen(false);
+                                  return;
+                                }
                                 if (isGithub) {
                                   if (!selectedProfileId || selectedProfile?.authStatus !== "authorized") {
                                     openSettingsDialog({
@@ -955,10 +1013,30 @@ export default function ConnectorDialog({
                                 }
 
                                 if (!selectedProfileId) {
+                                  if (isCustomMcp) {
+                                    openSettingsDialog({
+                                      tab: "connectors",
+                                      connectorKey: "custom_mcp",
+                                      targetSessionId: sessionId,
+                                    });
+                                    setDetailKey(null);
+                                    setOpen(false);
+                                    return;
+                                  }
                                   setDetailKey(item.key);
                                   return;
                                 }
                                 if (!attachedToSelected && !canAttach) {
+                                  if (isCustomMcp) {
+                                    openSettingsDialog({
+                                      tab: "connectors",
+                                      connectorKey: "custom_mcp",
+                                      targetSessionId: sessionId,
+                                    });
+                                    setDetailKey(null);
+                                    setOpen(false);
+                                    return;
+                                  }
                                   setDetailKey(item.key);
                                   return;
                                 }

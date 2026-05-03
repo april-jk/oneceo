@@ -11,6 +11,38 @@ type ConnectorDraftState = {
   userTouched?: boolean;
 };
 
+export function buildConnectorDraftKey(connectorKey: ConnectorKey, profileId?: string | null) {
+  const normalizedProfileId = typeof profileId === "string" ? profileId.trim() : "";
+  if (connectorKey === "custom_mcp") {
+    return normalizedProfileId ? `custom_mcp:${normalizedProfileId}` : "";
+  }
+  return connectorKey;
+}
+
+function normalizeEntries(entries: Record<string, SessionConnectorDraftEntry>) {
+  const next: Record<string, SessionConnectorDraftEntry> = {};
+  for (const [key, entry] of Object.entries(entries)) {
+    if (!entry?.connectorKey) continue;
+    const draftKey = buildConnectorDraftKey(entry.connectorKey, entry.profileId);
+    if (!draftKey) continue;
+    next[draftKey] = {
+      ...entry,
+      connectorInstanceKey: draftKey,
+    };
+  }
+  const legacyCustomMcp = entries.custom_mcp;
+  if (legacyCustomMcp?.connectorKey === "custom_mcp") {
+    const draftKey = buildConnectorDraftKey("custom_mcp", legacyCustomMcp.profileId);
+    if (draftKey) {
+      next[draftKey] = {
+        ...legacyCustomMcp,
+        connectorInstanceKey: draftKey,
+      };
+    }
+  }
+  return next;
+}
+
 function readState(): ConnectorDraftState | null {
   if (typeof window === "undefined") return null;
   try {
@@ -19,14 +51,15 @@ function readState(): ConnectorDraftState | null {
     const parsed = JSON.parse(raw) as Partial<ConnectorDraftState>;
     const draftId = typeof parsed?.draftId === "string" ? parsed.draftId.trim() : "";
     if (!draftId) return null;
-    const entries = parsed?.entries && typeof parsed.entries === "object" ? parsed.entries : {};
+    const rawEntries = parsed?.entries && typeof parsed.entries === "object" ? parsed.entries : {};
+    const entries = normalizeEntries(rawEntries as Record<string, SessionConnectorDraftEntry>);
     return {
       draftId,
       updatedAt:
         typeof parsed?.updatedAt === "string" && parsed.updatedAt.trim()
           ? parsed.updatedAt
           : new Date().toISOString(),
-      entries: entries as Record<string, SessionConnectorDraftEntry>,
+      entries,
       source: parsed?.source === "project_default" ? "project_default" : "manual",
       sourceProjectId:
         typeof parsed?.sourceProjectId === "string" && parsed.sourceProjectId.trim()
@@ -86,8 +119,13 @@ export function upsertSessionConnectorDraftEntry(
     source: "manual" as const,
     userTouched: false,
   };
-  state.entries[connectorKey] = {
+  const draftKey = buildConnectorDraftKey(connectorKey, entry.profileId);
+  if (!draftKey) {
+    return state;
+  }
+  state.entries[draftKey] = {
     connectorKey,
+    connectorInstanceKey: draftKey,
     ...entry,
     updatedAt: new Date().toISOString(),
   };
@@ -105,10 +143,13 @@ export function upsertSessionConnectorDraftEntry(
   return state;
 }
 
-export function removeSessionConnectorDraftEntry(connectorKey: ConnectorKey) {
+export function removeSessionConnectorDraftEntry(connectorKey: ConnectorKey, profileId?: string | null) {
   const state = readState();
   if (!state) return null;
-  delete state.entries[connectorKey];
+  const draftKey = buildConnectorDraftKey(connectorKey, profileId);
+  if (draftKey) {
+    delete state.entries[draftKey];
+  }
   state.updatedAt = new Date().toISOString();
   if (Object.keys(state.entries).length === 0) {
     writeState(null);
@@ -135,13 +176,19 @@ export function replaceSessionConnectorDraftEntries(
   },
 ) {
   const nextEntries = Object.fromEntries(
-    entries.map((entry) => [
-      entry.connectorKey,
-      {
-        ...entry,
-        updatedAt: new Date().toISOString(),
-      },
-    ])
+    entries
+      .map((entry) => {
+        const draftKey = buildConnectorDraftKey(entry.connectorKey, entry.profileId);
+        return [
+          draftKey,
+          {
+            ...entry,
+            connectorInstanceKey: draftKey,
+            updatedAt: new Date().toISOString(),
+          },
+        ] as const;
+      })
+      .filter(([key]) => key)
   );
   const nextState: ConnectorDraftState = {
     draftId: readState()?.draftId || ensureSessionConnectorDraftId(),

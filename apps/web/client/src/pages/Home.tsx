@@ -817,8 +817,19 @@ export default function Home() {
   useEffect(() => {
     const params = new URLSearchParams(search);
     const input = params.get("q")?.trim();
+    const prefill = params.get("prefill")?.trim();
     const sessionInQuery = sessionIdFromPath || params.get("sessionId")?.trim();
     const createNewToken = params.get("new")?.trim();
+
+    if (prefill && location.startsWith("/new-task")) {
+      pendingInputRef.current = null;
+      setMessage(prefill);
+      setAttachments([]);
+      setComposerReferences([]);
+      setMode("input");
+      window.history.replaceState(null, "", "/new-task");
+      return;
+    }
 
     if (createNewToken) {
       pendingInputRef.current = null;

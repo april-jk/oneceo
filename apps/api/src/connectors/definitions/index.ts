@@ -1,4 +1,6 @@
 import { buildFigmaDefinition } from './figma';
+import { buildCustomApiDefinition } from './custom-api';
+import { buildCustomMcpDefinition } from './custom-mcp';
 import { buildGithubDefinition } from './github';
 import { buildNotionDefinition } from './notion';
 import { buildPostgresDefinition } from './postgres';
@@ -27,6 +29,8 @@ export const CONNECTOR_KEYS = [
   'figma',
   'vercel',
   'postgres',
+  'custom_api',
+  'custom_mcp',
 ] as const;
 
 export function buildConnectorDefinitions(): ConnectorDefinition[] {
@@ -38,6 +42,8 @@ export function buildConnectorDefinitions(): ConnectorDefinition[] {
     buildFigmaDefinition(),
     buildVercelDefinition(),
     buildPostgresDefinition(),
+    buildCustomApiDefinition(),
+    buildCustomMcpDefinition(),
   ].sort((left, right) => (left.sortOrder || 0) - (right.sortOrder || 0));
 }
 

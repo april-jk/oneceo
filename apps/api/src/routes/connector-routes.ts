@@ -5,8 +5,13 @@ import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registr
 import { githubConnectorRepositoryService } from '../services/github-connector-repository-service';
 import { userConnectorService } from '../services/user-connector-service';
 import { sessionConnectorService } from '../services/session-connector-service';
+import customApiConnectorRoutes from './custom-api-connector-routes';
+import customMcpConnectorRoutes from './custom-mcp-connector-routes';
 
 const router = express.Router();
+
+router.use('/custom-api', customApiConnectorRoutes);
+router.use('/custom-mcp', customMcpConnectorRoutes);
 
 function handleError(res: express.Response, error: unknown, fallback: string, status = 400) {
   const message = error instanceof Error ? error.message : fallback;

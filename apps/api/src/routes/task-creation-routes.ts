@@ -86,6 +86,7 @@ const recentHistoryHydrationQueuedAt = new Map<string, number>();
 const DEFAULT_SESSION_TITLE = '待识别任务';
 const WAITING_SESSION_TITLE = '待补充需求';
 const LEGACY_DEFAULT_SESSION_TITLE = '新建任务会话';
+const AUTO_TITLE_RESOLVE_USER_MESSAGE_LIMIT = 3;
 const WEAK_INTENT_TITLE_INPUTS = new Set([
   '你好',
   '您好',
@@ -762,7 +763,7 @@ function toIso(value: Date | string | null | undefined): string {
 function toSessionSummary(session: any) {
   const normalizedStage = normalizeLiveSessionStage(session);
   const titleResolution = resolveDisplaySessionTitle({
-    storedTitle: session.title,
+    storedTitle: (session as any).title,
     storedTitleSource: session.titleSource,
     storedTitleState: session.titleState,
     status: session.status,
@@ -983,6 +984,9 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
     : false;
   const sandboxExecutor = inferredExecutor || (hasSandboxHistory ? 'opencode' : '');
   const titleResolution = resolveDisplaySessionTitle({
+    storedTitle: (session as any).title,
+    storedTitleSource: (session as any).titleSource,
+    storedTitleState: (session as any).titleState,
     taskDescriptionTitle: taskDescription?.title,
     firstUserMessage: messages?.find((m) => m.role === 'user')?.content,
     status,
@@ -1101,6 +1105,9 @@ async function buildLightweightFileSessionFromDb(sessionId: string): Promise<Fil
           ? 'clarifying'
           : 'executing';
   const titleResolution = resolveDisplaySessionTitle({
+    storedTitle: (session as any).title,
+    storedTitleSource: (session as any).titleSource,
+    storedTitleState: (session as any).titleState,
     taskDescriptionTitle: taskDescription?.title,
     firstUserMessage: normalizedRecentMessages.find((message) => asText(message.role) === 'user')?.content,
     status,
@@ -1356,6 +1363,9 @@ async function buildSessionSummaryFromDbSessions(
     const firstUserMessage =
       messages?.find((message) => message.role === 'user' && asText(message.content))?.content || '';
     const titleResolution = resolveDisplaySessionTitle({
+      storedTitle: (session as any).title,
+      storedTitleSource: (session as any).titleSource,
+      storedTitleState: (session as any).titleState,
       taskDescriptionTitle: description?.title,
       firstUserMessage,
       status: session.status,
@@ -4561,8 +4571,13 @@ router.post('/sessions/:sessionId/title/resolve', async (req, res) => {
       storedTitleState: session.titleState,
       status: session.status,
     });
+    const recentMessages = await taskCreationSessionDAO.getRecentMessages(session.id, 50).catch(() => []);
+    const userMessageCount = Array.isArray(recentMessages)
+      ? recentMessages.filter((message) => asText(message.role) === 'user' && asText(message.content)).length
+      : 0;
+    const autoResolveWindowExpired = userMessageCount > AUTO_TITLE_RESOLVE_USER_MESSAGE_LIMIT;
     const titleLocked = Boolean(session.titleLocked) || currentTitleResolution.titleSource !== 'placeholder';
-    if (!input || titleLocked || !isExplicitSessionTitleInput(input)) {
+    if (!input || titleLocked || autoResolveWindowExpired || !isExplicitSessionTitleInput(input)) {
       return res.json({
         success: true,
         data: {
@@ -4573,6 +4588,7 @@ router.post('/sessions/:sessionId/title/resolve', async (req, res) => {
           titleState: currentTitleResolution.titleState,
           titleResolvedAt: session.titleResolvedAt || null,
           resolved: false,
+          autoResolveWindowExpired,
         },
       });
     }

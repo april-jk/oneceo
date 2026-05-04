@@ -103,11 +103,14 @@ const BillingManagementSection = lazy(() =>
 const NotificationManagement = lazy(() =>
   import('./components/NotificationManagement').then((module) => ({ default: module.NotificationManagement }))
 );
+const PromoBannerManagement = lazy(() =>
+  import('./components/PromoBannerManagement').then((module) => ({ default: module.PromoBannerManagement }))
+);
 const MembershipManagementSection = lazy(() =>
   import('./components/MembershipManagementSection').then((module) => ({ default: module.MembershipManagementSection }))
 );
 
-type SectionKey = 'kvm' | 'operations' | 'deployment' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit' | 'billing' | 'notification' | 'membership';
+type SectionKey = 'kvm' | 'operations' | 'deployment' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit' | 'billing' | 'notification' | 'membership' | 'promoBanner';
 type NavGroupKey = 'runtime' | 'platform' | 'billing';
 type ToastTone = 'error' | 'success' | 'warning' | 'info';
 type SandboxDetailTab = 'overview' | 'files' | 'processes' | 'connectivity' | 'archive' | 'terminal';
@@ -506,6 +509,16 @@ const NAV_ITEMS: Array<{
     iconKey: 'billing',
     description: '维护会员类型、默认积分和 Agent 权限。',
     signal: '会员权益',
+  },
+  {
+    key: 'promoBanner',
+    group: 'platform',
+    label: '宣传条幅管理',
+    subtitle: '首页气泡与侧边栏气泡',
+    tag: 'PRM',
+    iconKey: 'notification',
+    description: '配置首页与侧边栏宣传气泡，支持图片和轮播。',
+    signal: '条幅状态',
   },
   {
     key: 'notification',
@@ -12083,6 +12096,13 @@ export default function App() {
       return (
         <Suspense fallback={<div className="p-6">加载中...</div>}>
           <MembershipManagementSection />
+        </Suspense>
+      );
+    }
+    if (activeSection === 'promoBanner') {
+      return (
+        <Suspense fallback={<div className="p-6">加载中...</div>}>
+          <PromoBannerManagement onNotify={pushToast} />
         </Suspense>
       );
     }

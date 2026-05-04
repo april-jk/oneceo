@@ -1727,6 +1727,82 @@ export const userNotifications = pgTable(
   })
 );
 
+export const uiPromoBanners = pgTable(
+  'ui_promo_banners',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    placement: text('placement').notNull().default('sidebar_bubble'),
+    displayType: text('display_type').notNull().default('single'),
+    status: text('status').notNull().default('draft'),
+    priority: integer('priority').notNull().default(0),
+    allowDismiss: boolean('allow_dismiss').notNull().default(true),
+    dismissResetOnVersion: boolean('dismiss_reset_on_version').notNull().default(true),
+    startAt: timestamp('start_at'),
+    endAt: timestamp('end_at'),
+    version: integer('version').notNull().default(1),
+    createdBy: uuid('created_by').references(() => adminUsers.id, { onDelete: 'set null' }),
+    updatedBy: uuid('updated_by').references(() => adminUsers.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    placementIdx: index('idx_ui_promo_banners_placement').on(table.placement),
+    statusIdx: index('idx_ui_promo_banners_status').on(table.status),
+    priorityIdx: index('idx_ui_promo_banners_priority').on(table.priority),
+    activeSortIdx: index('idx_ui_promo_banners_active_sort').on(
+      table.placement,
+      table.status,
+      table.priority,
+      table.updatedAt,
+    ),
+  }),
+);
+
+export const uiPromoBannerItems = pgTable(
+  'ui_promo_banner_items',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    bannerId: uuid('banner_id')
+      .notNull()
+      .references(() => uiPromoBanners.id, { onDelete: 'cascade' }),
+    sortOrder: integer('sort_order').notNull().default(0),
+    title: text('title').notNull(),
+    subtitle: text('subtitle'),
+    imageUrl: text('image_url'),
+    ctaText: text('cta_text'),
+    linkType: text('link_type').notNull().default('none'),
+    linkTarget: text('link_target'),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    bannerIdx: index('idx_ui_promo_banner_items_banner_id').on(table.bannerId),
+    sortIdx: index('idx_ui_promo_banner_items_sort_order').on(table.sortOrder),
+  }),
+);
+
+export const uiPromoBannerEvents = pgTable(
+  'ui_promo_banner_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    bannerId: uuid('banner_id')
+      .notNull()
+      .references(() => uiPromoBanners.id, { onDelete: 'cascade' }),
+    itemId: uuid('item_id').references(() => uiPromoBannerItems.id, { onDelete: 'set null' }),
+    userId: uuid('user_id').references(() => appUsers.id, { onDelete: 'set null' }),
+    eventType: text('event_type').notNull(),
+    metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    bannerIdx: index('idx_ui_promo_banner_events_banner_id').on(table.bannerId),
+    userIdx: index('idx_ui_promo_banner_events_user_id').on(table.userId),
+    typeIdx: index('idx_ui_promo_banner_events_type').on(table.eventType),
+  }),
+);
+
 export const membershipPlans = pgTable(
   'membership_plans',
   {
@@ -1866,3 +1942,9 @@ export type Notification = typeof notifications.$inferSelect;
 export type NewNotification = typeof notifications.$inferInsert;
 export type UserNotification = typeof userNotifications.$inferSelect;
 export type NewUserNotification = typeof userNotifications.$inferInsert;
+export type UiPromoBanner = typeof uiPromoBanners.$inferSelect;
+export type NewUiPromoBanner = typeof uiPromoBanners.$inferInsert;
+export type UiPromoBannerItem = typeof uiPromoBannerItems.$inferSelect;
+export type NewUiPromoBannerItem = typeof uiPromoBannerItems.$inferInsert;
+export type UiPromoBannerEvent = typeof uiPromoBannerEvents.$inferSelect;
+export type NewUiPromoBannerEvent = typeof uiPromoBannerEvents.$inferInsert;

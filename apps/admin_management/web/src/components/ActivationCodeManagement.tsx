@@ -494,8 +494,14 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
       if (result.skippedAlreadyTarget > 0) {
         skipParts.push(`${result.skippedAlreadyTarget} 条已是目标状态`);
       }
-      if (result.skippedIneligibleStatus > 0) {
-        skipParts.push(`${result.skippedIneligibleStatus} 条状态不可变更`);
+      if (result.skippedUsed > 0) {
+        skipParts.push(`${result.skippedUsed} 条已使用不可变更`);
+      }
+      if (result.skippedExpired > 0) {
+        skipParts.push(`${result.skippedExpired} 条已过期不可变更`);
+      }
+      if (result.skippedOtherStatus > 0) {
+        skipParts.push(`${result.skippedOtherStatus} 条状态不可变更`);
       }
       if (result.missing > 0) {
         skipParts.push(`${result.missing} 条不存在`);
@@ -600,6 +606,29 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
   const totalPages = Math.ceil(total / limit);
   const currentPageIds = codes.map((code) => code.id);
   const allCurrentPageSelected = currentPageIds.length > 0 && currentPageIds.every((id) => selectedCodeIds.includes(id));
+
+  const handleSortChange = (nextSortBy: string) => {
+    if (sortBy === nextSortBy) {
+      setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setSortBy(nextSortBy);
+    setSortOrder('desc');
+  };
+
+  const renderSortHeader = (label: string, key: string) => {
+    const active = sortBy === key;
+    const arrow = active ? (sortOrder === 'asc' ? '↑' : '↓') : '';
+    return (
+      <button
+        type="button"
+        className={`sortable-header${active ? ' active' : ''}`}
+        onClick={() => handleSortChange(key)}
+      >
+        {label} {arrow}
+      </button>
+    );
+  };
 
   return (
     <section className="activation-code-management">
@@ -730,13 +759,13 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
                   aria-label="全选当前页"
                 />
               </th>
-              <th>激活码</th>
-              <th>积分</th>
-              <th>状态</th>
-              <th>使用次数</th>
-              <th>分组</th>
-              <th>过期时间</th>
-              <th>创建时间</th>
+              <th>{renderSortHeader('激活码', 'code')}</th>
+              <th>{renderSortHeader('积分', 'credits_amount')}</th>
+              <th>{renderSortHeader('状态', 'status')}</th>
+              <th>{renderSortHeader('使用次数', 'current_uses')}</th>
+              <th>{renderSortHeader('分组', 'group_name')}</th>
+              <th>{renderSortHeader('过期时间', 'expires_at')}</th>
+              <th>{renderSortHeader('创建时间', 'created_at')}</th>
               <th>操作</th>
             </tr>
           </thead>
@@ -1300,6 +1329,23 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
           font-size: 12px;
           text-transform: uppercase;
           color: var(--text-soft);
+        }
+
+        .sortable-header {
+          border: none;
+          background: transparent;
+          color: inherit;
+          font: inherit;
+          cursor: pointer;
+          padding: 0;
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+        }
+
+        .sortable-header.active {
+          color: var(--text);
+          font-weight: 700;
         }
 
         .code-cell {

@@ -1,4 +1,4 @@
-import { eq, and, sql, desc, count, like, gte, lte, isNull, or, inArray } from 'drizzle-orm';
+import { eq, and, sql, desc, asc, count, like, gte, lte, isNull, or, inArray } from 'drizzle-orm';
 import { db } from '../config/database';
 import {
   creditActivationCodes,
@@ -219,17 +219,23 @@ export class ActivationCodeService {
     // 排序
     const sortColumn = (() => {
       switch (sortBy) {
-        case 'expires_at':
-          return creditActivationCodes.expiresAt;
+        case 'code':
+          return creditActivationCodes.code;
         case 'credits_amount':
           return creditActivationCodes.creditsAmount;
+        case 'status':
+          return creditActivationCodes.status;
+        case 'current_uses':
+          return creditActivationCodes.currentUses;
+        case 'group_name':
+          return creditActivationCodeGroups.name;
+        case 'expires_at':
+          return creditActivationCodes.expiresAt;
         case 'created_at':
         default:
           return creditActivationCodes.createdAt;
       }
     })();
-
-    const orderFn = sortOrder === 'asc' ? desc : desc; // 默认降序
 
     // 查询总数
     const countResult = await db
@@ -268,7 +274,7 @@ export class ActivationCodeService {
       .leftJoin(appUsers, eq(creditActivationCodes.usedBy, appUsers.id))
       .leftJoin(creditActivationCodeGroups, eq(creditActivationCodes.groupId, creditActivationCodeGroups.id))
       .where(whereClause)
-      .orderBy(sortOrder === 'asc' ? sortColumn : desc(sortColumn))
+      .orderBy(sortOrder === 'asc' ? asc(sortColumn) : desc(sortColumn))
       .limit(limit)
       .offset(offset);
 
@@ -392,7 +398,9 @@ export class ActivationCodeService {
     matched: number;
     updated: number;
     skippedAlreadyTarget: number;
-    skippedIneligibleStatus: number;
+    skippedUsed: number;
+    skippedExpired: number;
+    skippedOtherStatus: number;
     missing: number;
   }> {
     const uniqueIds = Array.from(new Set(
@@ -405,7 +413,9 @@ export class ActivationCodeService {
         matched: 0,
         updated: 0,
         skippedAlreadyTarget: 0,
-        skippedIneligibleStatus: 0,
+        skippedUsed: 0,
+        skippedExpired: 0,
+        skippedOtherStatus: 0,
         missing: 0,
       };
     }
@@ -425,13 +435,18 @@ export class ActivationCodeService {
         matched: 0,
         updated: 0,
         skippedAlreadyTarget: 0,
-        skippedIneligibleStatus: 0,
+        skippedUsed: 0,
+        skippedExpired: 0,
+        skippedOtherStatus: 0,
         missing,
       };
     }
 
     const eligibleRows = existingRows.filter((row) => row.status === 'active' || row.status === 'disabled');
-    const skippedIneligibleStatus = existingRows.length - eligibleRows.length;
+    const ineligibleRows = existingRows.filter((row) => row.status !== 'active' && row.status !== 'disabled');
+    const skippedUsed = ineligibleRows.filter((row) => row.status === 'used').length;
+    const skippedExpired = ineligibleRows.filter((row) => row.status === 'expired').length;
+    const skippedOtherStatus = Math.max(0, ineligibleRows.length - skippedUsed - skippedExpired);
     const skippedAlreadyTarget = eligibleRows.filter((row) => row.status === status).length;
     const actionableIds = eligibleRows
       .filter((row) => row.status !== status)
@@ -442,7 +457,9 @@ export class ActivationCodeService {
         matched,
         updated: 0,
         skippedAlreadyTarget,
-        skippedIneligibleStatus,
+        skippedUsed,
+        skippedExpired,
+        skippedOtherStatus,
         missing,
       };
     }
@@ -462,7 +479,9 @@ export class ActivationCodeService {
       matched,
       updated: updatedRows.length,
       skippedAlreadyTarget,
-      skippedIneligibleStatus,
+      skippedUsed,
+      skippedExpired,
+      skippedOtherStatus,
       missing,
     };
   }

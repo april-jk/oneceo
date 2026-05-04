@@ -12,7 +12,7 @@ type ManualProjectsSnapshot = {
 
 let snapshot: ManualProjectsSnapshot = {
   projects: [],
-  loading: false,
+  loading: true,
   loadedUserId: null,
 };
 
@@ -31,6 +31,21 @@ function setSnapshot(next: ManualProjectsSnapshot) {
 
 function getSnapshot() {
   return snapshot;
+}
+
+export function readSidebarExpandedState(
+  raw: string | null,
+  key: "expandedProjectGroups" | "expandedProjects" | "expandedManagers",
+  defaultValue: string[],
+) {
+  if (!raw) return defaultValue;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const stored = parsed?.[key];
+    return Array.isArray(stored) ? stored.filter((item) => typeof item === "string") : [];
+  } catch {
+    return defaultValue;
+  }
 }
 
 function subscribe(listener: () => void) {
@@ -82,7 +97,7 @@ export async function loadSharedManualProjects(options?: {
   const needsReload =
     options?.force ||
     snapshot.loadedUserId !== nextUserId ||
-    (!snapshot.loading && snapshot.projects.length === 0);
+    snapshot.projects.length === 0;
 
   if (!needsReload) {
     return snapshot.projects;
@@ -100,6 +115,13 @@ export async function loadSharedManualProjects(options?: {
           loading: false,
           loadedUserId: nextUserId,
         });
+      })
+      .catch((error) => {
+        setSnapshot({
+          ...snapshot,
+          loading: false,
+        });
+        throw error;
       })
       .finally(() => {
         inFlightLoad = null;

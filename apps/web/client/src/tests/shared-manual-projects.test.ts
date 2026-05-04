@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { TaskCreationProjectSummary } from "@/lib/task-creation-client";
 import {
   removeSharedManualProjectFromList,
+  readSidebarExpandedState,
   sortSharedManualProjects,
   upsertSharedManualProjectList,
 } from "@/lib/shared-manual-projects";
@@ -65,5 +66,11 @@ describe("shared manual projects helpers", () => {
     );
 
     expect(projects.map((project) => project.id)).toEqual(["b"]);
+  });
+
+  it("defaults manual projects to expanded on first paint", () => {
+    expect(
+      readSidebarExpandedState(null, "expandedProjectGroups", ["manual-projects"]),
+    ).toEqual(["manual-projects"]);
   });
 });

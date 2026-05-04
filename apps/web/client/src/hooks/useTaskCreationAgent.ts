@@ -199,6 +199,8 @@ function dispatchTaskCreationSessionUpdated(detail: {
   sessionId: string;
   title?: string;
   status?: string;
+  projectId?: string | null;
+  projectName?: string | null;
 }) {
   try {
     window.dispatchEvent(
@@ -207,6 +209,12 @@ function dispatchTaskCreationSessionUpdated(detail: {
           sessionId: detail.sessionId,
           ...(detail.title ? { title: detail.title } : {}),
           ...(detail.status ? { status: detail.status } : {}),
+          ...(Object.prototype.hasOwnProperty.call(detail, 'projectId')
+            ? { projectId: detail.projectId || null }
+            : {}),
+          ...(Object.prototype.hasOwnProperty.call(detail, 'projectName')
+            ? { projectName: detail.projectName || null }
+            : {}),
         },
       })
     );
@@ -2673,6 +2681,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     typeof options?.initialProjectId === 'string' && options.initialProjectId.trim()
       ? options.initialProjectId.trim()
       : null;
+  const initialProjectNameForNewSessionRef = useRef<string | null>(null);
   const [isConnected, setIsConnected] = useState(() => isManagedAltusMode());
   const [isProcessing, setIsProcessing] = useState(false);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
@@ -2707,6 +2716,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       try {
         const project = await getTaskCreationProject(initialProjectIdForNewSession);
         if (cancelled) return;
+        initialProjectNameForNewSessionRef.current =
+          typeof project?.name === 'string' && project.name.trim() ? project.name.trim() : null;
 
         const nextEntries: SessionConnectorDraftEntry[] = Array.isArray(project?.defaultConnectors)
           ? project.defaultConnectors
@@ -5240,36 +5251,29 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       let shouldBindCreatedSession = false;
       const initialProjectId = !activeSessionId ? initialProjectIdForNewSession || undefined : undefined;
       if (!activeSessionId) {
-        const created = await createTaskCreationDraftSession(text);
+        const created = await createTaskCreationDraftSession({
+          title: text,
+          projectId: initialProjectId || undefined,
+        });
         const createdSessionId = (created?.id || '').trim();
         if (!createdSessionId) {
           throw new Error('managed draft session id missing');
         }
         activeSessionId = createdSessionId;
         shouldBindCreatedSession = true;
+        if (initialProjectId) {
+          dispatchTaskCreationSessionUpdated({
+            sessionId: createdSessionId,
+            projectId: initialProjectId,
+            projectName: initialProjectNameForNewSessionRef.current,
+            status: created.status || 'in_progress',
+          });
+        }
         if (typeof created.title === 'string' && created.title.trim()) {
           dispatchTaskCreationSessionUpdated({
             sessionId: createdSessionId,
             title: created.title.trim(),
             status: created.status || 'in_progress',
-          });
-        }
-        if (initialProjectId) {
-          const updatedSession = await createTaskCreationSession({
-            sessionId: createdSessionId,
-            mode: 'altus',
-            projectId: initialProjectId,
-          });
-          dispatchTaskCreationSessionUpdated({
-            sessionId: createdSessionId,
-            ...(updatedSession?.title ? { title: updatedSession.title } : {}),
-            ...(Object.prototype.hasOwnProperty.call(updatedSession || {}, 'projectId')
-              ? { projectId: updatedSession?.projectId || null }
-              : {}),
-            ...(Object.prototype.hasOwnProperty.call(updatedSession || {}, 'projectName')
-              ? { projectName: updatedSession?.projectName || null }
-              : {}),
-            status: updatedSession?.status || 'in_progress',
           });
         }
         applyPendingConnectorDraftAsync(createdSessionId);
@@ -5446,6 +5450,14 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         const provisionalId = generateSessionId();
         activeSessionId = provisionalId;
         bindSessionId(provisionalId);
+        if (initialProjectIdForNewSession) {
+          dispatchTaskCreationSessionUpdated({
+            sessionId: provisionalId,
+            projectId: initialProjectIdForNewSession,
+            projectName: initialProjectNameForNewSessionRef.current,
+            status: 'in_progress',
+          });
+        }
       }
       const messageKey = generateClientMessageKey('user');
       const messageMetadata = {
@@ -5671,7 +5683,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const ensureSession = useCallback(async (_title?: string) => {
     const existing = (sessionId || '').trim();
     if (existing) return existing;
-    const created = await createTaskCreationDraftSession();
+    const created = await createTaskCreationDraftSession({
+      projectId: initialProjectIdForNewSession || undefined,
+    });
     const nextSessionId = (created.id || '').trim();
     if (!nextSessionId) {
       throw new Error('draft session id missing');

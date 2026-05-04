@@ -1404,7 +1404,11 @@ function mergeDbSessionSummaryWithMemory(dbSummary: any, memorySession: FileSess
   };
 }
 
-async function createDraftTaskSession(title: string | undefined, userId: string) {
+async function createDraftTaskSession(
+  title: string | undefined,
+  userId: string,
+  projectAssignment?: { projectId: string | null; projectName: string | null }
+) {
   const created = await taskCreationSessionDAO.createSession({
     id: randomUUID(),
     userId,
@@ -1418,6 +1422,10 @@ async function createDraftTaskSession(title: string | undefined, userId: string)
       state: 'provisional',
       force: true,
     });
+  }
+  if (projectAssignment?.projectId) {
+    await taskCreationFileMemoryStore.updateSessionProject(created.id, projectAssignment);
+    await taskCreationSessionDAO.updateSessionProject(created.id, projectAssignment);
   }
   await taskCreationFileMemoryStore.updateSessionStatus(created.id, 'in_progress');
   return created.id;
@@ -4300,7 +4308,30 @@ router.post('/sessions/draft', async (req, res) => {
     const currentUser = currentUserResolver.require(req);
     const requestedTitle = deriveAutoSessionTitle(req.body?.title);
     const title = requestedTitle || DEFAULT_SESSION_TITLE;
-    const sessionId = await createDraftTaskSession(title, currentUser.userId);
+    const requestedProjectId = asText(req.body?.projectId);
+    let initialProjectAssignment: { projectId: string | null; projectName: string | null } = {
+      projectId: null,
+      projectName: null,
+    };
+    if (requestedProjectId) {
+      const ownedProject = await appUserProjectDAO.getOwnedProjectById(requestedProjectId, currentUser.userId);
+      if (!ownedProject || ownedProject.projectType !== 'standard' || ownedProject.status !== 'active') {
+        return res.status(404).json({
+          success: false,
+          error: '项目不存在或当前用户无权访问该项目',
+        });
+      }
+      initialProjectAssignment = normalizeSessionProjectAssignmentInput({
+        projectId: ownedProject.id,
+        projectName: ownedProject.name,
+      });
+    }
+    const sessionId = await createDraftTaskSession(title, currentUser.userId, initialProjectAssignment);
+    if (initialProjectAssignment.projectId) {
+      await taskCreationProjectRedisCacheService.invalidateProjectReads(currentUser.userId, {
+        projectIds: [initialProjectAssignment.projectId],
+      });
+    }
     const session = await resolveTaskSessionRecord(sessionId);
     return res.json({
       success: true,

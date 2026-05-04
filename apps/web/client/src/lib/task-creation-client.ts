@@ -884,7 +884,9 @@ export async function getTaskCreationOlderMessages(
   );
 }
 
-export async function createTaskCreationDraftSession(title?: string): Promise<TaskCreationSessionDetail> {
+export async function createTaskCreationDraftSession(
+  input?: { title?: string; projectId?: string | null }
+): Promise<TaskCreationSessionDetail> {
   const url = `${getApiBaseUrl()}/api/task-creation/sessions/draft`;
   const response = await fetch(url, {
     method: "POST",
@@ -892,7 +894,8 @@ export async function createTaskCreationDraftSession(title?: string): Promise<Ta
       "Content-Type": "application/json",
     }),
     body: JSON.stringify({
-      title: title || undefined,
+      title: input?.title || undefined,
+      projectId: input?.projectId || undefined,
     }),
   });
   if (!response.ok) {

@@ -96,6 +96,8 @@ export function createBillingManagementRoutes() {
   router.get('/activation-codes/export', proxyToApi);
   router.get('/activation-codes/:id', proxyToApi);
   router.post('/activation-codes', proxyToApi);
+  router.post('/activation-codes/bulk-status', proxyToApi);
+  router.post('/activation-codes/bulk-delete', proxyToApi);
   router.put('/activation-codes/:id', proxyToApi);
   router.delete('/activation-codes/:id', proxyToApi);
 

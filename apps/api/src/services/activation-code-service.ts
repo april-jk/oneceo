@@ -383,6 +383,79 @@ export class ActivationCodeService {
   }
 
   /**
+   * 批量更新激活码状态（启用/禁用）
+   */
+  async bulkUpdateActivationCodeStatus(
+    ids: string[],
+    status: 'active' | 'disabled'
+  ): Promise<{ matched: number; updated: number }> {
+    const uniqueIds = Array.from(new Set(ids.filter((id) => typeof id === 'string' && id.trim().length > 0)));
+    if (uniqueIds.length === 0) {
+      return { matched: 0, updated: 0 };
+    }
+
+    const matchedResult = await db
+      .select({ count: count() })
+      .from(creditActivationCodes)
+      .where(
+        and(
+          sql`${creditActivationCodes.id} = ANY(${uniqueIds}::uuid[])`,
+          sql`${creditActivationCodes.status} IN ('active', 'disabled')`
+        )
+      );
+    const matched = Number(matchedResult[0]?.count || 0);
+
+    if (matched === 0) {
+      return { matched: 0, updated: 0 };
+    }
+
+    const updatedRows = await db
+      .update(creditActivationCodes)
+      .set({ status, updatedAt: new Date() })
+      .where(
+        and(
+          sql`${creditActivationCodes.id} = ANY(${uniqueIds}::uuid[])`,
+          sql`${creditActivationCodes.status} IN ('active', 'disabled')`
+        )
+      )
+      .returning({ id: creditActivationCodes.id });
+
+    return { matched, updated: updatedRows.length };
+  }
+
+  /**
+   * 批量删除激活码（仅删除未使用激活码）
+   */
+  async bulkDeleteActivationCodes(ids: string[]): Promise<{ matched: number; deleted: number }> {
+    const uniqueIds = Array.from(new Set(ids.filter((id) => typeof id === 'string' && id.trim().length > 0)));
+    if (uniqueIds.length === 0) {
+      return { matched: 0, deleted: 0 };
+    }
+
+    const matchedResult = await db
+      .select({ count: count() })
+      .from(creditActivationCodes)
+      .where(sql`${creditActivationCodes.id} = ANY(${uniqueIds}::uuid[])`);
+    const matched = Number(matchedResult[0]?.count || 0);
+
+    if (matched === 0) {
+      return { matched: 0, deleted: 0 };
+    }
+
+    const deletedRows = await db
+      .delete(creditActivationCodes)
+      .where(
+        and(
+          sql`${creditActivationCodes.id} = ANY(${uniqueIds}::uuid[])`,
+          eq(creditActivationCodes.currentUses, 0)
+        )
+      )
+      .returning({ id: creditActivationCodes.id });
+
+    return { matched, deleted: deletedRows.length };
+  }
+
+  /**
    * 获取激活码统计
    */
   async getActivationCodeStats(): Promise<{

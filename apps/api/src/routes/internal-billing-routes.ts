@@ -1256,7 +1256,9 @@ router.post('/activation-codes/bulk-status', async (req, res) => {
       matched: result.matched,
       updated: result.updated,
       skippedAlreadyTarget: result.skippedAlreadyTarget,
-      skippedIneligibleStatus: result.skippedIneligibleStatus,
+      skippedUsed: result.skippedUsed,
+      skippedExpired: result.skippedExpired,
+      skippedOtherStatus: result.skippedOtherStatus,
       missing: result.missing,
     });
   } catch (error) {

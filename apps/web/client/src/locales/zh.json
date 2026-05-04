@@ -243,7 +243,11 @@
     "passwordMismatch": "两次输入的密码不一致",
     "registerFailed": "注册失败",
     "missingLoginUser": "登录返回缺少用户信息",
-    "missingRegisterUser": "注册返回缺少用户信息"
+    "missingRegisterUser": "注册返回缺少用户信息",
+    "googleSignIn": "使用 Google 登录",
+    "githubSignIn": "使用 GitHub 登录",
+    "googleSignUp": "使用 Google 注册",
+    "githubSignUp": "使用 GitHub 注册"
   },
   "attachments": {
     "removeAttachment": "移除附件 {{name}}",
@@ -527,6 +531,14 @@
     "passwordUpdateUnavailable": "密码更新功能暂未接入",
     "deleteAccountUnavailable": "删除账户功能暂未接入",
     "avatarUploadUnavailable": "头像上传功能暂未接入",
+    "changeAvatar": "更换头像",
+    "removeAvatar": "移除头像",
+    "avatarUploadSuccess": "头像已更新",
+    "avatarRemoveSuccess": "头像已移除",
+    "avatarUploadFailed": "头像上传失败",
+    "avatarRemoveFailed": "头像移除失败",
+    "avatarFormatInvalid": "仅支持 JPG、PNG、WebP 格式",
+    "avatarSizeExceeded": "图片大小不能超过 5MB",
     "logout": "退出登录",
     "logoutSuccess": "已退出登录",
     "logoutFailed": "退出登录失败",

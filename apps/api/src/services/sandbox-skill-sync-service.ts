@@ -474,6 +474,7 @@ export class SandboxSkillSyncService {
       resourcePath: normalizedResourcePath,
       skillResourcePath: absolutePath,
       resourceType: resolvedResource.resource.resourceType,
+      contentMarkdown: resolvedResource.resource.contentMarkdown,
     };
   }
 

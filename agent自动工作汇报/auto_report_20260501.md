@@ -49,3 +49,23 @@
 - 做了什么：清理 GitHub/Notion/Slack/Supabase/Figma Composio MCP 改造后的旧 direct MCP/OAuth 残留，移除 `.env.example` 中旧 remote/token 配置示例，阻断 GitHub 旧 token 仓库直连路径，并删除 sandbox bootstrap 中历史 GitHub local token 环境变量投影。
 - 遇到什么：`github-connector-repository-service.ts` 里旧中文字符串较多，补丁大段匹配不稳定；已按函数边界做结构化清理。
 - 计划如何解决：已执行 API type-check 与相关 connector 单测；发现并修正旧 GitHub remote_sse 快照测试样例，改为 Vercel backend_rpc 样例。
+
+- 用户确认 `26_竞品式PPT子任务编排工作流方案_[20260501-1718已采用].md` 后，再按新子任务编排模型更新测试与实现。
+
+## 17:18 PPT workflow skill 实现
+
+- 做了什么：将 `26_竞品式PPT子任务编排工作流方案` 更新为已采用，新增 `ppt-workflow` 平台 skill seed，并通过 intent trigger 自动挂载到 PPT / PowerPoint / 演示文稿请求；同步迁移旧 PPT 测试 fixture。
+- 遇到什么：`tsx --test` 在默认沙箱内创建 IPC pipe 被拦截，使用已授权的 `pnpm --filter api exec` 在沙箱外完成测试。
+- 计划如何解决：后续接入 PPT 渲染器时，让当前 `PptRenderInstructionDraft` 成为渲染器输入，不回退到旧 `office-ppt` 或 `magazine-web-ppt`。
+
+## 17:31 PPT 旧 skill 下架同步
+
+- 做了什么：补充 seed reconcile 规则，确保 `ppt-workflow` 已存在但归档时会重新激活、缺少 published revision 时会创建发布版本，同时自动归档旧 `office-ppt` 与 `magazine-web-ppt`。
+- 遇到什么：仅从代码 seed 移除旧 skill 不会自动影响已经写入数据库的历史 skill，所以前端仍会看到旧入口。
+- 计划如何解决：API 服务重启或下一次执行 `ensureSeeded` 后，用户前端只应看到新的 `ppt-workflow`，旧 PPT skill 会变为 archived。
+
+## 18:08 Skill 资源加载修复
+
+- 做了什么：修复 `load_skill_resource` 对 active skill 的匹配逻辑，允许在当前 active skill 范围内用 `slug + revisionNumber` 命中真实 `skillId + revisionId`；同步让工具结果直接返回 `contentMarkdown`。
+- 遇到什么：真实历史会话里模型仍可能把 Active skills 中的 slug / revisionNumber 当成工具参数，导致原先只接受 UUID 级精确匹配时返回 `load_skill_resource_skill_not_active`。
+- 计划如何解决：后续继续通过真实会话回看确认模型是否仍尝试额外读取 `skillResourcePath`，如有再收紧 prompt 提示。

@@ -76,6 +76,7 @@ import { Link, useLocation } from "wouter";
 import { useTranslation } from "react-i18next";
 import React from "react";
 import { toast } from "sonner";
+import { isDevRuntime } from "@/lib/runtime-env";
 import {
   createTaskCreationProject,
   deleteTaskCreationProject,
@@ -270,6 +271,7 @@ export default function Sidebar({
   const [deleteProjectDialogOpen, setDeleteProjectDialogOpen] = React.useState(false);
   const [deleteProjectTarget, setDeleteProjectTarget] = React.useState<TaskCreationProjectSummary | null>(null);
   const [deleteProjectSubmitting, setDeleteProjectSubmitting] = React.useState(false);
+  const [unreadCount, setUnreadCount] = React.useState(0);
   const listLoadingRef = React.useRef(false);
   const lastListFetchRef = React.useRef(0);
   const lastListErrorToastAtRef = React.useRef(0);
@@ -616,6 +618,34 @@ export default function Sidebar({
     };
   }, [mapSessionTask, sortSessionTasks, t]);
 
+  // 获取未读通知数量
+  React.useEffect(() => {
+    const fetchUnreadCount = async () => {
+      try {
+        const response = await fetch("/api/notifications/unread-count", {
+          credentials: "include",
+        });
+        if (response.ok) {
+          const data = await response.json();
+          setUnreadCount(data.count || 0);
+        }
+      } catch (error) {
+        console.error("[Sidebar] failed to load unread count:", error);
+      }
+    };
+    void fetchUnreadCount();
+    const timer = window.setInterval(fetchUnreadCount, 60000);
+
+    // 监听通知已读事件，刷新未读数量
+    const handleNotificationRead = () => void fetchUnreadCount();
+    window.addEventListener("oneceo:notification-read", handleNotificationRead);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("oneceo:notification-read", handleNotificationRead);
+    };
+  }, []);
+
   const toggleProjectGroup = (groupId: string) => {
     setExpandedProjectGroups((prev) =>
       prev.includes(groupId)
@@ -649,23 +679,27 @@ export default function Sidebar({
     { icon: Search, label: t("sidebar.search"), href: "/search" },
     { icon: Library, label: t("sidebar.library"), href: "/library" },
     { icon: FolderOpen, label: t("sidebar.projects"), href: "/projects" },
-    { icon: Network, label: t("sidebar.ceoView"), href: "/ceo-view" },
+    ...(isDevRuntime()
+      ? [{ icon: Network, label: t("sidebar.ceoView"), href: "/ceo-view" }]
+      : []),
   ];
 
   const selfOrganizedProjectsData = React.useMemo<SidebarProjectNode[]>(
     () =>
-      SELF_ORGANIZED_PROJECTS.map((project) => ({
-        id: project.id,
-        name: project.name,
-        description: project.description,
-        managers: project.managers.map((manager) => ({
-          id: manager.id,
-          name: manager.name,
-          type: manager.type,
-          tasks: manager.tasks,
-        })),
-        kind: "self-organized" as const,
-      })),
+      isDevRuntime()
+        ? SELF_ORGANIZED_PROJECTS.map((project) => ({
+            id: project.id,
+            name: project.name,
+            description: project.description,
+            managers: project.managers.map((manager) => ({
+              id: manager.id,
+              name: manager.name,
+              type: manager.type,
+              tasks: manager.tasks,
+            })),
+            kind: "self-organized" as const,
+          }))
+        : [],
     [],
   );
   const manualProjectNodes = React.useMemo<SidebarProjectNode[]>(
@@ -1480,11 +1514,12 @@ export default function Sidebar({
                   </Button>
                 </div>
 
-                <div className="space-y-1">
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="icon"
+                {isDevRuntime() ? (
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
                       className="h-7 w-7 shrink-0"
                       onClick={() => toggleProjectGroup("self-organized")}
                     >
@@ -1608,7 +1643,8 @@ export default function Sidebar({
                       })}
                     </div>
                   )}
-                </div>
+                  </div>
+                ) : null}
               </div>
             </ScrollArea>
           </div>
@@ -1616,90 +1652,39 @@ export default function Sidebar({
       </div>
 
       {/* Bottom Section */}
-      <div
-        className="border-t border-sidebar-border p-2.5"
-        onMouseEnter={() => setSettingsMenuOpen(true)}
-        onMouseLeave={() => setSettingsMenuOpen(false)}
-      >
-        <DropdownMenu
-          open={settingsMenuOpen}
-          onOpenChange={setSettingsMenuOpen}
+      <div className="border-t border-sidebar-border p-2.5">
+        {/* 通知按钮 */}
+        <Button
+          variant="ghost"
+          className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150 mb-1 ${collapsed ? "" : "min-w-0 overflow-hidden"}`}
+          onClick={() => openNotificationCenter()}
         >
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150 ${collapsed ? "" : "min-w-0 overflow-hidden"}`}
-              onClick={() => openSettingsDialog({ tab: "personalization" })}
-            >
-              <Settings className="w-4 h-4" />
-              {!collapsed && (
-                <span className="min-w-0 truncate text-sm font-medium">
-                  {t("sidebar.settings")}
-                </span>
-              )}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            side="top"
-            align="start"
-            className="w-72 p-0 rounded-2xl border border-border shadow-lg"
-          >
-            <div className="p-4 border-b border-border">
-              <div className="flex items-center gap-3 mb-3">
-                <Avatar className="h-12 w-12">
-                  <AvatarImage
-                    src={user?.email ? `https://avatar.vercel.sh/${encodeURIComponent(user.email)}` : undefined}
-                    alt={user?.displayName || user?.email || t("account.title")}
-                  />
-                  <AvatarFallback>{(user?.displayName || user?.email || "U").slice(0, 1).toUpperCase()}</AvatarFallback>
-                </Avatar>
-                <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-sm text-foreground truncate">
-                    {user?.displayName || user?.email || t("userMenu.guestName")}
-                  </div>
-                  <div className="text-xs text-muted-foreground truncate">
-                    {user?.email || t("userMenu.guestSubtitle")}
-                  </div>
-                </div>
-              </div>
-              <div className="bg-accent/50 rounded-xl p-3 border border-border">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <Coins className="w-4 h-4 text-amber-500" />
-                    <span className="text-sm font-medium text-foreground">
-                      {t("sidebar.credits")}
-                    </span>
-                  </div>
-                  <span className="text-sm font-bold text-foreground">
-                    {creditBalanceLabel}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Crown className="w-4 h-4 text-purple-500" />
-                  <span className="text-xs text-muted-foreground">
-                    {t("sidebar.proMember")}
-                  </span>
-                </div>
-              </div>
-            </div>
-            <div className="p-2">
-              <DropdownMenuItem
-                className="rounded-lg py-2.5 px-3"
-                onSelect={() => openNotificationCenter()}
-              >
-                <Bell className="w-4 h-4 mr-2 text-muted-foreground" />
-                <span className="text-sm">{t("sidebar.notifications")}</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="rounded-lg py-2.5 px-3"
-                onSelect={() => openSettingsDialog({ tab: "settings" })}
-              >
-                <Settings className="w-4 h-4 mr-2 text-muted-foreground" />
-                <span className="text-sm">{t("sidebar.settings")}</span>
-              </DropdownMenuItem>
-            </div>
-          </DropdownMenuContent>
-        </DropdownMenu>
+          <span className="relative">
+            <Bell className={`w-4 h-4 ${unreadCount > 0 ? "animate-bounce" : ""}`} />
+            {unreadCount > 0 && (
+              <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full" />
+            )}
+          </span>
+          {!collapsed && (
+            <span className="min-w-0 truncate text-sm font-medium">
+              {t("sidebar.notifications")}
+            </span>
+          )}
+        </Button>
+
+        {/* 设置按钮 */}
+        <Button
+          variant="ghost"
+          className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150 ${collapsed ? "" : "min-w-0 overflow-hidden"}`}
+          onClick={() => openSettingsDialog({ tab: "personalization" })}
+        >
+          <Settings className="w-4 h-4" />
+          {!collapsed && (
+            <span className="min-w-0 truncate text-sm font-medium">
+              {t("sidebar.settings")}
+            </span>
+          )}
+        </Button>
       </div>
 
       <Dialog open={tasksDialogOpen} onOpenChange={setTasksDialogOpen}>

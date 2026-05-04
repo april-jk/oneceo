@@ -4,10 +4,13 @@ import {
   type AppAuthUser,
   loginAppUser,
   logoutAppUser,
+  removeAppUserAvatar,
   registerAppUser,
   resolveAppAuthSession,
+  startAppAuthOAuth,
   sendRegisterVerificationCode,
   type AppUserPersonalization,
+  uploadAppUserAvatar,
   updateAppUserProfile,
 } from "@/lib/auth-client";
 
@@ -25,6 +28,7 @@ type AuthContextValue = {
   credits: UserCredits | null;
   refreshCredits: () => Promise<void>;
   login: (input: { email: string; password: string }) => Promise<AppAuthUser>;
+  startOAuth: (input: { provider: "google" | "github"; redirect?: string }) => Promise<void>;
   sendRegisterCode: (input: { email: string }) => Promise<{ cooldownSeconds?: number; expiresInSeconds?: number }>;
   register: (input: {
     email: string;
@@ -36,6 +40,8 @@ type AuthContextValue = {
     displayName?: string;
     personalization?: AppUserPersonalization;
   }) => Promise<AppAuthUser>;
+  uploadAvatar: (file: File) => Promise<AppAuthUser>;
+  removeAvatar: () => Promise<AppAuthUser>;
   logout: () => Promise<void>;
   refresh: () => Promise<AppAuthUser | null>;
 };
@@ -96,6 +102,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await refreshCredits();
       return nextUser;
     },
+    startOAuth: async (input) => {
+      const result = await startAppAuthOAuth(input);
+      window.location.assign(result.authUrl);
+    },
     sendRegisterCode: async (input) => await sendRegisterVerificationCode(input),
     register: async (input) => {
       setStatus("loading");
@@ -107,6 +117,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     updateProfile: async (input) => {
       const nextUser = await updateAppUserProfile(input);
+      setUser(nextUser);
+      setStatus("authenticated");
+      return nextUser;
+    },
+    uploadAvatar: async (file) => {
+      const nextUser = await uploadAppUserAvatar(file);
+      setUser(nextUser);
+      setStatus("authenticated");
+      return nextUser;
+    },
+    removeAvatar: async () => {
+      const nextUser = await removeAppUserAvatar();
       setUser(nextUser);
       setStatus("authenticated");
       return nextUser;

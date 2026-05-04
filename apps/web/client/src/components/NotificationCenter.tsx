@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Bell, Check, CheckCheck, X } from 'lucide-react';
+import { Bell, Check, CheckCheck, X, ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   OPEN_NOTIFICATION_CENTER_EVENT,
   CLOSE_NOTIFICATION_CENTER_EVENT,
+  notifyNotificationRead,
 } from '@/lib/notification-center-events';
 
 interface Notification {
@@ -26,12 +27,15 @@ export function NotificationCenter() {
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
-  const [filter, setFilter] = useState<'all' | 'unread'>('all');
+  const [selectedNotification, setSelectedNotification] = useState<Notification | null>(null);
 
   // 监听打开/关闭事件
   useEffect(() => {
     const handleOpen = () => setOpen(true);
-    const handleClose = () => setOpen(false);
+    const handleClose = () => {
+      setOpen(false);
+      setSelectedNotification(null);
+    };
 
     window.addEventListener(OPEN_NOTIFICATION_CENTER_EVENT, handleOpen);
     window.addEventListener(CLOSE_NOTIFICATION_CENTER_EVENT, handleClose);
@@ -49,9 +53,6 @@ export function NotificationCenter() {
         page: String(pageNum),
         pageSize: '20',
       });
-      if (filter === 'unread') {
-        params.append('unreadOnly', 'true');
-      }
 
       const response = await fetch(`/api/notifications?${params}`, {
         credentials: 'include',
@@ -59,10 +60,27 @@ export function NotificationCenter() {
       if (!response.ok) throw new Error('获取通知失败');
       const data = await response.json();
 
+      // 按未读优先、优先级、时间倒序排序
+      const priorityOrder: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
+      const sortedItems = (data.items || []).sort((a: Notification, b: Notification) => {
+        // 1. 未读优先
+        if (a.isRead !== b.isRead) {
+          return a.isRead ? 1 : -1;
+        }
+        // 2. 优先级（urgent > high > normal > low）
+        const priorityA = priorityOrder[a.priority] ?? 2;
+        const priorityB = priorityOrder[b.priority] ?? 2;
+        if (priorityA !== priorityB) {
+          return priorityA - priorityB;
+        }
+        // 3. 时间倒序（最新优先）
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+
       if (append) {
-        setNotifications((prev) => [...prev, ...data.items]);
+        setNotifications((prev) => [...prev, ...sortedItems]);
       } else {
-        setNotifications(data.items || []);
+        setNotifications(sortedItems);
       }
       setUnreadCount(data.unreadCount || 0);
       setHasMore((data.items || []).length === 20);
@@ -71,7 +89,7 @@ export function NotificationCenter() {
     } finally {
       setLoading(false);
     }
-  }, [filter]);
+  }, []);
 
   // 获取未读数量
   const fetchUnreadCount = useCallback(async () => {
@@ -91,7 +109,7 @@ export function NotificationCenter() {
   useEffect(() => {
     if (open) {
       setPage(1);
-      setFilter('all');
+      setSelectedNotification(null);
       fetchNotifications(1);
     }
   }, [open, fetchNotifications]);
@@ -114,6 +132,14 @@ export function NotificationCenter() {
         prev.map((n) => (n.id === id ? { ...n, isRead: true } : n))
       );
       setUnreadCount((prev) => Math.max(0, prev - 1));
+
+      // 更新选中的通知
+      if (selectedNotification?.id === id) {
+        setSelectedNotification((prev) => prev ? { ...prev, isRead: true } : null);
+      }
+
+      // 通知侧边栏刷新未读数量
+      notifyNotificationRead();
     } catch (error) {
       console.error('标记已读失败:', error);
     }
@@ -130,9 +156,27 @@ export function NotificationCenter() {
 
       setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
       setUnreadCount(0);
+
+      // 更新选中的通知
+      if (selectedNotification) {
+        setSelectedNotification((prev) => prev ? { ...prev, isRead: true } : null);
+      }
     } catch (error) {
       console.error('标记全部已读失败:', error);
     }
+  };
+
+  // 点击通知
+  const handleNotificationClick = (notification: Notification) => {
+    setSelectedNotification(notification);
+    if (!notification.isRead) {
+      handleMarkAsRead(notification.id);
+    }
+  };
+
+  // 返回列表
+  const handleBackToList = () => {
+    setSelectedNotification(null);
   };
 
   // 加载更多
@@ -146,10 +190,10 @@ export function NotificationCenter() {
   const getPriorityColor = (priority: string) => {
     switch (priority) {
       case 'urgent': return 'text-red-500';
-      case 'high': return 'text-orange-500';
-      case 'normal': return 'text-blue-500';
+      case 'high': return 'text-amber-500';
+      case 'normal': return 'text-gray-500';
       case 'low': return 'text-gray-400';
-      default: return 'text-gray-400';
+      default: return 'text-gray-500';
     }
   };
 
@@ -161,6 +205,28 @@ export function NotificationCenter() {
       case 'task': return '📋';
       case 'security': return '🔒';
       default: return '📢';
+    }
+  };
+
+  // 获取类型标签
+  const getTypeLabel = (type: string) => {
+    switch (type) {
+      case 'system': return '系统通知';
+      case 'billing': return '计费通知';
+      case 'task': return '任务通知';
+      case 'security': return '安全通知';
+      default: return '通知';
+    }
+  };
+
+  // 获取优先级标签
+  const getPriorityLabel = (priority: string) => {
+    switch (priority) {
+      case 'urgent': return '紧急';
+      case 'high': return '高';
+      case 'normal': return '普通';
+      case 'low': return '低';
+      default: return '普通';
     }
   };
 
@@ -180,6 +246,17 @@ export function NotificationCenter() {
     return date.toLocaleDateString();
   };
 
+  // 格式化完整时间
+  const formatFullTime = (dateStr: string) => {
+    return new Date(dateStr).toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
   if (!open) return null;
 
   return (
@@ -195,16 +272,29 @@ export function NotificationCenter() {
         {/* 头部 */}
         <div className="flex items-center justify-between px-4 py-3 border-b">
           <div className="flex items-center gap-2">
-            <Bell className="w-5 h-5" />
-            <h2 className="text-lg font-semibold">通知中心</h2>
-            {unreadCount > 0 && (
+            {selectedNotification ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={handleBackToList}
+              >
+                <ArrowLeft className="w-4 h-4" />
+              </Button>
+            ) : (
+              <Bell className="w-5 h-5" />
+            )}
+            <h2 className="text-lg font-semibold">
+              {selectedNotification ? '通知详情' : '通知中心'}
+            </h2>
+            {!selectedNotification && unreadCount > 0 && (
               <Badge variant="secondary" className="ml-2">
                 {unreadCount > 99 ? '99+' : unreadCount}
               </Badge>
             )}
           </div>
           <div className="flex items-center gap-2">
-            {unreadCount > 0 && (
+            {!selectedNotification && unreadCount > 0 && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -225,116 +315,112 @@ export function NotificationCenter() {
           </div>
         </div>
 
-        {/* 筛选标签 */}
-        <div className="flex gap-2 px-4 py-2 border-b">
-          <Button
-            variant={filter === 'all' ? 'default' : 'ghost'}
-            size="sm"
-            onClick={() => { setFilter('all'); setPage(1); fetchNotifications(1); }}
-          >
-            全部
-          </Button>
-          <Button
-            variant={filter === 'unread' ? 'default' : 'ghost'}
-            size="sm"
-            onClick={() => { setFilter('unread'); setPage(1); fetchNotifications(1); }}
-          >
-            未读
-            {unreadCount > 0 && (
-              <Badge variant="secondary" className="ml-1">
-                {unreadCount}
-              </Badge>
-            )}
-          </Button>
-        </div>
+        {/* 通知详情视图 */}
+        {selectedNotification ? (
+          <div className="flex-1 overflow-y-auto">
+            <div className="p-5">
+              {/* 标题区域 */}
+              <div className="mb-4">
+                <h2 className="text-base font-semibold text-gray-900 mb-2">
+                  {selectedNotification.title}
+                </h2>
+                <div className="flex items-center gap-3 text-xs text-gray-400">
+                  <span>{formatFullTime(selectedNotification.publishedAt || selectedNotification.createdAt)}</span>
+                  <span>·</span>
+                  <span>{getTypeLabel(selectedNotification.type)}</span>
+                </div>
+              </div>
 
-        {/* 通知列表 */}
-        <ScrollArea className="flex-1">
-          {loading && notifications.length === 0 ? (
-            <div className="flex items-center justify-center h-32 text-gray-500">
-              加载中...
+              {/* 分割线 */}
+              <div className="border-t border-gray-100 mb-4" />
+
+              {/* 通知内容 */}
+              <div className="text-sm text-gray-600 leading-relaxed whitespace-pre-wrap">
+                {selectedNotification.content}
+              </div>
             </div>
-          ) : notifications.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-32 text-gray-500">
-              <Bell className="w-8 h-8 mb-2 opacity-50" />
-              <p>暂无通知</p>
-            </div>
-          ) : (
-            <div className="divide-y">
-              {notifications.map((notification) => (
-                <div
-                  key={notification.id}
-                  className={`px-4 py-3 hover:bg-gray-50 cursor-pointer transition-colors ${
-                    !notification.isRead ? 'bg-blue-50' : ''
-                  }`}
-                  onClick={() => {
-                    if (!notification.isRead) {
-                      handleMarkAsRead(notification.id);
-                    }
-                  }}
-                >
-                  <div className="flex items-start gap-3">
-                    <span className="text-lg">{getTypeIcon(notification.type)}</span>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h3
-                          className={`text-sm font-medium truncate ${
-                            !notification.isRead ? 'text-gray-900' : 'text-gray-600'
-                          }`}
-                        >
-                          {notification.title}
-                        </h3>
+          </div>
+        ) : (
+          <>
+            {/* 通知列表 */}
+            <ScrollArea className="flex-1">
+              {loading && notifications.length === 0 ? (
+                <div className="flex items-center justify-center h-32 text-gray-500">
+                  加载中...
+                </div>
+              ) : notifications.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-32 text-gray-500">
+                  <Bell className="w-8 h-8 mb-2 opacity-50" />
+                  <p>暂无通知</p>
+                </div>
+              ) : (
+                <div className="divide-y">
+                  {notifications.map((notification) => (
+                    <div
+                      key={notification.id}
+                      className={`px-4 py-3 hover:bg-gray-50 cursor-pointer transition-colors ${
+                        !notification.isRead ? 'bg-blue-50' : ''
+                      }`}
+                      onClick={() => handleNotificationClick(notification)}
+                    >
+                      <div className="flex items-start gap-3">
+                        <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 mt-1.5 ${
+                          notification.isRead ? 'bg-gray-300' : 'bg-gray-900'
+                        }`} />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h3
+                              className={`text-sm font-medium truncate ${
+                                !notification.isRead ? 'text-gray-900' : 'text-gray-600'
+                              }`}
+                            >
+                              {notification.title}
+                            </h3>
+                          </div>
+                          <p className="text-sm text-gray-500 mt-1 line-clamp-2">
+                            {notification.content}
+                          </p>
+                          <div className="flex items-center gap-2 mt-2">
+                            <span className="text-xs text-gray-400">
+                              {formatTime(notification.publishedAt || notification.createdAt)}
+                            </span>
+                          </div>
+                        </div>
                         {!notification.isRead && (
-                          <span className="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0" />
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleMarkAsRead(notification.id);
+                            }}
+                          >
+                            <Check className="w-4 h-4" />
+                          </Button>
                         )}
                       </div>
-                      <p className="text-sm text-gray-500 mt-1 line-clamp-2">
-                        {notification.content}
-                      </p>
-                      <div className="flex items-center gap-2 mt-2">
-                        <span className="text-xs text-gray-400">
-                          {formatTime(notification.publishedAt || notification.createdAt)}
-                        </span>
-                        <span className={`text-xs ${getPriorityColor(notification.priority)}`}>
-                          {notification.priority === 'urgent' ? '紧急' :
-                           notification.priority === 'high' ? '高' :
-                           notification.priority === 'normal' ? '普通' : '低'}
-                        </span>
-                      </div>
                     </div>
-                    {!notification.isRead && (
+                  ))}
+
+                  {/* 加载更多 */}
+                  {hasMore && (
+                    <div className="px-4 py-3">
                       <Button
                         variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleMarkAsRead(notification.id);
-                        }}
+                        className="w-full"
+                        onClick={handleLoadMore}
+                        disabled={loading}
                       >
-                        <Check className="w-4 h-4" />
+                        {loading ? '加载中...' : '加载更多'}
                       </Button>
-                    )}
-                  </div>
-                </div>
-              ))}
-
-              {/* 加载更多 */}
-              {hasMore && (
-                <div className="px-4 py-3">
-                  <Button
-                    variant="ghost"
-                    className="w-full"
-                    onClick={handleLoadMore}
-                    disabled={loading}
-                  >
-                    {loading ? '加载中...' : '加载更多'}
-                  </Button>
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
-          )}
-        </ScrollArea>
+            </ScrollArea>
+          </>
+        )}
       </div>
     </div>
   );

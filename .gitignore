@@ -16,10 +16,12 @@ build/
 # Environment variables
 .env
 .env.local
+.env.localhost
 .env.development.local
 .env.test.local
 .env.production.local
 .env.develop
+.env.staging
 .env.product
 
 # Logs

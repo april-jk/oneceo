@@ -5224,6 +5224,14 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       currentSessionId: sessionId,
       locationPath: location,
     });
+    const routeState = resolveSessionRouteState({
+      locationPath: location,
+      search,
+    });
+    if (routeState.createNewToken) {
+      // /new-task?new=... must always create a fresh session instead of reusing stale state.
+      activeSessionId = '';
+    }
     if (activeSessionId && activeSessionId !== sessionId) {
       bindSessionId(activeSessionId);
     }
@@ -5234,7 +5242,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         await interruptCurrentRun(activeSessionId || undefined);
       }
       let shouldBindCreatedSession = false;
-      const initialProjectId = !sessionId ? initialProjectIdForNewSession || undefined : undefined;
+      const initialProjectId = !activeSessionId ? initialProjectIdForNewSession || undefined : undefined;
       if (!activeSessionId) {
         const created = await createTaskCreationDraftSession(text);
         const createdSessionId = (created?.id || '').trim();
@@ -5456,7 +5464,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       let prePersistedUserInput = false;
       if (activeSessionId) {
         try {
-          const initialProjectId = !sessionId ? initialProjectIdForNewSession || undefined : undefined;
+          const initialProjectId = !activeSessionId ? initialProjectIdForNewSession || undefined : undefined;
           await createTaskCreationSession({
             sessionId: activeSessionId,
             mode: 'sandbox',
@@ -5615,6 +5623,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     applyPendingConnectorDraftAsync,
     bindSessionId,
     location,
+    search,
     orchestratorSessionId,
     opencodeSessionId,
     refreshRuntimeStatus,

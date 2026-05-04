@@ -1659,6 +1659,7 @@ export const creditActivationCodeUses = pgTable(
   (table) => ({
     codeIdIdx: index('idx_activation_code_uses_code_id').on(table.activationCodeId),
     userIdIdx: index('idx_activation_code_uses_user_id').on(table.userId),
+    userCodeUnique: uniqueIndex('idx_activation_code_uses_user_code_unique').on(table.activationCodeId, table.userId),
   })
 );
 

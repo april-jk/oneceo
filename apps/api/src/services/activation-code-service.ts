@@ -422,47 +422,50 @@ export class ActivationCodeService {
     code: string,
     userId: string
   ): Promise<{ success: boolean; creditsGranted: number; newBalance: number; message: string }> {
-    // 查找激活码
-    const activationCode = await db
-      .select()
-      .from(creditActivationCodes)
-      .where(eq(creditActivationCodes.code, code))
-      .limit(1);
-
-    if (activationCode.length === 0) {
-      return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码不存在' };
+    const normalizedCode = String(code ?? '').trim().toUpperCase();
+    if (!normalizedCode) {
+      return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码不能为空' };
     }
 
-    const ac = activationCode[0];
-
-    // 检查状态
-    if (ac.status === 'disabled') {
-      return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码已被禁用' };
-    }
-
-    if (ac.status === 'used' && ac.maxUses === 1) {
-      return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码已被使用' };
-    }
-
-    // 检查是否过期
-    if (ac.expiresAt && ac.expiresAt < new Date()) {
-      // 更新状态为过期
-      await db
-        .update(creditActivationCodes)
-        .set({ status: 'expired', updatedAt: new Date() })
-        .where(eq(creditActivationCodes.id, ac.id));
-      return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码已过期' };
-    }
-
-    // 检查使用次数
-    if (ac.currentUses >= ac.maxUses) {
-      return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码已达到最大使用次数' };
-    }
-
-    // 检查用户是否已使用过（单次使用码）
-    if (ac.maxUses === 1) {
-      const existingUse = await db
+    return await db.transaction(async (trx) => {
+      const activationCode = await trx
         .select()
+        .from(creditActivationCodes)
+        .where(eq(creditActivationCodes.code, normalizedCode))
+        .limit(1);
+      const ac = activationCode[0] ?? null;
+      if (!ac) {
+        return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码不存在' };
+      }
+      // 锁定该激活码行，避免并发重复兑换和次数超发。
+      await trx.execute(sql`select id from credit_activation_codes where id = ${ac.id} for update`);
+
+      // 检查状态
+      if (ac.status === 'disabled') {
+        return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码已被禁用' };
+      }
+
+      if (ac.status === 'used' && ac.maxUses === 1) {
+        return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码已被使用' };
+      }
+
+      // 检查是否过期
+      if (ac.expiresAt && ac.expiresAt < new Date()) {
+        await trx
+          .update(creditActivationCodes)
+          .set({ status: 'expired', updatedAt: new Date() })
+          .where(eq(creditActivationCodes.id, ac.id));
+        return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码已过期' };
+      }
+
+      // 检查使用次数
+      if (ac.currentUses >= ac.maxUses) {
+        return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码已达到最大使用次数' };
+      }
+
+      // 同一用户同一激活码只能兑换一次（无论 maxUses）
+      const existingUse = await trx
+        .select({ id: creditActivationCodeUses.id })
         .from(creditActivationCodeUses)
         .where(
           and(
@@ -471,14 +474,10 @@ export class ActivationCodeService {
           )
         )
         .limit(1);
-
       if (existingUse.length > 0) {
         return { success: false, creditsGranted: 0, newBalance: 0, message: '您已使用过该激活码' };
       }
-    }
 
-    // 执行兑换（事务）
-    return await db.transaction(async (trx) => {
       // 增加用户积分
       const creditResult = await billingService.addCredits(userId, ac.creditsAmount, 'recharge', {
         sourceType: 'activation_code',

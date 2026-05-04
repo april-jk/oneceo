@@ -8,6 +8,7 @@ import { userConnectorService } from './user-connector-service';
 import { customApiBrokerService } from './custom-api-broker-service';
 import { customApiMcpToolService } from './custom-api-mcp-tool-service';
 import { customMcpRemoteClientService } from './custom-mcp-remote-client-service';
+import { assertCustomApiEnabled } from './custom-api-feature-flag';
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -32,6 +33,7 @@ type HostedProviderRequest = {
   backendProvider: string;
   method: string;
   params: Record<string, unknown>;
+  agentRunId?: string | null;
 };
 
 type HostedProviderHostDeps = {
@@ -70,6 +72,7 @@ type HostedProviderHostDeps = {
         profileSecret: any;
         profileMetadata: Record<string, unknown>;
         catalogItem: any;
+        agentRunId?: string | null;
       };
     }): Promise<unknown>;
   };
@@ -157,6 +160,12 @@ export class HostedProviderHostService {
       backendProvider,
       method,
       params: pickObject(payload.params),
+      agentRunId:
+        asText(payload.agentRunId) ||
+        asText(payload.runId) ||
+        asText(pickObject(payload.params).agentRunId) ||
+        asText(pickObject(payload.params).runId) ||
+        null,
     };
   }
 
@@ -165,6 +174,7 @@ export class HostedProviderHostService {
       case 'vercel':
         return this.executeVercel(input);
       case 'figma':
+      case 'google_super':
       case 'github':
       case 'notion':
       case 'slack':
@@ -234,6 +244,7 @@ export class HostedProviderHostService {
         taskSessionId: input.taskSessionId,
         userId,
         profileId,
+        agentRunId: input.agentRunId || null,
         profileSecret: profile.secret || null,
         profileMetadata: pickObject(profile.metadataJson),
         catalogItem,
@@ -242,6 +253,7 @@ export class HostedProviderHostService {
   }
 
   private async executeCustomApi(input: HostedProviderRequest) {
+    assertCustomApiEnabled();
     const { profileId, userId } = await this.loadAttachedContext(input, 'custom_api');
     if (input.method === 'initialize') {
       return {

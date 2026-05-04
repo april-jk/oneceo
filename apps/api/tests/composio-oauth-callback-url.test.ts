@@ -47,3 +47,17 @@ test('Composio OAuth callback falls back to FRONTEND_URL when dedicated base is 
     'http://oneceo.ai:3000/figma/callback?settings=open&connector=figma'
   );
 });
+
+test('Composio OAuth callback supports Google Super fixed connector path', () => {
+  process.env.COMPOSIO_OAUTH_CALLBACK_BASE_URL = 'https://preview.oneceo.ai';
+
+  const callbackUrl = resolveComposioOauthCallbackUrl(
+    'google_super',
+    'http://localhost:3000/google-super/callback?settings=open&connector=google_super&targetSessionId=session-google-1'
+  );
+
+  assert.equal(
+    callbackUrl.toString(),
+    'https://preview.oneceo.ai/google-super/callback?settings=open&connector=google_super&targetSessionId=session-google-1'
+  );
+});

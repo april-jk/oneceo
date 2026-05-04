@@ -7,6 +7,7 @@ import { connectorSecretService } from './connector-secret-service';
 import { connectorStorageBootstrap } from './connector-storage-bootstrap';
 import { connectorRedisCacheService } from './connector-redis-cache-service';
 import { composioConnectorService } from './composio-connector-service';
+import { assertCustomApiEnabled } from './custom-api-feature-flag';
 import {
   type ConnectorAccountMaterial,
   type ConnectorAccountSecret,
@@ -469,6 +470,7 @@ const COMPOSIO_CALLBACK_PATHS: Partial<Record<ConnectorKey, string>> = {
   supabase: '/supabase/callback',
   slack: '/slack/callback',
   figma: '/figma/callback',
+  google_super: '/google-super/callback',
 };
 
 function resolveComposioCallbackBaseUrl(): string {
@@ -989,6 +991,9 @@ export class UserConnectorService {
   }
 
   async createProfile(userId: string, connectorKey: ConnectorKey, input: SaveConnectorInput) {
+    if (connectorKey === 'custom_api') {
+      assertCustomApiEnabled();
+    }
     const saved = await this.saveProfileInternal(userId, connectorKey, null, input);
     await this.invalidateMeCache(userId);
     return saved;
@@ -998,6 +1003,9 @@ export class UserConnectorService {
     const existing = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
     if (!existing) {
       throw new Error('Connector profile does not exist');
+    }
+    if (existing.connectorKey === 'custom_api') {
+      assertCustomApiEnabled();
     }
     const saved = await this.saveProfileInternal(
       userId,
@@ -1014,6 +1022,9 @@ export class UserConnectorService {
     const existing = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
     if (!existing) {
       throw new Error('Connector profile does not exist');
+    }
+    if (existing.connectorKey === 'custom_api') {
+      assertCustomApiEnabled();
     }
     await userConnectorProfileDAO.delete(profileId, userId);
     if (existing.isDefault) {
@@ -1037,6 +1048,9 @@ export class UserConnectorService {
     if (!existing) {
       throw new Error('Connector profile does not exist');
     }
+    if (existing.connectorKey === 'custom_api') {
+      assertCustomApiEnabled();
+    }
     await userConnectorProfileDAO.clearDefaultForConnector(userId, existing.connectorKey);
     const saved = await userConnectorProfileDAO.update(profileId, userId, { isDefault: true } as any);
     if (!saved) {
@@ -1051,6 +1065,9 @@ export class UserConnectorService {
     const existing = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
     if (!existing) {
       throw new Error('Connector profile does not exist');
+    }
+    if (existing.connectorKey === 'custom_api') {
+      assertCustomApiEnabled();
     }
     const catalogItem = connectorRegistry.getCatalogItem(existing.connectorKey);
     const saved = await userConnectorProfileDAO.update(profileId, userId, {

@@ -1,5 +1,6 @@
 import express from 'express';
 import { currentUserResolver } from '../services/current-user-resolver';
+import { isCustomApiEnabled } from '../services/custom-api-feature-flag';
 import { customApiConnectorService } from '../services/custom-api-connector-service';
 import { getPublicErrorMessage } from '../utils/error-response';
 
@@ -17,6 +18,16 @@ function asStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean);
 }
+
+router.use((req, res, next) => {
+  if (isCustomApiEnabled()) {
+    return next();
+  }
+  return res.status(404).json({
+    success: false,
+    error: getPublicErrorMessage('custom_api_disabled'),
+  });
+});
 
 router.get('/definitions', async (req, res) => {
   try {

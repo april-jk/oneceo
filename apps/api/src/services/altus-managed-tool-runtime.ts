@@ -708,8 +708,14 @@ export class AltusManagedToolRuntime {
     return relative && relative !== '' ? relative : '.';
   }
 
-  private parseCompletionAttachments(raw: unknown) {
-    if (!Array.isArray(raw)) return [];
+  private parseCompletionAttachments(raw: unknown, options?: { requireArray?: boolean }) {
+    if (raw == null) return [];
+    if (!Array.isArray(raw)) {
+      if (options?.requireArray) {
+        throw new Error('complete_task_attachments_invalid');
+      }
+      return [];
+    }
     const deduped = new Map<string, ManagedCompletionAttachment>();
     for (const item of raw.slice(0, 8)) {
       if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
@@ -730,6 +736,26 @@ export class AltusManagedToolRuntime {
       }
     }
     return Array.from(deduped.values());
+  }
+
+  private shouldRequireDownloadableAttachments() {
+    if (this.hasActiveSkill('ppt-workflow')) {
+      return true;
+    }
+
+    const profile = this.input.taskIntentProfile;
+    if (profile?.scriptArtifactRequested || profile?.emailTemplateRequested) {
+      return false;
+    }
+
+    const currentInput = asText(this.input.userInput).toLowerCase();
+    if (!currentInput) return false;
+    const artifactMentioned =
+      /\.(pptx|docx|xlsx|pdf|zip)\b/i.test(currentInput) ||
+      /(pptx|powerpoint|演示文稿|幻灯片|docx|word 文档|excel 表格|工作簿|pdf|压缩包)/i.test(currentInput);
+    const deliveryIntent =
+      /(生成|创建|输出|导出|交付|给我一份|给我一个|produce|generate|create|export|deliver)/i.test(currentInput);
+    return artifactMentioned && deliveryIntent;
   }
 
   private assertPptxAttachmentsWereRendered(attachments: ManagedCompletionAttachment[]) {
@@ -1852,7 +1878,12 @@ export class AltusManagedToolRuntime {
       const verification = Array.isArray(rawArgs.verification)
         ? rawArgs.verification.map((item) => asText(item)).filter(Boolean).slice(0, 8)
         : [];
-      const attachments = this.parseCompletionAttachments(rawArgs.attachments);
+      const attachments = this.parseCompletionAttachments(rawArgs.attachments, {
+        requireArray: Object.prototype.hasOwnProperty.call(rawArgs, 'attachments'),
+      });
+      if (this.shouldRequireDownloadableAttachments() && attachments.length === 0) {
+        throw new Error('complete_task_downloadable_requires_attachments');
+      }
       this.assertPptxAttachmentsWereRendered(attachments);
       return {
         type: 'complete',

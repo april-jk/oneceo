@@ -29,6 +29,14 @@ export function classifyManagedToolErrorCode(rawError: string) {
   const normalized = asText(rawError).toLowerCase();
   if (normalized.includes('invalid_tool_arguments_json')) return 'invalid_tool_arguments_json';
   if (normalized.startsWith('unsupported_tool:')) return 'unsupported_tool';
+  if (normalized.includes('complete_task_attachments_invalid')) return 'complete_task_attachments_invalid';
+  if (normalized.includes('complete_task_downloadable_requires_attachments')) {
+    return 'complete_task_downloadable_requires_attachments';
+  }
+  if (normalized.includes('complete_task_attachment_path_invalid')) return 'complete_task_attachment_path_invalid';
+  if (normalized.includes('complete_task_pptx_requires_render_pptx_from_instructions')) {
+    return 'complete_task_pptx_requires_render_pptx_from_instructions';
+  }
   if (normalized.includes('managed_run_missing_sandbox_context') || normalized.includes('sandbox_not_ready')) {
     return 'sandbox_not_ready';
   }
@@ -44,6 +52,10 @@ export function classifyManagedToolErrorCode(rawError: string) {
 export function isManagedToolErrorRetryable(errorCode: string) {
   return (
     errorCode === 'invalid_tool_arguments_json' ||
+    errorCode === 'complete_task_attachments_invalid' ||
+    errorCode === 'complete_task_downloadable_requires_attachments' ||
+    errorCode === 'complete_task_attachment_path_invalid' ||
+    errorCode === 'complete_task_pptx_requires_render_pptx_from_instructions' ||
     errorCode === 'sandbox_not_ready' ||
     errorCode === 'mcp_provider_not_found' ||
     errorCode === 'connector_guide_required' ||
@@ -83,12 +95,29 @@ export function buildContentForModel(input: {
       reason: asText(input.content) || 'cancelled',
     });
   }
+  const errorCode = input.errorCode || 'tool_execution_failed';
   return JSON.stringify({
     status: 'error',
-    errorCode: input.errorCode || 'tool_execution_failed',
-    error: input.errorMessage || 'Tool execution failed.',
-    instruction: buildErrorInstruction(input.errorCode || 'tool_execution_failed', input.toolName),
+    errorCode,
+    error: buildErrorDetail(errorCode, input.errorMessage),
+    instruction: buildErrorInstruction(errorCode, input.toolName),
   });
+}
+
+function buildErrorDetail(errorCode: string, rawError?: string) {
+  const normalizedRawError = asText(rawError);
+  switch (errorCode) {
+    case 'complete_task_attachments_invalid':
+      return 'The complete_task.attachments field must be a JSON array. Do not pass a stringified array or any other non-array structure.';
+    case 'complete_task_downloadable_requires_attachments':
+      return 'This task is asking for a downloadable artifact, but complete_task was called without attachments.';
+    case 'complete_task_attachment_path_invalid':
+      return 'Each complete_task attachment must use a non-empty path that points to a file inside the workspace, not the workspace root.';
+    case 'complete_task_pptx_requires_render_pptx_from_instructions':
+      return 'PPTX attachments must come from render_pptx_from_instructions before complete_task can deliver them.';
+    default:
+      return normalizedRawError || 'Tool execution failed.';
+  }
 }
 
 function buildErrorInstruction(errorCode: string, toolName: string) {
@@ -97,6 +126,14 @@ function buildErrorInstruction(errorCode: string, toolName: string) {
       return 'Retry this tool call with valid JSON object arguments.';
     case 'unsupported_tool':
       return `Tool ${toolName} is not available. Choose a supported tool or a different path.`;
+    case 'complete_task_attachments_invalid':
+      return 'Re-run complete_task with attachments as a real JSON array. Each item should include the workspace-relative file path, and optional name or mimeType.';
+    case 'complete_task_downloadable_requires_attachments':
+      return 'Confirm the final downloadable file exists in the workspace, then re-run complete_task with that file path in complete_task.attachments.';
+    case 'complete_task_attachment_path_invalid':
+      return 'Fix the attachment paths to use non-empty workspace-relative file paths that point to the generated deliverable files.';
+    case 'complete_task_pptx_requires_render_pptx_from_instructions':
+      return 'Call render_pptx_from_instructions first, then attach the returned PPTX path in complete_task.attachments.';
     case 'sandbox_not_ready':
       return 'Sandbox is not ready. Recover or wait for the sandbox before retrying.';
     case 'mcp_provider_not_found':

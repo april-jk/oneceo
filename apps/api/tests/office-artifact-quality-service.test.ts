@@ -57,8 +57,8 @@ function zip(entries: Record<string, string>): Buffer {
   return Buffer.concat([...localParts, centralDirectory, eocd]);
 }
 
-function docxBytes() {
-  const paragraphs = [
+function docxBytes(paragraphs?: string[]) {
+  const content = paragraphs || [
     'AI 履约平台商业计划书',
     '执行摘要',
     '本计划面向企业 AI 项目管理场景，提供任务拆解、执行跟踪、交付验证和审计治理能力。',
@@ -68,11 +68,13 @@ function docxBytes() {
     '第一阶段完成核心工作流，第二阶段完善质量门，第三阶段接入组织级审计。',
     '参考资料 https://example.com/report',
   ];
-  const body = paragraphs
+  const body = content
     .map((paragraph) => `<w:p><w:r><w:t>${paragraph}</w:t></w:r></w:p>`)
     .join('');
   return zip({
     '[Content_Types].xml': '<Types></Types>',
+    'docProps/core.xml':
+      '<core>alpha-001 beta-002 gamma-003 delta-004 epsilon-005 zeta-006 eta-007 theta-008 iota-009 kappa-010 lambda-011 mu-012 nu-013 xi-014 omicron-015 pi-016 rho-017 sigma-018 tau-019 upsilon-020 phi-021 chi-022 psi-023 omega-024</core>',
     'word/document.xml': `<w:document><w:body>${body}</w:body></w:document>`,
   });
 }
@@ -97,6 +99,26 @@ function xlsxBytes(options?: { formulas?: boolean; sourceSheet?: boolean }) {
   return zip(entries);
 }
 
+function xlsxInlineStringBytes() {
+  return zip({
+    '[Content_Types].xml': '<Types></Types>',
+    'xl/workbook.xml': '<workbook><sheets><sheet name="Summary" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    'xl/worksheets/sheet1.xml': [
+      '<worksheet><sheetData>',
+      '<row r="1"><c r="A1" t="inlineStr"><is><t>项目</t></is></c><c r="B1" t="inlineStr"><is><t>说明</t></is></c></row>',
+      '<row r="2"><c r="A2" t="inlineStr"><is><t>OneCEO</t></is></c><c r="B2" t="inlineStr"><is><t>https://example.com/source</t></is></c></row>',
+      '</sheetData></worksheet>',
+    ].join(''),
+  });
+}
+
+function xlsxMinimalFormBytes() {
+  return zip({
+    '[Content_Types].xml': '<Types></Types>',
+    'xl/workbook.xml': '<workbook><sheets><sheet name="Input" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    'xl/worksheets/sheet1.xml': '<worksheet><sheetData><row><c r="A1" t="inlineStr"><is><t>姓名</t></is></c><c r="B1" t="inlineStr"><is><t>张三</t></is></c></row></sheetData></worksheet>',
+  });
+}
 test('validateOfficeArtifact passes DOCX with manifest and readable structure', () => {
   const report = officeArtifactQualityService.validateOfficeArtifact({
     kind: 'docx',
@@ -131,6 +153,48 @@ test('validateOfficeArtifact fails DOCX when manifest is required and missing', 
   assert.equal(report.passed, false);
   assert.equal(report.manifestStatus, 'missing');
   assert.ok(report.errors.includes('manifest_missing'));
+});
+
+test('validateOfficeArtifact allows compact meeting memo DOCX structures', () => {
+  const report = officeArtifactQualityService.validateOfficeArtifact({
+    kind: 'docx',
+    artifactPath: 'outputs/final.docx',
+    bytes: docxBytes(['会议纪要', '今日完成预算评审与职责分工，结论为下周进入执行。']),
+    manifestPath: 'outputs/document_manifest.json',
+    manifestBytes: Buffer.from(
+      JSON.stringify({
+        artifactType: 'docx',
+        fileName: 'final.docx',
+        contentArchetype: 'meeting_memo',
+        stylePack: 'formal_executive',
+        sectionCount: 2,
+      }),
+    ),
+  });
+
+  assert.equal(report.passed, true);
+  assert.equal(report.errors.length, 0);
+});
+
+test('validateOfficeArtifact still rejects undersized business plan DOCX bodies', () => {
+  const report = officeArtifactQualityService.validateOfficeArtifact({
+    kind: 'docx',
+    artifactPath: 'outputs/final.docx',
+    bytes: docxBytes(['商业计划书', '这是一个很短的说明。']),
+    manifestPath: 'outputs/document_manifest.json',
+    manifestBytes: Buffer.from(
+      JSON.stringify({
+        artifactType: 'docx',
+        fileName: 'final.docx',
+        contentArchetype: 'business_plan',
+        stylePack: 'formal_executive',
+        sectionCount: 4,
+      }),
+    ),
+  });
+
+  assert.equal(report.passed, false);
+  assert.ok(report.errors.includes('docx_effective_body_missing'));
 });
 
 test('validateOfficeArtifact passes XLSX with formulas and source evidence', () => {
@@ -177,4 +241,40 @@ test('validateOfficeArtifact fails XLSX when required formulas are absent', () =
 
   assert.equal(report.passed, false);
   assert.ok(report.errors.includes('xlsx_required_formulas_missing'));
+});
+
+test('validateOfficeArtifact counts inline strings as effective XLSX cells', () => {
+  const report = officeArtifactQualityService.validateOfficeArtifact({
+    kind: 'xlsx',
+    artifactPath: 'outputs/final.xlsx',
+    bytes: xlsxInlineStringBytes(),
+    requireManifest: false,
+  });
+
+  assert.equal(report.passed, true);
+  assert.equal(report.manifestStatus, 'not_required');
+  assert.equal(report.metrics.nonEmptyCellCount, 4);
+  assert.equal(report.metrics.urlCount, 1);
+});
+
+test('validateOfficeArtifact allows lightweight input form XLSX layouts', () => {
+  const report = officeArtifactQualityService.validateOfficeArtifact({
+    kind: 'xlsx',
+    artifactPath: 'outputs/final.xlsx',
+    bytes: xlsxMinimalFormBytes(),
+    manifestPath: 'outputs/workbook_manifest.json',
+    manifestBytes: Buffer.from(
+      JSON.stringify({
+        artifactType: 'xlsx',
+        fileName: 'final.xlsx',
+        contentArchetype: 'input_form',
+        sheetCount: 1,
+        requiresFormulas: false,
+        requiresSourceSheet: false,
+      }),
+    ),
+  });
+
+  assert.equal(report.passed, true);
+  assert.equal(report.errors.length, 0);
 });

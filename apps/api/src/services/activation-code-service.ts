@@ -1,4 +1,4 @@
-import { eq, and, sql, desc, count, like, gte, lte, isNull, or } from 'drizzle-orm';
+import { eq, and, sql, desc, count, like, gte, lte, isNull, or, inArray } from 'drizzle-orm';
 import { db } from '../config/database';
 import {
   creditActivationCodes,
@@ -388,25 +388,63 @@ export class ActivationCodeService {
   async bulkUpdateActivationCodeStatus(
     ids: string[],
     status: 'active' | 'disabled'
-  ): Promise<{ matched: number; updated: number }> {
-    const uniqueIds = Array.from(new Set(ids.filter((id) => typeof id === 'string' && id.trim().length > 0)));
+  ): Promise<{
+    matched: number;
+    updated: number;
+    skippedAlreadyTarget: number;
+    skippedIneligibleStatus: number;
+    missing: number;
+  }> {
+    const uniqueIds = Array.from(new Set(
+      ids
+        .filter((id) => typeof id === 'string' && id.trim().length > 0)
+        .map((id) => id.trim())
+    ));
     if (uniqueIds.length === 0) {
-      return { matched: 0, updated: 0 };
+      return {
+        matched: 0,
+        updated: 0,
+        skippedAlreadyTarget: 0,
+        skippedIneligibleStatus: 0,
+        missing: 0,
+      };
     }
 
-    const matchedResult = await db
-      .select({ count: count() })
+    const existingRows = await db
+      .select({
+        id: creditActivationCodes.id,
+        status: creditActivationCodes.status,
+      })
       .from(creditActivationCodes)
-      .where(
-        and(
-          sql`${creditActivationCodes.id} = ANY(${uniqueIds}::uuid[])`,
-          sql`${creditActivationCodes.status} IN ('active', 'disabled')`
-        )
-      );
-    const matched = Number(matchedResult[0]?.count || 0);
+      .where(inArray(creditActivationCodes.id, uniqueIds as any[]));
+    const matched = existingRows.length;
+    const missing = Math.max(0, uniqueIds.length - matched);
 
     if (matched === 0) {
-      return { matched: 0, updated: 0 };
+      return {
+        matched: 0,
+        updated: 0,
+        skippedAlreadyTarget: 0,
+        skippedIneligibleStatus: 0,
+        missing,
+      };
+    }
+
+    const eligibleRows = existingRows.filter((row) => row.status === 'active' || row.status === 'disabled');
+    const skippedIneligibleStatus = existingRows.length - eligibleRows.length;
+    const skippedAlreadyTarget = eligibleRows.filter((row) => row.status === status).length;
+    const actionableIds = eligibleRows
+      .filter((row) => row.status !== status)
+      .map((row) => row.id);
+
+    if (actionableIds.length === 0) {
+      return {
+        matched,
+        updated: 0,
+        skippedAlreadyTarget,
+        skippedIneligibleStatus,
+        missing,
+      };
     }
 
     const updatedRows = await db
@@ -414,45 +452,73 @@ export class ActivationCodeService {
       .set({ status, updatedAt: new Date() })
       .where(
         and(
-          sql`${creditActivationCodes.id} = ANY(${uniqueIds}::uuid[])`,
+          inArray(creditActivationCodes.id, actionableIds as any[]),
           sql`${creditActivationCodes.status} IN ('active', 'disabled')`
         )
       )
       .returning({ id: creditActivationCodes.id });
 
-    return { matched, updated: updatedRows.length };
+    return {
+      matched,
+      updated: updatedRows.length,
+      skippedAlreadyTarget,
+      skippedIneligibleStatus,
+      missing,
+    };
   }
 
   /**
    * 批量删除激活码（仅删除未使用激活码）
    */
-  async bulkDeleteActivationCodes(ids: string[]): Promise<{ matched: number; deleted: number }> {
-    const uniqueIds = Array.from(new Set(ids.filter((id) => typeof id === 'string' && id.trim().length > 0)));
+  async bulkDeleteActivationCodes(ids: string[]): Promise<{
+    matched: number;
+    deleted: number;
+    skippedUsed: number;
+    missing: number;
+  }> {
+    const uniqueIds = Array.from(new Set(
+      ids
+        .filter((id) => typeof id === 'string' && id.trim().length > 0)
+        .map((id) => id.trim())
+    ));
     if (uniqueIds.length === 0) {
-      return { matched: 0, deleted: 0 };
+      return { matched: 0, deleted: 0, skippedUsed: 0, missing: 0 };
     }
 
-    const matchedResult = await db
-      .select({ count: count() })
+    const existingRows = await db
+      .select({
+        id: creditActivationCodes.id,
+        currentUses: creditActivationCodes.currentUses,
+      })
       .from(creditActivationCodes)
-      .where(sql`${creditActivationCodes.id} = ANY(${uniqueIds}::uuid[])`);
-    const matched = Number(matchedResult[0]?.count || 0);
+      .where(inArray(creditActivationCodes.id, uniqueIds as any[]));
+    const matched = existingRows.length;
+    const missing = Math.max(0, uniqueIds.length - matched);
 
     if (matched === 0) {
-      return { matched: 0, deleted: 0 };
+      return { matched: 0, deleted: 0, skippedUsed: 0, missing };
+    }
+
+    const deletableIds = existingRows
+      .filter((row) => row.currentUses === 0)
+      .map((row) => row.id);
+    const skippedUsed = existingRows.length - deletableIds.length;
+
+    if (deletableIds.length === 0) {
+      return { matched, deleted: 0, skippedUsed, missing };
     }
 
     const deletedRows = await db
       .delete(creditActivationCodes)
       .where(
         and(
-          sql`${creditActivationCodes.id} = ANY(${uniqueIds}::uuid[])`,
+          inArray(creditActivationCodes.id, deletableIds as any[]),
           eq(creditActivationCodes.currentUses, 0)
         )
       )
       .returning({ id: creditActivationCodes.id });
 
-    return { matched, deleted: deletedRows.length };
+    return { matched, deleted: deletedRows.length, skippedUsed, missing };
   }
 
   /**

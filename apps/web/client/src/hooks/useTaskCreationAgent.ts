@@ -190,7 +190,13 @@ function extractOrchestratorSessionId(message: AgentMessage): string | null {
 }
 
 function shouldAttemptSessionTitleResolve(value: string): boolean {
-  return typeof value === 'string' && value.trim().length > 0;
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim().replace(/\s+/g, ' ');
+  if (!normalized) return false;
+  if (normalized.length >= 12) return true;
+  return /(帮我|请|请帮|分析|排查|修复|开发|实现|优化|重构|设计|生成|创建|制作|写|继续|修改|整理|总结|如何|怎么|为什么|报错|bug|问题|页面|功能|css|html|nodejs|代码|接口|数据库|deploy|build|fix|debug|analy[sz]e|implement|optimi[sz]e|refactor|create|write)/i.test(
+    normalized
+  );
 }
 
 function dispatchTaskCreationSessionUpdated(detail: {

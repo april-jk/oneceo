@@ -92,6 +92,12 @@ function splitContentChunks(content: string) {
 }
 
 export class PlatformSkillDAO {
+  private isUniqueViolation(error: unknown) {
+    if (!error || typeof error !== 'object') return false;
+    const payload = error as { code?: unknown; cause?: { code?: unknown } };
+    return payload.code === '23505' || payload.cause?.code === '23505';
+  }
+
   async countSkills() {
     const [row] = await db
       .select({
@@ -438,70 +444,86 @@ export class PlatformSkillDAO {
       layeredImport?: SkillImportPreview | null;
     }
   ) {
-    return db.transaction(async (tx) => {
-      const [skill] = await tx
-        .select()
-        .from(platformSkills)
-        .where(eq(platformSkills.id, skillId))
-        .limit(1);
-      if (!skill) {
-        throw new Error('skill 不存在');
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        return await db.transaction(async (tx) => {
+          // Serialize revision allocation for the same skill across concurrent seeders/writers.
+          await tx.execute(
+            sql`select ${platformSkills.id} from ${platformSkills} where ${platformSkills.id} = ${skillId} for update`
+          );
+
+          const [skill] = await tx
+            .select()
+            .from(platformSkills)
+            .where(eq(platformSkills.id, skillId))
+            .limit(1);
+          if (!skill) {
+            throw new Error('skill 不存在');
+          }
+
+          const [maxRevision] = await tx
+            .select({
+              value: sql<number>`coalesce(max(${platformSkillRevisions.revisionNumber}), 0)::int`,
+            })
+            .from(platformSkillRevisions)
+            .where(eq(platformSkillRevisions.skillId, skillId));
+          const nextRevisionNumber = Number(maxRevision?.value || 0) + 1;
+
+          const [revision] = await tx
+            .insert(platformSkillRevisions)
+            .values({
+              skillId,
+              revisionNumber: nextRevisionNumber,
+              slugSnapshot: skill.slug,
+              nameSnapshot: input.name,
+              descriptionSnapshot: input.description,
+              categorySnapshot: input.category,
+              bodyMarkdown: input.bodyMarkdown,
+              createdBy: input.createdBy || null,
+              publishedAt: new Date(),
+            })
+            .returning();
+
+          const resources = await this.replaceRevisionResourcesTx(
+            tx,
+            revision.id,
+            Array.isArray(input.resources) ? input.resources : []
+          );
+          await this.replaceRevisionLayeredContentTx(
+            tx,
+            revision,
+            Array.isArray(input.resources) ? input.resources : [],
+            input.layeredImport || null
+          );
+
+          const [updatedSkill] = await tx
+            .update(platformSkills)
+            .set({
+              name: input.name,
+              description: input.description,
+              category: input.category,
+              metadataJson: input.metadataJson || {},
+              publishedRevisionId: revision.id,
+              updatedAt: new Date(),
+            })
+            .where(eq(platformSkills.id, skillId))
+            .returning();
+
+          return {
+            skill: updatedSkill,
+            revision,
+            resources,
+          };
+        });
+      } catch (error) {
+        if (this.isUniqueViolation(error) && attempt < maxAttempts) {
+          continue;
+        }
+        throw error;
       }
-
-      const [maxRevision] = await tx
-        .select({
-          value: sql<number>`coalesce(max(${platformSkillRevisions.revisionNumber}), 0)::int`,
-        })
-        .from(platformSkillRevisions)
-        .where(eq(platformSkillRevisions.skillId, skillId));
-      const nextRevisionNumber = Number(maxRevision?.value || 0) + 1;
-
-      const [revision] = await tx
-        .insert(platformSkillRevisions)
-        .values({
-          skillId,
-          revisionNumber: nextRevisionNumber,
-          slugSnapshot: skill.slug,
-          nameSnapshot: input.name,
-          descriptionSnapshot: input.description,
-          categorySnapshot: input.category,
-          bodyMarkdown: input.bodyMarkdown,
-          createdBy: input.createdBy || null,
-          publishedAt: new Date(),
-        })
-        .returning();
-
-      const resources = await this.replaceRevisionResourcesTx(
-        tx,
-        revision.id,
-        Array.isArray(input.resources) ? input.resources : []
-      );
-      await this.replaceRevisionLayeredContentTx(
-        tx,
-        revision,
-        Array.isArray(input.resources) ? input.resources : [],
-        input.layeredImport || null
-      );
-
-      const [updatedSkill] = await tx
-        .update(platformSkills)
-        .set({
-          name: input.name,
-          description: input.description,
-          category: input.category,
-          metadataJson: input.metadataJson || {},
-          publishedRevisionId: revision.id,
-          updatedAt: new Date(),
-        })
-        .where(eq(platformSkills.id, skillId))
-        .returning();
-
-      return {
-        skill: updatedSkill,
-        revision,
-        resources,
-      };
-    });
+    }
+    throw new Error('createPublishedRevision failed after retries');
   }
 
   async updateSkillStatus(skillId: string, status: 'active' | 'archived') {

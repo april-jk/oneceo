@@ -9,6 +9,7 @@ import { altusManagedDeploymentToolService } from '../src/services/altus-managed
 import { pptRenderToolService } from '../src/services/ppt-render-tool-service';
 import { userSkillService } from '../src/services/user-skill-service';
 import { buildManagedMcpToolName } from '../src/services/altus-managed-shared';
+import { buildManagedToolResultEnvelope } from '../src/services/altus-managed-tool-result-envelope';
 
 afterEach(() => {
   mock.reset();
@@ -298,6 +299,123 @@ test('complete_task rejects pptx attachments that bypass ppt workflow renderer',
     }),
     /complete_task_pptx_requires_render_pptx_from_instructions/
   );
+});
+
+test('complete_task rejects malformed downloadable attachments payloads', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    userInput: '请生成一份 docx 正式方案并交付给我下载',
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  await assert.rejects(
+    runtime.execute('complete_task', {
+      summary: '已生成文档',
+      attachments: '[{\"path\":\"deliverables/final.docx\"}]',
+    }),
+    /complete_task_attachments_invalid/
+  );
+});
+
+test('complete_task rejects downloadable tasks without attachments', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    userInput: '请生成一份 pdf 报告并交付给我下载',
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  await assert.rejects(
+    runtime.execute('complete_task', {
+      summary: '报告已完成',
+    }),
+    /complete_task_downloadable_requires_attachments/
+  );
+});
+
+test('complete_task does not require attachments for later non-delivery follow-up turns', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    userInput: '为什么这个 xlsx 打不开，帮我分析原因就行',
+    activeSkills: [],
+    mcpProviders: [],
+    taskIntentProfile: {
+      mode: 'non_deployable_artifact',
+      reason: 'follow_up_debug_only',
+      recentUserMessages: ['请生成一份 xlsx 报表并交付给我下载'],
+      explicitNoDeploy: true,
+      explicitNoWeb: true,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
+    },
+  });
+
+  const result = await runtime.execute('complete_task', {
+    summary: '已分析 xlsx 无法打开的原因',
+  });
+
+  assert.equal(result.type, 'complete');
+});
+
+test('tool result envelope gives repair guidance for malformed attachments payloads', () => {
+  const envelope = buildManagedToolResultEnvelope({
+    status: 'error',
+    runId: 'run-1',
+    toolUseId: 'tool-1',
+    toolName: 'complete_task',
+    modelRoundId: 'round-1',
+    args: {
+      summary: '已生成文档',
+      attachments: '[{"path":"deliverables/final.docx"}]',
+    },
+    errorMessage: 'complete_task_attachments_invalid',
+  });
+
+  assert.equal(envelope.errorCode, 'complete_task_attachments_invalid');
+  assert.equal(envelope.retryable, true);
+  const payload = JSON.parse(envelope.contentForModel);
+  assert.equal(payload.status, 'error');
+  assert.match(payload.error, /must be a JSON array/i);
+  assert.match(payload.instruction, /Re-run complete_task with attachments as a real JSON array/i);
+});
+
+test('tool result envelope gives repair guidance for missing downloadable attachments', () => {
+  const envelope = buildManagedToolResultEnvelope({
+    status: 'error',
+    runId: 'run-1',
+    toolUseId: 'tool-2',
+    toolName: 'complete_task',
+    modelRoundId: 'round-1',
+    args: {
+      summary: '报告已完成',
+    },
+    errorMessage: 'complete_task_downloadable_requires_attachments',
+  });
+
+  assert.equal(envelope.errorCode, 'complete_task_downloadable_requires_attachments');
+  assert.equal(envelope.retryable, true);
+  const payload = JSON.parse(envelope.contentForModel);
+  assert.equal(payload.status, 'error');
+  assert.match(payload.error, /downloadable artifact/i);
+  assert.match(payload.instruction, /Confirm the final downloadable file exists in the workspace/i);
 });
 
 test('complete_task accepts pptx attachment returned by ppt workflow renderer', async () => {

@@ -45,6 +45,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   FileText,
   FolderOpen,
@@ -94,6 +95,7 @@ import {
 import {
   removeSharedManualProject,
   upsertSharedManualProject,
+  readSidebarExpandedState,
   useSharedManualProjects,
 } from "@/lib/shared-manual-projects";
 import { SELF_ORGANIZED_PROJECTS } from "@/lib/self-organized-projects";
@@ -212,6 +214,7 @@ export default function Sidebar({
   onToggleCollapse,
   selectedProject,
 }: SidebarProps) {
+  const SIDEBAR_EXPAND_STATE_STORAGE_PREFIX = "oneceo_sidebar_expand_state_v1";
   type ProjectManager = {
     id: string;
     name: string;
@@ -242,14 +245,43 @@ export default function Sidebar({
   const currentPath = React.useMemo(() => location.split("?")[0] || location, [location]);
   const { t } = useTranslation();
   const { user, credits } = useAuth();
+  const expandStateStorageKey = React.useMemo(
+    () => `${SIDEBAR_EXPAND_STATE_STORAGE_PREFIX}:${user?.id || "anonymous"}`,
+    [user?.id],
+  );
   const creditBalanceLabel = credits ? credits.balance.toLocaleString() : "--";
-  const { projects: manualProjects } = useSharedManualProjects(user?.id);
-  const [expandedProjectGroups, setExpandedProjectGroups] = React.useState<string[]>([]);
-  const [expandedProjects, setExpandedProjects] = React.useState<string[]>([]);
-  const [expandedManagers, setExpandedManagers] = React.useState<string[]>([]);
+  const { projects: manualProjects, loading: manualProjectsLoading } = useSharedManualProjects(user?.id);
+  const [expandedProjectGroups, setExpandedProjectGroups] = React.useState<string[]>(() => {
+    if (typeof window === "undefined") return ["manual-projects"];
+    try {
+      const raw = window.localStorage.getItem(expandStateStorageKey);
+      return readSidebarExpandedState(raw, "expandedProjectGroups", ["manual-projects"]);
+    } catch {
+      return ["manual-projects"];
+    }
+  });
+  const [expandedProjects, setExpandedProjects] = React.useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = window.localStorage.getItem(expandStateStorageKey);
+      return readSidebarExpandedState(raw, "expandedProjects", []);
+    } catch {
+      return [];
+    }
+  });
+  const [expandedManagers, setExpandedManagers] = React.useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = window.localStorage.getItem(expandStateStorageKey);
+      return readSidebarExpandedState(raw, "expandedManagers", []);
+    } catch {
+      return [];
+    }
+  });
   const [tasksDialogOpen, setTasksDialogOpen] = React.useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = React.useState(false);
   const [sessionTasks, setSessionTasks] = React.useState<SessionTask[]>([]);
+  const [sessionListLoading, setSessionListLoading] = React.useState(true);
   const [projectSessionsByProjectId, setProjectSessionsByProjectId] = React.useState<
     Record<string, SessionTask[]>
   >({});
@@ -333,6 +365,22 @@ export default function Sidebar({
     () => new Set(manualProjects.map((project) => project.id)),
     [manualProjects],
   );
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        expandStateStorageKey,
+        JSON.stringify({
+          expandedProjectGroups,
+          expandedProjects,
+          expandedManagers,
+        }),
+      );
+    } catch {
+      // ignore localStorage write failures
+    }
+  }, [expandStateStorageKey, expandedProjectGroups, expandedProjects, expandedManagers]);
 
   React.useEffect(() => {
     projectSessionsByProjectIdRef.current = projectSessionsByProjectId;
@@ -448,6 +496,10 @@ export default function Sidebar({
       }
       return changed ? next : prev;
     });
+    setExpandedProjects((prev) => {
+      const next = prev.filter((projectId) => validProjectIds.has(projectId));
+      return next.length === prev.length ? prev : next;
+    });
   }, [manualProjects]);
 
   React.useEffect(() => {
@@ -477,6 +529,9 @@ export default function Sidebar({
       const now = Date.now();
       if (!force && now - lastListFetchRef.current < 3000) return;
       listLoadingRef.current = true;
+      if (force || sessionTasks.length === 0) {
+        setSessionListLoading(true);
+      }
       try {
         const list = await listTaskCreationSessions("all");
         if (disposed) return;
@@ -496,11 +551,14 @@ export default function Sidebar({
         }
       } finally {
         listLoadingRef.current = false;
+        if (!disposed) {
+          setSessionListLoading(false);
+        }
       }
     };
     const onVisibility = () => {
       if (document.visibilityState === "visible") {
-        void load(true);
+        void load(false);
       }
     };
     const onSessionUpdated = (event: Event) => {
@@ -640,10 +698,9 @@ export default function Sidebar({
         }
       }
       if (patchedSessionId && patchIsMeaningful) {
-        void load(true);
-        window.setTimeout(() => {
-          void load(true);
-        }, 4000);
+        // Use local patch as the primary update path to avoid visible sidebar flashing.
+        // Fallback polling will reconcile any missed server-side fields.
+        lastListFetchRef.current = Date.now();
       }
     };
     void load(true);
@@ -1409,8 +1466,18 @@ export default function Sidebar({
               <div className="overflow-x-hidden px-2.5 pb-2.5 pr-3">
                 <div className="space-y-3">
                   {manualProjectNodes.length === 0 ? (
-                    <div className="px-2 py-2 text-xs leading-5 text-muted-foreground">
-                      {t("sidebar.noManualProjects")}
+                    <div className="space-y-2 px-2 py-2">
+                      {manualProjectsLoading ? (
+                        <>
+                          <Skeleton className="h-4 w-28" />
+                          <Skeleton className="h-7 w-full" />
+                          <Skeleton className="h-7 w-4/5" />
+                        </>
+                      ) : (
+                        <div className="px-0 py-0 text-xs leading-5 text-muted-foreground">
+                          {t("sidebar.noManualProjects")}
+                        </div>
+                      )}
                     </div>
                   ) : null}
                   {manualProjectNodes.map((project) => {
@@ -1521,9 +1588,12 @@ export default function Sidebar({
                       </span>
                     </div>
 
-                    {ungroupedRecentSessionTasks.length === 0 ? (
-                      <div className="px-3 py-2 text-xs leading-5 text-muted-foreground">
-                        {t("sidebar.noTasks")}
+                    {sessionListLoading && sessionTasks.length === 0 ? (
+                      <div className="space-y-2 px-3 py-2">
+                        <Skeleton className="h-4 w-24" />
+                        <Skeleton className="h-8 w-full" />
+                        <Skeleton className="h-8 w-11/12" />
+                        <Skeleton className="h-8 w-10/12" />
                       </div>
                     ) : (
                       <div className="space-y-1">

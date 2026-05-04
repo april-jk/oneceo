@@ -8,6 +8,7 @@ import {
 } from '../src/db/dao';
 import { appAuthEmailService } from '../src/services/app-auth-email-service';
 import { appAuthService } from '../src/services/app-auth-service';
+import { managedImageObjectService } from '../src/services/managed-image-object-service';
 import { hashPassword, verifyPassword } from '../src/utils/auth-password';
 
 const originalMethods = {
@@ -16,12 +17,16 @@ const originalMethods = {
   getById: appUserDAO.getById,
   updateById: appUserDAO.updateById,
   touchLastLogin: appUserDAO.touchLastLogin,
+  updateAvatar: appUserDAO.updateAvatar,
   getVerification: appUserEmailVerificationDAO.getByEmailAndPurpose,
   upsertVerification: appUserEmailVerificationDAO.upsert,
   markConsumed: appUserEmailVerificationDAO.markConsumed,
   deleteVerification: appUserEmailVerificationDAO.deleteByEmailAndPurpose,
   createSession: appUserSessionDAO.create,
   sendVerificationCode: appAuthEmailService.sendVerificationCode,
+  getSignedDownloadUrl: managedImageObjectService.getSignedDownloadUrl,
+  uploadImage: managedImageObjectService.uploadImage,
+  deleteImage: managedImageObjectService.deleteImage,
 };
 
 afterEach(() => {
@@ -30,12 +35,16 @@ afterEach(() => {
   appUserDAO.getById = originalMethods.getById;
   appUserDAO.updateById = originalMethods.updateById;
   appUserDAO.touchLastLogin = originalMethods.touchLastLogin;
+  appUserDAO.updateAvatar = originalMethods.updateAvatar;
   appUserEmailVerificationDAO.getByEmailAndPurpose = originalMethods.getVerification;
   appUserEmailVerificationDAO.upsert = originalMethods.upsertVerification;
   appUserEmailVerificationDAO.markConsumed = originalMethods.markConsumed;
   appUserEmailVerificationDAO.deleteByEmailAndPurpose = originalMethods.deleteVerification;
   appUserSessionDAO.create = originalMethods.createSession;
   appAuthEmailService.sendVerificationCode = originalMethods.sendVerificationCode;
+  managedImageObjectService.getSignedDownloadUrl = originalMethods.getSignedDownloadUrl;
+  managedImageObjectService.uploadImage = originalMethods.uploadImage;
+  managedImageObjectService.deleteImage = originalMethods.deleteImage;
   delete process.env.APP_AUTH_REGISTER_CODE_TTL_SECONDS;
   delete process.env.APP_AUTH_REGISTER_CODE_RESEND_COOLDOWN_SECONDS;
 });
@@ -254,4 +263,56 @@ test('AppAuthService.updateProfile normalizes personalization payload and return
     preferences: 'Prefer clear tradeoffs.',
     responsePreferences: 'Start with the answer.',
   });
+});
+
+test('AppAuthService.uploadAvatar stores storage key and returns signed avatar url', async () => {
+  let uploadedKey = '';
+  let deletedKey = '';
+
+  appUserDAO.getById = async () =>
+    ({
+      id: 'user-avatar-1',
+      email: 'avatar@example.com',
+      displayName: 'Avatar User',
+      avatarStorageKey: 'managed-images/old-avatar.png',
+      avatarUrl: null,
+      avatarSource: 'manual',
+      profileJson: {},
+      status: 'active',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }) as any;
+  appUserDAO.updateAvatar = async (id, input) =>
+    ({
+      id,
+      email: 'avatar@example.com',
+      displayName: 'Avatar User',
+      avatarStorageKey: input.avatarStorageKey,
+      avatarUrl: input.avatarUrl,
+      avatarSource: input.avatarSource,
+      profileJson: {},
+      status: 'active',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }) as any;
+  managedImageObjectService.uploadImage = async (input) => {
+    uploadedKey = input.objectKey;
+  };
+  managedImageObjectService.getSignedDownloadUrl = async (key) => `signed:${key}`;
+  managedImageObjectService.deleteImage = async (key) => {
+    deletedKey = key;
+  };
+
+  const result = await appAuthService.uploadAvatar('user-avatar-1', {
+    contentType: 'image/png',
+    originalName: 'avatar.png',
+    buffer: Buffer.from('avatar'),
+  });
+
+  assert.equal(uploadedKey.startsWith('managed-images/app-user-user-avatar-1/avatar/'), true);
+  assert.equal(result?.avatarUrl, 'signed:' + uploadedKey);
+  assert.equal(result?.avatarSource, 'manual');
+
+  await appAuthService.removeAvatar('user-avatar-1');
+  assert.equal(deletedKey, 'managed-images/old-avatar.png');
 });

@@ -76,6 +76,7 @@ import { Link, useLocation } from "wouter";
 import { useTranslation } from "react-i18next";
 import React from "react";
 import { toast } from "sonner";
+import { isDevRuntime } from "@/lib/runtime-env";
 import {
   createTaskCreationProject,
   deleteTaskCreationProject,
@@ -678,23 +679,27 @@ export default function Sidebar({
     { icon: Search, label: t("sidebar.search"), href: "/search" },
     { icon: Library, label: t("sidebar.library"), href: "/library" },
     { icon: FolderOpen, label: t("sidebar.projects"), href: "/projects" },
-    { icon: Network, label: t("sidebar.ceoView"), href: "/ceo-view" },
+    ...(isDevRuntime()
+      ? [{ icon: Network, label: t("sidebar.ceoView"), href: "/ceo-view" }]
+      : []),
   ];
 
   const selfOrganizedProjectsData = React.useMemo<SidebarProjectNode[]>(
     () =>
-      SELF_ORGANIZED_PROJECTS.map((project) => ({
-        id: project.id,
-        name: project.name,
-        description: project.description,
-        managers: project.managers.map((manager) => ({
-          id: manager.id,
-          name: manager.name,
-          type: manager.type,
-          tasks: manager.tasks,
-        })),
-        kind: "self-organized" as const,
-      })),
+      isDevRuntime()
+        ? SELF_ORGANIZED_PROJECTS.map((project) => ({
+            id: project.id,
+            name: project.name,
+            description: project.description,
+            managers: project.managers.map((manager) => ({
+              id: manager.id,
+              name: manager.name,
+              type: manager.type,
+              tasks: manager.tasks,
+            })),
+            kind: "self-organized" as const,
+          }))
+        : [],
     [],
   );
   const manualProjectNodes = React.useMemo<SidebarProjectNode[]>(
@@ -1509,11 +1514,12 @@ export default function Sidebar({
                   </Button>
                 </div>
 
-                <div className="space-y-1">
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="icon"
+                {isDevRuntime() ? (
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
                       className="h-7 w-7 shrink-0"
                       onClick={() => toggleProjectGroup("self-organized")}
                     >
@@ -1637,7 +1643,8 @@ export default function Sidebar({
                       })}
                     </div>
                   )}
-                </div>
+                  </div>
+                ) : null}
               </div>
             </ScrollArea>
           </div>

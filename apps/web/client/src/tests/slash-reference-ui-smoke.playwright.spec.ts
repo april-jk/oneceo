@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { bootstrapSharedAuthenticatedUser } from "./playwright-auth";
 
 const WEB_URL = process.env.PLAYWRIGHT_WEB_URL || "http://127.0.0.1:3000";
 const CORS_HEADERS = {
@@ -25,29 +26,13 @@ async function openManagedInput(page: Page) {
 test("slash suggestions and token chip placement smoke", async ({ page }) => {
   const token = uniqueToken();
   let managedInputMetadataRaw = "";
+  const context = await bootstrapSharedAuthenticatedUser(
+    page.context().browser()!,
+    WEB_URL,
+  );
+  const authedPage = await context.newPage();
   try {
-    await page.route("**/api/auth/me", async (route) => {
-      if (route.request().method() === "OPTIONS") {
-        await route.fulfill({ status: 204, headers: CORS_HEADERS });
-        return;
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        headers: CORS_HEADERS,
-        body: JSON.stringify({
-          success: true,
-          data: {
-            user: {
-              id: `playwright-user-${token}`,
-              email: `playwright-${token}@example.com`,
-              displayName: "Playwright User",
-            },
-          },
-        }),
-      });
-    });
-    await page.route("**/api/task-creation/skills", async (route) => {
+    await authedPage.route("**/api/task-creation/skills", async (route) => {
       if (route.request().method() === "OPTIONS") {
         await route.fulfill({ status: 204, headers: CORS_HEADERS });
         return;
@@ -72,7 +57,7 @@ test("slash suggestions and token chip placement smoke", async ({ page }) => {
         }),
       });
     });
-    await page.route("**/api/connectors/me", async (route) => {
+    await authedPage.route("**/api/connectors/me", async (route) => {
       if (route.request().method() === "OPTIONS") {
         await route.fulfill({ status: 204, headers: CORS_HEADERS });
         return;
@@ -131,7 +116,7 @@ test("slash suggestions and token chip placement smoke", async ({ page }) => {
         }),
       });
     });
-    await page.route("**/api/task-creation/sessions/draft", async (route) => {
+    await authedPage.route("**/api/task-creation/sessions/draft", async (route) => {
       if (route.request().method() === "OPTIONS") {
         await route.fulfill({ status: 204, headers: CORS_HEADERS });
         return;
@@ -149,7 +134,7 @@ test("slash suggestions and token chip placement smoke", async ({ page }) => {
         }),
       });
     });
-    await page.route("**/api/task-creation/sessions/*/title/resolve", async (route) => {
+    await authedPage.route("**/api/task-creation/sessions/*/title/resolve", async (route) => {
       if (route.request().method() === "OPTIONS") {
         await route.fulfill({ status: 204, headers: CORS_HEADERS });
         return;
@@ -167,7 +152,7 @@ test("slash suggestions and token chip placement smoke", async ({ page }) => {
         }),
       });
     });
-    await page.route("**/api/altus-managed/inputs", async (route) => {
+    await authedPage.route("**/api/altus-managed/inputs", async (route) => {
       if (route.request().method() === "OPTIONS") {
         await route.fulfill({ status: 204, headers: CORS_HEADERS });
         return;
@@ -191,35 +176,35 @@ test("slash suggestions and token chip placement smoke", async ({ page }) => {
       });
     });
 
-    await openManagedInput(page);
+    await openManagedInput(authedPage);
 
-    const textarea = page.locator("textarea").first();
+    const textarea = authedPage.locator("textarea").first();
     await textarea.fill("/mini");
-    await expect(page.getByRole("button", { name: /minimax-pdf/ })).toBeVisible();
+    await expect(authedPage.getByRole("button", { name: /minimax-pdf/ })).toBeVisible();
 
-    await page.keyboard.press("Enter");
+    await authedPage.keyboard.press("Enter");
 
-    const skillTokenChip = page.getByRole("button", { name: /skill minimax-pdf/i });
+    const skillTokenChip = authedPage.getByRole("button", { name: /skill minimax-pdf/i });
     await expect(skillTokenChip).toBeVisible();
-    await expect(page.getByLabel("移除附件 minimax-pdf")).toHaveCount(0);
-    await expect(page).toHaveURL(/\/new-task/);
+    await expect(authedPage.getByLabel("移除附件 minimax-pdf")).toHaveCount(0);
+    await expect(authedPage).toHaveURL(/\/new-task/);
 
     await textarea.fill("/github");
-    await expect(page.getByRole("button", { name: /GitHub MCP/ })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Notion MCP/ })).toHaveCount(0);
+    await expect(authedPage.getByRole("button", { name: /GitHub MCP/ })).toBeVisible();
+    await expect(authedPage.getByRole("button", { name: /Notion MCP/ })).toHaveCount(0);
 
     await textarea.fill("run with selected skill");
-    await page.keyboard.press("Enter");
+    await authedPage.keyboard.press("Enter");
 
-    await expect(page).toHaveURL(/\/session\/session-slash-skill/);
+    await expect(authedPage).toHaveURL(/\/session\/session-slash-skill/);
     expect(managedInputMetadataRaw).toContain('"skills"');
     expect(managedInputMetadataRaw).toContain('"skillId":"minimax-pdf"');
   } finally {
-    await page.unroute("**/api/auth/me");
-    await page.unroute("**/api/task-creation/skills");
-    await page.unroute("**/api/connectors/me");
-    await page.unroute("**/api/task-creation/sessions/draft");
-    await page.unroute("**/api/task-creation/sessions/*/title/resolve");
-    await page.unroute("**/api/altus-managed/inputs");
+    await authedPage.unroute("**/api/task-creation/skills");
+    await authedPage.unroute("**/api/connectors/me");
+    await authedPage.unroute("**/api/task-creation/sessions/draft");
+    await authedPage.unroute("**/api/task-creation/sessions/*/title/resolve");
+    await authedPage.unroute("**/api/altus-managed/inputs");
+    await context.close();
   }
 });

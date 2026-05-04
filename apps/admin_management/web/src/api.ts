@@ -26,6 +26,12 @@ import type {
   ConnectorGuideValidationResult,
   DashboardOverview,
   HostListResponse,
+  MembershipPlan,
+  MembershipPagedResponse,
+  MembershipUserListItem,
+  MembershipDailyRestoreHistoryItem,
+  NewMembershipPlanPayload,
+  UserMembership,
   OsacRelease,
   OsacReleaseDetailResponse,
   OsacReleaseListResponse,
@@ -975,4 +981,86 @@ export const api = {
   },
   getAuditDetail: (auditId: string) =>
     request<AuditDetailResponse>(`/api/audit/${encodeURIComponent(auditId)}`),
+
+  listMembershipPlans: () => request<MembershipPlan[]>('/api/internal/membership/plans'),
+  getMembershipPlan: (planId: string) =>
+    request<MembershipPlan>(`/api/internal/membership/plans/${encodeURIComponent(planId)}`),
+  createMembershipPlan: (payload: NewMembershipPlanPayload) =>
+    request<MembershipPlan>('/api/internal/membership/plans', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateMembershipPlan: (planId: string, payload: Partial<NewMembershipPlanPayload>) =>
+    request<MembershipPlan>(`/api/internal/membership/plans/${encodeURIComponent(planId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  updateMembershipPlanStatus: (planId: string, payload: { status: string }) =>
+    request<MembershipPlan>(`/api/internal/membership/plans/${encodeURIComponent(planId)}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  listMembershipUsers: (query: {
+    userId?: string;
+    membershipPlanId?: string;
+    status?: string;
+    page?: number;
+    pageSize?: number;
+  } = {}) => {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<MembershipPagedResponse<MembershipUserListItem>>(`/api/internal/membership/users${suffix}`);
+  },
+  listUserMemberships: (userId: string) =>
+    request<UserMembership[]>(`/api/internal/membership/users/${encodeURIComponent(userId)}`),
+  assignUserMembership: (userId: string, payload: Record<string, unknown>) =>
+    request(`/api/internal/membership/users/${encodeURIComponent(userId)}/assign`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  updateUserMembershipStatus: (
+    membershipId: string,
+    payload: { status: 'active' | 'expired' | 'cancelled'; reason?: string }
+  ) =>
+    request<UserMembership>(`/api/internal/membership/user-memberships/${encodeURIComponent(membershipId)}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  updateUserMembershipExpireAt: (
+    membershipId: string,
+    payload: { expiresAt?: string | null; reason?: string }
+  ) =>
+    request<UserMembership>(`/api/internal/membership/user-memberships/${encodeURIComponent(membershipId)}/expire`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  runMembershipDailyRestore: (payload: { date?: string } = {}) =>
+    request<{ restoreDate: string; restoredCount: number }>('/api/internal/membership/daily-restore/run', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  listMembershipDailyRestoreHistory: (query: {
+    page?: number;
+    pageSize?: number;
+    userId?: string;
+    membershipPlanId?: string;
+    startDate?: string;
+    endDate?: string;
+  } = {}) => {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<MembershipPagedResponse<MembershipDailyRestoreHistoryItem>>(
+      `/api/internal/membership/daily-restore/history${suffix}`
+    );
+  },
 };

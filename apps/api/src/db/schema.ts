@@ -1688,7 +1688,7 @@ export const notifications = pgTable(
     type: text('type').notNull().default('system'),
     priority: text('priority').notNull().default('normal'),
     targetType: text('target_type').notNull().default('all'),
-    targetUserIds: jsonb('target_user_ids'),
+    targetUserIds: jsonb('target_user_ids').$type<string[] | null>().default(sql`null`),
     status: text('status').notNull().default('draft'),
     publishedAt: timestamp('published_at'),
     expiresAt: timestamp('expires_at'),
@@ -1848,56 +1848,6 @@ export const membershipDailyRestores = pgTable(
     restoreDateIdx: index('idx_membership_daily_restores_restore_date').on(table.restoreDate),
     uniqueDailyRestore: uniqueIndex('idx_membership_daily_restores_unique').on(table.userId, table.membershipPlanId, table.restoreDate),
     transactionUnique: uniqueIndex('idx_membership_daily_restores_credit_transaction_id').on(table.creditTransactionId),
-  })
-);
-
-export const notifications = pgTable(
-  'notifications',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    title: text('title').notNull(),
-    content: text('content').notNull(),
-    type: text('type').notNull().default('system'),
-    priority: text('priority').notNull().default('normal'),
-    targetType: text('target_type').notNull().default('all'),
-    targetUserIds: jsonb('target_user_ids').$type<string[] | null>().default(sql`null`),
-    status: text('status').notNull().default('draft'),
-    publishedAt: timestamp('published_at'),
-    expiresAt: timestamp('expires_at'),
-    createdBy: uuid('created_by').references(() => adminUsers.id, { onDelete: 'set null' }),
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
-  },
-  (table) => ({
-    statusIdx: index('idx_notifications_status').on(table.status),
-    typeIdx: index('idx_notifications_type').on(table.type),
-    createdAtIdx: index('idx_notifications_created_at').on(table.createdAt),
-  })
-);
-
-export const userNotifications = pgTable(
-  'user_notifications',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    userId: uuid('user_id')
-      .notNull()
-      .references(() => appUsers.id, { onDelete: 'cascade' }),
-    notificationId: uuid('notification_id')
-      .notNull()
-      .references(() => notifications.id, { onDelete: 'cascade' }),
-    isRead: boolean('is_read').notNull().default(false),
-    readAt: timestamp('read_at'),
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
-  },
-  (table) => ({
-    userIdIdx: index('idx_user_notifications_user_id').on(table.userId),
-    notificationIdIdx: index('idx_user_notifications_notification_id').on(table.notificationId),
-    unreadIdx: index('idx_user_notifications_unread').on(table.userId, table.isRead),
-    userNotificationUnique: uniqueIndex('idx_user_notifications_user_notification_unique').on(
-      table.userId,
-      table.notificationId
-    ),
   })
 );
 

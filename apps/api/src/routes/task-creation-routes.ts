@@ -54,6 +54,7 @@ import { codexRemoteService } from '../services/codex-remote-service';
 import { restoreWorkspaceIfArchived } from '../services/sandbox-archive-service';
 import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registry';
 import { resolveAttachConnectorError, sessionConnectorService } from '../services/session-connector-service';
+import { mcpToolConfirmationService } from '../services/mcp-tool-confirmation-service';
 import { sessionConnectorDraftService } from '../services/session-connector-draft-service';
 import { connectorGuideService } from '../services/connector-guide-service';
 import { sessionMcpRecoveryService } from '../services/session-mcp-recovery-service';
@@ -8743,6 +8744,61 @@ router.delete('/sessions/:sessionId', async (req, res) => {
     res.status(500).json({
       success: false,
       error: getPublicErrorMessage('删除会话失败，请稍后重试'),
+    });
+  }
+});
+
+router.post('/sessions/:sessionId/mcp-confirmations/:confirmationId/approve', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { sessionId, confirmationId } = req.params;
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const result = await mcpToolConfirmationService.approveConfirmation({
+      appUserId: currentUser.userId,
+      taskSessionId: sessionId,
+      confirmationId,
+    });
+    return res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(
+        authError?.message || ownershipError?.message || error?.message || '确认 MCP 工具执行失败'
+      ),
+    });
+  }
+});
+
+router.post('/sessions/:sessionId/mcp-confirmations/:confirmationId/reject', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { sessionId, confirmationId } = req.params;
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const result = await mcpToolConfirmationService.rejectConfirmation({
+      appUserId: currentUser.userId,
+      taskSessionId: sessionId,
+      confirmationId,
+    });
+    return res.json({
+      success: true,
+      data: {
+        confirmationId: result.id,
+        status: result.status,
+      },
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(
+        authError?.message || ownershipError?.message || error?.message || '拒绝 MCP 工具执行失败'
+      ),
     });
   }
 });

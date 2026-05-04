@@ -7,6 +7,7 @@ export type ConnectorKey =
   | "notion"
   | "supabase"
   | "figma"
+  | "google_super"
   | "vercel"
   | "postgres"
   | "custom_api"
@@ -539,6 +540,39 @@ export async function detachSessionConnector(
     }
   );
   return result.data?.connector || null;
+}
+
+export async function approveMcpToolConfirmation(
+  sessionId: string,
+  confirmationId: string
+): Promise<{ confirmationToken: string; expiresAt: string }> {
+  const result = await requestJson<{
+    data?: { confirmationToken?: string; expiresAt?: string };
+  }>(
+    `${getApiBaseUrl()}/api/task-creation/sessions/${encodeURIComponent(
+      sessionId
+    )}/mcp-confirmations/${encodeURIComponent(confirmationId)}/approve`,
+    { method: "POST" }
+  );
+  if (!result.data?.confirmationToken) {
+    throw new Error("confirmation token empty");
+  }
+  return {
+    confirmationToken: result.data.confirmationToken,
+    expiresAt: String(result.data.expiresAt || ""),
+  };
+}
+
+export async function rejectMcpToolConfirmation(
+  sessionId: string,
+  confirmationId: string
+): Promise<void> {
+  await requestJson(
+    `${getApiBaseUrl()}/api/task-creation/sessions/${encodeURIComponent(
+      sessionId
+    )}/mcp-confirmations/${encodeURIComponent(confirmationId)}/reject`,
+    { method: "POST" }
+  );
 }
 
 export async function saveSessionConnectorDraft(

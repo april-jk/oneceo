@@ -15,12 +15,18 @@ const originalGetMeSnapshot = connectorServiceAny.getMeSnapshot;
 const originalCreateProfile = connectorServiceAny.createProfile;
 const originalStartOAuth = connectorServiceAny.startOAuth;
 const originalCompleteOAuth = connectorServiceAny.completeOAuth;
+const originalCustomApiEnabled = process.env.ONECEO_CUSTOM_API_ENABLED;
 
 after(() => {
   connectorServiceAny.getMeSnapshot = originalGetMeSnapshot;
   connectorServiceAny.createProfile = originalCreateProfile;
   connectorServiceAny.startOAuth = originalStartOAuth;
   connectorServiceAny.completeOAuth = originalCompleteOAuth;
+  if (originalCustomApiEnabled === undefined) {
+    delete process.env.ONECEO_CUSTOM_API_ENABLED;
+  } else {
+    process.env.ONECEO_CUSTOM_API_ENABLED = originalCustomApiEnabled;
+  }
 });
 
 async function startServer(): Promise<TestServer> {
@@ -230,6 +236,55 @@ test('POST /api/connectors/notion/oauth/callback reports oauth errors', async ()
 
     assert.equal(response.status, 400);
     assert.equal(payload.success, false);
+  } finally {
+    await server.close();
+  }
+});
+
+test('custom API connector routes are unavailable while feature flag is disabled', async () => {
+  delete process.env.ONECEO_CUSTOM_API_ENABLED;
+  const server = await startServer();
+
+  try {
+    const response = await fetch(`${server.origin}/api/connectors/custom-api/definitions`, {
+      headers: {
+        'x-test-user-id': 'connector-user-6',
+      },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 404);
+    assert.equal(payload.success, false);
+    assert.match(String(payload.error || ''), /custom_api_disabled/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('generic connector profile route cannot create custom API while feature flag is disabled', async () => {
+  delete process.env.ONECEO_CUSTOM_API_ENABLED;
+  connectorServiceAny.createProfile = originalCreateProfile;
+  const server = await startServer();
+
+  try {
+    const response = await fetch(`${server.origin}/api/connectors/custom_api/profiles`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-test-user-id': 'connector-user-7',
+      },
+      body: JSON.stringify({
+        profileName: 'Custom API',
+        credentials: {
+          accessToken: 'secret-token',
+        },
+      }),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.equal(payload.success, false);
+    assert.match(String(payload.error || ''), /custom_api_disabled/);
   } finally {
     await server.close();
   }

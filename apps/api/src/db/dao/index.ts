@@ -12,6 +12,7 @@ export * from './user-connector-profile.dao';
 export * from './user-skill.dao';
 export * from './task-session-connector-binding.dao';
 export * from './task-session-mcp-recovery-job.dao';
+export * from './task-session-mcp-tool-confirmation.dao';
 export * from './task-session-deployment-sync-job.dao';
 export * from './connector-auth-request.dao';
 export * from './custom-api.dao';

@@ -658,7 +658,7 @@ router.post('/runtime-config/models', async (req, res) => {
  */
 router.get('/pricing', async (req, res) => {
   try {
-    const pricingList = await pricingService.listAllPricing();
+    const pricingList = await pricingService.listActivePricing();
     const runtimeTargets = billingRuntimeConfigService.listBillingTargets();
     const runtimeTargetKeys = new Set(runtimeTargets.map((item) => item.key));
 

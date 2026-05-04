@@ -240,6 +240,21 @@ export default function Sidebar({
     shareEnabled?: boolean;
     shareToken?: string | null;
   };
+  type SidebarPromoItem = {
+    id: string;
+    bannerId?: string;
+    title: string;
+    imageUrl?: string | null;
+    linkType?: "internal" | "external" | "none";
+    linkTarget?: string | null;
+  };
+  type SidebarPromoBanner = {
+    id: string;
+    displayType: "single" | "carousel";
+    allowDismiss: boolean;
+    version: number;
+    items: SidebarPromoItem[];
+  };
   const SESSION_PREVIEW_COUNT = 6;
   const [location, setLocation] = useLocation();
   const currentPath = React.useMemo(() => location.split("?")[0] || location, [location]);
@@ -304,6 +319,9 @@ export default function Sidebar({
   const [deleteProjectTarget, setDeleteProjectTarget] = React.useState<TaskCreationProjectSummary | null>(null);
   const [deleteProjectSubmitting, setDeleteProjectSubmitting] = React.useState(false);
   const [unreadCount, setUnreadCount] = React.useState(0);
+  const [promoBanner, setPromoBanner] = React.useState<SidebarPromoBanner | null>(null);
+  const [promoLoading, setPromoLoading] = React.useState(false);
+  const [promoCurrentIndex, setPromoCurrentIndex] = React.useState(0);
   const listLoadingRef = React.useRef(false);
   const lastListFetchRef = React.useRef(0);
   const lastListErrorToastAtRef = React.useRef(0);
@@ -428,6 +446,117 @@ export default function Sidebar({
       return changed ? next : prev;
     });
   }, []);
+
+  React.useEffect(() => {
+    if (collapsed) return;
+    let disposed = false;
+    const loadPromo = async () => {
+      setPromoLoading(true);
+      try {
+        const response = await fetch("/api/ui/promo-banners/active?placement=sidebar_bubble", {
+          credentials: "include",
+        });
+        if (!response.ok) {
+          throw new Error("加载侧边栏气泡失败");
+        }
+        const data = await response.json();
+        if (disposed) return;
+        const banner = data?.banner || null;
+        if (
+          banner &&
+          typeof banner.id === "string" &&
+          Array.isArray(banner.items) &&
+          banner.items.length > 0
+        ) {
+          const dismissedKey = `oneceo-sidebar-promo-dismissed:${user?.id || "anonymous"}:${banner.id}:v${String(banner.version || 1)}`;
+          if (typeof window !== "undefined" && window.localStorage.getItem(dismissedKey) === "1") {
+            setPromoBanner(null);
+            return;
+          }
+          setPromoBanner(banner);
+          setPromoCurrentIndex(0);
+        } else {
+          setPromoBanner(null);
+        }
+      } catch (error) {
+        console.error("[Sidebar] failed to load promo banner:", error);
+        setPromoBanner(null);
+      } finally {
+        if (!disposed) setPromoLoading(false);
+      }
+    };
+    void loadPromo();
+    return () => {
+      disposed = true;
+    };
+  }, [collapsed, user?.id]);
+
+  React.useEffect(() => {
+    if (!promoBanner || promoBanner.items.length < 2 || promoBanner.displayType !== "carousel") return;
+    const timer = window.setInterval(() => {
+      setPromoCurrentIndex((prev) => (prev + 1) % promoBanner.items.length);
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [promoBanner]);
+
+  const currentPromoItem = React.useMemo(() => {
+    if (!promoBanner || promoBanner.items.length === 0) return null;
+    if (promoBanner.displayType !== "carousel") return promoBanner.items[0] || null;
+    const safeIndex = Math.max(0, Math.min(promoCurrentIndex, promoBanner.items.length - 1));
+    return promoBanner.items[safeIndex] || null;
+  }, [promoBanner, promoCurrentIndex]);
+
+  const reportPromoEvent = React.useCallback(
+    async (eventType: "impression" | "click" | "dismiss", item?: SidebarPromoItem | null) => {
+      if (!promoBanner) return;
+      try {
+        await fetch(`/api/ui/promo-banners/${promoBanner.id}/events`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            eventType,
+            itemId: item?.id || null,
+            metadata: {
+              placement: "sidebar_bubble",
+              displayType: promoBanner.displayType,
+              index: promoCurrentIndex,
+            },
+          }),
+        });
+      } catch (error) {
+        console.error("[Sidebar] failed to report promo event:", error);
+      }
+    },
+    [promoBanner, promoCurrentIndex],
+  );
+
+  React.useEffect(() => {
+    if (!promoBanner || !currentPromoItem) return;
+    void reportPromoEvent("impression", currentPromoItem);
+  }, [currentPromoItem, promoBanner, reportPromoEvent]);
+
+  const handlePromoDismiss = React.useCallback(() => {
+    if (!promoBanner) return;
+    if (typeof window !== "undefined") {
+      const key = `oneceo-sidebar-promo-dismissed:${user?.id || "anonymous"}:${promoBanner.id}:v${String(promoBanner.version || 1)}`;
+      window.localStorage.setItem(key, "1");
+    }
+    void reportPromoEvent("dismiss", currentPromoItem);
+    setPromoBanner(null);
+  }, [currentPromoItem, promoBanner, reportPromoEvent, user?.id]);
+
+  const handlePromoClick = React.useCallback(() => {
+    if (!currentPromoItem) return;
+    void reportPromoEvent("click", currentPromoItem);
+    if (currentPromoItem.linkType === "internal" && currentPromoItem.linkTarget) {
+      setLocation(currentPromoItem.linkTarget);
+      return;
+    }
+    if (currentPromoItem.linkType === "external" && currentPromoItem.linkTarget) {
+      window.open(currentPromoItem.linkTarget, "_blank", "noopener,noreferrer");
+    }
+  }, [currentPromoItem, reportPromoEvent, setLocation]);
 
   const loadProjectSessions = React.useCallback(
     async (projectId: string, options?: { force?: boolean }) => {
@@ -1794,6 +1923,49 @@ export default function Sidebar({
 
       {/* Bottom Section */}
       <div className="border-t border-sidebar-border p-2.5">
+        {!collapsed && !promoLoading && promoBanner && currentPromoItem ? (
+          <div className="mb-2 overflow-hidden rounded-xl border border-sidebar-border bg-sidebar-accent/20">
+            <button type="button" className="w-full text-left" onClick={handlePromoClick}>
+              {currentPromoItem.imageUrl ? (
+                <img
+                  src={currentPromoItem.imageUrl}
+                  alt={currentPromoItem.title}
+                  className="h-24 w-full object-cover"
+                />
+              ) : null}
+              <div className="space-y-1 px-3 py-2">
+                <p className="text-sm font-semibold text-sidebar-foreground truncate">
+                  {currentPromoItem.title}
+                </p>
+              </div>
+            </button>
+            <div className="flex items-center justify-between px-3 pb-2">
+              <div className="flex items-center gap-1">
+                {promoBanner.items.map((_, index) => (
+                  <button
+                    key={`promo-dot-${index}`}
+                    type="button"
+                    className={`h-1.5 rounded-full transition-all ${
+                      promoCurrentIndex === index ? "w-4 bg-sidebar-foreground/80" : "w-1.5 bg-sidebar-foreground/30"
+                    }`}
+                    onClick={() => setPromoCurrentIndex(index)}
+                    aria-label={`切换到第 ${index + 1} 条`}
+                  />
+                ))}
+              </div>
+              {promoBanner.allowDismiss ? (
+                <button
+                  type="button"
+                  className="text-[11px] text-muted-foreground hover:text-sidebar-foreground"
+                  onClick={handlePromoDismiss}
+                >
+                  关闭
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
         {/* 通知按钮 */}
         <Button
           variant="ghost"

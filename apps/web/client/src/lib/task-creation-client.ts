@@ -5,7 +5,7 @@ export type TaskCreationSessionSummary = {
   id: string;
   title?: string;
   titleLocked?: boolean;
-  titleSource?: "placeholder" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
+  titleSource?: "placeholder" | "first_user_input" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
   titleState?: "provisional" | "resolved" | "manual";
   titleResolvedAt?: string;
   isFavorite?: boolean;
@@ -520,7 +520,7 @@ export type TaskCreationSessionDetail = {
   id: string;
   title?: string;
   titleLocked?: boolean;
-  titleSource?: "placeholder" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
+  titleSource?: "placeholder" | "first_user_input" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
   titleState?: "provisional" | "resolved" | "manual";
   titleResolvedAt?: string;
   isFavorite?: boolean;
@@ -912,7 +912,7 @@ export async function resolveTaskCreationSessionTitle(
   id: string;
   title?: string;
   titleLocked?: boolean;
-  titleSource?: "placeholder" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
+  titleSource?: "placeholder" | "first_user_input" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
   titleState?: "provisional" | "resolved" | "manual";
   titleResolvedAt?: string | null;
   resolved?: boolean;

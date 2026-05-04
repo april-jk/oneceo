@@ -593,6 +593,51 @@ export default function Sidebar({
           }
           return prev;
         });
+
+        if (hasProjectIdPatch) {
+          const appliedProjectId =
+            typeof detail?.projectId === "string" && detail.projectId.trim()
+              ? detail.projectId.trim()
+              : null;
+          const appliedProjectName =
+            typeof detail?.projectName === "string" && detail.projectName.trim()
+              ? detail.projectName.trim()
+              : null;
+          const nextUpdatedAt =
+            hasUpdatedAtPatch &&
+            typeof (detail as { updatedAt?: unknown }).updatedAt === "string" &&
+            (detail as { updatedAt?: string }).updatedAt?.trim()
+              ? (detail as { updatedAt?: string }).updatedAt?.trim()
+              : undefined;
+
+          setProjectSessionsByProjectId((prev) => {
+            const next = { ...prev };
+            const patchBase: SessionTask = {
+              sessionId: patchedSessionId,
+              title: patchedTitle || t("sidebar.sessionFallbackTitle"),
+              status: patchedStatus || "in_progress",
+              isFavorite: hasFavoritePatch ? Boolean(detail?.isFavorite) : false,
+              projectId: appliedProjectId,
+              projectName: appliedProjectName,
+              ...(typeof nextUpdatedAt === "string" ? { updatedAt: nextUpdatedAt } : {}),
+            };
+
+            for (const [projectId, sessions] of Object.entries(next)) {
+              const filtered = sessions.filter((session) => session.sessionId !== patchedSessionId);
+              next[projectId] = filtered;
+            }
+
+            if (appliedProjectId) {
+              const existing = next[appliedProjectId] || [];
+              next[appliedProjectId] = sortSessionTasks([
+                patchBase,
+                ...existing,
+              ]);
+            }
+
+            return next;
+          });
+        }
       }
       if (patchedSessionId && patchIsMeaningful) {
         void load(true);
@@ -730,12 +775,20 @@ export default function Sidebar({
     () => sortSessionTasks(sessionTasks),
     [sessionTasks, sortSessionTasks],
   );
-  const sessionPreviewList = orderedSessionTasks.slice(
+  const ungroupedRecentSessionTasks = React.useMemo(
+    () =>
+      orderedSessionTasks.filter(
+        (session) =>
+          !(typeof session.projectId === "string" && session.projectId.trim()),
+      ),
+    [orderedSessionTasks],
+  );
+  const sessionPreviewList = ungroupedRecentSessionTasks.slice(
     0,
     SESSION_PREVIEW_COUNT,
   );
   const hiddenSessionCount = Math.max(
-    orderedSessionTasks.length - SESSION_PREVIEW_COUNT,
+    ungroupedRecentSessionTasks.length - SESSION_PREVIEW_COUNT,
     0,
   );
   const hasSessionOverflow = hiddenSessionCount > 0;
@@ -1464,11 +1517,11 @@ export default function Sidebar({
                         {t("sidebar.recentSessions")}
                       </span>
                       <span className="shrink-0 text-[11px] text-muted-foreground">
-                        {orderedSessionTasks.length}
+                        {ungroupedRecentSessionTasks.length}
                       </span>
                     </div>
 
-                    {sessionTasks.length === 0 ? (
+                    {ungroupedRecentSessionTasks.length === 0 ? (
                       <div className="px-3 py-2 text-xs leading-5 text-muted-foreground">
                         {t("sidebar.noTasks")}
                       </div>

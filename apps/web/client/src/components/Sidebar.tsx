@@ -45,6 +45,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   FileText,
   FolderOpen,
@@ -243,13 +244,14 @@ export default function Sidebar({
   const { t } = useTranslation();
   const { user, credits } = useAuth();
   const creditBalanceLabel = credits ? credits.balance.toLocaleString() : "--";
-  const { projects: manualProjects } = useSharedManualProjects(user?.id);
+  const { projects: manualProjects, loading: manualProjectsLoading } = useSharedManualProjects(user?.id);
   const [expandedProjectGroups, setExpandedProjectGroups] = React.useState<string[]>([]);
   const [expandedProjects, setExpandedProjects] = React.useState<string[]>([]);
   const [expandedManagers, setExpandedManagers] = React.useState<string[]>([]);
   const [tasksDialogOpen, setTasksDialogOpen] = React.useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = React.useState(false);
   const [sessionTasks, setSessionTasks] = React.useState<SessionTask[]>([]);
+  const [sessionListLoading, setSessionListLoading] = React.useState(true);
   const [projectSessionsByProjectId, setProjectSessionsByProjectId] = React.useState<
     Record<string, SessionTask[]>
   >({});
@@ -477,6 +479,9 @@ export default function Sidebar({
       const now = Date.now();
       if (!force && now - lastListFetchRef.current < 3000) return;
       listLoadingRef.current = true;
+      if (force || sessionTasks.length === 0) {
+        setSessionListLoading(true);
+      }
       try {
         const list = await listTaskCreationSessions("all");
         if (disposed) return;
@@ -496,6 +501,9 @@ export default function Sidebar({
         }
       } finally {
         listLoadingRef.current = false;
+        if (!disposed) {
+          setSessionListLoading(false);
+        }
       }
     };
     const onVisibility = () => {
@@ -1356,8 +1364,25 @@ export default function Sidebar({
               <div className="overflow-x-hidden px-2.5 pb-2.5 pr-3">
                 <div className="space-y-3">
                   {manualProjectNodes.length === 0 ? (
-                    <div className="px-2 py-2 text-xs leading-5 text-muted-foreground">
-                      {t("sidebar.noManualProjects")}
+                    <div className="space-y-1 px-0 py-1">
+                      {manualProjectsLoading ? (
+                        <>
+                          <div className="flex items-center gap-1 px-0.5">
+                            <Skeleton className="h-7 w-7 shrink-0 rounded-lg" />
+                            <Skeleton className="h-7 flex-1 rounded-lg" />
+                            <Skeleton className="h-7 w-7 shrink-0 rounded-lg" />
+                          </div>
+                          <div className="flex items-center gap-1 px-0.5">
+                            <Skeleton className="h-7 w-7 shrink-0 rounded-lg" />
+                            <Skeleton className="h-7 flex-1 rounded-lg" />
+                            <Skeleton className="h-7 w-7 shrink-0 rounded-lg" />
+                          </div>
+                        </>
+                      ) : (
+                        <div className="px-2 py-1 text-xs leading-5 text-muted-foreground">
+                          {t("sidebar.noManualProjects")}
+                        </div>
+                      )}
                     </div>
                   ) : null}
                   {manualProjectNodes.map((project) => {
@@ -1468,9 +1493,23 @@ export default function Sidebar({
                       </span>
                     </div>
 
-                    {sessionTasks.length === 0 ? (
-                      <div className="px-3 py-2 text-xs leading-5 text-muted-foreground">
-                        {t("sidebar.noTasks")}
+                    {sessionListLoading && sessionTasks.length === 0 ? (
+                      <div className="space-y-1 px-2 py-1">
+                        <div className="grid h-7 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-1.5 px-2">
+                          <Skeleton className="h-3.5 w-3.5 rounded-sm" />
+                          <Skeleton className="h-3.5 w-full rounded-sm" />
+                          <Skeleton className="h-3.5 w-9 rounded-sm" />
+                        </div>
+                        <div className="grid h-7 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-1.5 px-2">
+                          <Skeleton className="h-3.5 w-3.5 rounded-sm" />
+                          <Skeleton className="h-3.5 w-11/12 rounded-sm" />
+                          <Skeleton className="h-3.5 w-9 rounded-sm" />
+                        </div>
+                        <div className="grid h-7 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-1.5 px-2">
+                          <Skeleton className="h-3.5 w-3.5 rounded-sm" />
+                          <Skeleton className="h-3.5 w-10/12 rounded-sm" />
+                          <Skeleton className="h-3.5 w-9 rounded-sm" />
+                        </div>
                       </div>
                     ) : (
                       <div className="space-y-1">

@@ -24,6 +24,7 @@ import { createUserManagementRoutes } from './routes/user-management-routes';
 import { createBillingManagementRoutes } from './routes/billing-management-routes';
 import { createNotificationManagementRoutes } from './routes/notification-management-routes';
 import { createMembershipManagementRoutes } from './routes/membership-management-routes';
+import { createPromoBannerManagementRoutes } from './routes/promo-banner-management-routes';
 import { AgentManagementService } from './services/agent-management-service';
 import { AdminThemeService } from './services/admin-theme-service';
 import { AuditService } from './services/audit-service';
@@ -130,6 +131,7 @@ app.use('/api/osac-releases', createOsacReleaseRoutes(osacReleaseManagementServi
 app.use('/api/operations-analytics', createOperationsAnalyticsRoutes(operationsAnalyticsService));
 app.use('/api/internal/billing', createBillingManagementRoutes());
 app.use('/api/internal/notifications', createNotificationManagementRoutes());
+app.use('/api/internal/promo-banners', createPromoBannerManagementRoutes());
 app.use('/api/internal/membership', createMembershipManagementRoutes());
 
 if (hasBuiltAdminWeb) {

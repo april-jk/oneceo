@@ -74,6 +74,9 @@ const REQUIRED_TABLES = [
   'membership_daily_restores',
   'notifications',
   'user_notifications',
+  'ui_promo_banners',
+  'ui_promo_banner_items',
+  'ui_promo_banner_events',
 ] as const;
 
 const REQUIRED_COLUMNS = [
@@ -283,6 +286,15 @@ const REQUIRED_COLUMNS = [
   ['user_notifications', 'user_id'],
   ['user_notifications', 'notification_id'],
   ['user_notifications', 'is_read'],
+  ['ui_promo_banners', 'placement'],
+  ['ui_promo_banners', 'display_type'],
+  ['ui_promo_banners', 'status'],
+  ['ui_promo_banners', 'priority'],
+  ['ui_promo_banner_items', 'banner_id'],
+  ['ui_promo_banner_items', 'title'],
+  ['ui_promo_banner_items', 'link_type'],
+  ['ui_promo_banner_events', 'banner_id'],
+  ['ui_promo_banner_events', 'event_type'],
 ] as const;
 
 const REQUIRED_INDEXES = [
@@ -379,6 +391,15 @@ const REQUIRED_INDEXES = [
   'idx_user_notifications_user_id',
   'idx_user_notifications_notification_id',
   'idx_user_notifications_user_read',
+  'idx_ui_promo_banners_placement',
+  'idx_ui_promo_banners_status',
+  'idx_ui_promo_banners_priority',
+  'idx_ui_promo_banners_active_sort',
+  'idx_ui_promo_banner_items_banner_id',
+  'idx_ui_promo_banner_items_sort_order',
+  'idx_ui_promo_banner_events_banner_id',
+  'idx_ui_promo_banner_events_user_id',
+  'idx_ui_promo_banner_events_type',
 ] as const;
 
 /**
@@ -2015,6 +2036,60 @@ CREATE INDEX IF NOT EXISTS idx_user_notifications_notification_id ON user_notifi
 CREATE INDEX IF NOT EXISTS idx_user_notifications_user_read ON user_notifications(user_id, is_read);
 `;
 
+const promoBannerTablesSQL = `
+CREATE TABLE IF NOT EXISTS ui_promo_banners (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  placement TEXT NOT NULL DEFAULT 'sidebar_bubble',
+  display_type TEXT NOT NULL DEFAULT 'single',
+  status TEXT NOT NULL DEFAULT 'draft',
+  priority INTEGER NOT NULL DEFAULT 0,
+  allow_dismiss BOOLEAN NOT NULL DEFAULT TRUE,
+  dismiss_reset_on_version BOOLEAN NOT NULL DEFAULT TRUE,
+  start_at TIMESTAMP,
+  end_at TIMESTAMP,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_by UUID REFERENCES admin_users(id) ON DELETE SET NULL,
+  updated_by UUID REFERENCES admin_users(id) ON DELETE SET NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ui_promo_banners_placement ON ui_promo_banners(placement);
+CREATE INDEX IF NOT EXISTS idx_ui_promo_banners_status ON ui_promo_banners(status);
+CREATE INDEX IF NOT EXISTS idx_ui_promo_banners_priority ON ui_promo_banners(priority);
+CREATE INDEX IF NOT EXISTS idx_ui_promo_banners_active_sort ON ui_promo_banners(placement, status, priority, updated_at);
+
+CREATE TABLE IF NOT EXISTS ui_promo_banner_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  banner_id UUID NOT NULL REFERENCES ui_promo_banners(id) ON DELETE CASCADE,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  title TEXT NOT NULL,
+  subtitle TEXT,
+  image_url TEXT,
+  cta_text TEXT,
+  link_type TEXT NOT NULL DEFAULT 'none',
+  link_target TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ui_promo_banner_items_banner_id ON ui_promo_banner_items(banner_id);
+CREATE INDEX IF NOT EXISTS idx_ui_promo_banner_items_sort_order ON ui_promo_banner_items(sort_order);
+
+CREATE TABLE IF NOT EXISTS ui_promo_banner_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  banner_id UUID NOT NULL REFERENCES ui_promo_banners(id) ON DELETE CASCADE,
+  item_id UUID REFERENCES ui_promo_banner_items(id) ON DELETE SET NULL,
+  user_id UUID REFERENCES app_users(id) ON DELETE SET NULL,
+  event_type TEXT NOT NULL,
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ui_promo_banner_events_banner_id ON ui_promo_banner_events(banner_id);
+CREATE INDEX IF NOT EXISTS idx_ui_promo_banner_events_user_id ON ui_promo_banner_events(user_id);
+CREATE INDEX IF NOT EXISTS idx_ui_promo_banner_events_type ON ui_promo_banner_events(event_type);
+`;
+
 export async function inspectDatabaseSchemaReadiness(): Promise<SchemaReadinessReport> {
   await ensureDatabaseConnection({ retries: 3, delayMs: 500 });
 
@@ -2117,6 +2192,12 @@ export async function runMigration() {
       await db.execute(sql.raw(notificationTablesSQL));
     } catch (notificationErr) {
       console.error('[MIGRATION] notification tables failed (non-fatal):', notificationErr);
+    }
+
+    try {
+      await db.execute(sql.raw(promoBannerTablesSQL));
+    } catch (promoBannerErr) {
+      console.error('[MIGRATION] promo banner tables failed (non-fatal):', promoBannerErr);
     }
 
     // 迁移：将定价基础单位从 1k tokens 切换到 1M tokens（必须在插入定价数据之前执行）

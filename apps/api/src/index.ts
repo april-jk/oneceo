@@ -29,6 +29,8 @@ import internalBillingRoutes from './routes/internal-billing-routes';
 import activationCodeRoutes from './routes/activation-code-routes';
 import notificationRoutes from './routes/notification-routes';
 import internalNotificationRoutes from './routes/internal-notification-routes';
+import internalPromoBannerRoutes from './routes/internal-promo-banner-routes';
+import uiPromoBannerRoutes from './routes/ui-promo-banner-routes';
 import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
 import { closeDatabaseConnection, testDatabaseConnection } from './config/database';
 import { getPublicErrorMessage } from './utils/error-response';
@@ -190,6 +192,8 @@ app.use('/api/internal/billing', internalBillingRoutes);
 app.use('/api/activation-codes', activationCodeRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/internal/notifications', internalNotificationRoutes);
+app.use('/api/internal/promo-banners', internalPromoBannerRoutes);
+app.use('/api/ui/promo-banners', uiPromoBannerRoutes);
 
 // 任务相关 API
 app.get('/api/tasks', (req, res) => {

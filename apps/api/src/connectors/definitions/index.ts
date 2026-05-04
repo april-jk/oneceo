@@ -2,6 +2,7 @@ import { buildFigmaDefinition } from './figma';
 import { buildCustomApiDefinition } from './custom-api';
 import { buildCustomMcpDefinition } from './custom-mcp';
 import { buildGithubDefinition } from './github';
+import { buildGoogleSuperDefinition } from './google-super';
 import { buildNotionDefinition } from './notion';
 import { buildPostgresDefinition } from './postgres';
 import { buildSlackDefinition } from './slack';
@@ -27,6 +28,7 @@ export const CONNECTOR_KEYS = [
   'slack',
   'supabase',
   'figma',
+  'google_super',
   'vercel',
   'postgres',
   'custom_api',
@@ -40,6 +42,7 @@ export function buildConnectorDefinitions(): ConnectorDefinition[] {
     buildSlackDefinition(),
     buildSupabaseDefinition(),
     buildFigmaDefinition(),
+    buildGoogleSuperDefinition(),
     buildVercelDefinition(),
     buildPostgresDefinition(),
     buildCustomApiDefinition(),

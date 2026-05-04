@@ -876,6 +876,36 @@ export const customApiConfirmations = pgTable(
   })
 );
 
+export const taskSessionMcpToolConfirmations = pgTable(
+  'task_session_mcp_tool_confirmations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    appUserId: text('app_user_id').notNull(),
+    taskSessionId: text('task_session_id').notNull(),
+    agentRunId: text('agent_run_id'),
+    connectorKey: text('connector_key').notNull(),
+    toolName: text('tool_name').notNull(),
+    argumentsHash: text('arguments_hash').notNull(),
+    confirmationTokenHash: text('confirmation_token_hash'),
+    summaryJson: jsonb('summary_json').notNull().default(sql`'{}'::jsonb`),
+    status: text('status').notNull().default('pending'),
+    expiresAt: timestamp('expires_at').notNull(),
+    approvedAt: timestamp('approved_at'),
+    consumedAt: timestamp('consumed_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    lookupIdx: index('idx_task_session_mcp_tool_confirmations_lookup').on(
+      table.appUserId,
+      table.taskSessionId,
+      table.connectorKey,
+      table.toolName
+    ),
+    tokenIdx: index('idx_task_session_mcp_tool_confirmations_token_hash').on(table.confirmationTokenHash),
+  })
+);
+
 export const customApiCallAuditLogs = pgTable(
   'custom_api_call_audit_logs',
   {
@@ -1371,6 +1401,8 @@ export type CustomApiEndpointTool = typeof customApiEndpointTools.$inferSelect;
 export type NewCustomApiEndpointTool = typeof customApiEndpointTools.$inferInsert;
 export type CustomApiConfirmation = typeof customApiConfirmations.$inferSelect;
 export type NewCustomApiConfirmation = typeof customApiConfirmations.$inferInsert;
+export type TaskSessionMcpToolConfirmation = typeof taskSessionMcpToolConfirmations.$inferSelect;
+export type NewTaskSessionMcpToolConfirmation = typeof taskSessionMcpToolConfirmations.$inferInsert;
 export type CustomApiCallAuditLog = typeof customApiCallAuditLogs.$inferSelect;
 export type NewCustomApiCallAuditLog = typeof customApiCallAuditLogs.$inferInsert;
 

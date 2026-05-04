@@ -119,6 +119,25 @@ export function getConnectorGuides(t: TFunction): Partial<Record<ConnectorKey, C
         t("connectors.guides.figma.tips.1"),
       ],
     },
+    google_super: {
+      intro: t("connectors.guides.google_super.intro"),
+      quickLinks: [
+        {
+          label: t("connectors.guides.google_super.links.composioToolkit.label"),
+          href: "https://docs.composio.dev/toolkits/googlesuper",
+          description: t("connectors.guides.google_super.links.composioToolkit.description"),
+        },
+      ],
+      steps: [
+        t("connectors.guides.google_super.steps.0"),
+        t("connectors.guides.google_super.steps.1"),
+        t("connectors.guides.google_super.steps.2"),
+      ],
+      tips: [
+        t("connectors.guides.google_super.tips.0"),
+        t("connectors.guides.google_super.tips.1"),
+      ],
+    },
     vercel: {
       intro: t("connectors.guides.vercel.intro"),
       quickLinks: [

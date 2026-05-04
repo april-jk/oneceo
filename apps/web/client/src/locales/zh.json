@@ -585,6 +585,10 @@
         "name": "Figma",
         "description": "通过 Composio 托管授权和 oneceo API broker 使用 Figma MCP 工具。"
       },
+      "google_super": {
+        "name": "Google Workspace",
+        "description": "通过 Composio Google Super 和 oneceo API broker 使用 Gmail、Drive、Docs、Sheets、Calendar 等工具。"
+      },
       "vercel": {
         "name": "Vercel",
         "description": "通过 OneCEO 托管 provider host 和 Vercel Integration 安装令牌连接 Vercel。"
@@ -675,12 +679,9 @@
       "unavailable": "不可用"
     },
     "empty": {
-      "customApiReserved": "自定义 API 入口已预留",
       "customMcpReserved": "自定义 MCP 入口已预留",
       "intro": "本轮先统一应用连接器目录、profile 规范和会话挂载边界。",
-      "customApiDetail": " 自定义 API 的 schema 导入与运行时装配将在下一阶段补齐。",
       "customMcpDetail": " 自定义 MCP 的创建表单和运行时装配将在下一阶段补齐。",
-      "createCustomApi": "创建自定义 API",
       "createCustomMcp": "创建自定义 MCP",
       "noMatches": "没有找到匹配的连接器"
     },
@@ -825,6 +826,24 @@
           "composioToolkit": {
             "label": "Composio Figma Toolkit",
             "description": "查看 Composio 托管的 Figma 工具集"
+          }
+        }
+      },
+      "google_super": {
+        "intro": "Google Workspace 连接器通过 Composio Google Super 托管授权，并通过 oneceo API broker 暴露 MCP 工具；Google token、Composio key 和 MCP headers 不会下发到前端或 sandbox。",
+        "steps": {
+          "0": "点击连接并完成 Composio/Google Workspace 授权流程。",
+          "1": "授权完成后，将 Google Workspace 挂载到当前会话，或保留为可复用 profile。",
+          "2": "Agent 会先搜索工具、按需获取 schema，再通过 broker 执行；高风险写操作需要本次确认。"
+        },
+        "tips": {
+          "0": "不要把 Google token、Composio API key、MCP URL 或 headers 粘贴到对话、表单、shell 或 sandbox 文件中。",
+          "1": "发送邮件、改日历、共享文件、修改 Docs/Sheets 等操作前，必须明确目标对象。"
+        },
+        "links": {
+          "composioToolkit": {
+            "label": "Composio Google Super Toolkit",
+            "description": "查看 Composio 托管的 Google Super 工具集"
           }
         }
       },

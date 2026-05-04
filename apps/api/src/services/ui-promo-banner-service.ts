@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, lte, gte, or, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
 import { db } from '../config/database';
 import { uiPromoBanners, uiPromoBannerEvents, uiPromoBannerItems } from '../db/schema';
 
@@ -38,7 +38,6 @@ type UpdateBannerInput = Omit<CreateBannerInput, 'createdBy'> & {
 };
 
 const allowedPlacements = new Set<Placement>(['home_bubble', 'sidebar_bubble']);
-const allowedDisplayTypes = new Set<DisplayType>(['single', 'carousel']);
 const allowedLinkTypes = new Set<LinkType>(['internal', 'external', 'none']);
 const allowedEventTypes = new Set<EventType>(['impression', 'click', 'dismiss']);
 
@@ -86,14 +85,11 @@ function validateBannerInput(input: CreateBannerInput | UpdateBannerInput) {
   if (!allowedPlacements.has(input.placement)) {
     throw new Error('展示位置不合法');
   }
-  if (!allowedDisplayTypes.has(input.displayType)) {
-    throw new Error('展示类型不合法');
-  }
   if (!Array.isArray(input.items) || input.items.length === 0) {
     throw new Error('至少需要一条素材');
   }
-  if (input.displayType === 'carousel' && input.items.length < 2) {
-    throw new Error('轮播至少需要两条素材');
+  if (input.items.length !== 1) {
+    throw new Error('每个条幅只能包含一条素材');
   }
   if (input.startAt && input.endAt && input.startAt.getTime() >= input.endAt.getTime()) {
     throw new Error('开始时间必须早于结束时间');
@@ -138,7 +134,7 @@ export class UiPromoBannerService {
       ? await db
           .select()
           .from(uiPromoBannerItems)
-          .where(sql`${uiPromoBannerItems.bannerId} = ANY(${ids}::uuid[])`)
+          .where(inArray(uiPromoBannerItems.bannerId, ids))
           .orderBy(asc(uiPromoBannerItems.sortOrder), asc(uiPromoBannerItems.createdAt))
       : [];
     const itemMap = new Map<string, typeof items>();
@@ -162,7 +158,7 @@ export class UiPromoBannerService {
       .values({
         name,
         placement: input.placement,
-        displayType: input.displayType,
+        displayType: 'single',
         status: 'draft',
         priority: Number.isFinite(input.priority) ? Number(input.priority) : 0,
         allowDismiss: input.allowDismiss !== false,
@@ -201,7 +197,7 @@ export class UiPromoBannerService {
       .set({
         name,
         placement: input.placement,
-        displayType: input.displayType,
+        displayType: 'single',
         priority: Number.isFinite(input.priority) ? Number(input.priority) : 0,
         allowDismiss: input.allowDismiss !== false,
         dismissResetOnVersion: input.dismissResetOnVersion !== false,
@@ -279,17 +275,41 @@ export class UiPromoBannerService {
         ),
       )
       .orderBy(desc(uiPromoBanners.priority), desc(uiPromoBanners.updatedAt))
-      .limit(1);
-    const banner = rows[0];
-    if (!banner) return null;
+      .limit(20);
+    if (rows.length === 0) return null;
+    const bannerIds = rows.map((row) => row.id);
     const allItems = await db
       .select()
       .from(uiPromoBannerItems)
-      .where(and(eq(uiPromoBannerItems.bannerId, banner.id), eq(uiPromoBannerItems.isActive, true)))
+      .where(and(inArray(uiPromoBannerItems.bannerId, bannerIds), eq(uiPromoBannerItems.isActive, true)))
       .orderBy(asc(uiPromoBannerItems.sortOrder), asc(uiPromoBannerItems.createdAt));
-    const items = banner.displayType === 'single' ? allItems.slice(0, 1) : allItems;
-    if (items.length === 0) return null;
-    return { ...banner, items };
+
+    const firstItemByBannerId = new Map<string, (typeof allItems)[number]>();
+    for (const item of allItems) {
+      if (!firstItemByBannerId.has(item.bannerId)) {
+        firstItemByBannerId.set(item.bannerId, item);
+      }
+    }
+
+    const resolvedItems = rows
+      .map((banner) => {
+        const item = firstItemByBannerId.get(banner.id);
+        if (!item) return null;
+        return {
+          ...item,
+          bannerId: banner.id,
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => Boolean(item));
+
+    if (resolvedItems.length === 0) return null;
+    const isCarousel = resolvedItems.length > 1;
+    const primaryBanner = rows[0];
+    return {
+      ...primaryBanner,
+      displayType: (isCarousel ? 'carousel' : 'single') as DisplayType,
+      items: resolvedItems,
+    };
   }
 
   async recordEvent(input: {

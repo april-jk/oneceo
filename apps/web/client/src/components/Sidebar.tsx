@@ -95,6 +95,7 @@ import {
 import {
   removeSharedManualProject,
   upsertSharedManualProject,
+  readSidebarExpandedState,
   useSharedManualProjects,
 } from "@/lib/shared-manual-projects";
 import { SELF_ORGANIZED_PROJECTS } from "@/lib/self-organized-projects";
@@ -213,6 +214,7 @@ export default function Sidebar({
   onToggleCollapse,
   selectedProject,
 }: SidebarProps) {
+  const SIDEBAR_EXPAND_STATE_STORAGE_PREFIX = "oneceo_sidebar_expand_state_v1";
   type ProjectManager = {
     id: string;
     name: string;
@@ -240,18 +242,16 @@ export default function Sidebar({
   };
   type SidebarPromoItem = {
     id: string;
+    bannerId?: string;
     title: string;
-    subtitle?: string | null;
     imageUrl?: string | null;
-    ctaText?: string | null;
-    linkType: "internal" | "external" | "none";
+    linkType?: "internal" | "external" | "none";
     linkTarget?: string | null;
   };
   type SidebarPromoBanner = {
     id: string;
     displayType: "single" | "carousel";
     allowDismiss: boolean;
-    dismissResetOnVersion?: boolean;
     version: number;
     items: SidebarPromoItem[];
   };
@@ -260,11 +260,39 @@ export default function Sidebar({
   const currentPath = React.useMemo(() => location.split("?")[0] || location, [location]);
   const { t } = useTranslation();
   const { user, credits } = useAuth();
+  const expandStateStorageKey = React.useMemo(
+    () => `${SIDEBAR_EXPAND_STATE_STORAGE_PREFIX}:${user?.id || "anonymous"}`,
+    [user?.id],
+  );
   const creditBalanceLabel = credits ? credits.balance.toLocaleString() : "--";
   const { projects: manualProjects, loading: manualProjectsLoading } = useSharedManualProjects(user?.id);
-  const [expandedProjectGroups, setExpandedProjectGroups] = React.useState<string[]>([]);
-  const [expandedProjects, setExpandedProjects] = React.useState<string[]>([]);
-  const [expandedManagers, setExpandedManagers] = React.useState<string[]>([]);
+  const [expandedProjectGroups, setExpandedProjectGroups] = React.useState<string[]>(() => {
+    if (typeof window === "undefined") return ["manual-projects"];
+    try {
+      const raw = window.localStorage.getItem(expandStateStorageKey);
+      return readSidebarExpandedState(raw, "expandedProjectGroups", ["manual-projects"]);
+    } catch {
+      return ["manual-projects"];
+    }
+  });
+  const [expandedProjects, setExpandedProjects] = React.useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = window.localStorage.getItem(expandStateStorageKey);
+      return readSidebarExpandedState(raw, "expandedProjects", []);
+    } catch {
+      return [];
+    }
+  });
+  const [expandedManagers, setExpandedManagers] = React.useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = window.localStorage.getItem(expandStateStorageKey);
+      return readSidebarExpandedState(raw, "expandedManagers", []);
+    } catch {
+      return [];
+    }
+  });
   const [tasksDialogOpen, setTasksDialogOpen] = React.useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = React.useState(false);
   const [sessionTasks, setSessionTasks] = React.useState<SessionTask[]>([]);
@@ -357,6 +385,22 @@ export default function Sidebar({
   );
 
   React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        expandStateStorageKey,
+        JSON.stringify({
+          expandedProjectGroups,
+          expandedProjects,
+          expandedManagers,
+        }),
+      );
+    } catch {
+      // ignore localStorage write failures
+    }
+  }, [expandStateStorageKey, expandedProjectGroups, expandedProjects, expandedManagers]);
+
+  React.useEffect(() => {
     projectSessionsByProjectIdRef.current = projectSessionsByProjectId;
   }, [projectSessionsByProjectId]);
 
@@ -403,15 +447,6 @@ export default function Sidebar({
     });
   }, []);
 
-  const buildPromoDismissedStorageKey = React.useCallback(
-    (banner: SidebarPromoBanner) => {
-      const versionSegment =
-        banner.dismissResetOnVersion === false ? "persistent" : `v${String(banner.version || 1)}`;
-      return `oneceo-sidebar-promo-dismissed:${user?.id || "anonymous"}:${banner.id}:${versionSegment}`;
-    },
-    [user?.id],
-  );
-
   React.useEffect(() => {
     if (collapsed) return;
     let disposed = false;
@@ -433,7 +468,7 @@ export default function Sidebar({
           Array.isArray(banner.items) &&
           banner.items.length > 0
         ) {
-          const dismissedKey = buildPromoDismissedStorageKey(banner);
+          const dismissedKey = `oneceo-sidebar-promo-dismissed:${user?.id || "anonymous"}:${banner.id}:v${String(banner.version || 1)}`;
           if (typeof window !== "undefined" && window.localStorage.getItem(dismissedKey) === "1") {
             setPromoBanner(null);
             return;
@@ -454,7 +489,7 @@ export default function Sidebar({
     return () => {
       disposed = true;
     };
-  }, [buildPromoDismissedStorageKey, collapsed]);
+  }, [collapsed, user?.id]);
 
   React.useEffect(() => {
     if (!promoBanner || promoBanner.items.length < 2 || promoBanner.displayType !== "carousel") return;
@@ -504,12 +539,12 @@ export default function Sidebar({
   const handlePromoDismiss = React.useCallback(() => {
     if (!promoBanner) return;
     if (typeof window !== "undefined") {
-      const key = buildPromoDismissedStorageKey(promoBanner);
+      const key = `oneceo-sidebar-promo-dismissed:${user?.id || "anonymous"}:${promoBanner.id}:v${String(promoBanner.version || 1)}`;
       window.localStorage.setItem(key, "1");
     }
     void reportPromoEvent("dismiss", currentPromoItem);
     setPromoBanner(null);
-  }, [buildPromoDismissedStorageKey, currentPromoItem, promoBanner, reportPromoEvent]);
+  }, [currentPromoItem, promoBanner, reportPromoEvent, user?.id]);
 
   const handlePromoClick = React.useCallback(() => {
     if (!currentPromoItem) return;
@@ -590,6 +625,10 @@ export default function Sidebar({
       }
       return changed ? next : prev;
     });
+    setExpandedProjects((prev) => {
+      const next = prev.filter((projectId) => validProjectIds.has(projectId));
+      return next.length === prev.length ? prev : next;
+    });
   }, [manualProjects]);
 
   React.useEffect(() => {
@@ -648,7 +687,7 @@ export default function Sidebar({
     };
     const onVisibility = () => {
       if (document.visibilityState === "visible") {
-        void load(true);
+        void load(false);
       }
     };
     const onSessionUpdated = (event: Event) => {
@@ -741,12 +780,56 @@ export default function Sidebar({
           }
           return prev;
         });
+
+        if (hasProjectIdPatch) {
+          const appliedProjectId =
+            typeof detail?.projectId === "string" && detail.projectId.trim()
+              ? detail.projectId.trim()
+              : null;
+          const appliedProjectName =
+            typeof detail?.projectName === "string" && detail.projectName.trim()
+              ? detail.projectName.trim()
+              : null;
+          const nextUpdatedAt =
+            hasUpdatedAtPatch &&
+            typeof (detail as { updatedAt?: unknown }).updatedAt === "string" &&
+            (detail as { updatedAt?: string }).updatedAt?.trim()
+              ? (detail as { updatedAt?: string }).updatedAt?.trim()
+              : undefined;
+
+          setProjectSessionsByProjectId((prev) => {
+            const next = { ...prev };
+            const patchBase: SessionTask = {
+              sessionId: patchedSessionId,
+              title: patchedTitle || t("sidebar.sessionFallbackTitle"),
+              status: patchedStatus || "in_progress",
+              isFavorite: hasFavoritePatch ? Boolean(detail?.isFavorite) : false,
+              projectId: appliedProjectId,
+              projectName: appliedProjectName,
+              ...(typeof nextUpdatedAt === "string" ? { updatedAt: nextUpdatedAt } : {}),
+            };
+
+            for (const [projectId, sessions] of Object.entries(next)) {
+              const filtered = sessions.filter((session) => session.sessionId !== patchedSessionId);
+              next[projectId] = filtered;
+            }
+
+            if (appliedProjectId) {
+              const existing = next[appliedProjectId] || [];
+              next[appliedProjectId] = sortSessionTasks([
+                patchBase,
+                ...existing,
+              ]);
+            }
+
+            return next;
+          });
+        }
       }
       if (patchedSessionId && patchIsMeaningful) {
-        void load(true);
-        window.setTimeout(() => {
-          void load(true);
-        }, 4000);
+        // Use local patch as the primary update path to avoid visible sidebar flashing.
+        // Fallback polling will reconcile any missed server-side fields.
+        lastListFetchRef.current = Date.now();
       }
     };
     void load(true);
@@ -878,12 +961,20 @@ export default function Sidebar({
     () => sortSessionTasks(sessionTasks),
     [sessionTasks, sortSessionTasks],
   );
-  const sessionPreviewList = orderedSessionTasks.slice(
+  const ungroupedRecentSessionTasks = React.useMemo(
+    () =>
+      orderedSessionTasks.filter(
+        (session) =>
+          !(typeof session.projectId === "string" && session.projectId.trim()),
+      ),
+    [orderedSessionTasks],
+  );
+  const sessionPreviewList = ungroupedRecentSessionTasks.slice(
     0,
     SESSION_PREVIEW_COUNT,
   );
   const hiddenSessionCount = Math.max(
-    orderedSessionTasks.length - SESSION_PREVIEW_COUNT,
+    ungroupedRecentSessionTasks.length - SESSION_PREVIEW_COUNT,
     0,
   );
   const hasSessionOverflow = hiddenSessionCount > 0;
@@ -1629,7 +1720,7 @@ export default function Sidebar({
                         {t("sidebar.recentSessions")}
                       </span>
                       <span className="shrink-0 text-[11px] text-muted-foreground">
-                        {orderedSessionTasks.length}
+                        {ungroupedRecentSessionTasks.length}
                       </span>
                     </div>
 
@@ -1834,11 +1925,7 @@ export default function Sidebar({
       <div className="border-t border-sidebar-border p-2.5">
         {!collapsed && !promoLoading && promoBanner && currentPromoItem ? (
           <div className="mb-2 overflow-hidden rounded-xl border border-sidebar-border bg-sidebar-accent/20">
-            <button
-              type="button"
-              className="w-full text-left"
-              onClick={handlePromoClick}
-            >
+            <button type="button" className="w-full text-left" onClick={handlePromoClick}>
               {currentPromoItem.imageUrl ? (
                 <img
                   src={currentPromoItem.imageUrl}
@@ -1850,12 +1937,6 @@ export default function Sidebar({
                 <p className="text-sm font-semibold text-sidebar-foreground truncate">
                   {currentPromoItem.title}
                 </p>
-                {currentPromoItem.subtitle ? (
-                  <p className="text-xs text-muted-foreground line-clamp-2">{currentPromoItem.subtitle}</p>
-                ) : null}
-                {currentPromoItem.ctaText ? (
-                  <p className="text-xs font-medium text-blue-600">{currentPromoItem.ctaText}</p>
-                ) : null}
               </div>
             </button>
             <div className="flex items-center justify-between px-3 pb-2">

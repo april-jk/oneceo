@@ -1,8 +1,17 @@
 import { Request, Response, Router } from 'express';
 import { uiPromoBannerService } from '../services/ui-promo-banner-service';
 import { promoBannerMediaService } from '../services/promo-banner-media-service';
+import { createRequireInternalToken } from './internal-auth-middleware';
+import { adminAuthMiddleware } from '../middleware/admin-auth-middleware';
 
 const router = Router();
+
+router.use(
+  createRequireInternalToken({
+    disabledMessage: '宣传条幅内部接口未启用',
+  }),
+);
+router.use(adminAuthMiddleware);
 
 router.post('/upload-media', async (req: Request, res: Response) => {
   try {

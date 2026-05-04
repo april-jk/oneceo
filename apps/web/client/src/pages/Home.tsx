@@ -78,7 +78,6 @@ import AltusArtifactPreviewCard, {
   type AltusArtifactFile,
 } from "@/components/AltusArtifactPreviewCard";
 import TaskDeliverableCard from "@/components/TaskDeliverableCard";
-import { SessionCreditBar } from "@/components/SessionCreditBar";
 import AltusRunReplayDrawer, {
   type AltusDrawerView,
   type AltusReplayAction,
@@ -2119,11 +2118,6 @@ export default function Home() {
           className="mt-auto shrink-0 bg-background/90 backdrop-blur"
         >
           <div className="px-6 py-3">
-            {sessionId ? (
-              <div className="mx-auto mb-2 w-[92%] max-w-full">
-                <SessionCreditBar sessionId={sessionId} refreshKey={managedRunStatus} />
-              </div>
-            ) : null}
             {slashSuggestionPanel ? (
               <div className="mx-auto mb-2 w-[92%] max-w-full">
                 {slashSuggestionPanel}

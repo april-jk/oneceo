@@ -36,6 +36,9 @@ type ValidateOfficeArtifactInput = {
 const MIN_OFFICE_FILE_BYTES = 512;
 const PLACEHOLDER_PATTERN = /\b(TODO|TBD)\b|lorem ipsum|示例文本|待补充|占位符/i;
 const URL_PATTERN = /https?:\/\/[^\s<>"')]+/gi;
+const DOCX_COMPACT_ARCHETYPES = new Set(['meeting_memo', 'external_statement']);
+const XLSX_LIGHTWEIGHT_ARCHETYPES = new Set(['input_form']);
+const XLSX_STANDARD_ARCHETYPES = new Set(['learning_plan', 'data_summary']);
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -139,6 +142,37 @@ function addManifestErrors(report: OfficeArtifactQualityReport, required: boolea
   }
 }
 
+function resolveDocxThresholds(manifest: Record<string, unknown> | null) {
+  const archetype = asText(manifest?.contentArchetype);
+  if (DOCX_COMPACT_ARCHETYPES.has(archetype)) {
+    return {
+      minParagraphCount: 2,
+      minCharacterCount: 20,
+      minHeadingLikeParagraphCount: 1,
+    };
+  }
+  if (archetype) {
+    return {
+      minParagraphCount: 3,
+      minCharacterCount: 120,
+      minHeadingLikeParagraphCount: 2,
+    };
+  }
+  return {
+    minParagraphCount: 2,
+    minCharacterCount: 60,
+    minHeadingLikeParagraphCount: 1,
+  };
+}
+
+function resolveXlsxMinimumEffectiveCellCount(manifest: Record<string, unknown> | null) {
+  const archetype = asText(manifest?.contentArchetype);
+  if (XLSX_LIGHTWEIGHT_ARCHETYPES.has(archetype)) return 2;
+  if (XLSX_STANDARD_ARCHETYPES.has(archetype)) return 4;
+  if (archetype) return 6;
+  return 4;
+}
+
 function validateDocx(input: ValidateOfficeArtifactInput): OfficeArtifactQualityReport {
   const required = input.requireManifest !== false;
   const { status, manifest } = parseManifest({ bytes: input.manifestBytes, required });
@@ -167,6 +201,7 @@ function validateDocx(input: ValidateOfficeArtifactInput): OfficeArtifactQuality
     if (!documentXml) {
       report.errors.push('docx_document_xml_missing');
     } else {
+      const thresholds = resolveDocxThresholds(manifest);
       const xml = documentXml.toString('utf8');
       const paragraphs = Array.from(xml.matchAll(/<w:p\b[\s\S]*?<\/w:p>/g))
         .map((match) => stripXmlTags(match[0]))
@@ -181,10 +216,13 @@ function validateDocx(input: ValidateOfficeArtifactInput): OfficeArtifactQuality
       report.metrics.urlCount = urlCount;
       report.metrics.characterCount = fullText.length;
 
-      if (paragraphs.length < 3 || fullText.length < 120) {
+      if (
+        paragraphs.length < thresholds.minParagraphCount ||
+        fullText.length < thresholds.minCharacterCount
+      ) {
         report.errors.push('docx_effective_body_missing');
       }
-      if (headingLikeParagraphCount < 2) {
+      if (headingLikeParagraphCount < thresholds.minHeadingLikeParagraphCount) {
         report.warnings.push('docx_heading_hierarchy_weak');
       }
       if (PLACEHOLDER_PATTERN.test(fullText)) {
@@ -290,7 +328,7 @@ function validateXlsx(input: ValidateOfficeArtifactInput): OfficeArtifactQuality
     if (sheetEntries.length < 1) {
       report.errors.push('xlsx_worksheet_missing');
     }
-    if (nonEmptyCellCount < 4) {
+    if (nonEmptyCellCount < resolveXlsxMinimumEffectiveCellCount(manifest)) {
       report.errors.push('xlsx_effective_cells_missing');
     }
 

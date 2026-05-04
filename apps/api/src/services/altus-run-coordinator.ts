@@ -1405,6 +1405,20 @@ private async chargeForModelCall(state: AltusRunState, input: {
     if (errorMessage.startsWith('deployment_tool_not_allowed_without_explicit_request')) {
       return '这次只是部署相关咨询，我不会在没有明确指令时触发部署工具。';
     }
+    if (toolName === 'complete_task') {
+      if (errorMessage.includes('complete_task_attachments_invalid')) {
+        return '交付附件参数格式不正确，Altus 将改为真实 JSON 数组并重新提交交付。';
+      }
+      if (errorMessage.includes('complete_task_downloadable_requires_attachments')) {
+        return '这是下载型交付任务，Altus 会先确认最终文件已生成，再把文件路径放入附件后重新交付。';
+      }
+      if (errorMessage.includes('complete_task_attachment_path_invalid')) {
+        return '交付附件路径不合法，Altus 将改为工作区内的真实文件相对路径后重新交付。';
+      }
+      if (errorMessage.includes('complete_task_pptx_requires_render_pptx_from_instructions')) {
+        return 'PPT 交付还没有走正式渲染链路，Altus 将先完成渲染，再重新附带文件交付。';
+      }
+    }
     if (toolName === 'debug_open_page') {
       if (errorMessage.includes('__ONECEO_DEBUG_TARGET_UNREACHABLE__')) {
         return '调试页面目标地址暂不可访问，Altus 将继续检查本地服务端口和启动命令。';

@@ -1255,6 +1255,9 @@ router.post('/activation-codes/bulk-status', async (req, res) => {
       success: true,
       matched: result.matched,
       updated: result.updated,
+      skippedAlreadyTarget: result.skippedAlreadyTarget,
+      skippedIneligibleStatus: result.skippedIneligibleStatus,
+      missing: result.missing,
     });
   } catch (error) {
     console.error('[Billing Admin] 批量更新激活码状态失败:', error);
@@ -1281,7 +1284,8 @@ router.post('/activation-codes/bulk-delete', async (req, res) => {
       success: true,
       matched: result.matched,
       deleted: result.deleted,
-      skipped: Math.max(0, result.matched - result.deleted),
+      skippedUsed: result.skippedUsed,
+      missing: result.missing,
     });
   } catch (error) {
     console.error('[Billing Admin] 批量删除激活码失败:', error);

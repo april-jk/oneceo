@@ -19,6 +19,24 @@ import { BillingService } from './billing-service';
 
 const billingService = new BillingService();
 
+function normalizeActivationPrefix(prefix?: string | null): string | undefined {
+  const normalized = String(prefix ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized || undefined;
+}
+
+function normalizeActivationCodeInput(code?: string | null): string {
+  return String(code ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '')
+    .replace(/[^A-Z0-9-]/g, '');
+}
+
 /**
  * 生成随机激活码
  */
@@ -86,6 +104,7 @@ export class ActivationCodeService {
     if (maxUses < 1 || !Number.isInteger(maxUses)) {
       throw new Error('最大使用次数必须大于 0');
     }
+    const normalizedPrefix = normalizeActivationPrefix(prefix);
 
     const batchId = quantity > 1 ? generateBatchId() : undefined;
     const expiresAt = expiresInDays
@@ -101,7 +120,7 @@ export class ActivationCodeService {
 
       // 确保生成唯一码
       do {
-        code = generateActivationCode(prefix);
+        code = generateActivationCode(normalizedPrefix);
         attempts++;
         if (attempts > 10) {
           throw new Error('生成唯一激活码失败，请重试');
@@ -422,18 +441,27 @@ export class ActivationCodeService {
     code: string,
     userId: string
   ): Promise<{ success: boolean; creditsGranted: number; newBalance: number; message: string }> {
-    const normalizedCode = String(code ?? '').trim().toUpperCase();
+    const normalizedCode = normalizeActivationCodeInput(code);
     if (!normalizedCode) {
       return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码不能为空' };
     }
 
     return await db.transaction(async (trx) => {
-      const activationCode = await trx
+      const exactMatch = await trx
         .select()
         .from(creditActivationCodes)
         .where(eq(creditActivationCodes.code, normalizedCode))
         .limit(1);
-      const ac = activationCode[0] ?? null;
+
+      const fallbackMatch = exactMatch.length > 0
+        ? []
+        : await trx
+            .select()
+            .from(creditActivationCodes)
+            .where(sql`upper(${creditActivationCodes.code}) = ${normalizedCode}`)
+            .orderBy(desc(creditActivationCodes.createdAt))
+            .limit(1);
+      const ac = exactMatch[0] ?? fallbackMatch[0] ?? null;
       if (!ac) {
         return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码不存在' };
       }

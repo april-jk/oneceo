@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
-import { Eye, EyeOff, LockKeyhole, Mail } from "lucide-react";
+import { Eye, EyeOff, Github, Globe, LockKeyhole, Mail } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ function resolveRedirectTarget() {
 }
 
 export default function Login() {
-  const { login, status } = useAuth();
+  const { login, startOAuth, status } = useAuth();
   const { t } = useTranslation();
   const [, setLocation] = useLocation();
   const redirectTarget = useMemo(resolveRedirectTarget, []);
@@ -33,6 +33,13 @@ export default function Login() {
       setLocation(redirectTarget);
     }
   }, [redirectTarget, setLocation, status]);
+
+  useEffect(() => {
+    const oauthError = new URLSearchParams(window.location.search).get("oauth_error");
+    if (oauthError) {
+      setError(oauthError);
+    }
+  }, []);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -50,6 +57,11 @@ export default function Login() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleOAuth = async (provider: "google" | "github") => {
+    setError(null);
+    await startOAuth({ provider, redirect: redirectTarget });
   };
 
   return (
@@ -157,6 +169,17 @@ export default function Login() {
               {submitting ? t("auth.signingIn") : t("auth.signIn")}
             </Button>
           </form>
+
+          <div className="mt-4 grid gap-2">
+            <Button type="button" variant="outline" className="h-[46px] w-full" onClick={() => void handleOAuth("google")}>
+              <Globe className="mr-2 size-4" />
+              {t("auth.googleSignIn")}
+            </Button>
+            <Button type="button" variant="outline" className="h-[46px] w-full" onClick={() => void handleOAuth("github")}>
+              <Github className="mr-2 size-4" />
+              {t("auth.githubSignIn")}
+            </Button>
+          </div>
 
           <p className="mt-5 text-center text-sm text-muted-foreground">
             {t("auth.noAccount")}

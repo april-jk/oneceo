@@ -243,7 +243,11 @@
     "passwordMismatch": "The passwords do not match",
     "registerFailed": "Registration failed",
     "missingLoginUser": "The sign-in response did not include user information",
-    "missingRegisterUser": "The registration response did not include user information"
+    "missingRegisterUser": "The registration response did not include user information",
+    "googleSignIn": "Continue with Google",
+    "githubSignIn": "Continue with GitHub",
+    "googleSignUp": "Sign up with Google",
+    "githubSignUp": "Sign up with GitHub"
   },
   "attachments": {
     "removeAttachment": "Remove attachment {{name}}",
@@ -527,6 +531,14 @@
     "passwordUpdateUnavailable": "Password update is not available yet",
     "deleteAccountUnavailable": "Delete account is not available yet",
     "avatarUploadUnavailable": "Avatar upload is not available yet",
+    "changeAvatar": "Change avatar",
+    "removeAvatar": "Remove avatar",
+    "avatarUploadSuccess": "Avatar updated",
+    "avatarRemoveSuccess": "Avatar removed",
+    "avatarUploadFailed": "Failed to upload avatar",
+    "avatarRemoveFailed": "Failed to remove avatar",
+    "avatarFormatInvalid": "Only JPG, PNG, and WebP are supported",
+    "avatarSizeExceeded": "Image size cannot exceed 5MB",
     "logout": "Log out",
     "logoutSuccess": "Logged out",
     "logoutFailed": "Failed to log out",

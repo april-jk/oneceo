@@ -5,7 +5,7 @@
  */
 
 import { sql } from 'drizzle-orm';
-import { pgTable, text, timestamp, jsonb, uuid, integer, boolean, uniqueIndex, index, bigint, real } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, uuid, integer, boolean, uniqueIndex, index, bigint, real, date } from 'drizzle-orm/pg-core';
 
 export const appUsers = pgTable(
   'app_users',
@@ -14,6 +14,10 @@ export const appUsers = pgTable(
     email: text('email').notNull(),
     passwordHash: text('password_hash').notNull(),
     displayName: text('display_name').notNull(),
+    avatarUrl: text('avatar_url'),
+    avatarStorageKey: text('avatar_storage_key'),
+    avatarSource: text('avatar_source').notNull().default('default'),
+    avatarUpdatedAt: timestamp('avatar_updated_at'),
     profileJson: jsonb('profile_json').notNull().default(sql`'{}'::jsonb`),
     status: text('status').notNull().default('active'),
     createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -23,6 +27,35 @@ export const appUsers = pgTable(
   (table) => ({
     emailUnique: uniqueIndex('idx_app_users_email').on(table.email),
     statusIdx: index('idx_app_users_status').on(table.status),
+  })
+);
+
+export const appUserOauthAccounts = pgTable(
+  'app_user_oauth_accounts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => appUsers.id, { onDelete: 'cascade' }),
+    provider: text('provider').notNull(),
+    providerSubject: text('provider_subject').notNull(),
+    providerEmail: text('provider_email'),
+    displayName: text('display_name'),
+    avatarUrl: text('avatar_url'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    providerSubjectUnique: uniqueIndex('idx_app_user_oauth_accounts_provider_subject').on(
+      table.provider,
+      table.providerSubject
+    ),
+    userProviderUnique: uniqueIndex('idx_app_user_oauth_accounts_user_provider').on(
+      table.userId,
+      table.provider
+    ),
+    userIdIdx: index('idx_app_user_oauth_accounts_user_id').on(table.userId),
+    providerIdx: index('idx_app_user_oauth_accounts_provider').on(table.provider),
   })
 );
 
@@ -1646,22 +1679,17 @@ export type NewCreditActivationCodeUse = typeof creditActivationCodeUses.$inferI
 export type CreditActivationCodeGroup = typeof creditActivationCodeGroups.$inferSelect;
 export type NewCreditActivationCodeGroup = typeof creditActivationCodeGroups.$inferInsert;
 
-/**
- * 通知主表
- *
- * 存储系统通知内容和下发策略
- */
 export const notifications = pgTable(
   'notifications',
   {
     id: uuid('id').primaryKey().defaultRandom(),
     title: text('title').notNull(),
     content: text('content').notNull(),
-    type: text('type').notNull().default('system'), // system, billing, task, security
-    priority: text('priority').notNull().default('normal'), // low, normal, high, urgent
-    targetType: text('target_type').notNull().default('all'), // all, specific_users
-    targetUserIds: jsonb('target_user_ids'), // 当 target_type='specific_users' 时存储用户 ID 列表
-    status: text('status').notNull().default('draft'), // draft, published, archived
+    type: text('type').notNull().default('system'),
+    priority: text('priority').notNull().default('normal'),
+    targetType: text('target_type').notNull().default('all'),
+    targetUserIds: jsonb('target_user_ids'),
+    status: text('status').notNull().default('draft'),
     publishedAt: timestamp('published_at'),
     expiresAt: timestamp('expires_at'),
     metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
@@ -1676,11 +1704,6 @@ export const notifications = pgTable(
   })
 );
 
-/**
- * 用户通知关联表
- *
- * 存储每个用户与通知的关联关系及已读状态
- */
 export const userNotifications = pgTable(
   'user_notifications',
   {
@@ -1696,14 +1719,198 @@ export const userNotifications = pgTable(
     createdAt: timestamp('created_at').notNull().defaultNow(),
   },
   (table) => ({
-    userNotificationUnique: uniqueIndex('idx_user_notifications_user_notification')
-      .on(table.userId, table.notificationId),
+    userNotificationUnique: uniqueIndex('idx_user_notifications_user_notification').on(table.userId, table.notificationId),
     userIdx: index('idx_user_notifications_user_id').on(table.userId),
     notificationIdx: index('idx_user_notifications_notification_id').on(table.notificationId),
     userReadIdx: index('idx_user_notifications_user_read').on(table.userId, table.isRead),
   })
 );
 
+export const membershipPlans = pgTable(
+  'membership_plans',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    code: text('code').notNull(),
+    name: text('name').notNull(),
+    status: text('status').notNull().default('active'),
+    defaultCredits: integer('default_credits').notNull().default(0),
+    isDefault: boolean('is_default').notNull().default(false),
+    allowedAgentLevelsJson: jsonb('allowed_agent_levels_json').notNull().default(sql`'[]'::jsonb`),
+    benefitsJson: jsonb('benefits_json').notNull().default(sql`'[]'::jsonb`),
+    dailyAutoRestoreEnabled: boolean('daily_auto_restore_enabled').notNull().default(false),
+    dailyAutoRestoreCredits: integer('daily_auto_restore_credits').notNull().default(0),
+    description: text('description').notNull().default(''),
+    sortOrder: integer('sort_order').notNull().default(0),
+    effectiveFrom: timestamp('effective_from'),
+    effectiveUntil: timestamp('effective_until'),
+    createdBy: uuid('created_by').references(() => adminUsers.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    codeUnique: uniqueIndex('idx_membership_plans_code').on(table.code),
+    statusIdx: index('idx_membership_plans_status').on(table.status),
+    sortOrderIdx: index('idx_membership_plans_sort_order').on(table.sortOrder),
+    isDefaultIdx: index('idx_membership_plans_is_default').on(table.isDefault),
+  })
+);
+
+export const userMemberships = pgTable(
+  'user_memberships',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => appUsers.id, { onDelete: 'cascade' }),
+    membershipPlanId: uuid('membership_plan_id')
+      .notNull()
+      .references(() => membershipPlans.id, { onDelete: 'restrict' }),
+    status: text('status').notNull().default('active'),
+    startedAt: timestamp('started_at').notNull().defaultNow(),
+    expiresAt: timestamp('expires_at'),
+    sourceType: text('source_type').notNull().default('manual'),
+    sourceId: uuid('source_id'),
+    assignedBy: uuid('assigned_by').references(() => adminUsers.id, { onDelete: 'set null' }),
+    assignedReason: text('assigned_reason').notNull().default(''),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdIdx: index('idx_user_memberships_user_id').on(table.userId),
+    membershipPlanIdIdx: index('idx_user_memberships_membership_plan_id').on(table.membershipPlanId),
+    statusIdx: index('idx_user_memberships_status').on(table.status),
+    activeUserUnique: uniqueIndex('idx_user_memberships_user_active').on(table.userId, table.status),
+  })
+);
+
+export const membershipGrants = pgTable(
+  'membership_grants',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => appUsers.id, { onDelete: 'cascade' }),
+    membershipPlanId: uuid('membership_plan_id')
+      .notNull()
+      .references(() => membershipPlans.id, { onDelete: 'restrict' }),
+    grantCredits: integer('grant_credits').notNull().default(0),
+    grantReason: text('grant_reason').notNull().default(''),
+    grantStatus: text('grant_status').notNull().default('issued'),
+    creditTransactionId: uuid('credit_transaction_id').references(() => creditTransactions.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdIdx: index('idx_membership_grants_user_id').on(table.userId),
+    membershipPlanIdIdx: index('idx_membership_grants_membership_plan_id').on(table.membershipPlanId),
+    createdAtIdx: index('idx_membership_grants_created_at').on(table.createdAt),
+    transactionUnique: uniqueIndex('idx_membership_grants_credit_transaction_id').on(table.creditTransactionId),
+  })
+);
+
+export const membershipAuditLogs = pgTable(
+  'membership_audit_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    actorId: uuid('actor_id').references(() => adminUsers.id, { onDelete: 'set null' }),
+    action: text('action').notNull(),
+    targetType: text('target_type').notNull(),
+    targetId: uuid('target_id'),
+    beforeJson: jsonb('before_json').notNull().default(sql`'{}'::jsonb`),
+    afterJson: jsonb('after_json').notNull().default(sql`'{}'::jsonb`),
+    reason: text('reason').notNull().default(''),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    actorIdIdx: index('idx_membership_audit_logs_actor_id').on(table.actorId),
+    targetIdx: index('idx_membership_audit_logs_target_type_target_id').on(table.targetType, table.targetId),
+    createdAtIdx: index('idx_membership_audit_logs_created_at').on(table.createdAt),
+  })
+);
+
+export const membershipDailyRestores = pgTable(
+  'membership_daily_restores',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => appUsers.id, { onDelete: 'cascade' }),
+    membershipPlanId: uuid('membership_plan_id')
+      .notNull()
+      .references(() => membershipPlans.id, { onDelete: 'restrict' }),
+    restoreDate: date('restore_date').notNull(),
+    restoreCredits: integer('restore_credits').notNull().default(0),
+    creditTransactionId: uuid('credit_transaction_id').references(() => creditTransactions.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdIdx: index('idx_membership_daily_restores_user_id').on(table.userId),
+    membershipPlanIdIdx: index('idx_membership_daily_restores_membership_plan_id').on(table.membershipPlanId),
+    restoreDateIdx: index('idx_membership_daily_restores_restore_date').on(table.restoreDate),
+    uniqueDailyRestore: uniqueIndex('idx_membership_daily_restores_unique').on(table.userId, table.membershipPlanId, table.restoreDate),
+    transactionUnique: uniqueIndex('idx_membership_daily_restores_credit_transaction_id').on(table.creditTransactionId),
+  })
+);
+
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    title: text('title').notNull(),
+    content: text('content').notNull(),
+    type: text('type').notNull().default('system'),
+    priority: text('priority').notNull().default('normal'),
+    targetType: text('target_type').notNull().default('all'),
+    targetUserIds: jsonb('target_user_ids').$type<string[] | null>().default(sql`null`),
+    status: text('status').notNull().default('draft'),
+    publishedAt: timestamp('published_at'),
+    expiresAt: timestamp('expires_at'),
+    createdBy: uuid('created_by').references(() => adminUsers.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    statusIdx: index('idx_notifications_status').on(table.status),
+    typeIdx: index('idx_notifications_type').on(table.type),
+    createdAtIdx: index('idx_notifications_created_at').on(table.createdAt),
+  })
+);
+
+export const userNotifications = pgTable(
+  'user_notifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => appUsers.id, { onDelete: 'cascade' }),
+    notificationId: uuid('notification_id')
+      .notNull()
+      .references(() => notifications.id, { onDelete: 'cascade' }),
+    isRead: boolean('is_read').notNull().default(false),
+    readAt: timestamp('read_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdIdx: index('idx_user_notifications_user_id').on(table.userId),
+    notificationIdIdx: index('idx_user_notifications_notification_id').on(table.notificationId),
+    unreadIdx: index('idx_user_notifications_unread').on(table.userId, table.isRead),
+    userNotificationUnique: uniqueIndex('idx_user_notifications_user_notification_unique').on(
+      table.userId,
+      table.notificationId
+    ),
+  })
+);
+
+export type MembershipPlan = typeof membershipPlans.$inferSelect;
+export type NewMembershipPlan = typeof membershipPlans.$inferInsert;
+export type UserMembership = typeof userMemberships.$inferSelect;
+export type NewUserMembership = typeof userMemberships.$inferInsert;
+export type MembershipGrant = typeof membershipGrants.$inferSelect;
+export type NewMembershipGrant = typeof membershipGrants.$inferInsert;
+export type MembershipAuditLog = typeof membershipAuditLogs.$inferSelect;
+export type NewMembershipAuditLog = typeof membershipAuditLogs.$inferInsert;
+export type MembershipDailyRestore = typeof membershipDailyRestores.$inferSelect;
+export type NewMembershipDailyRestore = typeof membershipDailyRestores.$inferInsert;
 export type Notification = typeof notifications.$inferSelect;
 export type NewNotification = typeof notifications.$inferInsert;
 export type UserNotification = typeof userNotifications.$inferSelect;

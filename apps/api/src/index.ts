@@ -12,6 +12,7 @@ import osacRoutes from './routes/osac-routes';
 import llmProxyRoutes from './routes/llm-proxy-routes';
 import connectorRoutes from './routes/connector-routes';
 import authRoutes from './routes/auth-routes';
+import authOauthRoutes from './routes/auth-oauth-routes';
 import internalSkillRoutes from './routes/internal-skill-routes';
 import internalSandboxRoutes from './routes/internal-sandbox-routes';
 import internalConnectorGuideRoutes from './routes/internal-connector-guide-routes';
@@ -22,6 +23,7 @@ import internalAdminAppUserRoutes from './routes/internal-admin-app-user-routes'
 import internalAdminDeploymentRoutes from './routes/internal-admin-deployment-routes';
 import internalAdminOperationsAnalyticsRoutes from './routes/internal-admin-operations-analytics-routes';
 import internalTaskCreationRoutes from './routes/internal-task-creation-routes';
+import internalMembershipRoutes from './routes/internal-membership-routes';
 import billingRoutes from './routes/billing-routes';
 import internalBillingRoutes from './routes/internal-billing-routes';
 import activationCodeRoutes from './routes/activation-code-routes';
@@ -35,6 +37,7 @@ import { hostedProviderHostService } from './services/hosted-provider-host-servi
 import { osacPersistentRecoveryService } from './services/osac-persistent-recovery-service';
 import { sessionMcpRecoveryService } from './services/session-mcp-recovery-service';
 import { startSandboxArchiveJob, stopSandboxArchiveJob } from './services/sandbox-archive-job';
+import { startMembershipDailyRestoreJob, stopMembershipDailyRestoreJob } from './services/membership-daily-restore-job';
 import {
   startTaskSessionDeploymentSyncJob,
   stopTaskSessionDeploymentSyncJob,
@@ -164,6 +167,7 @@ app.post('/api/projects', (req, res) => {
 
 // 任务创建相关 API
 app.use('/api/auth', authRoutes);
+app.use('/api/auth', authOauthRoutes);
 app.use('/api/task-creation', taskCreationRoutes);
 app.use('/api/altus-managed', altusManagedRoutes);
 app.use('/api/sandbox', sandboxRoutes);
@@ -180,6 +184,7 @@ app.use('/api/internal', internalAdminAppUserRoutes);
 app.use('/api/internal', internalAdminDeploymentRoutes);
 app.use('/api/internal/admin/operations/analytics', internalAdminOperationsAnalyticsRoutes);
 app.use('/api/internal', internalTaskCreationRoutes);
+app.use('/api/internal', internalMembershipRoutes);
 app.use('/api/billing', billingRoutes);
 app.use('/api/internal/billing', internalBillingRoutes);
 app.use('/api/activation-codes', activationCodeRoutes);
@@ -307,6 +312,7 @@ async function shutdown(signal: string, exitCode = 0) {
       listenRetryTimer = null;
     }
     stopSandboxArchiveJob();
+    stopMembershipDailyRestoreJob();
     stopTaskSessionDeploymentSyncJob();
   } catch (error) {
     console.warn('[API] stop background jobs failed:', error);
@@ -415,6 +421,8 @@ async function startServer() {
     }
     // 启动 Sandbox 空闲归档任务
     startSandboxArchiveJob();
+    // 启动会员每日自动恢复积分任务
+    startMembershipDailyRestoreJob();
     // 启动部署状态后台同步任务
     startTaskSessionDeploymentSyncJob();
     

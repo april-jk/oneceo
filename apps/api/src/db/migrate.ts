@@ -349,6 +349,7 @@ const REQUIRED_INDEXES = [
   'idx_activation_codes_used_by',
   'idx_activation_code_uses_code_id',
   'idx_activation_code_uses_user_id',
+  'idx_activation_code_uses_user_code_unique',
   'idx_activation_code_groups_name',
   'idx_activation_code_groups_status',
   'idx_membership_plans_code',
@@ -1968,6 +1969,12 @@ CREATE TABLE IF NOT EXISTS credit_activation_code_uses (
 );
 CREATE INDEX IF NOT EXISTS idx_activation_code_uses_code_id ON credit_activation_code_uses(activation_code_id);
 CREATE INDEX IF NOT EXISTS idx_activation_code_uses_user_id ON credit_activation_code_uses(user_id);
+DELETE FROM credit_activation_code_uses a
+USING credit_activation_code_uses b
+WHERE a.id < b.id
+  AND a.activation_code_id = b.activation_code_id
+  AND a.user_id = b.user_id;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_activation_code_uses_user_code_unique ON credit_activation_code_uses(activation_code_id, user_id);
 `;
 
 const notificationTablesSQL = `

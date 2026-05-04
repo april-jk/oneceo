@@ -16,8 +16,13 @@ const CACHE_HIT_RATIO_MAX = 1000; // 100%，存储单位为千分比
 const CACHE_CREATION_RATIO_MAX = 10000; // 1000%，允许缓存创建倍率高于 100%
 const BILLING_DEBUG_MAX_PROMPT_CHARS = 24000;
 const BILLING_DEBUG_MAX_TOKENS = 512;
+const UUID_LIKE_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type BillingDebugMode = 'request_only' | 'dry_run';
+
+function isUuidLike(value: unknown): value is string {
+  return typeof value === 'string' && UUID_LIKE_REGEX.test(value.trim());
+}
 
 function normalizeSandboxEngine(value: unknown): 'opencode' | 'codex' | null {
   const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -1225,6 +1230,62 @@ router.delete('/activation-codes/:id', async (req, res) => {
   } catch (error) {
     console.error('[Billing Admin] 删除激活码失败:', error);
     res.status(500).json({ error: '删除激活码失败' });
+  }
+});
+
+/**
+ * POST /api/internal/billing/activation-codes/bulk-status
+ * 批量更新激活码状态（启用/禁用）
+ */
+router.post('/activation-codes/bulk-status', async (req, res) => {
+  try {
+    const { ids, status } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: '请选择至少一个激活码' });
+    }
+    if (!ids.every((id) => isUuidLike(id))) {
+      return res.status(400).json({ error: '激活码ID格式无效' });
+    }
+    if (status !== 'active' && status !== 'disabled') {
+      return res.status(400).json({ error: '状态仅支持 active 或 disabled' });
+    }
+
+    const result = await activationCodeService.bulkUpdateActivationCodeStatus(ids, status);
+    return res.json({
+      success: true,
+      matched: result.matched,
+      updated: result.updated,
+    });
+  } catch (error) {
+    console.error('[Billing Admin] 批量更新激活码状态失败:', error);
+    return res.status(500).json({ error: '批量更新激活码状态失败' });
+  }
+});
+
+/**
+ * POST /api/internal/billing/activation-codes/bulk-delete
+ * 批量删除激活码（仅删除未使用激活码）
+ */
+router.post('/activation-codes/bulk-delete', async (req, res) => {
+  try {
+    const { ids } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: '请选择至少一个激活码' });
+    }
+    if (!ids.every((id) => isUuidLike(id))) {
+      return res.status(400).json({ error: '激活码ID格式无效' });
+    }
+
+    const result = await activationCodeService.bulkDeleteActivationCodes(ids);
+    return res.json({
+      success: true,
+      matched: result.matched,
+      deleted: result.deleted,
+      skipped: Math.max(0, result.matched - result.deleted),
+    });
+  } catch (error) {
+    console.error('[Billing Admin] 批量删除激活码失败:', error);
+    return res.status(500).json({ error: '批量删除激活码失败' });
   }
 });
 

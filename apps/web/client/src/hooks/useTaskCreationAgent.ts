@@ -192,11 +192,7 @@ function extractOrchestratorSessionId(message: AgentMessage): string | null {
 function shouldAttemptSessionTitleResolve(value: string): boolean {
   if (typeof value !== 'string') return false;
   const normalized = value.trim().replace(/\s+/g, ' ');
-  if (!normalized) return false;
-  if (normalized.length >= 12) return true;
-  return /(帮我|请|请帮|分析|排查|修复|开发|实现|优化|重构|设计|生成|创建|制作|写|继续|修改|整理|总结|如何|怎么|为什么|报错|bug|问题|页面|功能|css|html|nodejs|代码|接口|数据库|deploy|build|fix|debug|analy[sz]e|implement|optimi[sz]e|refactor|create|write)/i.test(
-    normalized
-  );
+  return normalized.length > 0;
 }
 
 function dispatchTaskCreationSessionUpdated(detail: {
@@ -5251,11 +5247,29 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         }
         activeSessionId = createdSessionId;
         shouldBindCreatedSession = true;
+        if (typeof created.title === 'string' && created.title.trim()) {
+          dispatchTaskCreationSessionUpdated({
+            sessionId: createdSessionId,
+            title: created.title.trim(),
+            status: created.status || 'in_progress',
+          });
+        }
         if (initialProjectId) {
-          await createTaskCreationSession({
+          const updatedSession = await createTaskCreationSession({
             sessionId: createdSessionId,
             mode: 'altus',
             projectId: initialProjectId,
+          });
+          dispatchTaskCreationSessionUpdated({
+            sessionId: createdSessionId,
+            ...(updatedSession?.title ? { title: updatedSession.title } : {}),
+            ...(Object.prototype.hasOwnProperty.call(updatedSession || {}, 'projectId')
+              ? { projectId: updatedSession?.projectId || null }
+              : {}),
+            ...(Object.prototype.hasOwnProperty.call(updatedSession || {}, 'projectName')
+              ? { projectName: updatedSession?.projectName || null }
+              : {}),
+            status: updatedSession?.status || 'in_progress',
           });
         }
         applyPendingConnectorDraftAsync(createdSessionId);
@@ -5464,8 +5478,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       let prePersistedUserInput = false;
       if (activeSessionId) {
         try {
-          const initialProjectId = !activeSessionId ? initialProjectIdForNewSession || undefined : undefined;
-          await createTaskCreationSession({
+          const initialProjectId = initialProjectIdForNewSession || undefined;
+          const createdSession = await createTaskCreationSession({
             sessionId: activeSessionId,
             mode: 'sandbox',
             executor,
@@ -5482,6 +5496,13 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           applyPendingConnectorDraftAsync(activeSessionId);
           dispatchTaskCreationSessionUpdated({
             sessionId: activeSessionId,
+            ...(createdSession?.title ? { title: createdSession.title } : {}),
+            ...(Object.prototype.hasOwnProperty.call(createdSession || {}, 'projectId')
+              ? { projectId: createdSession?.projectId || null }
+              : {}),
+            ...(Object.prototype.hasOwnProperty.call(createdSession || {}, 'projectName')
+              ? { projectName: createdSession?.projectName || null }
+              : {}),
             status: 'in_progress',
           });
           if (shouldAttemptSessionTitleResolve(text)) {

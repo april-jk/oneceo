@@ -490,10 +490,20 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
         return;
       }
       const result = await response.json();
+      const skipParts: string[] = [];
+      if (result.skippedAlreadyTarget > 0) {
+        skipParts.push(`${result.skippedAlreadyTarget} 条已是目标状态`);
+      }
+      if (result.skippedIneligibleStatus > 0) {
+        skipParts.push(`${result.skippedIneligibleStatus} 条状态不可变更`);
+      }
+      if (result.missing > 0) {
+        skipParts.push(`${result.missing} 条不存在`);
+      }
       onNotify?.(
         'success',
         status === 'disabled' ? '批量禁用完成' : '批量启用完成',
-        `已更新 ${result.updated} 条${result.matched > result.updated ? `，跳过 ${result.matched - result.updated} 条` : ''}`
+        `已更新 ${result.updated} 条${skipParts.length > 0 ? `，跳过：${skipParts.join('，')}` : ''}`
       );
       setSelectedCodeIds([]);
       fetchCodes();
@@ -525,10 +535,17 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
         return;
       }
       const result = await response.json();
+      const skipParts: string[] = [];
+      if (result.skippedUsed > 0) {
+        skipParts.push(`${result.skippedUsed} 条已使用不可删除`);
+      }
+      if (result.missing > 0) {
+        skipParts.push(`${result.missing} 条不存在`);
+      }
       onNotify?.(
         'success',
         '批量删除完成',
-        `已删除 ${result.deleted} 条${result.skipped > 0 ? `，跳过 ${result.skipped} 条（已使用不可删除）` : ''}`
+        `已删除 ${result.deleted} 条${skipParts.length > 0 ? `，跳过：${skipParts.join('，')}` : ''}`
       );
       setSelectedCodeIds([]);
       fetchCodes();

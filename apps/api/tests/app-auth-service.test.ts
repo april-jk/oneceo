@@ -6,8 +6,11 @@ import {
   appUserEmailVerificationDAO,
   appUserSessionDAO,
 } from '../src/db/dao';
+import { db } from '../src/config/database';
 import { appAuthEmailService } from '../src/services/app-auth-email-service';
 import { appAuthService } from '../src/services/app-auth-service';
+import { appUserBootstrapService } from '../src/services/app-user-bootstrap-service';
+import { runtimeEnvConfig } from '../src/config/runtime-env';
 import { managedImageObjectService } from '../src/services/managed-image-object-service';
 import { hashPassword, verifyPassword } from '../src/utils/auth-password';
 
@@ -24,9 +27,12 @@ const originalMethods = {
   deleteVerification: appUserEmailVerificationDAO.deleteByEmailAndPurpose,
   createSession: appUserSessionDAO.create,
   sendVerificationCode: appAuthEmailService.sendVerificationCode,
+  bootstrapNewAppUser: appUserBootstrapService.bootstrapNewAppUser,
+  transaction: db.transaction,
   getSignedDownloadUrl: managedImageObjectService.getSignedDownloadUrl,
   uploadImage: managedImageObjectService.uploadImage,
   deleteImage: managedImageObjectService.deleteImage,
+  skipEmailVerificationOnRegister: runtimeEnvConfig.capabilities.skipEmailVerificationOnRegister,
 };
 
 afterEach(() => {
@@ -42,9 +48,12 @@ afterEach(() => {
   appUserEmailVerificationDAO.deleteByEmailAndPurpose = originalMethods.deleteVerification;
   appUserSessionDAO.create = originalMethods.createSession;
   appAuthEmailService.sendVerificationCode = originalMethods.sendVerificationCode;
+  appUserBootstrapService.bootstrapNewAppUser = originalMethods.bootstrapNewAppUser;
+  db.transaction = originalMethods.transaction;
   managedImageObjectService.getSignedDownloadUrl = originalMethods.getSignedDownloadUrl;
   managedImageObjectService.uploadImage = originalMethods.uploadImage;
   managedImageObjectService.deleteImage = originalMethods.deleteImage;
+  runtimeEnvConfig.capabilities.skipEmailVerificationOnRegister = originalMethods.skipEmailVerificationOnRegister;
   delete process.env.APP_AUTH_REGISTER_CODE_TTL_SECONDS;
   delete process.env.APP_AUTH_REGISTER_CODE_RESEND_COOLDOWN_SECONDS;
 });
@@ -93,6 +102,8 @@ test('AppAuthService.sendRegisterVerificationCode stores hashed code and sends e
 });
 
 test('AppAuthService.register rejects wrong verification code', async () => {
+  runtimeEnvConfig.capabilities.skipEmailVerificationOnRegister = false;
+  db.transaction = async (callback: any) => callback({} as any);
   appUserDAO.getByEmail = async () => null;
   appUserEmailVerificationDAO.getByEmailAndPurpose = async () =>
     ({
@@ -127,6 +138,10 @@ test('AppAuthService.register rejects wrong verification code', async () => {
 });
 
 test('AppAuthService.register consumes verification code before creating session', async () => {
+  runtimeEnvConfig.capabilities.skipEmailVerificationOnRegister = false;
+  db.transaction = async (callback: any) => callback({} as any);
+  let bootstrapInput: { userId: string; source: string } | null = null;
+
   appUserDAO.getByEmail = async () => null;
   appUserEmailVerificationDAO.getByEmailAndPurpose = async () =>
     ({
@@ -173,6 +188,10 @@ test('AppAuthService.register consumes verification code before creating session
       createdAt: new Date(),
       updatedAt: new Date(),
     }) as any;
+  appUserBootstrapService.bootstrapNewAppUser = async (userId, source) => {
+    bootstrapInput = { userId, source };
+    return null;
+  };
 
   const result = await appAuthService.register({
     email: 'user@example.com',
@@ -183,7 +202,65 @@ test('AppAuthService.register consumes verification code before creating session
 
   assert.equal(result.user?.id, 'user-1');
   assert.equal(result.user?.email, 'user@example.com');
+  assert.deepEqual(bootstrapInput, {
+    userId: 'user-1',
+    source: 'email_register',
+  });
   assert.ok(result.token);
+});
+
+test('AppAuthService.register rolls back surfaced failure when bootstrap throws', async () => {
+  runtimeEnvConfig.capabilities.skipEmailVerificationOnRegister = false;
+  const transactionError = new Error('bootstrap failed');
+
+  db.transaction = async (callback: any) => {
+    try {
+      return await callback({} as any);
+    } catch (error) {
+      throw error;
+    }
+  };
+  appUserDAO.getByEmail = async () => null;
+  appUserEmailVerificationDAO.getByEmailAndPurpose = async () =>
+    ({
+      id: 'verify-4',
+      email: 'user@example.com',
+      purpose: 'register',
+      codeHash: await hashPassword('123456'),
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+      consumedAt: null,
+      lastSentAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }) as any;
+  appUserEmailVerificationDAO.markConsumed = async () =>
+    ({
+      id: 'verify-4',
+      consumedAt: new Date(),
+    }) as any;
+  appUserDAO.create = async () =>
+    ({
+      id: 'user-rollback-1',
+      email: 'user@example.com',
+      displayName: 'User',
+      status: 'active',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }) as any;
+  appUserBootstrapService.bootstrapNewAppUser = async () => {
+    throw transactionError;
+  };
+
+  await assert.rejects(
+    () =>
+      appAuthService.register({
+        email: 'user@example.com',
+        password: 'password123',
+        displayName: 'User',
+        verificationCode: '123456',
+      }),
+    transactionError
+  );
 });
 
 test('AppAuthService.updateProfile normalizes personalization payload and returns updated user', async () => {

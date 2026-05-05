@@ -1,9 +1,11 @@
 import type express from 'express';
 import { randomInt } from 'node:crypto';
+import { db } from '../config/database';
 import { appUserDAO, appUserEmailVerificationDAO, appUserSessionDAO } from '../db/dao';
 import { altusMemoryContextService } from './altus-memory-context-service';
 import { appAuthEmailService } from './app-auth-email-service';
 import { managedImageObjectService } from './managed-image-object-service';
+import { appUserBootstrapService } from './app-user-bootstrap-service';
 import { hashPassword, verifyPassword } from '../utils/auth-password';
 import { createSessionToken, hashSessionToken, resolveSessionExpiry } from '../utils/auth-session';
 import { runtimeEnvConfig } from '../config/runtime-env';
@@ -234,37 +236,41 @@ export class AppAuthService {
       if (!validCode) {
         throw new Error('验证码错误');
       }
-      const consumed = await appUserEmailVerificationDAO.markConsumed(String(verification.id));
-      if (!consumed) {
-        throw new Error('验证码已失效，请重新获取');
-      }
+      const createdUserId = await db.transaction(async (trx) => {
+        const consumed = await appUserEmailVerificationDAO.markConsumed(String(verification.id), trx);
+        if (!consumed) {
+          throw new Error('验证码已失效，请重新获取');
+        }
+        const created = await appUserDAO.create({
+          email,
+          passwordHash: await hashPassword(password),
+          displayName,
+          profileJson: {
+            personalization: normalizeAppUserPersonalization(undefined),
+          },
+        }, trx);
+        await appUserBootstrapService.bootstrapNewAppUser(String(created.id), 'email_register', trx);
+        return String(created.id);
+      });
+      return this.createSessionForUser(createdUserId, req);
     } else {
       console.info('[APP_AUTH_REGISTER] skip verification code because runtime env capability is enabled', {
         runtimeEnv: runtimeEnvConfig.runtimeEnv,
       });
     }
-    const created = await appUserDAO.create({
-      email,
-      passwordHash: await hashPassword(password),
-      displayName,
-      profileJson: {
-        personalization: normalizeAppUserPersonalization(undefined),
-      },
+    const createdUserId = await db.transaction(async (trx) => {
+      const created = await appUserDAO.create({
+        email,
+        passwordHash: await hashPassword(password),
+        displayName,
+        profileJson: {
+          personalization: normalizeAppUserPersonalization(undefined),
+        },
+      }, trx);
+      await appUserBootstrapService.bootstrapNewAppUser(String(created.id), 'email_register', trx);
+      return String(created.id);
     });
-    try {
-      const { membershipService } = await import('./membership-service');
-      await membershipService.assignDefaultMembershipForNewUser(String(created.id));
-    } catch (error) {
-      console.error('[Membership] 注册默认会员绑定失败:', error);
-    }
-    // 初始化用户积分（新用户赠送 500 积分）
-    try {
-      const { billingService } = await import('./billing-service');
-      await billingService.initUserCredits(String(created.id), 500);
-    } catch (error) {
-      console.error('[Billing] 初始化用户积分失败:', error);
-    }
-    return this.createSessionForUser(String(created.id), req);
+    return this.createSessionForUser(createdUserId, req);
   }
 
   async login(input: { email: string; password: string }, req?: express.Request) {

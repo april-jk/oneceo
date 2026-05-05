@@ -9,6 +9,9 @@ import {
   appUsers,
 } from '../schema';
 
+type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type DbExecutor = typeof db | DbTransaction;
+
 function normalizeEmail(value: string) {
   return value.trim().toLowerCase();
 }
@@ -27,8 +30,8 @@ class AppUserDAO {
     passwordHash: string;
     displayName: string;
     profileJson?: Record<string, unknown>;
-  }) {
-    const [created] = await db
+  }, executor: DbExecutor = db) {
+    const [created] = await executor
       .insert(appUsers)
       .values({
         email: normalizeEmail(input.email),
@@ -50,8 +53,8 @@ class AppUserDAO {
     avatarSource?: string | null;
     avatarStorageKey?: string | null;
     profileJson?: Record<string, unknown>;
-  }) {
-    const [created] = await db
+  }, executor: DbExecutor = db) {
+    const [created] = await executor
       .insert(appUsers)
       .values({
         email: normalizeEmail(input.email),
@@ -65,7 +68,7 @@ class AppUserDAO {
       })
       .returning();
 
-    await db.insert(appUserOauthAccounts).values({
+    await executor.insert(appUserOauthAccounts).values({
       userId: created.id as any,
       provider: input.provider.trim(),
       providerSubject: input.providerSubject.trim(),
@@ -333,8 +336,8 @@ class AppUserEmailVerificationDAO {
     return record;
   }
 
-  async markConsumed(id: string) {
-    const [record] = await db
+  async markConsumed(id: string, executor: DbExecutor = db) {
+    const [record] = await executor
       .update(appUserEmailVerifications)
       .set({
         consumedAt: new Date(),

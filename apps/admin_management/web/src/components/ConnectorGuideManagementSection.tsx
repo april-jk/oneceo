@@ -13,7 +13,7 @@ import {
   DEFAULT_CONNECTOR_GUIDE_MANAGEMENT_VIEW_STATE,
 } from './adminViewState';
 import type { ConnectorGuideManagementViewState } from './adminViewState';
-import { AdminButton, AdminDetailShell, AdminStickyInspector, AdminTabs, AuditTimeline, DangerConfirmDialog, DiffDrawer, StatusBadge, getAdminActionIcon, getAdminModuleIcon } from './admin-ui';
+import { AdminButton, AdminDetailShell, AdminStickyInspector, AdminTabs, DangerConfirmDialog, DiffDrawer, StatusBadge, getAdminActionIcon, getAdminModuleIcon } from './admin-ui';
 
 type Props = {
   onError: (message: string | null) => void;
@@ -109,7 +109,7 @@ export function ConnectorGuideManagementSection({
   const [busy, setBusy] = useState(false);
   const [editorModalOpen, setEditorModalOpen] = useState(false);
   const [dangerAction, setDangerAction] = useState<ConnectorDangerAction | null>(null);
-  const [detailTab, setDetailTab] = useState<'configuration' | 'audit' | 'raw'>('configuration');
+  const [detailTab, setDetailTab] = useState<'configuration' | 'raw'>('configuration');
   const [diffOpen, setDiffOpen] = useState(false);
   const selectedRevisionIdRef = useRef<string | null>(initialState.selectedRevisionId);
 
@@ -772,8 +772,8 @@ export function ConnectorGuideManagementSection({
           status={<StatusBadge>{guideStatusLabel(detail.status)}</StatusBadge>}
           moreActions={<AdminButton variant="secondary" icon={getAdminActionIcon('logs')} onClick={() => setDiffOpen(true)}>查看 Diff</AdminButton>}
           summary={<div className="connector-guide-preview-grid"><div className="connector-guide-preview-fact"><span>连接器</span><strong>{detail.connectorKey}</strong></div><div className="connector-guide-preview-fact"><span>触发模式</span><strong>{triggerModeLabel(detail.triggerMode)}</strong></div><div className="connector-guide-preview-fact"><span>当前版本</span><strong>{revision ? `v${revision.versionNumber}` : '暂无版本'}</strong></div></div>}
-          tabs={<AdminTabs value={detailTab} onChange={setDetailTab} items={[{ key: 'configuration', label: 'Configuration' }, { key: 'audit', label: 'Audit' }, { key: 'raw', label: 'Raw Data' }]} />}
-          inspector={<AdminStickyInspector compact title="Actionable Inspector" sections={[{ key: 'risk', title: '当前风险', children: <div className="signal-list"><p>{detail.status === 'archived' ? 'Policy 已归档，发布前需先恢复可用状态。' : revision?.status === 'published' ? '当前 revision 已发布，编辑器变更需保存后才生效。' : '草稿编辑中，发布前需确认文本 Diff。'}</p></div> }, { key: 'impact', title: '影响范围', children: <div className="signal-list"><p>影响 {detail.connectorKey} 的连接器引导说明、提醒与阻断规则。</p><p>不修改 connector 目录对象。</p></div> }, { key: 'recent', title: '最近操作', children: <AuditTimeline compact emptyText="暂无 revision 审计事件。" items={detail.revisions.map((item) => ({ id: item.id, title: `v${item.versionNumber} · ${guideStatusLabel(item.status)}`, time: formatDateTime(item.publishedAt || item.createdAt), tone: item.status === 'published' ? 'success' as const : item.status === 'draft' ? 'info' as const : 'neutral' as const, meta: [{ label: '创建', value: formatDateTime(item.createdAt) }, { label: '发布', value: formatDateTime(item.publishedAt) }] }))} /> }, { key: 'blockers', title: '阻断原因', children: <div className="signal-list"><p>{revision ? '当前无前端可见阻断；发布前需保存编辑器内容。' : '暂无 revision，需先新建或保存生成 revision。'}</p></div> }, { key: 'recommend', title: '推荐动作', children: <div className="signal-list"><p>发布前查看文本 Diff，并按需执行校验。</p></div> }, { key: 'actions', title: '快捷动作', children: <AdminButton variant="secondary" size="sm" onClick={() => setDiffOpen(true)}>查看文本 Diff</AdminButton> }]} />}
+          tabs={<AdminTabs value={detailTab} onChange={setDetailTab} items={[{ key: 'configuration', label: 'Configuration' }, { key: 'raw', label: 'Raw Data' }]} />}
+          inspector={<AdminStickyInspector compact title="Actionable Inspector" sections={[{ key: 'risk', title: '当前风险', children: <div className="signal-list"><p>{detail.status === 'archived' ? 'Policy 已归档，发布前需先恢复可用状态。' : revision?.status === 'published' ? '当前 revision 已发布，编辑器变更需保存后才生效。' : '草稿编辑中，发布前需确认文本 Diff。'}</p></div> }, { key: 'impact', title: '影响范围', children: <div className="signal-list"><p>影响 {detail.connectorKey} 的连接器引导说明、提醒与阻断规则。</p><p>不修改 connector 目录对象。</p></div> }, { key: 'recent', title: '最近操作', children: <div className="signal-list"><p>暂无 revision 审计事件。</p></div> }, { key: 'blockers', title: '阻断原因', children: <div className="signal-list"><p>{revision ? '当前无前端可见阻断；发布前需保存编辑器内容。' : '暂无 revision，需先新建或保存生成 revision。'}</p></div> }, { key: 'recommend', title: '推荐动作', children: <div className="signal-list"><p>发布前查看文本 Diff，并按需执行校验。</p></div> }, { key: 'actions', title: '快捷动作', children: <AdminButton variant="secondary" size="sm" onClick={() => setDiffOpen(true)}>查看文本 Diff</AdminButton> }]} />}
           footer={<AdminButton variant="secondary" disabled={busy} onClick={() => void savePolicy()}>保存当前内容</AdminButton>}
         >
 
@@ -928,8 +928,6 @@ export function ConnectorGuideManagementSection({
               </article>
             </div>
           </>
-          ) : detailTab === 'audit' ? (
-            <article className="sub-panel"><div className="editor-header"><div><h3>Audit</h3><p className="cell-subtle">仅展示现有 revision 状态，不请求新 API。</p></div></div><AuditTimeline emptyText="暂无 revision 审计事件。" items={detail.revisions.map((item) => ({ id: item.id, title: `v${item.versionNumber} · ${guideStatusLabel(item.status)}`, time: formatDateTime(item.publishedAt || item.createdAt), tone: item.status === 'published' ? 'success' as const : item.status === 'draft' ? 'info' as const : 'neutral' as const, meta: [{ label: '创建时间', value: formatDateTime(item.createdAt) }, { label: '发布时间', value: formatDateTime(item.publishedAt) }] }))} /></article>
           ) : (
             <article className="sub-panel"><div className="editor-header"><div><h3>Raw Data</h3><p className="cell-subtle">当前 revision 文本与编辑器值。</p></div></div><div className="detail-grid"><pre className="code-block">{JSON.stringify({ detail, revision }, null, 2)}</pre><pre className="code-block">{JSON.stringify(editor, null, 2)}</pre></div></article>
           )}

@@ -151,7 +151,7 @@ export function BillingDebugPanel({ onNotify }: BillingDebugPanelProps) {
       <div className="sub-panel" style={{
         margin: '12px 16px 0',
         padding: '10px 14px',
-        borderColor: 'color-mix(in srgb, var(--theme-warning, #f59e0b) 35%, var(--border))',
+        borderColor: 'color-mix(in srgb, var(--warning) 35%, var(--border))',
       }}>
         <strong>调试请求会产生真实上游模型成本；默认不会扣用户积分。</strong>
         <p className="panel-caption" style={{ marginTop: '4px' }}>

@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import type express from 'express';
+import { db } from '../config/database';
 import { appUserDAO, appUserSessionDAO } from '../db/dao';
+import { appUserBootstrapService } from './app-user-bootstrap-service';
 import { createSessionToken, hashSessionToken, resolveSessionExpiry } from '../utils/auth-session';
 
 function asText(value: unknown) {
@@ -108,17 +110,25 @@ export class AppAuthOauthService {
       return this.createSessionForUser(String(nextUser.id), req);
     }
 
-    const created = await appUserDAO.createOauthUser({
-      email,
-      displayName,
-      provider,
-      providerSubject,
-      providerEmail: profile.email || email,
-      avatarUrl: profile.avatarUrl || null,
-      avatarSource: profile.avatarUrl ? oauthAvatarSource : 'default',
-      avatarStorageKey: null,
+    const createdUserId = await db.transaction(async (trx) => {
+      const created = await appUserDAO.createOauthUser({
+        email,
+        displayName,
+        provider,
+        providerSubject,
+        providerEmail: profile.email || email,
+        avatarUrl: profile.avatarUrl || null,
+        avatarSource: profile.avatarUrl ? oauthAvatarSource : 'default',
+        avatarStorageKey: null,
+      }, trx);
+      await appUserBootstrapService.bootstrapNewAppUser(
+        String(created.id),
+        provider === 'google' ? 'oauth_google_register' : 'oauth_github_register',
+        trx
+      );
+      return String(created.id);
     });
-    return this.createSessionForUser(String(created.id), req);
+    return this.createSessionForUser(createdUserId, req);
   }
 
   async createSessionForUser(userId: string, req?: express.Request) {

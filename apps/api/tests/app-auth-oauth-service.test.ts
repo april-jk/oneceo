@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
+import { db } from '../src/config/database';
 import { appUserDAO, appUserSessionDAO } from '../src/db/dao';
 import { appAuthOauthService } from '../src/services/app-auth-oauth-service';
+import { appUserBootstrapService } from '../src/services/app-user-bootstrap-service';
 
 const originalMethods = {
   getByOauthAccount: appUserDAO.getByOauthAccount,
@@ -12,6 +14,8 @@ const originalMethods = {
   updateAvatar: appUserDAO.updateAvatar,
   getById: appUserDAO.getById,
   createSession: appUserSessionDAO.create,
+  bootstrapNewAppUser: appUserBootstrapService.bootstrapNewAppUser,
+  transaction: db.transaction,
 };
 
 afterEach(() => {
@@ -23,9 +27,12 @@ afterEach(() => {
   appUserDAO.updateAvatar = originalMethods.updateAvatar;
   appUserDAO.getById = originalMethods.getById;
   appUserSessionDAO.create = originalMethods.createSession;
+  appUserBootstrapService.bootstrapNewAppUser = originalMethods.bootstrapNewAppUser;
+  db.transaction = originalMethods.transaction;
 });
 
 test('AppAuthOauthService keeps manual avatar while still syncing oauth metadata', async () => {
+  db.transaction = async (callback: any) => callback({} as any);
   let updatedAvatarCount = 0;
   let upsertedAccount = false;
 
@@ -97,4 +104,98 @@ test('AppAuthOauthService keeps manual avatar while still syncing oauth metadata
   assert.equal(upsertedAccount, true);
   assert.equal(updatedAvatarCount, 0);
   assert.equal(result.user?.avatarSource, 'manual');
+});
+
+test('AppAuthOauthService bootstraps default membership for first-time oauth sign-up', async () => {
+  db.transaction = async (callback: any) => callback({} as any);
+  let bootstrapInput: { userId: string; source: string } | null = null;
+
+  appUserDAO.getByOauthAccount = async () => null;
+  appUserDAO.getByEmail = async () => null;
+  appUserDAO.createOauthUser = async (input) =>
+    ({
+      id: 'oauth-created-1',
+      email: input.email,
+      displayName: input.displayName,
+      avatarSource: input.avatarSource || 'default',
+      profileJson: {},
+      status: 'active',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }) as any;
+  appUserBootstrapService.bootstrapNewAppUser = async (userId, source) => {
+    bootstrapInput = { userId, source };
+    return null;
+  };
+  appUserSessionDAO.create = async () => ({ id: 'session-2' } as any);
+  appUserDAO.getById = async (id) =>
+    ({
+      id,
+      email: 'oauth-created@example.com',
+      displayName: 'OAuth Created',
+      avatarSource: 'oauth_google',
+      profileJson: {},
+      status: 'active',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }) as any;
+
+  const result = await appAuthOauthService.resolveOrCreateUser({
+    provider: 'google',
+    providerSubject: 'subject-created-1',
+    email: 'oauth-created@example.com',
+    displayName: 'OAuth Created',
+    avatarUrl: 'https://example.com/oauth-created.png',
+  });
+
+  assert.equal(result.user?.id, 'oauth-created-1');
+  assert.deepEqual(bootstrapInput, {
+    userId: 'oauth-created-1',
+    source: 'oauth_google_register',
+  });
+});
+
+test('AppAuthOauthService retries cleanly after transactional bootstrap failure', async () => {
+  const transactionError = new Error('bootstrap failed');
+  let createOauthUserCalls = 0;
+
+  db.transaction = async (callback: any) => {
+    try {
+      return await callback({} as any);
+    } catch (error) {
+      throw error;
+    }
+  };
+  appUserDAO.getByOauthAccount = async () => null;
+  appUserDAO.getByEmail = async () => null;
+  appUserDAO.createOauthUser = async () => {
+    createOauthUserCalls += 1;
+    return {
+      id: `oauth-created-${createOauthUserCalls}`,
+      email: 'oauth-created@example.com',
+      displayName: 'OAuth Created',
+      avatarSource: 'oauth_google',
+      profileJson: {},
+      status: 'active',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as any;
+  };
+  appUserBootstrapService.bootstrapNewAppUser = async () => {
+    throw transactionError;
+  };
+
+  await assert.rejects(
+    () =>
+      appAuthOauthService.resolveOrCreateUser({
+        provider: 'google',
+        providerSubject: 'subject-created-2',
+        email: 'oauth-created@example.com',
+        displayName: 'OAuth Created',
+        avatarUrl: 'https://example.com/oauth-created.png',
+      }),
+    transactionError
+  );
+
+  assert.equal(createOauthUserCalls, 1);
 });

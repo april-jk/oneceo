@@ -37,6 +37,10 @@ import { taskSessionAltusMemoryService } from './task-session-altus-memory-servi
 import { taskSessionSkillStateService } from './task-session-skill-state-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 import {
+  traceLlmCallStart,
+  traceLlmCallComplete,
+} from './api-trace-service';
+import {
   TaskSessionDeliverableService,
   taskSessionDeliverableService,
 } from './task-session-deliverable-service';
@@ -2099,14 +2103,36 @@ private async chargeForModelCall(state: AltusRunState, input: {
         throw new Error(`billing_pricing_missing:${billingTargetKey}`);
       }
 
-      const assistant = await this.callModelWithRetry({
-        messages,
-        signal,
-        mcpProviders: state.input.mcpProviders,
-        fallbackModel: state.input.model,
-        runtimeSnapshot: state.input.runtimeSnapshot || null,
-        runtimeTokenSource: state.input.runtimeTokenSource || null,
-        onRetryableError: async (error, attempt, delayMs) => {
+      const llmTraceStartedAt = new Date();
+      const llmTrace = await traceLlmCallStart({
+        sessionId: state.input.sessionId,
+        runId: state.input.runId,
+        model: modelName,
+        provider: state.input.runtimeSnapshot?.apiType || 'openai',
+        endpoint: '/v1/chat/completions',
+        requestBody: {
+          model: modelName,
+          messages: sanitizeMessagesForModel(messages),
+          tools: buildManagedToolDefinitionsWithMcp({
+            mcpProviders: Array.isArray(state.input.mcpProviders) ? state.input.mcpProviders : [],
+          }),
+          tool_choice: 'auto',
+          temperature: 0.2,
+          stream: true,
+        },
+        startedAt: llmTraceStartedAt,
+      });
+
+      let assistant;
+      try {
+        assistant = await this.callModelWithRetry({
+          messages,
+          signal,
+          mcpProviders: state.input.mcpProviders,
+          fallbackModel: state.input.model,
+          runtimeSnapshot: state.input.runtimeSnapshot || null,
+          runtimeTokenSource: state.input.runtimeTokenSource || null,
+          onRetryableError: async (error, attempt, delayMs) => {
           const parsed = this.extractModelError(error);
           await this.syncLoopSnapshot(state, {
             lastTransitionReason: 'model_retryable_error',
@@ -2178,6 +2204,21 @@ private async chargeForModelCall(state: AltusRunState, input: {
           );
         },
       });
+
+      traceLlmCallComplete(llmTrace, {
+        responseStatus: 200,
+        responseBody: assistant,
+        usage: assistant?.usage,
+        completedAt: new Date(),
+      });
+      } catch (error) {
+        traceLlmCallComplete(llmTrace, {
+          responseStatus: 500,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          completedAt: new Date(),
+        });
+        throw error;
+      }
 
       // 计费
       await this.chargeForModelCall(state, {

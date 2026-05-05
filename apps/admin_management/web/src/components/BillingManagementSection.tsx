@@ -4,7 +4,7 @@ import { BillingUsageLogs } from './BillingUsageLogs';
 import { BillingDebugPanel } from './BillingDebugPanel';
 import { ActivationCodeManagement } from './ActivationCodeManagement';
 import { getBillingErrorMessage, readBillingResponseError, type BillingNotify } from './billing-feedback';
-import { AdminButton, AdminDetailShell, AdminTabs, AuditTimeline, DangerConfirmDialog, DiffDrawer, IdToken, StatusBadge, getAdminActionIcon, getAdminModuleIcon } from './admin-ui';
+import { AdminButton, AdminDetailShell, AdminTabs, ConfirmDialog, DangerConfirmDialog, DiffDrawer, IdToken, StatusBadge, getAdminActionIcon, getAdminModuleIcon } from './admin-ui';
 
 function groupByProvider(items: ReferencePricingItem[]) {
   const groups: Record<string, ReferencePricingItem[]> = {};
@@ -26,6 +26,27 @@ interface ReferencePricingItem {
   inputPrice: number;
   outputPrice: number;
 }
+
+const REFERENCE_PRICING_VERSION = '2026-05-02-v1';
+
+const DEFAULT_REFERENCE_PRICING: ReferencePricingItem[] = [
+  { provider: 'OpenAI', model: 'GPT-4o', inputPrice: 18.00, outputPrice: 72.00 },
+  { provider: 'OpenAI', model: 'GPT-4o-mini', inputPrice: 1.08, outputPrice: 4.32 },
+  { provider: 'OpenAI', model: 'o1', inputPrice: 108.00, outputPrice: 432.00 },
+  { provider: 'OpenAI', model: 'o3', inputPrice: 14.40, outputPrice: 57.60 },
+  { provider: 'OpenAI', model: 'o4-mini', inputPrice: 7.92, outputPrice: 31.68 },
+  { provider: 'Anthropic', model: 'Claude Opus 4.7', inputPrice: 36.00, outputPrice: 180.00 },
+  { provider: 'Anthropic', model: 'Claude Sonnet 4.6', inputPrice: 21.60, outputPrice: 108.00 },
+  { provider: 'Anthropic', model: 'Claude Haiku 4.5', inputPrice: 7.20, outputPrice: 36.00 },
+  { provider: 'Anthropic', model: 'Claude Haiku 3.5', inputPrice: 5.76, outputPrice: 28.80 },
+  { provider: 'Google', model: 'Gemini 3.1 Pro Preview', inputPrice: 14.40, outputPrice: 86.40 },
+  { provider: 'Google', model: 'Gemini 3.1 Flash-Lite Preview', inputPrice: 1.80, outputPrice: 10.80 },
+  { provider: 'Google', model: 'Gemini 2.5 Flash-Lite', inputPrice: 0.72, outputPrice: 2.88 },
+  { provider: 'DeepSeek', model: 'DeepSeek-V4-Flash', inputPrice: 1.01, outputPrice: 2.02 },
+  { provider: '阿里云', model: 'qwen3-max', inputPrice: 2.50, outputPrice: 10.00 },
+  { provider: '阿里云', model: 'qwen3-coder-plus', inputPrice: 4.00, outputPrice: 16.00 },
+  { provider: '阿里云', model: 'qwen3-vl-plus', inputPrice: 1.00, outputPrice: 10.00 },
+];
 
 interface Pricing {
   id: string;
@@ -217,6 +238,10 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
   const [pricingFormMode, setPricingFormMode] = useState<'create' | 'update'>('create');
   const [pricingDetailOpen, setPricingDetailOpen] = useState(false);
   const [selectedPricing, setSelectedPricing] = useState<Pricing | null>(null);
+  const selectedPricingRef = useRef<Pricing | null>(null);
+  useEffect(() => {
+    selectedPricingRef.current = selectedPricing;
+  }, [selectedPricing]);
   const [pricingForm, setPricingForm] = useState({
     model: '',
     modelProvider: 'openai',
@@ -229,36 +254,36 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
   });
   const [pricingFormLoading, setPricingFormLoading] = useState(false);
   const [pricingFormTouched, setPricingFormTouched] = useState<Record<string, boolean>>({});
+  const [cacheSectionExpanded, setCacheSectionExpanded] = useState(false);
   const [deletePricingTarget, setDeletePricingTarget] = useState<Pricing | null>(null);
   const [deletePricingLoading, setDeletePricingLoading] = useState(false);
   const [updateConfirmOpen, setUpdateConfirmOpen] = useState(false);
+  const [unsavedConfirmTarget, setUnsavedConfirmTarget] = useState<'pricing' | 'runtime' | null>(null);
   const [pricingDiffOpen, setPricingDiffOpen] = useState(false);
 
   // Reference pricing state
   const [referencePricingOpen, setReferencePricingOpen] = useState(false);
   const [referencePricingData, setReferencePricingData] = useState<ReferencePricingItem[]>(() => {
-    const saved = localStorage.getItem('oneceo_reference_pricing');
-    if (saved) {
-      try { return JSON.parse(saved); } catch { /* fallthrough */ }
+    try {
+      const savedRaw = localStorage.getItem('oneceo_reference_pricing');
+      const savedVersion = localStorage.getItem('oneceo_reference_pricing_version');
+      if (savedRaw && savedVersion === REFERENCE_PRICING_VERSION) {
+        const parsed = JSON.parse(savedRaw) as ReferencePricingItem[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch {
+      // fallthrough to default
     }
-    return [
-      { provider: 'OpenAI', model: 'GPT-4o', inputPrice: 18.00, outputPrice: 72.00 },
-      { provider: 'OpenAI', model: 'GPT-4o-mini', inputPrice: 1.08, outputPrice: 4.32 },
-      { provider: 'OpenAI', model: 'o1', inputPrice: 108.00, outputPrice: 432.00 },
-      { provider: 'OpenAI', model: 'o3', inputPrice: 14.40, outputPrice: 57.60 },
-      { provider: 'OpenAI', model: 'o4-mini', inputPrice: 7.92, outputPrice: 31.68 },
-      { provider: 'Anthropic', model: 'Claude Opus 4.7', inputPrice: 36.00, outputPrice: 180.00 },
-      { provider: 'Anthropic', model: 'Claude Sonnet 4.6', inputPrice: 21.60, outputPrice: 108.00 },
-      { provider: 'Anthropic', model: 'Claude Haiku 4.5', inputPrice: 7.20, outputPrice: 36.00 },
-      { provider: 'Anthropic', model: 'Claude Haiku 3.5', inputPrice: 5.76, outputPrice: 28.80 },
-      { provider: 'Google', model: 'Gemini 3.1 Pro', inputPrice: 14.40, outputPrice: 86.40 },
-      { provider: 'Google', model: 'Gemini 3.1 Flash-Lite', inputPrice: 1.80, outputPrice: 10.80 },
-      { provider: 'Google', model: 'Gemini 2.5 Flash-Lite', inputPrice: 0.72, outputPrice: 2.88 },
-      { provider: 'DeepSeek', model: 'DeepSeek-V4-Flash', inputPrice: 1.01, outputPrice: 2.02 },
-      { provider: '阿里云', model: 'qwen3-max', inputPrice: 1.50, outputPrice: 60.00 },
-      { provider: '阿里云', model: 'qwen3-coder-plus', inputPrice: 1.00, outputPrice: 40.00 },
-      { provider: '阿里云', model: 'qwen3-vl-plus', inputPrice: 3.00, outputPrice: 120.00 },
-    ];
+    // Default: save version and default data to localStorage
+    try {
+      localStorage.setItem('oneceo_reference_pricing', JSON.stringify(DEFAULT_REFERENCE_PRICING));
+      localStorage.setItem('oneceo_reference_pricing_version', REFERENCE_PRICING_VERSION);
+    } catch {
+      // ignore storage errors
+    }
+    return DEFAULT_REFERENCE_PRICING;
   });
   const [referencePricingDraft, setReferencePricingDraft] = useState<ReferencePricingItem[]>(referencePricingData);
   const [referenceSearch, setReferenceSearch] = useState('');
@@ -291,7 +316,23 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
       const response = await fetch('/api/internal/billing/pricing', { credentials: 'include' });
       if (response.ok) {
         const data = await response.json();
-        setPricing(data.items || []);
+        const items = data.items || [];
+        setPricing(items);
+        // 同步更新详情弹窗中的选中项，避免旧引用导致显示旧数据
+        // 创建新版本后旧记录会被停用（id 不变但 isActive=false），
+        // 新记录有新的 id，因此需要按 model 查找最新活跃记录
+        const currentSelected = selectedPricingRef.current;
+        if (currentSelected) {
+          const byId = items.find((p: Pricing) => p.id === currentSelected.id);
+          if (byId && byId.isActive) {
+            setSelectedPricing(byId);
+          } else {
+            const byModel = items.find((p: Pricing) => p.model === currentSelected.model && p.isActive);
+            if (byModel) {
+              setSelectedPricing(byModel);
+            }
+          }
+        }
       } else {
         onNotify?.('error', '加载失败', await readBillingResponseError(response, '无法获取模型定价列表'));
       }
@@ -368,8 +409,6 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
     }
   }, [activeTab, fetchRuntimeConfig, fetchPricing, fetchModelCandidates, fetchCacheConfig]);
 
-
-
   const tabs = [
     { key: 'stats' as const, label: '平台统计' },
     { key: 'pricing' as const, label: '定价配置' },
@@ -419,8 +458,8 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
     });
     return sorted;
   }, [pricing, sortConfig]);
-  const pricingTargets = sortedPricing;
-  const activePricing = pricing.filter((item) => item.isActive);
+  const pricingTargets = sortedPricing.filter((item) => item.isActive);
+  const activePricing = pricingTargets;
   const runtimeItems = [...runtimeConfig.agent, ...runtimeConfig.sandbox];
   const runtimeFormHasUnsavedChanges = Boolean(runtimeFormTarget) && (
     runtimeForm.model.trim() !== (runtimeFormTarget?.model || '') ||
@@ -461,6 +500,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
 
     try {
       localStorage.setItem('oneceo_reference_pricing', JSON.stringify(validItems));
+      localStorage.setItem('oneceo_reference_pricing_version', REFERENCE_PRICING_VERSION);
       setReferencePricingData(validItems);
       setReferencePricingDraft(validItems);
       onNotify?.('success', '已保存', '市场参考定价已更新');
@@ -533,6 +573,20 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
     return errors;
   })();
 
+  const pricingFormIsDirty = useMemo(() => {
+    if (pricingFormMode === 'create') {
+      return Boolean(pricingForm.model.trim() || pricingForm.promptPricePer1mTokens || pricingForm.completionPricePer1mTokens || (pricingForm.multiplier && pricingForm.multiplier !== '1' && pricingForm.multiplier !== '1.0') || pricingForm.effectiveFrom || pricingForm.cacheHitRatio || pricingForm.cacheCreationRatio);
+    }
+    // For update mode, check if any field differs from the selected pricing
+    if (!selectedPricing) return false;
+    return pricingForm.promptPricePer1mTokens !== String(selectedPricing.promptPricePer1mTokens) ||
+      pricingForm.completionPricePer1mTokens !== String(selectedPricing.completionPricePer1mTokens) ||
+      pricingForm.multiplier !== String(selectedPricing.multiplier ?? 1.0) ||
+      Boolean(pricingForm.effectiveFrom) ||
+      pricingForm.cacheHitRatio !== formatPercentInput(selectedPricing.cacheHitRatio * 100) ||
+      pricingForm.cacheCreationRatio !== formatPercentInput(selectedPricing.cacheCreationRatio * 100);
+  }, [pricingFormMode, pricingForm, selectedPricing]);
+
   const shouldShowPricingFieldError = (field: string) => Boolean(pricingFormTouched[field] && pricingFieldErrors[field]);
 
   const markPricingFieldTouched = (field: string) => {
@@ -567,13 +621,16 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
       cacheCreationRatio: initial?.cacheCreationRatio || cacheForm.creationRatio,
     });
     setPricingFormTouched({});
+    setCacheSectionExpanded(mode === 'update');
     setPricingFormOpen(true);
   }, [getCacheFormForProvider]);
 
   const openPricingDetail = useCallback((pricingItem: Pricing) => {
-    setSelectedPricing(pricingItem);
+    // 始终显示当前活跃记录，避免打开旧版本快照
+    const activeItem = pricing.find((p) => p.model === pricingItem.model && p.isActive);
+    setSelectedPricing(activeItem || pricingItem);
     setPricingDetailOpen(true);
-  }, []);
+  }, [pricing]);
 
   const openPricingUpdate = useCallback((pricingItem: Pricing) => {
     const normalizedProvider = normalizePricingProvider(pricingItem.model, pricingItem.modelProvider);
@@ -804,26 +861,13 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
           <p className="section-tag">计费中心</p>
           <h2>计费管理</h2>
         </div>
-        <div className="sandbox-list-header-actions user-management-hero-actions">
-          <section className="user-management-summary-strip user-management-live-summary session-status sandbox-live-count" aria-label="计费摘要">
-            <span className="sandbox-live-metric sandbox-live-metric-total">
-              <span>用户</span>
-              <strong>用户详情</strong>
-            </span>
-            <span className="sandbox-live-metric sandbox-live-metric-running">
-              <span>定价规则</span>
-              <strong>{activePricing.length}</strong>
-            </span>
-            <span className="sandbox-live-metric sandbox-live-metric-paused">
-              <span>缓存配置</span>
-              <strong>{cacheConfigs.length}</strong>
-            </span>
-            <span className="sandbox-live-metric user-management-live-metric-disabled">
-              <span>入口</span>
-              <strong>统计/配置</strong>
-            </span>
-          </section>
-        </div>
+        {activeTab === 'pricing' && (
+          <div className="sandbox-list-header-actions user-management-hero-actions">
+            <p className="panel-caption billing-hero-summary">
+              活跃定价 <strong>{activePricing.length}</strong> 条 · 缓存配置 <strong>{cacheConfigs.length}</strong> 组 · 运行入口 <strong>{runtimeItems.length}</strong> 个
+            </p>
+          </div>
+        )}
       </section>
 
       {/* Tab Bar */}
@@ -839,7 +883,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
             <div className="pricing-live-head"><div className="pricing-live-title"><p className="section-tag">定价配置</p><p className="panel-caption">运行配置决定模型与接口，SKU 定价决定扣积分规则。修改运行配置只影响后续新任务。</p></div><div className="pricing-live-actions"><AdminButton variant="primary" onClick={() => openPricingForm()}>新建定价</AdminButton><AdminButton variant="secondary" onClick={() => { setReferencePricingDraft(referencePricingData); setReferencePricingOpen(!referencePricingOpen); }}>{referencePricingOpen ? '收起参考定价' : '市场参考定价'}</AdminButton><AdminButton variant="secondary" onClick={async () => { await fetchRuntimeConfig(); await fetchPricing(); onNotify?.('success', '已刷新', '运行配置与定价数据已更新'); }} loading={runtimeConfigLoading}>{runtimeConfigLoading ? '刷新中...' : '刷新配置'}</AdminButton></div></div>
             <div className="pricing-live-rack-compact" aria-busy={runtimeConfigLoading}>{runtimeItems.map((item) => { const testResult = runtimeTestResults[item.key]; const isTesting = runtimeTestingKey === item.key; return (<section key={item.key} id={item.runtimeConfigAnchor} className="pricing-live-runtime-compact"><div className="pricing-live-runtime-top"><span className="pricing-detail-label">{item.kind === 'agent' ? 'Agent' : 'Sandbox'}</span><StatusBadge tone={tokenStateTone(item.tokenState)}>{tokenStateLabel(item.tokenState)}</StatusBadge></div><strong title={item.displayName}>{item.displayName}</strong><small title={`${item.model || '未配置模型'} · ${item.baseUrlHost || '未配置接口'} · ${item.apiType || '-'}`}>{item.model || '未配置模型'}</small>{testResult ? (<button type="button" className={`runtime-test-result runtime-test-result-${testResult.status}`} onClick={() => { setRuntimeTestModalTarget(item); setRuntimeTestModalOpen(true); }} title={`${testResult.latencyMs}ms · ${testResult.model || item.model || '未配置模型'} · ${testResult.baseUrlHost || item.baseUrlHost || '未配置接口'}`}><StatusBadge tone={runtimeTestTone(testResult)}>{testResult.status === 'success' ? '通过' : '失败'}</StatusBadge></button>) : null}<div className="runtime-config-actions"><button type="button" className="table-btn" onClick={() => openRuntimeForm(item)}>调整运行配置</button><button type="button" className="table-btn" onClick={() => void testRuntimeConfig(item)} disabled={isTesting}>{isTesting ? '...' : '测试'}</button></div></section>); })}</div>
             <div className="pricing-live-notice"><span className="pricing-form-tip-icon">ℹ</span><span>运行配置和定价分层展示，先确认执行入口，再处理扣费规则。</span></div>
-            <div className="table-wrap user-management-table-wrap pricing-live-table-wrap" aria-live="polite"><table className="user-management-table pricing-live-table"><colgroup><col style={{ width: '20%' }} /><col style={{ width: '10%' }} /><col style={{ width: '10%' }} /><col style={{ width: '8%' }} /><col style={{ width: '14%' }} /><col style={{ width: '12%' }} /><col style={{ width: '12%' }} /><col style={{ width: '14%' }} /></colgroup><thead><tr><th onClick={() => handleSort('model')} style={{cursor:'pointer'}}><span className="runtime-th-label">计费对象{sortIndicator('model')}</span></th><th onClick={() => handleSort('promptPrice')} style={{cursor:'pointer'}}><span className="runtime-th-label">输入单价{sortIndicator('promptPrice')}</span></th><th onClick={() => handleSort('completionPrice')} style={{cursor:'pointer'}}><span className="runtime-th-label">输出单价{sortIndicator('completionPrice')}</span></th><th onClick={() => handleSort('multiplier')} style={{cursor:'pointer'}}><span className="runtime-th-label">倍率{sortIndicator('multiplier')}</span></th><th><span className="runtime-th-label">缓存比例</span></th><th onClick={() => handleSort('status')} style={{cursor:'pointer'}}><span className="runtime-th-label">运行状态{sortIndicator('status')}</span></th><th><span className="runtime-th-label">生效时间</span></th><th className="runtime-col-actions"><span className="runtime-th-label">操作</span></th></tr></thead><tbody>{pricingTargets.length === 0 ? (<tr><td colSpan={8} className="empty">暂无定价数据</td></tr>) : (pricingTargets.map((p) => { const normalizedProvider = normalizePricingProvider(p.model, p.modelProvider); const configured = p.isActive && p.promptPricePer1mTokens > 0 && p.completionPricePer1mTokens > 0; return (<tr key={p.id}><td><div className="user-management-table-user"><div className="user-management-table-user-head"><strong>{p.displayName || p.model}</strong></div><small>{p.billingTargetKey || p.model}</small>{p.actualModel && p.actualModel !== p.model ? (<small className="pricing-runtime-hint" title={`${p.actualModel} · ${p.baseUrlHost || '未配置接口'} · ${p.apiType || '-'}`}>{p.actualModel} · {p.baseUrlHost || '未配置接口'}</small>) : null}</div></td><td><div className="user-management-table-cell-stack user-management-table-metric"><strong>{p.promptPricePer1mTokens}</strong><small>/ 1M tokens</small>{(p.multiplier ?? 1.0) !== 1.0 && p.promptPricePer1mTokens > 0 ? <small className="pricing-effective-price" style={{color: '#0969da', fontWeight: 600}}>实际 {(p.promptPricePer1mTokens * (p.multiplier ?? 1.0)).toFixed(0)}</small> : null}</div></td><td><div className="user-management-table-cell-stack user-management-table-metric"><strong>{p.completionPricePer1mTokens}</strong><small>/ 1M tokens</small>{(p.multiplier ?? 1.0) !== 1.0 && p.completionPricePer1mTokens > 0 ? <small className="pricing-effective-price" style={{color: '#0969da', fontWeight: 600}}>实际 {(p.completionPricePer1mTokens * (p.multiplier ?? 1.0)).toFixed(0)}</small> : null}</div></td><td><div className="user-management-table-cell-stack user-management-table-metric"><strong>{(p.multiplier ?? 1.0).toFixed(2)}</strong><small>×</small></div></td><td><div className="user-management-table-cell-stack">{p.cacheHitRatio > 0 && (<span>命中 {(p.cacheHitRatio * 100).toFixed(0)}%</span>)}{p.cacheCreationRatio > 0 && (<span>创建 {(p.cacheCreationRatio * 100).toFixed(0)}%</span>)}</div></td><td><StatusBadge tone={tokenStateTone(p.tokenState)}>{tokenStateLabel(p.tokenState)}</StatusBadge></td><td><div className="user-management-table-cell-stack">{p.effectiveFrom ? (<small>{new Date(p.effectiveFrom).toLocaleDateString('zh-CN')}</small>) : (<small>-</small>)}</div></td><td><div className="user-management-table-actions"><button type="button" className="table-btn" onClick={() => configured ? openPricingDetail(p) : openPricingForm({ model: p.model, modelProvider: normalizedProvider }, 'create')}>{configured ? '详情' : '配置'}</button></div></td></tr>);}))}</tbody></table></div>
+            <div className="table-wrap user-management-table-wrap pricing-live-table-wrap" aria-live="polite"><table className="user-management-table pricing-live-table"><colgroup><col style={{ width: '20%' }} /><col style={{ width: '10%' }} /><col style={{ width: '10%' }} /><col style={{ width: '8%' }} /><col style={{ width: '14%' }} /><col style={{ width: '12%' }} /><col style={{ width: '12%' }} /><col style={{ width: '14%' }} /></colgroup><thead><tr><th onClick={() => handleSort('model')} style={{cursor:'pointer'}}><span className="runtime-th-label">计费对象{sortIndicator('model')}</span></th><th onClick={() => handleSort('promptPrice')} style={{cursor:'pointer'}}><span className="runtime-th-label">输入单价{sortIndicator('promptPrice')}</span></th><th onClick={() => handleSort('completionPrice')} style={{cursor:'pointer'}}><span className="runtime-th-label">输出单价{sortIndicator('completionPrice')}</span></th><th onClick={() => handleSort('multiplier')} style={{cursor:'pointer'}}><span className="runtime-th-label">倍率{sortIndicator('multiplier')}</span></th><th><span className="runtime-th-label">缓存比例</span></th><th onClick={() => handleSort('status')} style={{cursor:'pointer'}}><span className="runtime-th-label">运行状态{sortIndicator('status')}</span></th><th><span className="runtime-th-label">生效时间</span></th><th className="runtime-col-actions"><span className="runtime-th-label">操作</span></th></tr></thead><tbody>{pricingTargets.length === 0 ? (<tr><td colSpan={8} className="empty">暂无定价数据</td></tr>) : (pricingTargets.map((p) => { const normalizedProvider = normalizePricingProvider(p.model, p.modelProvider); const configured = p.isActive && p.promptPricePer1mTokens > 0 && p.completionPricePer1mTokens > 0; return (<tr key={p.id}><td><div className="user-management-table-user"><div className="user-management-table-user-head"><strong>{p.displayName || p.model}</strong></div><small>{p.billingTargetKey || p.model}</small>{p.actualModel && p.actualModel !== p.model ? (<small className="pricing-runtime-hint" title={`${p.actualModel} · ${p.baseUrlHost || '未配置接口'} · ${p.apiType || '-'}`}>{p.actualModel} · {p.baseUrlHost || '未配置接口'}</small>) : null}</div></td><td><div className="user-management-table-cell-stack user-management-table-metric"><strong>{p.promptPricePer1mTokens}</strong><small>/ 1M tokens</small>{(p.multiplier ?? 1.0) !== 1.0 && p.promptPricePer1mTokens > 0 ? <small className="pricing-effective-price" style={{color: 'var(--primary)', fontWeight: 600}}>实际 {(p.promptPricePer1mTokens * (p.multiplier ?? 1.0)).toFixed(0)}</small> : null}</div></td><td><div className="user-management-table-cell-stack user-management-table-metric"><strong>{p.completionPricePer1mTokens}</strong><small>/ 1M tokens</small>{(p.multiplier ?? 1.0) !== 1.0 && p.completionPricePer1mTokens > 0 ? <small className="pricing-effective-price" style={{color: 'var(--primary)', fontWeight: 600}}>实际 {(p.completionPricePer1mTokens * (p.multiplier ?? 1.0)).toFixed(0)}</small> : null}</div></td><td><div className="user-management-table-cell-stack user-management-table-metric"><strong>{(p.multiplier ?? 1.0).toFixed(2)}</strong><small>×</small></div></td><td><div className="user-management-table-cell-stack">{p.cacheHitRatio > 0 && (<span>命中 {(p.cacheHitRatio * 100).toFixed(0)}%</span>)}{p.cacheCreationRatio > 0 && (<span>创建 {(p.cacheCreationRatio * 100).toFixed(0)}%</span>)}</div></td><td><StatusBadge tone={tokenStateTone(p.tokenState)}>{tokenStateLabel(p.tokenState)}</StatusBadge></td><td><div className="user-management-table-cell-stack">{p.effectiveFrom ? (<small>{new Date(p.effectiveFrom).toLocaleDateString('zh-CN')}</small>) : (<small>-</small>)}</div></td><td><div className="user-management-table-actions"><button type="button" className="table-btn" onClick={() => configured ? openPricingDetail(p) : openPricingForm({ model: p.model, modelProvider: normalizedProvider }, 'create')}>{configured ? '详情' : '配置'}</button></div></td></tr>);}))}</tbody></table></div>
             <div className="admin-mobile-card-list" aria-label="定价配置移动列表">{pricingTargets.length === 0 ? <p className="empty">暂无定价数据</p> : pricingTargets.map((p) => (<article key={p.id} className="admin-mobile-card"><div className="admin-mobile-card-head"><strong>{p.displayName || p.model}</strong><StatusBadge tone={p.isActive ? 'success' : 'warning'}>{p.isActive ? '已定价' : '待配置'}</StatusBadge></div><div className="admin-mobile-card-meta"><span>输入 {p.promptPricePer1mTokens} / 1M</span><span>输出 {p.completionPricePer1mTokens} / 1M</span><span>倍率 {(p.multiplier ?? 1.0).toFixed(2)}×</span><span>缓存 {(p.cacheHitRatio * 100).toFixed(0)}% / {(p.cacheCreationRatio * 100).toFixed(0)}%</span></div>{p.isActive ? (
               <AdminButton variant="link" onClick={() => openPricingDetail(p)}>详情</AdminButton>
             ) : p.model?.trim() ? (
@@ -851,7 +895,10 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
 
           {/* Pricing Form Modal */}
           {pricingFormOpen && (
-            <div className="modal-backdrop" onClick={() => setPricingFormOpen(false)}>
+            <div className="modal-backdrop" onClick={() => {
+  if (pricingFormIsDirty) { setUnsavedConfirmTarget('pricing'); return; }
+  setPricingFormOpen(false);
+}}>
               <aside
                 className="pricing-form-modal"
                 role="dialog"
@@ -872,1007 +919,16 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                   <button
                     type="button"
                     className="pricing-form-modal-close"
-                    onClick={() => setPricingFormOpen(false)}
+                    onClick={() => {
+                      if (pricingFormIsDirty) { setUnsavedConfirmTarget('pricing'); return; }
+                      setPricingFormOpen(false);
+                    }}
                     aria-label="关闭"
                   >
                     ×
                   </button>
                 </div>
-                 {/* impeccable-variants-start d3ab82bb */}
-                <div data-impeccable-variants="d3ab82bb" data-impeccable-variant-count="4" style={{ display: "contents" }}>
-                  {/* Variant 1: Compact Stacked - Dense vertical rhythm with micro-grouping */}
-                  <style data-impeccable-css="d3ab82bb">
-                    {`
-                      @scope ([data-impeccable-variant="1"]) {
-                        .runtime-form-compact {
-                          padding: 12px 16px;
-                          display: flex;
-                          flex-direction: column;
-                          gap: 10px;
-                        }
-                        .runtime-form-compact .form-warning {
-                          display: flex;
-                          align-items: flex-start;
-                          gap: 6px;
-                          padding: 8px 10px;
-                          background: color-mix(in srgb, var(--warning) 6%, transparent);
-                          border: 1px solid color-mix(in srgb, var(--warning) 18%, transparent);
-                          border-radius: 6px;
-                          font-size: 12px;
-                          line-height: 1.4;
-                          color: var(--text-soft);
-                        }
-                        .runtime-form-compact .form-warning-icon {
-                          color: var(--warning);
-                          font-size: 13px;
-                          flex-shrink: 0;
-                          margin-top: 0.5px;
-                        }
-                        .runtime-form-compact .form-section {
-                          display: flex;
-                          flex-direction: column;
-                          gap: 8px;
-                        }
-                        .runtime-form-compact .section-title {
-                          font-size: 11px;
-                          font-weight: 800;
-                          text-transform: uppercase;
-                          letter-spacing: 0.06em;
-                          color: var(--text-faint);
-                          margin: 0;
-                          padding-bottom: 2px;
-                          border-bottom: 1px solid var(--border);
-                        }
-                        .runtime-form-compact .field-row {
-                          display: flex;
-                          gap: 10px;
-                          align-items: flex-end;
-                        }
-                        .runtime-form-compact .field-row .field {
-                          flex: 1;
-                        }
-                        .runtime-form-compact .field-row .field.field-wide {
-                          flex: 2;
-                        }
-                        .runtime-form-compact .field-label {
-                          display: block;
-                          font-size: 11px;
-                          font-weight: 700;
-                          color: var(--text-soft);
-                          margin-bottom: 3px;
-                        }
-                        .runtime-form-compact .field-label small {
-                          font-weight: 500;
-                          color: var(--text-faint);
-                          margin-left: 4px;
-                        }
-                        .runtime-form-compact input,
-                        .runtime-form-compact select {
-                          width: 100%;
-                          height: 32px;
-                          padding: 6px 9px;
-                          border: 1px solid var(--border);
-                          border-radius: 6px;
-                          background: var(--surface);
-                          font-size: 13px;
-                          color: var(--text);
-                        }
-                        .runtime-form-compact input:focus,
-                        .runtime-form-compact select:focus {
-                          outline: none;
-                          border-color: var(--primary);
-                          box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 12%, transparent);
-                        }
-                        .runtime-form-compact .input-group {
-                          display: flex;
-                          gap: 6px;
-                        }
-                        .runtime-form-compact .input-group input {
-                          flex: 1;
-                        }
-                        .runtime-form-compact .btn-micro {
-                          height: 32px;
-                          padding: 0 10px;
-                          font-size: 11px;
-                          font-weight: 700;
-                          white-space: nowrap;
-                          border: 1px solid var(--border);
-                          border-radius: 6px;
-                          background: var(--surface-muted);
-                          color: var(--text);
-                          cursor: pointer;
-                        }
-                        .runtime-form-compact .btn-micro:hover {
-                          background: var(--surface);
-                          border-color: var(--border-strong);
-                        }
-                      }
-                    `}
-                  </style>
-                  <div data-impeccable-variant="1" data-impeccable-params='[{"id":"density","kind":"steps","default":"compact","label":"密度","options":[{"value":"compact","label":"紧凑"},{"value":"comfortable","label":"舒适"},{"value":"airy","label":"宽松"}]}]' style={{ display: "none" }}>
-                    <div className="runtime-form-compact">
-                      <div className="form-warning">
-                        <span className="form-warning-icon">⚠</span>
-                        <span>Token 不回显。留空表示不修改已有 Token；运行日志只记录 tokenState。</span>
-                      </div>
-                      <div className="form-section">
-                        <h3 className="section-title">模型与接口</h3>
-                        <div className="field-row">
-                          <div className="field">
-                            <label className="field-label">模型名称</label>
-                            <div className="input-group">
-                              <input type="text" defaultValue="qwen3-max-2026-01-23" placeholder="如 qwen3-max-2026-01-23" />
-                              <button className="btn-micro">获取模型</button>
-                            </div>
-                          </div>
-                          <div className="field">
-                            <label className="field-label">协议</label>
-                            <select defaultValue="openai">
-                              <option value="openai">OpenAI</option>
-                            </select>
-                          </div>
-                        </div>
-                        <div className="field-row">
-                          <div className="field field-wide">
-                            <label className="field-label">模型列表接口 <small>可选</small></label>
-                            <input type="text" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1/models" />
-                          </div>
-                        </div>
-                        <div className="field-row">
-                          <div className="field field-wide">
-                            <label className="field-label">Base URL</label>
-                            <input type="text" defaultValue="https://dashscope.aliyuncs.com/compatible-mode/v1" />
-                          </div>
-                        </div>
-                        <div className="field-row">
-                          <div className="field field-wide">
-                            <label className="field-label">API Token <small>留空不修改</small></label>
-                            <input type="password" placeholder="已配置" />
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Variant 2: Grid Grouping - Two-column layout with visual cards */}
-                  <style data-impeccable-css="d3ab82bb">
-                    {`
-                      @scope ([data-impeccable-variant="2"]) {
-                        .runtime-form-grid {
-                          padding: 16px 18px;
-                          display: grid;
-                          grid-template-columns: 1fr 1fr;
-                          gap: 12px;
-                        }
-                        .runtime-form-grid .form-warning {
-                          grid-column: 1 / -1;
-                          display: flex;
-                          align-items: center;
-                          gap: 8px;
-                          padding: 10px 12px;
-                          background: color-mix(in srgb, var(--warning) 5%, transparent);
-                          border-left: 3px solid var(--warning);
-                          border-radius: 0 8px 8px 0;
-                          font-size: 12px;
-                          color: var(--text-soft);
-                        }
-                        .runtime-form-grid .form-card {
-                          background: var(--surface);
-                          border: 1px solid var(--border);
-                          border-radius: 10px;
-                          padding: 12px;
-                          display: flex;
-                          flex-direction: column;
-                          gap: 10px;
-                        }
-                        .runtime-form-grid .form-card.card-wide {
-                          grid-column: 1 / -1;
-                        }
-                        .runtime-form-grid .card-title {
-                          font-size: 12px;
-                          font-weight: 800;
-                          color: var(--text);
-                          margin: 0;
-                          display: flex;
-                          align-items: center;
-                          gap: 6px;
-                        }
-                        .runtime-form-grid .card-title::before {
-                          content: "";
-                          width: 4px;
-                          height: 14px;
-                          background: var(--primary);
-                          border-radius: 2px;
-                        }
-                        .runtime-form-grid .field-stack {
-                          display: flex;
-                          flex-direction: column;
-                          gap: 4px;
-                        }
-                        .runtime-form-grid .field-label {
-                          font-size: 11px;
-                          font-weight: 700;
-                          color: var(--text-soft);
-                        }
-                        .runtime-form-grid input,
-                        .runtime-form-grid select {
-                          width: 100%;
-                          height: 34px;
-                          padding: 7px 10px;
-                          border: 1px solid var(--border);
-                          border-radius: 7px;
-                          background: var(--surface-strong);
-                          font-size: 13px;
-                        }
-                        .runtime-form-grid .input-action {
-                          display: flex;
-                          gap: 6px;
-                        }
-                        .runtime-form-grid .input-action input {
-                          flex: 1;
-                        }
-                        .runtime-form-grid .btn-secondary {
-                          height: 34px;
-                          padding: 0 12px;
-                          font-size: 12px;
-                          font-weight: 700;
-                          border: 1px solid var(--border);
-                          border-radius: 7px;
-                          background: var(--surface-muted);
-                          color: var(--text);
-                          cursor: pointer;
-                          white-space: nowrap;
-                        }
-                      }
-                    `}
-                  </style>
-                  <div data-impeccable-variant="2" style={{ display: "none" }}>
-                    <div className="runtime-form-grid">
-                      <div className="form-warning">
-                        <span>⚠</span>
-                        <span>Token 不回显。留空表示不修改已有 Token；运行日志只记录 tokenState。</span>
-                      </div>
-                      <div className="form-card">
-                        <h3 className="card-title">模型配置</h3>
-                        <div className="field-stack">
-                          <label className="field-label">模型名称</label>
-                          <div className="input-action">
-                            <input type="text" defaultValue="qwen3-max-2026-01-23" />
-                            <button className="btn-secondary">获取</button>
-                          </div>
-                        </div>
-                        <div className="field-stack">
-                          <label className="field-label">协议类型</label>
-                          <select defaultValue="openai">
-                            <option value="openai">OpenAI compatible</option>
-                          </select>
-                        </div>
-                      </div>
-                      <div className="form-card">
-                        <h3 className="card-title">认证</h3>
-                        <div className="field-stack">
-                          <label className="field-label">API Token</label>
-                          <input type="password" placeholder="留空不修改 • 已配置" />
-                        </div>
-                      </div>
-                      <div className="form-card card-wide">
-                        <h3 className="card-title">接口端点</h3>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
-                          <div className="field-stack">
-                            <label className="field-label">Base URL</label>
-                            <input type="text" defaultValue="https://dashscope.aliyuncs.com/compatible-mode/v1" />
-                          </div>
-                          <div className="field-stack">
-                            <label className="field-label">模型列表接口 <small style={{ fontWeight: 500, color: "var(--text-faint)" }}>可选</small></label>
-                            <input type="text" placeholder="自动推导" />
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Variant 3: Tabbed Sections - Progressive disclosure with tabs */}
-                  <style data-impeccable-css="d3ab82bb">
-                    {`
-                      @scope ([data-impeccable-variant="3"]) {
-                        .runtime-form-tabbed {
-                          padding: 14px 16px;
-                        }
-                        .runtime-form-tabbed .form-warning {
-                          display: flex;
-                          align-items: center;
-                          gap: 8px;
-                          padding: 9px 12px;
-                          background: color-mix(in srgb, var(--warning) 6%, transparent);
-                          border-radius: 8px;
-                          font-size: 12px;
-                          color: var(--text-soft);
-                          margin-bottom: 12px;
-                        }
-                        .runtime-form-tabbed .tab-nav {
-                          display: flex;
-                          gap: 2px;
-                          padding: 3px;
-                          background: var(--surface-muted);
-                          border-radius: 8px;
-                          margin-bottom: 14px;
-                        }
-                        .runtime-form-tabbed .tab-btn {
-                          flex: 1;
-                          height: 30px;
-                          padding: 0 12px;
-                          font-size: 12px;
-                          font-weight: 700;
-                          border: none;
-                          border-radius: 6px;
-                          background: transparent;
-                          color: var(--text-soft);
-                          cursor: pointer;
-                          transition: all 0.15s ease;
-                        }
-                        .runtime-form-tabbed .tab-btn.active {
-                          background: var(--surface);
-                          color: var(--text);
-                          box-shadow: 0 1px 3px color-mix(in srgb, var(--rail) 10%, transparent);
-                        }
-                        .runtime-form-tabbed .tab-panel {
-                          display: flex;
-                          flex-direction: column;
-                          gap: 12px;
-                        }
-                        .runtime-form-tabbed .field {
-                          display: flex;
-                          flex-direction: column;
-                          gap: 4px;
-                        }
-                        .runtime-form-tabbed .field-label {
-                          font-size: 12px;
-                          font-weight: 700;
-                          color: var(--text);
-                        }
-                        .runtime-form-tabbed .field-hint {
-                          font-size: 11px;
-                          color: var(--text-faint);
-                          font-weight: 500;
-                        }
-                        .runtime-form-tabbed input,
-                        .runtime-form-tabbed select {
-                          height: 36px;
-                          padding: 8px 11px;
-                          border: 1px solid var(--border);
-                          border-radius: 8px;
-                          background: var(--surface);
-                          font-size: 14px;
-                        }
-                        .runtime-form-tabbed .input-row {
-                          display: flex;
-                          gap: 8px;
-                        }
-                        .runtime-form-tabbed .input-row input {
-                          flex: 1;
-                        }
-                        .runtime-form-tabbed .btn {
-                          height: 36px;
-                          padding: 0 14px;
-                          font-size: 12px;
-                          font-weight: 700;
-                          border: 1px solid var(--border);
-                          border-radius: 8px;
-                          background: var(--surface-muted);
-                          cursor: pointer;
-                        }
-                      }
-                    `}
-                  </style>
-                  <div data-impeccable-variant="3" style={{ display: "none" }}>
-                    <div className="runtime-form-tabbed">
-                      <div className="form-warning">
-                        <span>⚠</span>
-                        <span>Token 不回显。留空表示不修改已有 Token；运行日志只记录 tokenState。</span>
-                      </div>
-                      <div className="tab-nav">
-                        <button className="tab-btn active">基本</button>
-                        <button className="tab-btn">端点</button>
-                        <button className="tab-btn">认证</button>
-                      </div>
-                      <div className="tab-panel">
-                        <div className="field">
-                          <label className="field-label">模型名称</label>
-                          <div className="input-row">
-                            <input type="text" defaultValue="qwen3-max-2026-01-23" />
-                            <button className="btn">获取模型</button>
-                          </div>
-                        </div>
-                        <div className="field">
-                          <label className="field-label">协议类型</label>
-                          <select defaultValue="openai">
-                            <option value="openai">OpenAI compatible</option>
-                          </select>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Variant 4: Integrated Flow - Inline model picker with preview */}
-                  <style data-impeccable-css="d3ab82bb">
-                    {`
-                      @scope ([data-impeccable-variant="4"]) {
-                        .runtime-form-integrated {
-                          padding: 16px;
-                        }
-                        .runtime-form-integrated .form-header {
-                          display: flex;
-                          align-items: flex-start;
-                          justify-content: space-between;
-                          gap: 12px;
-                          padding: 10px 12px;
-                          background: color-mix(in srgb, var(--warning) 5%, transparent);
-                          border-radius: 8px;
-                          margin-bottom: 14px;
-                        }
-                        .runtime-form-integrated .form-header-text {
-                          font-size: 12px;
-                          line-height: 1.5;
-                          color: var(--text-soft);
-                        }
-                        .runtime-form-integrated .quick-actions {
-                          display: flex;
-                          gap: 6px;
-                          flex-shrink: 0;
-                        }
-                        .runtime-form-integrated .quick-actions button {
-                          height: 28px;
-                          padding: 0 10px;
-                          font-size: 11px;
-                          font-weight: 700;
-                          border: 1px solid var(--border);
-                          border-radius: 6px;
-                          background: var(--surface);
-                          cursor: pointer;
-                        }
-                        .runtime-form-integrated .main-field {
-                          display: flex;
-                          flex-direction: column;
-                          gap: 6px;
-                          margin-bottom: 14px;
-                        }
-                        .runtime-form-integrated .main-field-label {
-                          font-size: 12px;
-                          font-weight: 800;
-                          color: var(--text);
-                        }
-                        .runtime-form-integrated .model-selector {
-                          display: flex;
-                          gap: 8px;
-                          align-items: stretch;
-                        }
-                        .runtime-form-integrated .model-selector input {
-                          flex: 1;
-                          height: 40px;
-                          padding: 10px 12px;
-                          font-size: 15px;
-                          font-weight: 600;
-                          border: 2px solid var(--border);
-                          border-radius: 8px;
-                          background: var(--surface);
-                        }
-                        .runtime-form-integrated .model-selector input:focus {
-                          outline: none;
-                          border-color: var(--primary);
-                        }
-                        .runtime-form-integrated .model-selector .btn-primary {
-                          height: 40px;
-                          padding: 0 16px;
-                          font-size: 12px;
-                          font-weight: 700;
-                          border: none;
-                          border-radius: 8px;
-                          background: var(--primary);
-                          color: white;
-                          cursor: pointer;
-                        }
-                        .runtime-form-integrated .secondary-fields {
-                          display: grid;
-                          grid-template-columns: repeat(3, 1fr);
-                          gap: 10px;
-                        }
-                        .runtime-form-integrated .secondary-field {
-                          display: flex;
-                          flex-direction: column;
-                          gap: 3px;
-                        }
-                        .runtime-form-integrated .secondary-field label {
-                          font-size: 11px;
-                          font-weight: 700;
-                          color: var(--text-soft);
-                        }
-                        .runtime-form-integrated .secondary-field input,
-                        .runtime-form-integrated .secondary-field select {
-                          height: 32px;
-                          padding: 6px 9px;
-                          border: 1px solid var(--border);
-                          border-radius: 6px;
-                          background: var(--surface);
-                          font-size: 12px;
-                        }
-                      }
-                    `}
-                  </style>
-                  <div data-impeccable-variant="4" style={{ display: "none" }} data-impeccable-params='[{"id":"showAdvanced","kind":"toggle","default":false,"label":"显示高级选项"}]'>
-                    <div className="runtime-form-integrated">
-                      <div className="form-header">
-                        <span className="form-header-text">Token 不回显。留空表示不修改已有 Token；运行日志只记录 tokenState。</span>
-                        <div className="quick-actions">
-                          <button>测试连接</button>
-                          <button>重置</button>
-                        </div>
-                      </div>
-                      <div className="main-field">
-                        <label className="main-field-label">模型</label>
-                        <div className="model-selector">
-                          <input type="text" defaultValue="qwen3-max-2026-01-23" placeholder="输入模型名称或点击获取" />
-                          <button className="btn-primary">获取可用模型</button>
-                        </div>
-                      </div>
-                      <div className="secondary-fields">
-                        <div className="secondary-field">
-                          <label>协议</label>
-                          <select defaultValue="openai">
-                            <option value="openai">OpenAI</option>
-                          </select>
-                        </div>
-                        <div className="secondary-field">
-                          <label>Base URL</label>
-                          <input type="text" defaultValue="dashscope.aliyuncs.com" />
-                        </div>
-                        <div className="secondary-field">
-                          <label>API Token</label>
-                          <input type="password" placeholder="••••••••" />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                   {/* Original */}
-                   <div data-impeccable-variant="original" style={{ display: "contents" }}>
-                      {/* impeccable-variants-start 4b4b384f */}
-                     <div data-impeccable-variants="4b4b384f" data-impeccable-variant-count="3" style={{ display: "contents" }}>
-                       {/* Variant 1: Command Line Interface - Terminal-inspired precision */}
-                       <style data-impeccable-css="4b4b384f">
-                         {`
-                           @scope ([data-impeccable-variant="1"]) {
-                             .runtime-form-cli {
-                               padding: 16px;
-                               font-family: var(--font-mono);
-                             }
-                             .runtime-form-cli .cli-header {
-                               display: flex;
-                               align-items: center;
-                               gap: 8px;
-                               padding: 8px 10px;
-                               background: var(--rail);
-                               border-radius: 6px 6px 0 0;
-                               color: color-mix(in srgb, var(--surface) 80%, transparent);
-                               font-size: 11px;
-                             }
-                             .runtime-form-cli .cli-dot {
-                               width: 8px;
-                               height: 8px;
-                               border-radius: 50%;
-                             }
-                             .runtime-form-cli .cli-dot.red { background: var(--danger); }
-                             .runtime-form-cli .cli-dot.yellow { background: var(--warning); }
-                             .runtime-form-cli .cli-dot.green { background: var(--success); }
-                             .runtime-form-cli .cli-body {
-                               background: var(--surface);
-                               border: 1px solid var(--border);
-                               border-top: none;
-                               border-radius: 0 0 6px 6px;
-                               padding: 14px;
-                               display: flex;
-                               flex-direction: column;
-                               gap: 12px;
-                             }
-                             .runtime-form-cli .cli-row {
-                               display: flex;
-                               align-items: center;
-                               gap: 10px;
-                             }
-                             .runtime-form-cli .cli-prompt {
-                               color: var(--primary);
-                               font-weight: 700;
-                               white-space: nowrap;
-                               font-size: 12px;
-                             }
-                             .runtime-form-cli .cli-input {
-                               flex: 1;
-                               height: 30px;
-                               padding: 5px 10px;
-                               border: 1px solid var(--border);
-                               border-radius: 4px;
-                               background: var(--surface-muted);
-                               font-family: var(--font-mono);
-                               font-size: 12px;
-                               color: var(--text);
-                             }
-                             .runtime-form-cli .cli-input:focus {
-                               outline: none;
-                               border-color: var(--primary);
-                             }
-                             .runtime-form-cli .cli-btn {
-                               height: 30px;
-                               padding: 0 12px;
-                               font-size: 11px;
-                               font-weight: 700;
-                               border: 1px solid var(--primary);
-                               border-radius: 4px;
-                               background: transparent;
-                               color: var(--primary);
-                               cursor: pointer;
-                               font-family: var(--font-mono);
-                             }
-                             .runtime-form-cli .cli-btn:hover {
-                               background: var(--primary);
-                               color: white;
-                             }
-                             .runtime-form-cli .cli-section {
-                               border-top: 1px solid var(--border);
-                               padding-top: 10px;
-                               margin-top: 2px;
-                             }
-                             .runtime-form-cli .cli-label {
-                               font-size: 11px;
-                               color: var(--text-faint);
-                               margin-bottom: 4px;
-                             }
-                           }
-                         `}
-                       </style>
-                        <div data-impeccable-variant="1" style={{ display: "none" }}>
-                          <div className="runtime-form-cli">
-                           <div className="cli-header">
-                             <span className="cli-dot red" />
-                             <span className="cli-dot yellow" />
-                             <span className="cli-dot green" />
-                             <span style={{ marginLeft: 4 }}>runtime-config — {runtimeFormTarget?.displayName || 'Agent Pro'}</span>
-                           </div>
-                           <div className="cli-body">
-                             <div className="cli-row">
-                               <span className="cli-prompt">$ model</span>
-                               <input className="cli-input" type="text" defaultValue="qwen3-max-2026-01-23" />
-                               <button className="cli-btn">list</button>
-                             </div>
-                             <div className="cli-row">
-                               <span className="cli-prompt">$ protocol</span>
-                               <select className="cli-input" style={{ width: 'auto', flex: 'none' }} defaultValue="openai">
-                                 <option value="openai">openai-compatible</option>
-                               </select>
-                             </div>
-                             <div className="cli-section">
-                               <div className="cli-label">ENDPOINT CONFIGURATION</div>
-                               <div className="cli-row" style={{ marginTop: 6 }}>
-                                 <span className="cli-prompt">$ base_url</span>
-                                 <input className="cli-input" type="text" defaultValue="https://dashscope.aliyuncs.com/compatible-mode/v1" />
-                               </div>
-                               <div className="cli-row">
-                                 <span className="cli-prompt">$ models_url</span>
-                                 <input className="cli-input" type="text" placeholder="auto-resolve from base_url" />
-                               </div>
-                               <div className="cli-row">
-                                 <span className="cli-prompt">$ api_key</span>
-                                 <input className="cli-input" type="password" placeholder="[REDACTED]" />
-                               </div>
-                             </div>
-                           </div>
-                         </div>
-                       </div>
-
-                       {/* Variant 2: Properties Panel - IDE-style inspector */}
-                       <style data-impeccable-css="4b4b384f">
-                         {`
-                           @scope ([data-impeccable-variant="2"]) {
-                             .runtime-form-ide {
-                               padding: 0;
-                               display: grid;
-                               grid-template-columns: 160px 1fr;
-                               gap: 0;
-                               min-height: 300px;
-                             }
-                             .runtime-form-ide .ide-sidebar {
-                               background: var(--surface-muted);
-                               border-right: 1px solid var(--border);
-                               padding: 12px 0;
-                             }
-                             .runtime-form-ide .ide-nav-item {
-                               padding: 8px 14px;
-                               font-size: 12px;
-                               font-weight: 700;
-                               color: var(--text-soft);
-                               cursor: pointer;
-                               border-left: 3px solid transparent;
-                             }
-                             .runtime-form-ide .ide-nav-item:hover {
-                               background: color-mix(in srgb, var(--primary) 5%, transparent);
-                               color: var(--text);
-                             }
-                             .runtime-form-ide .ide-nav-item.active {
-                               background: color-mix(in srgb, var(--primary) 8%, transparent);
-                               color: var(--primary);
-                               border-left-color: var(--primary);
-                             }
-                             .runtime-form-ide .ide-content {
-                               padding: 16px 18px;
-                               display: flex;
-                               flex-direction: column;
-                               gap: 14px;
-                             }
-                             .runtime-form-ide .ide-field {
-                               display: flex;
-                               flex-direction: column;
-                               gap: 5px;
-                             }
-                             .runtime-form-ide .ide-field-label {
-                               display: flex;
-                               align-items: center;
-                               justify-content: space-between;
-                               font-size: 11px;
-                               font-weight: 800;
-                               text-transform: uppercase;
-                               letter-spacing: 0.04em;
-                               color: var(--text-faint);
-                             }
-                             .runtime-form-ide .ide-field-label .type-tag {
-                               font-size: 10px;
-                               font-weight: 600;
-                               padding: 1px 5px;
-                               background: var(--surface-muted);
-                               border-radius: 3px;
-                               color: var(--text-soft);
-                               text-transform: none;
-                               letter-spacing: 0;
-                             }
-                             .runtime-form-ide input,
-                             .runtime-form-ide select {
-                               height: 34px;
-                               padding: 7px 11px;
-                               border: 1px solid var(--border);
-                               border-radius: 6px;
-                               background: var(--surface);
-                               font-size: 13px;
-                               font-family: var(--font-mono);
-                             }
-                             .runtime-form-ide input:focus,
-                             .runtime-form-ide select:focus {
-                               outline: none;
-                               border-color: var(--primary);
-                               box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 10%, transparent);
-                             }
-                             .runtime-form-ide .ide-input-row {
-                               display: flex;
-                               gap: 8px;
-                             }
-                             .runtime-form-ide .ide-input-row input {
-                               flex: 1;
-                             }
-                             .runtime-form-ide .ide-btn {
-                               height: 34px;
-                               padding: 0 12px;
-                               font-size: 11px;
-                               font-weight: 700;
-                               border: 1px solid var(--border);
-                               border-radius: 6px;
-                               background: var(--surface-muted);
-                               cursor: pointer;
-                             }
-                             .runtime-form-ide .ide-status {
-                               display: flex;
-                               align-items: center;
-                               gap: 6px;
-                               padding: 8px 10px;
-                               background: color-mix(in srgb, var(--warning) 5%, transparent);
-                               border-radius: 6px;
-                               font-size: 11px;
-                               color: var(--text-soft);
-                             }
-                             .runtime-form-ide .ide-status-dot {
-                               width: 6px;
-                               height: 6px;
-                               border-radius: 50%;
-                               background: var(--warning);
-                             }
-                           }
-                         `}
-                       </style>
-                       <div data-impeccable-variant="2" style={{ display: "none" }}>
-                         <div className="runtime-form-ide">
-                           <div className="ide-sidebar">
-                             <div className="ide-nav-item active">General</div>
-                             <div className="ide-nav-item">Endpoint</div>
-                             <div className="ide-nav-item">Auth</div>
-                             <div className="ide-nav-item">Advanced</div>
-                           </div>
-                           <div className="ide-content">
-                             <div className="ide-status">
-                               <span className="ide-status-dot" />
-                               <span>Token is masked. Leave empty to preserve existing.</span>
-                             </div>
-                             <div className="ide-field">
-                               <label className="ide-field-label">
-                                 <span>model</span>
-                                 <span className="type-tag">string</span>
-                               </label>
-                               <div className="ide-input-row">
-                                 <input type="text" defaultValue="qwen3-max-2026-01-23" />
-                                 <button className="ide-btn">Fetch</button>
-                               </div>
-                             </div>
-                             <div className="ide-field">
-                               <label className="ide-field-label">
-                                 <span>protocol</span>
-                                 <span className="type-tag">enum</span>
-                               </label>
-                               <select defaultValue="openai">
-                                 <option value="openai">openai-compatible</option>
-                               </select>
-                             </div>
-                             <div className="ide-field">
-                               <label className="ide-field-label">
-                                 <span>base_url</span>
-                                 <span className="type-tag">url</span>
-                               </label>
-                               <input type="text" defaultValue="https://dashscope.aliyuncs.com/compatible-mode/v1" />
-                             </div>
-                             <div className="ide-field">
-                               <label className="ide-field-label">
-                                 <span>api_key</span>
-                                 <span className="type-tag">secret</span>
-                               </label>
-                               <input type="password" placeholder="••••••••••••" />
-                             </div>
-                           </div>
-                         </div>
-                       </div>
-
-                       {/* Variant 3: Dashboard Card - Metric-driven control surface */}
-                       <style data-impeccable-css="4b4b384f">
-                         {`
-                           @scope ([data-impeccable-variant="3"]) {
-                             .runtime-form-dashboard {
-                               padding: 18px;
-                               display: flex;
-                               flex-direction: column;
-                               gap: 16px;
-                             }
-                             .runtime-form-dashboard .dash-header {
-                               display: flex;
-                               align-items: center;
-                               justify-content: space-between;
-                               padding-bottom: 12px;
-                               border-bottom: 1px solid var(--border);
-                             }
-                             .runtime-form-dashboard .dash-title {
-                               font-size: 14px;
-                               font-weight: 800;
-                               color: var(--text);
-                             }
-                             .runtime-form-dashboard .dash-status {
-                               display: flex;
-                               align-items: center;
-                               gap: 6px;
-                               font-size: 11px;
-                               font-weight: 700;
-                               color: var(--success);
-                             }
-                             .runtime-form-dashboard .dash-status-dot {
-                               width: 7px;
-                               height: 7px;
-                               border-radius: 50%;
-                               background: var(--success);
-                             }
-                             .runtime-form-dashboard .dash-grid {
-                               display: grid;
-                               grid-template-columns: repeat(2, 1fr);
-                               gap: 12px;
-                             }
-                             .runtime-form-dashboard .dash-card {
-                               background: var(--surface);
-                               border: 1px solid var(--border);
-                               border-radius: 10px;
-                               padding: 12px;
-                               display: flex;
-                               flex-direction: column;
-                               gap: 8px;
-                             }
-                             .runtime-form-dashboard .dash-card.card-full {
-                               grid-column: 1 / -1;
-                             }
-                             .runtime-form-dashboard .card-label {
-                               font-size: 10px;
-                               font-weight: 800;
-                               text-transform: uppercase;
-                               letter-spacing: 0.06em;
-                               color: var(--text-faint);
-                             }
-                             .runtime-form-dashboard .card-value {
-                               font-size: 16px;
-                               font-weight: 700;
-                               color: var(--text);
-                               font-family: var(--font-mono);
-                             }
-                             .runtime-form-dashboard .card-input {
-                               height: 32px;
-                               padding: 6px 10px;
-                               border: 1px solid var(--border);
-                               border-radius: 6px;
-                               background: var(--surface-strong);
-                               font-size: 13px;
-                               font-family: var(--font-mono);
-                             }
-                             .runtime-form-dashboard .card-input:focus {
-                               outline: none;
-                               border-color: var(--primary);
-                             }
-                             .runtime-form-dashboard .card-action {
-                               display: flex;
-                               gap: 8px;
-                               margin-top: 4px;
-                             }
-                             .runtime-form-dashboard .card-btn {
-                               height: 28px;
-                               padding: 0 10px;
-                               font-size: 11px;
-                               font-weight: 700;
-                               border: 1px solid var(--border);
-                               border-radius: 5px;
-                               background: var(--surface-muted);
-                               cursor: pointer;
-                             }
-                             .runtime-form-dashboard .card-btn.primary {
-                               background: var(--primary);
-                               color: white;
-                               border-color: var(--primary);
-                             }
-                           }
-                         `}
-                       </style>
-                       <div data-impeccable-variant="3" style={{ display: "none" }}>
-                         <div className="runtime-form-dashboard">
-                           <div className="dash-header">
-                             <span className="dash-title">Runtime Configuration</span>
-                             <span className="dash-status">
-                               <span className="dash-status-dot" />
-                               Active
-                             </span>
-                           </div>
-                           <div className="dash-grid">
-                             <div className="dash-card">
-                               <span className="card-label">Model</span>
-                               <input className="card-input" type="text" defaultValue="qwen3-max-2026-01-23" />
-                               <div className="card-action">
-                                 <button className="card-btn primary">Fetch Models</button>
-                               </div>
-                             </div>
-                             <div className="dash-card">
-                               <span className="card-label">Protocol</span>
-                               <select className="card-input" defaultValue="openai">
-                                 <option value="openai">OpenAI Compatible</option>
-                               </select>
-                             </div>
-                             <div className="dash-card card-full">
-                               <span className="card-label">Base URL</span>
-                               <input className="card-input" type="text" defaultValue="https://dashscope.aliyuncs.com/compatible-mode/v1" />
-                             </div>
-                             <div className="dash-card card-full">
-                               <span className="card-label">API Token</span>
-                               <input className="card-input" type="password" placeholder="••••••••••••" />
-                             </div>
-                           </div>
-                         </div>
-                       </div>
-
-                        {/* Original */}
-                         <div data-impeccable-variant="original" style={{ display: "contents" }}>
-                           <div className="pricing-form-modal-body">
+                <div className="pricing-form-modal-body">
                         {pricingFormMode === 'update' && (
                         <div className="pricing-form-tip warning">
                         <span className="pricing-form-tip-icon">⚠</span>
@@ -2003,20 +1059,19 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                         />
                         {shouldShowPricingFieldError('completionPricePer1mTokens') && <span className="pricing-form-field-error">{pricingFieldErrors.completionPricePer1mTokens}</span>}
                         </div>
-                        <div className="pricing-form-field pricing-form-field-wide">
-                        <span className="pricing-form-field-label">生效时间 <small>留空立即生效</small></span>
-                        <input
-                        type="datetime-local"
-                        value={pricingForm.effectiveFrom}
-                        onChange={(e) => setPricingForm({ ...pricingForm, effectiveFrom: e.target.value })}
-                        />
-                        </div>
+                         <div className="pricing-form-field pricing-form-field-wide">
+                         <span className="pricing-form-field-label">生效时间 <small>留空立即生效</small></span>
+                         <input
+                         type="datetime-local"
+                         value={pricingForm.effectiveFrom}
+                         onChange={(e) => setPricingForm({ ...pricingForm, effectiveFrom: e.target.value })}
+                         />
+                         {pricingForm.effectiveFrom && new Date(pricingForm.effectiveFrom) < new Date() && (
+                           <span className="pricing-form-field-error" style={{ display: 'block', marginTop: '4px' }}>
+                             生效时间早于当前时间，该定价将对过去的请求生效
+                           </span>
+                         )}
                          </div>
-                         </section>
-                         
-                         <section className="pricing-form-section">
-                         <h3 className="pricing-form-section-title">倍率</h3>
-                         <div className="pricing-form-grid">
                          <div className="pricing-form-field pricing-form-field-wide">
                          <span className="pricing-form-field-label">倍率 <small>默认 1.0，最终定价 = 基础定价 × 倍率</small></span>
                          <input
@@ -2028,75 +1083,89 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                          onChange={(e) => setPricingForm({ ...pricingForm, multiplier: e.target.value })}
                          />
                          {Number(pricingForm.promptPricePer1mTokens) > 0 && Number(pricingForm.completionPricePer1mTokens) > 0 && Number(pricingForm.multiplier || 1.0) !== 1.0 ? (
-                           <div className="pricing-effective-summary" style={{marginTop: '8px', padding: '8px 12px', background: '#f6f8fa', borderRadius: '6px', fontSize: '13px'}}>
-                             <span style={{color: '#57606a'}}>实施定价：</span>
-                             <span style={{color: '#0969da', fontWeight: 600}}>输入 {(Number(pricingForm.promptPricePer1mTokens) * Number(pricingForm.multiplier || 1.0)).toFixed(0)}</span>
-                             <span style={{color: '#57606a', margin: '0 8px'}}>/</span>
-                             <span style={{color: '#0969da', fontWeight: 600}}>输出 {(Number(pricingForm.completionPricePer1mTokens) * Number(pricingForm.multiplier || 1.0)).toFixed(0)}</span>
-                             <span style={{color: '#57606a'}}> credits / 1M tokens</span>
+                           <div className="pricing-effective-summary" style={{marginTop: '8px', padding: '8px 12px', background: 'var(--surface-muted)', borderRadius: '6px', fontSize: '13px'}}>
+                             <span style={{color: 'var(--text-soft)'}}>实施定价：</span>
+                             <span style={{color: 'var(--primary)', fontWeight: 600}}>输入 {(Number(pricingForm.promptPricePer1mTokens) * Number(pricingForm.multiplier || 1.0)).toFixed(0)}</span>
+                             <span style={{color: 'var(--text-soft)', margin: '0 8px'}}>/</span>
+                             <span style={{color: 'var(--primary)', fontWeight: 600}}>输出 {(Number(pricingForm.completionPricePer1mTokens) * Number(pricingForm.multiplier || 1.0)).toFixed(0)}</span>
+                             <span style={{color: 'var(--text-soft)'}}> credits / 1M tokens</span>
                            </div>
                          ) : null}
                          </div>
                          </div>
                          </section>
                          
-                         <section className="pricing-form-section">
-                         <h3 className="pricing-form-section-title">缓存计费</h3>
-                        <div className="pricing-form-tip">
-                        <span className="pricing-form-tip-icon">ℹ</span>
-                        <span>缓存比例按 provider 生效，将影响 {providerLabel(pricingForm.modelProvider)} 下所有模型。Qwen 隐式缓存命中填 20，缓存创建填 125；无缓存创建费用填 0。</span>
-                        </div>
-                        <div className="pricing-form-grid">
-                        <div className={`pricing-form-field ${shouldShowPricingFieldError('cacheHitRatio') ? 'has-error' : ''}`}>
-                        <span className="pricing-form-field-label">缓存命中比例 <small>%</small></span>
-                        <input
-                        type="number"
-                        min={0}
-                        max={MAX_CACHE_HIT_PERCENT}
-                        step="0.1"
-                        placeholder="如 20"
-                        value={pricingForm.cacheHitRatio}
-                        onChange={(e) => {
-                        markPricingFieldTouched('cacheHitRatio');
-                        setPricingForm({ ...pricingForm, cacheHitRatio: e.target.value });
-                        }}
-                        onBlur={() => markPricingFieldTouched('cacheHitRatio')}
-                        />
-                        {shouldShowPricingFieldError('cacheHitRatio') && <span className="pricing-form-field-error">{pricingFieldErrors.cacheHitRatio}</span>}
-                        </div>
-                        <div className={`pricing-form-field ${shouldShowPricingFieldError('cacheCreationRatio') ? 'has-error' : ''}`}>
-                        <span className="pricing-form-field-label">缓存创建比例 <small>%</small></span>
-                        <input
-                        type="number"
-                        min={0}
-                        max={MAX_CACHE_CREATION_PERCENT}
-                        step="0.1"
-                        placeholder="如 125"
-                        value={pricingForm.cacheCreationRatio}
-                        onChange={(e) => {
-                        markPricingFieldTouched('cacheCreationRatio');
-                        setPricingForm({ ...pricingForm, cacheCreationRatio: e.target.value });
-                        }}
-                        onBlur={() => markPricingFieldTouched('cacheCreationRatio')}
-                        />
-                        {shouldShowPricingFieldError('cacheCreationRatio') && <span className="pricing-form-field-error">{pricingFieldErrors.cacheCreationRatio}</span>}
-                        </div>
-                        </div>
-                        </section>
-                        </div>
-                      </div>
-                      {/* Variants: insert below this line */}
-                    </div>
-                    {/* impeccable-variants-end 4b4b384f */}
-                  </div>
-                  {/* Variants: insert below this line */}
-                </div>
-                {/* impeccable-variants-end d3ab82bb */}
+                          <section className="pricing-form-section">
+                          <button
+                            type="button"
+                            className="pricing-form-section-toggle"
+                            onClick={() => setCacheSectionExpanded(!cacheSectionExpanded)}
+                            aria-expanded={cacheSectionExpanded}
+                          >
+                            <h3 className="pricing-form-section-title">缓存计费</h3>
+                            <span className="pricing-form-section-toggle-icon" aria-hidden="true">
+                              {cacheSectionExpanded ? '▼' : '▶'}
+                            </span>
+                            {!cacheSectionExpanded && (
+                              <span className="pricing-form-section-toggle-summary">
+                                命中 {pricingForm.cacheHitRatio}% · 创建 {pricingForm.cacheCreationRatio}% · {providerLabel(pricingForm.modelProvider)}
+                              </span>
+                            )}
+                          </button>
+                          {cacheSectionExpanded && (
+                            <>
+                         <div className="pricing-form-tip">
+                         <span className="pricing-form-tip-icon">ℹ</span>
+                         <span>缓存比例按 provider 生效，将影响 {providerLabel(pricingForm.modelProvider)} 下所有模型。Qwen 隐式缓存命中填 20，缓存创建填 125；无缓存创建费用填 0。</span>
+                         </div>
+                         <div className="pricing-form-grid">
+                         <div className={`pricing-form-field ${shouldShowPricingFieldError('cacheHitRatio') ? 'has-error' : ''}`}>
+                         <span className="pricing-form-field-label">缓存命中比例 <small>%</small></span>
+                         <input
+                         type="number"
+                         min={0}
+                         max={MAX_CACHE_HIT_PERCENT}
+                         step="0.1"
+                         placeholder="如 20"
+                         value={pricingForm.cacheHitRatio}
+                         onChange={(e) => {
+                         markPricingFieldTouched('cacheHitRatio');
+                         setPricingForm({ ...pricingForm, cacheHitRatio: e.target.value });
+                         }}
+                         onBlur={() => markPricingFieldTouched('cacheHitRatio')}
+                         />
+                         {shouldShowPricingFieldError('cacheHitRatio') && <span className="pricing-form-field-error">{pricingFieldErrors.cacheHitRatio}</span>}
+                         </div>
+                         <div className={`pricing-form-field ${shouldShowPricingFieldError('cacheCreationRatio') ? 'has-error' : ''}`}>
+                         <span className="pricing-form-field-label">缓存创建比例 <small>%</small></span>
+                         <input
+                         type="number"
+                         min={0}
+                         max={MAX_CACHE_CREATION_PERCENT}
+                         step="0.1"
+                         placeholder="如 125"
+                         value={pricingForm.cacheCreationRatio}
+                         onChange={(e) => {
+                         markPricingFieldTouched('cacheCreationRatio');
+                         setPricingForm({ ...pricingForm, cacheCreationRatio: e.target.value });
+                         }}
+                         onBlur={() => markPricingFieldTouched('cacheCreationRatio')}
+                         />
+                         {shouldShowPricingFieldError('cacheCreationRatio') && <span className="pricing-form-field-error">{pricingFieldErrors.cacheCreationRatio}</span>}
+                         </div>
+                          </div>
+                            </>
+                          )}
+                          </section>
+                         </div>
                 <div className="pricing-form-actions">
                   <button
                     type="button"
                     className="secondary-btn"
-                    onClick={() => setPricingFormOpen(false)}
+                    onClick={() => {
+                      if (pricingFormIsDirty) { setUnsavedConfirmTarget('pricing'); return; }
+                      setPricingFormOpen(false);
+                    }}
                     disabled={pricingFormLoading}
                   >
                     取消
@@ -2115,7 +1184,10 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
           )}
 
           {runtimeFormOpen && runtimeFormTarget && (
-            <div className="modal-backdrop" onClick={() => setRuntimeFormOpen(false)}>
+            <div className="modal-backdrop" onClick={() => {
+              if (runtimeFormHasUnsavedChanges) { setUnsavedConfirmTarget('runtime'); return; }
+              setRuntimeFormOpen(false);
+            }}>
               <aside
                 className="pricing-form-modal"
                 role="dialog"
@@ -2129,7 +1201,10 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                     <h2 id="billing-runtime-form-title">调整 {runtimeFormTarget.displayName}</h2>
                     <p className="panel-caption">配置模型、接口与 Token。保存后只影响后续新任务，历史账单继续使用当时快照。</p>
                   </div>
-                  <button type="button" className="pricing-form-modal-close" onClick={() => setRuntimeFormOpen(false)} aria-label="关闭">×</button>
+                  <button type="button" className="pricing-form-modal-close" onClick={() => {
+                    if (runtimeFormHasUnsavedChanges) { setUnsavedConfirmTarget('runtime'); return; }
+                    setRuntimeFormOpen(false);
+                  }} aria-label="关闭">×</button>
                 </div>
                 <div className="pricing-form-modal-body">
                   <div className="pricing-form-tip warning">
@@ -2202,7 +1277,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
                   ) : null}
                 </div>
                 <div className="pricing-form-actions">
-                  <button type="button" className="secondary-btn" onClick={() => setRuntimeFormOpen(false)} disabled={runtimeFormLoading}>取消</button>
+                  <button type="button" className="secondary-btn" onClick={() => { if (runtimeFormHasUnsavedChanges) { setUnsavedConfirmTarget('runtime'); return; } setRuntimeFormOpen(false); }} disabled={runtimeFormLoading}>取消</button>
                   <button type="button" className="secondary-btn" onClick={() => void testRuntimeConfig(runtimeFormTarget)} disabled={runtimeFormLoading || runtimeTestingKey === runtimeFormTarget.key || runtimeFormHasUnsavedChanges}>{runtimeTestingKey === runtimeFormTarget.key ? '测试中...' : '测试已保存配置'}</button>
                   <button type="button" className="primary-btn" onClick={submitRuntimeConfig} disabled={runtimeFormLoading || !runtimeForm.model.trim()}>{runtimeFormLoading ? '保存中...' : '保存运行配置'}</button>
                 </div>
@@ -2342,24 +1417,7 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
 
                   <div className="pricing-detail-events">
                     <h4 className="pricing-detail-events-title">定价事件</h4>
-                    <AuditTimeline
-                      emptyText="暂无定价历史事件。"
-                      items={[
-                        ...(selectedPricing.effectiveFrom ? [{
-                          id: 'effective-from',
-                          title: selectedPricing.isActive ? '当前定价生效' : '定价记录生效',
-                          time: new Date(selectedPricing.effectiveFrom).toLocaleString('zh-CN', { hour12: false }),
-                          tone: selectedPricing.isActive ? 'success' as const : 'neutral' as const,
-                          meta: [{ label: '状态', value: selectedPricing.isActive ? '生效中' : '已删除' }],
-                        }] : []),
-                        ...(selectedPricing.effectiveUntil ? [{
-                          id: 'effective-until',
-                          title: '定价结束',
-                          time: new Date(selectedPricing.effectiveUntil).toLocaleString('zh-CN', { hour12: false }),
-                          tone: 'warning' as const,
-                        }] : []),
-                      ]}
-                    />
+                    <p className="cell-subtle">暂无定价历史事件。</p>
                   </div>
                 </div>
 
@@ -2369,6 +1427,19 @@ export function BillingManagementSection({ onOpenUser, onOpenConversation, onNot
           )}
           <DangerConfirmDialog open={Boolean(deletePricingTarget)} title="删除模型定价" objectLabel="模型定价" objectId={deletePricingTarget?.id} objectName={deletePricingTarget?.model} actionLabel="删除定价" confirmText="DELETE" reasonRequired loading={deletePricingLoading} reversibility="partially_reversible" impactItems={["该规则不再参与新请求计费", "历史账单不会回写"]} nonImpactItems={["不会删除历史使用明细"]} onCancel={() => setDeletePricingTarget(null)} onConfirm={() => void handleDeletePricing()} />
           <DangerConfirmDialog open={updateConfirmOpen} title="确认更新模型定价" objectLabel="模型定价" objectName={pricingForm.model} actionLabel="保存新版本" confirmText="UPDATE" reasonRequired={false} loading={pricingFormLoading} reversibility="partially_reversible" objectMeta={[{ label: '输入单价', value: `${selectedPricing?.promptPricePer1mTokens ?? '-'} → ${promptPrice}` }, { label: '输出单价', value: `${selectedPricing?.completionPricePer1mTokens ?? '-'} → ${completionPrice}` }, { label: '倍率', value: `${(selectedPricing?.multiplier ?? 1.0).toFixed(2)} → ${(Number(pricingForm.multiplier) || 1.0).toFixed(2)}` }, { label: '缓存命中', value: `${selectedPricing ? formatPercentInput(selectedPricing.cacheHitRatio * 100) : '-'}% → ${cacheHitPercent}%` }, { label: '缓存创建', value: `${selectedPricing ? formatPercentInput(selectedPricing.cacheCreationRatio * 100) : '-'}% → ${cacheCreationPercent}%` }]} impactItems={["将创建新的定价版本", "历史 usage 不回写"]} onCancel={() => setUpdateConfirmOpen(false)} onConfirm={async () => { setUpdateConfirmOpen(false); await submitPricing(); }} />
+          <ConfirmDialog
+            open={unsavedConfirmTarget !== null}
+            title="存在未保存的修改"
+            description={unsavedConfirmTarget === 'pricing' ? '定价表单存在未保存的修改，关闭后将丢失。' : '运行配置存在未保存的修改，关闭后将丢失。'}
+            confirmLabel="放弃修改"
+            cancelLabel="继续编辑"
+            onCancel={() => setUnsavedConfirmTarget(null)}
+            onConfirm={() => {
+              if (unsavedConfirmTarget === 'pricing') setPricingFormOpen(false);
+              if (unsavedConfirmTarget === 'runtime') setRuntimeFormOpen(false);
+              setUnsavedConfirmTarget(null);
+            }}
+          />
 
           {/* Reference Pricing Inline Panel */}
           <section className={`rp-inline-panel${referencePricingOpen ? ' rp-inline-panel-expanded' : ''}`}>

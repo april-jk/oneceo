@@ -77,6 +77,8 @@ const REQUIRED_TABLES = [
   'ui_promo_banners',
   'ui_promo_banner_items',
   'ui_promo_banner_events',
+  'session_api_traces',
+  'api_request_logs',
 ] as const;
 
 const REQUIRED_COLUMNS = [
@@ -295,6 +297,15 @@ const REQUIRED_COLUMNS = [
   ['ui_promo_banner_items', 'link_type'],
   ['ui_promo_banner_events', 'banner_id'],
   ['ui_promo_banner_events', 'event_type'],
+  ['session_api_traces', 'session_id'],
+  ['session_api_traces', 'trace_type'],
+  ['session_api_traces', 'sequence'],
+  ['session_api_traces', 'created_at'],
+  ['api_request_logs', 'app_user_id'],
+  ['api_request_logs', 'method'],
+  ['api_request_logs', 'path'],
+  ['api_request_logs', 'response_status'],
+  ['api_request_logs', 'created_at'],
 ] as const;
 
 const REQUIRED_INDEXES = [
@@ -400,6 +411,19 @@ const REQUIRED_INDEXES = [
   'idx_ui_promo_banner_events_banner_id',
   'idx_ui_promo_banner_events_user_id',
   'idx_ui_promo_banner_events_type',
+  'idx_session_api_traces_session_id',
+  'idx_session_api_traces_session_type',
+  'idx_session_api_traces_session_sequence',
+  'idx_session_api_traces_run_id',
+  'idx_session_api_traces_tool_name',
+  'idx_session_api_traces_created_at',
+  'idx_session_api_traces_type_created_at',
+  'idx_api_request_logs_user_id',
+  'idx_api_request_logs_user_created_at',
+  'idx_api_request_logs_path',
+  'idx_api_request_logs_status',
+  'idx_api_request_logs_session_id',
+  'idx_api_request_logs_created_at',
 ] as const;
 
 /**
@@ -1558,6 +1582,87 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_user_custom_skill_documents_skill_path
   ON user_custom_skill_documents(custom_skill_id, document_path);
 CREATE INDEX IF NOT EXISTS idx_user_custom_skill_documents_skill_sort
   ON user_custom_skill_documents(custom_skill_id, sort_order);
+
+-- 会话 API 追踪表
+CREATE TABLE IF NOT EXISTS session_api_traces (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
+  run_id UUID REFERENCES task_session_runs(id) ON DELETE SET NULL,
+  trace_type TEXT NOT NULL,
+  sequence INTEGER NOT NULL DEFAULT 0,
+  model TEXT,
+  provider TEXT,
+  tool_name TEXT,
+  service_name TEXT,
+  endpoint TEXT,
+  request_method TEXT,
+  request_headers JSONB,
+  request_body JSONB,
+  request_body_text TEXT,
+  response_status INTEGER,
+  response_headers JSONB,
+  response_body JSONB,
+  response_body_text TEXT,
+  duration_ms INTEGER,
+  started_at TIMESTAMP,
+  completed_at TIMESTAMP,
+  prompt_tokens INTEGER DEFAULT 0,
+  completion_tokens INTEGER DEFAULT 0,
+  cached_prompt_tokens INTEGER DEFAULT 0,
+  cache_creation_tokens INTEGER DEFAULT 0,
+  total_tokens INTEGER DEFAULT 0,
+  error_message TEXT,
+  error_stack TEXT,
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_api_traces_session_id
+  ON session_api_traces(session_id);
+CREATE INDEX IF NOT EXISTS idx_session_api_traces_session_type
+  ON session_api_traces(session_id, trace_type);
+CREATE INDEX IF NOT EXISTS idx_session_api_traces_session_sequence
+  ON session_api_traces(session_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_session_api_traces_run_id
+  ON session_api_traces(run_id);
+CREATE INDEX IF NOT EXISTS idx_session_api_traces_tool_name
+  ON session_api_traces(tool_name);
+CREATE INDEX IF NOT EXISTS idx_session_api_traces_created_at
+  ON session_api_traces(created_at);
+CREATE INDEX IF NOT EXISTS idx_session_api_traces_type_created_at
+  ON session_api_traces(trace_type, created_at);
+
+-- API 请求日志表
+CREATE TABLE IF NOT EXISTS api_request_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  app_user_id UUID NOT NULL,
+  method TEXT NOT NULL,
+  path TEXT NOT NULL,
+  query_string TEXT,
+  request_headers JSONB DEFAULT '{}'::jsonb,
+  request_body_summary TEXT,
+  response_status INTEGER,
+  response_body_summary TEXT,
+  duration_ms INTEGER,
+  ip_address TEXT,
+  user_agent TEXT,
+  task_session_id UUID,
+  metadata_json JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_request_logs_user_id
+  ON api_request_logs(app_user_id);
+CREATE INDEX IF NOT EXISTS idx_api_request_logs_user_created_at
+  ON api_request_logs(app_user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_api_request_logs_path
+  ON api_request_logs(path);
+CREATE INDEX IF NOT EXISTS idx_api_request_logs_status
+  ON api_request_logs(response_status);
+CREATE INDEX IF NOT EXISTS idx_api_request_logs_session_id
+  ON api_request_logs(task_session_id);
+CREATE INDEX IF NOT EXISTS idx_api_request_logs_created_at
+  ON api_request_logs(created_at);
 `;
 
 const deliverableTablesSQL = `

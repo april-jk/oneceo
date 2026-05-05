@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { TaskCreationProjectSummary } from "@/lib/task-creation-client";
 import {
-  removeSharedManualProjectFromList,
   readSidebarExpandedState,
+  removeSharedManualProjectFromList,
   sortSharedManualProjects,
   upsertSharedManualProjectList,
 } from "@/lib/shared-manual-projects";
@@ -72,5 +72,33 @@ describe("shared manual projects helpers", () => {
     expect(
       readSidebarExpandedState(null, "expandedProjectGroups", ["manual-projects"]),
     ).toEqual(["manual-projects"]);
+  });
+
+  it("returns fallback when sidebar expand state JSON is invalid", () => {
+    expect(readSidebarExpandedState("{invalid", "expandedProjects", ["fallback"])).toEqual([
+      "fallback",
+    ]);
+  });
+
+  it("returns fallback when the target sidebar expand state field is not an array", () => {
+    expect(
+      readSidebarExpandedState(
+        JSON.stringify({ expandedProjects: { id: "project-a" } }),
+        "expandedProjects",
+        ["fallback"],
+      ),
+    ).toEqual(["fallback"]);
+  });
+
+  it("keeps only non-empty strings from sidebar expand state arrays", () => {
+    expect(
+      readSidebarExpandedState(
+        JSON.stringify({
+          expandedProjects: ["project-a", "", "  ", 1, null, "project-b"],
+        }),
+        "expandedProjects",
+        ["fallback"],
+      ),
+    ).toEqual(["project-a", "project-b"]);
   });
 });

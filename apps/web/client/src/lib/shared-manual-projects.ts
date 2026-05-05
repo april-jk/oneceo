@@ -33,26 +33,34 @@ function getSnapshot() {
   return snapshot;
 }
 
-export function readSidebarExpandedState(
-  raw: string | null,
-  key: "expandedProjectGroups" | "expandedProjects" | "expandedManagers",
-  defaultValue: string[],
-) {
-  if (!raw) return defaultValue;
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const stored = parsed?.[key];
-    return Array.isArray(stored) ? stored.filter((item) => typeof item === "string") : [];
-  } catch {
-    return defaultValue;
-  }
-}
-
 function subscribe(listener: () => void) {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
   };
+}
+
+export function readSidebarExpandedState(
+  raw: string | null,
+  key: "expandedProjectGroups" | "expandedProjects" | "expandedManagers",
+  fallback: string[],
+) {
+  if (!raw) return fallback;
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return fallback;
+  }
+
+  const candidate = parsed[key];
+  if (!Array.isArray(candidate)) return fallback;
+
+  const next = candidate.filter(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+  return next.length > 0 ? next : fallback;
 }
 
 export function sortSharedManualProjects(

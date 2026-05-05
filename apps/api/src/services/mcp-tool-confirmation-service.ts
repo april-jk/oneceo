@@ -23,6 +23,15 @@ type ConfirmationSummary = {
   parameterSummary: Record<string, unknown>;
 };
 
+type ConfirmationReplaySnapshot = {
+  toolName: string;
+  argumentsJson: Record<string, unknown>;
+};
+
+type StoredConfirmationSummary = ConfirmationSummary & {
+  __internalReplay?: ConfirmationReplaySnapshot;
+};
+
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -54,6 +63,7 @@ function tokenHash(token: string): string {
 }
 
 function normalizeToolName(toolName: string, args: Record<string, unknown>): string {
+  const firstTool = Array.isArray(args.tools) ? pickObject(args.tools[0]) : {};
   const direct = asText(toolName);
   const nested = [
     args.tool_slug,
@@ -63,6 +73,12 @@ function normalizeToolName(toolName: string, args: Record<string, unknown>): str
     args.action,
     pickObject(args.tool).slug,
     pickObject(args.tool).name,
+    firstTool.tool_slug,
+    firstTool.toolSlug,
+    firstTool.tool_name,
+    firstTool.toolName,
+    pickObject(firstTool.tool).slug,
+    pickObject(firstTool.tool).name,
   ]
     .map(asText)
     .find(Boolean);
@@ -220,6 +236,61 @@ function buildParameterSummary(args: Record<string, unknown>, prefix = '', depth
   return Object.fromEntries(Object.entries(summary).slice(0, 12));
 }
 
+function humanizeTargetFallback(value: string): string {
+  return value
+    .replace(/^google_super__/i, '')
+    .replace(/^googlesuper_/i, '')
+    .replace(/^googledocs_/i, '')
+    .replace(/^googledrive_/i, '')
+    .replace(/^gmail_/i, '')
+    .replace(/^calendar_/i, '')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+}
+
+function pickFallbackTargetFromSummary(summary: Record<string, unknown>): string {
+  for (const [key, value] of Object.entries(summary)) {
+    const normalized = normalizeTargetKey(key);
+    if (
+      /(title|name|subject|recipient|email|documentid|docid|fileid|folderid|calendarid|eventid|url|id)$/.test(
+        normalized
+      )
+    ) {
+      const text = asText(value);
+      if (text && text !== '[redacted]') {
+        return text;
+      }
+    }
+  }
+  return '';
+}
+
+function buildFallbackTarget(scope: ConfirmationScope, effectiveToolName: string): string {
+  const parameterSummary = buildParameterSummary(scope.argumentsJson);
+  const summaryTarget = pickFallbackTargetFromSummary(parameterSummary);
+  if (summaryTarget) return summaryTarget;
+
+  const nestedToolSlug = effectiveToolName.split(/\s+/).slice(1).join(' ').trim();
+  const toolHint = humanizeTargetFallback(nestedToolSlug || effectiveToolName);
+  if (toolHint) {
+    if (/create document markdown|create document|document/.test(toolHint.toLowerCase())) {
+      return 'new Google document';
+    }
+    if (/send email|gmail|email/.test(toolHint.toLowerCase())) {
+      return 'Google email operation';
+    }
+    if (/calendar|event/.test(toolHint.toLowerCase())) {
+      return 'Google Calendar event';
+    }
+    if (/drive|file|folder/.test(toolHint.toLowerCase())) {
+      return 'Google Drive item';
+    }
+    return toolHint;
+  }
+
+  return 'Google Workspace write operation';
+}
+
 function inferAction(toolName: string): string {
   const normalized = toolName.toLowerCase();
   if (normalized.includes('gmail') && normalized.includes('send')) return 'send_email';
@@ -251,14 +322,50 @@ function inferAction(toolName: string): string {
 function buildSummary(scope: ConfirmationScope): ConfirmationSummary {
   const effectiveToolName = normalizeToolName(scope.toolName, scope.argumentsJson);
   const targets = collectCandidateTexts(scope.argumentsJson);
-  const target = targets[0] || '';
+  const parameterSummary = buildParameterSummary(scope.argumentsJson);
+  const target = targets[0] || buildFallbackTarget(scope, effectiveToolName);
   return {
     connectorKey: scope.connectorKey,
     toolName: scope.toolName,
     action: inferAction(effectiveToolName),
     target,
     impact: `Execute one Google Workspace write operation through ${scope.toolName}.`,
-    parameterSummary: buildParameterSummary(scope.argumentsJson),
+    parameterSummary,
+  };
+}
+
+function buildStoredSummary(scope: ConfirmationScope): StoredConfirmationSummary {
+  return {
+    ...buildSummary(scope),
+    __internalReplay: {
+      toolName: scope.toolName,
+      argumentsJson: scope.argumentsJson,
+    },
+  };
+}
+
+function sanitizeSummary(summary: unknown): ConfirmationSummary {
+  const record = pickObject(summary);
+  return {
+    connectorKey: asText(record.connectorKey),
+    toolName: asText(record.toolName),
+    action: asText(record.action),
+    target: asText(record.target),
+    impact: asText(record.impact),
+    parameterSummary: buildParameterSummary(pickObject(record.parameterSummary)),
+  };
+}
+
+function readReplaySnapshot(summary: unknown): ConfirmationReplaySnapshot | null {
+  const internalReplay = pickObject(pickObject(summary).__internalReplay);
+  const toolName = asText(internalReplay.toolName);
+  const argumentsJson = pickObject(internalReplay.argumentsJson);
+  if (!toolName || Object.keys(argumentsJson).length === 0) {
+    return null;
+  }
+  return {
+    toolName,
+    argumentsJson,
   };
 }
 
@@ -278,20 +385,53 @@ export class McpToolConfirmationService {
     return buildSummary(scope);
   }
 
+  getPublicSummary(summary: unknown) {
+    return sanitizeSummary(summary);
+  }
+
+  private buildApprovalTokenPatch(nowMs: number) {
+    const token = randomBytes(32).toString('base64url');
+    const tokenTtlSeconds = Math.max(
+      60,
+      Number(process.env.GOOGLE_SUPER_CONFIRMATION_TOKEN_TTL_SECONDS || 600)
+    );
+    const tokenExpiresAt = new Date(nowMs + tokenTtlSeconds * 1000);
+    return {
+      token,
+      patch: {
+        status: 'approved' as const,
+        confirmationTokenHash: tokenHash(token),
+        approvedAt: new Date(nowMs),
+        expiresAt: tokenExpiresAt,
+      },
+      expiresAt: tokenExpiresAt,
+    };
+  }
+
   async createPendingConfirmation(scope: ConfirmationScope) {
     const summary = this.buildConfirmationSummary(scope);
-    if (!summary.target) {
-      throw new Error('google_super_confirmation_target_missing');
-    }
+    const storedSummary = buildStoredSummary(scope);
     const ttlSeconds = Math.max(60, Number(process.env.GOOGLE_SUPER_CONFIRMATION_TOKEN_TTL_SECONDS || 600));
+    const argumentsHash = sha256(scope.argumentsJson);
+    const reusable = await taskSessionMcpToolConfirmationDAO.findReusablePending({
+      appUserId: scope.appUserId,
+      taskSessionId: scope.taskSessionId,
+      agentRunId: asText(scope.agentRunId) || null,
+      connectorKey: scope.connectorKey,
+      toolName: scope.toolName,
+      argumentsHash,
+    });
+    if (reusable) {
+      return reusable;
+    }
     const row = await taskSessionMcpToolConfirmationDAO.create({
       appUserId: scope.appUserId,
       taskSessionId: scope.taskSessionId,
       agentRunId: asText(scope.agentRunId) || null,
       connectorKey: scope.connectorKey,
       toolName: scope.toolName,
-      argumentsHash: sha256(scope.argumentsJson),
-      summaryJson: summary,
+      argumentsHash,
+      summaryJson: storedSummary,
       status: 'pending',
       expiresAt: new Date(Date.now() + ttlSeconds * 1000),
     } as any);
@@ -320,14 +460,16 @@ export class McpToolConfirmationService {
     ) {
       throw new Error('mcp_confirmation_not_found');
     }
-    if (row.status !== 'pending') throw new Error('mcp_confirmation_not_pending');
-    if (row.expiresAt.getTime() <= Date.now()) throw new Error('mcp_confirmation_expired');
-    const token = randomBytes(32).toString('base64url');
-    const updated = await taskSessionMcpToolConfirmationDAO.updateStatus(row.id, {
-      status: 'approved',
-      confirmationTokenHash: tokenHash(token),
-      approvedAt: new Date(),
-    });
+    if (row.status === 'consumed') throw new Error('mcp_confirmation_already_consumed');
+    if (row.status === 'rejected') throw new Error('mcp_confirmation_not_pending');
+    if (row.status !== 'pending' && row.status !== 'approved') {
+      throw new Error('mcp_confirmation_not_pending');
+    }
+    if (row.status === 'pending' && row.expiresAt.getTime() <= Date.now()) {
+      throw new Error('mcp_confirmation_expired');
+    }
+    const approvalToken = this.buildApprovalTokenPatch(Date.now());
+    const updated = await taskSessionMcpToolConfirmationDAO.updateStatus(row.id, approvalToken.patch);
     await this.writeAuditEvent(
       {
         appUserId: row.appUserId,
@@ -337,12 +479,55 @@ export class McpToolConfirmationService {
         toolName: row.toolName,
         argumentsJson: {},
       },
-      'approved',
+      row.status === 'approved' ? 'approval_reissued' : 'approved',
       { confirmationId: row.id }
     );
     return {
-      confirmationToken: token,
-      expiresAt: updated?.expiresAt || row.expiresAt,
+      confirmationId: row.id,
+      connectorKey: row.connectorKey,
+      toolName: row.toolName,
+      confirmationAgentRunId: asText(row.agentRunId) || null,
+      summary: this.getPublicSummary(row.summaryJson),
+      confirmationToken: approvalToken.token,
+      expiresAt: updated?.expiresAt || approvalToken.expiresAt,
+    };
+  }
+
+  async resolveApprovedReplay(input: {
+    appUserId: string;
+    taskSessionId: string;
+    confirmationId: string;
+    connectorKey: string;
+    toolName: string;
+    confirmationAgentRunId?: string | null;
+  }) {
+    const row = await taskSessionMcpToolConfirmationDAO.getById(input.confirmationId);
+    if (
+      !row ||
+      row.appUserId !== input.appUserId ||
+      row.taskSessionId !== input.taskSessionId ||
+      row.status !== 'approved' ||
+      row.connectorKey !== input.connectorKey ||
+      row.toolName !== input.toolName
+    ) {
+      return null;
+    }
+    if (
+      asText(input.confirmationAgentRunId) &&
+      asText(row.agentRunId) &&
+      asText(input.confirmationAgentRunId) !== asText(row.agentRunId)
+    ) {
+      return null;
+    }
+    const replay = readReplaySnapshot(row.summaryJson);
+    if (!replay) {
+      return null;
+    }
+    return {
+      confirmationId: row.id,
+      agentRunId: asText(row.agentRunId) || null,
+      toolName: replay.toolName,
+      argumentsJson: replay.argumentsJson,
     };
   }
 
@@ -375,23 +560,16 @@ export class McpToolConfirmationService {
   async verifyAndConsumeConfirmation(scope: ConfirmationScope & { confirmationToken?: string | null }) {
     const token = asText(scope.confirmationToken);
     if (!token) return false;
-    const row = await taskSessionMcpToolConfirmationDAO.getByTokenHash(tokenHash(token));
-    const valid =
-      row &&
-      row.status === 'approved' &&
-      row.appUserId === scope.appUserId &&
-      row.taskSessionId === scope.taskSessionId &&
-      asText(row.agentRunId) === asText(scope.agentRunId) &&
-      row.connectorKey === scope.connectorKey &&
-      row.toolName === scope.toolName &&
-      row.argumentsHash === sha256(scope.argumentsJson) &&
-      row.expiresAt.getTime() > Date.now();
-    if (!valid || !row) return false;
-    await taskSessionMcpToolConfirmationDAO.updateStatus(row.id, {
-      status: 'consumed',
-      consumedAt: new Date(),
-      confirmationTokenHash: null,
+    const row = await taskSessionMcpToolConfirmationDAO.consumeApprovedToken({
+      tokenHash: tokenHash(token),
+      appUserId: scope.appUserId,
+      taskSessionId: scope.taskSessionId,
+      agentRunId: asText(scope.agentRunId) || null,
+      connectorKey: scope.connectorKey,
+      toolName: scope.toolName,
+      argumentsHash: sha256(scope.argumentsJson),
     });
+    if (!row) return false;
     await this.writeAuditEvent(scope, 'consumed', { confirmationId: row.id });
     return true;
   }

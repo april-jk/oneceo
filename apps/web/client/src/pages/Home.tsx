@@ -180,12 +180,19 @@ type PersistedPreviewState = {
 type GoogleWorkspaceConfirmationView = {
   confirmationId: string;
   agentRunId?: string;
+  connectorKey: string;
   toolName: string;
   action: string;
   target: string;
   impact: string;
   parameterSummary: Record<string, unknown>;
 };
+
+function getMcpConfirmationConnectorLabel(connectorKeyRaw: string) {
+  const connectorKey = asText(connectorKeyRaw);
+  if (connectorKey === "google_super") return "Google Workspace";
+  return connectorKey || "MCP";
+}
 
 type ComposerReferenceToken = {
   id: string;
@@ -363,6 +370,9 @@ export default function Home() {
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [mode, setMode] = useState<PageMode>("input");
   const [message, setMessage] = useState("");
+  const [handledGoogleConfirmationIds, setHandledGoogleConfirmationIds] = useState<
+    string[]
+  >([]);
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [composerReferences, setComposerReferences] = useState<
     ComposerReferenceToken[]
@@ -526,6 +536,8 @@ export default function Home() {
     sendChatInput,
     interruptCurrentRun,
     answerQuestion,
+    appendLocalMessage,
+    awaitManagedRunRecovery,
     ensureSession,
     loadOlderHistory,
   } = useTaskCreationAgent({
@@ -542,6 +554,25 @@ export default function Home() {
       console.error("任务创建失败:", error);
     },
   });
+  const resolvedGoogleConfirmationIds = useMemo(() => {
+    const ids = new Set(handledGoogleConfirmationIds);
+    for (const item of messages) {
+      const metadata = toRecord(item.metadata);
+      const confirmationId =
+        asText(toRecord(metadata.mcpToolConfirmation).confirmationId) ||
+        asText(metadata.confirmationId);
+      if (!confirmationId) continue;
+      const source = asText(metadata.source);
+      if (
+        source === "mcp_tool_confirmation_approved" ||
+        source === "mcp_tool_confirmation_rejected" ||
+        source === "mcp_tool_confirmation_followup"
+      ) {
+        ids.add(confirmationId);
+      }
+    }
+    return Array.from(ids);
+  }, [handledGoogleConfirmationIds, messages]);
 
   useEffect(() => {
     refreshCreditsRef.current = refreshCredits;
@@ -1728,29 +1759,37 @@ export default function Home() {
         sessionId,
         confirmation.confirmationId,
       );
-      await answerQuestion(
-        [
-          "用户已确认本次 Google Workspace 操作。",
-          `confirmationId: ${confirmation.confirmationId}`,
-          confirmation.agentRunId ? `confirmationAgentRunId: ${confirmation.agentRunId}` : "",
-          `toolName: ${confirmation.toolName}`,
-          `confirmationToken: ${result.confirmationToken}`,
-          "请使用 confirmationToken 和 confirmationAgentRunId 重试同一个 tool call，参数必须保持不变。",
-        ]
-          .filter(Boolean)
-          .join("\n"),
+      const connectorLabel = getMcpConfirmationConnectorLabel(
+        confirmation.connectorKey,
+      );
+      appendLocalMessage(
         {
+          messageKey: `mcp-confirmation-followup:${confirmation.confirmationId}`,
+          type: "status_update",
+          content: `已确认执行，正在继续处理 ${connectorLabel} 高风险操作...`,
+          message: `已确认执行，正在继续处理 ${connectorLabel} 高风险操作...`,
+          stage: "executing",
+          tone: "system",
           sessionId,
           metadata: {
-            executionMode: "managed",
-            source: "google_workspace_confirmation_approved",
+            eventType: "run_status",
+            status: "running",
             confirmationId: confirmation.confirmationId,
+            connectorKey: confirmation.connectorKey,
+            source: "mcp_tool_confirmation_followup",
           },
         },
+        { sessionId },
       );
-      toast.success("已确认 Google Workspace 操作");
+      await awaitManagedRunRecovery(sessionId);
+      setHandledGoogleConfirmationIds((prev) =>
+        prev.includes(confirmation.confirmationId)
+          ? prev
+          : [...prev, confirmation.confirmationId],
+      );
+      toast.success(`已确认 ${connectorLabel} 操作`);
     },
-    [answerQuestion, sessionId, t],
+    [awaitManagedRunRecovery, sessionId, t],
   );
 
   const rejectGoogleWorkspaceConfirmation = useCallback(
@@ -1759,29 +1798,37 @@ export default function Home() {
         toast.error(t("homeWorkspace.missingSession"));
         return;
       }
+      const connectorLabel = getMcpConfirmationConnectorLabel(
+        confirmation.connectorKey,
+      );
       await rejectMcpToolConfirmation(sessionId, confirmation.confirmationId);
-      await answerQuestion(
-        [
-          "用户已拒绝本次 Google Workspace 操作。",
-          `confirmationId: ${confirmation.confirmationId}`,
-          confirmation.agentRunId ? `confirmationAgentRunId: ${confirmation.agentRunId}` : "",
-          `toolName: ${confirmation.toolName}`,
-          "不要重试该 tool call。",
-        ]
-          .filter(Boolean)
-          .join("\n"),
+      appendLocalMessage(
         {
+          messageKey: `mcp-confirmation-rejected:${confirmation.confirmationId}`,
+          type: "status_update",
+          content: `已拒绝执行，${connectorLabel} 高风险操作已取消。`,
+          message: `已拒绝执行，${connectorLabel} 高风险操作已取消。`,
+          stage: "executing",
+          tone: "system",
           sessionId,
           metadata: {
-            executionMode: "managed",
-            source: "google_workspace_confirmation_rejected",
+            eventType: "run_status",
+            status: "waiting_user",
             confirmationId: confirmation.confirmationId,
+            connectorKey: confirmation.connectorKey,
+            source: "mcp_tool_confirmation_followup",
           },
         },
+        { sessionId },
       );
-      toast.success("已拒绝 Google Workspace 操作");
+      setHandledGoogleConfirmationIds((prev) =>
+        prev.includes(confirmation.confirmationId)
+          ? prev
+          : [...prev, confirmation.confirmationId],
+      );
+      toast.success(`已拒绝 ${connectorLabel} 操作`);
     },
-    [answerQuestion, sessionId, t],
+    [sessionId, t],
   );
 
   const submitDeploymentPrompt = async (
@@ -2173,6 +2220,7 @@ export default function Home() {
                   onDeployArtifact={deployFromArtifactCard}
                   runtimeSwitchBlocked={managedRunActive}
                   currentSessionId={sessionId}
+                  hiddenGoogleConfirmationIds={resolvedGoogleConfirmationIds}
                   onApproveGoogleWorkspaceConfirmation={
                     approveGoogleWorkspaceConfirmation
                   }
@@ -3493,6 +3541,9 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     if (message.type === "user_input" || message.type === "user_response") {
+      if (isHiddenMcpConfirmationUserMessage(message)) {
+        continue;
+      }
       clearManagedStatus();
       flushProgress();
       const resolvedUser = resolveUserMessageReferences({
@@ -4692,6 +4743,9 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
     const message = messages[index];
 
     if (message.type === "user_input" || message.type === "user_response") {
+      if (isHiddenMcpConfirmationUserMessage(message)) {
+        continue;
+      }
       const resolvedUser = resolveUserMessageReferences({
         content: message.content || "",
         metadata: message.metadata,
@@ -5106,6 +5160,7 @@ function MessageBubble({
   onDeployArtifact,
   runtimeSwitchBlocked,
   currentSessionId,
+  hiddenGoogleConfirmationIds,
   onApproveGoogleWorkspaceConfirmation,
   onRejectGoogleWorkspaceConfirmation,
 }: {
@@ -5127,6 +5182,7 @@ function MessageBubble({
   onDeployArtifact?: (path: string) => Promise<void> | void;
   runtimeSwitchBlocked?: boolean;
   currentSessionId?: string | null;
+  hiddenGoogleConfirmationIds?: string[];
   onApproveGoogleWorkspaceConfirmation?: (
     confirmation: GoogleWorkspaceConfirmationView,
   ) => Promise<void> | void;
@@ -5179,6 +5235,7 @@ function MessageBubble({
                       diffId: part.diffId,
                       messageKey: part.messageKey,
                     }}
+                    hiddenGoogleConfirmationIds={hiddenGoogleConfirmationIds}
                     onOpenDiffPreview={onOpenDiffPreview}
                   />
                 </div>
@@ -5326,7 +5383,18 @@ function MessageBubble({
   if (item.kind === "opencode_tool") {
     return (
       <div data-message-key={item.messageKey}>
-        <OpencodeToolCard item={item} onOpenDiffPreview={onOpenDiffPreview} />
+        <OpencodeToolCard
+          item={item}
+          currentSessionId={currentSessionId}
+          hiddenGoogleConfirmationIds={hiddenGoogleConfirmationIds}
+          onApproveGoogleWorkspaceConfirmation={
+            onApproveGoogleWorkspaceConfirmation
+          }
+          onRejectGoogleWorkspaceConfirmation={
+            onRejectGoogleWorkspaceConfirmation
+          }
+          onOpenDiffPreview={onOpenDiffPreview}
+        />
       </div>
     );
   }
@@ -5337,6 +5405,7 @@ function MessageBubble({
         <ManagedActivityGroup
           item={item}
           currentSessionId={currentSessionId}
+          hiddenGoogleConfirmationIds={hiddenGoogleConfirmationIds}
           onApproveGoogleWorkspaceConfirmation={
             onApproveGoogleWorkspaceConfirmation
           }
@@ -5360,6 +5429,7 @@ function MessageBubble({
         <ManagedToolCard
           item={item}
           currentSessionId={currentSessionId}
+          hiddenGoogleConfirmationIds={hiddenGoogleConfirmationIds}
           onApproveGoogleWorkspaceConfirmation={
             onApproveGoogleWorkspaceConfirmation
           }
@@ -5625,6 +5695,25 @@ function toRecord(value: unknown): Record<string, unknown> {
 
 function asText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function isHiddenMcpConfirmationUserMessage(
+  message: Pick<AgentMessage, "type" | "content" | "metadata"> | null | undefined,
+): boolean {
+  if (message?.type !== "user_response") return false;
+  const metadata = toRecord(message.metadata);
+  const source = asText(metadata.source);
+  if (
+    source === "mcp_tool_confirmation_approved" ||
+    source === "mcp_tool_confirmation_rejected"
+  ) {
+    return true;
+  }
+  const content = (message.content || "").trim();
+  return (
+    content === "[mcp_tool_confirmation:approve]" ||
+    content === "[mcp_tool_confirmation:reject]"
+  );
 }
 
 function asNumericValue(value: unknown): number | null {
@@ -6228,9 +6317,21 @@ export function buildOpencodeAtomicTooltip(input: {
 
 function OpencodeToolCard({
   item,
+  currentSessionId,
+  hiddenGoogleConfirmationIds,
+  onApproveGoogleWorkspaceConfirmation,
+  onRejectGoogleWorkspaceConfirmation,
   onOpenDiffPreview,
 }: {
   item: Extract<ChatItem, { kind: "opencode_tool" }>;
+  currentSessionId?: string | null;
+  hiddenGoogleConfirmationIds?: string[];
+  onApproveGoogleWorkspaceConfirmation?: (
+    confirmation: GoogleWorkspaceConfirmationView,
+  ) => Promise<void> | void;
+  onRejectGoogleWorkspaceConfirmation?: (
+    confirmation: GoogleWorkspaceConfirmationView,
+  ) => Promise<void> | void;
   onOpenDiffPreview?: (options?: {
     diffId?: string | null;
     filePath?: string | null;
@@ -6262,6 +6363,14 @@ function OpencodeToolCard({
 
   const isDiffEvent = (toolName || "").toLowerCase() === "apply_patch";
   const toolKey = (toolName || "").toLowerCase();
+  const googleConfirmation = readGoogleWorkspaceConfirmationFromOpencodeEvent({
+    metadata,
+    output,
+    content: item.content,
+    properties,
+    part,
+    toolState,
+  });
 
   const capsuleTone = "border-border/70 bg-muted/50 text-foreground/80";
 
@@ -6432,6 +6541,21 @@ function OpencodeToolCard({
       </Dialog>
     </>
   );
+
+  if (
+    googleConfirmation &&
+    !hiddenGoogleConfirmationIds?.includes(googleConfirmation.confirmationId)
+  ) {
+    return (
+      <GoogleWorkspaceConfirmationPanel
+        confirmation={googleConfirmation}
+        currentSessionId={currentSessionId}
+        compact
+        onApprove={onApproveGoogleWorkspaceConfirmation}
+        onReject={onRejectGoogleWorkspaceConfirmation}
+      />
+    );
+  }
 
   if (isDiffEvent) {
     return wrapWithDetailDialog(
@@ -7055,12 +7179,14 @@ function ManagedActivityGroup({
   item,
   onOpenReplay,
   currentSessionId,
+  hiddenGoogleConfirmationIds,
   onApproveGoogleWorkspaceConfirmation,
   onRejectGoogleWorkspaceConfirmation,
 }: {
   item: Extract<ChatItem, { kind: "managed_activity_group" }>;
   onOpenReplay?: (runId: string, toolCallId: string, toolName: string) => void;
   currentSessionId?: string | null;
+  hiddenGoogleConfirmationIds?: string[];
   onApproveGoogleWorkspaceConfirmation?: (
     confirmation: GoogleWorkspaceConfirmationView,
   ) => Promise<void> | void;
@@ -7148,6 +7274,7 @@ function ManagedActivityGroup({
                     item={entry}
                     onOpenReplay={onOpenReplay}
                     currentSessionId={currentSessionId}
+                    hiddenGoogleConfirmationIds={hiddenGoogleConfirmationIds}
                     onApproveGoogleWorkspaceConfirmation={
                       onApproveGoogleWorkspaceConfirmation
                     }
@@ -7169,12 +7296,14 @@ function ManagedActivityToolRow({
   item,
   onOpenReplay,
   currentSessionId,
+  hiddenGoogleConfirmationIds,
   onApproveGoogleWorkspaceConfirmation,
   onRejectGoogleWorkspaceConfirmation,
 }: {
   item: Extract<ChatItem, { kind: "managed_tool" }>;
   onOpenReplay?: (runId: string, toolCallId: string, toolName: string) => void;
   currentSessionId?: string | null;
+  hiddenGoogleConfirmationIds?: string[];
   onApproveGoogleWorkspaceConfirmation?: (
     confirmation: GoogleWorkspaceConfirmationView,
   ) => Promise<void> | void;
@@ -7190,7 +7319,10 @@ function ManagedActivityToolRow({
     getManagedToolDisplayName(item.toolName);
   const statusUi = getManagedToolStatusPresentation(item.status);
 
-  if (googleConfirmation) {
+  if (
+    googleConfirmation &&
+    !hiddenGoogleConfirmationIds?.includes(googleConfirmation.confirmationId)
+  ) {
     return (
       <GoogleWorkspaceConfirmationPanel
         confirmation={{ ...googleConfirmation, agentRunId: item.runId }}
@@ -7248,6 +7380,7 @@ function GoogleWorkspaceConfirmationPanel({
     !confirmation.confirmationId ||
     !onApprove ||
     !onReject;
+  const connectorLabel = getMcpConfirmationConnectorLabel(confirmation.connectorKey);
   const parameterEntries = Object.entries(confirmation.parameterSummary).slice(0, 6);
 
   const runAction = async (action: "approve" | "reject") => {
@@ -7278,7 +7411,7 @@ function GoogleWorkspaceConfirmationPanel({
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-[12px] font-semibold leading-5">
-              确认 Google Workspace 操作
+              确认高风险 MCP 操作
             </div>
             <div className="truncate text-[11px] leading-5 opacity-75">
               {confirmation.toolName}
@@ -7289,6 +7422,14 @@ function GoogleWorkspaceConfirmationPanel({
           </span>
         </div>
         <div className="grid gap-2 text-[12px] leading-5 sm:grid-cols-2">
+          <div className="min-w-0">
+            <div className="text-[10px] font-medium uppercase tracking-[0.16em] opacity-60">
+              Connector
+            </div>
+            <div className="truncate" title={connectorLabel}>
+              {connectorLabel}
+            </div>
+          </div>
           <div className="min-w-0">
             <div className="text-[10px] font-medium uppercase tracking-[0.16em] opacity-60">
               目标对象
@@ -7302,7 +7443,7 @@ function GoogleWorkspaceConfirmationPanel({
               动作
             </div>
             <div className="truncate" title={confirmation.action}>
-              {confirmation.action || "google_workspace_write"}
+              {confirmation.action || "write_operation"}
             </div>
           </div>
         </div>
@@ -7357,12 +7498,14 @@ function ManagedToolCard({
   item,
   onOpenReplay,
   currentSessionId,
+  hiddenGoogleConfirmationIds,
   onApproveGoogleWorkspaceConfirmation,
   onRejectGoogleWorkspaceConfirmation,
 }: {
   item: Extract<ChatItem, { kind: "managed_tool" }>;
   onOpenReplay?: (runId: string, toolCallId: string, toolName: string) => void;
   currentSessionId?: string | null;
+  hiddenGoogleConfirmationIds?: string[];
   onApproveGoogleWorkspaceConfirmation?: (
     confirmation: GoogleWorkspaceConfirmationView,
   ) => Promise<void> | void;
@@ -7421,7 +7564,10 @@ function ManagedToolCard({
     node.scrollTop = node.scrollHeight;
   }, [isWriteFileExpanded, writeFilePreview]);
 
-  if (googleConfirmation) {
+  if (
+    googleConfirmation &&
+    !hiddenGoogleConfirmationIds?.includes(googleConfirmation.confirmationId)
+  ) {
     return (
       <GoogleWorkspaceConfirmationPanel
         confirmation={{ ...googleConfirmation, agentRunId: item.runId }}
@@ -7910,32 +8056,103 @@ function readManagedToolViewProjection(metadataRaw: unknown) {
 
 function readGoogleWorkspaceConfirmation(metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
-  const output = parseManagedToolOutputPreview(metadata.outputPreview);
-  const contentItems = Array.isArray(output.content) ? output.content : [];
-  const contentJson = contentItems
-    .map((item) => {
-      const text = asText(toRecord(item).text);
-      if (!text) return {};
+  return toGoogleWorkspaceConfirmationView(
+    extractGoogleWorkspaceConfirmationPayload(
+      parseManagedToolOutputPreview(metadata.outputPreview),
+    ),
+  );
+}
+
+function readGoogleWorkspaceConfirmationFromOpencodeEvent(input: {
+  metadata?: Record<string, unknown>;
+  output?: unknown;
+  content?: unknown;
+  properties?: Record<string, unknown>;
+  part?: Record<string, unknown>;
+  toolState?: Record<string, unknown>;
+}) {
+  const payload = extractGoogleWorkspaceConfirmationPayload([
+    input.toolState,
+    input.part,
+    input.properties,
+    input.metadata,
+    input.output,
+    input.content,
+  ]);
+  return toGoogleWorkspaceConfirmationView(payload);
+}
+
+function extractGoogleWorkspaceConfirmationPayload(
+  raw: unknown,
+): Record<string, unknown> | null {
+  const visit = (value: unknown, depth = 0): Record<string, unknown> | null => {
+    if (depth > 6 || value == null) return null;
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!trimmed) return null;
       try {
-        return toRecord(JSON.parse(text) as unknown);
+        return visit(JSON.parse(trimmed), depth + 1);
       } catch {
-        return {};
+        return null;
       }
-    })
-    .find((item) => asText(item.type) === "confirmation_required") || {};
-  const structured = toRecord(output.structuredContent);
-  const direct =
-    asText(output.type) === "confirmation_required"
-      ? output
-      : asText(contentJson.type) === "confirmation_required"
-        ? contentJson
-      : asText(structured.type) === "confirmation_required"
-        ? structured
-        : {};
-  if (asText(direct.connectorKey) !== "google_super") return null;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const found = visit(item, depth + 1);
+        if (found) return found;
+      }
+      return null;
+    }
+    if (typeof value !== "object") return null;
+    const record = toRecord(value);
+    if (
+      asText(record.type) === "confirmation_required" &&
+      asText(record.confirmationId) &&
+      asText(record.toolName)
+    ) {
+      return record;
+    }
+
+    const directKeys = [
+      "structuredContent",
+      "result",
+      "outputPreview",
+      "output",
+      "content",
+      "rawPayload",
+      "event",
+      "properties",
+      "part",
+      "state",
+      "data",
+    ];
+    for (const key of directKeys) {
+      const found = visit(record[key], depth + 1);
+      if (found) return found;
+    }
+
+    const contentItems = Array.isArray(record.content) ? record.content : [];
+    for (const item of contentItems) {
+      const found =
+        visit(toRecord(item).text, depth + 1) || visit(item, depth + 1);
+      if (found) return found;
+    }
+
+    return null;
+  };
+
+  return visit(raw);
+}
+
+function toGoogleWorkspaceConfirmationView(
+  payload: Record<string, unknown> | null,
+): GoogleWorkspaceConfirmationView | null {
+  const direct = toRecord(payload);
+  if (!asText(direct.confirmationId) || !asText(direct.toolName)) return null;
   const summary = toRecord(direct.summary);
   return {
     confirmationId: asText(direct.confirmationId),
+    connectorKey: asText(direct.connectorKey),
     toolName: asText(direct.toolName),
     action: asText(summary.action),
     target: asText(summary.target),
@@ -8526,7 +8743,10 @@ function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
   const projectedView = readManagedToolViewProjection(metadata);
   const googleConfirmation = readGoogleWorkspaceConfirmation(metadata);
   if (googleConfirmation) {
-    return "等待确认 Google Workspace 操作";
+    const connectorLabel = getMcpConfirmationConnectorLabel(
+      googleConfirmation.connectorKey,
+    );
+    return `等待确认 ${connectorLabel} 高风险操作`;
   }
   if (toolName === "shell_execute") {
     return asText(args.command) || i18n.t("homeWorkspace.executeShellCommand");
@@ -8615,8 +8835,12 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
   const googleConfirmation = readGoogleWorkspaceConfirmation(metadata);
 
   if (googleConfirmation) {
+    const connectorLabel = getMcpConfirmationConnectorLabel(
+      googleConfirmation.connectorKey,
+    );
     return [
-      "确认 Google Workspace 操作",
+      "确认高风险 MCP 操作",
+      `连接器：${connectorLabel}`,
       googleConfirmation.target ? `目标：${googleConfirmation.target}` : "",
       googleConfirmation.action ? `动作：${googleConfirmation.action}` : "",
     ]
@@ -8769,8 +8993,12 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
   }
 
   if (googleConfirmation) {
+    const connectorLabel = getMcpConfirmationConnectorLabel(
+      googleConfirmation.connectorKey,
+    );
     return [
-      "确认 Google Workspace 操作",
+      "确认高风险 MCP 操作",
+      `Connector: ${connectorLabel}`,
       `Tool: ${googleConfirmation.toolName || toolName}`,
       googleConfirmation.confirmationId ? `Confirmation: ${googleConfirmation.confirmationId}` : "",
       googleConfirmation.action ? `动作: ${googleConfirmation.action}` : "",

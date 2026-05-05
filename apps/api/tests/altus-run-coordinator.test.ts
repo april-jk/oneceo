@@ -2374,6 +2374,307 @@ test('execute requests clarification and transitions to waiting_user', async () 
   assert.equal(eventCalls[3]?.payload.messageKey, 'managed:run-coordinator-clarify:clarification');
 });
 
+test('execute stops the turn when google workspace confirmation is required', async () => {
+  const state = createState('run-coordinator-google-confirmation', 'session-coordinator-google-confirmation');
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-google-confirmation',
+      workspaceRoot: '/workspace/session-coordinator-google-confirmation',
+      reused: true,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => {}),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  global.fetch = mock.fn(async () =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-google-confirm-1',
+                  type: 'function',
+                  function: {
+                    name: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+                    arguments: JSON.stringify({
+                      tool_slug: 'GOOGLESUPER_CREATE_DOCUMENT_MARKDOWN',
+                      arguments: {
+                        title: 'oneceo confirmation e2e test',
+                      },
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    )
+  ) as typeof fetch;
+
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => ({
+    type: 'result' as const,
+    content: JSON.stringify({
+      type: 'confirmation_required',
+      connectorKey: 'google_super',
+      toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+      confirmationId: 'confirmation-1',
+      summary: {
+        action: 'google_workspace_write',
+        target: 'oneceo confirmation e2e test',
+        impact: 'Execute one Google Workspace write operation.',
+        parameterSummary: {
+          title: 'oneceo confirmation e2e test',
+        },
+      },
+    }),
+  }));
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeMock.mock.callCount(), 1);
+  assert.deepEqual(lifecycleCalls, ['running', 'waiting_user']);
+  assert.equal(state.status, 'waiting_user');
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'tool_call_started' &&
+        entry.payload.toolName === 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL'
+    ),
+    true
+  );
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'clarification_requested' || entry.eventType === 'assistant_message'
+    ),
+    false
+  );
+});
+
+test('execute stops the turn when google workspace confirmation is wrapped in provider envelope', async () => {
+  const state = createState('run-coordinator-google-confirmation-envelope', 'session-coordinator-google-confirmation-envelope');
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-google-confirm-envelope',
+      workspaceRoot: '/workspace/session-coordinator-google-confirmation-envelope',
+      reused: true,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => {}),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-google-confirm-envelope-1',
+                    type: 'function',
+                    function: {
+                      name: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+                      arguments: JSON.stringify({
+                        tool_slug: 'GOOGLESUPER_SEND_EMAIL',
+                        arguments: {
+                          recipient_email: '3065025109@qq.com',
+                          subject: '测试',
+                        },
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '已成功发送邮件！',
+              tool_calls: [
+                {
+                  id: 'tool-google-confirm-envelope-complete',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '已使用 Google Workspace 成功发送邮件。',
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL') {
+      const structuredContent = {
+        type: 'confirmation_required',
+        connectorKey: 'google_super',
+        toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+        confirmationId: 'confirmation-envelope-1',
+        summary: {
+          action: 'google_workspace_write',
+          target: '3065025109@qq.com',
+          impact: 'Execute one Google Workspace write operation.',
+          parameterSummary: {
+            subject: '测试',
+          },
+        },
+      };
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({
+          providerId: 'provider-google-super',
+          toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+          result: {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(structuredContent),
+              },
+            ],
+            structuredContent,
+          },
+        }),
+      };
+    }
+    if (toolName === 'complete_task') {
+      return {
+        type: 'complete' as const,
+        summary: '已使用 Google Workspace 成功发送邮件。',
+      };
+    }
+    throw new Error(`unexpected tool: ${toolName}`);
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeMock.mock.callCount(), 1);
+  assert.equal(fetchCount, 1);
+  assert.deepEqual(lifecycleCalls, ['running', 'waiting_user']);
+  assert.equal(state.status, 'waiting_user');
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'tool_call_started' &&
+        entry.payload.toolName === 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL'
+    ),
+    true
+  );
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'assistant_message' ||
+        entry.eventType === 'tool_call_started' && entry.payload.toolName === 'complete_task'
+    ),
+    false
+  );
+});
+
 test('execute defers sibling tool calls when ask_user appears in same tool batch', async () => {
   const state = createState('run-coordinator-clarify-sibling', 'session-coordinator-clarify-sibling');
   const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
@@ -2828,6 +3129,344 @@ test('execute records plain-text continuation recovery before failing the manage
         entry.eventType === 'run_status' && entry.payload.transitionReason === 'plain_text_continuation_failed'
     ),
     true
+  );
+});
+
+test('execute replays approved mcp tool calls before the next model round without exposing confirmation prompt text', async () => {
+  const state = createState(
+    'run-coordinator-mcp-confirmation-replay',
+    'session-coordinator-mcp-confirmation-replay',
+    '[mcp_tool_confirmation:approve]',
+    'user_response'
+  );
+  state.input.confirmedMcpToolReplay = {
+    confirmationId: 'confirmation-1',
+    confirmationToken: 'token-1',
+    confirmationAgentRunId: 'run-origin-1',
+    toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+    argumentsJson: {
+      tool_slug: 'GOOGLEDOCS_CREATE_DOCUMENT',
+      arguments: {
+        title: '项目周报',
+      },
+    },
+  };
+
+  const lifecycleCalls: string[] = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const capturedBodies: any[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-mcp-confirmation-replay',
+      workspaceRoot: '/workspace/session-coordinator-mcp-confirmation-replay',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, _input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: '帮我创建一个 Google Docs 文档' },
+      { role: 'user', content: '[mcp_tool_confirmation:approve]' },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => {}),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(
+      async (
+        _runId: string,
+        _sessionId: string,
+        _userId: string,
+        eventType: string,
+        payload: Record<string, unknown>
+      ) => {
+        eventCalls.push({ eventType, payload });
+        return {
+          sequence: eventCalls.length,
+          payload,
+        };
+      }
+    ),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  global.fetch = mock.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+    capturedBodies.push(JSON.parse(String(init?.body || '{}')));
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: 'Google Docs 文档已创建完成。',
+              tool_calls: [
+                {
+                  id: 'call-complete-1',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '已创建 Google Docs 文档《项目周报》。',
+                      verification: ['已获得文档 ID doc-1'],
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName, args) => {
+    if (toolName === 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL') {
+      return {
+        type: 'result',
+        content: JSON.stringify({
+          providerId: 'provider-google-super',
+          toolName: 'COMPOSIO_MULTI_EXECUTE_TOOL',
+          result: {
+            documentId: 'doc-1',
+            title: (args as any)?.arguments?.title || '项目周报',
+          },
+        }),
+      };
+    }
+    if (toolName === 'complete_task') {
+      return {
+        type: 'complete',
+        summary: '已创建 Google Docs 文档《项目周报》。',
+        verification: ['已获得文档 ID doc-1'],
+      };
+    }
+    throw new Error(`unexpected tool: ${toolName}`);
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeMock.mock.callCount(), 2);
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+  assert.equal(
+    String((setupService.buildConversationMessages.mock.calls[0]?.arguments[3] as any)?.turnStatePrompt || '').includes(
+      'confirmationToken: token-1'
+    ),
+    false
+  );
+  assert.equal(
+    capturedBodies[0]?.messages?.some((item: Record<string, unknown>) => Array.isArray(item?.tool_calls)),
+    true
+  );
+  assert.equal(
+    capturedBodies[0]?.messages?.some(
+      (item: Record<string, unknown>) =>
+        String(item?.content || '').includes('GOOGLEDOCS_CREATE_DOCUMENT')
+    ),
+    true
+  );
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'tool_call_started' &&
+        entry.payload.toolName === 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL' &&
+        String(JSON.stringify(entry.payload.arguments || {})).includes('token-1')
+    ),
+    false
+  );
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'tool_call_completed' &&
+        entry.payload.toolName === 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL'
+    ),
+    true
+  );
+});
+
+test('execute does not continue normal planning when approved mcp replay fails on the first attempt', async () => {
+  const state = createState(
+    'run-coordinator-mcp-confirmation-replay-failed',
+    'session-coordinator-mcp-confirmation-replay-failed',
+    '[mcp_tool_confirmation:approve]',
+    'user_response'
+  );
+  state.input.confirmedMcpToolReplay = {
+    confirmationId: 'confirmation-replay-failed-1',
+    confirmationToken: 'token-replay-failed-1',
+    confirmationAgentRunId: 'run-origin-replay-failed-1',
+    toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+    argumentsJson: {
+      tools: [
+        {
+          tool_slug: 'GOOGLESUPER_SEND_EMAIL',
+          arguments: {
+            recipient_email: '3065025109@qq.com',
+            subject: '测试',
+            body: '当前时间：2026-05-05T03:29:34.273Z',
+          },
+        },
+      ],
+      thought: 'Sending email with current UTC time as requested',
+      session_id: 'rock',
+      current_step: 'SENDING_EMAIL',
+      sync_response_to_workbench: false,
+    },
+  };
+
+  const lifecycleCalls: string[] = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  let fetchCount = 0;
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-mcp-confirmation-replay-failed',
+      workspaceRoot: '/workspace/session-coordinator-mcp-confirmation-replay-failed',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, _input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: '帮我发送邮件' },
+      { role: 'user', content: '[mcp_tool_confirmation:approve]' },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => {}),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(
+      async (
+        _runId: string,
+        _sessionId: string,
+        _userId: string,
+        eventType: string,
+        payload: Record<string, unknown>
+      ) => {
+        eventCalls.push({ eventType, payload });
+        return {
+          sequence: eventCalls.length,
+          payload,
+        };
+      }
+    ),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '我先加载 Google guide 再继续发送。',
+              tool_calls: [
+                {
+                  id: 'call-load-guide-after-replay-failure',
+                  type: 'function',
+                  function: {
+                    name: 'load_connector_guide',
+                    arguments: JSON.stringify({
+                      connectorKey: 'google_super',
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL') {
+      throw new Error(
+        [
+          'connector_guide_blocked:google_super',
+          'Call load_connector_guide with connectorKey=google_super before using Multi Execute Composio Tools.',
+        ].join('\n')
+      );
+    }
+    if (toolName === 'load_connector_guide') {
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({
+          connectorKey: 'google_super',
+          revisionId: 'rev-google-1',
+        }),
+      };
+    }
+    throw new Error(`unexpected tool: ${toolName}`);
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeMock.mock.callCount(), 1);
+  assert.equal(fetchCount, 0);
+  assert.deepEqual(lifecycleCalls, ['running', 'failed']);
+  assert.equal(state.status, 'failed');
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'tool_call_failed' &&
+        entry.payload.toolCallId === 'confirmed:confirmation-replay-failed-1'
+    ),
+    true
+  );
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'tool_call_started' &&
+        entry.payload.toolName === 'load_connector_guide'
+    ),
+    false
   );
 });
 

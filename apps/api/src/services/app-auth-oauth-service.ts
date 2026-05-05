@@ -84,6 +84,7 @@ export class AppAuthOauthService {
 
     const email = normalizeEmail(profile.email) || buildFallbackEmail(provider, providerSubject);
     const displayName = asText(profile.displayName) || email.split('@')[0] || provider;
+    const bootstrapSource = provider === 'google' ? 'oauth_google_register' : 'oauth_github_register';
     const existingByEmail = await appUserDAO.getByEmail(email);
     if (existingByEmail) {
       await appUserDAO.upsertOauthAccount({
@@ -123,7 +124,7 @@ export class AppAuthOauthService {
       }, trx);
       await appUserBootstrapService.bootstrapNewAppUser(
         String(created.id),
-        provider === 'google' ? 'oauth_google_register' : 'oauth_github_register',
+        bootstrapSource,
         trx
       );
       return String(created.id);

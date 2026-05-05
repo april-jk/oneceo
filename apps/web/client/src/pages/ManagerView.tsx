@@ -34,6 +34,7 @@ import {
   summarizeProjectInstruction,
   type TaskCreationSessionSummary,
 } from "@/lib/task-creation-client";
+import { isDevRuntime } from "@/lib/runtime-env";
 
 type ProjectSessionItem = {
   sessionId: string;
@@ -43,6 +44,7 @@ type ProjectSessionItem = {
 };
 
 export default function ManagerView() {
+  const showSelfOrganizedProjects = isDevRuntime();
   const [, setLocation] = useLocation();
   const { t } = useTranslation();
   const { user } = useAuth();
@@ -423,41 +425,42 @@ export default function ManagerView() {
           )}
         </section>
 
-        <section className="space-y-4">
-          <button
-            type="button"
-            className="flex w-full items-center justify-between rounded-2xl border border-border/70 bg-card px-4 py-3 text-left transition-colors hover:bg-accent/30"
-            onClick={() => setSelfOrganizedExpanded((prev) => !prev)}
-          >
-            <div className="flex items-center gap-3">
-              <FolderOpen className="h-5 w-5 text-muted-foreground" />
-              <div>
-                <h2 className="text-base font-semibold text-foreground">
-                  {t("sidebar.selfOrganizedProjects")}
-                </h2>
-                <p className="text-sm text-muted-foreground">
-                  {SELF_ORGANIZED_PROJECTS.length}
-                </p>
+        {showSelfOrganizedProjects ? (
+          <section className="space-y-4">
+            <button
+              type="button"
+              className="flex w-full items-center justify-between rounded-2xl border border-border/70 bg-card px-4 py-3 text-left transition-colors hover:bg-accent/30"
+              onClick={() => setSelfOrganizedExpanded((prev) => !prev)}
+            >
+              <div className="flex items-center gap-3">
+                <FolderOpen className="h-5 w-5 text-muted-foreground" />
+                <div>
+                  <h2 className="text-base font-semibold text-foreground">
+                    {t("sidebar.selfOrganizedProjects")}
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    {SELF_ORGANIZED_PROJECTS.length}
+                  </p>
+                </div>
               </div>
-            </div>
-            {selfOrganizedExpanded ? (
-              <ChevronDown className="h-4 w-4 text-muted-foreground" />
-            ) : (
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-            )}
-          </button>
+              {selfOrganizedExpanded ? (
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              )}
+            </button>
 
-          <AnimatePresence initial={false}>
-            {selfOrganizedExpanded ? (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: "auto", opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.2 }}
-                className="space-y-4 overflow-hidden"
-              >
-                {SELF_ORGANIZED_PROJECTS.map((project) => (
-                  <Card key={project.id} className="p-6">
+            <AnimatePresence initial={false}>
+              {selfOrganizedExpanded ? (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="space-y-4 overflow-hidden"
+                >
+                  {SELF_ORGANIZED_PROJECTS.map((project) => (
+                    <Card key={project.id} className="p-6">
                     <div className="mb-4 flex items-start justify-between">
                       <div className="flex-1">
                         <div className="mb-2 flex items-center gap-3">
@@ -627,12 +630,13 @@ export default function ManagerView() {
                         </motion.div>
                       ) : null}
                     </AnimatePresence>
-                  </Card>
-                ))}
-              </motion.div>
-            ) : null}
-          </AnimatePresence>
-        </section>
+                    </Card>
+                  ))}
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+          </section>
+        ) : null}
       </div>
     </WorkspaceLayout>
   );

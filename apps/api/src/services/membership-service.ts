@@ -15,6 +15,9 @@ import {
   userCredits,
 } from '../db/schema';
 
+type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+export type MembershipDbExecutor = typeof db | DbTransaction;
+
 function generateMembershipCode(name: string) {
   const normalized = String(name || '')
     .trim()
@@ -41,6 +44,124 @@ export class MembershipService {
       throw new Error(`${fieldName}无效`);
     }
     return num;
+  }
+
+  private async assignUserMembershipWithExecutor(
+    executor: MembershipDbExecutor,
+    input: {
+      userId: string;
+      membershipPlanId: string;
+      expiresAt?: Date | null;
+      sourceType?: string;
+      sourceId?: string | null;
+      assignedReason?: string;
+      grantCredits?: number;
+    },
+    actorId?: string | null
+  ) {
+    if (!input.userId) throw new Error('用户ID不能为空');
+    if (!input.membershipPlanId) throw new Error('会员类型不能为空');
+
+    const [plan] = await executor.select().from(membershipPlans).where(eq(membershipPlans.id, input.membershipPlanId)).limit(1);
+    if (!plan) {
+      throw new Error('会员类型不存在');
+    }
+    if (plan.status !== 'active') {
+      throw new Error('会员类型未启用');
+    }
+
+    await executor
+      .update(userMemberships)
+      .set({
+        status: 'expired',
+        updatedAt: new Date(),
+      })
+      .where(and(eq(userMemberships.userId, input.userId), eq(userMemberships.status, 'active')));
+
+    const [membership] = await executor.insert(userMemberships).values({
+      userId: input.userId,
+      membershipPlanId: input.membershipPlanId,
+      status: 'active',
+      startedAt: new Date(),
+      expiresAt: input.expiresAt || null,
+      sourceType: input.sourceType || 'manual',
+      sourceId: input.sourceId || null,
+      assignedBy: actorId || null,
+      assignedReason: input.assignedReason || '',
+    } satisfies NewUserMembership).returning();
+
+    const shouldGrantCredits = Number.isFinite(input.grantCredits ?? plan.defaultCredits) && (input.grantCredits ?? plan.defaultCredits) > 0;
+    let grantRecord = null;
+    let transactionId: string | null = null;
+
+    if (shouldGrantCredits) {
+      const amount = Math.max(0, Math.floor(input.grantCredits ?? plan.defaultCredits));
+      const creditUpdate = await executor
+        .update(userCredits)
+        .set({
+          balance: sql`balance + ${amount}`,
+          totalEarned: sql`total_earned + ${amount}`,
+          updatedAt: new Date(),
+        })
+        .where(eq(userCredits.userId, input.userId))
+        .returning();
+
+      if (creditUpdate.length === 0) {
+        await executor.insert(userCredits).values({
+          userId: input.userId,
+          balance: amount,
+          totalEarned: amount,
+          totalConsumed: 0,
+          lastRechargeAt: new Date(),
+        }).returning();
+      }
+
+      const [transaction] = await executor.insert(creditTransactions).values({
+        userId: input.userId,
+        type: 'adjust',
+        amount,
+        balanceAfter: (creditUpdate[0]?.balance ?? amount),
+        sourceId: membership.id,
+        sourceType: 'membership',
+        description: input.assignedReason || `会员 ${plan.name} 默认赠送积分`,
+        metadataJson: {
+          membershipPlanId: plan.id,
+          membershipCode: plan.code,
+          actorId,
+        },
+      }).returning();
+      transactionId = transaction.id;
+
+      const [grant] = await executor.insert(membershipGrants).values({
+        userId: input.userId,
+        membershipPlanId: plan.id,
+        grantCredits: amount,
+        grantReason: input.assignedReason || `会员 ${plan.name} 默认赠送积分`,
+        grantStatus: 'issued',
+        creditTransactionId: transaction.id,
+      } satisfies NewMembershipGrant).returning();
+      grantRecord = grant;
+    }
+
+    await executor.insert(membershipAuditLogs).values({
+      actorId: actorId || null,
+      action: 'user_membership.assign',
+      targetType: 'user_membership',
+      targetId: membership.id,
+      beforeJson: {},
+      afterJson: {
+        membership,
+        grantTransactionId: transactionId,
+        grantRecord,
+      },
+      reason: input.assignedReason || '',
+    } satisfies NewMembershipAuditLog);
+
+    return {
+      membership,
+      grantRecord,
+      grantTransactionId: transactionId,
+    };
   }
 
   async listPlans() {
@@ -238,112 +359,7 @@ export class MembershipService {
     },
     actorId?: string | null
   ) {
-    return db.transaction(async (trx) => {
-      if (!input.userId) throw new Error('用户ID不能为空');
-      if (!input.membershipPlanId) throw new Error('会员类型不能为空');
-
-      const [plan] = await trx.select().from(membershipPlans).where(eq(membershipPlans.id, input.membershipPlanId)).limit(1);
-      if (!plan) {
-        throw new Error('会员类型不存在');
-      }
-      if (plan.status !== 'active') {
-        throw new Error('会员类型未启用');
-      }
-
-      await trx
-        .update(userMemberships)
-        .set({
-          status: 'expired',
-          updatedAt: new Date(),
-        })
-        .where(and(eq(userMemberships.userId, input.userId), eq(userMemberships.status, 'active')));
-
-      const [membership] = await trx.insert(userMemberships).values({
-        userId: input.userId,
-        membershipPlanId: input.membershipPlanId,
-        status: 'active',
-        startedAt: new Date(),
-        expiresAt: input.expiresAt || null,
-        sourceType: input.sourceType || 'manual',
-        sourceId: input.sourceId || null,
-        assignedBy: actorId || null,
-        assignedReason: input.assignedReason || '',
-      } satisfies NewUserMembership).returning();
-
-      const shouldGrantCredits = Number.isFinite(input.grantCredits ?? plan.defaultCredits) && (input.grantCredits ?? plan.defaultCredits) > 0;
-      let grantRecord = null;
-      let transactionId: string | null = null;
-
-      if (shouldGrantCredits) {
-        const amount = Math.max(0, Math.floor(input.grantCredits ?? plan.defaultCredits));
-        const creditUpdate = await trx
-          .update(userCredits)
-          .set({
-            balance: sql`balance + ${amount}`,
-            totalEarned: sql`total_earned + ${amount}`,
-            updatedAt: new Date(),
-          })
-          .where(eq(userCredits.userId, input.userId))
-          .returning();
-
-        if (creditUpdate.length === 0) {
-          const [createdCredit] = await trx.insert(userCredits).values({
-            userId: input.userId,
-            balance: amount,
-            totalEarned: amount,
-            totalConsumed: 0,
-            lastRechargeAt: new Date(),
-          }).returning();
-          void createdCredit;
-        }
-
-        const [transaction] = await trx.insert(creditTransactions).values({
-          userId: input.userId,
-          type: 'adjust',
-          amount,
-          balanceAfter: (creditUpdate[0]?.balance ?? amount),
-          sourceId: membership.id,
-          sourceType: 'membership',
-          description: input.assignedReason || `会员 ${plan.name} 默认赠送积分`,
-          metadataJson: {
-            membershipPlanId: plan.id,
-            membershipCode: plan.code,
-            actorId,
-          },
-        }).returning();
-        transactionId = transaction.id;
-
-        const [grant] = await trx.insert(membershipGrants).values({
-          userId: input.userId,
-          membershipPlanId: plan.id,
-          grantCredits: amount,
-          grantReason: input.assignedReason || `会员 ${plan.name} 默认赠送积分`,
-          grantStatus: 'issued',
-          creditTransactionId: transaction.id,
-        } satisfies NewMembershipGrant).returning();
-        grantRecord = grant;
-      }
-
-      await trx.insert(membershipAuditLogs).values({
-        actorId: actorId || null,
-        action: 'user_membership.assign',
-        targetType: 'user_membership',
-        targetId: membership.id,
-        beforeJson: {},
-        afterJson: {
-          membership,
-          grantTransactionId: transactionId,
-          grantRecord,
-        },
-        reason: input.assignedReason || '',
-      } satisfies NewMembershipAuditLog);
-
-      return {
-        membership,
-        grantRecord,
-        grantTransactionId: transactionId,
-      };
-    });
+    return db.transaction(async (trx) => this.assignUserMembershipWithExecutor(trx, input, actorId));
   }
 
   async updateUserMembershipStatus(
@@ -422,8 +438,8 @@ export class MembershipService {
     });
   }
 
-  async assignDefaultMembershipForNewUser(userId: string) {
-    const [defaultPlan] = await db
+  async assignDefaultMembershipForNewUser(userId: string, executor: MembershipDbExecutor = db) {
+    const [defaultPlan] = await executor
       .select()
       .from(membershipPlans)
       .where(and(eq(membershipPlans.status, 'active'), eq(membershipPlans.isDefault, true)))
@@ -431,7 +447,8 @@ export class MembershipService {
       .limit(1);
     if (!defaultPlan) return null;
 
-    return this.assignUserMembership(
+    return this.assignUserMembershipWithExecutor(
+      executor,
       {
         userId,
         membershipPlanId: defaultPlan.id,

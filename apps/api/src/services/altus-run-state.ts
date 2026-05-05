@@ -29,6 +29,14 @@ export class AltusRunState {
       runtimeTokenSource?: string;
       userInput: string;
       messageType?: 'user_input' | 'user_response';
+      mcpToolConfirmationPrompt?: string | null;
+      confirmedMcpToolReplay?: {
+        confirmationId: string;
+        confirmationToken: string;
+        confirmationAgentRunId?: string | null;
+        toolName: string;
+        argumentsJson: Record<string, unknown>;
+      } | null;
       sessionTitle?: string | null;
       memoryContextPrompt?: string | null;
       userMemory: AltusUserMemory;

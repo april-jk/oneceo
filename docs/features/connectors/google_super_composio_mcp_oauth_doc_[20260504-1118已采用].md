@@ -99,9 +99,10 @@ Google Super tools 全量可见/可用，但不能把全部 tool schema 一次�
    - 预期影响
 3. 前端在会话内展示确认层，用户明确确认后，后端生成一次性 confirmation token。
 4. agent 或运行时带 confirmation token 重试同一个 tool call。
-5. 后端校验 token 只匹配同一 user、session、run、tool、参数摘要和有效期。
-6. 校验通过后只执行这一次 tool call。
-7. 执行完成或失败后 token 立即失效。
+5. managed 模式下，批准后优先由后端隐式恢复并重放原始待确认 tool call，用户时间线不额外展示注入提示。
+6. 后端校验 token 只匹配同一 user、session、run、tool、参数摘要和有效期。
+7. 校验通过后只执行这一次 tool call。
+8. 执行完成或失败后 token 立即失效。
 
 确认不是 OAuth 授权，不改变 Google scope，也不代表后续同类动作自动放行。
 
@@ -395,7 +396,12 @@ apps/api/src/services/mcp-tool-confirmation-service.ts
 2. 内容：tool、目标对象、主要参数、影响说明。
 3. 操作：确认执行、拒绝。
 4. 确认后调用后端 approve 接口。
-5. 拒绝后把 confirmation 标记为 rejected，agent 本次 tool call 不执行。
+5. 确认或拒绝都必须通过 managed input 提交结构化 `mcpToolConfirmation` metadata，不能只依赖自然语言提示。
+6. 后端要基于该 metadata 做恢复：
+   - 确认时优先隐藏重放同一个 Google Workspace tool call，并仅在内部补充 `confirmationToken` 与 `confirmationAgentRunId`
+   - 仅在无法隐藏重放的异常诊断场景下，才允许保留后端内部恢复提示；该提示不得落到用户可见时间线
+   - 拒绝时要求 AI 不得重试该高风险 tool call
+7. 拒绝后把 confirmation 标记为 rejected，agent 本次 tool call 不执行。
 
 UI 必须符合“任务塔台”原则：高密度、对象清晰、后果可复核，不使用泛化弹窗文案。
 

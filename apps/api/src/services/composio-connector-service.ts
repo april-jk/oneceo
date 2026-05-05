@@ -633,20 +633,12 @@ export class ComposioConnectorService {
       }
       const rawArguments = pickObject(params.arguments);
       const confirmationToken =
-        asText(params.confirmationToken) ||
-        asText(params.confirmation_token) ||
-        asText(rawArguments.confirmationToken) ||
-        asText(rawArguments.confirmation_token);
+        asText(params.confirmationToken) || asText(rawArguments.confirmationToken);
       const confirmationAgentRunId =
-        asText(params.confirmationAgentRunId) ||
-        asText(params.confirmation_agent_run_id) ||
-        asText(rawArguments.confirmationAgentRunId) ||
-        asText(rawArguments.confirmation_agent_run_id);
+        asText(params.confirmationAgentRunId) || asText(rawArguments.confirmationAgentRunId);
       const sanitizedArguments = { ...rawArguments };
       delete sanitizedArguments.confirmationToken;
-      delete sanitizedArguments.confirmation_token;
       delete sanitizedArguments.confirmationAgentRunId;
-      delete sanitizedArguments.confirmation_agent_run_id;
       const toolArguments =
         composioToolName === 'COMPOSIO_SEARCH_TOOLS'
           ? normalizeComposioSearchToolsArguments(sanitizedArguments, runtimeContext)
@@ -661,10 +653,13 @@ export class ComposioConnectorService {
           toolArguments
         ) === 'high'
       ) {
+        const scopedAgentRunId = confirmationToken
+          ? confirmationAgentRunId || null
+          : runtimeContext.agentRunId || null;
         const scope = {
           appUserId: runtimeContext.userId,
           taskSessionId: runtimeContext.taskSessionId,
-          agentRunId: confirmationAgentRunId || runtimeContext.agentRunId || null,
+          agentRunId: scopedAgentRunId,
           connectorKey: runtimeContext.connectorKey,
           toolName: requestedName,
           argumentsJson: toolArguments,
@@ -675,6 +670,7 @@ export class ComposioConnectorService {
         });
         if (!confirmed) {
           const pending = await mcpToolConfirmationService.createPendingConfirmation(scope);
+          const publicSummary = mcpToolConfirmationService.getPublicSummary(pending.summaryJson);
           return {
             content: [
               {
@@ -684,7 +680,7 @@ export class ComposioConnectorService {
                   connectorKey: runtimeContext.connectorKey,
                   toolName: requestedName,
                   confirmationId: pending.id,
-                  summary: pending.summaryJson,
+                  summary: publicSummary,
                 }),
               },
             ],
@@ -693,7 +689,7 @@ export class ComposioConnectorService {
               connectorKey: runtimeContext.connectorKey,
               toolName: requestedName,
               confirmationId: pending.id,
-              summary: pending.summaryJson,
+              summary: publicSummary,
             },
           };
         }

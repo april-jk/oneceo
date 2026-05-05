@@ -40,23 +40,6 @@ function subscribe(listener: () => void) {
   };
 }
 
-export function readSidebarExpandedState(
-  raw: string | null,
-  key: string,
-  fallback: string[],
-) {
-  if (!raw) return fallback;
-
-  const parsed = JSON.parse(raw) as Record<string, unknown>;
-  const candidate = parsed[key];
-  if (!Array.isArray(candidate)) return fallback;
-
-  const next = candidate.filter(
-    (value): value is string => typeof value === "string" && value.trim().length > 0,
-  );
-  return next.length > 0 ? next : fallback;
-}
-
 export function sortSharedManualProjects(
   projects: TaskCreationProjectSummary[],
 ) {

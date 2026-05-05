@@ -1,5 +1,4 @@
 import type { KvmOrchestratorConnector } from '../connectors/kvm-orchestrator-connector';
-import type { AuditService } from './audit-service';
 import type { DashboardOverview } from '../types';
 
 function buildDistribution(input: string[]): Array<{ label: string; value: number }> {
@@ -20,7 +19,7 @@ function average(values: number[]): number {
 }
 
 export class DashboardService {
-  constructor(private readonly connector: KvmOrchestratorConnector, private readonly auditService: AuditService) {}
+  constructor(private readonly connector: KvmOrchestratorConnector) {}
 
   async getOverview(): Promise<DashboardOverview> {
     const [healthResult, vmResult, sessionResult] = await Promise.allSettled([
@@ -34,8 +33,6 @@ export class DashboardService {
 
     const vms = vmResult.status === 'fulfilled' ? vmResult.value.vms : [];
     const sessions = sessionResult.status === 'fulfilled' ? sessionResult.value.sessions : [];
-
-    const auditLogs = await this.auditService.list(20);
 
     const vmSummary = {
       total: vms.length,
@@ -70,10 +67,6 @@ export class DashboardService {
 
     if (vmSummary.error > 0) {
       alerts.push(`发现 ${vmSummary.error} 台处于 error 状态的 VM，建议优先处理`);
-    }
-
-    if (auditLogs.some((item) => item.result === 'failed')) {
-      alerts.push('最近存在失败的电源操作，请检查审计日志');
     }
 
     return {

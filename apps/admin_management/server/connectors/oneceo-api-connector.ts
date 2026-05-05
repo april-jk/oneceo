@@ -1560,6 +1560,304 @@ export class OneceoApiConnector {
       }
     );
   }
+
+  getSessionApiTraces(sessionId: string, options?: {
+    type?: string;
+    toolName?: string;
+    model?: string;
+    limit?: number;
+    offset?: number;
+  }) {
+    const params = new URLSearchParams();
+    params.set('sessionId', sessionId);
+    if (options?.type) params.set('type', options.type);
+    if (options?.toolName) params.set('toolName', options.toolName);
+    if (options?.model) params.set('model', options.model);
+    if (options?.limit !== undefined) params.set('limit', String(options.limit));
+    if (options?.offset !== undefined) params.set('offset', String(options.offset));
+    return this.request<{
+      total: number;
+      limit: number;
+      offset: number;
+      traces: Array<{
+        id: string;
+        sessionId: string;
+        runId?: string | null;
+        traceType: string;
+        sequence: number;
+        model?: string | null;
+        provider?: string | null;
+        toolName?: string | null;
+        serviceName?: string | null;
+        endpoint?: string | null;
+        requestMethod?: string | null;
+        requestHeaders?: Record<string, unknown> | null;
+        requestBody?: Record<string, unknown> | null;
+        requestBodyText?: string | null;
+        responseStatus?: number | null;
+        responseHeaders?: Record<string, unknown> | null;
+        responseBody?: Record<string, unknown> | null;
+        responseBodyText?: string | null;
+        durationMs?: number | null;
+        startedAt?: string | null;
+        completedAt?: string | null;
+        promptTokens?: number;
+        completionTokens?: number;
+        cachedPromptTokens?: number;
+        cacheCreationTokens?: number;
+        totalTokens?: number;
+        errorMessage?: string | null;
+        metadataJson?: Record<string, unknown>;
+        createdAt: string;
+      }>;
+    }>(`/api/internal/traces?${params.toString()}`);
+  }
+
+  getApiTraceAggregate(options?: {
+    type?: string;
+    toolName?: string;
+    model?: string;
+    sessionId?: string;
+    from?: string;
+    to?: string;
+    groupBy?: string;
+    limit?: number;
+    offset?: number;
+  }) {
+    const params = new URLSearchParams();
+    if (options?.type) params.set('type', options.type);
+    if (options?.toolName) params.set('toolName', options.toolName);
+    if (options?.model) params.set('model', options.model);
+    if (options?.sessionId) params.set('sessionId', options.sessionId);
+    if (options?.from) params.set('from', options.from);
+    if (options?.to) params.set('to', options.to);
+    if (options?.groupBy) params.set('groupBy', options.groupBy);
+    if (options?.limit !== undefined) params.set('limit', String(options.limit));
+    if (options?.offset !== undefined) params.set('offset', String(options.offset));
+    return this.request<Array<{
+      dimension: string | null;
+      count: number;
+      avgDurationMs: number;
+      totalTokens: number;
+      errorCount: number;
+    }>>(`/api/internal/traces/aggregate?${params.toString()}`);
+  }
+
+  getApiTraceStats(options?: {
+    type?: string;
+    from?: string;
+    to?: string;
+  }) {
+    const params = new URLSearchParams();
+    if (options?.type) params.set('type', options.type);
+    if (options?.from) params.set('from', options.from);
+    if (options?.to) params.set('to', options.to);
+    return this.request<{
+      totalCalls: number;
+      avgDurationMs: number;
+      errorCount: number;
+      totalTokens: number;
+      byType: Array<{ type: string; count: number }>;
+      byTool: Array<{ toolName: string | null; count: number; avgDurationMs: number }>;
+      byModel: Array<{ model: string | null; count: number; totalTokens: number }>;
+    }>(`/api/internal/traces/stats?${params.toString()}`);
+  }
+
+  getApiTraceTrend(options?: {
+    type?: string;
+    from?: string;
+    to?: string;
+    interval?: string;
+  }) {
+    const params = new URLSearchParams();
+    if (options?.type) params.set('type', options.type);
+    if (options?.from) params.set('from', options.from);
+    if (options?.to) params.set('to', options.to);
+    if (options?.interval) params.set('interval', options.interval);
+    return this.request<Array<{
+      bucket: string;
+      count: number;
+      avgDurationMs: number;
+      totalTokens: number;
+      errorCount: number;
+    }>>(`/api/internal/traces/trend?${params.toString()}`);
+  }
+
+  listRequestLogs(options?: {
+    userId?: string;
+    method?: string;
+    path?: string;
+    status?: number;
+    from?: string;
+    to?: string;
+    limit?: number;
+    offset?: number;
+  }) {
+    const params = new URLSearchParams();
+    if (options?.userId) params.set('userId', options.userId);
+    if (options?.method) params.set('method', options.method);
+    if (options?.path) params.set('path', options.path);
+    if (options?.status !== undefined) params.set('status', String(options.status));
+    if (options?.from) params.set('from', options.from);
+    if (options?.to) params.set('to', options.to);
+    if (options?.limit !== undefined) params.set('limit', String(options.limit));
+    if (options?.offset !== undefined) params.set('offset', String(options.offset));
+    return this.request<{
+      total: number;
+      limit: number;
+      offset: number;
+      entries: Array<{
+        id: string;
+        appUserId: string;
+        method: string;
+        path: string;
+        queryString: string | null;
+        responseStatus: number | null;
+        durationMs: number | null;
+        taskSessionId: string | null;
+        createdAt: string;
+      }>;
+    }>(`/api/internal/request-logs?${params.toString()}`);
+  }
+
+  getRequestLogDetail(logId: string) {
+    return this.request<{
+      id: string;
+      appUserId: string;
+      method: string;
+      path: string;
+      queryString: string | null;
+      requestHeaders: Record<string, unknown>;
+      requestBodySummary: string | null;
+      responseStatus: number | null;
+      responseBodySummary: string | null;
+      durationMs: number | null;
+      ipAddress: string | null;
+      userAgent: string | null;
+      taskSessionId: string | null;
+      metadataJson: Record<string, unknown>;
+      createdAt: string;
+    }>(`/api/internal/request-logs/${encodeURIComponent(logId)}`);
+  }
+
+  listUserSessions(userId: string, query?: { page?: number; limit?: number }) {
+    const params = new URLSearchParams();
+    if (query?.page !== undefined) params.set('page', String(query.page));
+    if (query?.limit !== undefined) params.set('limit', String(query.limit));
+    return this.request<{
+      items: Array<{
+        id: string;
+        title: string;
+        status: string;
+        createdAt: string;
+        updatedAt: string;
+        completedAt: string | null;
+        traceSummary: {
+          totalTraces: number;
+          toolCalls: number;
+          llmRequests: number;
+          errors: number;
+        };
+      }>;
+      total: number;
+      page: number;
+      limit: number;
+    }>(`/api/internal/admin/app-users/${encodeURIComponent(userId)}/sessions?${params.toString()}`);
+  }
+
+  getSessionMessages(sessionId: string) {
+    return this.request<{
+      session: {
+        id: string;
+        status: string;
+        metadataJson: Record<string, unknown>;
+        createdAt: string;
+        updatedAt: string;
+      };
+      messages: Array<{
+        id: string;
+        role: string;
+        content: string;
+        messageType: string | null;
+        timelineCursor: number | null;
+        createdAt: string;
+        metadata: Record<string, unknown> | null;
+      }>;
+    }>(`/api/internal/admin/app-users/any/sessions/${encodeURIComponent(sessionId)}/messages`);
+  }
+
+  listUserToolCalls(userId: string, query?: { page?: number; limit?: number }) {
+    const params = new URLSearchParams();
+    if (query?.page !== undefined) params.set('page', String(query.page));
+    if (query?.limit !== undefined) params.set('limit', String(query.limit));
+    return this.request<{
+      items: Array<{
+        id: string;
+        sessionId: string;
+        runId: string | null;
+        traceType: string;
+        sequence: number;
+        model: string | null;
+        provider: string | null;
+        toolName: string | null;
+        serviceName: string | null;
+        endpoint: string | null;
+        requestMethod: string | null;
+        responseStatus: number | null;
+        durationMs: number | null;
+        promptTokens: number;
+        completionTokens: number;
+        totalTokens: number;
+        errorMessage: string | null;
+        metadataJson: Record<string, unknown>;
+        createdAt: string;
+      }>;
+      total: number;
+      page: number;
+      limit: number;
+    }>(`/api/internal/admin/app-users/${encodeURIComponent(userId)}/tool-calls?${params.toString()}`);
+  }
+
+  listUserTransactions(userId: string, query?: { page?: number; limit?: number; type?: string }) {
+    const params = new URLSearchParams();
+    if (query?.page !== undefined) params.set('page', String(query.page));
+    if (query?.limit !== undefined) params.set('limit', String(query.limit));
+    if (query?.type) params.set('type', query.type);
+    return this.request<{
+      items: Array<{
+        id: string;
+        userId: string;
+        type: string;
+        amount: number;
+        balanceBefore: number;
+        balanceAfter: number;
+        description: string | null;
+        metadata: Record<string, unknown> | null;
+        createdAt: string;
+      }>;
+      total: number;
+      page: number;
+      limit: number;
+    }>(`/api/internal/admin/app-users/${encodeURIComponent(userId)}/transactions?${params.toString()}`);
+  }
+
+  listUserTokenUsage(userId: string, query?: { page?: number; limit?: number }) {
+    const params = new URLSearchParams();
+    if (query?.page !== undefined) params.set('page', String(query.page));
+    if (query?.limit !== undefined) params.set('limit', String(query.limit));
+    return this.request<{
+      items: Array<{
+        id: string;
+        sessionId: string;
+        sessionTitle: string;
+        totalCredits: number;
+        callCount: number;
+        startedAt: string;
+        lastUsedAt: string;
+      }>;
+      total: number;
+    }>(`/api/internal/admin/app-users/${encodeURIComponent(userId)}/token-usage?${params.toString()}`);
+  }
 }
 
 export const oneceoApiConnector = new OneceoApiConnector();

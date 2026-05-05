@@ -166,3 +166,22 @@
 3. 首轮消息顺序与回归测试
    - 现状：前端已能展示 `clarification_request`、`question` 与 `todowrite`，但 Altus managed 还未验证“先澄清/先 Todo，再执行”的稳定顺序。
    - 后续需要补齐：增加 managed prompt / run coordinator / 前端回放顺序的回归测试，并避免 `ask_user` tool 卡与 `clarification_request` 重复出现。
+
+## 2026-05-04
+
+### 文档
+
+- 管理文档：
+  - [admin_api_trace_and_aggregation_design_[20260504-已采用].md](docs/features/admin_api_trace_and_aggregation_design_[20260504-已采用].md)
+
+### TODO 列表
+
+1. 会话全链路 API 追踪与聚合查询（P0-P5）
+   - 状态：已完成（2026-05-04）
+   - 管理文档：`docs/features/admin_api_trace_and_aggregation_design_[20260504-已采用].md`
+   - Phase 1：数据层 —— 新增 `session_api_traces` 表、DAO、Schema ✅
+   - Phase 2：采集层 —— LLM Proxy 插桩、工具执行器增强、服务调用包装 ✅
+   - Phase 3：API 层 —— 主 API 和管理后台新增追踪查询路由 ✅
+   - Phase 4：前端单对话增强 —— 对话详情新增 `api-traces` Tab ✅
+   - Phase 5：前端聚合面板 —— 新增独立追踪查询面板 ✅
+   - Phase 6：验证与优化 —— 类型检查通过 ✅

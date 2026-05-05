@@ -8,8 +8,7 @@ function createService(oneceoApiOverrides: Record<string, unknown> = {}) {
     ...oneceoApiOverrides,
   } as any;
   const kvmConnector = {} as any;
-  const auditService = {} as any;
-  return new ConversationManagementService(oneceoApi, kvmConnector, auditService);
+  return new ConversationManagementService(oneceoApi, kvmConnector);
 }
 
 test('listSessions returns normalized items from oneceo api', async () => {

@@ -214,6 +214,7 @@ export default function Sidebar({
   onToggleCollapse,
   selectedProject,
 }: SidebarProps) {
+  const showSelfOrganizedProjects = isDevRuntime();
   const SIDEBAR_EXPAND_STATE_STORAGE_PREFIX = "oneceo_sidebar_expand_state_v1";
   type ProjectManager = {
     id: string;
@@ -910,14 +911,14 @@ export default function Sidebar({
     { icon: Search, label: t("sidebar.search"), href: "/search" },
     { icon: Library, label: t("sidebar.library"), href: "/library" },
     { icon: FolderOpen, label: t("sidebar.projects"), href: "/projects" },
-    ...(isDevRuntime()
+    ...(showSelfOrganizedProjects
       ? [{ icon: Network, label: t("sidebar.ceoView"), href: "/ceo-view" }]
       : []),
   ];
 
   const selfOrganizedProjectsData = React.useMemo<SidebarProjectNode[]>(
     () =>
-      isDevRuntime()
+      showSelfOrganizedProjects
         ? SELF_ORGANIZED_PROJECTS.map((project) => ({
             id: project.id,
             name: project.name,
@@ -931,7 +932,7 @@ export default function Sidebar({
             kind: "self-organized" as const,
           }))
         : [],
-    [],
+    [showSelfOrganizedProjects],
   );
   const manualProjectNodes = React.useMemo<SidebarProjectNode[]>(
     () =>
@@ -1784,7 +1785,7 @@ export default function Sidebar({
                   </Button>
                 </div>
 
-                {isDevRuntime() ? (
+                {showSelfOrganizedProjects ? (
                   <div className="space-y-1">
                     <div className="flex items-center gap-1">
                       <Button

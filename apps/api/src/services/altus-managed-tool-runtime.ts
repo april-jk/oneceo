@@ -1124,6 +1124,23 @@ export class AltusManagedToolRuntime {
           mcpTool.connectorKey
         );
         this.ensureNotAborted(signal);
+        const confirmationToken = asText(rawArgs.confirmationToken);
+        const confirmationAgentRunId = asText(rawArgs.confirmationAgentRunId);
+        if (
+          activeGuide &&
+          !this.loadedConnectorGuides.has(mcpTool.connectorKey) &&
+          confirmationToken
+        ) {
+          this.loadedConnectorGuides.add(mcpTool.connectorKey);
+          writeConnectorDebugLog('[CONNECTOR_GUIDE_RUNTIME_REPLAY_PRELOADED]', {
+            taskSessionId: this.input.sessionId,
+            connectorKey: mcpTool.connectorKey,
+            toolName: mcpTool.toolName,
+            managedToolName: toolName,
+            revisionId: activeGuide.revisionId,
+            replayMode: confirmationAgentRunId ? 'token_with_origin_run' : 'token_without_origin_run',
+          });
+        }
         if (activeGuide && !this.loadedConnectorGuides.has(mcpTool.connectorKey)) {
           writeConnectorDebugLog('[CONNECTOR_GUIDE_RUNTIME_BLOCKED]', {
             taskSessionId: this.input.sessionId,

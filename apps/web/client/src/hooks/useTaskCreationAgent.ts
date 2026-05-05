@@ -4697,6 +4697,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       targetSessionId?: string,
       options?: {
         preservePendingRecovery?: boolean;
+        expectedNewRunAfterId?: string | null;
       }
     ) => {
       const sid = (targetSessionId || sessionId || '').trim();
@@ -4736,6 +4737,28 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
 
         const nextRunId = (latest.id || latest.runId || '').trim();
         const nextStatus = normalizeManagedRunStatus(latest.status);
+        const expectedNewRunAfterId = asText(options?.expectedNewRunAfterId);
+        if (
+          options?.preservePendingRecovery &&
+          expectedNewRunAfterId &&
+          nextRunId === expectedNewRunAfterId &&
+          nextStatus === 'waiting_user'
+        ) {
+          writeManagedRunRecoveryState({
+            sessionId: sid,
+            runId: null,
+            status: 'starting',
+            processing: true,
+          });
+          setManagedRunId(null);
+          managedRunIdRef.current = null;
+          setManagedRunStatus('starting');
+          managedRunStatusRef.current = 'starting';
+          setManagedRunStreaming(false);
+          setManagedRunError(null);
+          setIsProcessing(true);
+          return;
+        }
         setManagedRunId(nextRunId);
         managedRunIdRef.current = nextRunId;
         setManagedRunStatus(nextStatus);
@@ -4776,6 +4799,32 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       }
     },
     [loadHistory, sessionId]
+  );
+
+  const awaitManagedRunRecovery = useCallback(
+    async (targetSessionId?: string | null) => {
+      const sid = (targetSessionId || sessionId || '').trim();
+      if (!sid || !isManagedAltusMode()) return;
+      const previousRunId = managedRunIdRef.current;
+      writeManagedRunRecoveryState({
+        sessionId: sid,
+        runId: null,
+        status: 'starting',
+        processing: true,
+      });
+      setManagedRunId(null);
+      managedRunIdRef.current = null;
+      setManagedRunStatus('starting');
+      managedRunStatusRef.current = 'starting';
+      setManagedRunStreaming(false);
+      setManagedRunError(null);
+      setIsProcessing(true);
+      await refreshManagedRun(sid, {
+        preservePendingRecovery: true,
+        expectedNewRunAfterId: previousRunId,
+      });
+    },
+    [refreshManagedRun, sessionId]
   );
 
   useEffect(() => {
@@ -5210,7 +5259,10 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
 
   const sendChatInput = useCallback(async (input: string, options?: SendInputOptions) => {
     const text = input.trim();
-    if (!text) return;
+    const metadataOnly = Boolean(
+      options?.metadata && Object.keys(options.metadata).length > 0 && !text
+    );
+    if (!text && !metadataOnly) return;
     const optimisticAttachments = Array.isArray(options?.files) ? buildOptimisticAttachments(options.files) : [];
 
     let activeSessionId = resolveChatInputSessionId({
@@ -5230,7 +5282,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       let shouldBindCreatedSession = false;
       const initialProjectId = !sessionId ? initialProjectIdForNewSession || undefined : undefined;
       if (!activeSessionId) {
-        const created = await createTaskCreationDraftSession(text);
+        const created = await createTaskCreationDraftSession(text || "MCP 高风险操作确认");
         const createdSessionId = (created?.id || '').trim();
         if (!createdSessionId) {
           throw new Error('managed draft session id missing');
@@ -5260,7 +5312,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       };
       const optimisticUserMessage: AgentMessage = {
         messageKey,
-        type: 'user_input',
+        type: metadataOnly ? 'user_response' : 'user_input',
         content: text,
         metadata: messageMetadata,
         sessionId: activeSessionId || undefined,
@@ -5317,7 +5369,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
               prev,
               {
                 messageKey,
-                type: 'user_input',
+                type: metadataOnly ? 'user_response' : 'user_input',
                 content: text,
                 metadata: {
                   ...messageMetadata,
@@ -5644,6 +5696,15 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     return nextSessionId;
   }, [bindSessionId, sessionId]);
 
+  const appendLocalMessage = useCallback(
+    (message: AgentMessage, options?: { sessionId?: string | null }) => {
+      const targetSessionId = asText(options?.sessionId) || sessionId || null;
+      setMessages((prev) => mergeRealtimeMessage(prev, message, WELCOME_MESSAGE));
+      trackPendingLocalMessage(targetSessionId, message);
+    },
+    [sessionId, trackPendingLocalMessage]
+  );
+
   return {
     isConnected,
     isProcessing,
@@ -5684,6 +5745,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     ensureSession,
     loadOlderHistory,
     answerQuestion,
+    appendLocalMessage,
+    awaitManagedRunRecovery,
     clearMessages,
     connect,
     disconnect,

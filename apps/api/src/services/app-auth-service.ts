@@ -6,6 +6,7 @@ import { altusMemoryContextService } from './altus-memory-context-service';
 import { appAuthEmailService } from './app-auth-email-service';
 import { managedImageObjectService } from './managed-image-object-service';
 import { appUserBootstrapService } from './app-user-bootstrap-service';
+import type { MembershipDbExecutor } from './membership-service';
 import { hashPassword, verifyPassword } from '../utils/auth-password';
 import { createSessionToken, hashSessionToken, resolveSessionExpiry } from '../utils/auth-session';
 import { runtimeEnvConfig } from '../config/runtime-env';
@@ -137,6 +138,31 @@ async function toPublicUser(user: Awaited<ReturnType<typeof appUserDAO.getById>>
 }
 
 export class AppAuthService {
+  private async createUserWithBootstrapInTransaction(input: {
+    email: string;
+    password: string;
+    displayName: string;
+  }, executor?: MembershipDbExecutor) {
+    const createWithin = async (currentExecutor: MembershipDbExecutor) => {
+      const created = await appUserDAO.create({
+        email: input.email,
+        passwordHash: await hashPassword(input.password),
+        displayName: input.displayName,
+        profileJson: {
+          personalization: normalizeAppUserPersonalization(undefined),
+        },
+      }, currentExecutor);
+      await appUserBootstrapService.bootstrapNewAppUser(String(created.id), 'email_register', currentExecutor);
+      return String(created.id);
+    };
+
+    if (executor) {
+      return createWithin(executor);
+    }
+
+    return db.transaction(async (trx) => createWithin(trx));
+  }
+
   async sendRegisterVerificationCode(input: { email: string }) {
     const email = asText(input.email).toLowerCase();
     if (!isValidEmail(email)) {
@@ -241,16 +267,11 @@ export class AppAuthService {
         if (!consumed) {
           throw new Error('验证码已失效，请重新获取');
         }
-        const created = await appUserDAO.create({
+        return this.createUserWithBootstrapInTransaction({
           email,
-          passwordHash: await hashPassword(password),
+          password,
           displayName,
-          profileJson: {
-            personalization: normalizeAppUserPersonalization(undefined),
-          },
         }, trx);
-        await appUserBootstrapService.bootstrapNewAppUser(String(created.id), 'email_register', trx);
-        return String(created.id);
       });
       return this.createSessionForUser(createdUserId, req);
     } else {
@@ -258,17 +279,10 @@ export class AppAuthService {
         runtimeEnv: runtimeEnvConfig.runtimeEnv,
       });
     }
-    const createdUserId = await db.transaction(async (trx) => {
-      const created = await appUserDAO.create({
-        email,
-        passwordHash: await hashPassword(password),
-        displayName,
-        profileJson: {
-          personalization: normalizeAppUserPersonalization(undefined),
-        },
-      }, trx);
-      await appUserBootstrapService.bootstrapNewAppUser(String(created.id), 'email_register', trx);
-      return String(created.id);
+    const createdUserId = await this.createUserWithBootstrapInTransaction({
+      email,
+      password,
+      displayName,
     });
     return this.createSessionForUser(createdUserId, req);
   }

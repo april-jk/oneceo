@@ -219,33 +219,6 @@ export interface HostListResponse {
   hosts: HostRuntime[];
 }
 
-export interface AuditLogEntry {
-  id: string;
-  timestamp: string;
-  operator: string;
-  action: string;
-  targetVmId: string;
-  sessionId?: string;
-  result: 'success' | 'failed';
-  detail?: string;
-}
-
-export interface AuditResponse {
-  total: number;
-  filteredTotal: number;
-  limit: number;
-  offset: number;
-  entries: AuditLogEntry[];
-  availableOperators?: string[];
-  availableActions?: string[];
-  availableTargets?: string[];
-}
-
-export interface AuditDetailResponse {
-  entry: AuditLogEntry;
-  relatedEntries: AuditLogEntry[];
-}
-
 export interface MembershipPlan {
   id: string;
   code: string;
@@ -339,7 +312,6 @@ export interface MembershipDailyRestoreHistoryItem {
     name: string;
   };
 }
-
 export interface AgentStageDistributionItem {
   stageKey: string;
   label: string;
@@ -438,7 +410,7 @@ export interface ConversationSessionDetailResponse {
       vmMetrics?: Record<string, unknown> | null;
       vmLogs?: Record<string, unknown> | null;
       quota?: Record<string, unknown> | null;
-      auditEntries?: AuditLogEntry[];
+
       errors?: string[];
     };
     osac: {
@@ -1453,4 +1425,167 @@ export interface OsacReleaseDetailResponse {
   release: OsacRelease;
   currentPublishedReleaseId: string | null;
   currentPublishedVersion: string | null;
+}
+
+export interface ApiTraceItem {
+  id: string;
+  sessionId: string;
+  runId?: string | null;
+  traceType: 'llm_request' | 'tool_call' | 'service_api' | 'connector_api';
+  sequence: number;
+  model?: string | null;
+  provider?: string | null;
+  toolName?: string | null;
+  serviceName?: string | null;
+  endpoint?: string | null;
+  requestMethod?: string | null;
+  requestHeaders?: Record<string, unknown> | null;
+  requestBody?: Record<string, unknown> | null;
+  requestBodyText?: string | null;
+  responseStatus?: number | null;
+  responseHeaders?: Record<string, unknown> | null;
+  responseBody?: Record<string, unknown> | null;
+  responseBodyText?: string | null;
+  durationMs?: number | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  promptTokens?: number;
+  completionTokens?: number;
+  cachedPromptTokens?: number;
+  cacheCreationTokens?: number;
+  totalTokens?: number;
+  errorMessage?: string | null;
+  metadataJson?: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface ApiRequestLogEntry {
+  id: string;
+  appUserId: string;
+  method: string;
+  path: string;
+  queryString: string | null;
+  requestHeaders: Record<string, unknown>;
+  requestBodySummary: string | null;
+  responseStatus: number | null;
+  responseBodySummary: string | null;
+  durationMs: number | null;
+  ipAddress: string | null;
+  userAgent: string | null;
+  taskSessionId: string | null;
+  metadataJson: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface ApiRequestLogListResponse {
+  total: number;
+  limit: number;
+  offset: number;
+  entries: ApiRequestLogEntry[];
+}
+
+export interface AuditUserSession {
+  id: string;
+  title: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  traceSummary: {
+    totalTraces: number;
+    toolCalls: number;
+    llmRequests: number;
+    errors: number;
+  };
+}
+
+export interface AuditUserSessionListResponse {
+  items: AuditUserSession[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export interface AuditSessionMessage {
+  id: string;
+  role: string;
+  content: string;
+  messageType: string | null;
+  timelineCursor: number | null;
+  createdAt: string;
+  metadata: Record<string, unknown> | null;
+}
+
+export interface AuditSessionMessagesResponse {
+  session: {
+    id: string;
+    status: string;
+    metadataJson: Record<string, unknown>;
+    createdAt: string;
+    updatedAt: string;
+  };
+  messages: AuditSessionMessage[];
+}
+
+export interface AuditToolCall {
+  id: string;
+  sessionId: string;
+  runId: string | null;
+  traceType: string;
+  sequence: number;
+  model: string | null;
+  provider: string | null;
+  toolName: string | null;
+  serviceName: string | null;
+  endpoint: string | null;
+  requestMethod: string | null;
+  responseStatus: number | null;
+  durationMs: number | null;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  errorMessage: string | null;
+  metadataJson: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface AuditToolCallListResponse {
+  items: AuditToolCall[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export interface AuditTransaction {
+  id: string;
+  userId: string;
+  type: string;
+  amount: number;
+  balanceBefore: number;
+  balanceAfter: number;
+  description: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface AuditTransactionListResponse {
+  items: AuditTransaction[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export interface AuditTokenUsageItem {
+  id: string;
+  sessionId: string;
+  sessionTitle: string;
+  totalCredits: number;
+  callCount: number;
+  startedAt: string;
+  lastUsedAt: string;
+}
+
+export interface AuditTokenUsageResponse {
+  items: AuditTokenUsageItem[];
+  total: number;
 }

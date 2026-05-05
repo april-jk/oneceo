@@ -23,3 +23,4 @@ export * from './connector-guide.dao';
 export * from './platform-runtime-artifact.dao';
 export * from './project-storage-resource.dao';
 export * from './membership.dao';
+export * from './session-api-trace.dao';

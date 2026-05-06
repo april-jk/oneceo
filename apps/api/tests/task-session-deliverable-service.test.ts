@@ -77,6 +77,15 @@ function docxBytes() {
   });
 }
 
+function xlsxBytes() {
+  return zip({
+    '[Content_Types].xml': '<Types></Types>',
+    'xl/workbook.xml': '<workbook><sheets><sheet name="Summary" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    'xl/worksheets/sheet1.xml':
+      '<worksheet><sheetData><row><c r="A1" t="inlineStr"><is><t>项目</t></is></c><c r="B1" t="inlineStr"><is><t>OneCEO</t></is></c></row></sheetData></worksheet>',
+  });
+}
+
 test('persistManagedRunDeliverables archives directory attachments before upload', async () => {
   class TestDeliverableService extends TaskSessionDeliverableService {
     uploaded: Array<{ storageKey: string; bytes: Buffer }> = [];
@@ -154,7 +163,7 @@ test('persistManagedRunDeliverables archives directory attachments before upload
   }
 });
 
-test('persistManagedRunDeliverables blocks DOCX attachments without required manifest', async () => {
+test('persistManagedRunDeliverables allows DOCX attachments without required manifest', async () => {
   class TestDeliverableService extends TaskSessionDeliverableService {
     uploaded: Array<{ storageKey: string; bytes: Buffer }> = [];
 
@@ -183,29 +192,114 @@ test('persistManagedRunDeliverables blocks DOCX attachments without required man
     }
     throw new Error('file_not_found');
   });
-  mock.method(taskSessionDeliverableArtifactDAO, 'createMany', async () => {
-    throw new Error('createMany_should_not_be_called');
-  });
+  mock.method(taskSessionDeliverableArtifactDAO, 'createMany', async (records: any[]) =>
+    records.map((record, index) => ({
+      id: `artifact-${index + 1}`,
+      ...record,
+      createdAt: new Date('2026-04-22T00:00:00.000Z'),
+    })),
+  );
 
   try {
-    await assert.rejects(
-      () =>
-        service.persistManagedRunDeliverables({
-          sessionId: 'session-1',
-          runId: 'run-1',
-          sandboxId: 'sandbox-1',
-          workspaceRoot: '/workspace',
-          attachments: [
-            {
-              path: 'outputs/final.docx',
-              name: 'final.docx',
-              mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            },
-          ],
+    const result = await service.persistManagedRunDeliverables({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace',
+      attachments: [
+        {
+          path: 'outputs/final.docx',
+          name: 'final.docx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        },
+      ],
+    });
+    assert.equal(result.length, 1);
+    assert.equal(result[0]?.path, 'outputs/final.docx');
+    assert.equal(service.uploaded.length, 1);
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (typeof value === 'string') {
+        process.env[key] = value;
+      } else {
+        delete process.env[key];
+      }
+    }
+    mock.restoreAll();
+  }
+});
+
+test('persistManagedRunDeliverables persists xlsx/docx/pdf/pptx deliverables in one run', async () => {
+  class TestDeliverableService extends TaskSessionDeliverableService {
+    uploaded: Array<{ storageKey: string; bytes: Buffer }> = [];
+
+    protected override async uploadDeliverable(storageKey: string, bytes: Buffer): Promise<void> {
+      this.uploaded.push({ storageKey, bytes });
+    }
+  }
+
+  const service = new TestDeliverableService();
+  const previousEnv = {
+    R2_BUCKET_NAME: process.env.R2_BUCKET_NAME,
+    R2_ACCOUNT_ID: process.env.R2_ACCOUNT_ID,
+    R2_ACCESS_KEY_ID: process.env.R2_ACCESS_KEY_ID,
+    R2_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY,
+  };
+
+  process.env.R2_BUCKET_NAME = 'test-bucket';
+  process.env.R2_ACCOUNT_ID = 'test-account';
+  process.env.R2_ACCESS_KEY_ID = 'test-key';
+  process.env.R2_SECRET_ACCESS_KEY = 'test-secret';
+
+  mock.method(e2bConnector, 'runCommand', async () => ({ stdout: 'file', stderr: '', exitCode: 0 }) as any);
+  mock.method(e2bConnector, 'readFile', async (_sandboxId: string, filePath: string) => {
+    if (filePath.endsWith('/outputs/final.xlsx')) {
+      return Uint8Array.from(xlsxBytes());
+    }
+    if (filePath.endsWith('/outputs/final.docx')) {
+      return Uint8Array.from(docxBytes());
+    }
+    if (filePath.endsWith('/outputs/final.pdf')) {
+      return Uint8Array.from(Buffer.from('%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n', 'utf8'));
+    }
+    if (filePath.endsWith('/outputs/final.pptx')) {
+      return Uint8Array.from(
+        zip({
+          '[Content_Types].xml': '<Types></Types>',
+          'ppt/presentation.xml': '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"></p:presentation>',
         }),
-      /office_deliverable_quality_failed/,
+      );
+    }
+    throw new Error(`unexpected_file_path:${filePath}`);
+  });
+  mock.method(taskSessionDeliverableArtifactDAO, 'createMany', async (records: any[]) =>
+    records.map((record, index) => ({
+      id: `artifact-${index + 1}`,
+      ...record,
+      createdAt: new Date('2026-05-06T00:00:00.000Z'),
+    })),
+  );
+
+  try {
+    const result = await service.persistManagedRunDeliverables({
+      sessionId: 'session-batch',
+      runId: 'run-batch',
+      sandboxId: 'sandbox-batch',
+      workspaceRoot: '/workspace',
+      attachments: [
+        { path: 'outputs/final.xlsx', name: 'final.xlsx' },
+        { path: 'outputs/final.docx', name: 'final.docx' },
+        { path: 'outputs/final.pdf', name: 'final.pdf' },
+        { path: 'outputs/final.pptx', name: 'final.pptx' },
+      ],
+    });
+
+    assert.equal(result.length, 4);
+    assert.equal(service.uploaded.length, 4);
+    assert.deepEqual(
+      result.map((item) => item.name).sort(),
+      ['final.docx', 'final.pdf', 'final.pptx', 'final.xlsx'].sort(),
     );
-    assert.equal(service.uploaded.length, 0);
   } finally {
     for (const [key, value] of Object.entries(previousEnv)) {
       if (typeof value === 'string') {

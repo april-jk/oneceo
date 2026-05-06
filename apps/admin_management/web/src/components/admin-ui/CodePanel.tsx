@@ -10,6 +10,7 @@ type CodePanelProps = {
   maxHeight?: number;
   className?: string;
   downloadName?: string;
+  theme?: 'dark' | 'light';
 };
 
 function stringifyCode(value: unknown, language?: string) {
@@ -30,7 +31,95 @@ function stringifyCode(value: unknown, language?: string) {
   }
 }
 
-export function CodePanel({ title, value, language = 'text', maxHeight = 360, className, downloadName }: CodePanelProps) {
+function highlightJsonLine(line: string, idx: number): React.ReactNode {
+  const keyMatch = line.match(/^(\s*)("(?:\\.|[^"\\])*")(\s*:)(.*)$/);
+  if (!keyMatch) {
+    // Try to highlight standalone values (array items, root values)
+    const trimmed = line.trim();
+    if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+      return (
+        <span key={idx}>
+          {line.slice(0, line.indexOf(trimmed))}
+          <span className="json-string">{trimmed}</span>
+          {line.slice(line.indexOf(trimmed) + trimmed.length)}
+        </span>
+      );
+    }
+    if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(trimmed)) {
+      return (
+        <span key={idx}>
+          {line.slice(0, line.indexOf(trimmed))}
+          <span className="json-number">{trimmed}</span>
+          {line.slice(line.indexOf(trimmed) + trimmed.length)}
+        </span>
+      );
+    }
+    if (/^(true|false|null)$/.test(trimmed)) {
+      return (
+        <span key={idx}>
+          {line.slice(0, line.indexOf(trimmed))}
+          <span className="json-boolean">{trimmed}</span>
+          {line.slice(line.indexOf(trimmed) + trimmed.length)}
+        </span>
+      );
+    }
+    return <span key={idx}>{line}</span>;
+  }
+
+  const [, indent, key, colon, rest] = keyMatch;
+  let valueNode: React.ReactNode = rest;
+  const trimmed = rest.trim();
+
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    valueNode = (
+      <>
+        {rest.slice(0, rest.indexOf(trimmed))}
+        <span className="json-string">{trimmed}</span>
+        {rest.slice(rest.indexOf(trimmed) + trimmed.length)}
+      </>
+    );
+  } else if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(trimmed)) {
+    valueNode = (
+      <>
+        {rest.slice(0, rest.indexOf(trimmed))}
+        <span className="json-number">{trimmed}</span>
+        {rest.slice(rest.indexOf(trimmed) + trimmed.length)}
+      </>
+    );
+  } else if (/^(true|false|null)$/.test(trimmed)) {
+    valueNode = (
+      <>
+        {rest.slice(0, rest.indexOf(trimmed))}
+        <span className="json-boolean">{trimmed}</span>
+        {rest.slice(rest.indexOf(trimmed) + trimmed.length)}
+      </>
+    );
+  }
+
+  return (
+    <span key={idx}>
+      {indent}
+      <span className="json-key">{key}</span>
+      {colon}
+      {valueNode}
+    </span>
+  );
+}
+
+function JsonHighlight({ code }: { code: string }): React.ReactNode {
+  const lines = code.split('\n');
+  return (
+    <>
+      {lines.map((line, i) => (
+        <div key={i} className="json-line">
+          {highlightJsonLine(line, i)}
+        </div>
+      ))}
+    </>
+  );
+}
+
+export function CodePanel({ title, value, language = 'text', maxHeight = 360, className, downloadName, theme = 'dark' }: CodePanelProps) {
   const [wrap, setWrap] = useState(false);
   const [copied, setCopied] = useState(false);
   const code = useMemo(() => stringifyCode(value, language), [language, value]);
@@ -51,8 +140,10 @@ export function CodePanel({ title, value, language = 'text', maxHeight = 360, cl
     URL.revokeObjectURL(url);
   };
 
+  const isJson = language === 'json';
+
   return (
-    <section className={clsx('admin-code-panel', wrap && 'admin-code-panel-wrap', className)}>
+    <section className={clsx('admin-code-panel', theme === 'light' && 'admin-code-panel-light', wrap && 'admin-code-panel-wrap', className)}>
       <header className="admin-code-panel-header">
         <div>
           <strong>{title}</strong>
@@ -64,7 +155,9 @@ export function CodePanel({ title, value, language = 'text', maxHeight = 360, cl
           <AdminButton size="icon" variant="ghost" iconOnly icon={<Download size={14} />} onClick={handleDownload} aria-label="下载内容" />
         </div>
       </header>
-      <pre className="admin-code-panel-body" style={{ maxHeight }}><code>{code || '暂无内容'}</code></pre>
+      <pre className="admin-code-panel-body" style={{ maxHeight }}>
+        <code>{isJson ? <JsonHighlight code={code} /> : (code || '暂无内容')}</code>
+      </pre>
     </section>
   );
 }

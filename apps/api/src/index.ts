@@ -31,6 +31,7 @@ import notificationRoutes from './routes/notification-routes';
 import internalNotificationRoutes from './routes/internal-notification-routes';
 import internalPromoBannerRoutes from './routes/internal-promo-banner-routes';
 import uiPromoBannerRoutes from './routes/ui-promo-banner-routes';
+import internalTraceRoutes from './routes/trace-routes';
 import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
 import { closeDatabaseConnection, testDatabaseConnection } from './config/database';
 import { getPublicErrorMessage } from './utils/error-response';
@@ -40,6 +41,9 @@ import { osacPersistentRecoveryService } from './services/osac-persistent-recove
 import { sessionMcpRecoveryService } from './services/session-mcp-recovery-service';
 import { startSandboxArchiveJob, stopSandboxArchiveJob } from './services/sandbox-archive-job';
 import { startMembershipDailyRestoreJob, stopMembershipDailyRestoreJob } from './services/membership-daily-restore-job';
+import { startApiTraceCleanupJob, stopApiTraceCleanupJob } from './services/api-trace-cleanup-job';
+import { startApiRequestLogCleanupJob, stopApiRequestLogCleanupJob } from './services/api-request-log-cleanup-job';
+import { requestLogMiddleware } from './middleware/request-log-middleware';
 import {
   startTaskSessionDeploymentSyncJob,
   stopTaskSessionDeploymentSyncJob,
@@ -127,8 +131,9 @@ app.use(
 app.use('/api/llm-proxy', express.raw({ type: '*/*', limit: llmProxyBodyLimit }));
 app.use(express.json({ limit: jsonBodyLimit }));
 app.use(appAuthMiddleware);
+app.use(requestLogMiddleware);
 
-// 请求日志
+// 请求日志（控制台）
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
@@ -142,7 +147,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    version: '0.1.0',
+    version: '1.0.0',
   });
 });
 
@@ -194,6 +199,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/internal/notifications', internalNotificationRoutes);
 app.use('/api/internal/promo-banners', internalPromoBannerRoutes);
 app.use('/api/ui/promo-banners', uiPromoBannerRoutes);
+app.use('/api/internal', internalTraceRoutes);
 
 // 任务相关 API
 app.get('/api/tasks', (req, res) => {
@@ -318,6 +324,8 @@ async function shutdown(signal: string, exitCode = 0) {
     stopSandboxArchiveJob();
     stopMembershipDailyRestoreJob();
     stopTaskSessionDeploymentSyncJob();
+    stopApiTraceCleanupJob();
+    stopApiRequestLogCleanupJob();
   } catch (error) {
     console.warn('[API] stop background jobs failed:', error);
   }
@@ -429,6 +437,9 @@ async function startServer() {
     startMembershipDailyRestoreJob();
     // 启动部署状态后台同步任务
     startTaskSessionDeploymentSyncJob();
+    // 启动 API 追踪数据清理任务
+    startApiTraceCleanupJob();
+    startApiRequestLogCleanupJob();
     
     console.log('');
   });

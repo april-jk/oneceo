@@ -205,17 +205,6 @@ export interface HostRuntime extends HostRecord {
   totalVmCount: number;
 }
 
-export interface AuditLogEntry {
-  id: string;
-  timestamp: string;
-  operator: string;
-  action: string;
-  targetVmId: string;
-  sessionId?: string;
-  result: 'success' | 'failed';
-  detail?: string;
-}
-
 export interface DashboardOverview {
   updatedAt: string;
   orchestrator: {

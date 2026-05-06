@@ -243,7 +243,7 @@ export function BillingUsageLogs({ onOpenUser, onOpenConversation, onNotify }: B
                     <td>
                       {log.cachedPromptTokens > 0 ? (
                         <div className="user-management-table-cell-stack user-management-table-metric">
-                          <strong style={{ color: '#0f766e' }}>{log.cachedPromptTokens.toLocaleString()}</strong>
+                          <strong style={{ color: 'var(--success)' }}>{log.cachedPromptTokens.toLocaleString()}</strong>
                         </div>
                       ) : (
                         <span className="dim">-</span>
@@ -257,7 +257,7 @@ export function BillingUsageLogs({ onOpenUser, onOpenConversation, onNotify }: B
                     <td>
                       {log.cacheCreationTokens > 0 ? (
                         <div className="user-management-table-cell-stack user-management-table-metric">
-                          <strong style={{ color: '#ea9d34' }}>{log.cacheCreationTokens.toLocaleString()}</strong>
+                          <strong style={{ color: 'var(--warning)' }}>{log.cacheCreationTokens.toLocaleString()}</strong>
                         </div>
                       ) : (
                         <span className="dim">-</span>
@@ -270,7 +270,7 @@ export function BillingUsageLogs({ onOpenUser, onOpenConversation, onNotify }: B
                     </td>
                     <td>
                       <div className="user-management-table-cell-stack user-management-table-metric">
-                        <strong style={{ color: '#0f766e' }}>{log.creditsConsumed.toLocaleString()}</strong>
+                        <strong style={{ color: 'var(--success)' }}>{log.creditsConsumed.toLocaleString()}</strong>
                         <small>credits</small>
                       </div>
                     </td>
@@ -354,7 +354,7 @@ export function BillingUsageLogs({ onOpenUser, onOpenConversation, onNotify }: B
                       </div>
                       <div>
                         <dt>缓存命中</dt>
-                        <dd style={{ color: '#0f766e' }}>{selectedLog.cachedPromptTokens.toLocaleString()}</dd>
+                        <dd style={{ color: 'var(--success)' }}>{selectedLog.cachedPromptTokens.toLocaleString()}</dd>
                       </div>
                       <div>
                         <dt>非缓存</dt>
@@ -362,7 +362,7 @@ export function BillingUsageLogs({ onOpenUser, onOpenConversation, onNotify }: B
                       </div>
                       <div>
                         <dt>缓存创建</dt>
-                        <dd style={{ color: '#ea9d34' }}>{selectedLog.cacheCreationTokens.toLocaleString()}</dd>
+                        <dd style={{ color: 'var(--warning)' }}>{selectedLog.cacheCreationTokens.toLocaleString()}</dd>
                       </div>
                       <div>
                         <dt>Completion</dt>
@@ -386,7 +386,7 @@ export function BillingUsageLogs({ onOpenUser, onOpenConversation, onNotify }: B
                     <dl className="user-management-record-grid">
                       <div>
                         <dt>积分消耗</dt>
-                        <dd><strong style={{ color: '#c03d3d' }}>{selectedLog.creditsConsumed.toLocaleString()} credits</strong></dd>
+                        <dd><strong style={{ color: 'var(--danger)' }}>{selectedLog.creditsConsumed.toLocaleString()} credits</strong></dd>
                       </div>
                       <div>
                         <dt>用户ID</dt>

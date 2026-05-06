@@ -457,6 +457,15 @@ test('buildPostToolRunStatusContent uses user-friendly wording instead of comman
   assert.equal(
     (coordinator as any).buildPostToolRunStatusContent({
       toolName: 'shell_execute',
+      args: { command: 'ls -la /workspace/outputs' },
+      outcome: 'completed',
+    }),
+    '文件我已经核对过了；如果交付文件已就绪，我会直接提交最终交付'
+  );
+
+  assert.equal(
+    (coordinator as any).buildPostToolRunStatusContent({
+      toolName: 'shell_execute',
       args: { command: 'cd /workspace && npm start' },
       outcome: 'failed',
     }),

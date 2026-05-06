@@ -5,7 +5,7 @@
  */
 
 import express from 'express';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   appUserProjectDAO,
   appUserLegacyIdMappingDAO,
@@ -3787,8 +3787,9 @@ function serializeDeliverableArtifact(input: {
 }
 
 function buildAttachmentDisposition(fileName: string): string {
-  const fallback = fileName.replace(/[^\x20-\x7E]+/g, '_').replace(/["\\]/g, '_') || 'download';
-  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+  const safeFileName = String(fileName || '').replace(/[\r\n]/g, ' ').trim();
+  const fallback = safeFileName.replace(/[^\x20-\x7E]+/g, '_').replace(/["\\]/g, '_') || 'download';
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(safeFileName || 'download')}`;
 }
 
 function isTextLikeMimeType(mimeType: string): boolean {
@@ -5327,8 +5328,22 @@ router.get('/sessions/:sessionId/deliverables/:artifactId/download', async (req,
     }
 
     const body = await downloadFromR2(artifact.storageKey);
+    const sha256 = createHash('sha256').update(body).digest('hex');
+    if (artifact.sha256 && sha256 !== artifact.sha256) {
+      console.error('[DELIVERABLE_INTEGRITY_MISMATCH]', {
+        artifactId: artifact.id,
+        storageKey: artifact.storageKey,
+        expectedSha256: artifact.sha256,
+        actualSha256: sha256,
+      });
+      return res.status(500).json({
+        success: false,
+        error: getPublicErrorMessage('交付物完整性校验失败，请重试生成'),
+      });
+    }
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Type', artifact.mimeType || 'application/octet-stream');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Length', String(body.length));
     res.setHeader('Content-Disposition', buildAttachmentDisposition(artifact.displayName));
     return res.status(200).send(body);

@@ -2678,13 +2678,109 @@ private async chargeForModelCall(state: AltusRunState, input: {
             if (!state.sandboxId || !state.workspaceRoot) {
               throw new Error('managed_run_missing_sandbox_context');
             }
-            const deliverables = await this.deliverableService.persistManagedRunDeliverables({
-              sessionId: state.input.sessionId,
-              runId: state.input.runId,
-              sandboxId: state.sandboxId,
-              workspaceRoot: state.workspaceRoot,
-              attachments: result.attachments || [],
-            });
+            let deliverables;
+            try {
+              deliverables = await this.deliverableService.persistManagedRunDeliverables({
+                sessionId: state.input.sessionId,
+                runId: state.input.runId,
+                sandboxId: state.sandboxId,
+                workspaceRoot: state.workspaceRoot,
+                attachments: result.attachments || [],
+              });
+            } catch (firstPersistError) {
+              console.warn('[DELIVERABLE_PERSIST_RETRY]', {
+                runId: state.input.runId,
+                sessionId: state.input.sessionId,
+                attempt: 1,
+                error:
+                  firstPersistError instanceof Error
+                    ? firstPersistError.message
+                    : String(firstPersistError),
+              });
+              try {
+                deliverables = await this.deliverableService.persistManagedRunDeliverables({
+                  sessionId: state.input.sessionId,
+                  runId: state.input.runId,
+                  sandboxId: state.sandboxId,
+                  workspaceRoot: state.workspaceRoot,
+                  attachments: result.attachments || [],
+                });
+              } catch (secondPersistError) {
+                const persistErrorMessage =
+                  secondPersistError instanceof Error
+                    ? secondPersistError.message
+                    : String(secondPersistError);
+                const userFacingError =
+                  '交付文件暂存失败，平台已自动重试。请检查输出文件后再次调用 complete_task 提交交付物。';
+                await this.eventWriter.appendRunEvent(
+                  state.input.runId,
+                  state.input.sessionId,
+                  state.input.userId,
+                  'tool_call_failed',
+                  {
+                    toolName,
+                    content: this.buildToolEventContent(toolName, 'failed'),
+                    arguments: args,
+                    toolCallId: toolCall.id,
+                    toolResultEnvelope: buildManagedToolResultEnvelope({
+                      status: 'error',
+                      runId: state.input.runId,
+                      toolUseId: toolCall.id,
+                      toolName,
+                      modelRoundId: currentRound,
+                      args,
+                      errorCode: 'deliverable_persistence_failed',
+                      errorMessage: userFacingError,
+                      content: userFacingError,
+                      contentForUser: userFacingError,
+                    }),
+                    error: userFacingError,
+                    transitionReason: 'deliverable_persistence_failed',
+                    userView: {
+                      summary: userFacingError,
+                      preview: userFacingError,
+                      detail: userFacingError,
+                    },
+                    internalView: {
+                      detail: [`工具: ${toolName}`, `rawError: ${persistErrorMessage}`].join('\n'),
+                    },
+                  },
+                );
+                await this.syncLoopSnapshot(state, {
+                  lastTransitionReason: 'deliverable_persistence_failed',
+                  recoveryMode: 'tool_repair',
+                  currentRound,
+                  maxRounds: maxToolRounds,
+                  plainTextRecoveryUsed,
+                  lastToolName: toolName,
+                  lastToolCallId: toolCall.id,
+                });
+                messages.push({
+                  role: 'tool',
+                  tool_call_id: toolCall.id,
+                  name: toolName,
+                  content: stringifyManagedToolResultEnvelope(
+                    buildManagedToolResultEnvelope({
+                      status: 'error',
+                      runId: state.input.runId,
+                      toolUseId: toolCall.id,
+                      toolName,
+                      modelRoundId: currentRound,
+                      args,
+                      errorCode: 'deliverable_persistence_failed',
+                      errorMessage: userFacingError,
+                      content: userFacingError,
+                      contentForUser: userFacingError,
+                    }),
+                  ),
+                });
+                completedToolCallIds.add(toolCall.id);
+                continue;
+              }
+            }
+            if (!deliverables) {
+              throw new Error('deliverables_persist_unexpected_empty');
+            }
             state.deliverables = deliverables;
             const previewSnapshot: WebsitePreviewSnapshot | null =
               await this.websitePreviewSnapshotService.captureManagedRunPreview({

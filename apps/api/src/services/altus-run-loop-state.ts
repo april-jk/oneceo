@@ -8,6 +8,7 @@ export type AltusRunTransitionReason =
   | 'tool_failed_but_recoverable'
   | 'tool_failed_user_action_required'
   | 'deployment_completion_blocked'
+  | 'deliverable_persistence_failed'
   | 'deployment_repair_required'
   | 'model_retryable_error'
   | 'model_non_retryable_error'

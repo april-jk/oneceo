@@ -1867,10 +1867,16 @@ export async function downloadTaskCreationDeliverable(
   }
 
   const blob = await response.blob();
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const utf8NameMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  const asciiNameMatch = disposition.match(/filename=\"?([^\";]+)\"?/i);
+  const resolvedName = utf8NameMatch
+    ? decodeURIComponent(utf8NameMatch[1] || "")
+    : (asciiNameMatch?.[1] || "").trim();
   const objectUrl = window.URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = objectUrl;
-  anchor.download = artifact.name || "deliverable";
+  anchor.download = resolvedName || artifact.name || "deliverable";
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();

@@ -263,15 +263,25 @@ function countSheetMetrics(sheetXml: string, sharedStrings: string[]) {
   for (const match of cellMatches) {
     const cellXml = match[0];
     if (/<f\b/.test(cellXml)) formulaCellCount += 1;
-    const value = asText((cellXml.match(/<v[^>]*>([\s\S]*?)<\/v>/) || [])[1]);
-    if (value) nonEmptyCellCount += 1;
+    const sharedValue = asText((cellXml.match(/<v[^>]*>([\s\S]*?)<\/v>/) || [])[1]);
+    const inlineValue = asText(
+      decodeXmlText(
+        Array.from(cellXml.matchAll(/<is\b[\s\S]*?<t[^>]*>([\s\S]*?)<\/t>[\s\S]*?<\/is>/g))
+          .map((item) => item[1] || '')
+          .join(' ')
+      )
+    );
+    const hasEffectiveValue = Boolean(sharedValue || inlineValue);
+    if (hasEffectiveValue) nonEmptyCellCount += 1;
+
     if (/t="s"/.test(cellXml)) {
-      const shared = sharedStrings[Number(value)];
+      const shared = sharedStrings[Number(sharedValue)];
       if (shared) {
         urlCount += (shared.match(URL_PATTERN) || []).length;
       }
     } else {
-      urlCount += (value.match(URL_PATTERN) || []).length;
+      const effectiveValue = inlineValue || sharedValue;
+      urlCount += (effectiveValue.match(URL_PATTERN) || []).length;
     }
   }
 

@@ -41,6 +41,8 @@ import {
   Check,
   Trash2,
   X,
+  PanelRightOpen,
+  PanelRightClose,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -2030,6 +2032,25 @@ export default function Home() {
                 })}
               </span>
             ) : null}
+            <Button
+              type="button"
+              size="icon"
+              variant={previewOpen ? "default" : "outline"}
+              className="h-7 w-7"
+              onClick={() => setPreviewOpen((open) => !open)}
+              aria-pressed={previewOpen}
+              aria-label={
+                previewOpen
+                  ? "Close Altus actions window"
+                  : "Open Altus actions window"
+              }
+            >
+              {previewOpen ? (
+                <PanelRightClose className="h-3.5 w-3.5" />
+              ) : (
+                <PanelRightOpen className="h-3.5 w-3.5" />
+              )}
+            </Button>
           </div>
         </div>
         <div

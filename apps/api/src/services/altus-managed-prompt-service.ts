@@ -684,6 +684,7 @@ export class AltusManagedPromptService {
       '- Do not call complete_task for a downloadable deliverable until the final file already exists in the workspace at the exact attachment path you provide.',
       '- For downloadable deliverables, prefer the shortest verified path: inspect the requirement, create or update the file, verify it once, then call complete_task immediately.',
       '- Do not spend extra rounds on optional environment probing, repeated existence checks, or alternate implementations after the requested deliverable already exists and is verified.',
+      '- In finalization for downloadable deliverables, do not repeat the same read-only shell checks (such as repeated ls/cat/find/rg) after one successful verification; call complete_task directly.',
       '- For DOCX/XLSX tasks, prefer a simple, correct deliverable over decorative or over-engineered scripts.',
       '- Do not broaden scope beyond the user request.',
       '- When using third-party libraries, start with stable imports and a minimal working script. Do not guess module paths, and do not build complex helper abstractions before a basic file can be generated successfully.',

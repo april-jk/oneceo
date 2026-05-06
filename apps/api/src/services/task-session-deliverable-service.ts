@@ -90,6 +90,21 @@ function toIso(value: Date | string | null | undefined): string | null {
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
 }
 
+function isBlockingOfficeQualityError(errorCode: string): boolean {
+  const code = asText(errorCode);
+  if (!code) return false;
+  if (code.startsWith('docx_unreadable:') || code.startsWith('xlsx_unreadable:')) return true;
+  return [
+    'docx_extension_invalid',
+    'docx_file_too_small',
+    'docx_document_xml_missing',
+    'xlsx_extension_invalid',
+    'xlsx_file_too_small',
+    'xlsx_workbook_xml_missing',
+    'xlsx_worksheet_missing',
+  ].includes(code);
+}
+
 function serializeRecord(record: Awaited<ReturnType<typeof taskSessionDeliverableArtifactDAO.getById>>) {
   if (!record) return null;
   return {
@@ -228,10 +243,18 @@ export class TaskSessionDeliverableService {
             manifestPath: manifest.manifestPath,
             manifestBytes: manifest.manifestBytes,
           });
-          if (!qualityReport.passed) {
-            throw new Error(`office_deliverable_quality_failed:${JSON.stringify(qualityReport)}`);
+          const blockingErrors = qualityReport.errors.filter((code) => isBlockingOfficeQualityError(code));
+          const advisoryErrors = qualityReport.errors.filter((code) => !isBlockingOfficeQualityError(code));
+          if (blockingErrors.length > 0) {
+            throw new Error(
+              `office_deliverable_quality_failed:${JSON.stringify({
+                ...qualityReport,
+                errors: blockingErrors,
+                advisoryErrors,
+              })}`,
+            );
           }
-          if (qualityReport.warnings.length > 0) {
+          if (advisoryErrors.length > 0 || qualityReport.warnings.length > 0) {
             console.warn('[OFFICE_DELIVERABLE_QUALITY_WARNING]', JSON.stringify(qualityReport));
           }
         }

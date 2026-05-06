@@ -2035,8 +2035,8 @@ export default function Home() {
             <Button
               type="button"
               size="icon"
-              variant={previewOpen ? "default" : "outline"}
-              className="h-7 w-7"
+              variant="ghost"
+              className="h-7 w-7 bg-transparent hover:bg-transparent"
               onClick={() => setPreviewOpen((open) => !open)}
               aria-pressed={previewOpen}
               aria-label={

@@ -143,16 +143,15 @@ test('validateOfficeArtifact passes DOCX with manifest and readable structure', 
   assert.equal(report.errors.length, 0);
 });
 
-test('validateOfficeArtifact fails DOCX when manifest is required and missing', () => {
+test('validateOfficeArtifact accepts DOCX without manifest when file structure is valid', () => {
   const report = officeArtifactQualityService.validateOfficeArtifact({
     kind: 'docx',
     artifactPath: 'outputs/final.docx',
     bytes: docxBytes(),
   });
 
-  assert.equal(report.passed, false);
-  assert.equal(report.manifestStatus, 'missing');
-  assert.ok(report.errors.includes('manifest_missing'));
+  assert.equal(report.passed, true);
+  assert.equal(report.manifestStatus, 'not_required');
 });
 
 test('validateOfficeArtifact allows compact meeting memo DOCX structures', () => {
@@ -255,6 +254,21 @@ test('validateOfficeArtifact counts inline strings as effective XLSX cells', () 
   assert.equal(report.manifestStatus, 'not_required');
   assert.equal(report.metrics.nonEmptyCellCount, 4);
   assert.equal(report.metrics.urlCount, 1);
+});
+
+test('validateOfficeArtifact still flags invalid manifest only when explicitly required', () => {
+  const report = officeArtifactQualityService.validateOfficeArtifact({
+    kind: 'docx',
+    artifactPath: 'outputs/final.docx',
+    bytes: docxBytes(),
+    manifestPath: 'outputs/document_manifest.json',
+    manifestBytes: Buffer.from('{'),
+    requireManifest: true,
+  });
+
+  assert.equal(report.passed, false);
+  assert.equal(report.manifestStatus, 'invalid');
+  assert.ok(report.errors.includes('manifest_invalid'));
 });
 
 test('validateOfficeArtifact allows lightweight input form XLSX layouts', () => {

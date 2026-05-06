@@ -143,6 +143,7 @@ import {
 } from "@/lib/task-session-deployment-prompts";
 import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
 import { resolveUserMessageReferences } from "@/lib/message-reference-parser";
+import { isManagedInternalSupportArtifact } from "@/lib/managed-artifact-visibility";
 import { readAltusMode } from "@/lib/altus-settings";
 import { shouldAutoCollapseSidebarForAltusActions } from "@/lib/altus-actions-layout";
 import type { TaskProjectSelection } from "@/lib/task-project-selection";
@@ -3563,10 +3564,14 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           managedToolName,
           metadata,
         );
+        const internalSupportArtifact = isManagedInternalSupportArtifact(
+          artifactPath,
+        );
         if (
           managedEventType === "tool_call_completed" &&
           managedRunId &&
-          artifactPath
+          artifactPath &&
+          !internalSupportArtifact
         ) {
           mergeManagedArtifact(managedRunId, {
             path: artifactPath,
@@ -3579,6 +3584,12 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           managedEventType === "tool_call_completed" ||
           managedEventType === "tool_call_failed"
         ) {
+          if (
+            internalSupportArtifact &&
+            (managedToolName === "write_file" || managedToolName === "read_file")
+          ) {
+            continue;
+          }
           flushManagedStatus({ skipHidden: true });
           flushProgress();
           items.push({
@@ -7702,6 +7713,7 @@ function buildManagedReplayData(messages: AgentMessage[]) {
   ) => {
     const path = pathRaw.trim().replace(/\\/g, "/");
     if (!path) return;
+    if (isManagedInternalSupportArtifact(path)) return;
     const files = ensureFiles(runId);
     const index = fileIndexByRun.get(runId)!;
     if (index.has(path)) {
@@ -7737,6 +7749,7 @@ function buildManagedReplayData(messages: AgentMessage[]) {
       .trim()
       .replace(/\\/g, "/");
     if (!path) return;
+    if (isManagedInternalSupportArtifact(path)) return;
 
     const output = parseManagedToolOutputPreview(metadata.outputPreview);
     const args = toRecord(metadata.arguments);
@@ -8010,11 +8023,13 @@ export function getManagedToolPurposeSummary(
   }
 
   if (toolName === "write_file") {
+    if (isManagedInternalSupportArtifact(path)) return "";
     if (filename) return `更新${filename}`;
     return "更新项目文件";
   }
 
   if (toolName === "read_file") {
+    if (isManagedInternalSupportArtifact(path)) return "";
     if (filename) return `读取${filename}检查内容`;
     return "读取项目文件";
   }

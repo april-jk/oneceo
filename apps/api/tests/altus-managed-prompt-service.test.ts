@@ -157,10 +157,10 @@ test('managed prompt enforces multi-phase DOCX collaboration and QA gate', () =>
   assert.match(prompt, /docx_task_router/i);
   assert.match(prompt, /docx_outline_architect/i);
   assert.match(prompt, /docx_style_system_designer/i);
-  assert.match(prompt, /document_manifest\.json/i);
   assert.match(prompt, /choose exactly one taskMode from/i);
   assert.match(prompt, /choose exactly one taskMode from .* and one contentArchetype from/i);
   assert.match(prompt, /build the outline using bounded section types/i);
+  assert.match(prompt, /Do not use `write_file` to create `\.docx` directly/i);
   assert.match(prompt, /enforce this DOCX QA gate before complete_task/i);
 });
 
@@ -175,10 +175,10 @@ test('managed prompt enforces multi-phase XLSX collaboration and formula-first Q
   assert.match(prompt, /xlsx_task_router/i);
   assert.match(prompt, /xlsx_workbook_designer/i);
   assert.match(prompt, /xlsx_formula_planner/i);
-  assert.match(prompt, /workbook_manifest\.json/i);
   assert.match(prompt, /choose exactly one taskMode from/i);
   assert.match(prompt, /Formula-First rule/i);
   assert.match(prompt, /plan the workbook before writing cells/i);
+  assert.match(prompt, /Do not use `write_file` to create `\.xlsx` directly/i);
   assert.match(prompt, /enforce this XLSX QA gate before complete_task/i);
 });
 

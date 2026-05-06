@@ -1380,7 +1380,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
         return '运行环境已经准备好了，我开始生成项目内容';
       }
       if (commandValue.includes('ls')) {
-        return '文件我已经核对过了，接着做最后整理';
+        return '文件我已经核对过了；如果交付文件已就绪，我会直接提交最终交付';
       }
       return '这一步已经跑完了，我继续处理后面的内容';
     }

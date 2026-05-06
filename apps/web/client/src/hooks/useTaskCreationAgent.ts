@@ -1011,6 +1011,38 @@ function shouldDisplayExecutorEvent(metadataRaw: unknown, contentRaw?: string): 
   return hasMeaningfulExecutorEventText(metadataRaw, contentRaw);
 }
 
+function isManagedReadOnlyShellInspectionEvent(message: Partial<AgentMessage>): boolean {
+  if (message.type !== 'executor_event') return false;
+  const metadata = toRecord(message.metadata);
+  if (asText(metadata.executor).toLowerCase() !== 'altus') return false;
+  if (asText(metadata.executionMode).toLowerCase() !== 'managed') return false;
+  if (asText(metadata.toolName).toLowerCase() !== 'shell_execute') return false;
+  if (asText(metadata.eventType).toLowerCase() !== 'tool_call_completed') return false;
+  const args = toRecord(metadata.arguments);
+  const command = asText(args.command).trim().toLowerCase();
+  if (!command) return false;
+  return /(^|\s)(ls|cat|find|tree|pwd|head|tail|sed|rg|grep)(\s|$)/.test(command);
+}
+
+function isSemanticallyDuplicateManagedInspectionTail(
+  previous: Partial<AgentMessage> | undefined,
+  next: Partial<AgentMessage>
+): boolean {
+  if (!previous) return false;
+  if (!isManagedReadOnlyShellInspectionEvent(previous) || !isManagedReadOnlyShellInspectionEvent(next)) {
+    return false;
+  }
+  const previousMeta = toRecord(previous.metadata);
+  const nextMeta = toRecord(next.metadata);
+  const previousText = (asText(previous.content) || asText(previous.message)).trim();
+  const nextText = (asText(next.content) || asText(next.message)).trim();
+  if (!previousText || !nextText) return false;
+  const previousPurpose = asText(previousMeta.toolPurpose).trim();
+  const nextPurpose = asText(nextMeta.toolPurpose).trim();
+  if (previousPurpose && nextPurpose && previousPurpose === nextPurpose) return true;
+  return previousText === nextText;
+}
+
 function mapExecutorEventStage(
   metadataRaw: unknown
 ): AgentMessage['stage'] | undefined {
@@ -1873,6 +1905,12 @@ export function mergeRealtimeMessage(
   if (isDuplicateExecutorTail) {
     return prev;
   }
+  if (
+    message.type === 'executor_event' &&
+    isSemanticallyDuplicateManagedInspectionTail(lastMessage, message)
+  ) {
+    return prev;
+  }
   const sessionEventSeq = asPositiveInt(metadata.sessionEventSeq);
   if (sessionEventSeq !== null) {
     const hasSameSessionEventSeq = prev.some((item) => {
@@ -2087,6 +2125,23 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
         asText(toRecord(last?.metadata).eventType).toLowerCase() === asText(metadata.eventType).toLowerCase() &&
         asText(last?.content) &&
         asText(last?.content) === asText(item?.content)
+      ) {
+        continue;
+      }
+      if (
+        last &&
+        isSemanticallyDuplicateManagedInspectionTail(
+          {
+            type: 'executor_event',
+            content: asText(last?.content),
+            metadata: toRecord(last?.metadata),
+          },
+          {
+            type: 'executor_event',
+            content: asText(item?.content),
+            metadata,
+          }
+        )
       ) {
         continue;
       }

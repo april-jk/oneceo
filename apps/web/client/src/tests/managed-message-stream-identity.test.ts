@@ -114,6 +114,49 @@ describe('managed message stream identity', () => {
     expect(next[0]?.content).toBe('工具 read_file 已完成');
   });
 
+  it('dedupes repeated managed shell inspection tail events in finalization stage', () => {
+    const previous: AgentMessage = {
+      type: 'executor_event',
+      content: '检查项目文件和运行日志',
+      messageKey: 'managed:run-3:tool:tool-check-1',
+      metadata: {
+        executor: 'altus',
+        executionMode: 'managed',
+        eventType: 'tool_call_completed',
+        toolName: 'shell_execute',
+        arguments: {
+          command: 'ls -la outputs',
+        },
+        toolPurpose: '检查项目文件和运行日志',
+      },
+      sessionId: 'session-3',
+    };
+
+    const next = mergeRealtimeMessage(
+      [previous],
+      {
+        type: 'executor_event',
+        content: '检查项目文件和运行日志',
+        messageKey: 'managed:run-3:tool:tool-check-2',
+        metadata: {
+          executor: 'altus',
+          executionMode: 'managed',
+          eventType: 'tool_call_completed',
+          toolName: 'shell_execute',
+          arguments: {
+            command: 'cat outputs/workbook_manifest.json',
+          },
+          toolPurpose: '检查项目文件和运行日志',
+        },
+        sessionId: 'session-3',
+      },
+      WELCOME_MESSAGE
+    );
+
+    expect(next).toHaveLength(1);
+    expect(next[0]?.messageKey).toBe('managed:run-3:tool:tool-check-1');
+  });
+
   it('maps clarification_requested to the same key as persisted clarification message', () => {
     const fallbackKey = resolveManagedStreamMessageKey({
       eventType: 'clarification_requested',

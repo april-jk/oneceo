@@ -320,6 +320,40 @@ describe("managed run status dialogue", () => {
     expect(shellPurpose).not.toContain("total 20");
   });
 
+  it("hides internal support artifacts from managed activity rows", () => {
+    const visibleItems = groupManagedActivityItems(
+      buildChatItems([
+        createManagedToolMessage({
+          eventType: "tool_call_completed",
+          content: "写入内部 manifest",
+          toolCallId: "tool-support",
+          toolName: "write_file",
+          metadata: {
+            arguments: {
+              path: "outputs/document_manifest.json",
+              content: '{"fileName":"final.docx"}',
+            },
+            outputPreview: {
+              path: "outputs/document_manifest.json",
+              content: '{"fileName":"final.docx"}',
+            },
+          },
+        }),
+      ]),
+    );
+
+    const managedTools = visibleItems.flatMap((item) =>
+      item.kind === "managed_activity_group"
+        ? item.items.filter(
+            (child): child is Extract<ChatItem, { kind: "managed_tool" }> =>
+              child.kind === "managed_tool",
+          )
+        : [],
+    );
+
+    expect(managedTools).toHaveLength(0);
+  });
+
   it("shows concrete browser interaction actions in managed activity rows", () => {
     expect(
       getManagedToolPurposeSummary("browser_interact", {

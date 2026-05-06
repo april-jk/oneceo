@@ -1423,6 +1423,9 @@ private async chargeForModelCall(state: AltusRunState, input: {
         return 'PPT 交付还没有走正式渲染链路，Altus 将先完成渲染，再重新附带文件交付。';
       }
     }
+    if (toolName === 'write_file' && errorMessage.includes('write_file_binary_deliverable_requires_generator')) {
+      return '这类最终交付文件不能直接按文本写入，Altus 将改用真实文档生成链路后重新交付。';
+    }
     if (toolName === 'debug_open_page') {
       if (errorMessage.includes('__ONECEO_DEBUG_TARGET_UNREACHABLE__')) {
         return '调试页面目标地址暂不可访问，Altus 将继续检查本地服务端口和启动命令。';

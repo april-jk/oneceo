@@ -34,6 +34,9 @@ export function classifyManagedToolErrorCode(rawError: string) {
     return 'complete_task_downloadable_requires_attachments';
   }
   if (normalized.includes('complete_task_attachment_path_invalid')) return 'complete_task_attachment_path_invalid';
+  if (normalized.includes('write_file_binary_deliverable_requires_generator')) {
+    return 'write_file_binary_deliverable_requires_generator';
+  }
   if (normalized.includes('complete_task_pptx_requires_render_pptx_from_instructions')) {
     return 'complete_task_pptx_requires_render_pptx_from_instructions';
   }
@@ -55,6 +58,7 @@ export function isManagedToolErrorRetryable(errorCode: string) {
     errorCode === 'complete_task_attachments_invalid' ||
     errorCode === 'complete_task_downloadable_requires_attachments' ||
     errorCode === 'complete_task_attachment_path_invalid' ||
+    errorCode === 'write_file_binary_deliverable_requires_generator' ||
     errorCode === 'complete_task_pptx_requires_render_pptx_from_instructions' ||
     errorCode === 'sandbox_not_ready' ||
     errorCode === 'mcp_provider_not_found' ||
@@ -113,6 +117,8 @@ function buildErrorDetail(errorCode: string, rawError?: string) {
       return 'This task is asking for a downloadable artifact, but complete_task was called without attachments.';
     case 'complete_task_attachment_path_invalid':
       return 'Each complete_task attachment must use a non-empty path that points to a file inside the workspace, not the workspace root.';
+    case 'write_file_binary_deliverable_requires_generator':
+      return 'write_file only supports UTF-8 text files. Final docx/xlsx/pptx/pdf and archive deliverables must be generated through a real document generator or renderer.';
     case 'complete_task_pptx_requires_render_pptx_from_instructions':
       return 'PPTX attachments must come from render_pptx_from_instructions before complete_task can deliver them.';
     default:
@@ -132,6 +138,8 @@ function buildErrorInstruction(errorCode: string, toolName: string) {
       return 'Confirm the final downloadable file exists in the workspace, then re-run complete_task with that file path in complete_task.attachments.';
     case 'complete_task_attachment_path_invalid':
       return 'Fix the attachment paths to use non-empty workspace-relative file paths that point to the generated deliverable files.';
+    case 'write_file_binary_deliverable_requires_generator':
+      return 'Generate the final downloadable file through shell/python tooling or the managed renderer, verify it can be opened, then continue. Do not use write_file for docx/xlsx/pptx/pdf or archive outputs.';
     case 'complete_task_pptx_requires_render_pptx_from_instructions':
       return 'Call render_pptx_from_instructions first, then attach the returned PPTX path in complete_task.attachments.';
     case 'sandbox_not_ready':

@@ -42,6 +42,7 @@ import {
   replaceSessionConnectorDraftEntries,
 } from '@/lib/session-connector-draft';
 import { ALTUS_MODE_STORAGE_KEY, readAltusMode } from '@/lib/altus-settings';
+import { isManagedInternalSupportArtifact } from '@/lib/managed-artifact-visibility';
 
 export interface AgentMessage {
   id?: string;
@@ -966,7 +967,22 @@ function shouldDisplayExecutorEvent(metadataRaw: unknown, contentRaw?: string): 
   const itemType =
     asText(metadata.itemType).toLowerCase() ||
     asText(item.type).toLowerCase();
+  const toolName = asText(metadata.toolName).toLowerCase();
+  const args = toRecord(metadata.arguments);
+  const outputPreview = toRecord(metadata.outputPreview);
+  const artifactPath =
+    asText(args.path) ||
+    asText(outputPreview.path) ||
+    asText(toRecord(metadata.writeFileProgress).path);
   if (executor === 'codex' && (normalizedEventType === 'stderr.line' || normalizedEventType === 'stdout.line')) {
+    return false;
+  }
+  if (
+    asText(metadata.executor).toLowerCase() === 'altus' &&
+    asText(metadata.executionMode).toLowerCase() === 'managed' &&
+    (toolName === 'write_file' || toolName === 'read_file') &&
+    isManagedInternalSupportArtifact(artifactPath)
+  ) {
     return false;
   }
   if (!normalizedEventType) {

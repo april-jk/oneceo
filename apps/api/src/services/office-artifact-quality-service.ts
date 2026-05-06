@@ -1,6 +1,4 @@
 import { inflateRawSync } from 'node:zlib';
-import path from 'node:path';
-
 export type OfficeArtifactKind = 'docx' | 'xlsx';
 
 export type OfficeManifestStatus = 'found' | 'missing' | 'invalid' | 'not_required';
@@ -174,7 +172,7 @@ function resolveXlsxMinimumEffectiveCellCount(manifest: Record<string, unknown> 
 }
 
 function validateDocx(input: ValidateOfficeArtifactInput): OfficeArtifactQualityReport {
-  const required = input.requireManifest !== false;
+  const required = input.requireManifest === true;
   const { status, manifest } = parseManifest({ bytes: input.manifestBytes, required });
   const report: OfficeArtifactQualityReport = {
     kind: 'docx',
@@ -289,7 +287,7 @@ function countSheetMetrics(sheetXml: string, sharedStrings: string[]) {
 }
 
 function validateXlsx(input: ValidateOfficeArtifactInput): OfficeArtifactQualityReport {
-  const required = input.requireManifest !== false;
+  const required = input.requireManifest === true;
   const { status, manifest } = parseManifest({ bytes: input.manifestBytes, required });
   const report: OfficeArtifactQualityReport = {
     kind: 'xlsx',
@@ -374,12 +372,6 @@ function validateXlsx(input: ValidateOfficeArtifactInput): OfficeArtifactQuality
 export class OfficeArtifactQualityService {
   validateOfficeArtifact(input: ValidateOfficeArtifactInput): OfficeArtifactQualityReport {
     return input.kind === 'docx' ? validateDocx(input) : validateXlsx(input);
-  }
-
-  resolveManifestRelativePath(artifactPath: string, kind: OfficeArtifactKind): string {
-    const directory = path.posix.dirname(artifactPath);
-    const manifestName = kind === 'docx' ? 'document_manifest.json' : 'workbook_manifest.json';
-    return directory === '.' ? manifestName : path.posix.join(directory, manifestName);
   }
 }
 

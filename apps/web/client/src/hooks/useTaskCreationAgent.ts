@@ -192,15 +192,17 @@ function extractOrchestratorSessionId(message: AgentMessage): string | null {
 function shouldAttemptSessionTitleResolve(value: string): boolean {
   if (typeof value !== 'string') return false;
   const normalized = value.trim().replace(/\s+/g, ' ');
-  return normalized.length > 0;
+  if (!normalized) return false;
+  if (normalized.length >= 12) return true;
+  return /(帮我|请|请帮|分析|排查|修复|开发|实现|优化|重构|设计|生成|创建|制作|写|继续|修改|整理|总结|如何|怎么|为什么|报错|bug|问题|页面|功能|css|html|nodejs|代码|接口|数据库|deploy|build|fix|debug|analy[sz]e|implement|optimi[sz]e|refactor|create|write)/i.test(
+    normalized
+  );
 }
 
 function dispatchTaskCreationSessionUpdated(detail: {
   sessionId: string;
   title?: string;
   status?: string;
-  projectId?: string | null;
-  projectName?: string | null;
 }) {
   try {
     window.dispatchEvent(
@@ -209,12 +211,6 @@ function dispatchTaskCreationSessionUpdated(detail: {
           sessionId: detail.sessionId,
           ...(detail.title ? { title: detail.title } : {}),
           ...(detail.status ? { status: detail.status } : {}),
-          ...(Object.prototype.hasOwnProperty.call(detail, 'projectId')
-            ? { projectId: detail.projectId || null }
-            : {}),
-          ...(Object.prototype.hasOwnProperty.call(detail, 'projectName')
-            ? { projectName: detail.projectName || null }
-            : {}),
         },
       })
     );
@@ -2681,7 +2677,6 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     typeof options?.initialProjectId === 'string' && options.initialProjectId.trim()
       ? options.initialProjectId.trim()
       : null;
-  const initialProjectNameForNewSessionRef = useRef<string | null>(null);
   const [isConnected, setIsConnected] = useState(() => isManagedAltusMode());
   const [isProcessing, setIsProcessing] = useState(false);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
@@ -2716,8 +2711,6 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       try {
         const project = await getTaskCreationProject(initialProjectIdForNewSession);
         if (cancelled) return;
-        initialProjectNameForNewSessionRef.current =
-          typeof project?.name === 'string' && project.name.trim() ? project.name.trim() : null;
 
         const nextEntries: SessionConnectorDraftEntry[] = Array.isArray(project?.defaultConnectors)
           ? project.defaultConnectors
@@ -5251,10 +5244,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       let shouldBindCreatedSession = false;
       const initialProjectId = !activeSessionId ? initialProjectIdForNewSession || undefined : undefined;
       if (!activeSessionId) {
-        const created = await createTaskCreationDraftSession({
-          title: text,
-          projectId: initialProjectId || undefined,
-        });
+        const created = await createTaskCreationDraftSession(text);
         const createdSessionId = (created?.id || '').trim();
         if (!createdSessionId) {
           throw new Error('managed draft session id missing');
@@ -5262,18 +5252,10 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         activeSessionId = createdSessionId;
         shouldBindCreatedSession = true;
         if (initialProjectId) {
-          dispatchTaskCreationSessionUpdated({
+          await createTaskCreationSession({
             sessionId: createdSessionId,
+            mode: 'altus',
             projectId: initialProjectId,
-            projectName: initialProjectNameForNewSessionRef.current,
-            status: created.status || 'in_progress',
-          });
-        }
-        if (typeof created.title === 'string' && created.title.trim()) {
-          dispatchTaskCreationSessionUpdated({
-            sessionId: createdSessionId,
-            title: created.title.trim(),
-            status: created.status || 'in_progress',
           });
         }
         applyPendingConnectorDraftAsync(createdSessionId);
@@ -5450,14 +5432,6 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         const provisionalId = generateSessionId();
         activeSessionId = provisionalId;
         bindSessionId(provisionalId);
-        if (initialProjectIdForNewSession) {
-          dispatchTaskCreationSessionUpdated({
-            sessionId: provisionalId,
-            projectId: initialProjectIdForNewSession,
-            projectName: initialProjectNameForNewSessionRef.current,
-            status: 'in_progress',
-          });
-        }
       }
       const messageKey = generateClientMessageKey('user');
       const messageMetadata = {
@@ -5490,8 +5464,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       let prePersistedUserInput = false;
       if (activeSessionId) {
         try {
-          const initialProjectId = initialProjectIdForNewSession || undefined;
-          const createdSession = await createTaskCreationSession({
+          const initialProjectId = !activeSessionId ? initialProjectIdForNewSession || undefined : undefined;
+          await createTaskCreationSession({
             sessionId: activeSessionId,
             mode: 'sandbox',
             executor,
@@ -5508,13 +5482,6 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           applyPendingConnectorDraftAsync(activeSessionId);
           dispatchTaskCreationSessionUpdated({
             sessionId: activeSessionId,
-            ...(createdSession?.title ? { title: createdSession.title } : {}),
-            ...(Object.prototype.hasOwnProperty.call(createdSession || {}, 'projectId')
-              ? { projectId: createdSession?.projectId || null }
-              : {}),
-            ...(Object.prototype.hasOwnProperty.call(createdSession || {}, 'projectName')
-              ? { projectName: createdSession?.projectName || null }
-              : {}),
             status: 'in_progress',
           });
           if (shouldAttemptSessionTitleResolve(text)) {
@@ -5683,9 +5650,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const ensureSession = useCallback(async (_title?: string) => {
     const existing = (sessionId || '').trim();
     if (existing) return existing;
-    const created = await createTaskCreationDraftSession({
-      projectId: initialProjectIdForNewSession || undefined,
-    });
+    const created = await createTaskCreationDraftSession();
     const nextSessionId = (created.id || '').trim();
     if (!nextSessionId) {
       throw new Error('draft session id missing');

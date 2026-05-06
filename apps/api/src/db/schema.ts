@@ -454,6 +454,53 @@ export const taskSessionConnectorRuntimeEvents = pgTable(
   })
 );
 
+export const sessionApiTraces = pgTable(
+  'session_api_traces',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => taskCreationSessions.id, { onDelete: 'cascade' }),
+    runId: uuid('run_id').references(() => taskSessionRuns.id, { onDelete: 'set null' }),
+    traceType: text('trace_type').notNull(),
+    sequence: integer('sequence').notNull().default(0),
+    model: text('model'),
+    provider: text('provider'),
+    toolName: text('tool_name'),
+    serviceName: text('service_name'),
+    endpoint: text('endpoint'),
+    requestMethod: text('request_method'),
+    requestHeaders: jsonb('request_headers'),
+    requestBody: jsonb('request_body'),
+    requestBodyText: text('request_body_text'),
+    responseStatus: integer('response_status'),
+    responseHeaders: jsonb('response_headers'),
+    responseBody: jsonb('response_body'),
+    responseBodyText: text('response_body_text'),
+    durationMs: integer('duration_ms'),
+    startedAt: timestamp('started_at'),
+    completedAt: timestamp('completed_at'),
+    promptTokens: integer('prompt_tokens').default(0),
+    completionTokens: integer('completion_tokens').default(0),
+    cachedPromptTokens: integer('cached_prompt_tokens').default(0),
+    cacheCreationTokens: integer('cache_creation_tokens').default(0),
+    totalTokens: integer('total_tokens').default(0),
+    errorMessage: text('error_message'),
+    errorStack: text('error_stack'),
+    metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    sessionIdx: index('idx_session_api_traces_session_id').on(table.sessionId),
+    sessionTypeIdx: index('idx_session_api_traces_session_type').on(table.sessionId, table.traceType),
+    sessionSequenceIdx: index('idx_session_api_traces_session_sequence').on(table.sessionId, table.sequence),
+    runIdx: index('idx_session_api_traces_run_id').on(table.runId),
+    toolNameIdx: index('idx_session_api_traces_tool_name').on(table.toolName),
+    createdAtIdx: index('idx_session_api_traces_created_at').on(table.createdAt),
+    typeCreatedAtIdx: index('idx_session_api_traces_type_created_at').on(table.traceType, table.createdAt),
+  })
+);
+
 export const platformSkills = pgTable(
   'platform_skills',
   {
@@ -1667,6 +1714,37 @@ export type UserCredit = typeof userCredits.$inferSelect;
 export type NewUserCredit = typeof userCredits.$inferInsert;
 export type CreditTransaction = typeof creditTransactions.$inferSelect;
 export type NewCreditTransaction = typeof creditTransactions.$inferInsert;
+export const apiRequestLogs = pgTable(
+  'api_request_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    appUserId: uuid('app_user_id').notNull(),
+    method: text('method').notNull(),
+    path: text('path').notNull(),
+    queryString: text('query_string'),
+    requestHeaders: jsonb('request_headers').default(sql`'{}'::jsonb`),
+    requestBodySummary: text('request_body_summary'),
+    responseStatus: integer('response_status'),
+    responseBodySummary: text('response_body_summary'),
+    durationMs: integer('duration_ms'),
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    taskSessionId: uuid('task_session_id'),
+    metadataJson: jsonb('metadata_json').default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdx: index('idx_api_request_logs_user_id').on(table.appUserId),
+    userCreatedAtIdx: index('idx_api_request_logs_user_created_at').on(table.appUserId, table.createdAt),
+    pathIdx: index('idx_api_request_logs_path').on(table.path),
+    statusIdx: index('idx_api_request_logs_status').on(table.responseStatus),
+    sessionIdx: index('idx_api_request_logs_session_id').on(table.taskSessionId),
+    createdAtIdx: index('idx_api_request_logs_created_at').on(table.createdAt),
+  })
+);
+
+export type ApiRequestLog = typeof apiRequestLogs.$inferSelect;
+export type NewApiRequestLog = typeof apiRequestLogs.$inferInsert;
 export type CachePricingConfig = typeof cachePricingConfig.$inferSelect;
 export type NewCachePricingConfig = typeof cachePricingConfig.$inferInsert;
 export type TokenUsageLog = typeof tokenUsageLogs.$inferSelect;

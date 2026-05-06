@@ -1,15 +1,6 @@
 import { AppError } from '../utils/errors';
 import type { KvmOrchestratorConnector } from '../connectors/kvm-orchestrator-connector';
 import type { KvmVmListItem, KvmVmState, VmAction } from '../types';
-import type { AuditService } from './audit-service';
-
-function normalizeActionForAudit(action: VmAction) {
-  if (action === 'shutdown') {
-    return 'stop';
-  }
-  return action;
-}
-
 type VmListResult = {
   total: number;
   limit: number;
@@ -18,7 +9,7 @@ type VmListResult = {
 };
 
 export class KvmService {
-  constructor(private readonly connector: KvmOrchestratorConnector, private readonly auditService: AuditService) {}
+  constructor(private readonly connector: KvmOrchestratorConnector) {}
 
   async health() {
     return this.connector.health();
@@ -88,32 +79,12 @@ export class KvmService {
     const operator = options?.operator || 'admin-ui';
     const vmMeta = await this.connector.getVm(vmId).catch(() => null);
 
-    try {
-      const result = await this.connector.runVmAction(vmId, action, {
-        async: options?.async,
-        idempotencyKey: options?.idempotencyKey,
-      });
+    const result = await this.connector.runVmAction(vmId, action, {
+      async: options?.async,
+      idempotencyKey: options?.idempotencyKey,
+    });
 
-      await this.auditService.append({
-        operator,
-        action: normalizeActionForAudit(action),
-        targetVmId: vmId,
-        sessionId: vmMeta?.sessionId,
-        result: 'success',
-      });
-
-      return result;
-    } catch (error) {
-      await this.auditService.append({
-        operator,
-        action: normalizeActionForAudit(action),
-        targetVmId: vmId,
-        sessionId: vmMeta?.sessionId,
-        result: 'failed',
-        detail: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
-    }
+    return result;
   }
 
   async powerVm(vmId: string, action: 'start' | 'stop', operator = 'admin-ui', force = false) {

@@ -4,6 +4,10 @@ import type { AltusRunRecoveryMode, AltusRunTransitionReason } from './altus-run
 import type { ToolCall } from './altus-managed-shared';
 import { asText } from './altus-managed-shared';
 import {
+  traceToolCallStart,
+  traceToolCallComplete,
+} from './api-trace-service';
+import {
   buildManagedToolResultEnvelope,
   type ManagedToolResultEnvelope,
 } from './altus-managed-tool-result-envelope';
@@ -86,6 +90,15 @@ export class AltusManagedToolExecutor {
   }): Promise<AltusManagedToolExecutionEnvelope> {
     const toolName = asText(input.toolCall?.function?.name);
     const toolCallId = asText(input.toolCall?.id);
+    const toolStartedAt = new Date();
+
+    const toolTrace = await traceToolCallStart({
+      sessionId: this.input.sessionId,
+      runId: this.input.runId,
+      toolName: toolName || 'unknown',
+      arguments: input.args,
+      startedAt: toolStartedAt,
+    });
 
     await this.input.eventWriter.appendRunEvent(
       this.input.runId,
@@ -114,6 +127,11 @@ export class AltusManagedToolExecutor {
           contentForUser: result.question,
           activatedSkills: result.activatedSkills as any,
         });
+        traceToolCallComplete(toolTrace, {
+          responseBody: { type: 'ask_user', question: result.question },
+          completedAt: new Date(),
+          durationMs: Date.now() - toolStartedAt.getTime(),
+        });
         return {
           status: 'ask_user',
           toolName,
@@ -139,6 +157,11 @@ export class AltusManagedToolExecutor {
           }),
           contentForUser: result.summary,
           activatedSkills: result.activatedSkills as any,
+        });
+        traceToolCallComplete(toolTrace, {
+          responseBody: { type: 'complete', summary: result.summary },
+          completedAt: new Date(),
+          durationMs: Date.now() - toolStartedAt.getTime(),
         });
         return {
           status: 'complete',
@@ -177,6 +200,11 @@ export class AltusManagedToolExecutor {
           ...(disposition.eventPayload || {}),
         }
       );
+      traceToolCallComplete(toolTrace, {
+        responseBody: { type: 'result', content: result.content },
+        completedAt: new Date(),
+        durationMs: Date.now() - toolStartedAt.getTime(),
+      });
 
       return {
         status: 'result',
@@ -221,6 +249,12 @@ export class AltusManagedToolExecutor {
           ...(disposition.eventPayload || {}),
         }
       );
+      traceToolCallComplete(toolTrace, {
+        responseBody: { type: 'error', error: sanitizedError },
+        completedAt: new Date(),
+        durationMs: Date.now() - toolStartedAt.getTime(),
+        errorMessage: sanitizedError,
+      });
 
       return {
         status: 'failed',

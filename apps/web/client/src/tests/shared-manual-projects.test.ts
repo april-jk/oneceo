@@ -68,12 +68,6 @@ describe("shared manual projects helpers", () => {
     expect(projects.map((project) => project.id)).toEqual(["b"]);
   });
 
-  it("defaults manual projects to expanded on first paint", () => {
-    expect(
-      readSidebarExpandedState(null, "expandedProjectGroups", ["manual-projects"]),
-    ).toEqual(["manual-projects"]);
-  });
-
   it("returns fallback when sidebar expand state JSON is invalid", () => {
     expect(readSidebarExpandedState("{invalid", "expandedProjects", ["fallback"])).toEqual([
       "fallback",

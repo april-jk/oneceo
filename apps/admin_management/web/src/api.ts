@@ -5,8 +5,6 @@ import type {
   AgentManagementOverview,
   AppUserDetailResponse,
   AppUserListResponse,
-  AuditDetailResponse,
-  AuditResponse,
   ConversationSessionDetailResponse,
   ConversationSessionInfraResponse,
   ConversationSessionsResponse,
@@ -67,6 +65,14 @@ import type {
   VmIpInfo,
   VmListResponse,
   VmMetricsInfo,
+  ApiTraceItem,
+  ApiRequestLogEntry,
+  ApiRequestLogListResponse,
+  AuditUserSessionListResponse,
+  AuditSessionMessagesResponse,
+  AuditToolCallListResponse,
+  AuditTransactionListResponse,
+  AuditTokenUsageResponse,
 } from './types';
 
 type ApiSuccess<T> = {
@@ -956,32 +962,150 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  listAudit: (
-    query: {
-      query?: string;
-      operator?: string;
-      action?: string;
-      result?: string;
-      sessionId?: string;
-      targetVmId?: string;
-      from?: string;
-      to?: string;
-      limit?: number;
-      offset?: number;
-    } = {}
-  ) => {
+  getSessionApiTraces: (sessionId: string, query: {
+    type?: string;
+    toolName?: string;
+    model?: string;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
+    const params = new URLSearchParams();
+    params.set('sessionId', sessionId);
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+    return request<{
+      total: number;
+      limit: number;
+      offset: number;
+      traces: ApiTraceItem[];
+    }>(`/api/conversations/sessions/${encodeURIComponent(sessionId)}/api-traces?${params.toString()}`);
+  },
+
+  getApiTraceAggregate: (query: {
+    type?: string;
+    toolName?: string;
+    model?: string;
+    sessionId?: string;
+    from?: string;
+    to?: string;
+    groupBy?: string;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
     const params = new URLSearchParams();
     Object.entries(query).forEach(([key, value]) => {
       if (value !== undefined && value !== null && value !== '') {
         params.set(key, String(value));
       }
     });
-    const suffix = params.toString() ? `?${params.toString()}` : '';
-    return request<AuditResponse>(`/api/audit${suffix}`);
+    return request<Array<{
+      dimension: string | null;
+      count: number;
+      avgDurationMs: number;
+      totalTokens: number;
+      errorCount: number;
+    }>>(`/api/conversations/api-traces/aggregate?${params.toString()}`);
   },
-  getAuditDetail: (auditId: string) =>
-    request<AuditDetailResponse>(`/api/audit/${encodeURIComponent(auditId)}`),
 
+  getApiTraceStats: (query: {
+    type?: string;
+    from?: string;
+    to?: string;
+  } = {}) => {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+    return request<{
+      totalCalls: number;
+      avgDurationMs: number;
+      errorCount: number;
+      totalTokens: number;
+      byType: Array<{ type: string; count: number }>;
+      byTool: Array<{ toolName: string | null; count: number; avgDurationMs: number }>;
+      byModel: Array<{ model: string | null; count: number; totalTokens: number }>;
+    }>(`/api/conversations/api-traces/stats?${params.toString()}`);
+  },
+
+  getApiTraceTrend: (query: {
+    type?: string;
+    from?: string;
+    to?: string;
+    interval?: string;
+  } = {}) => {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+    return request<Array<{
+      bucket: string;
+      count: number;
+      avgDurationMs: number;
+      totalTokens: number;
+      errorCount: number;
+    }>>(`/api/conversations/api-traces/trend?${params.toString()}`);
+  },
+
+  listRequestLogs: (query: {
+    userId?: string;
+    method?: string;
+    path?: string;
+    status?: number;
+    from?: string;
+    to?: string;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+    return request<ApiRequestLogListResponse>(`/api/audit/request-logs?${params.toString()}`);
+  },
+
+  getRequestLogDetail: (logId: string) =>
+    request<ApiRequestLogEntry>(`/api/audit/request-logs/${encodeURIComponent(logId)}`),
+
+  listUserSessions: (userId: string, query?: { page?: number; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (query?.page !== undefined) params.set('page', String(query.page));
+    if (query?.limit !== undefined) params.set('limit', String(query.limit));
+    return request<AuditUserSessionListResponse>(`/api/audit/users/${encodeURIComponent(userId)}/sessions?${params.toString()}`);
+  },
+
+  getSessionMessages: (sessionId: string) =>
+    request<AuditSessionMessagesResponse>(`/api/audit/sessions/${encodeURIComponent(sessionId)}/messages`),
+
+  listUserToolCalls: (userId: string, query?: { page?: number; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (query?.page !== undefined) params.set('page', String(query.page));
+    if (query?.limit !== undefined) params.set('limit', String(query.limit));
+    return request<AuditToolCallListResponse>(`/api/audit/users/${encodeURIComponent(userId)}/tool-calls?${params.toString()}`);
+  },
+
+  listUserTransactions: (userId: string, query?: { page?: number; limit?: number; type?: string }) => {
+    const params = new URLSearchParams();
+    if (query?.page !== undefined) params.set('page', String(query.page));
+    if (query?.limit !== undefined) params.set('limit', String(query.limit));
+    if (query?.type) params.set('type', query.type);
+    return request<AuditTransactionListResponse>(`/api/audit/users/${encodeURIComponent(userId)}/transactions?${params.toString()}`);
+  },
+
+  listUserTokenUsage: (userId: string, query?: { page?: number; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (query?.page !== undefined) params.set('page', String(query.page));
+    if (query?.limit !== undefined) params.set('limit', String(query.limit));
+    return request<AuditTokenUsageResponse>(`/api/audit/users/${encodeURIComponent(userId)}/token-usage?${params.toString()}`);
+  },
   listMembershipPlans: () => request<MembershipPlan[]>('/api/internal/membership/plans'),
   getMembershipPlan: (planId: string) =>
     request<MembershipPlan>(`/api/internal/membership/plans/${encodeURIComponent(planId)}`),

@@ -595,7 +595,8 @@ export function buildManagedToolDefinitions() {
       type: 'function',
       function: {
         name: 'write_file',
-        description: 'Write or replace a UTF-8 text file in the workspace.',
+        description:
+          'Write or replace a UTF-8 text file in the workspace. Do not use this for final docx/xlsx/pptx/pdf or archive deliverables.',
         parameters: objectSchema(
           {
             path: { type: 'string', description: 'Workspace-relative file path.' },

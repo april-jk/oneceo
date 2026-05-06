@@ -57,6 +57,22 @@ type ManagedTodoItem = {
   activeForm?: string;
 };
 
+const BINARY_DELIVERABLE_EXTENSIONS = new Set([
+  '.doc',
+  '.docx',
+  '.odp',
+  '.ods',
+  '.odt',
+  '.pdf',
+  '.ppt',
+  '.pptx',
+  '.tar',
+  '.tgz',
+  '.xls',
+  '.xlsx',
+  '.zip',
+]);
+
 function asPositiveInt(value: unknown, fallback: number, max: number) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
@@ -86,6 +102,10 @@ function asStringArray(value: unknown, maxItems: number) {
     if (result.length >= maxItems) break;
   }
   return result;
+}
+
+function isBinaryDeliverablePath(relativePath: string) {
+  return BINARY_DELIVERABLE_EXTENSIONS.has(path.posix.extname(relativePath).toLowerCase());
 }
 
 function findActiveSkillForResourceLoad(
@@ -770,6 +790,13 @@ export class AltusManagedToolRuntime {
     if (missing.length > 0) {
       throw new Error('complete_task_pptx_requires_render_pptx_from_instructions');
     }
+  }
+
+  private assertWriteFileTargetAllowed(relativePath: string) {
+    if (!isBinaryDeliverablePath(relativePath)) {
+      return;
+    }
+    throw new Error('write_file_binary_deliverable_requires_generator');
   }
 
   private parseTodos(raw: unknown) {
@@ -1626,6 +1653,8 @@ export class AltusManagedToolRuntime {
 
     if (toolName === 'write_file') {
       const absolutePath = this.resolveWorkspacePath(rawArgs.path);
+      const relativePath = this.relativeForDisplay(absolutePath);
+      this.assertWriteFileTargetAllowed(relativePath);
       const content = String(rawArgs.content ?? '');
       const parentDir = this.posix.dirname(absolutePath);
       await this.runShell(`mkdir -p ${shellEscape(parentDir)}`, {
@@ -1639,7 +1668,7 @@ export class AltusManagedToolRuntime {
         type: 'result',
         activatedSkills,
         content: JSON.stringify({
-          path: this.relativeForDisplay(absolutePath),
+          path: relativePath,
           bytes: Buffer.byteLength(content, 'utf-8'),
         }),
       };

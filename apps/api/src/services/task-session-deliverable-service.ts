@@ -169,24 +169,6 @@ export class TaskSessionDeliverableService {
     }
   }
 
-  private async readOfficeManifest(input: {
-    sandboxId: string;
-    workspaceRoot: string;
-    relativePath: string;
-    kind: OfficeArtifactKind;
-  }): Promise<{ manifestPath: string; manifestBytes: Buffer | null }> {
-    const manifestPath = officeArtifactQualityService.resolveManifestRelativePath(input.relativePath, input.kind);
-    const absoluteManifestPath = this.posix.join(input.workspaceRoot, manifestPath);
-    try {
-      return {
-        manifestPath,
-        manifestBytes: Buffer.from(await e2bConnector.readFile(input.sandboxId, absoluteManifestPath)),
-      };
-    } catch {
-      return { manifestPath, manifestBytes: null };
-    }
-  }
-
   async persistManagedRunDeliverables(input: {
     sessionId: string;
     runId: string;
@@ -230,18 +212,10 @@ export class TaskSessionDeliverableService {
           : resolveMimeType(relativePath, attachment.mimeType);
         const officeKind = isDirectory ? null : resolveOfficeArtifactKind(relativePath, mimeType);
         if (officeKind) {
-          const manifest = await this.readOfficeManifest({
-            sandboxId: input.sandboxId,
-            workspaceRoot: input.workspaceRoot,
-            relativePath,
-            kind: officeKind,
-          });
           const qualityReport = officeArtifactQualityService.validateOfficeArtifact({
             kind: officeKind,
             artifactPath: relativePath,
             bytes,
-            manifestPath: manifest.manifestPath,
-            manifestBytes: manifest.manifestBytes,
           });
           const blockingErrors = qualityReport.errors.filter((code) => isBlockingOfficeQualityError(code));
           const advisoryErrors = qualityReport.errors.filter((code) => !isBlockingOfficeQualityError(code));

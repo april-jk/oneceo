@@ -321,6 +321,25 @@ test('complete_task rejects malformed downloadable attachments payloads', async 
   );
 });
 
+test('write_file rejects binary deliverable targets that require a real generator', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  await assert.rejects(
+    runtime.execute('write_file', {
+      path: 'deliverables/final.docx',
+      content: '# 这其实只是 markdown',
+    }),
+    /write_file_binary_deliverable_requires_generator/
+  );
+});
+
 test('complete_task rejects downloadable tasks without attachments', async () => {
   const runtime = new AltusManagedToolRuntime({
     sessionId: 'session-1',
@@ -416,6 +435,28 @@ test('tool result envelope gives repair guidance for missing downloadable attach
   assert.equal(payload.status, 'error');
   assert.match(payload.error, /downloadable artifact/i);
   assert.match(payload.instruction, /Confirm the final downloadable file exists in the workspace/i);
+});
+
+test('tool result envelope steers binary deliverables away from write_file', () => {
+  const envelope = buildManagedToolResultEnvelope({
+    status: 'error',
+    runId: 'run-1',
+    toolUseId: 'tool-3',
+    toolName: 'write_file',
+    modelRoundId: 'round-1',
+    args: {
+      path: 'deliverables/final.docx',
+      content: '# fake docx',
+    },
+    errorMessage: 'write_file_binary_deliverable_requires_generator',
+  });
+
+  assert.equal(envelope.errorCode, 'write_file_binary_deliverable_requires_generator');
+  assert.equal(envelope.retryable, true);
+  const payload = JSON.parse(envelope.contentForModel);
+  assert.equal(payload.status, 'error');
+  assert.match(payload.error, /write_file only supports UTF-8 text files/i);
+  assert.match(payload.instruction, /Do not use write_file/i);
 });
 
 test('complete_task accepts pptx attachment returned by ppt workflow renderer', async () => {

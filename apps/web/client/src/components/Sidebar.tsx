@@ -1529,6 +1529,7 @@ export default function Sidebar({
                   onClick={() => {
                     setLocation(`/new-task?new=${Date.now()}`);
                   }}
+                  data-tour="sidebar-new-task"
                   data-umami-event="sidebar_new_task_click"
                   data-umami-event-target="/new-task"
                 >

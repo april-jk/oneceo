@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API Trace 详情</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #f6f8fa;
+      --surface: #f9fbfd;
+      --surface-raised: #f2f5f8;
+      --surface-soft: #edf1f5;
+      --border: #d0d7de;
+      --text: #1f2328;
+      --text-secondary: #57606a;
+      --success: #2f8f68;
+      --danger: #cf222e;
+      --info: #0969da;
+      --neutral: #6b7480;
+      --mono: 'Fira Code', SFMono-Regular, Consolas, monospace;
+      --radius: 8px;
+    }
+    html { scroll-behavior: smooth; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'IBM Plex Sans', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 24px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    .header-left { flex: 1; }
+    .section-tag {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+    .title {
+      font-size: 20px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .mono { font-family: var(--mono); }
+    .meta {
+      display: flex;
+      gap: 12px;
+      margin-top: 10px;
+      flex-wrap: wrap;
+    }
+    .close-btn {
+      background: var(--surface-raised);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 16px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .close-btn:hover { background: var(--border); }
+
+    /* Badges */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    .badge-info { background: color-mix(in srgb, var(--info) 10%, transparent); color: #0550ae; }
+    .badge-warning { background: color-mix(in srgb, var(--warning) 10%, transparent); color: #7a5100; }
+    .badge-neutral { background: color-mix(in srgb, var(--neutral) 10%, transparent); color: #4b5563; }
+    .status-success { color: var(--success); }
+    .status-error { color: var(--danger); }
+
+    /* Metrics */
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .metric {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      text-align: center;
+    }
+    .metric-value {
+      font-family: var(--mono);
+      font-size: 22px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .metric-label {
+      font-size: 11px;
+      color: var(--text-secondary);
+      margin-top: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    /* Panels */
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+    .panel-header {
+      padding: 12px 16px;
+      background: var(--surface-raised);
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+    }
+    .panel-header:hover { background: var(--surface-soft); }
+    .panel-body {
+      padding: 16px;
+      display: none;
+    }
+    .panel-body.open { display: block; }
+    .panel-toggle { font-size: 11px; color: var(--text-secondary); }
+
+    /* Code blocks */
+    pre {
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.5;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+    }
+    .json-key { color: #0969da; }
+    .json-string { color: #2f8f68; }
+    .json-number { color: #9a6700; }
+    .json-boolean { color: #cf222e; }
+    .json-null { color: #6b7480; }
+
+    /* Error */
+    .error-block {
+      background: color-mix(in srgb, var(--danger) 6%, transparent);
+      border: 1px solid color-mix(in srgb, var(--danger) 18%, transparent);
+      border-radius: var(--radius);
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+    .error-header {
+      padding: 10px 16px;
+      background: color-mix(in srgb, var(--danger) 10%, transparent);
+      font-size: 12px;
+      font-weight: 600;
+      color: #9e1c23;
+    }
+    .error-body {
+      padding: 16px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: #9e1c23;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+    }
+
+    /* Back to top */
+    .back-to-top {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      transition: all 0.2s;
+      z-index: 100;
+    }
+    .back-to-top.visible { display: flex; }
+    .back-to-top:hover { background: var(--info); color: #fff; border-color: var(--info); }
+
+    /* Empty / not found */
+    .empty {
+      text-align: center;
+      padding: 80px 20px;
+      color: var(--text-secondary);
+    }
+    .empty h2 { font-size: 18px; margin-bottom: 8px; color: var(--text); }
+
+    /* Grid for request/response */
+    .code-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+    }
+    @media (min-width: 900px) {
+      .code-grid { grid-template-columns: 1fr 1fr; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container" id="app">
+    <div class="empty">
+      <h2>加载中...</h2>
+      <p>正在读取 API Trace 数据</p>
+    </div>
+  </div>
+
+  <button class="back-to-top" id="back-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="回到顶部">↑</button>
+
+  <script>
+    function formatDateTime(value) {
+      if (!value) return '-';
+      try {
+        const d = new Date(value);
+        return d.toLocaleString('zh-CN', { hour12: false });
+      } catch {
+        return value;
+      }
+    }
+
+    function syntaxHighlightJSON(json) {
+      if (typeof json !== 'string') json = JSON.stringify(json, null, 2);
+      json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return json.replace(
+        /("(?:\\.|[^"\\])*")(\s*:)?/g,
+        function (match, string, colon) {
+          const keyClass = colon ? 'json-key' : 'json-string';
+          return '<span class="' + keyClass + '">' + string + '</span>' + (colon || '');
+        }
+      )
+      .replace(/\b(true|false)\b/g, '<span class="json-boolean">$1</span>')
+      .replace(/\b(null)\b/g, '<span class="json-null">$1</span>')
+      .replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="json-number">$1</span>');
+    }
+
+    function formatRawHttp(t) {
+      const lines = [];
+      lines.push((t.requestMethod || 'POST') + ' ' + (t.endpoint || '/') + ' HTTP/1.1');
+      lines.push('Host: ' + (t.provider || 'upstream'));
+      if (t.requestHeaders) {
+        Object.entries(t.requestHeaders).forEach(function ([k, v]) {
+          lines.push(k + ': ' + (Array.isArray(v) ? v.join(', ') : v));
+        });
+      }
+      lines.push('');
+      if (t.requestBody) {
+        lines.push(JSON.stringify(t.requestBody, null, 2));
+      }
+      lines.push('');
+      lines.push('HTTP/1.1 ' + (t.responseStatus || 200) + ' ' + (t.errorMessage ? 'Error' : 'OK'));
+      if (t.responseHeaders) {
+        Object.entries(t.responseHeaders).forEach(function ([k, v]) {
+          lines.push(k + ': ' + (Array.isArray(v) ? v.join(', ') : v));
+        });
+      }
+      lines.push('');
+      if (t.responseBody) {
+        lines.push(JSON.stringify(t.responseBody, null, 2));
+      }
+      if (t.errorMessage) {
+        lines.push(t.errorMessage);
+      }
+      return lines.join('\n');
+    }
+
+    function renderPanel(title, content, isOpen) {
+      const id = 'panel-' + Math.random().toString(36).slice(2, 8);
+      const openClass = isOpen ? 'open' : '';
+      return (
+        '<div class="panel">' +
+        '<div class="panel-header" onclick="document.getElementById(\'' + id + '\').classList.toggle(\'open\')">' +
+        '<span>' + title + '</span>' +
+        '<span class="panel-toggle">点击展开/收起</span>' +
+        '</div>' +
+        '<div class="panel-body ' + openClass + '" id="' + id + '">' +
+        '<pre>' + content + '</pre>' +
+        '</div>' +
+        '</div>'
+      );
+    }
+
+    function render() {
+      const params = new URLSearchParams(window.location.search);
+      const traceId = params.get('id');
+      if (!traceId) {
+        document.getElementById('app').innerHTML =
+          '<div class="empty"><h2>参数错误</h2><p>缺少 trace ID</p></div>';
+        return;
+      }
+
+      const raw = sessionStorage.getItem('trace-detail-' + traceId);
+      if (!raw) {
+        document.getElementById('app').innerHTML =
+          '<div class="empty"><h2>数据已过期</h2><p>请在管理后台重新打开此 Trace</p></div>';
+        return;
+      }
+
+      let trace;
+      try {
+        trace = JSON.parse(raw);
+      } catch (e) {
+        document.getElementById('app').innerHTML =
+          '<div class="empty"><h2>数据解析失败</h2><p>无法读取 Trace 数据</p></div>';
+        return;
+      }
+
+      const typeLabel = trace.traceType === 'llm_request' ? 'LLM'
+        : trace.traceType === 'tool_call' ? '工具'
+        : trace.traceType === 'service_api' ? '服务' : '连接器';
+      const typeTone = trace.traceType === 'llm_request' ? 'info'
+        : trace.traceType === 'tool_call' ? 'warning' : 'neutral';
+      const hasError = !!trace.errorMessage;
+
+      let html = '';
+
+      // Header
+      html += '<div class="header">';
+      html += '<div class="header-left">';
+      html += '<div class="section-tag">API Trace 详情</div>';
+      html += '<div class="title">';
+      html += '<span class="badge badge-' + typeTone + '">' + typeLabel + '</span>';
+      html += '<span class="mono">' + (trace.model || trace.toolName || trace.serviceName || trace.endpoint || trace.traceType) + '</span>';
+      html += '</div>';
+      html += '<div class="meta">';
+      html += '<span class="' + (hasError ? 'status-error' : 'status-success') + '">' + (hasError ? '● 失败' : '● 成功') + '</span>';
+      html += '<span class="mono">' + (trace.durationMs ? trace.durationMs + 'ms' : '-') + '</span>';
+      html += '<span class="mono">' + formatDateTime(trace.createdAt) + '</span>';
+      if (trace.sequence !== undefined) {
+        html += '<span class="mono">seq: ' + trace.sequence + '</span>';
+      }
+      html += '</div>';
+      html += '</div>';
+      html += '<button class="close-btn" onclick="window.close()">关闭标签页</button>';
+      html += '</div>';
+
+      // Token metrics
+      if (trace.promptTokens || trace.completionTokens) {
+        html += '<div class="metrics">';
+        html += '<div class="metric"><div class="metric-value">' + (trace.promptTokens || 0) + '</div><div class="metric-label">Prompt</div></div>';
+        html += '<div class="metric"><div class="metric-value">' + (trace.completionTokens || 0) + '</div><div class="metric-label">Completion</div></div>';
+        html += '<div class="metric"><div class="metric-value">' + (trace.totalTokens || 0) + '</div><div class="metric-label">Total</div></div>';
+        if (trace.cachedPromptTokens) {
+          html += '<div class="metric"><div class="metric-value">' + trace.cachedPromptTokens + '</div><div class="metric-label">Cached</div></div>';
+        }
+        if (trace.cacheCreationTokens) {
+          html += '<div class="metric"><div class="metric-value">' + trace.cacheCreationTokens + '</div><div class="metric-label">Cache 创建</div></div>';
+        }
+        html += '</div>';
+      }
+
+      // Error
+      if (trace.errorMessage) {
+        html += '<div class="error-block">';
+        html += '<div class="error-header">错误</div>';
+        html += '<div class="error-body">' + trace.errorMessage.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>';
+        html += '</div>';
+      }
+
+      // Request / Response
+      if (trace.requestBody || trace.responseBody) {
+        html += '<div class="code-grid">';
+        if (trace.requestBody) {
+          html += renderPanel('请求', syntaxHighlightJSON(trace.requestBody), true);
+        }
+        if (trace.responseBody) {
+          html += renderPanel('响应', syntaxHighlightJSON(trace.responseBody), true);
+        }
+        html += '</div>';
+      }
+
+      // Raw HTTP
+      html += renderPanel('原始 HTTP', formatRawHttp(trace).replace(/</g, '&lt;').replace(/>/g, '&gt;'), false);
+
+      // Metadata
+      if (trace.metadataJson && Object.keys(trace.metadataJson).length > 0) {
+        html += renderPanel('元数据', syntaxHighlightJSON(trace.metadataJson), false);
+      }
+
+      document.getElementById('app').innerHTML = html;
+
+      // Auto-open first panel if only one
+      const panels = document.querySelectorAll('.panel-body');
+      if (panels.length === 1) {
+        panels[0].classList.add('open');
+      }
+    }
+
+    function onScroll() {
+      const btn = document.getElementById('back-to-top');
+      if (!btn) return;
+      btn.classList.toggle('visible', window.scrollY > 400);
+    }
+    window.addEventListener('scroll', onScroll);
+
+    render();
+  </script>
+</body>
+</html>

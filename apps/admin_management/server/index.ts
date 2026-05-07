@@ -24,7 +24,6 @@ import { createBillingManagementRoutes } from './routes/billing-management-route
 import { createNotificationManagementRoutes } from './routes/notification-management-routes';
 import { createMembershipManagementRoutes } from './routes/membership-management-routes';
 import { createPromoBannerManagementRoutes } from './routes/promo-banner-management-routes';
-import { createAuditRoutes } from './routes/audit-routes';
 import { AgentManagementService } from './services/agent-management-service';
 import { AdminThemeService } from './services/admin-theme-service';
 import { ConversationManagementService } from './services/conversation-management-service';
@@ -130,7 +129,6 @@ app.use('/api/internal/billing', createBillingManagementRoutes());
 app.use('/api/internal/notifications', createNotificationManagementRoutes());
 app.use('/api/internal/promo-banners', createPromoBannerManagementRoutes());
 app.use('/api/internal/membership', createMembershipManagementRoutes());
-app.use('/api/audit', createAuditRoutes(oneceoApiConnector));
 
 if (hasBuiltAdminWeb) {
   app.get('*', (req, res, next) => {

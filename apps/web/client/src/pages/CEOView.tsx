@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/tooltip";
 import ConnectorDialog from "@/components/ConnectorDialog";
 import { mergePendingAttachments, type PendingAttachment } from "@/lib/task-attachments";
+import { GuidedTour, type GuidedTourStep } from "@/components/GuidedTour";
 
 // 模拟数据
 const mockProjects = [
@@ -90,6 +91,31 @@ const mockProjects = [
   },
 ];
 
+const CEO_VIEW_TOUR_KEY = "oneceo:tour.ceo_view.completed";
+const CEO_VIEW_STEPS: GuidedTourStep[] = [
+  {
+    id: "ceo-metrics",
+    selector: '[data-tour="ceo-metrics"]',
+    title: "跨项目指标",
+    body: "这里用于快速判断项目规模、团队负载、任务完成率和整体进度。",
+    placement: "bottom",
+  },
+  {
+    id: "ceo-context",
+    selector: '[data-tour="ceo-context"]',
+    title: "总经理上下文",
+    body: "适合问资源调度、项目优先级和团队绩效，不替代单任务执行。",
+    placement: "bottom",
+  },
+  {
+    id: "ceo-composer",
+    selector: '[data-tour="ceo-composer"]',
+    title: "发起调度问题",
+    body: "可以带附件、连接器和执行强度，让总经理视角围绕项目治理给出判断。",
+    placement: "top",
+  },
+];
+
 export default function CEOView() {
   const { t } = useTranslation();
   const [message, setMessage] = useState("");
@@ -139,6 +165,11 @@ export default function CEOView() {
   return (
     <WorkspaceLayout>
       <div className="flex flex-col h-[calc(100vh-3.5rem)] overflow-hidden">
+        <GuidedTour
+          storageKey={CEO_VIEW_TOUR_KEY}
+          steps={CEO_VIEW_STEPS}
+          autoStart
+        />
         {/* 上方：统计数据卡片 */}
         <div className="flex-shrink-0 p-6 space-y-4">
           <div>
@@ -149,7 +180,7 @@ export default function CEOView() {
           </div>
 
           {/* 关键指标卡片 - 横向排列 */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div data-tour="ceo-metrics" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* 项目总数 */}
             <Card className="p-6">
               <div className="flex items-center justify-between">
@@ -226,7 +257,7 @@ export default function CEOView() {
           <div className="flex-1 overflow-y-auto mb-4 scrollbar-thin scrollbar-thumb-muted-foreground/20 scrollbar-track-transparent">
             <div className="max-w-4xl mx-auto">
               {/* 欢迎消息 */}
-              <div className="flex items-start gap-4 mb-6">
+              <div data-tour="ceo-context" className="flex items-start gap-4 mb-6">
                 <div className="w-10 h-10 bg-primary rounded-full flex items-center justify-center flex-shrink-0">
                   <span className="text-primary-foreground font-semibold text-sm">
                     CEO
@@ -259,7 +290,7 @@ export default function CEOView() {
           {/* 输入框区域 - 固定在聊天区底部 */}
           <div className="flex-shrink-0">
             <div className="max-w-4xl mx-auto">
-              <Card className="p-4">
+              <Card data-tour="ceo-composer" className="p-4">
                 <div className="space-y-3">
                   {/* Textarea */}
                   <Textarea

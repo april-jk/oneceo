@@ -78,6 +78,7 @@ import AltusArtifactPreviewCard, {
   type AltusArtifactFile,
 } from "@/components/AltusArtifactPreviewCard";
 import TaskDeliverableCard from "@/components/TaskDeliverableCard";
+import { GuidedTour, type GuidedTourStep } from "@/components/GuidedTour";
 import AltusRunReplayDrawer, {
   type AltusDrawerView,
   type AltusReplayAction,
@@ -151,6 +152,80 @@ import { useAuth } from "@/contexts/AuthContext";
 
 type PageMode = "input" | "chat";
 const BILLING_TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "stopped"]);
+const HOME_CORE_TOUR_KEY = "oneceo:tour.home_core.completed";
+const HOME_CORE_TOUR_STEPS: GuidedTourStep[] = [
+  {
+    id: "new-task",
+    selector: '[data-tour="sidebar-new-task"]',
+    title: "新建任务",
+    body: "从这里开启一个新的 Agent 会话。每个会话都会记录上下文、产出和后续操作。",
+    placement: "right",
+  },
+  {
+    id: "composer",
+    selector: '[data-tour="home-composer"]',
+    title: "描述你要完成的事",
+    body: "直接写目标、约束和交付物。越接近真实需求，Altus 越容易给出可复核产出。",
+    placement: "top",
+  },
+  {
+    id: "attachment",
+    selector: '[data-tour="composer-attachments"]',
+    title: "补充资料和 Skills",
+    body: "这里可以添加本地文件、云端资料，或选择已启用的 Skills 进入本次任务。",
+    placement: "top",
+  },
+  {
+    id: "send",
+    selector: '[data-tour="composer-send"]',
+    title: "开始执行",
+    body: "发送后会进入会话执行链路，产出、文件、部署和调试信息会跟随会话保存。",
+    placement: "top",
+  },
+];
+const HOME_LOCAL_TOURS: Record<string, { storageKey: string; steps: GuidedTourStep[] }> = {
+  attachments: {
+    storageKey: "oneceo:tour.home_attachment.seen",
+    steps: [
+      {
+        id: "attachments",
+        selector: '[data-tour="composer-attachments"]',
+        title: "附件、云端资料和 Skills",
+        body: "从这里可以添加资料，也可以把 Skills 注入本次任务。Skills 进入当前任务上下文，不等于全局永久开启。",
+        placement: "top",
+      },
+    ],
+  },
+  connectors: {
+    storageKey: "oneceo:tour.home_connectors.seen",
+    steps: [
+      {
+        id: "connectors",
+        selector: '[data-tour="composer-connectors"]',
+        title: "连接器按任务启用",
+        body: "这里为本次任务启用 GitHub、Notion、Slack、Supabase、Figma 或 Vercel。未授权时先进入管理连接器完成配置。",
+        placement: "top",
+      },
+    ],
+  },
+  model: {
+    storageKey: "oneceo:tour.home_model.seen",
+    steps: [
+      {
+        id: "model",
+        selector: '[data-tour="composer-model"]',
+        title: "选择执行强度",
+        body: "Lite 更快，Pro 均衡，Max 适合复杂任务。默认 Pro 可以覆盖多数工作。",
+        placement: "top",
+      },
+    ],
+  },
+};
+
+function hasCompletedTour(storageKey: string) {
+  if (typeof window === "undefined") return true;
+  return window.localStorage.getItem(storageKey) === "completed";
+}
 
 function isInsufficientCreditsError(error: unknown) {
   const text = error instanceof Error ? error.message : String(error || "");
@@ -397,6 +472,10 @@ export default function Home() {
     messageKey?: string | null;
     messageIndex?: number | null;
   } | null>(null);
+  const [localTour, setLocalTour] = useState<{
+    storageKey: string;
+    steps: GuidedTourStep[];
+  } | null>(null);
   const isMobile = useIsMobile();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageScrollRef = useRef<HTMLDivElement>(null);
@@ -531,6 +610,23 @@ export default function Home() {
   useEffect(() => {
     refreshCreditsRef.current = refreshCredits;
   }, [refreshCredits]);
+
+  useEffect(() => {
+    const handleTourTargetClick = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const trigger = target.closest<HTMLElement>("[data-tour-local]");
+      const tourId = trigger?.dataset.tourLocal;
+      if (!tourId) return;
+      const tour = HOME_LOCAL_TOURS[tourId];
+      if (!tour || hasCompletedTour(tour.storageKey)) return;
+      window.setTimeout(() => setLocalTour(tour), 180);
+    };
+    document.addEventListener("click", handleTourTargetClick, true);
+    return () => {
+      document.removeEventListener("click", handleTourTargetClick, true);
+    };
+  }, []);
 
   useEffect(() => {
     if (!managedRunStatus || !BILLING_TERMINAL_RUN_STATUSES.has(managedRunStatus)) {
@@ -2123,7 +2219,7 @@ export default function Home() {
                 {slashSuggestionPanel}
               </div>
             ) : null}
-            <div className="w-full rounded-[2rem] border border-border/70 bg-card shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)]">
+            <div data-tour="home-composer" className="w-full rounded-[2rem] border border-border/70 bg-card shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)]">
               <div className="space-y-3 p-4">
                 <Textarea
                   placeholder={
@@ -2160,18 +2256,24 @@ export default function Home() {
                 <TooltipProvider>
                   <div className="flex items-center justify-between pt-2">
                     <div className="flex items-center gap-1">
-                      <AttachmentPickerButton
-                        onSelectFiles={handleAttachmentSelect}
-                        onSelectSkills={handleSkillSelect}
-                      />
+                      <span data-tour="composer-attachments" data-tour-local="attachments">
+                        <AttachmentPickerButton
+                          onSelectFiles={handleAttachmentSelect}
+                          onSelectSkills={handleSkillSelect}
+                        />
+                      </span>
 
-                      <ConnectorDialog sessionId={sessionId} />
+                      <span data-tour="composer-connectors" data-tour-local="connectors">
+                        <ConnectorDialog sessionId={sessionId} />
+                      </span>
 
                       <DropdownMenu>
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <DropdownMenuTrigger asChild>
                               <Button
+                                data-tour="composer-model"
+                                data-tour-local="model"
                                 variant="ghost"
                                 size="sm"
                                 className="h-9 gap-2 rounded-xl px-3 transition-colors hover:bg-accent"
@@ -2247,6 +2349,7 @@ export default function Home() {
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
+                            data-tour="composer-send"
                             onClick={() => {
                               if (currentQuestion) {
                                 handleAnswerQuestion(message);
@@ -2302,6 +2405,24 @@ export default function Home() {
       sidebarCollapsed={sidebarCollapsed}
       onSidebarCollapsedChange={setSidebarCollapsed}
     >
+      <GuidedTour
+        storageKey={HOME_CORE_TOUR_KEY}
+        steps={HOME_CORE_TOUR_STEPS}
+        autoStart={mode === "input"}
+      />
+      {localTour ? (
+        <GuidedTour
+          storageKey={localTour.storageKey}
+          steps={localTour.steps}
+          open
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) {
+              setLocalTour(null);
+            }
+          }}
+          onComplete={() => setLocalTour(null)}
+        />
+      ) : null}
       <div
         className={
           mode === "chat"
@@ -2366,7 +2487,7 @@ export default function Home() {
                       </div>
                     ) : null}
                     {/* Text Area and Actions - Single Container */}
-                    <div className="relative z-10 space-y-3 rounded-[2rem] border border-border/70 bg-card p-4 shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)]">
+                    <div data-tour="home-composer" className="relative z-10 space-y-3 rounded-[2rem] border border-border/70 bg-card p-4 shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)]">
                       {/* Textarea */}
                       <Textarea
                         placeholder={t("homePage.textareaPlaceholder")}
@@ -2394,12 +2515,16 @@ export default function Home() {
                         <div className="flex items-center justify-between pt-2">
                           {/* Left Side Actions */}
                           <div className="flex items-center gap-1">
-                            <AttachmentPickerButton
-                              onSelectFiles={handleAttachmentSelect}
-                              onSelectSkills={handleSkillSelect}
-                            />
+                            <span data-tour="composer-attachments" data-tour-local="attachments">
+                              <AttachmentPickerButton
+                                onSelectFiles={handleAttachmentSelect}
+                                onSelectSkills={handleSkillSelect}
+                              />
+                            </span>
 
-                            <ConnectorDialog sessionId={sessionId} />
+                            <span data-tour="composer-connectors" data-tour-local="connectors">
+                              <ConnectorDialog sessionId={sessionId} />
+                            </span>
 
                             {/* Model Selection Button */}
                             <DropdownMenu>
@@ -2407,6 +2532,8 @@ export default function Home() {
                                 <TooltipTrigger asChild>
                                   <DropdownMenuTrigger asChild>
                                     <Button
+                                      data-tour="composer-model"
+                                      data-tour-local="model"
                                       variant="ghost"
                                       size="sm"
                                       className="h-9 gap-2 rounded-xl transition-colors hover:bg-accent"
@@ -2488,6 +2615,7 @@ export default function Home() {
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Button
+                                  data-tour="composer-send"
                                   onClick={handleSend}
                                   disabled={
                                     !message.trim() &&

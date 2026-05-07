@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type * as React from 'react';
 // 管理后台主页面：统一组装导航、区块切换和会话/主机/技能/发布等能力面板。
 import { api } from './api';
@@ -19,7 +19,6 @@ import {
   StatusBadge,
   statusToneFromValue,
 } from './components/admin-ui';
-import { AuditLogSection } from './components/AuditLogSection';
 import type { AdminModuleIconKey } from './components/admin-ui';
 import {
   DEFAULT_DEPLOYMENT_MANAGEMENT_VIEW_STATE,
@@ -107,7 +106,7 @@ const MembershipManagementSection = lazy(() =>
   import('./components/MembershipManagementSection').then((module) => ({ default: module.MembershipManagementSection }))
 );
 
-type SectionKey = 'kvm' | 'operations' | 'deployment' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit' | 'billing' | 'notification' | 'membership' | 'promoBanner';
+type SectionKey = 'kvm' | 'operations' | 'deployment' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'billing' | 'notification' | 'membership' | 'promoBanner';
 type NavGroupKey = 'runtime' | 'platform' | 'billing';
 type ToastTone = 'error' | 'success' | 'warning' | 'info';
 type SandboxDetailTab = 'overview' | 'files' | 'processes' | 'connectivity' | 'archive' | 'terminal';
@@ -150,7 +149,7 @@ function sandboxDisplayLabel(detail: SandboxRuntimeDetail | null | undefined, fa
   );
 }
 
-type ConversationDialogTab = 'overview' | 'billing' | 'interaction' | 'infra' | 'raw' | 'transitions' | 'api-traces';
+type ConversationDialogTab = 'overview' | 'billing' | 'interaction' | 'infra' | 'raw' | 'transitions';
 type ConversationBillingUsage = {
   totalCredits: number;
   totalTokens: number;
@@ -417,16 +416,6 @@ const NAV_ITEMS: Array<{
     iconKey: 'user',
     description: '查看普通用户账号状态、登录来源，以及对话和 Sandbox 的关联情况。',
     signal: '账号关联',
-  },
-  {
-    key: 'audit',
-    group: 'runtime',
-    label: '审计日志',
-    subtitle: '用户行为追踪',
-    tag: 'LOG',
-    iconKey: 'audit',
-    description: '查看用户前端 API 调用和会话 AI 执行细节。',
-    signal: '行为追踪',
   },
   {
     key: 'kvm',
@@ -1973,6 +1962,12 @@ type ConversationReplayItem =
       author: string;
       messageKey?: string;
       showAuthor?: boolean;
+    }
+  | {
+      id: string;
+      kind: 'api_trace';
+      trace: ApiTraceItem;
+      timestamp: string;
     };
 
 type ConversationOpencodeEventInfo = {
@@ -2742,318 +2737,6 @@ function conversationReplayNoticeText(message: ConversationMessage): string {
   return parts.join(' · ') || '会话状态已更新';
 }
 
-function buildConversationReplayItems(messages: ConversationMessage[]): ConversationReplayItem[] {
-  const items: ConversationReplayItem[] = [];
-
-  const pushAgentPlain = (message: ConversationMessage, text: string, author: string, options: string[] = []) => {
-    const normalized = normalizeConversationReplayText(text);
-    if (!normalized) return;
-    const last = items[items.length - 1];
-    if (last?.kind === 'agent_plain' && normalizeConversationReplayText(last.text) === normalized && last.author === author) {
-      return;
-    }
-    items.push({
-      id: message.id,
-      kind: 'agent_plain',
-      text,
-      timestamp: message.createdAt,
-      author,
-      options,
-      messageKey: conversationMessageKey(message),
-    });
-  };
-
-  const pushCapsule = (message: ConversationMessage, label: string, segments?: string[]) => {
-    const text = label.trim();
-    if (!text) return;
-    items.push({
-      id: message.id,
-      kind: 'capsule',
-      label: text,
-      timestamp: message.createdAt,
-      tone: conversationReplayCapsuleTone(message, text),
-      loading: isConversationProgressStatusLabel(text),
-      segments,
-      messageKey: conversationMessageKey(message),
-    });
-  };
-
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index];
-    const type = String(message.messageType || '');
-    if (type === 'user_input' || type === 'user_response') {
-      items.push({
-        id: message.id,
-        kind: 'user',
-        text: conversationReplayMessageText(message),
-        timestamp: message.createdAt,
-        messageKey: conversationMessageKey(message),
-      });
-      continue;
-    }
-
-    if (type === 'assistant_message' || type === 'agent_message') {
-      const text = conversationReplayMessageText(message);
-      const capsule = extractConversationReplayCapsule(text);
-      if (capsule) {
-        if (isConversationProgressStatusLabel(capsule.label) && !capsule.rest.trim()) {
-          pushCapsule(message, capsule.label);
-          continue;
-        }
-        pushCapsule(message, capsule.label);
-        if (capsule.rest.trim()) {
-          pushAgentPlain(message, capsule.rest, conversationReplayAuthor(message));
-        }
-        continue;
-      }
-      pushAgentPlain(message, text, conversationReplayAuthor(message));
-      continue;
-    }
-
-    if (type === 'clarification_request') {
-      const question = clarificationQuestion(message);
-      const options = clarificationOptions(message);
-      const previousMessage = index > 0 ? messages[index - 1] : null;
-      const previousContent =
-        previousMessage && ['assistant_message', 'agent_message'].includes(String(previousMessage.messageType || ''))
-          ? conversationReplayMessageText(previousMessage)
-          : '';
-      const currentRunId = messageRunId(message);
-      const previousRunId = previousMessage ? messageRunId(previousMessage) : null;
-      const sameRun = !currentRunId || !previousRunId || currentRunId === previousRunId;
-
-      if (
-        previousContent &&
-        sameRun &&
-        normalizeConversationClarificationText(previousContent) === normalizeConversationClarificationText(question)
-      ) {
-        items.push({
-          id: message.id,
-          kind: 'clarification_notice',
-          text: 'Altus 将在你回复后继续工作',
-          timestamp: message.createdAt,
-          messageKey: conversationMessageKey(message),
-        });
-        continue;
-      }
-
-      pushAgentPlain(message, question, conversationReplayAuthor(message), options);
-      items.push({
-        id: `${message.id}:notice`,
-        kind: 'clarification_notice',
-        text: 'Altus 将在你回复后继续工作',
-        timestamp: message.createdAt,
-        messageKey: conversationMessageKey(message),
-      });
-      continue;
-    }
-
-    if (type === 'status_update' || type === 'session_started') {
-      const output = messageOutputPreviewRecord(message);
-      const label = conversationReplayNoticeText(message);
-      const segments =
-        messageEventType(message) === 'deliverables_ready' && Array.isArray(output?.deliverables)
-          ? ['完成任务', '已完成', '对话已结束。']
-          : undefined;
-      pushCapsule(message, label, segments);
-      continue;
-    }
-
-    if (type === 'executor_event') {
-      if (isManagedConversationExecutionEvent(message)) {
-        const managedToolItem = buildConversationManagedToolItem(message);
-        if (managedToolItem) {
-          items.push(managedToolItem);
-          continue;
-        }
-      }
-
-      const metadata = toRecord(message.metadata);
-      const eventType = asText(metadata.eventType).toLowerCase();
-      const eventInfo = getConversationReplayOpencodeEventInfo(metadata);
-      const item = toRecord(toRecord(metadata.event).item);
-      const itemType = (asText(metadata.itemType) || asText(item.type)).toLowerCase();
-      const content =
-        asText(item.text) ||
-        asText(item.content) ||
-        asText(item.message) ||
-        conversationReplayMessageText(message);
-      const executorName = messageExecutor(message) ? executorLabel(messageExecutor(message) || '') : conversationReplayAuthor(message);
-
-      if (eventType === 'turn.started') {
-        pushCapsule(message, `${executorName} 开始执行`);
-        continue;
-      }
-
-      if (eventType === 'turn.completed') {
-        pushCapsule(message, `${executorName} 执行完成`);
-        continue;
-      }
-
-      if (eventType === 'turn.failed' || eventType === 'turn.interrupted') {
-        pushCapsule(message, content || `${executorName} 执行失败`);
-        continue;
-      }
-
-      if (eventType === 'turn/plan/updated' && content) {
-        pushAgentPlain(message, content, executorName);
-        continue;
-      }
-
-      if (eventType === 'stderr.line' || eventType === 'stdout.line' || eventType === 'item/filechange/outputdelta') {
-        continue;
-      }
-
-      if (itemType === 'approval_request' || itemType === 'approvalrequest') {
-        pushCapsule(message, '需要授权');
-        pushAgentPlain(message, content || `${executorName} 需要进一步授权后才能继续执行。`, executorName);
-        continue;
-      }
-
-      if (itemType === 'command_execution' || itemType === 'commandexecution') {
-        const commandText = asText(metadata.command) || asText(item.command);
-        items.push(
-          buildConversationOpencodeToolCard({
-            message,
-            eventType: 'command.executed',
-            toolName: 'bash',
-            properties: {
-              command: commandText,
-              stdout: asText(metadata.outputPreview) || asText(item.aggregated_output),
-              status: asText(metadata.itemStatus) || asText(item.status),
-            },
-            part: {},
-            content,
-            metadata,
-          }),
-        );
-        continue;
-      }
-
-      if (itemType === 'file_change' || itemType === 'filechange' || itemType === 'diff' || eventType === 'turn/diff/updated') {
-        const files = Array.isArray((metadata as { fileChanges?: unknown[] }).fileChanges)
-          ? ((metadata as { fileChanges?: unknown[] }).fileChanges || [])
-              .map((entry) => toRecord(entry))
-              .map((entry) => ({
-                kind: asText(entry.kind),
-                path: asText(entry.path) || asText(entry.file),
-              }))
-              .filter((entry) => entry.path)
-          : [];
-        items.push(
-          buildConversationOpencodeToolCard({
-            message,
-            eventType: 'file.changed',
-            toolName: asText(eventInfo.toolName) || 'apply_patch',
-            properties: {
-              label: files[0]?.kind ? conversationReplayMapFileChangeLabel(files[0].kind) : '文件变更',
-              files,
-              file: files[0]?.path || '',
-              path: files[0]?.path || '',
-              status: asText(metadata.itemStatus) || asText(item.status) || 'completed',
-            },
-            part: {},
-            content,
-            metadata,
-          }),
-        );
-        continue;
-      }
-
-      if (
-        eventInfo.partType === 'tool' ||
-        eventInfo.eventType.startsWith('file.') ||
-        eventInfo.eventType.startsWith('pty.') ||
-        eventInfo.eventType === 'command.executed' ||
-        content.startsWith('[Tool]')
-      ) {
-        items.push(
-          buildConversationOpencodeToolCard({
-            message,
-            eventType: eventInfo.eventType,
-            toolName: eventInfo.toolName,
-            properties: eventInfo.properties,
-            part: eventInfo.part,
-            content,
-            metadata,
-          }),
-        );
-        continue;
-      }
-
-      if (content) {
-        pushAgentPlain(message, content, executorName);
-      }
-      continue;
-    }
-
-    if (type === 'opencode_event') {
-      const metadata = toRecord(message.metadata);
-      const eventInfo = getConversationReplayOpencodeEventInfo(metadata);
-      const content = conversationReplayMessageText(message);
-      const normalizedContent = normalizeConversationReplayText(content);
-
-      if (eventInfo.eventType === 'message.final') {
-        if (!normalizedContent) continue;
-        pushAgentPlain(message, content, 'OpenCode');
-        continue;
-      }
-
-      if (eventInfo.partType === 'text') {
-        if (!normalizedContent) continue;
-        pushAgentPlain(message, content, 'OpenCode');
-        continue;
-      }
-
-      if (
-        eventInfo.partType === 'tool' ||
-        eventInfo.eventType.startsWith('file.') ||
-        eventInfo.eventType.startsWith('pty.') ||
-        eventInfo.eventType === 'command.executed' ||
-        content.startsWith('[Tool]')
-      ) {
-        items.push(
-          buildConversationOpencodeToolCard({
-            message,
-            eventType: eventInfo.eventType,
-            toolName: eventInfo.toolName,
-            properties: eventInfo.properties,
-            part: eventInfo.part,
-            content,
-            metadata,
-          }),
-        );
-      }
-      continue;
-    }
-
-    if (type === 'error' || type === 'opencode_error') {
-      items.push({
-        id: message.id,
-        kind: 'error',
-        text: conversationReplayMessageText(message),
-        timestamp: message.createdAt,
-        author: conversationReplayAuthor(message),
-        messageKey: conversationMessageKey(message),
-      });
-    }
-  }
-
-  let previousAuthor = '';
-  for (const item of items) {
-    if (item.kind === 'agent_plain' || item.kind === 'error') {
-      item.showAuthor = item.author !== previousAuthor;
-      previousAuthor = item.author;
-      continue;
-    }
-    if (item.kind === 'capsule') {
-      continue;
-    }
-    previousAuthor = '';
-  }
-
-  return items;
-}
 
 function formatStateSnapshot(snapshot?: { status?: string; stage?: string; phase?: string }) {
   const status = statusLabel(snapshot?.status || '-');
@@ -3302,7 +2985,6 @@ function isSectionKey(value: string | null): value is SectionKey {
     || value === 'connectorGuide'
     || value === 'osacRelease'
     || value === 'sandbox'
-    || value === 'audit'
     || value === 'billing';
 }
 
@@ -3718,11 +3400,7 @@ export default function App() {
   const [transitionView, setTransitionView] = useState<'timeline' | 'list'>('timeline');
   const [conversationApiTraces, setConversationApiTraces] = useState<ApiTraceItem[]>([]);
   const [conversationApiTracesLoading, setConversationApiTracesLoading] = useState(false);
-  const [conversationApiTracesTotal, setConversationApiTracesTotal] = useState(0);
-  const [expandedReplayIds, setExpandedReplayIds] = useState<Set<string>>(new Set());
-  const [conversationApiTraceFilter, setConversationApiTraceFilter] = useState<'all' | 'llm_request' | 'tool_call' | 'service_api' | 'connector_api'>('all');
-  const [conversationApiTracePage, setConversationApiTracePage] = useState(0);
-  const [selectedTraceDetail, setSelectedTraceDetail] = useState<ApiTraceItem | null>(null);
+
   const [apiTraceStats, setApiTraceStats] = useState<{
     totalCalls: number;
     avgDurationMs: number;
@@ -4037,8 +3715,6 @@ export default function App() {
     setSelectedSessionId(sessionId);
     setConversationDetailLoading(true);
     setConversationApiTraces([]);
-    setConversationApiTracesTotal(0);
-    setConversationApiTracePage(0);
   }, [selectedSessionId]);
 
   const claimOverlayZIndex = useCallback(() => {
@@ -5848,28 +5524,18 @@ export default function App() {
 
   useEffect(() => {
     const sessionId = conversationDetail?.session.id || null;
-    if (!sessionId || conversationDialogTab !== 'api-traces') return;
+    if (!sessionId) return;
     let cancelled = false;
     setConversationApiTracesLoading(true);
-    void api.getSessionApiTraces(sessionId, {
-      type: conversationApiTraceFilter === 'all' ? undefined : conversationApiTraceFilter,
-      limit: 50,
-      offset: conversationApiTracePage * 50,
-    })
+    void api.getSessionApiTraces(sessionId, { limit: 500 })
       .then((result) => {
         if (!cancelled) {
           setConversationApiTraces(result.traces);
-          setConversationApiTracesTotal(result.total);
-          // Auto-select first trace when new data loads and nothing selected
-          if (result.traces.length > 0 && !selectedTraceDetail) {
-            setSelectedTraceDetail(result.traces[0]);
-          }
         }
       })
       .catch(() => {
         if (!cancelled) {
           setConversationApiTraces([]);
-          setConversationApiTracesTotal(0);
         }
       })
       .finally(() => {
@@ -5878,7 +5544,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [conversationDetail?.session.id, conversationDialogTab, conversationApiTraceFilter, conversationApiTracePage]);
+  }, [conversationDetail?.session.id]);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') {
@@ -6400,242 +6066,11 @@ export default function App() {
   ].filter(Boolean).length;
   const latestFilteredTransition = filteredTransitions[filteredTransitions.length - 1] || null;
   const latestRelatedEnvironmentUpdatedAt = recentRelatedEnvironments[0]?.updatedAt || primaryEnvironment?.updatedAt || null;
-  const conversationReplayItems = buildConversationReplayItems(conversationMessages);
   const conversationDialogDetail =
     conversationDialog && conversationDetail?.session.id === conversationDialog.sessionId
       ? conversationDetail
       : null;
   const conversationDialogLoading = Boolean(conversationDialog) && !conversationDialogDetail;
-
-  const renderConversationApiTracesPanel = () => {
-    if (conversationApiTracesLoading) {
-      return <p className="empty">正在加载 API 追踪数据...</p>;
-    }
-
-    const filteredTraces = conversationApiTraceFilter === 'all'
-      ? conversationApiTraces
-      : conversationApiTraces.filter((item) => item.traceType === conversationApiTraceFilter);
-
-    const maxDuration = Math.max(...filteredTraces.map((t) => t.durationMs || 0), 1);
-
-    const handleKeyDown = (e: React.KeyboardEvent) => {
-      if (!selectedTraceDetail || filteredTraces.length === 0) return;
-      const currentIndex = filteredTraces.findIndex((t) => t.id === selectedTraceDetail.id);
-      if (e.key === 'ArrowUp' && currentIndex > 0) {
-        e.preventDefault();
-        setSelectedTraceDetail(filteredTraces[currentIndex - 1]);
-      } else if (e.key === 'ArrowDown' && currentIndex < filteredTraces.length - 1) {
-        e.preventDefault();
-        setSelectedTraceDetail(filteredTraces[currentIndex + 1]);
-      }
-    };
-
-    const renderTraceDetail = (trace: ApiTraceItem) => {
-      const formatRawHttp = (t: ApiTraceItem): string => {
-        const lines: string[] = [];
-        lines.push(`${t.requestMethod || 'POST'} ${t.endpoint || '/'} HTTP/1.1`);
-        lines.push(`Host: ${t.provider || 'upstream'}`);
-        if (t.requestHeaders) {
-          Object.entries(t.requestHeaders).forEach(([k, v]) => {
-            lines.push(`${k}: ${Array.isArray(v) ? v.join(', ') : v}`);
-          });
-        }
-        lines.push('');
-        if (t.requestBody) {
-          lines.push(JSON.stringify(t.requestBody, null, 2));
-        }
-        lines.push('');
-        lines.push(`HTTP/1.1 ${t.responseStatus || 200} ${t.errorMessage ? 'Error' : 'OK'}`);
-        if (t.responseHeaders) {
-          Object.entries(t.responseHeaders).forEach(([k, v]) => {
-            lines.push(`${k}: ${Array.isArray(v) ? v.join(', ') : v}`);
-          });
-        }
-        lines.push('');
-        if (t.responseBody) {
-          lines.push(JSON.stringify(t.responseBody, null, 2));
-        }
-        if (t.errorMessage) {
-          lines.push(t.errorMessage);
-        }
-        return lines.join('\n');
-      };
-
-      const typeLabel = trace.traceType === 'llm_request' ? 'LLM' : trace.traceType === 'tool_call' ? '工具' : trace.traceType === 'service_api' ? '服务' : '连接器';
-      const typeTone = trace.traceType === 'llm_request' ? 'info' : trace.traceType === 'tool_call' ? 'warning' : 'neutral';
-      const hasError = !!trace.errorMessage;
-
-      return (
-        <div className="api-trace-detail-pane" onKeyDown={handleKeyDown} tabIndex={0}>
-          <div className="api-trace-detail-header">
-            <div>
-              <p className="section-tag">API 追踪详情</p>
-              <h2 className="api-trace-detail-title">
-                <span className={`api-trace-type-badge api-trace-type-badge-${typeTone}`}>{typeLabel}</span>
-                <span className="mono">{trace.model || trace.toolName || trace.serviceName || trace.endpoint || trace.traceType}</span>
-              </h2>
-              <div className="api-trace-detail-meta">
-                <span className={`api-trace-status api-trace-status-${hasError ? 'error' : 'success'}`}>
-                  {hasError ? '失败' : '成功'}
-                </span>
-                <span className="mono">{trace.durationMs ? `${trace.durationMs}ms` : '-'}</span>
-                <span className="mono">{formatDateTime(trace.createdAt)}</span>
-                <span className="mono">seq: {trace.sequence}</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="api-trace-detail-body">
-            {(trace.promptTokens || trace.completionTokens) ? (
-              <div className="api-trace-metrics">
-                <div className="api-trace-metric">
-                  <span className="api-trace-metric-value">{trace.promptTokens || 0}</span>
-                  <span className="api-trace-metric-label">Prompt</span>
-                </div>
-                <div className="api-trace-metric">
-                  <span className="api-trace-metric-value">{trace.completionTokens || 0}</span>
-                  <span className="api-trace-metric-label">Completion</span>
-                </div>
-                <div className="api-trace-metric">
-                  <span className="api-trace-metric-value">{trace.totalTokens || 0}</span>
-                  <span className="api-trace-metric-label">Total</span>
-                </div>
-                {trace.cachedPromptTokens ? (
-                  <div className="api-trace-metric">
-                    <span className="api-trace-metric-value">{trace.cachedPromptTokens}</span>
-                    <span className="api-trace-metric-label">Cached</span>
-                  </div>
-                ) : null}
-                {trace.cacheCreationTokens ? (
-                  <div className="api-trace-metric">
-                    <span className="api-trace-metric-value">{trace.cacheCreationTokens}</span>
-                    <span className="api-trace-metric-label">Cache 创建</span>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-
-            <div className="api-trace-detail-code-grid">
-              {trace.requestBody ? (
-                <CodePanel title="请求" value={trace.requestBody} language="json" maxHeight={320} theme="light" />
-              ) : null}
-              {trace.responseBody ? (
-                <CodePanel title="响应" value={trace.responseBody} language="json" maxHeight={320} theme="light" />
-              ) : null}
-            </div>
-
-            {trace.errorMessage ? (
-              <div className="api-trace-error-block">
-                <header className="api-trace-error-header">错误</header>
-                <pre className="api-trace-error-body">{trace.errorMessage}</pre>
-              </div>
-            ) : null}
-
-            <CodePanel title="原始 HTTP" value={formatRawHttp(trace)} language="text" maxHeight={360} theme="light" />
-          </div>
-        </div>
-      );
-    };
-
-    return (
-      <div className="api-trace-split-pane">
-        <div className="api-trace-timeline-pane">
-          <div className="api-trace-console-bar">
-            <div className="api-trace-filter-pills">
-              {(['all', 'llm_request', 'tool_call', 'service_api', 'connector_api'] as const).map((type) => (
-                <button
-                  key={type}
-                  type="button"
-                  className={`api-trace-filter-pill ${conversationApiTraceFilter === type ? 'active' : ''}`}
-                  onClick={() => {
-                    setConversationApiTraceFilter(type);
-                    setConversationApiTracePage(0);
-                  }}
-                >
-                  {type === 'all' ? '全部' : type === 'llm_request' ? 'LLM' : type === 'tool_call' ? '工具' : type === 'service_api' ? '服务' : '连接器'}
-                </button>
-              ))}
-            </div>
-            <span className="api-trace-count">{conversationApiTracesTotal} 条追踪</span>
-          </div>
-
-          {filteredTraces.length === 0 ? (
-            <p className="empty">当前没有 API 追踪记录</p>
-          ) : (
-            <div className="api-trace-step-list" role="listbox" aria-label="API 追踪步骤">
-              {filteredTraces.map((trace, index) => {
-                const typeLabel = trace.traceType === 'llm_request' ? 'LLM' : trace.traceType === 'tool_call' ? '工具' : trace.traceType === 'service_api' ? '服务' : '连接器';
-                const typeTone = trace.traceType === 'llm_request' ? 'info' : trace.traceType === 'tool_call' ? 'warning' : trace.traceType === 'service_api' ? 'neutral' : 'neutral';
-                const hasError = !!trace.errorMessage;
-                const durationPct = maxDuration > 0 ? ((trace.durationMs || 0) / maxDuration) * 100 : 0;
-                const isSelected = selectedTraceDetail?.id === trace.id;
-                return (
-                  <div key={trace.id} className="api-trace-step-wrapper">
-                    {index > 0 && <div className="api-trace-connector" aria-hidden="true" />}
-                    <button
-                      type="button"
-                      role="option"
-                      aria-selected={isSelected}
-                      className={`api-trace-step-card ${hasError ? 'api-trace-step-card-error' : ''} ${isSelected ? 'api-trace-step-card-active' : ''}`}
-                      onClick={() => setSelectedTraceDetail(trace)}
-                    >
-                      <div className="api-trace-step-main">
-                        <span className="api-trace-step-seq">{String(index + 1).padStart(2, '0')}</span>
-                        <span className={`api-trace-type-badge api-trace-type-badge-${typeTone}`}>{typeLabel}</span>
-                        <span className="api-trace-step-name mono" title={trace.model || trace.toolName || trace.serviceName || trace.endpoint || trace.traceType}>
-                          {trace.model || trace.toolName || trace.serviceName || trace.endpoint || trace.traceType}
-                        </span>
-                      </div>
-                      <div className="api-trace-step-meta">
-                        <span className="api-trace-duration-bar">
-                          <span className="api-trace-duration-track">
-                            <span className="api-trace-duration-fill" style={{ width: `${Math.max(durationPct, 2)}%` }} />
-                          </span>
-                          <span className="api-trace-duration-label mono">{trace.durationMs ? `${trace.durationMs}ms` : '-'}</span>
-                        </span>
-                        <span className={`api-trace-status api-trace-status-${hasError ? 'error' : 'success'}`}>
-                          {hasError ? '失败' : '成功'}
-                        </span>
-                        <span className="api-trace-time mono">{formatDateTime(trace.createdAt)}</span>
-                      </div>
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {conversationApiTracesTotal > 50 ? (
-            <div className="conversation-api-traces-pagination">
-              <button
-                type="button"
-                className="secondary-btn"
-                disabled={conversationApiTracePage <= 0}
-                onClick={() => setConversationApiTracePage((p) => Math.max(0, p - 1))}
-              >
-                上一页
-              </button>
-              <span>第 {conversationApiTracePage + 1} 页</span>
-              <button
-                type="button"
-                className="secondary-btn"
-                disabled={(conversationApiTracePage + 1) * 50 >= conversationApiTracesTotal}
-                onClick={() => setConversationApiTracePage((p) => p + 1)}
-              >
-                下一页
-              </button>
-            </div>
-          ) : null}
-        </div>
-
-        {selectedTraceDetail && filteredTraces.length > 0 ? renderTraceDetail(selectedTraceDetail) : (
-          <div className="api-trace-detail-pane api-trace-detail-empty">
-            <p className="empty">选择左侧步骤查看详情</p>
-          </div>
-        )}
-      </div>
-    );
-  };
 
   const renderConversationTransitionsPanel = () => {
     const stagePreview = transitionStats.stages.slice(0, 3).map((value) => conversationStageLabel(value)).join(' / ') || '无';
@@ -7372,255 +6807,35 @@ export default function App() {
   );
 
   const renderConversationReplayPanel = () => {
-    const toggleReplayDetail = (itemId: string) => {
-      setExpandedReplayIds((prev) => {
-        const next = new Set(prev);
-        if (next.has(itemId)) {
-          next.delete(itemId);
-        } else {
-          next.add(itemId);
-        }
-        return next;
-      });
-    };
-
-    const renderReplayDetail = (itemId: string) => {
-      const rawMessage = conversationMessages.find((m) => m.id === itemId);
-      if (!rawMessage?.metadata) return null;
-      const isExpanded = expandedReplayIds.has(itemId);
-      return (
-        <div className="conversation-replay-detail">
-          <button
-            type="button"
-            className="conversation-replay-detail-toggle"
-            onClick={() => toggleReplayDetail(itemId)}
-          >
-            {isExpanded ? '收起详情 ◂' : '查看详情 ▸'}
-          </button>
-          {isExpanded && (
-            <div className="conversation-replay-detail-panel">
-              <CodePanel title="消息元数据" value={rawMessage.metadata} language="json" maxHeight={280} theme="light" />
-            </div>
-          )}
-        </div>
-      );
-    };
+    const sessionId = conversationDetail?.session.id;
+    if (!sessionId) {
+      return <p className="empty">会话数据加载中...</p>;
+    }
 
     return (
-    <div className="conversation-replay-shell">
-      <div className="conversation-replay-scroll">
-        {conversationReplayItems.length === 0 ? (
-          <p className="empty">无可回放的用户态消息。</p>
-        ) : (
-          conversationReplayItems.map((item) => {
-            if (item.kind === 'user') {
-              return (
-                <div key={item.id} className="conversation-replay-row conversation-replay-row-user" title={formatDateTime(item.timestamp)}>
-                  <div className="conversation-replay-user-bubble">
-                    <span className="conversation-replay-user-text">{item.text}</span>
-                  </div>
-                  {renderReplayDetail(item.id)}
-                </div>
-              );
-            }
-
-            if (item.kind === 'capsule') {
-              const segments = item.segments && item.segments.length > 0 ? item.segments : [item.label];
-              const lastIndex = segments.length - 1;
-              return (
-                <div key={item.id} className="conversation-replay-row conversation-replay-row-agent" title={formatDateTime(item.timestamp)}>
-                  <div className={`conversation-replay-capsule conversation-replay-capsule-${item.tone}`}>
-                    <span className="conversation-replay-capsule-content">
-                      {segments.map((segment, index) => (
-                        <span
-                          key={`${item.id}-${segment}-${index}`}
-                          className={item.loading && (segments.length === 1 || index < lastIndex) ? 'conversation-replay-capsule-loading' : ''}
-                        >
-                          {segment}
-                          {index < lastIndex ? <span className="conversation-replay-capsule-dot">·</span> : null}
-                        </span>
-                      ))}
-                    </span>
-                  </div>
-                  {renderReplayDetail(item.id)}
-                </div>
-              );
-            }
-
-            if (item.kind === 'clarification_notice') {
-              return (
-                <div key={item.id} className="conversation-replay-row conversation-replay-row-agent" title={formatDateTime(item.timestamp)}>
-                  <div className="conversation-replay-clarification">
-                    <span className="conversation-replay-clarification-icon" aria-hidden="true" />
-                    <span>{item.text}</span>
-                  </div>
-                  {renderReplayDetail(item.id)}
-                </div>
-              );
-            }
-
-            if (item.kind === 'managed_tool') {
-              const statusLabel =
-                item.status === 'failed'
-                  ? '失败'
-                  : item.status === 'completed'
-                    ? '已完成'
-                    : item.status === 'running'
-                      ? '进行中'
-                      : '未知';
-              return (
-                <div key={item.id} className="conversation-replay-row conversation-replay-row-agent" title={formatDateTime(item.timestamp)}>
-                  <div className="conversation-replay-tool-block">
-                    <div
-                      className={`conversation-replay-managed-tool ${
-                        item.expandWrite ? 'conversation-replay-managed-tool-expanded' : 'conversation-replay-managed-tool-compact'
-                      } conversation-replay-managed-tool-${item.status}`}
-                    >
-                      {item.expandWrite ? (
-                        <>
-                          <div className="conversation-replay-managed-tool-header">
-                            <div className="conversation-replay-tool-title-group">
-                              <span className="conversation-replay-tool-icon-badge">写</span>
-                              <div>
-                                <div className="conversation-replay-tool-title">写入文件</div>
-                                <div className="conversation-replay-tool-subtitle">{item.summary}</div>
-                              </div>
-                            </div>
-                            <div className="conversation-replay-tool-status-stack">
-                              <span className={`conversation-replay-tool-status conversation-replay-tool-status-${item.status}`}>{statusLabel}</span>
-                              <span className="conversation-replay-tool-meta">{formatDateTime(item.timestamp)}</span>
-                            </div>
-                          </div>
-                          <div className="conversation-replay-tool-preview conversation-replay-tool-preview-code">
-                            {item.preview || '正在生成代码片段...'}
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <span className="conversation-replay-tool-icon-badge">
-                            {item.toolName === 'shell_execute'
-                              ? '命'
-                              : item.toolName === 'write_file'
-                                ? '写'
-                                : item.toolName === 'read_file'
-                                  ? '读'
-                                  : item.toolName === 'search_code'
-                                    ? '搜'
-                                    : item.toolName === 'list_directory'
-                                      ? '列'
-                                      : item.toolName === 'ask_user'
-                                        ? '问'
-                                        : '工'}
-                          </span>
-                          <span className="conversation-replay-managed-tool-content">
-                            <span className="conversation-replay-managed-tool-label">{getConversationManagedToolDisplayName(item.toolName)}</span>
-                            <span className={`conversation-replay-tool-status conversation-replay-tool-status-${item.status}`}>{statusLabel}</span>
-                            {item.summary ? <span className="conversation-replay-managed-tool-summary">{item.summary}</span> : null}
-                          </span>
-                        </>
-                      )}
-                    </div>
-                    {!item.expandWrite && item.status === 'failed' && item.preview ? (
-                      <div className="conversation-replay-tool-preview conversation-replay-tool-preview-plain">
-                        {item.preview}
-                      </div>
-                    ) : null}
-                  </div>
-                  {renderReplayDetail(item.id)}
-                </div>
-              );
-            }
-
-            if (item.kind === 'opencode_tool') {
-              return (
-                <div key={item.id} className="conversation-replay-row conversation-replay-row-agent" title={formatDateTime(item.timestamp)}>
-                  <div className="conversation-replay-tool-block">
-                    <div
-                      className={`conversation-replay-opencode-tool ${
-                        item.variant === 'card'
-                          ? 'conversation-replay-opencode-tool-card'
-                          : 'conversation-replay-opencode-tool-chip'
-                      } conversation-replay-opencode-tool-${item.tone || 'default'}`}
-                    >
-                      <div className="conversation-replay-tool-title-group">
-                        <span className="conversation-replay-tool-icon-badge">{item.iconLabel}</span>
-                        <div>
-                          <div className="conversation-replay-tool-title-row">
-                            <span className="conversation-replay-tool-title">{item.title}</span>
-                            {item.statusLabel ? (
-                              <span className="conversation-replay-tool-status conversation-replay-tool-status-compact">
-                                {item.statusLabel}
-                              </span>
-                            ) : null}
-                          </div>
-                          {item.subtitle ? <div className="conversation-replay-tool-subtitle">{item.subtitle}</div> : null}
-                        </div>
-                      </div>
-                      {item.command ? (
-                        <div className="conversation-replay-tool-preview conversation-replay-tool-preview-code">
-                          {item.command}
-                        </div>
-                      ) : null}
-                      {item.variant === 'card' && item.preview ? (
-                        <div
-                          className={`conversation-replay-tool-preview ${
-                            item.previewMode === 'code'
-                              ? 'conversation-replay-tool-preview-code'
-                              : 'conversation-replay-tool-preview-plain'
-                          }`}
-                        >
-                          {item.preview}
-                        </div>
-                      ) : null}
-                    </div>
-                    {item.variant === 'chip' && item.preview && item.detail && item.preview !== item.detail ? (
-                      <div className="conversation-replay-tool-preview conversation-replay-tool-preview-plain">{item.preview}</div>
-                    ) : null}
-                  </div>
-                  {renderReplayDetail(item.id)}
-                </div>
-              );
-            }
-
-            if (item.kind === 'error') {
-              return (
-                <div key={item.id} className="conversation-replay-row conversation-replay-row-agent" title={formatDateTime(item.timestamp)}>
-                  <article className="conversation-replay-agent-block conversation-replay-agent-block-error">
-                    {item.showAuthor !== false ? (
-                      <div className="conversation-replay-author">{item.author || '智能体'}</div>
-                    ) : null}
-                    <div className="conversation-replay-agent-text">{item.text}</div>
-                  </article>
-                  {renderReplayDetail(item.id)}
-                </div>
-              );
-            }
-
-            return (
-              <div key={item.id} className="conversation-replay-row conversation-replay-row-agent" title={formatDateTime(item.timestamp)}>
-                <article className="conversation-replay-agent-block">
-                  {item.showAuthor !== false ? (
-                    <div className="conversation-replay-author">{item.author || '智能体'}</div>
-                  ) : null}
-                  <div className="conversation-replay-agent-text">{item.text}</div>
-                  {item.options?.length ? (
-                    <div className="conversation-replay-option-list">
-                      {item.options.map((option) => (
-                        <span key={`${item.id}-${option}`} className="conversation-replay-option-chip">
-                          {option}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                </article>
-                {renderReplayDetail(item.id)}
-              </div>
-            );
-          })
-        )}
+      <div className="panel fade-in" style={{ textAlign: 'center', padding: '48px 24px' }}>
+        <p className="section-tag" style={{ marginBottom: 12 }}>交互回放</p>
+        <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>对话回放已移至独立页面</h2>
+        <p className="panel-caption" style={{ marginBottom: 24, maxWidth: 480, margin: '0 auto 24px' }}>
+          为了提供更好的查看体验，完整的对话回放（含消息、工具调用、API Trace）现在在新标签页中展示。
+        </p>
+        <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className="primary-btn"
+            onClick={() => {
+              window.open(`/conversation-replay.html?session=${encodeURIComponent(sessionId)}`, '_blank');
+            }}
+          >
+            在新标签页打开回放
+          </button>
+        </div>
+        <div style={{ marginTop: 24, display: 'flex', gap: 24, justifyContent: 'center', color: 'var(--text-secondary)', fontSize: 13 }}>
+          <span>{conversationMessages.length} 条消息</span>
+          <span>{conversationApiTraces.length} 条 API Trace</span>
+        </div>
       </div>
-    </div>
-  );
+    );
   };
 
   const activeNavItem = NAV_ITEMS.find((item) => item.key === activeSection) || NAV_ITEMS[0];
@@ -9454,7 +8669,6 @@ export default function App() {
                 { key: 'infra', label: '关联' },
                 { key: 'raw', label: '日志', count: conversationDetailedLogs.counts.total },
                 { key: 'transitions', label: '流转', count: conversationTabCounts.transitions },
-                { key: 'api-traces', label: 'API 追踪', count: conversationApiTracesTotal },
               ]}
             />
           ) : undefined}
@@ -9468,7 +8682,6 @@ export default function App() {
           {!conversationDialogLoading && conversationDialogTab === 'infra' ? renderConversationInfraPanel() : null}
           {!conversationDialogLoading && conversationDialogTab === 'raw' ? renderConversationDetailedLogsPanel() : null}
           {!conversationDialogLoading && conversationDialogTab === 'transitions' ? renderConversationTransitionsPanel() : null}
-          {!conversationDialogLoading && conversationDialogTab === 'api-traces' ? renderConversationApiTracesPanel() : null}
         </AdminDetailShell>
       ) : null}
       </>
@@ -11611,22 +10824,6 @@ export default function App() {
     });
   };
 
-  const renderAuditSection = () => {
-    return (
-      <AuditLogSection
-        onOpenSession={(sessionId) => {
-          openConversationDialog(sessionId, 'overview', {
-            section: 'audit',
-            trail: '审计日志 / 会话 Trace',
-          });
-        }}
-        onError={(message) => {
-          setError(message);
-        }}
-      />
-    );
-  };
-
   const renderContent = () => {
     if (loading) {
       if (activeSection === 'sandbox') {
@@ -11848,7 +11045,6 @@ export default function App() {
       );
     }
     if (activeSection === 'sandbox') return renderSandboxSection();
-    if (activeSection === 'audit') return renderAuditSection();
     return null;
   };
 

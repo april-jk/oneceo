@@ -1,0 +1,1035 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>对话回放</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #f6f8fa;
+      --surface: #f9fbfd;
+      --surface-raised: #f2f5f8;
+      --surface-soft: #edf1f5;
+      --border: #d0d7de;
+      --border-subtle: #e5e9ef;
+      --text: #1f2328;
+      --text-secondary: #57606a;
+      --text-faint: #6b7480;
+      --success: #2f8f68;
+      --danger: #cf222e;
+      --info: #0969da;
+      --warning: #9a6700;
+      --neutral: #6b7280;
+      --mono: 'Fira Code', SFMono-Regular, Consolas, monospace;
+      --radius: 8px;
+    }
+    html { scroll-behavior: smooth; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'IBM Plex Sans', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    .container { max-width: 960px; margin: 0 auto; padding: 24px; }
+    @media (min-width: 1400px) {
+      .container { max-width: 1200px; padding: 32px; }
+      .row { max-width: 80%; }
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 24px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    .header-left { flex: 1; min-width: 0; }
+    .section-tag {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+    .title { font-size: 20px; font-weight: 600; overflow-wrap: break-word; }
+    .subtitle { font-size: 13px; color: var(--text-secondary); margin-top: 4px; }
+    .close-btn {
+      background: var(--surface-raised);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 16px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .close-btn:hover { background: var(--border); }
+
+    /* Filter bar */
+    .filter-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .filter-pill {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      padding: 4px 12px;
+      border-radius: 999px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: border-color 0.15s, background 0.15s, color 0.15s;
+    }
+    .filter-pill:hover { border-color: var(--text-secondary); color: var(--text); }
+    .filter-pill.active { background: var(--info); border-color: var(--info); color: #fff; }
+    .filter-count { font-size: 12px; color: var(--text-secondary); margin-left: auto; }
+
+    /* Timeline */
+    .timeline { display: flex; flex-direction: column; gap: 8px; position: relative; padding-left: 24px; }
+    .timeline::before {
+      content: '';
+      position: absolute;
+      left: 7px;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: var(--border-subtle);
+      border-radius: 1px;
+    }
+
+    /* Message rows */
+    .row {
+      display: flex;
+      max-width: 85%;
+      animation: fadeIn 0.2s ease;
+      position: relative;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+    .row-user { align-self: flex-end; }
+    .row-agent { align-self: flex-start; }
+    .row-trace { align-self: center; width: 100%; max-width: 600px; flex-direction: column; align-items: stretch; gap: 0; }
+
+    /* Timeline dots */
+    .row::before {
+      content: '';
+      position: absolute;
+      left: -20px;
+      top: 14px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 2px solid var(--border);
+      z-index: 1;
+    }
+    .row-user::before { border-color: var(--info); background: var(--info); }
+    .row-agent::before { border-color: var(--text-secondary); }
+    .row-trace::before { border-color: var(--warning); background: var(--warning); }
+    .row-error::before { border-color: var(--danger); background: var(--danger); }
+
+    /* User bubble */
+    .user-bubble {
+      background: var(--info);
+      color: #f6fbff;
+      padding: 10px 14px;
+      border-radius: 16px 16px 4px 16px;
+      font-size: 14px;
+      line-height: 1.5;
+      overflow-wrap: break-word;
+    }
+
+    /* Agent blocks */
+    .agent-block {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px 16px 16px 4px;
+      padding: 12px 14px;
+      font-size: 14px;
+      line-height: 1.6;
+      overflow-wrap: break-word;
+    }
+    .agent-block-error { border-color: color-mix(in srgb, var(--danger) 30%, transparent); }
+    .agent-author { font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .agent-text { white-space: pre-wrap; }
+
+    /* Capsules */
+    .capsule {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .capsule-system { background: color-mix(in srgb, var(--neutral) 10%, transparent); color: #4b5563; }
+    .capsule-intent { background: color-mix(in srgb, var(--info) 8%, transparent); color: #0550ae; }
+    .capsule-planning { background: color-mix(in srgb, var(--warning) 8%, transparent); color: #7a5100; }
+    .capsule-execution { background: color-mix(in srgb, var(--success) 8%, transparent); color: #1a5c3e; }
+    .capsule-review { background: color-mix(in srgb, var(--warning) 8%, transparent); color: #7a5100; }
+    .capsule-error { background: color-mix(in srgb, var(--danger) 8%, transparent); color: #9e1c23; }
+
+    /* Tool blocks */
+    .tool-block {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 14px;
+      font-size: 13px;
+    }
+    .tool-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .tool-badge {
+      width: 22px; height: 22px; border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; font-weight: 700; background: var(--surface-raised); color: var(--text);
+    }
+    .tool-title { font-weight: 600; }
+    .tool-status { font-size: 11px; padding: 1px 6px; border-radius: 4px; margin-left: auto; }
+    .tool-status-success { background: color-mix(in srgb, var(--success) 10%, transparent); color: #1a5c3e; }
+    .tool-status-failed { background: color-mix(in srgb, var(--danger) 10%, transparent); color: #9e1c23; }
+    .tool-preview { font-size: 12px; color: var(--text-secondary); margin-top: 6px; padding: 8px; background: var(--bg); border-radius: 6px; font-family: var(--mono); white-space: pre-wrap; overflow-wrap: break-word; }
+
+    /* Clarification */
+    .clarification {
+      background: color-mix(in srgb, var(--warning) 6%, transparent);
+      border: 1px solid color-mix(in srgb, var(--warning) 18%, transparent);
+      border-radius: 12px;
+      padding: 10px 14px;
+      font-size: 13px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .clarification::before {
+      content: '?';
+      width: 18px; height: 18px; border-radius: 50%;
+      background: var(--warning); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 700; flex-shrink: 0;
+    }
+
+    /* API Trace inline card */
+    .trace-card {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 12px;
+      transition: border-color 0.15s, background 0.15s;
+      width: 100%;
+      position: relative;
+    }
+    .trace-card:hover { background: var(--surface-raised); border-color: var(--text-secondary); }
+    .trace-card::before {
+      content: '';
+      position: absolute;
+      left: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--neutral);
+    }
+    .trace-card-info::before { background: var(--info); }
+    .trace-card-warning::before { background: var(--warning); }
+    .trace-card-neutral::before { background: var(--neutral); }
+    .trace-card-error::before { background: var(--danger); width: 8px; height: 8px; }
+    .trace-card { padding-left: 22px; }
+    .trace-badge {
+      font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 4px; flex-shrink: 0;
+    }
+    .trace-badge-info { background: color-mix(in srgb, var(--info) 10%, transparent); color: #0550ae; }
+    .trace-badge-warning { background: color-mix(in srgb, var(--warning) 10%, transparent); color: #7a5100; }
+    .trace-badge-neutral { background: color-mix(in srgb, var(--neutral) 10%, transparent); color: #4b5563; }
+    .trace-name { font-family: var(--mono); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .trace-status { flex-shrink: 0; font-size: 11px; }
+    .trace-duration { font-family: var(--mono); color: var(--text-secondary); flex-shrink: 0; }
+    .trace-tokens { font-family: var(--mono); color: var(--text-secondary); flex-shrink: 0; font-size: 11px; }
+
+    /* Loading */
+    .loading { text-align: center; padding: 60px 20px; color: var(--text-secondary); }
+    .loading-spinner {
+      width: 24px; height: 24px; border: 2px solid var(--border);
+      border-top-color: var(--info); border-radius: 50%;
+      animation: spin 0.8s linear infinite; margin: 0 auto 12px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Empty */
+    .empty { text-align: center; padding: 60px 20px; color: var(--text-secondary); }
+    .empty h2 { font-size: 18px; margin-bottom: 8px; color: var(--text); }
+
+    /* Error */
+    .error { text-align: center; padding: 60px 20px; }
+    .error h2 { font-size: 18px; margin-bottom: 8px; color: var(--danger); }
+    .error p { color: var(--text-secondary); }
+
+    /* Keyboard focus */
+    .row-focused > .user-bubble,
+    .row-focused > .agent-block,
+    .row-focused > .capsule,
+    .row-focused > .clarification,
+    .row-focused > .tool-block,
+    .row-focused > .trace-card {
+      outline: 2px solid var(--info);
+      outline-offset: 2px;
+    }
+
+    /* Help modal */
+    .help-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.4);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      backdrop-filter: blur(2px);
+    }
+    .help-overlay.open { display: flex; }
+    .help-modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      max-width: 400px;
+      width: 90%;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+    }
+    .help-modal h3 { font-size: 16px; margin-bottom: 16px; }
+    .help-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      font-size: 13px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .help-row:last-child { border-bottom: none; }
+    .help-key {
+      font-family: var(--mono);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 12px;
+    }
+
+    /* Back to top */
+    .back-to-top {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      transition: all 0.2s;
+      z-index: 100;
+    }
+    .back-to-top.visible { display: flex; }
+    .back-to-top:hover { background: var(--info); color: #fff; border-color: var(--info); }
+
+    /* Keyboard hint */
+    .keyboard-hint {
+      font-size: 11px;
+      color: var(--text-faint);
+      margin-top: 6px;
+    }
+
+    /* Trace inline detail */
+    .trace-detail {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-top: 8px;
+      padding: 16px;
+      width: 100%;
+      animation: slideDown 0.2s ease;
+    }
+    @keyframes slideDown {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .trace-detail-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+    .trace-detail-title {
+      font-size: 14px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .trace-detail-meta {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      font-size: 12px;
+    }
+    .trace-metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .trace-metric {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      text-align: center;
+    }
+    .trace-metric-value {
+      font-family: var(--mono);
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .trace-metric-label {
+      font-size: 10px;
+      color: var(--text-secondary);
+      margin-top: 2px;
+    }
+    .trace-panel {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 10px;
+      overflow: hidden;
+    }
+    .trace-panel-header {
+      padding: 8px 12px;
+      background: var(--surface-raised);
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .trace-panel-body {
+      padding: 12px;
+      display: none;
+    }
+    .trace-panel-body.open { display: block; }
+    .trace-code {
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.5;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+    }
+    .trace-error-block {
+      background: color-mix(in srgb, var(--danger) 6%, transparent);
+      border: 1px solid color-mix(in srgb, var(--danger) 18%, transparent);
+      border-radius: 6px;
+      margin-bottom: 10px;
+      overflow: hidden;
+    }
+    .trace-error-header {
+      padding: 8px 12px;
+      background: color-mix(in srgb, var(--danger) 10%, transparent);
+      font-size: 12px;
+      font-weight: 600;
+      color: #9e1c23;
+    }
+    .trace-error-body {
+      padding: 12px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: #9e1c23;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .row { animation: none; }
+      .trace-detail { animation: none; }
+      html { scroll-behavior: auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container" id="app">
+    <div class="loading">
+      <div class="loading-spinner"></div>
+      <p>正在加载对话数据...</p>
+    </div>
+  </div>
+
+  <div class="help-overlay" id="help-overlay" onclick="showHelp(false)">
+    <div class="help-modal" onclick="event.stopPropagation()">
+      <h3>键盘快捷键</h3>
+      <div class="help-row"><span>向下导航</span><span class="help-key">j / ↓</span></div>
+      <div class="help-row"><span>向上导航</span><span class="help-key">k / ↑</span></div>
+      <div class="help-row"><span>展开/收起 Trace</span><span class="help-key">Enter</span></div>
+      <div class="help-row"><span>显示帮助</span><span class="help-key">?</span></div>
+      <div class="help-row"><span>取消聚焦</span><span class="help-key">Esc</span></div>
+    </div>
+  </div>
+
+  <button class="back-to-top" id="back-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="回到顶部">↑</button>
+
+  <script>
+    const API_BASE = '';
+    let messages = [];
+    let traces = [];
+    let sessionTitle = '';
+    let sessionMeta = {};
+    let filter = 'all';
+    const expandedTraceIds = new Set();
+    let focusedIndex = -1;
+    let mergedItems = [];
+
+    function formatDateTime(value) {
+      if (!value) return '-';
+      try {
+        const d = new Date(value);
+        return d.toLocaleString('zh-CN', { hour12: false });
+      } catch {
+        return value;
+      }
+    }
+
+    function normalizeText(value) {
+      return value.replace(/\s+/g, ' ').trim().toLowerCase();
+    }
+
+    function extractCapsule(content) {
+      const text = content.trim();
+      const match = text.match(/^\{([^{}]+)\}\s*([\s\S]*)$/);
+      if (match) {
+        return { label: match[1].trim(), rest: (match[2] || '').trim() };
+      }
+      const statusList = ['构思阶段','分析阶段','开发阶段','测试阶段','修复阶段','交付阶段','正在分析您的任务需求','已识别任务类型','正在规划任务详情','任务规划完成','正在生成执行计划','执行计划已生成'];
+      for (const s of statusList) {
+        if (text.includes(s)) return { label: text, rest: '' };
+      }
+      const fallback = ['意图识别','任务规划','执行计划','系统','错误'];
+      for (const f of fallback) {
+        if (text.startsWith(f)) {
+          const rest = text.slice(f.length).trim();
+          return { label: f, rest: rest ? rest.replace(/^[：:]\s*/, '') : '' };
+        }
+      }
+      return null;
+    }
+
+    function capsuleTone(content) {
+      const text = content.toLowerCase();
+      if (text.includes('错误') || text.includes('失败') || text.includes('exception')) return 'error';
+      if (text.includes('执行') || text.includes('运行') || text.includes('构建') || text.includes('部署')) return 'execution';
+      if (text.includes('计划') || text.includes('规划') || text.includes('方案')) return 'planning';
+      if (text.includes('分析') || text.includes('评估')) return 'review';
+      if (text.includes('意图') || text.includes('识别')) return 'intent';
+      return 'system';
+    }
+
+    function buildReplayItems(msgs) {
+      const items = [];
+      for (const m of msgs) {
+        const role = m.role;
+        const content = m.content || '';
+        const metadata = m.metadata || {};
+
+        if (role === 'user') {
+          items.push({ kind: 'user', id: m.id, text: content, timestamp: m.createdAt });
+          continue;
+        }
+
+        // Tool events
+        const eventType = metadata.eventType || metadata.messageEventType || '';
+        if (eventType === 'tool_call_started' || eventType === 'tool_call_completed' || eventType === 'tool_call_failed') {
+          const toolName = metadata.toolName || metadata.tool_name || 'tool';
+          const status = eventType === 'tool_call_failed' ? 'failed' : eventType === 'tool_call_completed' ? 'completed' : 'running';
+          items.push({
+            kind: 'tool',
+            id: m.id,
+            toolName,
+            status,
+            preview: metadata.outputPreview || metadata.result || '',
+            timestamp: m.createdAt,
+          });
+          continue;
+        }
+
+        // Clarification
+        if (metadata.isClarification || metadata.clarification || content.includes('为了更准确地')) {
+          items.push({ kind: 'clarification', id: m.id, text: content, timestamp: m.createdAt });
+          continue;
+        }
+
+        // Capsule
+        const capsule = extractCapsule(content);
+        if (capsule) {
+          items.push({
+            kind: 'capsule',
+            id: m.id,
+            label: capsule.label,
+            text: capsule.rest,
+            tone: capsuleTone(content),
+            timestamp: m.createdAt,
+          });
+          continue;
+        }
+
+        // Error
+        if (metadata.isError || metadata.error || content.toLowerCase().includes('error') || content.includes('异常')) {
+          items.push({ kind: 'error', id: m.id, text: content, author: metadata.agentName || metadata.agent || '智能体', timestamp: m.createdAt });
+          continue;
+        }
+
+        // Plain agent message
+        items.push({ kind: 'agent', id: m.id, text: content, author: metadata.agentName || metadata.agent || '智能体', timestamp: m.createdAt });
+      }
+      return items;
+    }
+
+    function mergeItems(replayItems, traceItems) {
+      const traceObjs = traceItems.map((t) => ({
+        kind: 'api_trace',
+        id: t.id,
+        trace: t,
+        timestamp: t.createdAt,
+      }));
+      const merged = [...replayItems, ...traceObjs].sort(
+        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+      );
+      if (filter === 'messages-only') {
+        return merged.filter((item) => item.kind !== 'api_trace');
+      }
+      if (filter !== 'all') {
+        return merged.filter((item) =>
+          item.kind !== 'api_trace' || item.trace.traceType === filter
+        );
+      }
+      return merged;
+    }
+
+    function renderBadge(typeLabel, typeTone) {
+      return '<span class="trace-badge trace-badge-' + typeTone + '" style="margin-right:6px;">' + typeLabel + '</span>';
+    }
+
+    function renderTraceCard(trace) {
+      const typeLabel = trace.traceType === 'llm_request' ? 'LLM' : trace.traceType === 'tool_call' ? '工具' : trace.traceType === 'service_api' ? '服务' : '连接器';
+      const typeTone = trace.traceType === 'llm_request' ? 'info' : trace.traceType === 'tool_call' ? 'warning' : 'neutral';
+      const hasError = !!trace.errorMessage;
+      const isExpanded = expandedTraceIds.has(trace.id);
+      let html = '<button type="button" class="trace-card trace-card-' + typeTone + (hasError ? ' trace-card-error' : '') + '"';
+      html += ' onclick="toggleTraceDetail(\'' + trace.id + '\')">';
+      html += '<span class="trace-badge trace-badge-' + typeTone + '" style="margin-right:6px;">' + typeLabel + '</span>';
+      html += '<span class="trace-name">' + (trace.model || trace.toolName || trace.serviceName || trace.endpoint || trace.traceType) + '</span>';
+      html += '<span class="trace-status ' + (hasError ? 'status-error' : 'status-success') + '" style="color:' + (hasError ? 'var(--danger)' : 'var(--success)') + ';font-size:11px;">' + (hasError ? '失败' : '成功') + '</span>';
+      html += '<span class="trace-duration">' + (trace.durationMs ? trace.durationMs + 'ms' : '-') + '</span>';
+      if (trace.totalTokens) {
+        html += '<span class="trace-tokens">' + (trace.promptTokens || 0) + '+' + (trace.completionTokens || 0) + '=' + trace.totalTokens + '</span>';
+      }
+      html += '</button>';
+      if (isExpanded) {
+        html += renderTraceInlineDetail(trace);
+      }
+      return html;
+    }
+
+    function toggleTraceDetail(traceId) {
+      if (expandedTraceIds.has(traceId)) {
+        expandedTraceIds.delete(traceId);
+      } else {
+        expandedTraceIds.add(traceId);
+      }
+      render();
+    }
+
+    function syntaxHighlightJSON(json) {
+      if (typeof json !== 'string') json = JSON.stringify(json, null, 2);
+      json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return json.replace(
+        /("(?:\\.|[^"\\])*")(\s*:)?/g,
+        function (match, string, colon) {
+          const keyClass = colon ? 'json-key' : 'json-string';
+          return '<span class="' + keyClass + '">' + string + '</span>' + (colon || '');
+        }
+      )
+      .replace(/\b(true|false)\b/g, '<span class="json-boolean">$1</span>')
+      .replace(/\b(null)\b/g, '<span class="json-null">$1</span>')
+      .replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="json-number">$1</span>');
+    }
+
+    function formatRawHttp(t) {
+      const lines = [];
+      lines.push((t.requestMethod || 'POST') + ' ' + (t.endpoint || '/') + ' HTTP/1.1');
+      lines.push('Host: ' + (t.provider || 'upstream'));
+      if (t.requestHeaders) {
+        Object.entries(t.requestHeaders).forEach(function ([k, v]) {
+          lines.push(k + ': ' + (Array.isArray(v) ? v.join(', ') : v));
+        });
+      }
+      lines.push('');
+      if (t.requestBody) {
+        lines.push(JSON.stringify(t.requestBody, null, 2));
+      }
+      lines.push('');
+      lines.push('HTTP/1.1 ' + (t.responseStatus || 200) + ' ' + (t.errorMessage ? 'Error' : 'OK'));
+      if (t.responseHeaders) {
+        Object.entries(t.responseHeaders).forEach(function ([k, v]) {
+          lines.push(k + ': ' + (Array.isArray(v) ? v.join(', ') : v));
+        });
+      }
+      lines.push('');
+      if (t.responseBody) {
+        lines.push(JSON.stringify(t.responseBody, null, 2));
+      }
+      if (t.errorMessage) {
+        lines.push(t.errorMessage);
+      }
+      return lines.join('\n');
+    }
+
+    function renderTracePanel(title, content, isOpen) {
+      const id = 'tp-' + Math.random().toString(36).slice(2, 8);
+      return (
+        '<div class="trace-panel">' +
+        '<div class="trace-panel-header" onclick="this.nextElementSibling.classList.toggle(\'open\')">' +
+        '<span>' + title + '</span>' +
+        '<span style="font-size:11px;color:var(--text-secondary);">' + (isOpen ? '收起' : '展开') + '</span>' +
+        '</div>' +
+        '<div class="trace-panel-body ' + (isOpen ? 'open' : '') + '">' +
+        '<div class="trace-code">' + content + '</div>' +
+        '</div>' +
+        '</div>'
+      );
+    }
+
+    function renderTraceInlineDetail(trace) {
+      const typeLabel = trace.traceType === 'llm_request' ? 'LLM' : trace.traceType === 'tool_call' ? '工具' : trace.traceType === 'service_api' ? '服务' : '连接器';
+      const typeTone = trace.traceType === 'llm_request' ? 'info' : trace.traceType === 'tool_call' ? 'warning' : 'neutral';
+      const hasError = !!trace.errorMessage;
+
+      let html = '<div class="trace-detail">';
+
+      // Header
+      html += '<div class="trace-detail-header">';
+      html += '<div class="trace-detail-title">';
+      html += '<span class="trace-badge trace-badge-' + typeTone + '">' + typeLabel + '</span>';
+      html += '<span class="mono">' + (trace.model || trace.toolName || trace.serviceName || trace.endpoint || trace.traceType) + '</span>';
+      html += '</div>';
+      html += '<div class="trace-detail-meta">';
+      html += '<span class="' + (hasError ? 'status-error' : 'status-success') + '">' + (hasError ? '● 失败' : '● 成功') + '</span>';
+      html += '<span class="mono">' + (trace.durationMs ? trace.durationMs + 'ms' : '-') + '</span>';
+      html += '<span class="mono">' + formatDateTime(trace.createdAt) + '</span>';
+      if (trace.sequence !== undefined) {
+        html += '<span class="mono">seq: ' + trace.sequence + '</span>';
+      }
+      html += '</div>';
+      html += '</div>';
+
+      // Token metrics
+      if (trace.promptTokens || trace.completionTokens) {
+        html += '<div class="trace-metrics">';
+        html += '<div class="trace-metric"><div class="trace-metric-value">' + (trace.promptTokens || 0) + '</div><div class="trace-metric-label">Prompt</div></div>';
+        html += '<div class="trace-metric"><div class="trace-metric-value">' + (trace.completionTokens || 0) + '</div><div class="trace-metric-label">Completion</div></div>';
+        html += '<div class="trace-metric"><div class="trace-metric-value">' + (trace.totalTokens || 0) + '</div><div class="trace-metric-label">Total</div></div>';
+        if (trace.cachedPromptTokens) {
+          html += '<div class="trace-metric"><div class="trace-metric-value">' + trace.cachedPromptTokens + '</div><div class="trace-metric-label">Cached</div></div>';
+        }
+        if (trace.cacheCreationTokens) {
+          html += '<div class="trace-metric"><div class="trace-metric-value">' + trace.cacheCreationTokens + '</div><div class="trace-metric-label">Cache 创建</div></div>';
+        }
+        html += '</div>';
+      }
+
+      // Error
+      if (trace.errorMessage) {
+        html += '<div class="trace-error-block">';
+        html += '<div class="trace-error-header">错误</div>';
+        html += '<div class="trace-error-body">' + escapeHtml(trace.errorMessage) + '</div>';
+        html += '</div>';
+      }
+
+      // Request / Response
+      if (trace.requestBody || trace.responseBody) {
+        if (trace.requestBody) {
+          html += renderTracePanel('请求', syntaxHighlightJSON(trace.requestBody), true);
+        }
+        if (trace.responseBody) {
+          html += renderTracePanel('响应', syntaxHighlightJSON(trace.responseBody), true);
+        }
+      }
+
+      // Raw HTTP
+      html += renderTracePanel('原始 HTTP', escapeHtml(formatRawHttp(trace)), false);
+
+      // Metadata
+      if (trace.metadataJson && Object.keys(trace.metadataJson).length > 0) {
+        html += renderTracePanel('元数据', syntaxHighlightJSON(trace.metadataJson), false);
+      }
+
+      html += '</div>';
+      return html;
+    }
+
+    function render() {
+      mergedItems = mergeItems(buildReplayItems(messages), traces);
+      let html = '';
+
+      // Header
+      html += '<div class="header">';
+      html += '<div class="header-left">';
+      html += '<div class="section-tag">对话回放</div>';
+      html += '<div class="title">' + (sessionTitle || '会话回放') + '</div>';
+      html += '<div class="subtitle">' + messages.length + ' 条消息 · ' + traces.length + ' 条 API Trace';
+      if (sessionMeta.createdAt) {
+        html += ' · ' + formatDateTime(sessionMeta.createdAt);
+      }
+      if (sessionMeta.status) {
+        html += ' · 状态: ' + escapeHtml(sessionMeta.status);
+      }
+      html += '</div>';
+      html += '<div class="keyboard-hint">按 ? 查看键盘快捷键</div>';
+      html += '</div>';
+      html += '<button class="close-btn" onclick="window.close()">关闭标签页</button>';
+      html += '</div>';
+
+      // Filter bar
+      html += '<div class="filter-bar">';
+      const filters = [
+        { key: 'all', label: '全部' },
+        { key: 'messages-only', label: '仅对话' },
+        { key: 'llm_request', label: 'LLM' },
+        { key: 'tool_call', label: '工具' },
+        { key: 'service_api', label: '服务' },
+        { key: 'connector_api', label: '连接器' },
+      ];
+      for (const f of filters) {
+        html += '<button type="button" class="filter-pill ' + (filter === f.key ? 'active' : '') + '" onclick="setFilter(\'' + f.key + '\')">' + f.label + '</button>';
+      }
+      html += '<span class="filter-count">' + mergedItems.length + ' 条</span>';
+      html += '</div>';
+
+      // Timeline
+      html += '<div class="timeline" id="timeline">';
+      if (mergedItems.length === 0) {
+        html += '<div class="empty"><h2>暂无数据</h2><p>当前筛选条件下没有可展示的内容</p></div>';
+      } else {
+        for (const item of mergedItems) {
+          if (item.kind === 'user') {
+            html += '<div class="row row-user">';
+            html += '<div class="user-bubble">' + escapeHtml(item.text) + '</div>';
+            html += '</div>';
+          } else if (item.kind === 'agent') {
+            html += '<div class="row row-agent">';
+            html += '<div class="agent-block">';
+            html += '<div class="agent-author">' + escapeHtml(item.author) + '</div>';
+            html += '<div class="agent-text">' + escapeHtml(item.text) + '</div>';
+            html += '</div>';
+            html += '</div>';
+          } else if (item.kind === 'error') {
+            html += '<div class="row row-error">';
+            html += '<div class="agent-block agent-block-error">';
+            html += '<div class="agent-author">' + escapeHtml(item.author) + '</div>';
+            html += '<div class="agent-text">' + escapeHtml(item.text) + '</div>';
+            html += '</div>';
+            html += '</div>';
+          } else if (item.kind === 'capsule') {
+            html += '<div class="row row-agent">';
+            html += '<div class="capsule capsule-' + item.tone + '">' + escapeHtml(item.label) + (item.text ? ' · ' + escapeHtml(item.text) : '') + '</div>';
+            html += '</div>';
+          } else if (item.kind === 'clarification') {
+            html += '<div class="row row-agent">';
+            html += '<div class="clarification">' + escapeHtml(item.text) + '</div>';
+            html += '</div>';
+          } else if (item.kind === 'tool') {
+            const statusClass = item.status === 'failed' ? 'tool-status-failed' : 'tool-status-success';
+            const statusText = item.status === 'failed' ? '失败' : item.status === 'completed' ? '已完成' : '进行中';
+            html += '<div class="row row-agent">';
+            html += '<div class="tool-block">';
+            html += '<div class="tool-header">';
+            html += '<span class="tool-badge">工</span>';
+            html += '<span class="tool-title">' + escapeHtml(item.toolName) + '</span>';
+            html += '<span class="tool-status ' + statusClass + '" style="margin-left:auto;">' + statusText + '</span>';
+            html += '</div>';
+            if (item.preview) {
+              html += '<div class="tool-preview">' + escapeHtml(item.preview) + '</div>';
+            }
+            html += '</div>';
+            html += '</div>';
+          } else if (item.kind === 'api_trace') {
+            html += '<div class="row row-trace">';
+            html += renderTraceCard(item.trace);
+            html += '</div>';
+          }
+        }
+      }
+      html += '</div>';
+
+      document.getElementById('app').innerHTML = html;
+
+      // Restore focus after render
+      if (focusedIndex >= 0) {
+        requestAnimationFrame(updateFocus);
+      }
+    }
+
+    function setFilter(newFilter) {
+      filter = newFilter;
+      render();
+    }
+
+    function escapeHtml(text) {
+      if (!text) return '';
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function updateFocus() {
+      const rows = document.querySelectorAll('.timeline > .row');
+      rows.forEach((row, i) => {
+        row.classList.toggle('row-focused', i === focusedIndex);
+      });
+      if (focusedIndex >= 0 && rows[focusedIndex]) {
+        rows[focusedIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+
+    function navigateFocus(delta) {
+      const rows = document.querySelectorAll('.timeline > .row');
+      if (rows.length === 0) return;
+      focusedIndex = Math.max(0, Math.min(rows.length - 1, focusedIndex + delta));
+      updateFocus();
+    }
+
+    function toggleFocusedTrace() {
+      if (focusedIndex < 0) return;
+      const item = mergedItems[focusedIndex];
+      if (item && item.kind === 'api_trace') {
+        toggleTraceDetail(item.trace.id);
+      }
+    }
+
+    function showHelp(show) {
+      document.getElementById('help-overlay').classList.toggle('open', show);
+    }
+
+    document.addEventListener('keydown', function (e) {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if (document.getElementById('help-overlay').classList.contains('open')) {
+        if (e.key === 'Escape' || e.key === '?') {
+          showHelp(false);
+          e.preventDefault();
+        }
+        return;
+      }
+      switch (e.key) {
+        case 'j':
+        case 'ArrowDown':
+          navigateFocus(1);
+          e.preventDefault();
+          break;
+        case 'k':
+        case 'ArrowUp':
+          navigateFocus(-1);
+          e.preventDefault();
+          break;
+        case 'Enter':
+          toggleFocusedTrace();
+          e.preventDefault();
+          break;
+        case '?':
+          showHelp(true);
+          e.preventDefault();
+          break;
+        case 'Escape':
+          focusedIndex = -1;
+          updateFocus();
+          break;
+      }
+    });
+
+    function onScroll() {
+      const btn = document.getElementById('back-to-top');
+      if (!btn) return;
+      btn.classList.toggle('visible', window.scrollY > 400);
+    }
+    window.addEventListener('scroll', onScroll);
+
+    async function loadData() {
+      const params = new URLSearchParams(window.location.search);
+      const sessionId = params.get('session');
+      if (!sessionId) {
+        document.getElementById('app').innerHTML = '<div class="error"><h2>参数错误</h2><p>缺少会话 ID</p></div>';
+        return;
+      }
+
+      try {
+        // Load session core data
+        const coreRes = await fetch(API_BASE + '/api/conversations/sessions/' + encodeURIComponent(sessionId) + '/core', {
+          credentials: 'same-origin',
+        });
+        if (!coreRes.ok) throw new Error('加载会话数据失败: ' + coreRes.status);
+        const coreData = await coreRes.json();
+        if (!coreData.success) throw new Error(coreData.error || '加载失败');
+
+        const detail = coreData.data || coreData;
+        messages = detail.messages || [];
+        sessionTitle = detail.session?.title || detail.title || '会话 ' + sessionId.slice(0, 8);
+        sessionMeta = {
+          createdAt: detail.session?.createdAt || detail.createdAt,
+          status: detail.session?.status || detail.status,
+          id: sessionId,
+        };
+
+        // Load API traces
+        const tracesRes = await fetch(API_BASE + '/api/conversations/sessions/' + encodeURIComponent(sessionId) + '/api-traces?limit=500', {
+          credentials: 'same-origin',
+        });
+        if (tracesRes.ok) {
+          const tracesData = await tracesRes.json();
+          const td = tracesData.data || tracesData;
+          traces = td.traces || [];
+        }
+
+        render();
+      } catch (err) {
+        document.getElementById('app').innerHTML = '<div class="error"><h2>加载失败</h2><p>' + escapeHtml(err.message) + '</p></div>';
+      }
+    }
+
+    loadData();
+  </script>
+</body>
+</html>

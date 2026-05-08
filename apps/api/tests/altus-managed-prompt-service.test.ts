@@ -218,6 +218,7 @@ test('managed prompt requires deployment tools and auto-repair loop for publish 
 
   assert.match(prompt, /use the managed deployment tools instead of replying with plain text/i);
   assert.match(prompt, /use `deploy_application` for first publish or publishing the latest workspace changes/i);
+  assert.match(prompt, /If the workspace already contains the fixed OneCEO web shell, treat it as the canonical scaffold/i);
   assert.match(prompt, /returns `status=retryable_repair_required`, inspect `repair\.category` first/i);
   assert.match(prompt, /keep deployment debug details internal/i);
 });

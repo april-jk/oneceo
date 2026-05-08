@@ -708,6 +708,7 @@ export class AltusManagedPromptService {
       '- The manifest must include: `templateVersion`, `appType`, `stack`, `build.command`, `build.outputDir`, `start.command`, `start.portEnv`, `healthcheck.path`, `features`, and `runtime`.',
       '- For deployable web app tasks, default `appType` to `web_app`, `templateVersion` to `1.0.0`, and `start.portEnv` to `PORT`.',
       '- For new deployable web app tasks without an existing workspace stack to preserve, default to the fixed OneCEO web shell instead of inventing a new runtime family: root `client/`, root `server/`, optional root `shared/`, root `package.json`, root `oneceo.manifest.json`.',
+      '- If the workspace already contains the fixed OneCEO web shell, treat it as the canonical scaffold. Extend and replace content inside it instead of rebuilding the shell from scratch.',
       '- Treat the fixed OneCEO web shell as the default stable delivery lane for new deployable websites, not as a global migration rule for every task.',
       '- If the workspace already exists in another stack, or the user is debugging, repairing, or extending an existing project, preserve the existing stack unless the user explicitly asks for a template migration.',
       '- For the fixed OneCEO web shell, frontend build should be Vite-based, and the production runtime should stay on the Node web shell.',

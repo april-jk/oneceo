@@ -3028,7 +3028,10 @@ private async chargeForModelCall(state: AltusRunState, input: {
       );
       const sandbox = await this.setupService.ensureSandbox(
         state.input.sessionId,
-        state.input.sessionTitle
+        state.input.sessionTitle,
+        {
+          taskIntentProfile: state.input.taskIntentProfile,
+        }
       );
       const residentSkillSelections = Array.isArray(state.input.residentSkillSelections)
         ? state.input.residentSkillSelections

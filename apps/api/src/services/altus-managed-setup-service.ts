@@ -32,6 +32,10 @@ import {
   altusManagedContextService,
   buildManagedConversationEntries,
 } from './altus-managed-context-service';
+import {
+  buildOfficialWebShellMaterializationGuidance,
+  materializeOfficialWebShellInSandbox,
+} from './oneceo-official-web-shell-materialization-service';
 
 const INLINE_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const INLINE_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
@@ -993,7 +997,13 @@ export class AltusManagedSetupService {
     };
   }
 
-  async ensureSandbox(sessionId: string, sessionTitle?: string | null) {
+  async ensureSandbox(
+    sessionId: string,
+    sessionTitle?: string | null,
+    options?: {
+      taskIntentProfile?: AltusManagedTaskIntentProfile | null;
+    }
+  ) {
     const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
     const provision = await sandboxAgentProvisionService.provisionWithLock({
       executor: 'altus',
@@ -1027,6 +1037,30 @@ export class AltusManagedSetupService {
       executor: 'altus',
       workspaceRoot,
     });
+    const materialization = await materializeOfficialWebShellInSandbox({
+      sandboxId: provision.sessionId,
+      workspaceRoot,
+      taskIntentProfile: options?.taskIntentProfile,
+    }).catch((error) => {
+      console.warn('[OFFICIAL_WEB_SHELL_MATERIALIZATION_WARN]', {
+        sessionId,
+        sandboxId: provision.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    });
+    if (materialization?.applied) {
+      await this.persistTimelineMessage({
+        sessionId,
+        role: 'system',
+        messageType: 'system_template_materialized',
+        content: buildOfficialWebShellMaterializationGuidance(),
+        metadata: {
+          eventType: 'official_web_shell_materialized',
+          writtenPaths: materialization.writtenPaths,
+        },
+      });
+    }
     void sessionMcpRecoveryService.ensureSessionRecovered(sessionId, provision.sessionId).catch(() => null);
     return {
       sandboxId: provision.sessionId,

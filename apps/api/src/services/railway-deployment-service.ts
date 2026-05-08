@@ -330,6 +330,58 @@ function toPublicUrl(value: unknown): string | undefined {
   return `https://${raw}`;
 }
 
+function isActivePublicDomainStatus(value: unknown) {
+  return asText(value).toLowerCase() === 'active';
+}
+
+function normalizePublicUrlHost(value: unknown) {
+  const url = toPublicUrl(value);
+  if (!url) return '';
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return url.replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
+  }
+}
+
+export function resolveRailwayPanelPublicUrls(input: {
+  publicUrl?: unknown;
+  publicDomain?: unknown;
+  domainStatus?: unknown;
+  providerLatestUrl?: unknown;
+  providerLatestStaticUrl?: unknown;
+  providerDomains?: string[];
+}) {
+  const customPublicUrl =
+    toPublicUrl(input.publicUrl) ||
+    toPublicUrl(input.publicDomain);
+  const customPublicHost = normalizePublicUrlHost(customPublicUrl);
+  const customDomainActive = Boolean(customPublicUrl && isActivePublicDomainStatus(input.domainStatus));
+  const providerLatestUrl =
+    normalizePublicUrlHost(input.providerLatestUrl) === customPublicHost
+      ? undefined
+      : toPublicUrl(input.providerLatestUrl);
+  const providerLatestStaticUrl =
+    normalizePublicUrlHost(input.providerLatestStaticUrl) === customPublicHost
+      ? undefined
+      : toPublicUrl(input.providerLatestStaticUrl);
+  const providerDomains = (input.providerDomains || [])
+    .map((item) => toPublicUrl(item) || '')
+    .filter((item) => normalizePublicUrlHost(item) !== customPublicHost)
+    .filter(Boolean);
+  const activePublicUrl = customDomainActive ? customPublicUrl : undefined;
+  const latestUrl = providerLatestUrl || providerDomains[0] || activePublicUrl;
+  const latestStaticUrl = providerLatestStaticUrl || providerDomains[0] || activePublicUrl || undefined;
+  const domains = providerDomains.length > 0 ? providerDomains : activePublicUrl ? [activePublicUrl] : [];
+  return {
+    latestUrl,
+    latestStaticUrl,
+    publicUrl: activePublicUrl,
+    domains,
+    customDomainActive,
+  };
+}
+
 function buildMissingMessage(missing: string[]) {
   if (missing.length === 0) return '';
   return `部署尚未就绪，缺少：${missing.join('、')}。请联系平台管理员完成部署供应链配置。`;
@@ -775,9 +827,6 @@ export async function getRailwayDeploymentPanel(
   const activeStatus = asText(detail?.status) || selectedDeployment?.status || '';
   const providerLatestUrl = toPublicUrl(detail?.url);
   const providerLatestStaticUrl = toPublicUrl(detail?.staticUrl);
-  const canonicalPublicUrl =
-    toPublicUrl(binding.publicUrl) ||
-    toPublicUrl(binding.publicDomain);
   const canDeploy = Boolean(binding.serviceId);
   const missingForDeploy = canDeploy ? [] : ['serviceId'];
   const providerDomains = [
@@ -786,9 +835,14 @@ export async function getRailwayDeploymentPanel(
   ]
     .map((entry) => toPublicUrl(entry.domain) || '')
     .filter(Boolean);
-  const domains = canonicalPublicUrl ? [canonicalPublicUrl] : providerDomains;
-  const latestUrl = canonicalPublicUrl || providerLatestUrl;
-  const resolvedStaticUrl = canonicalPublicUrl || providerLatestStaticUrl || providerDomains[0] || undefined;
+  const publicUrls = resolveRailwayPanelPublicUrls({
+    publicUrl: binding.publicUrl,
+    publicDomain: binding.publicDomain,
+    domainStatus: binding.domainStatus,
+    providerLatestUrl,
+    providerLatestStaticUrl,
+    providerDomains,
+  });
 
   return {
     configured: true,
@@ -813,22 +867,22 @@ export async function getRailwayDeploymentPanel(
     serviceName: resolvedServiceName || undefined,
     deploymentId: selectedDeploymentId || undefined,
     latestStatus: activeStatus || undefined,
-    latestUrl: latestUrl || undefined,
-    latestStaticUrl: resolvedStaticUrl,
-    publicUrl: canonicalPublicUrl || undefined,
+    latestUrl: publicUrls.latestUrl || undefined,
+    latestStaticUrl: publicUrls.latestStaticUrl,
+    publicUrl: publicUrls.publicUrl || undefined,
     publicDomain: binding.publicDomain || undefined,
     domainStatus: binding.domainStatus || undefined,
     domainStatusMessage: normalizeDomainStatusMessage(binding.domainStatus, binding.domainStatusMessage),
     activeDeploymentPending: DEPLOYMENT_TRANSIENT_STATUSES.has(activeStatus),
-    domains,
+    domains: publicUrls.domains,
     deployments: deployments.map((item) =>
       item.id === selectedDeploymentId
         ? {
             ...item,
             status: activeStatus || item.status,
             createdAt: toIso(detail?.createdAt) || item.createdAt,
-            url: latestUrl || undefined,
-            staticUrl: resolvedStaticUrl,
+            url: publicUrls.latestUrl || undefined,
+            staticUrl: publicUrls.latestStaticUrl,
           }
         : item
     ),

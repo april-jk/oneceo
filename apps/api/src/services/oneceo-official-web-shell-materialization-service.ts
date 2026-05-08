@@ -21,7 +21,6 @@ const OFFICIAL_WEB_SHELL_PACKAGE_JSON = {
     start: 'node dist/index.js',
   },
   dependencies: {
-    express: '^5.0.0',
     react: '^19.0.0',
     'react-dom': '^19.0.0',
   },
@@ -58,7 +57,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
 );
 `;
 
-const OFFICIAL_WEB_SHELL_APP_JSX = `export default function App() {
+const OFFICIAL_WEB_SHELL_APP_JSX = `import React from 'react';
+
+export default function App() {
   return (
     <main className="shell">
       <section className="hero">
@@ -155,27 +156,155 @@ ul {
 }
 `;
 
-const OFFICIAL_WEB_SHELL_SERVER_SOURCE = `import express from 'express';
+const OFFICIAL_WEB_SHELL_SERVER_SOURCE = `import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const app = express();
 const port = Number(process.env.PORT || 8080);
 const publicDir = path.join(__dirname, 'public');
+const indexPath = path.join(publicDir, 'index.html');
+const mimeTypes = {
+  '.css': 'text/css; charset=utf-8',
+  '.gif': 'image/gif',
+  '.html': 'text/html; charset=utf-8',
+  '.ico': 'image/x-icon',
+  '.jpeg': 'image/jpeg',
+  '.jpg': 'image/jpeg',
+  '.js': 'application/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.mjs': 'application/javascript; charset=utf-8',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.txt': 'text/plain; charset=utf-8',
+  '.webp': 'image/webp',
+};
+const ANALYTICS_MARKER_START = '<!-- ONECEO_ANALYTICS:START -->';
+const ANALYTICS_MARKER_END = '<!-- ONECEO_ANALYTICS:END -->';
 
-app.get('/api/system/health', (_req, res) => {
-  res.json({ ok: true, service: 'oneceo-official-web-shell' });
+function getMimeType(filePath) {
+  return mimeTypes[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+}
+
+function readEnv(key) {
+  return typeof process.env[key] === 'string' ? process.env[key].trim() : '';
+}
+
+function buildAnalyticsBootstrapSnippet() {
+  const enabledValue = readEnv('VITE_ANALYTICS_ENABLED').toLowerCase();
+  const host = readEnv('VITE_ANALYTICS_HOST');
+  const endpoint = readEnv('VITE_ANALYTICS_ENDPOINT') || host;
+  const websiteId = readEnv('VITE_ANALYTICS_WEBSITE_ID');
+  const tag = readEnv('VITE_ANALYTICS_TAG');
+  const enabled = !['0', 'false', 'no', 'off'].includes(enabledValue) && Boolean(endpoint && websiteId);
+  if (!enabled) return '';
+  const normalizedEndpoint = endpoint.replace(/\\/+$/, '');
+  return [
+    ANALYTICS_MARKER_START,
+    '<script>',
+    'window.__ONECEO_ANALYTICS__ = Object.freeze(' + JSON.stringify({ enabled, host: normalizedEndpoint, endpoint: normalizedEndpoint, websiteId, tag }) + ');',
+    '(function () {',
+    "  if (document.querySelector('script[data-oneceo-analytics=\\\"runtime\\\"]')) return;",
+    "  var script = document.createElement('script');",
+    '  script.defer = true;',
+    '  script.src = ' + JSON.stringify(normalizedEndpoint) + " + '/script.js';",
+    "  script.setAttribute('data-website-id', " + JSON.stringify(websiteId) + ');',
+    "  script.setAttribute('data-host-url', " + JSON.stringify(normalizedEndpoint) + ');',
+    "  script.setAttribute('data-oneceo-analytics', 'runtime');",
+    tag ? "  script.setAttribute('data-tag', " + JSON.stringify(tag) + ');' : '',
+    '  document.body.appendChild(script);',
+    '})();',
+    '</script>',
+    ANALYTICS_MARKER_END,
+  ].filter(Boolean).join('\\n');
+}
+
+function injectRuntimeAnalytics(html) {
+  const snippet = buildAnalyticsBootstrapSnippet();
+  if (!snippet) return html;
+  const markerStartIndex = html.indexOf(ANALYTICS_MARKER_START);
+  if (markerStartIndex >= 0) {
+    const markerEndIndex = html.indexOf(ANALYTICS_MARKER_END, markerStartIndex);
+    if (markerEndIndex < 0) return html;
+    return html.slice(0, markerStartIndex) + snippet + html.slice(markerEndIndex + ANALYTICS_MARKER_END.length);
+  }
+  const bodyCloseIndex = html.lastIndexOf('</body>');
+  if (bodyCloseIndex >= 0) {
+    return html.slice(0, bodyCloseIndex) + snippet + '\\n' + html.slice(bodyCloseIndex);
+  }
+  return html + '\\n' + snippet + '\\n';
+}
+
+function sendJson(res, statusCode, payload) {
+  const body = JSON.stringify(payload);
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'Content-Length': Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
+function sendFile(res, filePath) {
+  if (path.extname(filePath).toLowerCase() === '.html') {
+    const html = injectRuntimeAnalytics(fs.readFileSync(filePath, 'utf8'));
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Content-Length': Buffer.byteLength(html),
+    });
+    res.end(html);
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': getMimeType(filePath) });
+  fs.createReadStream(filePath).pipe(res);
+}
+
+function resolveStaticPath(requestPath) {
+  const normalizedPath = requestPath === '/' ? '/index.html' : requestPath;
+  const safePath = path.normalize(normalizedPath).replace(/^(\\.\\.[/\\\\])+/, '');
+  const targetPath = path.join(publicDir, safePath);
+  if (!targetPath.startsWith(publicDir)) {
+    return null;
+  }
+  return targetPath;
+}
+
+const server = http.createServer((req, res) => {
+  const requestUrl = new URL(req.url || '/', 'http://127.0.0.1');
+  if (requestUrl.pathname === '/api/system/health' || requestUrl.pathname === '/health') {
+    return sendJson(res, 200, { ok: true, service: 'oneceo-official-web-shell' });
+  }
+
+  const targetPath = resolveStaticPath(requestUrl.pathname);
+  if (!targetPath) {
+    return sendJson(res, 400, { ok: false, error: 'invalid_path' });
+  }
+
+  try {
+    const stats = fs.statSync(targetPath);
+    if (stats.isDirectory()) {
+      const nestedIndex = path.join(targetPath, 'index.html');
+      if (fs.existsSync(nestedIndex)) {
+        sendFile(res, nestedIndex);
+        return;
+      }
+    } else {
+      sendFile(res, targetPath);
+      return;
+    }
+  } catch {}
+
+  try {
+    sendFile(res, indexPath);
+  } catch {
+    sendJson(res, 404, { ok: false, error: 'not_found' });
+  }
 });
 
-app.use(express.static(publicDir));
-
-app.get('*', (_req, res) => {
-  res.sendFile(path.join(publicDir, 'index.html'));
-});
-
-app.listen(port, '0.0.0.0', () => {
+server.listen(port, '0.0.0.0', () => {
   console.log('[oneceo-official-web-shell] listening on port ' + port);
 });
 `;
@@ -186,6 +315,9 @@ import path from 'node:path';
 export default defineConfig({
   root: path.resolve(__dirname, 'client'),
   publicDir: path.resolve(__dirname, 'client/public'),
+  esbuild: {
+    jsxInject: "import React from 'react'",
+  },
   build: {
     outDir: path.resolve(__dirname, 'dist/public'),
     emptyOutDir: true,
@@ -198,7 +330,7 @@ const OFFICIAL_WEB_SHELL_MANIFEST = {
   appType: 'web_app',
   stack: 'oneceo_fixed_vite_node_shell',
   build: {
-    command: 'pnpm build',
+    command: 'npm run build',
     outputDir: 'dist/public',
   },
   start: {
@@ -244,12 +376,6 @@ function shouldMaterializeForTask(profile?: AltusManagedTaskIntentProfile | null
     return {
       allowed: false,
       reason: 'task_not_deployable' as const,
-    };
-  }
-  if (!profile.deploymentAllowed) {
-    return {
-      allowed: false,
-      reason: 'deployment_not_allowed' as const,
     };
   }
   return {
@@ -310,7 +436,8 @@ export function buildOfficialWebShellMaterializationGuidance() {
     'OneCEO 官方固定网站模板已经预置到当前工作区。',
     '请直接在现有模板内完成用户需求，不要重新发明技术栈，也不要重写 build/start/healthcheck/analytics 契约。',
     '优先修改这些文件：`client/src/App.jsx`、`client/src/styles.css`、`server/index.ts`、`shared/`。',
-    '保持这些契约不变：`package.json` 的 build/start、`oneceo.manifest.json`、`client/index.html` 的 analytics hook、`/api/system/health`。',
+    '首页主内容、用户要求的验收标识、hero、核心区块和浏览器交互必须写入 `client/src/App.jsx`；`client/src/main.jsx` 只负责挂载。',
+    '保持这些契约不变：`package.json` 的 build/start、固定 Node Web Shell、`oneceo.manifest.json`、`client/index.html` 的 analytics hook、`/api/system/health`。',
   ].join('\n');
 }
 

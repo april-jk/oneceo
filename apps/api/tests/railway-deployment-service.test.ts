@@ -5,6 +5,7 @@ import {
   buildRailwayBindingUnavailablePanel,
   classifyRailwayDeploymentError,
   isRailwayBindingNotFoundError,
+  resolveRailwayPanelPublicUrls,
   resolveRailwaySelectedDeploymentId,
   waitForRailwayDeploymentPublicReachability,
   type RailwayDeploymentListItem,
@@ -124,6 +125,54 @@ test('classifyRailwayDeploymentError returns repairable classification for repo 
 
   assert.equal(result.code, 'railway_repo_access_denied');
   assert.equal(result.bindingState, 'repair_required');
+});
+
+test('resolveRailwayPanelPublicUrls uses provider URL while custom domain certificate is pending', () => {
+  const result = resolveRailwayPanelPublicUrls({
+    publicDomain: 'app-demo.oneceo.space',
+    domainStatus: 'pending_certificate',
+    providerLatestUrl: 'app-demo.up.railway.app',
+    providerLatestStaticUrl: 'app-demo-static.up.railway.app',
+    providerDomains: ['app-demo.up.railway.app'],
+  });
+
+  assert.equal(result.latestUrl, 'https://app-demo.up.railway.app');
+  assert.equal(result.latestStaticUrl, 'https://app-demo-static.up.railway.app');
+  assert.equal(result.publicUrl, undefined);
+  assert.deepEqual(result.domains, ['https://app-demo.up.railway.app']);
+  assert.equal(result.customDomainActive, false);
+});
+
+test('resolveRailwayPanelPublicUrls promotes active custom domain as public URL', () => {
+  const result = resolveRailwayPanelPublicUrls({
+    publicDomain: 'app-demo.oneceo.space',
+    domainStatus: 'active',
+    providerLatestUrl: 'app-demo.up.railway.app',
+    providerLatestStaticUrl: 'app-demo-static.up.railway.app',
+    providerDomains: ['app-demo.up.railway.app'],
+  });
+
+  assert.equal(result.latestUrl, 'https://app-demo.up.railway.app');
+  assert.equal(result.latestStaticUrl, 'https://app-demo-static.up.railway.app');
+  assert.equal(result.publicUrl, 'https://app-demo.oneceo.space');
+  assert.deepEqual(result.domains, ['https://app-demo.up.railway.app']);
+  assert.equal(result.customDomainActive, true);
+});
+
+test('resolveRailwayPanelPublicUrls filters custom domain from provider candidates', () => {
+  const result = resolveRailwayPanelPublicUrls({
+    publicDomain: 'app-demo.oneceo.space',
+    domainStatus: 'active',
+    providerLatestUrl: 'app-demo.oneceo.space',
+    providerLatestStaticUrl: 'https://app-demo.oneceo.space',
+    providerDomains: ['app-demo.oneceo.space', 'app-demo.up.railway.app'],
+  });
+
+  assert.equal(result.latestUrl, 'https://app-demo.up.railway.app');
+  assert.equal(result.latestStaticUrl, 'https://app-demo.up.railway.app');
+  assert.equal(result.publicUrl, 'https://app-demo.oneceo.space');
+  assert.deepEqual(result.domains, ['https://app-demo.up.railway.app']);
+  assert.equal(result.customDomainActive, true);
 });
 
 test('waitForRailwayDeploymentPublicReachability rejects persistent 500 responses', async () => {

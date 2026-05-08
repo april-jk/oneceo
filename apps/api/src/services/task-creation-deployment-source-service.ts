@@ -353,27 +353,155 @@ const FRONTEND_DIST_TEMPLATE_MANIFEST: OneCeoDeploymentManifest = {
   },
 };
 
-const OFFICIAL_WEB_SHELL_SERVER_SOURCE = `import express from 'express';
+const OFFICIAL_WEB_SHELL_SERVER_SOURCE = `import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const app = express();
 const port = Number(process.env.PORT || 8080);
 const publicDir = path.join(__dirname, 'public');
+const indexPath = path.join(publicDir, 'index.html');
+const mimeTypes = {
+  '.css': 'text/css; charset=utf-8',
+  '.gif': 'image/gif',
+  '.html': 'text/html; charset=utf-8',
+  '.ico': 'image/x-icon',
+  '.jpeg': 'image/jpeg',
+  '.jpg': 'image/jpeg',
+  '.js': 'application/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.mjs': 'application/javascript; charset=utf-8',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.txt': 'text/plain; charset=utf-8',
+  '.webp': 'image/webp',
+};
+const ANALYTICS_MARKER_START = '<!-- ONECEO_ANALYTICS:START -->';
+const ANALYTICS_MARKER_END = '<!-- ONECEO_ANALYTICS:END -->';
 
-app.get('/api/system/health', (_req, res) => {
-  res.json({ ok: true, service: 'oneceo-official-web-shell' });
+function getMimeType(filePath) {
+  return mimeTypes[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+}
+
+function readEnv(key) {
+  return typeof process.env[key] === 'string' ? process.env[key].trim() : '';
+}
+
+function buildAnalyticsBootstrapSnippet() {
+  const enabledValue = readEnv('VITE_ANALYTICS_ENABLED').toLowerCase();
+  const host = readEnv('VITE_ANALYTICS_HOST');
+  const endpoint = readEnv('VITE_ANALYTICS_ENDPOINT') || host;
+  const websiteId = readEnv('VITE_ANALYTICS_WEBSITE_ID');
+  const tag = readEnv('VITE_ANALYTICS_TAG');
+  const enabled = !['0', 'false', 'no', 'off'].includes(enabledValue) && Boolean(endpoint && websiteId);
+  if (!enabled) return '';
+  const normalizedEndpoint = endpoint.replace(/\\/+$/, '');
+  return [
+    ANALYTICS_MARKER_START,
+    '<script>',
+    'window.__ONECEO_ANALYTICS__ = Object.freeze(' + JSON.stringify({ enabled, host: normalizedEndpoint, endpoint: normalizedEndpoint, websiteId, tag }) + ');',
+    '(function () {',
+    "  if (document.querySelector('script[data-oneceo-analytics=\\\"runtime\\\"]')) return;",
+    "  var script = document.createElement('script');",
+    '  script.defer = true;',
+    '  script.src = ' + JSON.stringify(normalizedEndpoint) + " + '/script.js';",
+    "  script.setAttribute('data-website-id', " + JSON.stringify(websiteId) + ');',
+    "  script.setAttribute('data-host-url', " + JSON.stringify(normalizedEndpoint) + ');',
+    "  script.setAttribute('data-oneceo-analytics', 'runtime');",
+    tag ? "  script.setAttribute('data-tag', " + JSON.stringify(tag) + ');' : '',
+    '  document.body.appendChild(script);',
+    '})();',
+    '</script>',
+    ANALYTICS_MARKER_END,
+  ].filter(Boolean).join('\\n');
+}
+
+function injectRuntimeAnalytics(html) {
+  const snippet = buildAnalyticsBootstrapSnippet();
+  if (!snippet) return html;
+  const markerStartIndex = html.indexOf(ANALYTICS_MARKER_START);
+  if (markerStartIndex >= 0) {
+    const markerEndIndex = html.indexOf(ANALYTICS_MARKER_END, markerStartIndex);
+    if (markerEndIndex < 0) return html;
+    return html.slice(0, markerStartIndex) + snippet + html.slice(markerEndIndex + ANALYTICS_MARKER_END.length);
+  }
+  const bodyCloseIndex = html.lastIndexOf('</body>');
+  if (bodyCloseIndex >= 0) {
+    return html.slice(0, bodyCloseIndex) + snippet + '\\n' + html.slice(bodyCloseIndex);
+  }
+  return html + '\\n' + snippet + '\\n';
+}
+
+function sendJson(res, statusCode, payload) {
+  const body = JSON.stringify(payload);
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'Content-Length': Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
+function sendFile(res, filePath) {
+  if (path.extname(filePath).toLowerCase() === '.html') {
+    const html = injectRuntimeAnalytics(fs.readFileSync(filePath, 'utf8'));
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Content-Length': Buffer.byteLength(html),
+    });
+    res.end(html);
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': getMimeType(filePath) });
+  fs.createReadStream(filePath).pipe(res);
+}
+
+function resolveStaticPath(requestPath) {
+  const normalizedPath = requestPath === '/' ? '/index.html' : requestPath;
+  const safePath = path.normalize(normalizedPath).replace(/^(\\.\\.[/\\\\])+/, '');
+  const targetPath = path.join(publicDir, safePath);
+  if (!targetPath.startsWith(publicDir)) {
+    return null;
+  }
+  return targetPath;
+}
+
+const server = http.createServer((req, res) => {
+  const requestUrl = new URL(req.url || '/', 'http://127.0.0.1');
+  if (requestUrl.pathname === '/api/system/health' || requestUrl.pathname === '/health') {
+    return sendJson(res, 200, { ok: true, service: 'oneceo-official-web-shell' });
+  }
+
+  const targetPath = resolveStaticPath(requestUrl.pathname);
+  if (!targetPath) {
+    return sendJson(res, 400, { ok: false, error: 'invalid_path' });
+  }
+
+  try {
+    const stats = fs.statSync(targetPath);
+    if (stats.isDirectory()) {
+      const nestedIndex = path.join(targetPath, 'index.html');
+      if (fs.existsSync(nestedIndex)) {
+        sendFile(res, nestedIndex);
+        return;
+      }
+    } else {
+      sendFile(res, targetPath);
+      return;
+    }
+  } catch {}
+
+  try {
+    sendFile(res, indexPath);
+  } catch {
+    sendJson(res, 404, { ok: false, error: 'not_found' });
+  }
 });
 
-app.use(express.static(publicDir));
-
-app.get('*', (_req, res) => {
-  res.sendFile(path.join(publicDir, 'index.html'));
-});
-
-app.listen(port, '0.0.0.0', () => {
+server.listen(port, '0.0.0.0', () => {
   console.log('[oneceo-official-web-shell] listening on port ' + port);
 });
 `;
@@ -384,6 +512,9 @@ import path from 'node:path';
 export default defineConfig({
   root: path.resolve(__dirname, 'client'),
   publicDir: path.resolve(__dirname, 'client/public'),
+  esbuild: {
+    jsxInject: "import React from 'react'",
+  },
   build: {
     outDir: path.resolve(__dirname, 'dist/public'),
     emptyOutDir: true,
@@ -396,7 +527,7 @@ const OFFICIAL_WEB_SHELL_MANIFEST: OneCeoDeploymentManifest = {
   appType: 'web_app',
   stack: 'oneceo_fixed_vite_node_shell',
   build: {
-    command: 'pnpm build',
+    command: 'npm run build',
     outputDir: 'dist/public',
   },
   start: {
@@ -895,6 +1026,8 @@ async function ensureOfficialFrontendWebShell(sourceDir: string) {
     await writeFile(clientIndexPath, nextIndexSource, 'utf-8');
   }
 
+  await ensureReactNamespaceImports(sourceDir);
+
   await writeFile(join(sourceDir, 'server', 'index.ts'), OFFICIAL_WEB_SHELL_SERVER_SOURCE, 'utf-8');
   await writeFile(join(sourceDir, 'vite.config.ts'), OFFICIAL_WEB_SHELL_VITE_CONFIG, 'utf-8');
 
@@ -908,7 +1041,6 @@ async function ensureOfficialFrontendWebShell(sourceDir: string) {
     },
     dependencies: {
       ...((packageJson.dependencies || {}) as Record<string, unknown>),
-      express: asText(asObject(packageJson.dependencies).express) || '^5.0.0',
     },
     devDependencies: {
       ...((packageJson.devDependencies || {}) as Record<string, unknown>),
@@ -929,6 +1061,47 @@ async function ensureOfficialFrontendWebShell(sourceDir: string) {
   await ensureRailwayConfigFile(sourceDir, OFFICIAL_WEB_SHELL_MANIFEST, { force: true });
 
   return true;
+}
+
+async function collectReactSourceFiles(dir: string, output: string[] = []) {
+  if (!(await exists(dir))) return output;
+  const entries = await readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+    const entryPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      await collectReactSourceFiles(entryPath, output);
+      continue;
+    }
+    if (/\.(js|jsx|ts|tsx)$/.test(entry.name)) {
+      output.push(entryPath);
+    }
+  }
+  return output;
+}
+
+function hasReactImport(source: string) {
+  return (
+    /import\s+React\b/.test(source) ||
+    /import\s+\*\s+as\s+React\b/.test(source) ||
+    /\bconst\s+React\s*=/.test(source)
+  );
+}
+
+function shouldEnsureReactImport(source: string) {
+  return /\bReact\./.test(source) || /<[A-Za-z][A-Za-z0-9.:-]*(\s|>|\/)/.test(source);
+}
+
+async function ensureReactNamespaceImports(sourceDir: string) {
+  const candidates = [
+    ...(await collectReactSourceFiles(join(sourceDir, 'client', 'src'))),
+    ...(await collectReactSourceFiles(join(sourceDir, 'src'))),
+  ];
+  for (const filePath of candidates) {
+    const source = await readTextIfExists(filePath);
+    if (!source || !shouldEnsureReactImport(source) || hasReactImport(source)) continue;
+    await writeFile(filePath, `import React from 'react';\n${source}`, 'utf-8');
+  }
 }
 
 async function ensureBuiltFrontendDeploymentFiles(sourceDir: string) {

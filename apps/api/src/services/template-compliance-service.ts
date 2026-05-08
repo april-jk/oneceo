@@ -59,7 +59,6 @@ export type OneCeoOfficialWebTemplateReport = {
     sharedDirDetected: boolean;
     viteDependencyDetected: boolean;
     frontendDependencyDetected: boolean;
-    expressDependencyDetected: boolean;
     buildCommandMatched: boolean;
     startCommandMatched: boolean;
   };
@@ -213,7 +212,6 @@ export async function detectOneCeoOfficialWebTemplate(input: {
       frontendDependencyDetected: input.packageJson
         ? hasDependency(input.packageJson, 'react') || hasDependency(input.packageJson, 'react-dom')
         : false,
-      expressDependencyDetected: input.packageJson ? hasDependency(input.packageJson, 'express') : false,
       buildCommandMatched: normalizeCommandForMatch(asText(scripts.build)).includes('vite build'),
       startCommandMatched: normalizeCommandForMatch(asText(scripts.start)) === 'node dist/index.js',
     },
@@ -225,7 +223,6 @@ export async function detectOneCeoOfficialWebTemplate(input: {
     report.checks.serverDirDetected &&
     report.checks.viteDependencyDetected &&
     report.checks.frontendDependencyDetected &&
-    report.checks.expressDependencyDetected &&
     report.checks.buildCommandMatched &&
     report.checks.startCommandMatched;
 
@@ -394,7 +391,7 @@ async function buildDefaultManifest(input: {
       appType: 'web_app',
       stack: 'oneceo_fixed_vite_node_shell',
       build: {
-        command: asText(scripts.build) || 'pnpm build',
+        command: asText(scripts.build) || 'npm run build',
         outputDir: 'dist/public',
       },
       start: {

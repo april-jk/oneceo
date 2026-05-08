@@ -275,6 +275,7 @@ export type AltusManagedTaskIntentProfile = {
     | 'multi_target'
     | 'debug_chain'
     | 'integration_chain'
+    | 'deployable_web_app_blueprint'
     | 'explicit_user_request'
     | 'none';
 };
@@ -309,18 +310,12 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
   let mode: AltusManagedTaskIntentProfile['mode'] = 'neutral';
   let reason: AltusManagedTaskIntentProfile['reason'] = 'unknown';
 
-  if (latestExplicitNoDeploy) {
-    mode = 'non_deployable_artifact';
-    reason = 'latest_explicit_no_deploy';
-  } else if (latestExplicitNoWeb) {
+  if (latestExplicitNoWeb) {
     mode = 'non_deployable_artifact';
     reason = 'latest_explicit_no_web';
   } else if (latestWebArtifact || latestDeployRequest) {
     mode = 'deployable_web_app';
     reason = 'latest_deployable_request';
-  } else if (explicitNoDeploy) {
-    mode = 'non_deployable_artifact';
-    reason = 'historical_explicit_no_deploy';
   } else if (explicitNoWeb) {
     mode = 'non_deployable_artifact';
     reason = 'historical_explicit_no_web';
@@ -330,7 +325,22 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
   } else if (scriptArtifactRequested || emailTemplateRequested) {
     mode = 'non_deployable_artifact';
     reason = 'script_or_template_artifact';
+  } else if (latestExplicitNoDeploy) {
+    mode = 'non_deployable_artifact';
+    reason = 'latest_explicit_no_deploy';
+  } else if (explicitNoDeploy) {
+    mode = 'non_deployable_artifact';
+    reason = 'historical_explicit_no_deploy';
   }
+
+  const needsClarification =
+    intentShape.needsClarification || intentShape.candidateClarificationType !== 'none';
+  const deployableWebAppBlueprintRequired =
+    mode === 'deployable_web_app' &&
+    !needsClarification &&
+    !explicitNoWeb &&
+    !scriptArtifactRequested &&
+    !emailTemplateRequested;
 
   return {
     mode,
@@ -344,8 +354,7 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
     scriptArtifactRequested,
     emailTemplateRequested,
     deploymentAllowed,
-    needsClarification:
-      intentShape.needsClarification || intentShape.candidateClarificationType !== 'none',
+    needsClarification,
     clarificationQuestion:
       intentShape.clarificationQuestion || intentShape.candidateClarificationQuestion,
     clarificationType: intentShape.candidateClarificationType,
@@ -357,9 +366,12 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
       intentShape.candidateTodoSignals.explicitTodoRequest ||
       intentShape.candidateTodoSignals.hasMultipleSubtasks ||
       intentShape.candidateTodoSignals.hasDebugChain ||
-      intentShape.candidateTodoSignals.hasIntegrationChain,
+      intentShape.candidateTodoSignals.hasIntegrationChain ||
+      deployableWebAppBlueprintRequired,
     todoReason: intentShape.candidateTodoSignals.explicitTodoRequest
       ? 'explicit_user_request'
+      : deployableWebAppBlueprintRequired
+        ? 'deployable_web_app_blueprint'
       : intentShape.candidateTodoSignals.hasMultipleSubtasks
         ? 'multi_step'
         : intentShape.candidateTodoSignals.hasDebugChain
@@ -702,6 +714,7 @@ export class AltusManagedPromptService {
       clarificationTransitionSection,
       todoGateSection,
       '# OneCEO web app contract',
+      '- [ONECEO_FIXED_SHELL_ANCHOR] The fixed OneCEO web shell is the deployment contract. Do not replace its runtime family, start command, or directory ownership during ordinary website generation.',
       '- When the user asks for a website, web app, dashboard, admin panel, SaaS UI, landing page with working product flow, or other deployable browser product, you must build it as a OneCEO deployable web app instead of an ad-hoc static artifact.',
       '- For deployable web app tasks, you must produce a root `package.json` with working `build` and `start` scripts.',
       '- For deployable web app tasks, you must ensure a root `oneceo.manifest.json` exists before you finish.',
@@ -711,9 +724,20 @@ export class AltusManagedPromptService {
       '- If the workspace already contains the fixed OneCEO web shell, treat it as the canonical scaffold. Extend and replace content inside it instead of rebuilding the shell from scratch.',
       '- Treat the fixed OneCEO web shell as the default stable delivery lane for new deployable websites, not as a global migration rule for every task.',
       '- If the workspace already exists in another stack, or the user is debugging, repairing, or extending an existing project, preserve the existing stack unless the user explicitly asks for a template migration.',
-      '- For the fixed OneCEO web shell, frontend build should be Vite-based, and the production runtime should stay on the Node web shell.',
+      '- For the fixed OneCEO web shell, frontend build should be Vite-based, and the production runtime should stay on the fixed Node web shell.',
       '- For the fixed OneCEO web shell, make the build pipeline produce browser assets under `dist/public` and a server entry at `dist/index.js`.',
       '- For the fixed OneCEO web shell, the production start command should resolve to `node dist/index.js`. Do not end a new deployable web app task with `vite preview`, `php -S`, `python ...`, `java -jar`, or any other ad-hoc production runtime.',
+      '- For the fixed OneCEO web shell, do not introduce Express, Koa, Fastify, or other extra server frameworks unless the workspace already depends on them for an explicit repair task. The default shell must remain a self-contained Node web server.',
+      '- For the fixed OneCEO web shell, keep runtime ownership stable: browser UI and styling belong under `client/`; server routes and HTTP handling belong under `server/`; shared constants/types belong under `shared/`.',
+      '- For the fixed OneCEO web shell, the homepage implementation, primary user-facing content, requested acceptance marker, hero, main sections, and interactive browser UI must live in `client/src/App.jsx` or `client/src/App.tsx`. Keep `client/src/main.*` as the React mount file only.',
+      '- For React files in the fixed OneCEO web shell, avoid unresolved browser globals: if code uses `React.useState`, `React.useEffect`, `React.Fragment`, or any other `React.*` namespace, explicitly import React in that file. Prefer named imports such as `import { useState } from "react"` when only hooks are needed.',
+      '- [ONECEO_WEBAPP_TODO_BLUEPRINT_ANCHOR] Before the first code-editing step for a new deployable web app task, write a blueprint todo with `todowrite`.',
+      '- The deployable-web-app blueprint todo must scale with task size: include every major frontend, backend, integration, verification, and completion workstream, but do not pad it with arbitrary filler items.',
+      '- The deployable-web-app blueprint todo must name the target path for each implementation item, such as `client/src/App.jsx`, `client/src/styles.css`, `server/index.ts`, or a concrete file under `shared/`.',
+      '- The deployable-web-app blueprint todo must distinguish user-facing modules from contract files. Treat `package.json`, `oneceo.manifest.json`, and `vite.config.ts` as contract files that should stay stable unless the task is an explicit repair.',
+      '- If the request is a weakly specified website or landing page, default the blueprint to a compact but complete site structure: hero, primary value or service section, proof/case/portfolio section, and CTA/contact section. Only add more sections when the request clearly needs them.',
+      '- In weakly specified website tasks, bind that default structure to `client/src/App.jsx` or `client/src/App.tsx`, and put the visual system in `client/src/styles.css`.',
+      '- If the request clearly needs both frontend and backend behavior, the blueprint todo must cover both `client/` work and `server/` work before implementation starts.',
       '- Treat user requests such as “use Java”, “use PHP”, or “use Python” for a website as content or implementation-style hints when you are creating a new deployable site from scratch, not as permission to switch the deployable runtime. If the workspace already exists in that stack and you are explicitly modifying it, preserve the existing runtime.',
       "- For Express/EJS projects, do not use `layout('...')` or a layout file with `<%- body %>` unless `express-ejs-layouts` or `ejs-mate` is installed and wired in the server. Otherwise use ordinary partial includes for head/header/footer.",
       '- For PHP sites that run with `php -S`, if you do not implement a dedicated JSON health endpoint, set `healthcheck.path` to `/` and make sure the homepage returns HTTP 200. Do not point PHP static-style sites at `/api/system/health` unless that route really exists.',
@@ -722,6 +746,8 @@ export class AltusManagedPromptService {
       '- If you touch the frontend entry for a deployable web app, keep a stable hook for platform analytics injection. Do not hard-code tracker host, websiteId, or vendor-specific script tags.',
       '- For deployable web app tasks, include a healthcheck route path in `oneceo.manifest.json`. Prefer `/api/system/health` when you own the server route design.',
       '- Do not finish a deployable web app task while required deployment files are missing. Before completion, verify at least: `package.json`, `oneceo.manifest.json`, and the primary app entry files exist.',
+      '- [ONECEO_WEBAPP_MACRO_REVIEW_ANCHOR] Before `complete_task`, run one macro self-check against the current todo: confirm the promised paths exist, the fixed shell contract still holds, the major requested modules are present, and no unexpected runtime or start-script drift was introduced.',
+      '- The macro self-check should stay high level. Do not reread every file line-by-line just to restate the todo; use one concise consistency pass before completion.',
       deploymentToolSection,
       resourceToolSection,
       '',

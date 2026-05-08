@@ -453,6 +453,78 @@
       white-space: pre-wrap;
       overflow-wrap: break-word;
     }
+    /* JSON Tree styles */
+    .json-tree {
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .json-tree-node {
+      position: relative;
+      padding-left: 18px;
+    }
+    .json-tree-branch > .json-tree-node::before {
+      content: '';
+      position: absolute;
+      left: 4px;
+      top: 0;
+      bottom: 0;
+      width: 1px;
+      background: var(--border);
+    }
+    .json-tree-toggle {
+      position: absolute;
+      left: 0;
+      top: 2px;
+      width: 14px;
+      height: 14px;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      color: var(--text-secondary);
+      padding: 0;
+      line-height: 1;
+    }
+    .json-tree-toggle:hover { color: var(--text); }
+    .json-tree-key {
+      color: #0969da;
+      font-weight: 600;
+      margin-right: 4px;
+    }
+    .json-tree-key::after { content: ':'; color: var(--text-faint); }
+    .json-tree-value-string { color: #2f8f68; }
+    .json-tree-value-number { color: #cf222e; }
+    .json-tree-value-boolean { color: #6b7480; font-weight: 600; }
+    .json-tree-value-null { color: #9ca3af; font-style: italic; }
+    .json-tree-bracket { color: var(--text-faint); }
+    .json-tree-count {
+      font-size: 10px;
+      color: var(--text-faint);
+      margin-left: 4px;
+    }
+    .json-tree-ellipsed {
+      color: var(--text-faint);
+      cursor: pointer;
+    }
+    .json-tree-ellipsed:hover { color: var(--text-secondary); }
+    .json-tree-collapsed { display: none; }
+    .json-tree-collapsed.open { display: block; }
+    .json-tree-leaf {
+      padding-left: 18px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0 4px;
+      align-items: baseline;
+    }
+    .json-tree-preview {
+      color: var(--text-faint);
+      font-size: 11px;
+    }
+
     .trace-error-block {
       background: color-mix(in srgb, var(--danger) 6%, transparent);
       border: 1px solid color-mix(in srgb, var(--danger) 18%, transparent);
@@ -734,6 +806,56 @@
       );
     }
 
+    function renderJSONTree(data) {
+      function renderValue(val, key, depth) {
+        var type = val === null ? 'null' : Array.isArray(val) ? 'array' : typeof val;
+        var isBranch = type === 'object' || type === 'array';
+        var id = 'jt-' + Math.random().toString(36).slice(2, 9);
+
+        if (!isBranch) {
+          var valClass = 'json-tree-value-' + type;
+          var display = type === 'string' ? '"' + escapeHtml(val) + '"' : String(val);
+          var html = '<div class="json-tree-leaf">';
+          if (key !== undefined) html += '<span class="json-tree-key">' + escapeHtml(String(key)) + '</span>';
+          html += '<span class="' + valClass + '">' + display + '</span>';
+          html += '</div>';
+          return html;
+        }
+
+        var children = type === 'array' ? val : Object.entries(val);
+        var count = type === 'array' ? val.length : Object.keys(val).length;
+
+        var html = '<div class="json-tree-node json-tree-branch">';
+        html += '<button type="button" class="json-tree-toggle" onclick="document.getElementById(\'' + id + '\').classList.toggle(\'open\');this.textContent=document.getElementById(\'' + id + '\').classList.contains(\'open\')?\'▼\':\'▶\'">▼</button>';
+
+        if (key !== undefined) {
+          html += '<span class="json-tree-key">' + escapeHtml(String(key)) + '</span>';
+        }
+
+        var bracketOpen = type === 'array' ? '[' : '{';
+        var bracketClose = type === 'array' ? ']' : '}';
+        html += '<span class="json-tree-bracket">' + bracketOpen + '</span>';
+        html += '<span class="json-tree-count">' + count + ' ' + (type === 'array' ? '项' : '键') + '</span>';
+        html += '<span class="json-tree-bracket">' + bracketClose + '</span>';
+
+        html += '<div class="json-tree-collapsed open" id="' + id + '">';
+        if (type === 'array') {
+          val.forEach(function(v, i) {
+            html += renderValue(v, i, depth + 1);
+          });
+        } else {
+          Object.entries(val).forEach(function(entry) {
+            html += renderValue(entry[1], entry[0], depth + 1);
+          });
+        }
+        html += '</div>';
+        html += '</div>';
+        return html;
+      }
+
+      return '<div class="json-tree">' + renderValue(data, undefined, 0) + '</div>';
+    }
+
     function renderTraceInlineDetail(trace) {
       const typeLabel = trace.traceType === 'llm_request' ? 'LLM' : trace.traceType === 'tool_call' ? '工具' : trace.traceType === 'service_api' ? '服务' : '连接器';
       const typeTone = trace.traceType === 'llm_request' ? 'info' : trace.traceType === 'tool_call' ? 'warning' : 'neutral';
@@ -783,10 +905,10 @@
       // Request / Response
       if (trace.requestBody || trace.responseBody) {
         if (trace.requestBody) {
-          html += renderTracePanel('请求', syntaxHighlightJSON(trace.requestBody), true);
+          html += renderTracePanel('请求', renderJSONTree(trace.requestBody), true);
         }
         if (trace.responseBody) {
-          html += renderTracePanel('响应', syntaxHighlightJSON(trace.responseBody), true);
+          html += renderTracePanel('响应', renderJSONTree(trace.responseBody), true);
         }
       }
 
@@ -795,7 +917,7 @@
 
       // Metadata
       if (trace.metadataJson && Object.keys(trace.metadataJson).length > 0) {
-        html += renderTracePanel('元数据', syntaxHighlightJSON(trace.metadataJson), false);
+        html += renderTracePanel('元数据', renderJSONTree(trace.metadataJson), false);
       }
 
       html += '</div>';

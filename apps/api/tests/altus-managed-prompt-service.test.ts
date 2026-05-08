@@ -222,6 +222,23 @@ test('managed prompt requires deployment tools and auto-repair loop for publish 
   assert.match(prompt, /keep deployment debug details internal/i);
 });
 
+test('managed prompt fixes deployable web apps to the official vite-node shell', () => {
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-fixed-shell-test',
+    sessionTitle: 'fixed shell contract',
+    workspaceRoot: '/workspace/session-fixed-shell-test',
+    connectors: [],
+  });
+
+  assert.match(prompt, /without an existing workspace stack to preserve, default to the fixed OneCEO web shell/i);
+  assert.match(prompt, /default stable delivery lane for new deployable websites, not as a global migration rule/i);
+  assert.match(prompt, /If the workspace already exists in another stack, or the user is debugging, repairing, or extending an existing project, preserve the existing stack/i);
+  assert.match(prompt, /root `client\/`, root `server\/`, optional root `shared\/`/i);
+  assert.match(prompt, /produce browser assets under `dist\/public` and a server entry at `dist\/index\.js`/i);
+  assert.match(prompt, /production start command should resolve to `node dist\/index\.js`/i);
+  assert.match(prompt, /creating a new deployable site from scratch, not as permission to switch the deployable runtime/i);
+});
+
 test('managed prompt fixes managed database engine to Railway Postgres', () => {
   const prompt = altusManagedPromptService.buildSystemPrompt({
     sessionId: 'session-db-fixed-test',

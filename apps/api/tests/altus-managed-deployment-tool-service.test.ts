@@ -41,6 +41,7 @@ function createReadyProjectProfile() {
     updatedAt: new Date().toISOString(),
     artifactType: 'web_app' as const,
     runtimeFamily: 'frontend_dist' as const,
+    templateFamily: 'legacy_or_custom' as const,
     deployability: 'ready' as const,
     entrypoints: [{ path: 'index.html', kind: 'html' as const }],
     commands: {
@@ -55,6 +56,24 @@ function createReadyProjectProfile() {
       railwayJson: true,
     },
     evidence: [{ source: 'file_scan' as const, message: 'detected runtimeFamily=frontend_dist' }],
+  };
+}
+
+function createOfficialTemplateProjectProfile() {
+  return {
+    ...createReadyProjectProfile(),
+    templateFamily: 'oneceo_official_vite_node_shell' as const,
+    commands: {
+      build: 'pnpm build',
+      start: 'node dist/index.js',
+    },
+    evidence: [
+      { source: 'file_scan' as const, message: 'detected runtimeFamily=frontend_dist' },
+      {
+        source: 'file_scan' as const,
+        message: 'detected templateFamily=oneceo_official_vite_node_shell',
+      },
+    ],
   };
 }
 
@@ -147,7 +166,7 @@ test('redeploy_application republishes current workspace through deployment runt
 test('deploy_application returns project profile and succeeded deployment flow on successful publish', async () => {
   const service = new AltusManagedDeploymentToolService({
     inspectBaseline: async () => createReadyBaseline(),
-    inspectProjectProfile: async () => createReadyProjectProfile(),
+    inspectProjectProfile: async () => createOfficialTemplateProjectProfile(),
     resolveSession: async () => ({
       id: 'session-1',
       messages: [],
@@ -181,9 +200,44 @@ test('deploy_application returns project profile and succeeded deployment flow o
 
   assert.equal(result.status, 'success');
   assert.equal(result.projectProfile?.runtimeFamily, 'frontend_dist');
+  assert.equal(result.projectProfile?.templateFamily, 'oneceo_official_vite_node_shell');
   assert.equal(result.projectProfile?.deployability, 'ready');
   assert.equal(result.deploymentFlow?.state, 'succeeded');
   assert.equal(result.deploymentFlow?.profile?.runtimeFamily, 'frontend_dist');
+});
+
+test('deploy_application requires template repair when frontend_dist project is not on the official shell', async () => {
+  let executed = false;
+  const service = new AltusManagedDeploymentToolService({
+    inspectBaseline: async () => createReadyBaseline(),
+    inspectProjectProfile: async () => createReadyProjectProfile(),
+    resolveSession: async () => ({
+      id: 'session-1',
+      messages: [],
+    } as any),
+    buildDeploymentResponse: async () => {
+      throw new Error('should_not_build_response');
+    },
+    executeDeploymentAction: async () => {
+      executed = true;
+      throw new Error('should_not_execute_action');
+    },
+    getErrorMessage: (error) => String((error as Error)?.message || error),
+  });
+
+  const result = await service.execute({
+    action: 'deploy_application',
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+  });
+
+  assert.equal(executed, false);
+  assert.equal(result.status, 'retryable_repair_required');
+  assert.equal(result.repair?.category, 'template_compliance');
+  assert.deepEqual(result.repair?.checks, ['non_official_frontend_template']);
+  assert.match(result.summary, /官方固定模板壳/);
 });
 
 test('deploy_application does not require database when session has no explicit declaration', async () => {

@@ -67,6 +67,56 @@ test('deployment template baseline marks manifest generation and platform analyt
   }
 });
 
+test('template compliance detects the official fixed vite-node shell contract', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-official-template-test-'));
+  try {
+    await mkdir(join(workspace, 'client', 'src'), { recursive: true });
+    await mkdir(join(workspace, 'server'), { recursive: true });
+    await mkdir(join(workspace, 'shared'), { recursive: true });
+    await writeFile(
+      join(workspace, 'package.json'),
+      JSON.stringify({
+        name: 'oneceo-official-shell',
+        scripts: {
+          build: 'vite build && esbuild server/index.ts --platform=node --bundle --outfile=dist/index.js',
+          start: 'node dist/index.js',
+        },
+        dependencies: {
+          express: '^5.0.0',
+          react: '^19.0.0',
+          'react-dom': '^19.0.0',
+        },
+        devDependencies: {
+          esbuild: '^0.25.0',
+          vite: '^7.0.0',
+        },
+      }),
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'client/index.html'),
+      '<!doctype html><html><body><!-- ONECEO_ANALYTICS:START --><div id="root"></div></body></html>',
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'server/index.ts'),
+      "app.get('/api/system/health', (_req, res) => res.json({ ok: true }));\n",
+      'utf-8'
+    );
+
+    const compliance = await ensureTemplateCompliance(workspace);
+
+    assert.equal(compliance.ok, true);
+    assert.equal(compliance.manifest.stack, 'oneceo_fixed_vite_node_shell');
+    assert.equal(compliance.manifest.start.command, 'node dist/index.js');
+    assert.equal(compliance.manifest.build.outputDir, 'dist/public');
+    assert.equal(compliance.checks.officialTemplateDetected, true);
+    assert.match(compliance.warnings.join(' | '), /官方固定模板壳/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('deployment template baseline does not auto-declare railway_postgres from pg dependency alone', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-pg-infer-test-'));
   try {

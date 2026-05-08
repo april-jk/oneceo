@@ -5,7 +5,12 @@ import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { DEPLOYMENT_TEMPLATE_ANALYTICS_ENTRY_RELATIVE_PATHS } from './deployment-template-bootstrap-service';
-import { ensureTemplateCompliance, type TemplateComplianceReport } from './template-compliance-service';
+import {
+  detectOneCeoOfficialWebTemplate,
+  ensureTemplateCompliance,
+  type OneCeoOfficialWebTemplateReport,
+  type TemplateComplianceReport,
+} from './template-compliance-service';
 
 const execFile = promisify(execFileCallback);
 
@@ -26,6 +31,7 @@ export type TaskSessionProjectProfile = {
   updatedAt: string;
   artifactType: 'web_app' | 'api_service' | 'static_site' | 'script' | 'unknown';
   runtimeFamily: 'static' | 'frontend_dist' | 'node' | 'python' | 'php' | 'java' | 'unknown';
+  templateFamily: 'oneceo_official_vite_node_shell' | 'legacy_or_custom' | 'unknown';
   deployability: 'ready' | 'repairable' | 'blocked' | 'not_deployable' | 'unknown';
   entrypoints: Array<{ path: string; kind: 'html' | 'server' | 'template' | 'config' }>;
   commands: {
@@ -226,9 +232,23 @@ function inferAnalyticsStatus(
   return 'missing';
 }
 
+function inferTemplateFamily(
+  runtimeFamily: TaskSessionProjectProfile['runtimeFamily'],
+  officialTemplate: OneCeoOfficialWebTemplateReport
+): TaskSessionProjectProfile['templateFamily'] {
+  if (officialTemplate.matched) {
+    return officialTemplate.templateFamily;
+  }
+  if (runtimeFamily === 'unknown') {
+    return 'unknown';
+  }
+  return 'legacy_or_custom';
+}
+
 function buildEvidence(
   index: ProjectFileIndex,
   runtimeFamily: TaskSessionProjectProfile['runtimeFamily'],
+  officialTemplate: OneCeoOfficialWebTemplateReport,
   compliance?: TemplateComplianceReport | null
 ): TaskSessionProjectProfile['evidence'] {
   const evidence: TaskSessionProjectProfile['evidence'] = [
@@ -242,6 +262,12 @@ function buildEvidence(
   }
   if (index.manifest) {
     evidence.push({ source: 'manifest', message: 'oneceo.manifest.json detected', path: 'oneceo.manifest.json' });
+  }
+  if (officialTemplate.matched) {
+    evidence.push({
+      source: 'file_scan',
+      message: `detected templateFamily=${officialTemplate.templateFamily}`,
+    });
   }
   if (compliance) {
     evidence.push({
@@ -263,6 +289,10 @@ export async function buildTaskSessionProjectProfileFromDirectory(
 ): Promise<TaskSessionProjectProfile> {
   const index = await buildFileIndex(sourceDir);
   const runtimeFamily = inferRuntimeFamily(index);
+  const officialTemplate = await detectOneCeoOfficialWebTemplate({
+    sourceDir,
+    packageJson: index.packageJson,
+  });
   const compliance =
     options?.compliance === undefined
       ? await ensureTemplateCompliance(sourceDir).catch(() => null)
@@ -286,6 +316,7 @@ export async function buildTaskSessionProjectProfileFromDirectory(
     updatedAt: new Date().toISOString(),
     artifactType: inferArtifactType(runtimeFamily, index),
     runtimeFamily,
+    templateFamily: inferTemplateFamily(runtimeFamily, officialTemplate),
     deployability,
     entrypoints: collectEntrypoints(index),
     commands: {
@@ -305,7 +336,7 @@ export async function buildTaskSessionProjectProfileFromDirectory(
       pomXml: index.files.has('pom.xml'),
       gradle: index.files.has('build.gradle') || index.files.has('build.gradle.kts'),
     },
-    evidence: buildEvidence(index, runtimeFamily, compliance),
+    evidence: buildEvidence(index, runtimeFamily, officialTemplate, compliance),
   };
 }
 
@@ -363,6 +394,7 @@ export async function inspectTaskSessionProjectProfile(input: {
       updatedAt: new Date().toISOString(),
       artifactType: 'unknown',
       runtimeFamily: 'unknown',
+      templateFamily: 'unknown',
       deployability: 'blocked',
       entrypoints: [],
       commands: {},

@@ -38,12 +38,57 @@ test('project profile detects vite frontend runtime and deployment commands', as
 
     assert.equal(profile.sessionId, 'session-1');
     assert.equal(profile.runtimeFamily, 'frontend_dist');
+    assert.equal(profile.templateFamily, 'legacy_or_custom');
     assert.equal(profile.artifactType, 'web_app');
     assert.equal(profile.commands.build, 'vite build');
     assert.equal(profile.commands.start, 'node server.js');
     assert.equal(profile.commands.preview, 'vite preview');
     assert.equal(profile.analyticsStatus, 'platform_injectable');
     assert.equal(profile.configFiles.packageJson, true);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('project profile detects the official fixed vite-node template family', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-profile-official-template-'));
+  try {
+    await mkdir(join(workspace, 'client', 'src'), { recursive: true });
+    await mkdir(join(workspace, 'server'), { recursive: true });
+    await mkdir(join(workspace, 'shared'), { recursive: true });
+    await writeFile(
+      join(workspace, 'package.json'),
+      JSON.stringify({
+        scripts: {
+          build: 'vite build && esbuild server/index.ts --platform=node --bundle --outfile=dist/index.js',
+          start: 'node dist/index.js',
+        },
+        dependencies: {
+          express: '^5.0.0',
+          react: '^19.0.0',
+          'react-dom': '^19.0.0',
+          vite: '^7.0.0',
+        },
+      }),
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'client/index.html'),
+      '<!doctype html><html><body><div id="root"></div></body></html>',
+      'utf-8'
+    );
+    await writeFile(join(workspace, 'server/index.ts'), 'export {};', 'utf-8');
+
+    const profile = await buildTaskSessionProjectProfileFromDirectory(workspace, {
+      compliance: null,
+    });
+
+    assert.equal(profile.runtimeFamily, 'frontend_dist');
+    assert.equal(profile.templateFamily, 'oneceo_official_vite_node_shell');
+    assert.match(
+      profile.evidence.map((item) => item.message).join(' | '),
+      /templateFamily=oneceo_official_vite_node_shell/
+    );
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

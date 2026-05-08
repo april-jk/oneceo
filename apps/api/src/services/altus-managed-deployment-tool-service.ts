@@ -54,6 +54,7 @@ type AltusManagedDeploymentDebug = {
   baselineErrors?: string[];
   sourceProfileVersion?: string;
   expectedRuntimeFamily?: TaskSessionProjectProfile['runtimeFamily'];
+  expectedTemplateFamily?: TaskSessionProjectProfile['templateFamily'];
 };
 
 export type AltusManagedDeploymentToolResult = {
@@ -80,6 +81,7 @@ type ManagedDeploymentToolInputSchema = {
   workspaceRoot: string;
   sourceProfileVersion?: string;
   expectedRuntimeFamily?: TaskSessionProjectProfile['runtimeFamily'];
+  expectedTemplateFamily?: TaskSessionProjectProfile['templateFamily'];
   repairPolicy: 'none' | 'safe_template_adapt' | 'skill_repair_then_retry';
   reason?: string;
 };
@@ -137,8 +139,54 @@ function buildSuggestedActions(checks: string[]) {
     if (check === 'database_contract_mismatch') {
       suggestions.add('修正数据库依赖与 manifest 契约，保持 Railway Postgres 与 pg/drizzle-orm 一致');
     }
+    if (check === 'non_official_frontend_template') {
+      suggestions.add('将当前前端项目收敛到 OneCEO 官方固定模板壳：client/server/shared + vite build + node dist/index.js');
+      suggestions.add('先补齐官方模板目录与构建/启动契约，再重新触发发布');
+    }
   }
   return Array.from(suggestions);
+}
+
+function shouldRequireOfficialFrontendTemplate(
+  profile: TaskSessionProjectProfile | undefined
+): boolean {
+  if (!profile) {
+    return false;
+  }
+  return (
+    profile.artifactType === 'web_app' &&
+    profile.runtimeFamily === 'frontend_dist' &&
+    profile.templateFamily !== 'oneceo_official_vite_node_shell'
+  );
+}
+
+function buildTemplateFamilyRepairResult(input: {
+  action: AltusManagedDeploymentToolName;
+  baseline: DeploymentTemplateBaselineData;
+  projectProfile: TaskSessionProjectProfile;
+  deploymentFlow?: DeploymentFlowSnapshot;
+}): AltusManagedDeploymentToolResult {
+  return {
+    action: input.action,
+    phase: 'repair_required',
+    status: 'retryable_repair_required',
+    summary:
+      '当前前端项目还不是 OneCEO 官方固定模板壳，需先收敛到固定模板契约后再继续发布，以保证主链稳定性。',
+    repair: {
+      category: 'template_compliance',
+      checks: ['non_official_frontend_template'],
+      suggestedActions: buildSuggestedActions(['non_official_frontend_template']),
+    },
+    baseline: input.baseline,
+    projectProfile: input.projectProfile,
+    deploymentFlow: input.deploymentFlow,
+    debug: {
+      baselineStatus: input.baseline.status,
+      baselineErrors: input.baseline.errors,
+      expectedRuntimeFamily: input.projectProfile.runtimeFamily,
+      expectedTemplateFamily: 'oneceo_official_vite_node_shell',
+    },
+  };
 }
 
 function buildRepairResult(
@@ -601,10 +649,11 @@ export class AltusManagedDeploymentToolService {
       workspaceRoot: input.workspaceRoot,
       sourceProfileVersion: input.projectProfile?.version,
       expectedRuntimeFamily: input.projectProfile?.runtimeFamily,
+      expectedTemplateFamily: input.projectProfile?.templateFamily,
       repairPolicy:
         input.action === 'get_application_deployment_status'
           ? 'none'
-          : input.projectProfile?.deployability === 'ready'
+          : input.projectProfile?.templateFamily === 'oneceo_official_vite_node_shell'
             ? 'safe_template_adapt'
             : 'skill_repair_then_retry',
       reason: asText(input.notes) || undefined,
@@ -640,6 +689,7 @@ export class AltusManagedDeploymentToolService {
         updatedAt: new Date().toISOString(),
         artifactType: 'unknown',
         runtimeFamily: 'unknown',
+        templateFamily: 'unknown',
         deployability: 'unknown',
         entrypoints: [],
         commands: {},
@@ -699,6 +749,7 @@ export class AltusManagedDeploymentToolService {
             rawError: this.deps.getErrorMessage(error),
             sourceProfileVersion: schema.sourceProfileVersion,
             expectedRuntimeFamily: schema.expectedRuntimeFamily,
+            expectedTemplateFamily: schema.expectedTemplateFamily,
           },
         });
       }
@@ -716,6 +767,19 @@ export class AltusManagedDeploymentToolService {
       });
       if (baseline.status !== 'ready') {
         return buildRepairResult(input.action, baseline, undefined, { projectProfile, deploymentFlow });
+      }
+      if (projectProfile && shouldRequireOfficialFrontendTemplate(projectProfile)) {
+        deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
+          type: 'REPAIR_REQUIRED',
+          category: 'template_compliance',
+          checks: ['non_official_frontend_template'],
+        });
+        return buildTemplateFamilyRepairResult({
+          action: input.action,
+          baseline,
+          projectProfile,
+          deploymentFlow,
+        });
       }
       const resourceDeclarations = this.deps.getResourceDeclarations
         ? await this.deps.getResourceDeclarations(input.sessionId).catch(() => ({
@@ -887,6 +951,7 @@ export class AltusManagedDeploymentToolService {
             baselineErrors: latestBaseline?.errors,
             sourceProfileVersion: schema.sourceProfileVersion,
             expectedRuntimeFamily: schema.expectedRuntimeFamily,
+            expectedTemplateFamily: schema.expectedTemplateFamily,
           },
         }
       );

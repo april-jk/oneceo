@@ -11,6 +11,7 @@ const profile = {
   updatedAt: new Date().toISOString(),
   artifactType: 'web_app' as const,
   runtimeFamily: 'static' as const,
+  templateFamily: 'legacy_or_custom' as const,
   deployability: 'ready' as const,
   entrypoints: [],
   commands: {},

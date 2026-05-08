@@ -589,7 +589,7 @@ export function shouldCleanupFailedDeploymentResources(input: {
   );
 }
 
-function resolveDeploymentAnalyticsDomain(input: {
+export function resolveDeploymentAnalyticsDomain(input: {
   metadata: Record<string, unknown>;
   accountPublicUrl?: string;
   accountPublicDomain?: string;
@@ -601,10 +601,10 @@ function resolveDeploymentAnalyticsDomain(input: {
     asText(input.panel?.latestStaticUrl) ||
     asText(input.panel?.latestUrl) ||
     asText(input.panel?.domains?.[0]) ||
+    asText(input.accountDomain) ||
     asText(input.accountPublicUrl) ||
     asText(input.accountPublicDomain) ||
     asText(analytics.domain) ||
-    asText(input.accountDomain) ||
     ''
   );
 }

@@ -271,6 +271,30 @@ test('buildTaskIntentProfile keeps trivial single-point tasks off the todo path'
   assert.equal(profile.clarificationType, 'none');
 });
 
+test('buildTaskIntentProfile requires blueprint todo for new deployable web app tasks', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '请在当前工作区用 Vite + React + Node Web Shell 固定模板直接实现一个可部署的企业官网源码，不要提问。页面包含 hero、服务介绍、案例、联系区；后端只保留 /api/system/health 和一个 contact 接口，不需要数据库、登录或外部集成。',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => null as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-webapp-blueprint',
+    '请在当前工作区用 Vite + React + Node Web Shell 固定模板直接实现一个可部署的企业官网源码，不要提问。页面包含 hero、服务介绍、案例、联系区；后端只保留 /api/system/health 和一个 contact 接口，不需要数据库、登录或外部集成。',
+    'user_input'
+  );
+
+  assert.equal(profile.mode, 'deployable_web_app');
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.todoRequired, true);
+  assert.equal(profile.todoReason, 'deployable_web_app_blueprint');
+});
+
 test('buildTaskIntentProfile suppresses tech-stack clarification when workspace root already constrains the stack', async () => {
   const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), 'oneceo-managed-setup-'));
   tmpDirsToRemove.add(workspaceRoot);

@@ -56,8 +56,14 @@ test('materializeOfficialWebShellInSandbox writes the official scaffold into an 
     assert.ok(commands.some((command) => command.includes('mkdir -p')));
     assert.ok(writes.some((item) => item.path.endsWith('/client/index.html')));
     assert.ok(writes.some((item) => item.path.endsWith('/client/src/App.jsx')));
+    assert.ok(writes.some((item) => item.path.endsWith('/client/src/App.jsx') && item.content.startsWith("import React from 'react';")));
+    assert.ok(writes.some((item) => item.path.endsWith('/vite.config.ts') && item.content.includes('jsxInject')));
     assert.ok(writes.some((item) => item.path.endsWith('/server/index.ts')));
     assert.ok(writes.some((item) => item.path.endsWith('/package.json') && item.content.includes('"start": "node dist/index.js"')));
+    assert.ok(writes.some((item) => item.path.endsWith('/package.json') && !item.content.includes('"express"')));
+    assert.ok(writes.some((item) => item.path.endsWith('/server/index.ts') && item.content.includes("import http from 'node:http'")));
+    assert.ok(writes.some((item) => item.path.endsWith('/server/index.ts') && item.content.includes('VITE_ANALYTICS_WEBSITE_ID')));
+    assert.ok(writes.some((item) => item.path.endsWith('/server/index.ts') && item.content.includes('injectRuntimeAnalytics')));
     assert.ok(writes.some((item) => item.path.endsWith('/oneceo.manifest.json') && item.content.includes('"stack": "oneceo_fixed_vite_node_shell"')));
   } finally {
     mock.restoreAll();
@@ -105,11 +111,56 @@ test('materializeOfficialWebShellInSandbox skips existing stack workspaces', asy
   }
 });
 
+test('materializeOfficialWebShellInSandbox also writes the scaffold for website source-only tasks', async () => {
+  mock.method(e2bConnector, 'runCommand', async (_sandboxId: string, command: string) => {
+    if (command.includes('official_present=')) {
+      return {
+        stdout: 'stack_detected=0\nofficial_present=0\nnon_ignored_count=0\n',
+        stderr: '',
+        exitCode: 0,
+      } as any;
+    }
+    return { stdout: '', stderr: '', exitCode: 0 } as any;
+  });
+  const writeMock = mock.method(e2bConnector, 'writeFile', async () => undefined);
+
+  try {
+    const result = await materializeOfficialWebShellInSandbox({
+      sandboxId: 'sandbox-source-only',
+      workspaceRoot: '/workspace/source-only',
+      taskIntentProfile: {
+        mode: 'deployable_web_app',
+        reason: 'latest_deployable_request',
+        recentUserMessages: ['创建一个可部署的网站，不要部署，只完成源码'],
+        explicitNoDeploy: true,
+        explicitNoWeb: false,
+        webArtifactRequested: true,
+        deployRequested: false,
+        scriptArtifactRequested: false,
+        emailTemplateRequested: false,
+        deploymentAllowed: false,
+        needsClarification: false,
+        clarificationQuestion: '',
+        clarificationType: 'none',
+        todoRequired: true,
+        todoReason: 'deployable_web_app_blueprint',
+      },
+    });
+
+    assert.equal(result.applied, true);
+    assert.equal(result.reason, 'materialized');
+    assert.ok(writeMock.mock.callCount() > 0);
+  } finally {
+    mock.restoreAll();
+  }
+});
+
 test('buildOfficialWebShellMaterializationGuidance tells Altus to edit within the scaffold', () => {
   const guidance = buildOfficialWebShellMaterializationGuidance();
 
   assert.match(guidance, /官方固定网站模板已经预置/);
   assert.match(guidance, /不要重新发明技术栈/);
   assert.match(guidance, /client\/src\/App\.jsx/);
+  assert.match(guidance, /验收标识/);
   assert.match(guidance, /build\/start\/healthcheck\/analytics/);
 });

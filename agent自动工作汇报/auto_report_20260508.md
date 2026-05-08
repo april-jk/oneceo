@@ -8,3 +8,7 @@
 - 补了固定模板相关单测，并完成 `pnpm exec tsx --test ...` 与 `pnpm --filter api type-check` 验证。
 - 当前仍未收缩 deploy tool 执行层，只先把“生成约束 + 模板识别 + 合规锚点”落稳，下一轮可以继续把部署主链真正向固定模板收拢。
 - 继续推进部署 preflight：`altus-managed-deployment-tool-service` 现在会优先看 `templateFamily`，并且只对 `frontend_dist + legacy/custom` 的 web app 触发官方固定模板修复要求，不影响非当前主链的已有栈项目。
+- 在部署导出副本上新增“官方固定模板壳安全自适应”：
+  - 对通用 `frontend_dist` 项目，发布前会在导出副本上补齐 `client/server/shared`、`vite.config.ts`、`server/index.ts`、`node dist/index.js` 启动契约和官方 manifest。
+  - 会顺手补上 `client/index.html` 的 analytics hook，确保固定模板壳自身满足平台注入与合规要求。
+  - 这条适配不改用户真实工作区，只作用于部署导出副本。

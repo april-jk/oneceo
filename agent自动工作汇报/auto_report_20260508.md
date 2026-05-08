@@ -12,3 +12,10 @@
   - 对通用 `frontend_dist` 项目，发布前会在导出副本上补齐 `client/server/shared`、`vite.config.ts`、`server/index.ts`、`node dist/index.js` 启动契约和官方 manifest。
   - 会顺手补上 `client/index.html` 的 analytics hook，确保固定模板壳自身满足平台注入与合规要求。
   - 这条适配不改用户真实工作区，只作用于部署导出副本。
+- 为固定模板路线补了强/弱提示词部署 E2E 基建：
+  - `deployment-main-chain.e2e.ts` 现在支持按环境变量注入不同提示词，并把 `promptCategory/promptLabel` 写入报告。
+  - 工作区 marker 验收从“只盯根目录 index.html”改成“根据项目形态检查根静态文件或官方模板 React 入口源码”，避免固定模板 SPA 被壳文件误判。
+  - 新增 `deployment-prompt-strength-matrix.e2e.ts`，用于串行跑“强约束 vs 弱约束”提示词样本并汇总结论。
+- 真实 E2E 观察结论：
+  - 强约束样本能稳定收敛到官方模板并最终发布成功。
+  - 弱约束样本可以进入同一条模板/部署链，但生成耗时明显更长，且当前样本在公网可达阶段出现 `latestStatus=FAILED`。

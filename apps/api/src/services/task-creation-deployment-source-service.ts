@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from 'node:child_process';
-import { access, cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -14,6 +14,7 @@ import {
   type DeploymentTemplateBootstrapReport,
 } from './deployment-template-bootstrap-service';
 import {
+  detectOneCeoOfficialWebTemplate,
   ensureTemplateCompliance,
   type OneCeoDeploymentManifest,
   type TemplateComplianceReport,
@@ -344,6 +345,72 @@ const FRONTEND_DIST_TEMPLATE_MANIFEST: OneCeoDeploymentManifest = {
     userTracking: true,
     database: false,
     auth: false,
+    objectStorage: false,
+  },
+  runtime: {
+    framework: 'frontend_dist',
+    transport: 'http',
+  },
+};
+
+const OFFICIAL_WEB_SHELL_SERVER_SOURCE = `import express from 'express';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const app = express();
+const port = Number(process.env.PORT || 8080);
+const publicDir = path.join(__dirname, 'public');
+
+app.get('/api/system/health', (_req, res) => {
+  res.json({ ok: true, service: 'oneceo-official-web-shell' });
+});
+
+app.use(express.static(publicDir));
+
+app.get('*', (_req, res) => {
+  res.sendFile(path.join(publicDir, 'index.html'));
+});
+
+app.listen(port, '0.0.0.0', () => {
+  console.log('[oneceo-official-web-shell] listening on port ' + port);
+});
+`;
+
+const OFFICIAL_WEB_SHELL_VITE_CONFIG = `import { defineConfig } from 'vite';
+import path from 'node:path';
+
+export default defineConfig({
+  root: path.resolve(__dirname, 'client'),
+  publicDir: path.resolve(__dirname, 'client/public'),
+  build: {
+    outDir: path.resolve(__dirname, 'dist/public'),
+    emptyOutDir: true,
+  },
+});
+`;
+
+const OFFICIAL_WEB_SHELL_MANIFEST: OneCeoDeploymentManifest = {
+  templateVersion: '1.0.0',
+  appType: 'web_app',
+  stack: 'oneceo_fixed_vite_node_shell',
+  build: {
+    command: 'pnpm build',
+    outputDir: 'dist/public',
+  },
+  start: {
+    command: 'node dist/index.js',
+    portEnv: 'PORT',
+  },
+  healthcheck: {
+    path: '/api/system/health',
+  },
+  features: {
+    analytics: true,
+    userTracking: true,
+    database: false,
+    auth: 'optional',
     objectStorage: false,
   },
   runtime: {
@@ -742,6 +809,128 @@ async function ensureStaticRootDeploymentFiles(sourceDir: string) {
   return true;
 }
 
+async function ensureOfficialFrontendWebShell(sourceDir: string) {
+  const packageJsonPath = join(sourceDir, 'package.json');
+  if (!(await exists(packageJsonPath))) {
+    return false;
+  }
+
+  let packageJson: Record<string, unknown>;
+  try {
+    packageJson = JSON.parse(await readTextIfExists(packageJsonPath)) as Record<string, unknown>;
+  } catch {
+    return false;
+  }
+
+  const officialTemplate = await detectOneCeoOfficialWebTemplate({
+    sourceDir,
+    packageJson,
+  });
+  if (officialTemplate.matched) {
+    return false;
+  }
+
+  const dependencies = {
+    ...((packageJson.dependencies || {}) as Record<string, unknown>),
+    ...((packageJson.devDependencies || {}) as Record<string, unknown>),
+  };
+  const frontendSignals = [
+    'vite',
+    'react',
+    'react-dom',
+    'vue',
+    'svelte',
+    '@vitejs/plugin-react',
+    '@vitejs/plugin-vue',
+  ];
+  const hasFrontendSignal =
+    frontendSignals.some((name) => Boolean(asText(dependencies[name]))) ||
+    (await exists(join(sourceDir, 'src'))) ||
+    (await exists(join(sourceDir, 'public'))) ||
+    (await exists(join(sourceDir, 'index.html')));
+  if (!hasFrontendSignal) {
+    return false;
+  }
+
+  await mkdir(join(sourceDir, 'client'), { recursive: true });
+  await mkdir(join(sourceDir, 'server'), { recursive: true });
+  await mkdir(join(sourceDir, 'shared'), { recursive: true });
+
+  if (!(await exists(join(sourceDir, 'client', 'src'))) && (await exists(join(sourceDir, 'src')))) {
+    await cp(join(sourceDir, 'src'), join(sourceDir, 'client', 'src'), {
+      recursive: true,
+      force: true,
+    });
+  }
+
+  if (!(await exists(join(sourceDir, 'client', 'public'))) && (await exists(join(sourceDir, 'public')))) {
+    await cp(join(sourceDir, 'public'), join(sourceDir, 'client', 'public'), {
+      recursive: true,
+      force: true,
+    });
+  }
+
+  const clientIndexPath = join(sourceDir, 'client', 'index.html');
+  if (!(await exists(clientIndexPath))) {
+    for (const candidate of ['index.html', 'public/index.html'] as const) {
+      const candidatePath = join(sourceDir, candidate);
+      if (!(await exists(candidatePath))) continue;
+      await writeFile(clientIndexPath, await readTextIfExists(candidatePath), 'utf-8');
+      break;
+    }
+  }
+
+  if (!(await exists(clientIndexPath))) {
+    return false;
+  }
+
+  const clientIndexSource = await readTextIfExists(clientIndexPath);
+  if (clientIndexSource && !clientIndexSource.includes('ONECEO_ANALYTICS:START')) {
+    const analyticsHook = '<!-- ONECEO_ANALYTICS:START --><!-- ONECEO_ANALYTICS:END -->';
+    const bodyCloseIndex = clientIndexSource.lastIndexOf('</body>');
+    const nextIndexSource =
+      bodyCloseIndex >= 0
+        ? `${clientIndexSource.slice(0, bodyCloseIndex)}${analyticsHook}\n${clientIndexSource.slice(bodyCloseIndex)}`
+        : `${clientIndexSource}\n${analyticsHook}\n`;
+    await writeFile(clientIndexPath, nextIndexSource, 'utf-8');
+  }
+
+  await writeFile(join(sourceDir, 'server', 'index.ts'), OFFICIAL_WEB_SHELL_SERVER_SOURCE, 'utf-8');
+  await writeFile(join(sourceDir, 'vite.config.ts'), OFFICIAL_WEB_SHELL_VITE_CONFIG, 'utf-8');
+
+  const scripts = (packageJson.scripts || {}) as Record<string, unknown>;
+  const nextPackageJson = {
+    ...packageJson,
+    scripts: {
+      ...scripts,
+      build: 'vite build && esbuild server/index.ts --platform=node --bundle --format=esm --outfile=dist/index.js',
+      start: 'node dist/index.js',
+    },
+    dependencies: {
+      ...((packageJson.dependencies || {}) as Record<string, unknown>),
+      express: asText(asObject(packageJson.dependencies).express) || '^5.0.0',
+    },
+    devDependencies: {
+      ...((packageJson.devDependencies || {}) as Record<string, unknown>),
+      esbuild: asText(asObject(packageJson.devDependencies).esbuild) || '^0.25.0',
+      vite:
+        asText(asObject(packageJson.dependencies).vite) ||
+        asText(asObject(packageJson.devDependencies).vite) ||
+        '^7.0.0',
+    },
+  };
+  await writeFile(packageJsonPath, `${JSON.stringify(nextPackageJson, null, 2)}\n`, 'utf-8');
+
+  await writeFile(
+    join(sourceDir, 'oneceo.manifest.json'),
+    `${JSON.stringify(OFFICIAL_WEB_SHELL_MANIFEST, null, 2)}\n`,
+    'utf-8'
+  );
+  await ensureRailwayConfigFile(sourceDir, OFFICIAL_WEB_SHELL_MANIFEST, { force: true });
+
+  return true;
+}
+
 async function ensureBuiltFrontendDeploymentFiles(sourceDir: string) {
   const packageJsonPath = join(sourceDir, 'package.json');
   const rootIndexPath = join(sourceDir, 'index.html');
@@ -1105,6 +1294,7 @@ async function ensureJavaRootDeploymentFiles(sourceDir: string) {
 
 export async function normalizeDeploymentSourceDirectoryForPublish(sourceDir: string): Promise<{
   promotedNestedApp: boolean;
+  adaptedOfficialFrontendShell: boolean;
   injectedBuiltFrontendBaseline: boolean;
   injectedStaticBaseline: boolean;
   injectedNodeScriptBaseline: boolean;
@@ -1119,18 +1309,26 @@ export async function normalizeDeploymentSourceDirectoryForPublish(sourceDir: st
     promotedNestedApp = true;
   }
 
-  const injectedBuiltFrontendBaseline = await ensureBuiltFrontendDeploymentFiles(sourceDir);
-  const injectedStaticBaseline = injectedBuiltFrontendBaseline
+  const adaptedOfficialFrontendShell = await ensureOfficialFrontendWebShell(sourceDir);
+  const injectedBuiltFrontendBaseline = adaptedOfficialFrontendShell
+    ? false
+    : await ensureBuiltFrontendDeploymentFiles(sourceDir);
+  const injectedStaticBaseline = adaptedOfficialFrontendShell || injectedBuiltFrontendBaseline
     ? false
     : await ensureStaticRootDeploymentFiles(sourceDir);
-  const injectedNodeScriptBaseline = injectedBuiltFrontendBaseline || injectedStaticBaseline
+  const injectedNodeScriptBaseline =
+    adaptedOfficialFrontendShell || injectedBuiltFrontendBaseline || injectedStaticBaseline
     ? false
     : await ensureNodeScriptDeploymentFiles(sourceDir);
   const injectedPythonBaseline =
-    injectedBuiltFrontendBaseline || injectedStaticBaseline || injectedNodeScriptBaseline
+    adaptedOfficialFrontendShell ||
+    injectedBuiltFrontendBaseline ||
+    injectedStaticBaseline ||
+    injectedNodeScriptBaseline
       ? false
       : await ensurePythonRootDeploymentFiles(sourceDir);
   const injectedPhpBaseline =
+    adaptedOfficialFrontendShell ||
     injectedBuiltFrontendBaseline ||
     injectedStaticBaseline ||
     injectedNodeScriptBaseline ||
@@ -1138,6 +1336,7 @@ export async function normalizeDeploymentSourceDirectoryForPublish(sourceDir: st
       ? false
       : await ensurePhpRootDeploymentFiles(sourceDir);
   const injectedJavaBaseline =
+    adaptedOfficialFrontendShell ||
     injectedBuiltFrontendBaseline ||
     injectedStaticBaseline ||
     injectedNodeScriptBaseline ||
@@ -1156,6 +1355,7 @@ export async function normalizeDeploymentSourceDirectoryForPublish(sourceDir: st
   }
   return {
     promotedNestedApp,
+    adaptedOfficialFrontendShell,
     injectedBuiltFrontendBaseline,
     injectedStaticBaseline,
     injectedNodeScriptBaseline,

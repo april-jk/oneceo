@@ -5,6 +5,7 @@ import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { DEPLOYMENT_TEMPLATE_ANALYTICS_ENTRY_RELATIVE_PATHS } from './deployment-template-bootstrap-service';
+import { normalizeDeploymentSourceDirectoryForPublish } from './task-creation-deployment-source-service';
 import {
   detectOneCeoOfficialWebTemplate,
   ensureTemplateCompliance,
@@ -405,6 +406,7 @@ export async function inspectTaskSessionProjectProfile(input: {
   }
   const sourceDir = await exportWorkspaceToLocalDirectory(normalizedSessionId, normalizedWorkspaceRoot);
   try {
+    await normalizeDeploymentSourceDirectoryForPublish(sourceDir);
     return await buildTaskSessionProjectProfileFromDirectory(sourceDir, {
       sessionId: input.sessionId,
       runtimeGeneration: input.runtimeGeneration,

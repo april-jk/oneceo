@@ -117,6 +117,56 @@ test('template compliance detects the official fixed vite-node shell contract', 
   }
 });
 
+test('deployment source normalization can adapt a generic frontend project into the official fixed shell', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-official-shell-adapt-test-'));
+  try {
+    await mkdir(join(workspace, 'src'), { recursive: true });
+    await mkdir(join(workspace, 'public'), { recursive: true });
+    await writeFile(
+      join(workspace, 'package.json'),
+      JSON.stringify({
+        name: 'generic-frontend-app',
+        scripts: {
+          build: 'vite build',
+          start: 'vite preview',
+        },
+        dependencies: {
+          react: '^19.0.0',
+          'react-dom': '^19.0.0',
+        },
+        devDependencies: {
+          vite: '^7.0.0',
+        },
+      }),
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'public/index.html'),
+      '<!doctype html><html><body><div id="root"></div></body></html>',
+      'utf-8'
+    );
+    await writeFile(join(workspace, 'src/main.jsx'), 'console.log("app");\n', 'utf-8');
+
+    const normalization = await normalizeDeploymentSourceDirectoryForPublish(workspace);
+    const compliance = await ensureTemplateCompliance(workspace);
+    const packageJson = JSON.parse(await readFile(join(workspace, 'package.json'), 'utf-8'));
+    const manifest = JSON.parse(await readFile(join(workspace, 'oneceo.manifest.json'), 'utf-8'));
+    const viteConfig = await readFile(join(workspace, 'vite.config.ts'), 'utf-8');
+    const serverSource = await readFile(join(workspace, 'server/index.ts'), 'utf-8');
+
+    assert.equal(normalization.adaptedOfficialFrontendShell, true);
+    assert.equal(packageJson.scripts.start, 'node dist/index.js');
+    assert.match(packageJson.scripts.build, /esbuild server\/index\.ts/);
+    assert.equal(manifest.stack, 'oneceo_fixed_vite_node_shell');
+    assert.equal(compliance.checks.officialTemplateDetected, true);
+    assert.match(viteConfig, /root: path\.resolve\(__dirname, 'client'\)/);
+    assert.match(viteConfig, /dist\/public/);
+    assert.match(serverSource, /oneceo-official-web-shell/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('deployment template baseline does not auto-declare railway_postgres from pg dependency alone', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-pg-infer-test-'));
   try {

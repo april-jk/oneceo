@@ -465,11 +465,20 @@ async function deriveWorkspaceTechStackHints(workspaceRoot: string): Promise<Wor
   };
 }
 
-function resolveTodoDecision(shape: TaskIntentShape): Pick<AltusManagedTaskIntentProfile, 'todoRequired' | 'todoReason'> {
+function resolveTodoDecision(
+  shape: TaskIntentShape,
+  options?: { deployableWebAppBlueprintRequired?: boolean }
+): Pick<AltusManagedTaskIntentProfile, 'todoRequired' | 'todoReason'> {
   if (shape.candidateTodoSignals.explicitTodoRequest) {
     return {
       todoRequired: true,
       todoReason: 'explicit_user_request',
+    };
+  }
+  if (options?.deployableWebAppBlueprintRequired) {
+    return {
+      todoRequired: true,
+      todoReason: 'deployable_web_app_blueprint',
     };
   }
   if (
@@ -504,6 +513,16 @@ function resolveTodoDecision(shape: TaskIntentShape): Pick<AltusManagedTaskInten
     todoRequired: false,
     todoReason: 'none',
   };
+}
+
+function shouldRequireDeployableWebAppBlueprint(input: {
+  profile: AltusManagedTaskIntentProfile;
+  needsClarification: boolean;
+}) {
+  return Boolean(
+    input.profile.mode === 'deployable_web_app' &&
+      !input.needsClarification
+  );
 }
 
 function resolveClarificationDecision(input: {
@@ -669,7 +688,12 @@ function buildProfileFromTransition(input: TransitionResolvedProfileInput): Altu
       : input.shape;
   const effectiveTodoDecision =
     input.reduced.nextState === 'new_turn'
-      ? resolveTodoDecision(effectiveShape)
+      ? resolveTodoDecision(effectiveShape, {
+          deployableWebAppBlueprintRequired: shouldRequireDeployableWebAppBlueprint({
+            profile: effectiveBaseProfile,
+            needsClarification: false,
+          }),
+        })
       : input.todoDecision;
 
   return {
@@ -1247,7 +1271,12 @@ export class AltusManagedSetupService {
       const advisoryShape = classifyTaskIntentShape(currentTexts);
       return {
         ...advisoryProfile,
-        ...resolveTodoDecision(advisoryShape),
+        ...resolveTodoDecision(advisoryShape, {
+          deployableWebAppBlueprintRequired: shouldRequireDeployableWebAppBlueprint({
+            profile: advisoryProfile,
+            needsClarification: false,
+          }),
+        }),
         needsClarification: false,
         clarificationType: 'none',
         clarificationQuestion: '',
@@ -1304,7 +1333,12 @@ export class AltusManagedSetupService {
             return buildProfileFromTransition({
               baseProfile,
               shape,
-              todoDecision: resolveTodoDecision(shape),
+              todoDecision: resolveTodoDecision(shape, {
+                deployableWebAppBlueprintRequired: shouldRequireDeployableWebAppBlueprint({
+                  profile: baseProfile,
+                  needsClarification: false,
+                }),
+              }),
               reduced,
               currentText,
               texts,
@@ -1324,7 +1358,12 @@ export class AltusManagedSetupService {
       return buildProfileFromTransition({
         baseProfile,
         shape,
-        todoDecision: resolveTodoDecision(shape),
+        todoDecision: resolveTodoDecision(shape, {
+          deployableWebAppBlueprintRequired: shouldRequireDeployableWebAppBlueprint({
+            profile: baseProfile,
+            needsClarification: false,
+          }),
+        }),
         reduced: {
           accepted: true,
           nextState: 'ready_to_execute',
@@ -1354,7 +1393,12 @@ export class AltusManagedSetupService {
       pendingClarificationType: treatAsNewTurn ? null : pendingClarificationType,
       workspaceHints,
     });
-    const todoDecision = resolveTodoDecision(effectiveShape);
+    const todoDecision = resolveTodoDecision(effectiveShape, {
+      deployableWebAppBlueprintRequired: shouldRequireDeployableWebAppBlueprint({
+        profile: effectiveBaseProfile,
+        needsClarification: clarificationDecision.needsClarification,
+      }),
+    });
 
     return {
       ...effectiveBaseProfile,

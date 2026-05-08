@@ -25,6 +25,13 @@ type CaseResult = {
   deploymentStatus?: string;
   bindingState?: string;
   analyticsStatus?: string;
+  publicReachabilityStatus?: string;
+  publicMarkerStatus?: string;
+  analyticsBootstrapStatus?: string;
+  browserVisitStatus?: string;
+  browserAnalyticsSendStatus?: number;
+  analyticsTrackingStatus?: string;
+  publicMarkerLocation?: string;
   checkpoints?: Array<{ name: string; status: 'passed' | 'failed'; details?: Record<string, unknown> }>;
   reportPath?: string;
   error?: string;
@@ -47,7 +54,7 @@ const CASES: PromptCase[] = [
       '请在当前工作区直接创建一个可部署的网站，不要提问，不要部署，只完成源码。',
       '必须满足以下技术约束：',
       '1. 使用 OneCEO 官方固定模板壳：根目录必须有 client/、server/、shared/。',
-      '2. 前端使用 Vite + React，服务端使用 Node + Express。',
+      '2. 前端使用 Vite + React，服务端使用固定 Node Web Shell，不要引入额外服务端框架。',
       '3. package.json 的生产构建必须输出 dist/public 和 dist/index.js，生产启动必须是 node dist/index.js。',
       '4. 必须存在 oneceo.manifest.json，healthcheck 使用 /api/system/health。',
       '5. 网站是 AI 咨询公司的企业官网，至少包含 hero、服务介绍、案例、联系区域。',
@@ -63,7 +70,7 @@ const CASES: PromptCase[] = [
       '请在当前工作区直接创建一个可部署的网站，不要提问，不要部署，只完成源码。',
       '技术要求：',
       '1. 严格使用 OneCEO 官方固定模板壳 client/server/shared。',
-      '2. 使用 Vite + React + Node/Express，不要自由切换到其他语言或运行时。',
+      '2. 使用 Vite + React + 固定 Node Web Shell，不要自由切换到其他语言、运行时或额外服务端框架。',
       '3. build/start 契约必须分别收敛到 dist/public 和 node dist/index.js。',
       '4. 网站主题是面向零售门店的 SaaS 产品落地页，要有产品价值、功能模块、价格方案、CTA 按钮。',
       '5. 页面主体必须显著显示唯一标识 "__ONECEO_E2E_MARKER__"。',
@@ -98,6 +105,19 @@ function nowStamp() {
 
 function asText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function printNetworkContextHint() {
+  const proxy =
+    asText(process.env.HTTP_PROXY) ||
+    asText(process.env.http_proxy) ||
+    asText(process.env.HTTPS_PROXY) ||
+    asText(process.env.https_proxy) ||
+    asText(process.env.ALL_PROXY) ||
+    asText(process.env.all_proxy);
+  const noProxy = asText(process.env.NO_PROXY) || asText(process.env.no_proxy);
+  const proxyEnabled = asText(process.env.ONECEO_PROXY_ENABLED) || 'unset';
+  console.log(`[matrix] network proxy=${proxy ? 'set' : 'unset'} no_proxy=${noProxy || 'unset'} ONECEO_PROXY_ENABLED=${proxyEnabled}`);
 }
 
 async function runCase(testCase: PromptCase): Promise<CaseResult> {
@@ -136,11 +156,53 @@ async function runCase(testCase: PromptCase): Promise<CaseResult> {
       deploymentStatus: asText(report.deploymentStatus) || undefined,
       bindingState: asText(report.bindingState) || undefined,
       analyticsStatus: asText(report.analyticsStatus) || undefined,
+      publicReachabilityStatus: asText(report.publicReachabilityStatus) || undefined,
+      publicMarkerStatus: asText(report.publicMarkerStatus) || undefined,
+      analyticsBootstrapStatus: asText(report.analyticsBootstrapStatus) || undefined,
+      browserVisitStatus: asText(report.browserVisitStatus) || undefined,
+      browserAnalyticsSendStatus: Number.isFinite(Number(report.browserAnalyticsSendStatus))
+        ? Number(report.browserAnalyticsSendStatus)
+        : undefined,
+      analyticsTrackingStatus: asText(report.analyticsTrackingStatus) || undefined,
+      publicMarkerLocation: asText(report.publicMarkerLocation) || undefined,
       checkpoints: Array.isArray(report.checkpoints) ? report.checkpoints : [],
       reportPath,
       error: asText(report.error) || undefined,
     };
   } catch (error: any) {
+    const combined = `${asText(error?.stdout)}\n${asText(error?.stderr)}`.trim();
+    const reportMatch = combined.match(/\[e2e\] json report: (.+\.json)/);
+    if (reportMatch?.[1]) {
+      try {
+        const reportPath = reportMatch[1].trim();
+        const report = JSON.parse(await fs.readFile(reportPath, 'utf8')) as Record<string, any>;
+        return {
+          id: testCase.id,
+          category: testCase.category,
+          label: testCase.label,
+          passed: false,
+          sessionId: asText(report.sessionId) || undefined,
+          publicUrl: asText(report.publicUrl) || undefined,
+          deploymentStatus: asText(report.deploymentStatus) || undefined,
+          bindingState: asText(report.bindingState) || undefined,
+          analyticsStatus: asText(report.analyticsStatus) || undefined,
+          publicReachabilityStatus: asText(report.publicReachabilityStatus) || undefined,
+          publicMarkerStatus: asText(report.publicMarkerStatus) || undefined,
+          analyticsBootstrapStatus: asText(report.analyticsBootstrapStatus) || undefined,
+          browserVisitStatus: asText(report.browserVisitStatus) || undefined,
+          browserAnalyticsSendStatus: Number.isFinite(Number(report.browserAnalyticsSendStatus))
+            ? Number(report.browserAnalyticsSendStatus)
+            : undefined,
+          analyticsTrackingStatus: asText(report.analyticsTrackingStatus) || undefined,
+          publicMarkerLocation: asText(report.publicMarkerLocation) || undefined,
+          checkpoints: Array.isArray(report.checkpoints) ? report.checkpoints : [],
+          reportPath,
+          error: asText(report.error) || asText(error?.message) || 'e2e process failed',
+        };
+      } catch {
+        // Fall through to the raw process error below.
+      }
+    }
     return {
       id: testCase.id,
       category: testCase.category,
@@ -182,11 +244,11 @@ async function writeMatrixReport(results: CaseResult[]) {
     `- strongPassed: ${summary.strongPassed}/${summary.strongCount}`,
     `- weakPassed: ${summary.weakPassed}/${summary.weakCount}`,
     '',
-    '| Case | Category | Passed | Binding | Deploy | Analytics | Public URL |',
-    '| --- | --- | --- | --- | --- | --- | --- |',
+    '| Case | Category | Passed | Binding | Deploy | Public Reach | Marker | Analytics Bootstrap | Browser Visit | Analytics Send | Analytics Tracking | Analytics | Public URL |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
     ...results.map(
       (item) =>
-        `| ${item.label} | ${item.category} | ${item.passed ? 'yes' : 'no'} | ${item.bindingState || '-'} | ${item.deploymentStatus || '-'} | ${item.analyticsStatus || '-'} | ${item.publicUrl || '-'} |`
+        `| ${item.label} | ${item.category} | ${item.passed ? 'yes' : 'no'} | ${item.bindingState || '-'} | ${item.deploymentStatus || '-'} | ${item.publicReachabilityStatus || '-'} | ${item.publicMarkerStatus || '-'} | ${item.analyticsBootstrapStatus || '-'} | ${item.browserVisitStatus || '-'} | ${item.browserAnalyticsSendStatus ?? '-'} | ${item.analyticsTrackingStatus || '-'} | ${item.analyticsStatus || '-'} | ${item.publicUrl || '-'} |`
     ),
   ];
 
@@ -196,6 +258,13 @@ async function writeMatrixReport(results: CaseResult[]) {
     lines.push(`- passed: ${item.passed}`);
     lines.push(`- bindingState: ${item.bindingState || '-'}`);
     lines.push(`- deploymentStatus: ${item.deploymentStatus || '-'}`);
+    lines.push(`- publicReachabilityStatus: ${item.publicReachabilityStatus || '-'}`);
+    lines.push(`- publicMarkerStatus: ${item.publicMarkerStatus || '-'}`);
+    lines.push(`- publicMarkerLocation: ${item.publicMarkerLocation || '-'}`);
+    lines.push(`- analyticsBootstrapStatus: ${item.analyticsBootstrapStatus || '-'}`);
+    lines.push(`- browserVisitStatus: ${item.browserVisitStatus || '-'}`);
+    lines.push(`- browserAnalyticsSendStatus: ${item.browserAnalyticsSendStatus ?? '-'}`);
+    lines.push(`- analyticsTrackingStatus: ${item.analyticsTrackingStatus || '-'}`);
     lines.push(`- analyticsStatus: ${item.analyticsStatus || '-'}`);
     lines.push(`- publicUrl: ${item.publicUrl || '-'}`);
     lines.push(`- reportPath: ${item.reportPath || '-'}`);
@@ -210,6 +279,7 @@ async function writeMatrixReport(results: CaseResult[]) {
 }
 
 async function main() {
+  printNetworkContextHint();
   const cases = FILTER.length > 0 ? CASES.filter((item) => FILTER.includes(item.id)) : CASES;
   assert.ok(cases.length > 0, 'no prompt strength cases selected');
   const results: CaseResult[] = [];

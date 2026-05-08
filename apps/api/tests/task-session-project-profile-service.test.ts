@@ -64,9 +64,10 @@ test('project profile detects the official fixed vite-node template family', asy
           start: 'node dist/index.js',
         },
         dependencies: {
-          express: '^5.0.0',
           react: '^19.0.0',
           'react-dom': '^19.0.0',
+        },
+        devDependencies: {
           vite: '^7.0.0',
         },
       }),

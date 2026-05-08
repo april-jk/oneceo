@@ -3410,6 +3410,24 @@ function pickRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
+function isTruthyQueryFlag(value: unknown) {
+  const normalized = Array.isArray(value) ? asText(value[0]) : asText(value);
+  return ['1', 'true', 'yes', 'on'].includes(normalized.toLowerCase());
+}
+
+function getDeploymentCacheAnalyticsStatus(value: unknown) {
+  const record = pickRecord(value);
+  const directStatus = asText(record.status);
+  if (directStatus) return directStatus.toLowerCase();
+  const analytics = pickRecord(record.analytics);
+  return asText(analytics.status).toLowerCase();
+}
+
+function shouldUseDeploymentReadCache(value: unknown, refresh: unknown) {
+  if (isTruthyQueryFlag(refresh)) return false;
+  return getDeploymentCacheAnalyticsStatus(value) !== 'bound';
+}
+
 async function invalidateTaskSessionDeploymentReads(userId: string, sessionId: string) {
   if (!taskSessionDeploymentRedisCacheService.isEnabled()) return;
   await taskSessionDeploymentRedisCacheService.invalidateSessionReads(userId, sessionId);
@@ -6123,7 +6141,7 @@ router.get('/sessions/:sessionId/deployment', async (req, res) => {
       sessionId,
       deploymentId || undefined
     );
-    if (cached) {
+    if (cached && shouldUseDeploymentReadCache(cached, req.query.refresh)) {
       return res.json({
         success: true,
         data: cached,
@@ -6181,7 +6199,7 @@ router.get('/sessions/:sessionId/deployment/analytics', async (req, res) => {
       sessionId,
       range
     );
-    if (cached) {
+    if (cached && shouldUseDeploymentReadCache(cached, req.query.refresh)) {
       return res.json({
         success: true,
         data: cached,

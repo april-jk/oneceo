@@ -105,6 +105,30 @@ test('managed task intent requires todo workflow for explicit debug trigger', ()
   assert.equal(profile.todoReason, 'debug_chain');
 });
 
+test('managed task intent requires blueprint todo for new deployable web app tasks', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '请在当前工作区用 Vite + React + Node Web Shell 固定模板直接实现一个可部署的企业官网源码，不要提问。页面包含 hero、服务介绍、案例、联系区；后端只保留 /api/system/health 和一个 contact 接口，不需要数据库、登录或外部集成。'
+  ]);
+
+  assert.equal(profile.mode, 'deployable_web_app');
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.todoRequired, true);
+  assert.equal(profile.todoReason, 'deployable_web_app_blueprint');
+});
+
+test('managed task intent keeps website source-only no-deploy requests on the web app path', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '请在当前工作区用 Vite + React + Node Web Shell 固定模板直接创建一个可部署的网站，不要提问，不要部署，只完成源码。页面主体必须显示 ONECEO_E2E_MARKER_test。',
+  ]);
+
+  assert.equal(profile.mode, 'deployable_web_app');
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.deploymentAllowed, false);
+  assert.equal(profile.explicitNoDeploy, true);
+  assert.equal(profile.todoRequired, true);
+  assert.equal(profile.todoReason, 'deployable_web_app_blueprint');
+});
+
 test('managed task intent profile carries a hard clarification gate for broad business-system requests', () => {
   const profile = deriveManagedTaskIntentProfile([
     '帮我做一个企业管理系统。',
@@ -229,14 +253,44 @@ test('managed prompt fixes deployable web apps to the official vite-node shell',
     sessionTitle: 'fixed shell contract',
     workspaceRoot: '/workspace/session-fixed-shell-test',
     connectors: [],
+    taskIntentProfile: {
+      mode: 'deployable_web_app',
+      reason: 'latest_deployable_request',
+      recentUserMessages: ['帮我做一个企业官网'],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: true,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: true,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: true,
+      todoReason: 'deployable_web_app_blueprint',
+    },
   });
 
+  assert.match(prompt, /ONECEO_FIXED_SHELL_ANCHOR/i);
+  assert.match(prompt, /ONECEO_WEBAPP_TODO_BLUEPRINT_ANCHOR/i);
+  assert.match(prompt, /ONECEO_WEBAPP_MACRO_REVIEW_ANCHOR/i);
   assert.match(prompt, /without an existing workspace stack to preserve, default to the fixed OneCEO web shell/i);
   assert.match(prompt, /default stable delivery lane for new deployable websites, not as a global migration rule/i);
   assert.match(prompt, /If the workspace already exists in another stack, or the user is debugging, repairing, or extending an existing project, preserve the existing stack/i);
   assert.match(prompt, /root `client\/`, root `server\/`, optional root `shared\/`/i);
+  assert.match(prompt, /fixed Node web shell/i);
   assert.match(prompt, /produce browser assets under `dist\/public` and a server entry at `dist\/index\.js`/i);
   assert.match(prompt, /production start command should resolve to `node dist\/index\.js`/i);
+  assert.match(prompt, /do not introduce Express, Koa, Fastify/i);
+  assert.match(prompt, /homepage implementation, primary user-facing content, requested acceptance marker/i);
+  assert.match(prompt, /client\/src\/main\.\*` as the React mount file only/i);
+  assert.match(prompt, /Before the first code-editing step for a new deployable web app task, write a blueprint todo/i);
+  assert.match(prompt, /must name the target path for each implementation item/i);
+  assert.match(prompt, /default the blueprint to a compact but complete site structure: hero, primary value or service section, proof\/case\/portfolio section, and CTA\/contact section/i);
+  assert.match(prompt, /bind that default structure to `client\/src\/App\.jsx` or `client\/src\/App\.tsx`/i);
+  assert.match(prompt, /run one macro self-check against the current todo/i);
+  assert.match(prompt, /Do not reread every file line-by-line/i);
   assert.match(prompt, /creating a new deployable site from scratch, not as permission to switch the deployable runtime/i);
 });
 

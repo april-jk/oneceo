@@ -37,6 +37,9 @@ type TestReport = {
   finishedAt?: string;
   apiBase: string;
   marker: string;
+  promptCategory?: string;
+  promptLabel?: string;
+  promptText?: string;
   userEmail?: string;
   sessionId?: string;
   runId?: string;
@@ -65,6 +68,10 @@ const URL_TIMEOUT_MS = Math.max(60_000, Number(process.env.ONECEO_E2E_URL_TIMEOU
 const POLL_INTERVAL_MS = Math.max(2_000, Number(process.env.ONECEO_E2E_POLL_INTERVAL_MS || 5_000));
 const KEEP_RESOURCES = ['1', 'true', 'yes', 'on'].includes(String(process.env.ONECEO_E2E_KEEP_RESOURCES || '').trim().toLowerCase());
 const TEST_ACCOUNT_PATH = path.resolve(process.cwd(), '../web/e2e/playwright-test-account.json');
+const PROMPT_CATEGORY = asText(process.env.ONECEO_E2E_PROMPT_CATEGORY) || 'default';
+const PROMPT_LABEL = asText(process.env.ONECEO_E2E_PROMPT_LABEL) || PROMPT_CATEGORY;
+const PROMPT_TEXT_OVERRIDE = asText(process.env.ONECEO_E2E_PROMPT_TEXT);
+const REPORT_TAG = asText(process.env.ONECEO_E2E_REPORT_TAG);
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -82,8 +89,9 @@ async function writeReport(report: TestReport) {
   const reportsDir = path.resolve(process.cwd(), 'tests/e2e/reports');
   await fs.mkdir(reportsDir, { recursive: true });
   const stamp = nowStamp();
-  const jsonPath = path.join(reportsDir, `deployment-main-chain-${stamp}.json`);
-  const mdPath = path.join(reportsDir, `deployment-main-chain-${stamp}.md`);
+  const suffix = REPORT_TAG ? `-${REPORT_TAG}` : '';
+  const jsonPath = path.join(reportsDir, `deployment-main-chain-${stamp}${suffix}.json`);
+  const mdPath = path.join(reportsDir, `deployment-main-chain-${stamp}${suffix}.md`);
 
   await fs.writeFile(jsonPath, JSON.stringify(report, null, 2), 'utf8');
 
@@ -94,6 +102,8 @@ async function writeReport(report: TestReport) {
     `- finishedAt: ${report.finishedAt || '-'}`,
     `- apiBase: ${report.apiBase}`,
     `- marker: ${report.marker}`,
+    `- promptCategory: ${report.promptCategory || '-'}`,
+    `- promptLabel: ${report.promptLabel || '-'}`,
     `- userEmail: ${report.userEmail || '-'}`,
     `- sessionId: ${report.sessionId || '-'}`,
     `- runId: ${report.runId || '-'}`,
@@ -226,6 +236,46 @@ async function postApiData<T>(url: string, cookie: string, payload?: unknown): P
   return ((body as ApiResult<T>).data ?? body) as T;
 }
 
+async function readWorkspaceFileIfExists(sessionId: string, cookie: string, filePath: string) {
+  const encodedPath = encodeURIComponent(filePath);
+  const { response, body } = await requestJson<JsonRecord>(
+    `${API_BASE}/api/task-creation/sessions/${sessionId}/workspace/file?path=${encodedPath}&refresh=1`,
+    {
+      method: 'GET',
+      cookie,
+    }
+  );
+  if (!response.ok) {
+    return null;
+  }
+  const payload = ((body as ApiResult<JsonRecord>).data ?? body) as JsonRecord;
+  if (payload?.isBinary) {
+    return null;
+  }
+  return payload;
+}
+
+async function findMarkerInWorkspaceFiles(
+  sessionId: string,
+  cookie: string,
+  marker: string,
+  candidates: string[]
+) {
+  for (const candidate of candidates) {
+    const result = await readWorkspaceFileIfExists(sessionId, cookie, candidate);
+    if (typeof result?.content !== 'string') {
+      continue;
+    }
+    if (result.content.includes(marker)) {
+      return {
+        path: candidate,
+        matched: true,
+      };
+    }
+  }
+  return null;
+}
+
 async function deleteApi(url: string, cookie: string) {
   const { response, body } = await requestJson<JsonRecord>(url, {
     method: 'DELETE',
@@ -281,6 +331,9 @@ async function poll<T>(
 }
 
 function buildGenerationPrompt(marker: string) {
+  if (PROMPT_TEXT_OVERRIDE) {
+    return PROMPT_TEXT_OVERRIDE.replaceAll('__ONECEO_E2E_MARKER__', marker);
+  }
   return [
     '在当前工作区直接创建一个最小可部署静态网页应用，不要提问，不要解释，不要部署。',
     '要求：',
@@ -306,10 +359,14 @@ async function fetchPublicHtml(url: string) {
 }
 
 async function main() {
+  const marker = `ONECEO_E2E_MARKER_${Date.now().toString(36)}`;
   const report: TestReport = {
     startedAt: new Date().toISOString(),
     apiBase: API_BASE,
-    marker: `ONECEO_E2E_MARKER_${Date.now().toString(36)}`,
+    marker,
+    promptCategory: PROMPT_CATEGORY,
+    promptLabel: PROMPT_LABEL,
+    promptText: PROMPT_TEXT_OVERRIDE || buildGenerationPrompt(marker),
     checkpoints: [],
     passed: false,
   };
@@ -418,24 +475,47 @@ async function main() {
       cookieSession.cookie
     );
     const treeText = JSON.stringify(workspaceTree);
-    assert.match(treeText, /index\.html/i);
-    assert.match(treeText, /styles\.css/i);
-    assert.match(treeText, /app\.js/i);
+    const hasRootStaticShape =
+      /index\.html/i.test(treeText) && /styles\.css/i.test(treeText) && /app\.js/i.test(treeText);
+    const hasOfficialShellShape =
+      /client\/index\.html/i.test(treeText) && /server\/index\.(t|j)s/i.test(treeText);
+    assert.ok(
+      hasRootStaticShape || hasOfficialShellShape,
+      `workspace tree did not match a supported website shape: ${treeText.slice(0, 1200)}`
+    );
     checkpoint('workspace_tree', 'passed', {
-      containsIndex: /index\.html/i.test(treeText),
-      containsStyles: /styles\.css/i.test(treeText),
-      containsAppJs: /app\.js/i.test(treeText),
+      hasRootStaticShape,
+      hasOfficialShellShape,
     });
 
-    const indexFile = await getApiData<JsonRecord>(
-      `${API_BASE}/api/task-creation/sessions/${sessionId}/workspace/file?path=${encodeURIComponent('index.html')}&refresh=1`,
-      cookieSession.cookie
+    const workspaceMarkerCandidates = hasOfficialShellShape
+      ? [
+          'client/index.html',
+          'client/src/main.jsx',
+          'client/src/main.tsx',
+          'client/src/App.jsx',
+          'client/src/App.tsx',
+          'src/main.jsx',
+          'src/main.tsx',
+          'src/App.jsx',
+          'src/App.tsx',
+          'public/index.html',
+        ]
+      : ['index.html', 'app.js', 'styles.css'];
+    const markerSource = await findMarkerInWorkspaceFiles(
+      sessionId,
+      cookieSession.cookie,
+      report.marker,
+      workspaceMarkerCandidates
     );
-    assert.equal(indexFile.isBinary, false, 'index.html should be text');
-    assert.match(String(indexFile.content || ''), new RegExp(report.marker));
-    checkpoint('workspace_index_html', 'passed', {
-      path: indexFile.path || 'index.html',
+    assert.ok(
+      markerSource,
+      `workspace should contain marker in a supported entry source: ${workspaceMarkerCandidates.join(', ')}`
+    );
+    checkpoint('workspace_marker_source', 'passed', {
+      path: markerSource.path,
       markerFound: true,
+      officialShell: hasOfficialShellShape,
     });
 
     const baseline = await getApiData<JsonRecord>(

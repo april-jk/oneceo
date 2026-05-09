@@ -116,6 +116,31 @@ test('validateTaskSessionDeploymentPublicReadiness skips public validation while
   assert.equal(result.latestStatus, 'BUILDING');
 });
 
+test('validateTaskSessionDeploymentPublicReadiness surfaces terminal provider failures immediately', async () => {
+  let probeCalled = false;
+  const panel = createPanel({
+    bindingState: 'public_settling',
+    latestStatus: 'FAILED',
+    latestStaticUrl: 'https://example.com',
+    activeDeploymentPending: true,
+    publicReachabilityStartedAt: new Date().toISOString(),
+  });
+
+  const result = await validateTaskSessionDeploymentPublicReadiness({
+    panel,
+    probe: async () => {
+      probeCalled = true;
+      return { url: 'https://example.com', status: 200 };
+    },
+  });
+
+  assert.equal(probeCalled, false);
+  assert.equal(result.bindingState, 'repair_required');
+  assert.equal(result.activeDeploymentPending, false);
+  assert.equal(result.providerErrorCode, 'deployment_provider_error');
+  assert.match(result.providerErrorMessage || '', /FAILED/);
+});
+
 test('validateTaskSessionDeploymentPublicReadiness promotes a live successful deployment when the selected deployment is still queued', async () => {
   const panel = createPanel({
     bindingState: 'provisioning',

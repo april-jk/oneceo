@@ -275,6 +275,8 @@ test('managed prompt fixes deployable web apps to the official vite-node shell',
   assert.match(prompt, /ONECEO_FIXED_SHELL_ANCHOR/i);
   assert.match(prompt, /ONECEO_WEBAPP_TODO_BLUEPRINT_ANCHOR/i);
   assert.match(prompt, /ONECEO_WEBAPP_MACRO_REVIEW_ANCHOR/i);
+  assert.match(prompt, /keep todo updates sparse/i);
+  assert.match(prompt, /Do not call `todowrite` after every small file edit/i);
   assert.match(prompt, /without an existing workspace stack to preserve, default to the fixed OneCEO web shell/i);
   assert.match(prompt, /default stable delivery lane for new deployable websites, not as a global migration rule/i);
   assert.match(prompt, /If the workspace already exists in another stack, or the user is debugging, repairing, or extending an existing project, preserve the existing stack/i);
@@ -286,6 +288,10 @@ test('managed prompt fixes deployable web apps to the official vite-node shell',
   assert.match(prompt, /homepage implementation, primary user-facing content, requested acceptance marker/i);
   assert.match(prompt, /client\/src\/main\.\*` as the React mount file only/i);
   assert.match(prompt, /Before the first code-editing step for a new deployable web app task, write a blueprint todo/i);
+  assert.match(prompt, /ONECEO_WEAK_WEBAPP_FAST_PATH_ANCHOR/i);
+  assert.match(prompt, /4-6 concrete items are usually enough/i);
+  assert.match(prompt, /Do not spend extra rounds on stack discovery, dependency installation, build\/start rewrites/i);
+  assert.match(prompt, /one focused implementation pass by editing `client\/src\/App\.jsx` and `client\/src\/styles\.css`/i);
   assert.match(prompt, /must name the target path for each implementation item/i);
   assert.match(prompt, /default the blueprint to a compact but complete site structure: hero, primary value or service section, proof\/case\/portfolio section, and CTA\/contact section/i);
   assert.match(prompt, /bind that default structure to `client\/src\/App\.jsx` or `client\/src\/App\.tsx`/i);

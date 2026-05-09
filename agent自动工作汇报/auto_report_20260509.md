@@ -424,3 +424,17 @@
 
 - 本轮 E2E 通过 fetch 验证 HTML 与 JS bundle，不执行浏览器 JS，因此 analytics 已确认 bootstrap 发布，但统计状态仍是 `bound`。
 - 下一步如果继续推进，应使用真实浏览器访问 public URL，等待 Umami 事件入库，再要求 `analyticsStatus=tracking`。
+
+## 追加：部署前本地运行验收门
+
+本次继续补齐固定模板部署风险：
+
+- 新增 `task-session-deployment-local-preflight-service`，在 Railway 发布前于 sandbox 内按 manifest 契约执行依赖安装、build、start、healthcheck 与 Playwright smoke。
+- 门禁只覆盖当前优先保障的 node/js/html 快车道栈；Java/PHP/Python 等暂时跳过，避免影响非目标语言的既有路径。
+- `deploy_application` 遇到本地预检失败会返回 `local_preflight` 修复项，日志包含 install/build/server/browser 输出，停止继续推 Railway。
+- 同步修复 provider `FAILED/CRASHED/REMOVED` 被误包装为 `public_settling` 的问题，失败状态会立即收敛到 `repair_required`。
+
+验证：
+
+- `pnpm type-check` 通过。
+- `pnpm exec tsx --test tests/task-session-deployment-local-preflight-service.test.ts tests/altus-managed-deployment-tool-service.test.ts tests/task-session-deployment-runtime-service.test.ts` 通过，39 个测试全绿。

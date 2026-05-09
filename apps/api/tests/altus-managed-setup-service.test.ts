@@ -720,6 +720,49 @@ test('buildTaskIntentProfile routes protected capability delegation to user conf
   assert.equal(profile.clarificationTransition?.nextState, 'risk_confirmation');
 });
 
+test('buildTaskIntentProfile preserves explicit deploy authorization after production confirmation answer', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我部署当前项目',
+      metadata: {},
+    },
+    {
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这会部署到生产环境，请明确确认是否继续。',
+      metadata: {},
+    },
+    {
+      role: 'user',
+      messageType: 'user_response',
+      content: '确认继续',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    pendingQuestion: '这会部署到生产环境，请明确确认是否继续。',
+    pendingOptions: undefined,
+    pendingClarificationType: 'acceptance_requirement',
+  }) as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-deploy-risk-confirmation-answer',
+    '确认继续',
+    'user_response'
+  );
+
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.deploymentAllowed, true);
+  assert.equal(profile.deployRequested, true);
+  assert.equal(profile.platformCapabilityIntent?.mode, 'execute');
+  assert.equal(profile.platformCapabilityIntent?.capabilityKind, 'deploy');
+  assert.equal(profile.clarificationTransition?.nextState, 'ready_to_execute');
+  assert.equal(profile.reason, 'latest_deployable_request');
+});
+
 test('captureMcpToolSnapshot exposes only Composio brokered Notion tools', async () => {
   mock.method(taskSessionConnectorBindingDAO, 'listByTaskSessionId', async () => [
     {

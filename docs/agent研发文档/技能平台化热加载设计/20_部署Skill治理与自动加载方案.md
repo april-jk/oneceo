@@ -239,6 +239,18 @@ deployment skill 需要新增一条明确治理规则：
 
 这条规则的目的，是把“强模板策略”真正延伸到部署修复阶段，避免平台基础设施错误再次被误路由成工作区代码修复。
 
+## 11.2 风险确认后的部署意图继承（2026-05-10）
+
+deployment skill 自动加载还需要补一条运行时约束：
+
+1. 若上一条用户消息已经是显式部署动作
+2. 当前轮只是对 `deploy.production` / `deploy.preview` 风险确认问题的回答
+3. 用户回复是“确认”“确认继续”“继续”这类确认语句
+
+则 runtime 必须恢复上一条显式部署意图的 `deployRequested / deploymentAllowed / capabilityKind`，继续挂载 `deployment_orchestrator`。
+
+这条规则只适用于“有待回答的部署风险确认问题”场景，不适用于普通多轮闲聊。也就是说，系统仍然保留“模糊当前轮不能平白继承历史部署动作”的主规则，只是在风险确认闭环里允许继承。
+
 在平台 skill 数据层或 service 聚合层补齐：
 
 1. `systemRole`

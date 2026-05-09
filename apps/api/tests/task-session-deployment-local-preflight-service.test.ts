@@ -4,6 +4,7 @@ import { mock, test } from 'node:test';
 import { e2bConnector } from '../src/connectors/e2b-connector';
 import {
   formatTaskSessionDeploymentLocalPreflightFailure,
+  isTaskSessionDeploymentLocalPreflightPlatformFailure,
   isTaskSessionDeploymentLocalPreflightSupported,
   runTaskSessionDeploymentLocalPreflight,
 } from '../src/services/task-session-deployment-local-preflight-service';
@@ -47,8 +48,9 @@ test('local deployment preflight runs manifest build/start/browser smoke for sup
   const runCommandMock = mock.method(e2bConnector, 'runCommand', async (_sandboxId, command, options) => {
     assert.match(command, /pnpm install --frozen-lockfile/);
     assert.match(command, /npm install --package-lock=false/);
-    assert.match(command, /sh -lc "\$build_command"/);
-    assert.match(command, /ONECEO_PREFLIGHT_ROOT_URL/);
+    assert.match(command, /bash -lc "\$build_command"/);
+    assert.match(command, /NODE_PATH="\$playwright_node_path/);
+    assert.match(command, /PLAYWRIGHT_BROWSERS_PATH="\$\{PLAYWRIGHT_BROWSERS_PATH:-\/opt\/ms-playwright\}"/);
     assert.equal(options?.cwd, '/workspace/app');
     return {
       stdout:
@@ -136,6 +138,38 @@ test('local deployment preflight formats failed build evidence for Altus repair'
     assert.equal(report.phase, 'build');
     assert.match(formatted, /已停止 Railway 发布/);
     assert.match(formatted, /Unexpected token in App\.jsx/);
+  } finally {
+    mock.restoreAll();
+  }
+});
+
+test('local deployment preflight detects sandbox Playwright capability failures separately from workspace code failures', async () => {
+  mock.method(e2bConnector, 'runCommand', async () => ({
+    stdout:
+      '__ONECEO_DEPLOYMENT_LOCAL_PREFLIGHT__' +
+      JSON.stringify({
+        status: 'failed',
+        phase: 'browser_smoke',
+        failureKind: 'platform_capability',
+        checkedAt: new Date().toISOString(),
+        message:
+          'Playwright smoke test failed because sandbox Playwright capability is unavailable before Railway deployment.',
+        browserOutput:
+          "Error: Cannot find module 'playwright'\nError: Executable doesn't exist at /opt/ms-playwright/chromium",
+      }),
+    exitCode: 0,
+  }));
+
+  try {
+    const report = await runTaskSessionDeploymentLocalPreflight({
+      orchestratorSessionId: 'sandbox-1',
+      workspaceRoot: '/workspace/app',
+      baseline: createBaseline(),
+    });
+
+    assert.equal(report.status, 'failed');
+    assert.equal(report.failureKind, 'platform_capability');
+    assert.equal(isTaskSessionDeploymentLocalPreflightPlatformFailure(report), true);
   } finally {
     mock.restoreAll();
   }

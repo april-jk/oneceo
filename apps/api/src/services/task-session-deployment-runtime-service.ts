@@ -29,6 +29,7 @@ import {
 } from './task-creation-deployment-source-service';
 import {
   formatTaskSessionDeploymentLocalPreflightFailure,
+  isTaskSessionDeploymentLocalPreflightPlatformFailure,
   runTaskSessionDeploymentLocalPreflight,
 } from './task-session-deployment-local-preflight-service';
 import { platformDeploymentAccountService } from './platform-deployment-account-service';
@@ -1693,8 +1694,12 @@ export async function executeTaskSessionDeploymentAction(
           deploymentLocalPreflight: localPreflight,
         });
         if (localPreflight.status === 'failed') {
+          const failureMessage = formatTaskSessionDeploymentLocalPreflightFailure(localPreflight);
+          if (isTaskSessionDeploymentLocalPreflightPlatformFailure(localPreflight)) {
+            throw new Error(`deployment_platform_capability_not_ready:${failureMessage}`);
+          }
           throw new Error(
-            `deployment_preflight_not_ready:${formatTaskSessionDeploymentLocalPreflightFailure(localPreflight)}`
+            `deployment_preflight_not_ready:${failureMessage}`
           );
         }
       }

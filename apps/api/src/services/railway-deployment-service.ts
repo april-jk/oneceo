@@ -100,6 +100,7 @@ export type RailwayDeploymentProvisioningPhase =
 
 export type RailwayDeploymentProviderErrorCode =
   | 'deployment_preflight_not_ready'
+  | 'deployment_platform_capability_not_ready'
   | 'deployment_public_unreachable'
   | 'railway_project_not_found'
   | 'railway_environment_not_found'
@@ -198,6 +199,15 @@ export function classifyRailwayDeploymentError(message: string): {
       code: 'deployment_preflight_not_ready',
       bindingState: 'repair_required',
       userMessage: detail || '当前项目缺少稳定发布所需的部署基线，需先修复后再继续发布。',
+    };
+  }
+  if (message.startsWith('deployment_platform_capability_not_ready:')) {
+    const detail = asText(message.slice('deployment_platform_capability_not_ready:'.length));
+    return {
+      code: 'deployment_platform_capability_not_ready',
+      bindingState: 'provider_error',
+      userMessage:
+        detail || '部署预检依赖的沙箱浏览器能力当前不可用，需先修复平台运行环境后再继续发布。',
     };
   }
   const normalized = asText(message).toLowerCase();

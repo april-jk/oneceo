@@ -437,6 +437,8 @@ export function buildOfficialWebShellMaterializationGuidance() {
     '请直接在现有模板内完成用户需求，不要重新发明技术栈，也不要重写 build/start/healthcheck/analytics 契约。',
     '优先修改这些文件：`client/src/App.jsx`、`client/src/styles.css`、`server/index.ts`、`shared/`。',
     '首页主内容、用户要求的验收标识、hero、核心区块和浏览器交互必须写入 `client/src/App.jsx`；`client/src/main.jsx` 只负责挂载。',
+    '如果用户只是弱约束地要求生成官网/落地页/作品集/餐厅/工作室网站，走短路径：有限 todo，优先一次性填充 `client/src/App.jsx` 与 `client/src/styles.css`，不要额外安装依赖、启动本地服务或反复检查契约文件。',
+    '源码交付场景中，完成主要页面、样式、验收标识和一次宏观自检后即可 `complete_task`；平台部署链路会在后续验证 build/start/public runtime/analytics。',
     '保持这些契约不变：`package.json` 的 build/start、固定 Node Web Shell、`oneceo.manifest.json`、`client/index.html` 的 analytics hook、`/api/system/health`。',
   ].join('\n');
 }

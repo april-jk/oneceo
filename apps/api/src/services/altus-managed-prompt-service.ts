@@ -599,19 +599,43 @@ export class AltusManagedPromptService {
     const todoGateSection =
       includeRuntimeState && taskIntentProfile && !taskIntentProfile.needsClarification
         ? taskIntentProfile.todoRequired
-          ? [
-              '# Todo gate',
-              `- The current request requires a pre-execution todo snapshot (reason=${taskIntentProfile.todoReason}).`,
-              '- Call `todowrite` before the first execution step, then update it after each major step.',
-              '- While work is ongoing, `todowrite` must contain exactly one `in_progress` item.',
-              '',
-            ].join('\n')
+          ? taskIntentProfile.todoReason === 'deployable_web_app_blueprint'
+            ? [
+                '# Todo gate',
+                `- The current request requires a pre-execution todo snapshot (reason=${taskIntentProfile.todoReason}).`,
+                '- Call `todowrite` before the first execution step.',
+                '- For fixed-shell source-only web app delivery, keep todo updates sparse: one initial blueprint, one update after the focused implementation pass, and one final completed snapshot before `complete_task` are enough unless a real blocker appears.',
+                '- Do not call `todowrite` after every small file edit, visual tweak, or read-only check.',
+                '- While work is ongoing, `todowrite` must contain exactly one `in_progress` item.',
+                '',
+              ].join('\n')
+            : [
+                '# Todo gate',
+                `- The current request requires a pre-execution todo snapshot (reason=${taskIntentProfile.todoReason}).`,
+                '- Call `todowrite` before the first execution step, then update it after each major step.',
+                '- While work is ongoing, `todowrite` must contain exactly one `in_progress` item.',
+                '',
+              ].join('\n')
           : [
               '# Simple-task gate',
               '- The current request does not require a pre-execution todo snapshot.',
               '- Do not call `todowrite` just because the request sounds non-trivial; execute directly with the minimum correct tool path.',
               '',
             ].join('\n')
+        : '';
+    const webAppFastPathSection =
+      includeRuntimeState &&
+      taskIntentProfile?.mode === 'deployable_web_app' &&
+      !taskIntentProfile.needsClarification
+        ? [
+            '# OneCEO weak web app fast path',
+            '- [ONECEO_WEAK_WEBAPP_FAST_PATH_ANCHOR] If the user broadly asks to generate a website, landing page, studio site, restaurant site, portfolio, or company homepage without custom backend/integration requirements, use the shortest fixed-shell delivery path.',
+            '- Keep the blueprint todo finite and proportional. For a weakly specified marketing website, 4-6 concrete items are usually enough: page content in `client/src/App.jsx`, visual system in `client/src/styles.css`, one optional lightweight interaction if useful, acceptance marker, macro self-check, and completion.',
+            '- Do not spend extra rounds on stack discovery, dependency installation, build/start rewrites, local preview servers, browser automation, or repeated read-only file probes when the fixed shell is already materialized and the user only asked for source code.',
+            '- Fill the requested site in one focused implementation pass by editing `client/src/App.jsx` and `client/src/styles.css`. Leave `server/index.ts`, `package.json`, `vite.config.ts`, and `oneceo.manifest.json` unchanged unless the user explicitly needs backend behavior.',
+            '- After writing the files, perform one macro self-check against the todo and call `complete_task`. Do not keep polishing optional copy, alternate layouts, or unused files after the requested site structure and marker exist.',
+            '',
+          ].join('\n')
         : '';
 
     return [
@@ -713,6 +737,7 @@ export class AltusManagedPromptService {
       clarificationFocusSection,
       clarificationTransitionSection,
       todoGateSection,
+      webAppFastPathSection,
       '# OneCEO web app contract',
       '- [ONECEO_FIXED_SHELL_ANCHOR] The fixed OneCEO web shell is the deployment contract. Do not replace its runtime family, start command, or directory ownership during ordinary website generation.',
       '- When the user asks for a website, web app, dashboard, admin panel, SaaS UI, landing page with working product flow, or other deployable browser product, you must build it as a OneCEO deployable web app instead of an ad-hoc static artifact.',

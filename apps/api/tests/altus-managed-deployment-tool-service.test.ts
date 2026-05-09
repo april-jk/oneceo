@@ -12,6 +12,8 @@ function createReadyBaseline() {
     manifestGenerated: false,
     manifestPath: '/tmp/workspace/oneceo.manifest.json',
     templateVersion: '1.0.0',
+    appType: 'web_app' as const,
+    stack: 'oneceo_fixed_vite_node_shell',
     buildCommand: 'pnpm build',
     startCommand: 'node dist/index.js',
     healthcheckPath: '/api/system/health',
@@ -593,6 +595,38 @@ test('deploy_application returns deployment_failed when public reachability vali
   assert.equal(result.repair?.category, 'deployment_failed');
   assert.match(result.summary, /公网访问验证失败/);
   assert.match(result.debug?.rawError || '', /Application not found/);
+});
+
+test('deploy_application returns local_preflight repair when sandbox validation fails before Railway', async () => {
+  const service = new AltusManagedDeploymentToolService({
+    inspectBaseline: async () => createReadyBaseline(),
+    resolveSession: async () => ({
+      id: 'session-1',
+      messages: [],
+    } as any),
+    buildDeploymentResponse: async () => {
+      throw new Error('should_not_build_response');
+    },
+    executeDeploymentAction: async () => {
+      throw new Error(
+        'deployment_preflight_not_ready:本地运行验收未通过，已停止 Railway 发布。\nphase=build\nbuildLog=Unexpected token in App.jsx'
+      );
+    },
+    getErrorMessage: (error) => String((error as Error)?.message || error),
+  });
+
+  const result = await service.execute({
+    action: 'deploy_application',
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+  });
+
+  assert.equal(result.status, 'retryable_repair_required');
+  assert.equal(result.phase, 'repair_required');
+  assert.equal(result.repair?.category, 'local_preflight');
+  assert.match(result.debug?.rawError || '', /Unexpected token in App\.jsx/);
 });
 
 test('deploy_application returns fatal_error when provider error remains after ready baseline', async () => {

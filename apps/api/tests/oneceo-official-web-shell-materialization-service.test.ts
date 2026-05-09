@@ -162,5 +162,7 @@ test('buildOfficialWebShellMaterializationGuidance tells Altus to edit within th
   assert.match(guidance, /不要重新发明技术栈/);
   assert.match(guidance, /client\/src\/App\.jsx/);
   assert.match(guidance, /验收标识/);
+  assert.match(guidance, /弱约束地要求生成官网\/落地页\/作品集\/餐厅\/工作室网站/);
+  assert.match(guidance, /不要额外安装依赖、启动本地服务或反复检查契约文件/);
   assert.match(guidance, /build\/start\/healthcheck\/analytics/);
 });

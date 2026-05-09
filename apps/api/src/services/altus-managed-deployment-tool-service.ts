@@ -3,6 +3,7 @@ import {
   buildTaskSessionDeploymentResponse,
   executeTaskSessionDeploymentAction,
   getTaskSessionDeploymentErrorMessage,
+  resolvePreferredPanelPublicUrl,
   resolveTaskSessionRecord,
 } from './task-session-deployment-runtime-service';
 import {
@@ -364,7 +365,7 @@ function buildPendingResult(
   }
 ): AltusManagedDeploymentToolResult {
   const deploymentStatus = asText(panel.latestStatus);
-  const url = asText(panel.latestStaticUrl || panel.latestUrl);
+  const url = resolvePreferredPanelPublicUrl(panel);
   const bindingState = asText(panel.bindingState);
   const waitingForPublicReadiness = bindingState === 'public_settling';
   return {
@@ -446,7 +447,7 @@ function buildDeploymentFailedRepairResult(
   }
 ): AltusManagedDeploymentToolResult {
   const deploymentStatus = asText(panel.latestStatus) || 'unknown';
-  const url = asText(panel.latestStaticUrl || panel.latestUrl);
+  const url = resolvePreferredPanelPublicUrl(panel);
   const checks = [
     deploymentStatus,
     asText(panel.bindingState),
@@ -541,7 +542,7 @@ function buildSuccessResult(input: {
   deploymentFlow?: DeploymentFlowSnapshot;
 }): AltusManagedDeploymentToolResult {
   const deploymentStatus = asText(input.panel.latestStatus);
-  const url = asText(input.panel.latestStaticUrl || input.panel.latestUrl);
+  const url = resolvePreferredPanelPublicUrl(input.panel);
   const deploymentId = asText(input.panel.deploymentId);
 
   if (input.action === 'get_application_deployment_status') {
@@ -749,7 +750,7 @@ export class AltusManagedDeploymentToolService {
           deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
             type: 'PROVIDER_STATUS',
             status: asText(panel.latestStatus) || 'pending',
-            url: asText(panel.latestStaticUrl || panel.latestUrl) || undefined,
+            url: resolvePreferredPanelPublicUrl(panel) || undefined,
           });
           return buildPendingResult(input.action, panel, { projectProfile, deploymentFlow });
         }
@@ -757,14 +758,14 @@ export class AltusManagedDeploymentToolService {
           deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
             type: 'PROVIDER_STATUS',
             status: asText(panel.latestStatus) || 'FAILED',
-            url: asText(panel.latestStaticUrl || panel.latestUrl) || undefined,
+            url: resolvePreferredPanelPublicUrl(panel) || undefined,
           });
           return buildDeploymentFailedRepairResult(input.action, panel, { projectProfile, deploymentFlow });
         }
         deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
           type: 'PUBLIC_ACCESS_VERIFIED',
           statusCode: 200,
-          url: asText(panel.latestStaticUrl || panel.latestUrl) || '',
+          url: resolvePreferredPanelPublicUrl(panel) || '',
         });
         return buildSuccessResult({
           action: input.action,
@@ -903,7 +904,7 @@ export class AltusManagedDeploymentToolService {
         deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
           type: 'PROVIDER_STATUS',
           status: asText(result.panel.latestStatus) || 'pending',
-          url: asText(result.panel.latestStaticUrl || result.panel.latestUrl) || undefined,
+          url: resolvePreferredPanelPublicUrl(result.panel) || undefined,
         });
         return buildPendingResult(input.action, result.panel, { projectProfile, deploymentFlow });
       }
@@ -911,14 +912,14 @@ export class AltusManagedDeploymentToolService {
         deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
           type: 'PROVIDER_STATUS',
           status: asText(result.panel.latestStatus) || 'FAILED',
-          url: asText(result.panel.latestStaticUrl || result.panel.latestUrl) || undefined,
+          url: resolvePreferredPanelPublicUrl(result.panel) || undefined,
         });
         return buildDeploymentFailedRepairResult(input.action, result.panel, { projectProfile, deploymentFlow });
       }
       deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
         type: 'PUBLIC_ACCESS_VERIFIED',
         statusCode: 200,
-        url: asText(result.panel.latestStaticUrl || result.panel.latestUrl) || '',
+        url: resolvePreferredPanelPublicUrl(result.panel) || '',
       });
       return buildSuccessResult({
         action: input.action,

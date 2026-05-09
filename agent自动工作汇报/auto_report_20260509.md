@@ -218,6 +218,29 @@
   - `shared/`
   固定模板壳结构
 
+---
+
+## 2026-05-09 部署链路继续修复补记
+
+### 做了什么
+
+1. 继续检查部署功能当前未提交改动，确认本轮核心在：
+   - 用户态部署 URL 选择统一到 `publicUrl/publicDomain`
+   - `deployment-main-chain.e2e.ts` 支持聊天触发部署与更宽松的 analytics 收敛验证
+2. 补齐 `task-session-deployment-runtime-service.ts`、`altus-managed-deployment-tool-service.ts` 中仍然只认 `latestStaticUrl/latestUrl` 的出口，统一复用同一套优先级。
+3. 调整 E2E 收敛条件：当部署面板进入 `public_settling` 且已经返回可探测公网地址时，继续执行公网探测，而不是卡在“面板尚未 fully ready”的超时分支。
+4. 同步更新部署 skill 文档与部署链路验收手册，补充聊天触发部署与 `public_settling` 回归约束。
+
+### 遇到什么
+
+- 当前仓库部署文档里同时存在“用户态优先 `publicUrl`”与“固定模板阶段优先 provider URL”两类表述，历史语义有叠层。
+- 现状代码已经在用户态面板里引入 `publicUrl/publicDomain`，但部分状态文案、Altus 工具结果和 E2E 条件还停留在旧选择逻辑，导致链路表现不一致。
+
+### 计划如何解决
+
+1. 先用聚焦测试验证这次 URL 收口与 `public_settling` E2E 条件调整没有回归。
+2. 如果测试通过，再根据结果决定是否继续清理剩余 provider/public URL 语义分层文档，避免后续开发再次混用。
+
 这说明：
 
 - 新增的蓝图型 todo 约束，对弱约束任务还没有形成足够强的“模板壳牵引力”。

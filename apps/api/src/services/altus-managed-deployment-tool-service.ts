@@ -34,6 +34,7 @@ export type AltusManagedDeploymentToolName = (typeof ALTUS_MANAGED_DEPLOYMENT_TO
 type RepairCategory =
   | 'workspace_missing'
   | 'template_compliance'
+  | 'local_preflight'
   | 'deployment_configuration'
   | 'resource_binding'
   | 'deployment_pending'
@@ -306,6 +307,41 @@ function buildResourceBindingRepairResult(
       suggestedActions: [
         '优先修复 Railway 部署资源绑定，不要继续修改工作区模板或本地启动脚本',
         '修复完成后直接再次调用部署工具，重新校验部署状态',
+      ],
+    },
+    baseline: baseline || undefined,
+    projectProfile: extra?.projectProfile,
+    deploymentFlow: extra?.deploymentFlow,
+    debug: {
+      rawError,
+      baselineStatus: baseline?.status,
+      baselineErrors: baseline?.errors,
+    },
+  };
+}
+
+function buildLocalPreflightRepairResult(
+  action: AltusManagedDeploymentToolName,
+  rawError: string,
+  baseline?: DeploymentTemplateBaselineData | null,
+  extra?: {
+    projectProfile?: TaskSessionProjectProfile;
+    deploymentFlow?: DeploymentFlowSnapshot;
+  }
+): AltusManagedDeploymentToolResult {
+  return {
+    action,
+    phase: 'repair_required',
+    status: 'retryable_repair_required',
+    summary:
+      '当前项目在 sandbox 本地运行验收未通过，已停止 Railway 发布。Altus 需要先修复构建、启动或浏览器运行错误后再重新发布。',
+    repair: {
+      category: 'local_preflight',
+      checks: ['local_build_start_or_browser_smoke_failed'],
+      suggestedActions: [
+        '根据本地预检日志修复 build/start/healthcheck 或浏览器运行错误',
+        '修复后重新调用 deploy_application，让平台再次执行本地验收',
+        '本地验收通过前不要继续推送 Railway 部署',
       ],
     },
     baseline: baseline || undefined,
@@ -911,6 +947,17 @@ export class AltusManagedDeploymentToolService {
         });
       }
       const classified = classifyRailwayDeploymentError(rawError);
+      if (classified.code === 'deployment_preflight_not_ready') {
+        deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
+          type: 'REPAIR_REQUIRED',
+          category: 'local_preflight',
+          checks: ['local_build_start_or_browser_smoke_failed'],
+        });
+        return buildLocalPreflightRepairResult(input.action, rawError, latestBaseline, {
+          projectProfile,
+          deploymentFlow,
+        });
+      }
       if (classified.bindingState === 'repair_required') {
         deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
           type: 'REPAIR_REQUIRED',

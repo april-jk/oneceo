@@ -27,6 +27,10 @@ import {
   type DeploymentTemplateBaselineData,
   type DeploymentWorkspacePublishReport,
 } from './task-creation-deployment-source-service';
+import {
+  formatTaskSessionDeploymentLocalPreflightFailure,
+  runTaskSessionDeploymentLocalPreflight,
+} from './task-session-deployment-local-preflight-service';
 import { platformDeploymentAccountService } from './platform-deployment-account-service';
 import { setSandboxMetadata } from './sandbox-activity-service';
 import {
@@ -81,6 +85,7 @@ let deploymentSyncTimer: NodeJS.Timeout | null = null;
 let deploymentSyncRunning = false;
 const deploymentSyncRunningSessions = new Set<string>();
 const terminalSuccessDeploymentStatuses = new Set(['SUCCESS', 'DEPLOYED', 'ACTIVE']);
+const terminalFailureDeploymentStatuses = new Set(['FAILED', 'CRASHED', 'REMOVED']);
 const PUBLIC_REACHABILITY_SETTLING_TIMEOUT_MS = Math.max(
   60_000,
   Number(process.env.TASK_SESSION_DEPLOYMENT_PUBLIC_SETTLING_TIMEOUT_MS || 180_000)
@@ -1015,6 +1020,23 @@ function buildTaskSessionPublicReachabilityFailurePanel(
   };
 }
 
+function buildTaskSessionDeploymentProviderFailurePanel(
+  panel: RailwayDeploymentPanelData,
+  message: string
+): RailwayDeploymentPanelData {
+  return {
+    ...panel,
+    bindingState: 'repair_required',
+    provisioningPhase: 'deployment_trigger',
+    providerErrorCode: 'deployment_provider_error',
+    providerErrorMessage: message,
+    message,
+    lastVerifiedAt: new Date().toISOString(),
+    activeDeploymentPending: false,
+    publicReachabilityStartedAt: undefined,
+  };
+}
+
 function promoteTaskSessionSuccessfulLiveDeployment(
   panel: RailwayDeploymentPanelData
 ): RailwayDeploymentPanelData {
@@ -1052,6 +1074,12 @@ export async function validateTaskSessionDeploymentPublicReadiness(input: {
     asText(input.panel.latestUrl) ||
     asText(input.panel.domains[0]);
   const latestStatus = asText(input.panel.latestStatus).toUpperCase();
+  if (terminalFailureDeploymentStatuses.has(latestStatus)) {
+    return buildTaskSessionDeploymentProviderFailurePanel(
+      input.panel,
+      `部署平台返回失败状态：${latestStatus}。请检查构建日志或重新发布。`
+    );
+  }
   const domainStatus = asText(input.panel.domainStatus).toLowerCase();
   const publicDomainStillActivating =
     domainStatus === 'pending_dns' || domainStatus === 'pending_certificate';
@@ -1646,6 +1674,21 @@ export async function executeTaskSessionDeploymentAction(
             baseline.errors.join('；') || '当前项目缺少稳定发布所需的部署基线'
           }`
         );
+      }
+      if (input.action === 'deploy' || shouldRecycleFailedRedeploy) {
+        const localPreflight = await runTaskSessionDeploymentLocalPreflight({
+          orchestratorSessionId,
+          workspaceRoot,
+          baseline,
+        });
+        await setSandboxMetadata(orchestratorSessionId, {
+          deploymentLocalPreflight: localPreflight,
+        });
+        if (localPreflight.status === 'failed') {
+          throw new Error(
+            `deployment_preflight_not_ready:${formatTaskSessionDeploymentLocalPreflightFailure(localPreflight)}`
+          );
+        }
       }
     }
     account = shouldRecycleFailedRedeploy

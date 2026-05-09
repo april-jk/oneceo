@@ -697,6 +697,8 @@ export type DeploymentTemplateBaselineData = {
   manifestGenerated: boolean;
   manifestPath?: string;
   templateVersion?: string;
+  appType?: OneCeoDeploymentManifest['appType'];
+  stack?: OneCeoDeploymentManifest['stack'];
   buildCommand?: string;
   startCommand?: string;
   healthcheckPath?: string;
@@ -762,6 +764,8 @@ export function buildDeploymentTemplateBaseline(input: {
     manifestGenerated: Boolean(compliance?.generatedManifest),
     manifestPath: compliance?.manifestPath,
     templateVersion: compliance?.manifest.templateVersion,
+    appType: compliance?.manifest.appType,
+    stack: compliance?.manifest.stack,
     buildCommand: compliance?.manifest.build.command,
     startCommand: compliance?.manifest.start.command,
     healthcheckPath: compliance?.manifest.healthcheck.path,

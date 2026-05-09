@@ -127,6 +127,16 @@ test('classifyRailwayDeploymentError returns repairable classification for repo 
   assert.equal(result.bindingState, 'repair_required');
 });
 
+test('classifyRailwayDeploymentError returns provider_error classification for sandbox capability failures', () => {
+  const result = classifyRailwayDeploymentError(
+    'deployment_platform_capability_not_ready:Playwright smoke test failed because sandbox Playwright capability is unavailable before Railway deployment.'
+  );
+
+  assert.equal(result.code, 'deployment_platform_capability_not_ready');
+  assert.equal(result.bindingState, 'provider_error');
+  assert.match(result.userMessage, /Playwright capability is unavailable/i);
+});
+
 test('resolveRailwayPanelPublicUrls uses provider URL while custom domain certificate is pending', () => {
   const result = resolveRailwayPanelPublicUrls({
     publicDomain: 'app-demo.oneceo.space',

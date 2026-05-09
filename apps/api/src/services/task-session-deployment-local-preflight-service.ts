@@ -12,6 +12,7 @@ export type TaskSessionDeploymentLocalPreflightPhase =
 export type TaskSessionDeploymentLocalPreflightReport = {
   status: 'passed' | 'failed' | 'skipped';
   phase: TaskSessionDeploymentLocalPreflightPhase;
+  failureKind?: 'workspace_code' | 'platform_capability';
   checkedAt: string;
   workspaceRoot: string;
   buildCommand?: string;
@@ -154,8 +155,8 @@ function buildPreflightScript(input: {
     '}',
     'trap cleanup EXIT',
     'write_report() {',
-    '  status="$1"; phase="$2"; message="$3"; browser_mode="$4"',
-    '  STATUS="$status" PHASE="$phase" MESSAGE="$message" BROWSER_MODE="$browser_mode" \\',
+    '  status="$1"; phase="$2"; message="$3"; browser_mode="$4"; failure_kind="$5"',
+    '  STATUS="$status" PHASE="$phase" MESSAGE="$message" BROWSER_MODE="$browser_mode" FAILURE_KIND="$failure_kind" \\',
     '  BUILD_COMMAND="$build_command" START_COMMAND="$start_command" HEALTH_PATH="$health_path" \\',
     '  PORT_VALUE="$port" ROOT_URL="$root_url" HEALTH_URL="$health_url" SCREENSHOT_PATH="$screenshot_path" \\',
     '  INSTALL_LOG="$install_log" BUILD_LOG="$build_log" SERVER_LOG="$server_log" BROWSER_LOG="$browser_log" \\',
@@ -172,6 +173,7 @@ function buildPreflightScript(input: {
     'const report = {',
     '  status: process.env.STATUS,',
     '  phase: process.env.PHASE,',
+    '  failureKind: process.env.FAILURE_KIND || undefined,',
     '  checkedAt: new Date().toISOString(),',
     '  buildCommand: process.env.BUILD_COMMAND || undefined,',
     '  startCommand: process.env.START_COMMAND || undefined,',
@@ -206,22 +208,22 @@ function buildPreflightScript(input: {
     '  fi',
     '  install_status=$?',
     '  if [ "$install_status" -ne 0 ]; then',
-    '    write_report failed dependency_install "Dependency install failed before local deployment preflight." ""',
+    '    write_report failed dependency_install "Dependency install failed before local deployment preflight." "" workspace_code',
     '    exit 0',
     '  fi',
     'fi',
-    'sh -lc "$build_command" > "$build_log" 2>&1',
+    'bash -lc "$build_command" > "$build_log" 2>&1',
     'build_status=$?',
     'if [ "$build_status" -ne 0 ]; then',
-    '  write_report failed build "Build command failed before Railway deployment." ""',
+    '  write_report failed build "Build command failed before Railway deployment." "" workspace_code',
     '  exit 0',
     'fi',
-    'env PORT="$port" sh -lc "$start_command" > "$server_log" 2>&1 &',
+    'env PORT="$port" bash -lc "$start_command" > "$server_log" 2>&1 &',
     'server_pid=$!',
     'echo "$server_pid" > "$pid_path"',
     'sleep 1',
     'if ! kill -0 "$server_pid" >/dev/null 2>&1; then',
-    '  write_report failed start "Start command exited before the local healthcheck became reachable." ""',
+    '  write_report failed start "Start command exited before the local healthcheck became reachable." "" workspace_code',
     '  exit 0',
     'fi',
     'health_ok=0',
@@ -231,7 +233,7 @@ function buildPreflightScript(input: {
     '  sleep 1',
     'done',
     'if [ "$health_ok" -ne 1 ]; then',
-    '  write_report failed healthcheck "Local service did not pass the manifest healthcheck before deployment." ""',
+    '  write_report failed healthcheck "Local service did not pass the manifest healthcheck before deployment." "" workspace_code',
     '  exit 0',
     'fi',
     'cat > "$browser_script" <<\'NODE\'',
@@ -242,8 +244,22 @@ function buildPreflightScript(input: {
     '  return /favicon|analytics|umami|failed to load resource.*404/i.test(String(text || ""));',
     '}',
     '(async () => {',
-    '  const { chromium } = require("playwright");',
-    '  const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] });',
+    '  let chromium;',
+    '  try {',
+    '    ({ chromium } = require("playwright"));',
+    '  } catch (error) {',
+    '    throw new Error("__ONECEO_PLATFORM_CAPABILITY__MODULE__:" + (error && error.stack ? error.stack : String(error)));',
+    '  }',
+    '  let browser;',
+    '  try {',
+    '    browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] });',
+    '  } catch (error) {',
+    '    const text = error && error.stack ? error.stack : String(error);',
+    "    if (/Executable doesn't exist|Looks like Playwright was just installed|browser.*not installed/i.test(text)) {",
+    '      throw new Error("__ONECEO_PLATFORM_CAPABILITY__BROWSER__:" + text);',
+    '    }',
+    '    throw error;',
+    '  }',
     '  const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });',
     '  const pageErrors = [];',
     '  const consoleErrors = [];',
@@ -268,21 +284,29 @@ function buildPreflightScript(input: {
     '  process.exit(1);',
     '});',
     'NODE',
+    'playwright_node_path="$(npm root -g 2>/dev/null || true)"',
+    'playwright_node_path="${playwright_node_path:-/usr/lib/node_modules}"',
+    'PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/opt/ms-playwright}" \\',
+    'NODE_PATH="$playwright_node_path${NODE_PATH:+:$NODE_PATH}" \\',
     'ONECEO_PREFLIGHT_ROOT_URL="$root_url" ONECEO_PREFLIGHT_SCREENSHOT_PATH="$screenshot_path" node "$browser_script" > "$browser_log" 2>&1',
     'browser_status=$?',
     'if [ "$browser_status" -eq 0 ]; then',
-    '  write_report passed browser_smoke "Local build, start, healthcheck, and Playwright smoke passed." playwright_node',
+    '  write_report passed browser_smoke "Local build, start, healthcheck, and Playwright smoke passed." playwright_node ""',
     '  exit 0',
     'fi',
     'if command -v playwright >/dev/null 2>&1; then',
-    '  playwright screenshot --timeout=15000 "$root_url" "$screenshot_path" >> "$browser_log" 2>&1',
+    '  PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/opt/ms-playwright}" playwright screenshot --timeout=15000 "$root_url" "$screenshot_path" >> "$browser_log" 2>&1',
     '  cli_status=$?',
     '  if [ "$cli_status" -eq 0 ]; then',
-    '    write_report passed browser_smoke "Local build, start, healthcheck, and Playwright CLI smoke passed." playwright_cli',
+    '    write_report passed browser_smoke "Local build, start, healthcheck, and Playwright CLI smoke passed." playwright_cli ""',
     '    exit 0',
     '  fi',
     'fi',
-    'write_report failed browser_smoke "Playwright smoke test failed before Railway deployment." playwright_node',
+    'if grep -E "__ONECEO_PLATFORM_CAPABILITY__|Cannot find module .playwright.|Executable doesn.t exist|Looks like Playwright was just installed|chromium executable missing|chromium browser not installed|browsers path missing" "$browser_log" >/dev/null 2>&1; then',
+    '  write_report failed browser_smoke "Playwright smoke test failed because sandbox Playwright capability is unavailable before Railway deployment." playwright_node platform_capability',
+    '  exit 0',
+    'fi',
+    'write_report failed browser_smoke "Playwright smoke test failed before Railway deployment." playwright_node workspace_code',
     'exit 0',
   ].join('\n');
 }
@@ -352,6 +376,24 @@ export async function runTaskSessionDeploymentLocalPreflight(input: {
       message: `Local deployment preflight command failed: ${message}`,
     };
   }
+}
+
+export function isTaskSessionDeploymentLocalPreflightPlatformFailure(
+  report: Pick<TaskSessionDeploymentLocalPreflightReport, 'failureKind' | 'browserOutput' | 'message'>
+) {
+  if (report.failureKind === 'platform_capability') {
+    return true;
+  }
+  const text = [report.message, report.browserOutput].map((item) => asText(item)).filter(Boolean).join('\n');
+  return (
+    text.includes('__ONECEO_PLATFORM_CAPABILITY__') ||
+    /Cannot find module ['"]playwright['"]/i.test(text) ||
+    /Executable doesn't exist/i.test(text) ||
+    /Looks like Playwright was just installed/i.test(text) ||
+    /chromium executable missing/i.test(text) ||
+    /chromium browser not installed/i.test(text) ||
+    /browsers path missing/i.test(text)
+  );
 }
 
 export function formatTaskSessionDeploymentLocalPreflightFailure(

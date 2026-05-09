@@ -36,6 +36,7 @@ type RepairCategory =
   | 'workspace_missing'
   | 'template_compliance'
   | 'local_preflight'
+  | 'platform_capability'
   | 'deployment_configuration'
   | 'resource_binding'
   | 'deployment_pending'
@@ -156,8 +157,7 @@ function shouldRequireOfficialFrontendTemplate(
     return false;
   }
   return (
-    profile.artifactType === 'web_app' &&
-    profile.runtimeFamily === 'frontend_dist' &&
+    (profile.artifactType === 'web_app' || profile.artifactType === 'static_site') &&
     profile.templateFamily !== 'oneceo_official_vite_node_shell'
   );
 }
@@ -340,9 +340,44 @@ function buildLocalPreflightRepairResult(
       category: 'local_preflight',
       checks: ['local_build_start_or_browser_smoke_failed'],
       suggestedActions: [
-        '根据本地预检日志修复 build/start/healthcheck 或浏览器运行错误',
+        '根据本地预检日志修复工作区里的 build/start/healthcheck 或页面运行错误，不要擅自切换固定模板运行时',
         '修复后重新调用 deploy_application，让平台再次执行本地验收',
         '本地验收通过前不要继续推送 Railway 部署',
+      ],
+    },
+    baseline: baseline || undefined,
+    projectProfile: extra?.projectProfile,
+    deploymentFlow: extra?.deploymentFlow,
+    debug: {
+      rawError,
+      baselineStatus: baseline?.status,
+      baselineErrors: baseline?.errors,
+    },
+  };
+}
+
+function buildPlatformCapabilityRepairResult(
+  action: AltusManagedDeploymentToolName,
+  rawError: string,
+  baseline?: DeploymentTemplateBaselineData | null,
+  extra?: {
+    projectProfile?: TaskSessionProjectProfile;
+    deploymentFlow?: DeploymentFlowSnapshot;
+  }
+): AltusManagedDeploymentToolResult {
+  return {
+    action,
+    phase: 'repair_required',
+    status: 'retryable_repair_required',
+    summary:
+      '当前部署被平台预检环境阻断，问题出在沙箱 Playwright/浏览器能力，而不是工作区源码。请先修复平台能力后再重新发布。',
+    repair: {
+      category: 'platform_capability',
+      checks: ['sandbox_playwright_unavailable'],
+      suggestedActions: [
+        '不要继续修改工作区源码、package.json、manifest 或固定模板契约文件',
+        '先修复沙箱 Playwright / 浏览器能力，再重新调用 deploy_application 或 redeploy_application',
+        '在平台能力恢复前，只允许汇报阻塞状态或重新查询部署状态，不要进入本地 build/start/browser 自修复循环',
       ],
     },
     baseline: baseline || undefined,
@@ -948,6 +983,16 @@ export class AltusManagedDeploymentToolService {
         });
       }
       const classified = classifyRailwayDeploymentError(rawError);
+      if (classified.code === 'deployment_platform_capability_not_ready') {
+        deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
+          type: 'TERMINAL_FAILURE',
+          reason: rawError,
+        });
+        return buildPlatformCapabilityRepairResult(input.action, rawError, latestBaseline, {
+          projectProfile,
+          deploymentFlow,
+        });
+      }
       if (classified.code === 'deployment_preflight_not_ready') {
         deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
           type: 'REPAIR_REQUIRED',

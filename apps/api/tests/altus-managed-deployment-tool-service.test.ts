@@ -79,6 +79,19 @@ function createOfficialTemplateProjectProfile() {
   };
 }
 
+function createLegacyStaticSiteProfile() {
+  return {
+    ...createReadyProjectProfile(),
+    artifactType: 'static_site' as const,
+    runtimeFamily: 'static' as const,
+    commands: {
+      build: 'npm run build',
+      start: 'node dist/index.js',
+    },
+    evidence: [{ source: 'file_scan' as const, message: 'detected runtimeFamily=static' }],
+  };
+}
+
 test('deploy_application returns repair_required when baseline is not ready', async () => {
   const service = new AltusManagedDeploymentToolService({
     inspectBaseline: async () => ({
@@ -240,6 +253,72 @@ test('deploy_application requires template repair when frontend_dist project is 
   assert.equal(result.repair?.category, 'template_compliance');
   assert.deepEqual(result.repair?.checks, ['non_official_frontend_template']);
   assert.match(result.summary, /官方固定模板壳/);
+});
+
+test('deploy_application requires template repair when static site project is not on the official shell main lane', async () => {
+  let executed = false;
+  const service = new AltusManagedDeploymentToolService({
+    inspectBaseline: async () => createReadyBaseline(),
+    inspectProjectProfile: async () => createLegacyStaticSiteProfile(),
+    resolveSession: async () => ({
+      id: 'session-1',
+      messages: [],
+    } as any),
+    buildDeploymentResponse: async () => {
+      throw new Error('should_not_build_response');
+    },
+    executeDeploymentAction: async () => {
+      executed = true;
+      throw new Error('should_not_execute_action');
+    },
+    getErrorMessage: (error) => String((error as Error)?.message || error),
+  });
+
+  const result = await service.execute({
+    action: 'deploy_application',
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+  });
+
+  assert.equal(executed, false);
+  assert.equal(result.status, 'retryable_repair_required');
+  assert.equal(result.repair?.category, 'template_compliance');
+  assert.deepEqual(result.repair?.checks, ['non_official_frontend_template']);
+});
+
+test('deploy_application surfaces platform capability failures without asking Altus to repair workspace code', async () => {
+  const service = new AltusManagedDeploymentToolService({
+    inspectBaseline: async () => createReadyBaseline(),
+    inspectProjectProfile: async () => createOfficialTemplateProjectProfile(),
+    resolveSession: async () => ({
+      id: 'session-1',
+      messages: [],
+    } as any),
+    buildDeploymentResponse: async () => {
+      throw new Error('should_not_build_response');
+    },
+    executeDeploymentAction: async () => {
+      throw new Error(
+        "deployment_platform_capability_not_ready:Playwright smoke test failed because sandbox Playwright capability is unavailable before Railway deployment.\nError: Cannot find module 'playwright'"
+      );
+    },
+    getErrorMessage: (error) => String((error as Error)?.message || error),
+  });
+
+  const result = await service.execute({
+    action: 'deploy_application',
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+  });
+
+  assert.equal(result.status, 'retryable_repair_required');
+  assert.equal(result.repair?.category, 'platform_capability');
+  assert.deepEqual(result.repair?.checks, ['sandbox_playwright_unavailable']);
+  assert.match(result.summary, /平台预检环境阻断/);
 });
 
 test('deploy_application does not require database when session has no explicit declaration', async () => {

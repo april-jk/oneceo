@@ -133,6 +133,8 @@ export const PLATFORM_SKILL_SEEDS: PlatformSkillSeed[] = [
       '',
       '## repair_required 处理',
       '- 若 `repair.category=template_compliance`、`deployment_configuration` 或 `workspace_missing`，允许回到 workspace 修复文件后再重试部署。',
+      '- 若 `repair.category=local_preflight`，只修复已经被日志证实的工作区 build/start/healthcheck/页面错误；不要擅自切换固定模板 runtime，也不要安装 Playwright 到用户项目。',
+      '- 若 `repair.category=platform_capability`，不要继续修改工作区源码或契约文件；这是平台预检能力阻塞，应等待平台能力恢复后再重试部署。',
       '- 若 `repair.category=deployment_failed`，根据部署状态、日志和公网访问结果修复启动命令、端口、健康检查或入口文件后再重试部署。',
       '- 若 `repair.category=resource_binding`，不要继续改本地模板；应优先继续修复平台资源绑定，再重试部署。',
       '- 不要把本地 `debug_open_page` 成功误判为线上发布成功。',

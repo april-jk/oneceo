@@ -229,6 +229,16 @@ deployment skill 的资源建议固定出一个清晰骨架：
 
 这样做的目的，是保证“部署 skill 自动挂载”与“部署结果对外可验证”两条链路一起被验证，而不是只测到半截。
 
+## 11.1 平台能力失败分流补充（2026-05-10）
+
+deployment skill 需要新增一条明确治理规则：
+
+1. 当部署工具返回 `repair.category=platform_capability` 时，表示失败点位于平台预检环境，而不是工作区源码
+2. 命中该类别后，deployment skill 不得继续引导 Altus 修改 `package.json`、`oneceo.manifest.json`、`vite.config.ts`、固定 healthcheck 壳或安装 Playwright 依赖
+3. deployment skill 只能汇报平台阻塞、等待平台能力恢复，或在恢复后重新触发部署工具
+
+这条规则的目的，是把“强模板策略”真正延伸到部署修复阶段，避免平台基础设施错误再次被误路由成工作区代码修复。
+
 在平台 skill 数据层或 service 聚合层补齐：
 
 1. `systemRole`

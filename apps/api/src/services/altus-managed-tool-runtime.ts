@@ -1360,10 +1360,9 @@ export class AltusManagedToolRuntime {
           ].join('\n')
         );
       }
-      if (
-        this.hasActiveSkill('deployment-orchestrator') &&
-        isLocalPreviewOrDevCommand(command)
-      ) {
+      const deploymentIntentActive =
+        this.hasActiveSkill('deployment-orchestrator') || this.input.taskIntentProfile?.deploymentAllowed === true;
+      if (deploymentIntentActive && isLocalPreviewOrDevCommand(command)) {
         throw new Error(
           'deployment_shell_preview_blocked:部署链路禁止使用本地 preview/dev 命令。请改用 deploy_application、redeploy_application 或 get_application_deployment_status，并依赖平台导出的标准 start/healthcheck 配置。'
         );

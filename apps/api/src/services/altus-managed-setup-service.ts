@@ -225,6 +225,7 @@ type TransitionResolvedProfileInput = {
   todoDecision: Pick<AltusManagedTaskIntentProfile, 'todoRequired' | 'todoReason'>;
   reduced: ClarificationReducerResult;
   currentText: string;
+  pendingQuestion?: string | null;
   texts: string[];
 };
 
@@ -641,6 +642,69 @@ function shouldUseClarificationTransitionAgent(input: {
   );
 }
 
+function isConfirmationLikeResponse(text: string) {
+  const normalized = normalizeText(text).replace(/[。．.!！?？\s]+/g, '');
+  return (
+    normalized === '确认' ||
+    normalized === '确认继续' ||
+    normalized === '确认部署' ||
+    normalized === '继续' ||
+    normalized === '继续部署' ||
+    normalized === '可以' ||
+    normalized === '可以继续' ||
+    normalized === '好的' ||
+    normalized === '好' ||
+    normalized === '是' ||
+    normalized === '是的' ||
+    normalized === 'yes' ||
+    normalized === 'ok' ||
+    normalized === 'okay'
+  );
+}
+
+function isDeploymentRiskConfirmationQuestion(question?: string | null) {
+  const normalized = normalizeText(question);
+  return normalized.includes('部署到生产环境') || normalized.includes('外部预览部署');
+}
+
+function resolveConfirmedDeploymentIntent(
+  input: Pick<TransitionResolvedProfileInput, 'baseProfile' | 'currentText' | 'pendingQuestion' | 'reduced' | 'texts'>
+): Pick<
+  AltusManagedTaskIntentProfile,
+  'deployRequested' | 'deploymentAllowed' | 'mode' | 'platformCapabilityIntent' | 'reason' | 'webArtifactRequested'
+> | null {
+  if (!input.reduced.accepted || input.reduced.nextState !== 'ready_to_execute') {
+    return null;
+  }
+  if (!isDeploymentRiskConfirmationQuestion(input.pendingQuestion)) {
+    return null;
+  }
+  if (!isConfirmationLikeResponse(input.currentText)) {
+    return null;
+  }
+  if (input.texts.length < 2) {
+    return null;
+  }
+
+  const historicalProfile = deriveManagedTaskIntentProfile(input.texts.slice(0, -1));
+  if (!historicalProfile.deploymentAllowed || historicalProfile.platformCapabilityIntent?.mode !== 'execute') {
+    return null;
+  }
+
+  return {
+    mode: historicalProfile.mode === 'neutral' ? 'deployable_web_app' : historicalProfile.mode,
+    reason:
+      historicalProfile.reason === 'latest_deployable_request' ||
+      historicalProfile.reason === 'historical_deployable_request'
+        ? historicalProfile.reason
+        : 'historical_deployable_request',
+    webArtifactRequested: historicalProfile.webArtifactRequested || input.baseProfile.webArtifactRequested,
+    deployRequested: true,
+    deploymentAllowed: true,
+    platformCapabilityIntent: historicalProfile.platformCapabilityIntent,
+  };
+}
+
 function buildProfileFromTransition(input: TransitionResolvedProfileInput): AltusManagedTaskIntentProfile {
   const fallbackQuestion = input.reduced.accepted
     ? ''
@@ -695,9 +759,16 @@ function buildProfileFromTransition(input: TransitionResolvedProfileInput): Altu
           }),
         })
       : input.todoDecision;
+  const confirmedDeploymentIntent = resolveConfirmedDeploymentIntent(input);
+  const resolvedBaseProfile = confirmedDeploymentIntent
+    ? {
+        ...effectiveBaseProfile,
+        ...confirmedDeploymentIntent,
+      }
+    : effectiveBaseProfile;
 
   return {
-    ...effectiveBaseProfile,
+    ...resolvedBaseProfile,
     ...effectiveTodoDecision,
     needsClarification: false,
     clarificationType: 'none',
@@ -1265,6 +1336,7 @@ export class AltusManagedSetupService {
     const currentText = asText(currentInput);
     const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId).catch(() => null);
     const pendingClarificationType = sessionMemory?.pendingClarificationType || null;
+    const pendingQuestion = sessionMemory?.pendingQuestion || null;
     if (currentText && isPlatformCapabilityAdvisoryText(currentText)) {
       const currentTexts = [currentText];
       const advisoryProfile = deriveManagedTaskIntentProfile(currentTexts);
@@ -1294,7 +1366,7 @@ export class AltusManagedSetupService {
       currentInput: currentText,
       currentMessageType: messageType,
       pendingClarificationType,
-      pendingQuestion: sessionMemory?.pendingQuestion || null,
+      pendingQuestion,
       pendingOptions: Array.isArray(sessionMemory?.pendingOptions) ? sessionMemory.pendingOptions : null,
       clarificationTranscriptLimit: 10,
       userTextLimit: 8,
@@ -1312,7 +1384,7 @@ export class AltusManagedSetupService {
           recentUserTexts: texts,
           recentMessages: recentTransitionMessages,
           pendingClarificationType,
-          pendingQuestion: sessionMemory?.pendingQuestion || null,
+          pendingQuestion,
           pendingOptions: Array.isArray(sessionMemory?.pendingOptions) ? sessionMemory.pendingOptions : null,
           shape,
         });
@@ -1321,7 +1393,7 @@ export class AltusManagedSetupService {
             {
               status: pendingClarificationType ? 'clarifying' : 'none',
               pendingClarificationType,
-              pendingQuestion: sessionMemory?.pendingQuestion || null,
+              pendingQuestion,
             },
             proposal
           );
@@ -1341,6 +1413,7 @@ export class AltusManagedSetupService {
               }),
               reduced,
               currentText,
+              pendingQuestion,
               texts,
             });
           }
@@ -1348,6 +1421,34 @@ export class AltusManagedSetupService {
       } catch (error) {
         console.warn('[altus] clarification transition agent failed; falling back to deterministic gate', error);
       }
+    }
+    if (
+      messageType === 'user_response' &&
+      pendingClarificationType &&
+      currentText &&
+      isDeploymentRiskConfirmationQuestion(pendingQuestion) &&
+      isConfirmationLikeResponse(currentText)
+    ) {
+      return buildProfileFromTransition({
+        baseProfile,
+        shape,
+        todoDecision: resolveTodoDecision(shape, {
+          deployableWebAppBlueprintRequired: shouldRequireDeployableWebAppBlueprint({
+            profile: baseProfile,
+            needsClarification: false,
+          }),
+        }),
+        reduced: {
+          accepted: true,
+          nextState: 'ready_to_execute',
+          clearedPending: true,
+          assumptions: [currentText],
+          reason: 'confirmed_pending_deployment_risk',
+        },
+        currentText,
+        pendingQuestion,
+        texts,
+      });
     }
     if (
       messageType === 'user_response' &&
@@ -1372,6 +1473,7 @@ export class AltusManagedSetupService {
           reason: 'answered_pending_clarification',
         },
         currentText,
+        pendingQuestion,
         texts,
       });
     }

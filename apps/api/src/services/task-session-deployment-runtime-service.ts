@@ -42,6 +42,26 @@ function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function toPublicHttpUrl(value: unknown): string {
+  const text = asText(value);
+  if (!text) return '';
+  if (/^https?:\/\//i.test(text)) return text;
+  if (/^[a-z0-9.-]+\.[a-z]{2,}(\/.*)?$/i.test(text)) return `https://${text}`;
+  return '';
+}
+
+export function resolvePreferredPanelPublicUrl(
+  panel: Pick<RailwayDeploymentPanelData, 'publicUrl' | 'publicDomain' | 'latestStaticUrl' | 'latestUrl' | 'domains'>
+): string {
+  const domains = Array.isArray(panel.domains) ? panel.domains : [];
+  const candidates = [panel.publicUrl, panel.publicDomain, panel.latestStaticUrl, panel.latestUrl, domains[0]];
+  for (const candidate of candidates) {
+    const url = toPublicHttpUrl(candidate);
+    if (url) return url;
+  }
+  return '';
+}
+
 function pickRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     return value as Record<string, unknown>;
@@ -687,10 +707,7 @@ async function readPublishedAnalyticsConfig(panel: RailwayDeploymentPanelData): 
   tag?: string;
   publicDomain?: string;
 } | null> {
-  const publicUrl =
-    asText(panel.latestStaticUrl) ||
-    asText(panel.latestUrl) ||
-    asText(panel.domains[0]);
+  const publicUrl = resolvePreferredPanelPublicUrl(panel);
   if (!publicUrl) {
     return null;
   }
@@ -729,7 +746,7 @@ async function reconcilePublishedAnalyticsMetadata(input: {
   }
   const currentAnalytics = pickRecord(input.metadata.analytics);
   const canonicalDomain = asText(input.panel.publicDomain) ||
-    asText(input.panel.latestStaticUrl || input.panel.latestUrl || input.panel.domains[0])
+    asText(input.panel.publicUrl || input.panel.latestStaticUrl || input.panel.latestUrl || input.panel.domains[0])
       .replace(/^https?:\/\//, '')
       .replace(/\/.*$/, '');
   const publishedDomain = asText(published?.publicDomain)
@@ -754,7 +771,7 @@ async function reconcilePublishedAnalyticsMetadata(input: {
       canonicalDomain ||
       publishedDomain ||
       asText(currentAnalytics.domain) ||
-      asText(input.panel.latestStaticUrl || input.panel.latestUrl || input.panel.domains[0])
+      asText(input.panel.publicUrl || input.panel.latestStaticUrl || input.panel.latestUrl || input.panel.domains[0])
         .replace(/^https?:\/\//, '')
         .replace(/\/.*$/, ''),
     updatedAt: new Date().toISOString(),
@@ -863,7 +880,7 @@ function shouldFollowupTaskSessionDeploymentSync(panel: RailwayDeploymentPanelDa
     panel.bindingState === 'provisioning' ||
     panel.bindingState === 'public_settling' ||
     (panel.analytics?.status === 'pending_domain' &&
-      Boolean(panel.latestStaticUrl || panel.latestUrl || panel.domains[0]))
+      Boolean(resolvePreferredPanelPublicUrl(panel)))
   );
 }
 
@@ -929,10 +946,7 @@ async function waitForTaskSessionPublicReachabilityAndRefresh(input: {
   session: FileSessionRecord | null;
   orchestratorSessionId: string;
 }) {
-  const publicUrl =
-    asText(input.panel.latestStaticUrl) ||
-    asText(input.panel.latestUrl) ||
-    asText(input.panel.domains[0]);
+  const publicUrl = resolvePreferredPanelPublicUrl(input.panel);
   const latestStatus = asText(input.panel.latestStatus).toUpperCase();
   const domainStatus = asText(input.panel.domainStatus).toLowerCase();
   const publicDomainStillActivating =
@@ -964,10 +978,7 @@ async function waitForTaskSessionPublicReachabilityAndRefresh(input: {
       selectedDeploymentId: input.panel.deploymentId,
       resolvedOrchestratorSessionId: input.orchestratorSessionId,
     }).catch(() => input.panel);
-    const refreshedUrl =
-      asText(refreshed.latestStaticUrl) ||
-      asText(refreshed.latestUrl) ||
-      asText(refreshed.domains[0]);
+    const refreshedUrl = resolvePreferredPanelPublicUrl(refreshed);
     const refreshedStatus = asText(refreshed.latestStatus).toUpperCase();
     const isStillPending =
       refreshed.activeDeploymentPending === true || asText(refreshed.bindingState) === 'provisioning';
@@ -1069,10 +1080,7 @@ export async function validateTaskSessionDeploymentPublicReadiness(input: {
   const probe =
     input.probe ||
     ((probeInput, probeOptions) => waitForRailwayDeploymentPublicReachability(probeInput, probeOptions));
-  const publicUrl =
-    asText(input.panel.latestStaticUrl) ||
-    asText(input.panel.latestUrl) ||
-    asText(input.panel.domains[0]);
+  const publicUrl = resolvePreferredPanelPublicUrl(input.panel);
   const latestStatus = asText(input.panel.latestStatus).toUpperCase();
   if (terminalFailureDeploymentStatuses.has(latestStatus)) {
     return buildTaskSessionDeploymentProviderFailurePanel(
@@ -1245,7 +1253,7 @@ export function formatTaskSessionDeploymentStatus(panel: RailwayDeploymentPanelD
   if (panel.latestStatus) {
     parts.push(`当前部署状态：${panel.latestStatus}`);
   }
-  const url = asText(panel.latestStaticUrl || panel.latestUrl);
+  const url = resolvePreferredPanelPublicUrl(panel);
   if (url) {
     parts.push(`访问地址：${url.replace(/^https?:\/\//, '')}`);
   }
@@ -1543,7 +1551,7 @@ export async function refreshTaskSessionDeploymentSnapshot(input: {
     resolvedOrchestratorSessionId: orchestratorSessionId,
   });
   const resourceBinding = panel.resourceBinding;
-  const hasPublicUrl = Boolean(asText(panel.latestStaticUrl) || asText(panel.latestUrl) || panel.domains[0]);
+  const hasPublicUrl = Boolean(resolvePreferredPanelPublicUrl(panel));
   const account = hasPublicUrl
     ? await platformDeploymentAccountService.getProjectAccount(
         input.userId,

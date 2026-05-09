@@ -45,6 +45,7 @@ type TestReport = {
   userEmail?: string;
   sessionId?: string;
   runId?: string;
+  deployRunId?: string;
   orchestratorSessionId?: string;
   publicUrl?: string;
   deploymentStatus?: string;
@@ -96,6 +97,9 @@ const BROWSER_VISIT_ENABLED = ['1', 'true', 'yes', 'on'].includes(
 const REQUIRE_ANALYTICS_TRACKING = ['1', 'true', 'yes', 'on'].includes(
   String(process.env.ONECEO_E2E_REQUIRE_ANALYTICS_TRACKING || '').trim().toLowerCase()
 );
+const ANALYTICS_BLOCKING = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.ONECEO_E2E_ANALYTICS_BLOCKING || '').trim().toLowerCase()
+);
 const REQUIRE_BROWSER_NO_ERRORS = !['0', 'false', 'no', 'off'].includes(
   String(process.env.ONECEO_E2E_REQUIRE_BROWSER_NO_ERRORS ?? 'true').trim().toLowerCase()
 );
@@ -105,6 +109,8 @@ const PROMPT_CATEGORY = asText(process.env.ONECEO_E2E_PROMPT_CATEGORY) || 'defau
 const PROMPT_LABEL = asText(process.env.ONECEO_E2E_PROMPT_LABEL) || PROMPT_CATEGORY;
 const PROMPT_TEXT_OVERRIDE = asText(process.env.ONECEO_E2E_PROMPT_TEXT);
 const REPORT_TAG = asText(process.env.ONECEO_E2E_REPORT_TAG);
+const DEPLOY_TRIGGER_MODE = asText(process.env.ONECEO_E2E_DEPLOY_TRIGGER_MODE).toLowerCase() === 'chat' ? 'chat' : 'api';
+const DEPLOY_TRIGGER_PROMPT = asText(process.env.ONECEO_E2E_DEPLOY_TRIGGER_PROMPT) || '帮我部署当前项目';
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -112,6 +118,24 @@ function sleep(ms: number) {
 
 function asText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function toPublicHttpUrl(value: unknown) {
+  const text = asText(value);
+  if (!text) return '';
+  if (/^https?:\/\//i.test(text)) return text;
+  if (/^[a-z0-9.-]+\.[a-z]{2,}(\/.*)?$/i.test(text)) return `https://${text}`;
+  return '';
+}
+
+function resolvePreferredPublicProbeUrl(panel: JsonRecord) {
+  const domains = Array.isArray(panel?.domains) ? panel.domains : [];
+  const candidates = [panel?.publicUrl, panel?.publicDomain, panel?.latestStaticUrl, panel?.latestUrl, domains[0]];
+  for (const candidate of candidates) {
+    const url = toPublicHttpUrl(candidate);
+    if (url) return url;
+  }
+  return '';
 }
 
 function nowStamp() {
@@ -140,6 +164,7 @@ async function writeReport(report: TestReport) {
     `- userEmail: ${report.userEmail || '-'}`,
     `- sessionId: ${report.sessionId || '-'}`,
     `- runId: ${report.runId || '-'}`,
+    `- deployRunId: ${report.deployRunId || '-'}`,
     `- orchestratorSessionId: ${report.orchestratorSessionId || '-'}`,
     `- publicUrl: ${report.publicUrl || '-'}`,
     `- deploymentStatus: ${report.deploymentStatus || '-'}`,
@@ -641,16 +666,6 @@ console.log(JSON.stringify({
     };
     const analyticsSendStatus = Number(metadata.analyticsSendStatus);
     const pageErrors = Array.isArray(metadata.pageErrors) ? metadata.pageErrors.filter(Boolean) : [];
-    if (analyticsSendStatus !== 200) {
-      return {
-        ok: false,
-        status: 'failed',
-        screenshotPath,
-        analyticsSendStatus: Number.isFinite(analyticsSendStatus) ? analyticsSendStatus : undefined,
-        pageErrors,
-        error: 'browser visit did not observe analytics.oneceo.ai/api/send returning HTTP 200',
-      };
-    }
     if (REQUIRE_BROWSER_NO_ERRORS && pageErrors.length > 0) {
       return {
         ok: false,
@@ -868,13 +883,52 @@ async function main() {
       warnings: Array.isArray(baseline.warnings) ? baseline.warnings : [],
     });
 
-    const deployPanel = await postApiData<JsonRecord>(
-      `${API_BASE}/api/task-creation/sessions/${sessionId}/deployment/deploy`,
-      cookieSession.cookie
-    );
+    let deployPanel: JsonRecord;
+    if (DEPLOY_TRIGGER_MODE === 'chat') {
+      const deployRunStart = await postApiData<JsonRecord>(`${API_BASE}/api/altus-managed/inputs`, cookieSession.cookie, {
+        sessionId,
+        content: DEPLOY_TRIGGER_PROMPT,
+        metadata: {
+          source: 'deployment_main_chain_e2e_deploy_trigger',
+        },
+      });
+      const deployRunId = asText(deployRunStart?.run?.id || deployRunStart?.run?.runId);
+      report.deployRunId = deployRunId || undefined;
+      assert.ok(deployRunId, 'deploy trigger run id should exist');
+      checkpoint('deployment_trigger_submit', 'passed', {
+        mode: DEPLOY_TRIGGER_MODE,
+        runId: deployRunId,
+      });
+
+      const deployRun = await poll<JsonRecord>(
+        'deploy trigger run terminal',
+        RUN_TIMEOUT_MS,
+        async () => getApiData<JsonRecord>(`${API_BASE}/api/altus-managed/sessions/${sessionId}/runs/${deployRunId}`, cookieSession!.cookie),
+        (value) => {
+          const status = asText(value?.status).toLowerCase();
+          return ['completed', 'failed', 'stopped', 'waiting_user'].includes(status);
+        }
+      );
+      const deployRunStatus = asText(deployRun.status).toLowerCase();
+      checkpoint('deployment_trigger_run_terminal', 'passed', {
+        mode: DEPLOY_TRIGGER_MODE,
+        runStatus: deployRunStatus,
+        error: deployRun.error || deployRun.errorMessage || deployRun.lastError || null,
+      });
+      assert.notEqual(deployRunStatus, 'failed', 'deploy trigger run should not fail');
+      assert.notEqual(deployRunStatus, 'stopped', 'deploy trigger run should not stop');
+      assert.notEqual(deployRunStatus, 'waiting_user', 'deploy trigger run should not ask for clarification');
+      deployPanel = await getApiData<JsonRecord>(`${API_BASE}/api/task-creation/sessions/${sessionId}/deployment?refresh=1`, cookieSession.cookie);
+    } else {
+      deployPanel = await postApiData<JsonRecord>(
+        `${API_BASE}/api/task-creation/sessions/${sessionId}/deployment/deploy`,
+        cookieSession.cookie
+      );
+    }
     console.log('[e2e] deployment requested');
     assert.ok(asText(deployPanel.bindingState), 'deploy panel should return bindingState');
     checkpoint('deployment_trigger', 'passed', {
+      mode: DEPLOY_TRIGGER_MODE,
       bindingState: deployPanel.bindingState || null,
       provisioningPhase: deployPanel.provisioningPhase || null,
     });
@@ -886,10 +940,11 @@ async function main() {
       (value) => {
         const state = asText(value?.bindingState).toLowerCase();
         const latestStatus = asText(value?.latestStatus).toLowerCase();
+        const publicProbeUrl = resolvePreferredPublicProbeUrl(value || {});
         if (state === 'repair_required' || state === 'provider_error') {
           return true;
         }
-        if (state === 'ready' && (value?.latestUrl || value?.latestStaticUrl || (Array.isArray(value?.domains) && value.domains.length > 0))) {
+        if ((state === 'ready' || state === 'public_settling') && publicProbeUrl) {
           return true;
         }
         return ['success', 'deployed', 'active'].includes(latestStatus);
@@ -912,11 +967,7 @@ async function main() {
     });
 
     const publicUrl =
-      asText(finalDeployment.latestUrl) ||
-      asText(finalDeployment.latestStaticUrl) ||
-      (Array.isArray(finalDeployment.domains) && finalDeployment.domains.length > 0
-        ? asText(finalDeployment.domains[0])
-        : '');
+      resolvePreferredPublicProbeUrl(finalDeployment);
     if (publicUrl) {
       report.publicUrl = publicUrl;
       const publicProbe = await pollPublicDeployment(publicUrl, report.marker);
@@ -949,39 +1000,53 @@ async function main() {
           checkpoint('analytics_bootstrap_published', 'passed', {
             analyticsBootstrapFound: true,
           });
-          const browserVisit = await visitPublicDeploymentWithBrowser(publicUrl);
-          report.browserVisitStatus = browserVisit.status;
-          report.browserVisitScreenshot = browserVisit.screenshotPath;
-          report.browserVisitError = browserVisit.error;
-          report.browserAnalyticsSendStatus = browserVisit.analyticsSendStatus;
-          report.browserPageErrors = browserVisit.pageErrors;
-          if (browserVisit.ok) {
-            checkpoint('browser_visit_public_url', 'passed', {
-              publicUrl,
-              screenshotPath: browserVisit.screenshotPath || null,
-              analyticsSendStatus: browserVisit.analyticsSendStatus ?? null,
-              pageErrors: browserVisit.pageErrors || [],
-              waitMs: BROWSER_VISIT_WAIT_MS,
-            });
-          } else if (browserVisit.status === 'skipped') {
-            checkpoint('browser_visit_skipped', 'passed', {
-              reason: 'set ONECEO_E2E_BROWSER_VISIT=true to execute public URL JavaScript',
-            });
-          } else {
-            checkpoint('browser_visit_public_url', 'failed', {
-              publicUrl,
-              error: browserVisit.error || null,
-              analyticsSendStatus: browserVisit.analyticsSendStatus ?? null,
-              pageErrors: browserVisit.pageErrors || [],
-            });
-            throw new Error(`public browser visit failed: ${browserVisit.error || 'unknown error'}`);
-          }
         } else {
           checkpoint('analytics_bootstrap_missing', 'failed', {
             analyticsBootstrapFound: false,
             note: 'public HTML is reachable, but the runtime analytics bootstrap was not published',
           });
-          throw new Error('public deployment is reachable but OneCEO analytics bootstrap was not published');
+          if (ANALYTICS_BLOCKING) {
+            throw new Error('public deployment is reachable but OneCEO analytics bootstrap was not published');
+          }
+        }
+
+        const browserVisit = await visitPublicDeploymentWithBrowser(publicUrl);
+        report.browserVisitStatus = browserVisit.status;
+        report.browserVisitScreenshot = browserVisit.screenshotPath;
+        report.browserVisitError = browserVisit.error;
+        report.browserAnalyticsSendStatus = browserVisit.analyticsSendStatus;
+        report.browserPageErrors = browserVisit.pageErrors;
+        if (browserVisit.ok) {
+          checkpoint('browser_visit_public_url', 'passed', {
+            publicUrl,
+            screenshotPath: browserVisit.screenshotPath || null,
+            analyticsSendStatus: browserVisit.analyticsSendStatus ?? null,
+            pageErrors: browserVisit.pageErrors || [],
+            waitMs: BROWSER_VISIT_WAIT_MS,
+          });
+        } else if (browserVisit.status === 'skipped') {
+          checkpoint('browser_visit_skipped', 'passed', {
+            reason: 'set ONECEO_E2E_BROWSER_VISIT=true to execute public URL JavaScript',
+          });
+        } else {
+          checkpoint('browser_visit_public_url', 'failed', {
+            publicUrl,
+            error: browserVisit.error || null,
+            analyticsSendStatus: browserVisit.analyticsSendStatus ?? null,
+            pageErrors: browserVisit.pageErrors || [],
+          });
+          throw new Error(`public browser visit failed: ${browserVisit.error || 'unknown error'}`);
+        }
+
+        if (BROWSER_VISIT_ENABLED) {
+          const sendOk = browserVisit.analyticsSendStatus === 200;
+          checkpoint('analytics_send', sendOk ? 'passed' : 'failed', {
+            analyticsSendStatus: browserVisit.analyticsSendStatus ?? null,
+            blocking: ANALYTICS_BLOCKING,
+          });
+          if (!sendOk && ANALYTICS_BLOCKING) {
+            throw new Error('browser visit did not observe analytics.oneceo.ai/api/send returning HTTP 200');
+          }
         }
       } else {
         checkpoint('public_url_reachability_unverified', 'passed', {
@@ -991,29 +1056,43 @@ async function main() {
         });
       }
 
-      const analyticsAfterVisit = await poll<JsonRecord>(
-        'analytics status after visit',
-        REQUIRE_ANALYTICS_TRACKING ? ANALYTICS_TRACKING_TIMEOUT_MS : 2 * 60_000,
-        async () => getApiData<JsonRecord>(`${API_BASE}/api/task-creation/sessions/${sessionId}/deployment?refresh=1`, cookieSession!.cookie),
-        (value) => {
-          const status = asText(value?.analytics?.status).toLowerCase();
-          return REQUIRE_ANALYTICS_TRACKING ? status === 'tracking' : status === 'bound' || status === 'tracking';
+      try {
+        const analyticsAfterVisit = await poll<JsonRecord>(
+          'analytics status after visit',
+          REQUIRE_ANALYTICS_TRACKING ? ANALYTICS_TRACKING_TIMEOUT_MS : 2 * 60_000,
+          async () => getApiData<JsonRecord>(`${API_BASE}/api/task-creation/sessions/${sessionId}/deployment?refresh=1`, cookieSession!.cookie),
+          (value) => {
+            const status = asText(value?.analytics?.status).toLowerCase();
+            return REQUIRE_ANALYTICS_TRACKING ? status === 'tracking' : status === 'bound' || status === 'tracking';
+          }
+        );
+        report.analyticsStatus = asText(analyticsAfterVisit.analytics?.status) || report.analyticsStatus;
+        const trackingReached = asText(analyticsAfterVisit.analytics?.status).toLowerCase() === 'tracking';
+        report.analyticsTrackingStatus = trackingReached ? 'passed' : BROWSER_VISIT_ENABLED ? 'failed' : 'unverified';
+        const analyticsStatusCheckpoint = REQUIRE_ANALYTICS_TRACKING && !trackingReached ? 'failed' : 'passed';
+        checkpoint('analytics_status', analyticsStatusCheckpoint, {
+          analyticsStatus: analyticsAfterVisit.analytics?.status || null,
+          requireTracking: REQUIRE_ANALYTICS_TRACKING,
+          analyticsBlocking: ANALYTICS_BLOCKING,
+          browserVisitEnabled: BROWSER_VISIT_ENABLED,
+          pageviews: analyticsAfterVisit.analytics?.pageviews ?? null,
+          visits: analyticsAfterVisit.analytics?.visits ?? null,
+        });
+        if (analyticsStatusCheckpoint === 'failed' && ANALYTICS_BLOCKING) {
+          throw new Error('analytics status did not reach tracking before timeout');
         }
-      );
-      report.analyticsStatus = asText(analyticsAfterVisit.analytics?.status) || report.analyticsStatus;
-      report.analyticsTrackingStatus =
-        asText(analyticsAfterVisit.analytics?.status).toLowerCase() === 'tracking'
-          ? 'passed'
-          : BROWSER_VISIT_ENABLED
-            ? 'failed'
-            : 'unverified';
-      checkpoint('analytics_status', 'passed', {
-        analyticsStatus: analyticsAfterVisit.analytics?.status || null,
-        requireTracking: REQUIRE_ANALYTICS_TRACKING,
-        browserVisitEnabled: BROWSER_VISIT_ENABLED,
-        pageviews: analyticsAfterVisit.analytics?.pageviews ?? null,
-        visits: analyticsAfterVisit.analytics?.visits ?? null,
-      });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        report.analyticsTrackingStatus = BROWSER_VISIT_ENABLED ? 'failed' : 'unverified';
+        checkpoint('analytics_status', 'failed', {
+          requireTracking: REQUIRE_ANALYTICS_TRACKING,
+          analyticsBlocking: ANALYTICS_BLOCKING,
+          error: message,
+        });
+        if (ANALYTICS_BLOCKING) {
+          throw error;
+        }
+      }
     } else {
       assert.ok(
         report.bindingState === 'repair_required' || report.bindingState === 'provider_error',

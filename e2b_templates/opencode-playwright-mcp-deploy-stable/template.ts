@@ -23,7 +23,7 @@ export function buildTemplate(input?: {
       ? [
           `mkdir -p ${opencodeBaseDir} ${opencodeBaseDir}/log ${opencodeBaseDir}/tmp ${opencodeBaseDir}/workspaces ${opencodeBaseDir}/state`,
           `curl -fsSL -o ${opencodeBaseDir}/osac "${input.osacDownloadUrl}"`,
-          `printf '%s  %s\n' '${input.osacSha256}' '${opencodeBaseDir}/osac' | sha256sum -c -`,
+          `printf '%s  %s\\n' '${input.osacSha256}' '${opencodeBaseDir}/osac' | sha256sum -c -`,
           `chmod +x ${opencodeBaseDir}/osac`,
           `chown -R ${sandboxUser} ${opencodeBaseDir}`,
         ]
@@ -77,6 +77,7 @@ export function buildTemplate(input?: {
       `ln -sf /usr/local/lib/nodejs/node-v${nodeVersion}-linux-x64/bin/npm /usr/local/bin/npm`,
       `ln -sf /usr/local/lib/nodejs/node-v${nodeVersion}-linux-x64/bin/npx /usr/local/bin/npx`,
       `npm install -g pnpm@${pnpmVersion}`,
+      `ln -sf /usr/local/lib/nodejs/node-v${nodeVersion}-linux-x64/bin/pnpm /usr/local/bin/pnpm`,
       'node --version',
       'npm --version',
       'pnpm --version',
@@ -100,7 +101,7 @@ export function buildTemplate(input?: {
       `chown -R ${sandboxUser} /opt/browser-use`,
       `mkdir -p ${playwrightPath}`,
       'npm install -g playwright @playwright/mcp@latest',
-      `PLAYWRIGHT_BROWSERS_PATH=${playwrightPath} playwright install --with-deps chromium`,
+      `PLAYWRIGHT_BROWSERS_PATH=${playwrightPath} npx playwright install --with-deps chromium`,
       `chmod -R 755 ${playwrightPath}`,
       `chown -R ${sandboxUser} ${playwrightPath}`,
     ])

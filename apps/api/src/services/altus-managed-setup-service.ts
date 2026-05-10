@@ -198,7 +198,7 @@ const ROOT_STACK_FILES = [
   'pom.xml',
 ] as const;
 const COMPOSIO_BROKERED_RUNTIME_TRANSPORT = 'api_brokered_mcp';
-const COMPOSIO_BROKERED_CONNECTORS = new Set(['github', 'notion', 'slack', 'figma', 'supabase']);
+const COMPOSIO_BROKERED_CONNECTORS = new Set(['github', 'notion', 'slack', 'figma', 'google_super', 'supabase']);
 
 function isSnapshotRuntimeTransportSupported(binding: { connectorKey?: unknown; runtimeTransport?: unknown }) {
   if (!COMPOSIO_BROKERED_CONNECTORS.has(asText(binding.connectorKey))) {

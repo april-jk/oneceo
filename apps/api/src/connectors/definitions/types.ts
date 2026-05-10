@@ -4,6 +4,7 @@ export type ConnectorKey =
   | 'slack'
   | 'supabase'
   | 'figma'
+  | 'google_super'
   | 'vercel'
   | 'postgres'
   | 'custom_api'

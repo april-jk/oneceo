@@ -78,4 +78,42 @@ describe('managed clarification rendering', () => {
     expect(clarificationBlocks).toHaveLength(1);
     expect(clarificationBlocks[0]?.markdown).toContain('请确认要部署到美东还是亚太区域。');
   });
+
+  it('hides mcp confirmation approval markers from rendered user messages', () => {
+    const messages: AgentMessage[] = [
+      {
+        type: 'user_input',
+        content: '帮我发邮件给 Alice',
+        messageKey: 'user-approve-1',
+      },
+      {
+        type: 'user_response',
+        content: '[mcp_tool_confirmation:approve]',
+        messageKey: 'user-approve-2',
+        metadata: {
+          source: 'mcp_tool_confirmation_approved',
+          confirmationId: 'confirmation-1',
+        },
+      },
+      {
+        type: 'agent_message',
+        content: '已确认执行，正在继续处理 Google Workspace 高风险操作...',
+        agent: 'altus',
+        messageKey: 'managed:run-approve-1:assistant',
+        metadata: {
+          runId: 'run-approve-1',
+          eventType: 'assistant_message',
+        },
+      },
+    ];
+
+    const items = buildChatItems(messages);
+    const userItems = items.filter(
+      (item): item is Extract<ChatItem, { kind: 'user' }> => item.kind === 'user'
+    );
+
+    expect(userItems).toHaveLength(1);
+    expect(userItems[0]?.text).toBe('帮我发邮件给 Alice');
+    expect(JSON.stringify(items)).not.toContain('[mcp_tool_confirmation:approve]');
+  });
 });

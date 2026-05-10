@@ -1,11 +1,21 @@
 import assert from 'node:assert/strict';
-import { mock, test } from 'node:test';
+import { afterEach, mock, test } from 'node:test';
 import {
   customApiDefinitionDAO,
   customApiEndpointToolDAO,
   taskSessionConnectorBindingDAO,
 } from '../src/db/dao';
 import { customApiMcpToolService, buildCustomApiToolName, parseCustomApiToolName } from '../src/services/custom-api-mcp-tool-service';
+
+const originalCustomApiEnabled = process.env.ONECEO_CUSTOM_API_ENABLED;
+
+afterEach(() => {
+  if (originalCustomApiEnabled === undefined) {
+    delete process.env.ONECEO_CUSTOM_API_ENABLED;
+  } else {
+    process.env.ONECEO_CUSTOM_API_ENABLED = originalCustomApiEnabled;
+  }
+});
 
 test('custom API MCP tool names are stable and parseable', () => {
   const toolName = buildCustomApiToolName('CRM Hub', 'Get Customer');
@@ -17,6 +27,7 @@ test('custom API MCP tool names are stable and parseable', () => {
 });
 
 test('custom API MCP tools expose only published endpoint tools explicitly selected for the session', async () => {
+  process.env.ONECEO_CUSTOM_API_ENABLED = 'true';
   const bindingMock = mock.method(
     taskSessionConnectorBindingDAO,
     'getByTaskSessionAndConnectorKey',
@@ -116,6 +127,7 @@ test('custom API MCP tools expose only published endpoint tools explicitly selec
 });
 
 test('custom API MCP tools are empty when the session has no explicit endpoint subset', async () => {
+  process.env.ONECEO_CUSTOM_API_ENABLED = 'true';
   const bindingMock = mock.method(
     taskSessionConnectorBindingDAO,
     'getByTaskSessionAndConnectorKey',
@@ -166,5 +178,20 @@ test('custom API MCP tools are empty when the session has no explicit endpoint s
     bindingMock.mock.restore();
     definitionMock.mock.restore();
     toolsMock.mock.restore();
+  }
+});
+
+test('custom API MCP tools are hidden while feature flag is disabled', async () => {
+  delete process.env.ONECEO_CUSTOM_API_ENABLED;
+  const bindingMock = mock.method(taskSessionConnectorBindingDAO, 'getByTaskSessionAndConnectorKey', async () => {
+    throw new Error('binding lookup should not run while custom api is disabled');
+  });
+
+  try {
+    const tools = await customApiMcpToolService.listToolsForSession('task-session-1');
+    assert.deepEqual(tools, []);
+    assert.equal(bindingMock.mock.callCount(), 0);
+  } finally {
+    bindingMock.mock.restore();
   }
 });

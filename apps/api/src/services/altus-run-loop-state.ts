@@ -1,6 +1,7 @@
 export type AltusRunTransitionReason =
   | 'initial_execution'
   | 'tool_result_continue'
+  | 'tool_confirmation_requested'
   | 'plain_text_conversation_completed'
   | 'plain_text_continuation_prompted'
   | 'plain_text_continuation_failed'

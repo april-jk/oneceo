@@ -45,21 +45,19 @@ const OFFICIAL_WEB_SHELL_INDEX_HTML = `<!doctype html>
 </html>
 `;
 
-const OFFICIAL_WEB_SHELL_MAIN_JSX = `import React from 'react';
-import ReactDOM from 'react-dom/client';
+const OFFICIAL_WEB_SHELL_MAIN_JSX = `import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
 import './styles.css';
 
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
+createRoot(document.getElementById('root')).render(
+  <StrictMode>
     <App />
-  </React.StrictMode>
+  </StrictMode>
 );
 `;
 
-const OFFICIAL_WEB_SHELL_APP_JSX = `import React from 'react';
-
-export default function App() {
+const OFFICIAL_WEB_SHELL_APP_JSX = `export default function App() {
   return (
     <main className="shell">
       <section className="hero">
@@ -76,7 +74,7 @@ export default function App() {
           <li>client/src/App.jsx：页面结构与文案</li>
           <li>client/src/styles.css：视觉风格与响应式布局</li>
           <li>server/index.ts：少量路由或接口</li>
-          <li>shared/：跨端共享的简单常量或类型</li>
+          <li>shared/：跨端共享的简单常量或类型，前端通过 @shared/... 引用</li>
         </ul>
       </section>
     </main>
@@ -315,8 +313,10 @@ import path from 'node:path';
 export default defineConfig({
   root: path.resolve(__dirname, 'client'),
   publicDir: path.resolve(__dirname, 'client/public'),
-  esbuild: {
-    jsxInject: "import React from 'react'",
+  resolve: {
+    alias: {
+      '@shared': path.resolve(__dirname, 'shared'),
+    },
   },
   build: {
     outDir: path.resolve(__dirname, 'dist/public'),
@@ -435,8 +435,9 @@ export function buildOfficialWebShellMaterializationGuidance() {
   return [
     'OneCEO 官方固定网站模板已经预置到当前工作区。',
     '请直接在现有模板内完成用户需求，不要重新发明技术栈，也不要重写 build/start/healthcheck/analytics 契约。',
-    '优先修改这些文件：`client/src/App.jsx`、`client/src/styles.css`、`server/index.ts`、`shared/`。',
+    '优先修改这些文件：`client/src/App.jsx`、`client/src/styles.css`、`server/index.ts`，以及需要跨端共享时使用的 `shared/`。',
     '首页主内容、用户要求的验收标识、hero、核心区块和浏览器交互必须写入 `client/src/App.jsx`；`client/src/main.jsx` 只负责挂载。',
+    '弱约束官网类任务若只是抽离页面常量，优先放在 `client/src/` 内；只有确实需要跨端共享时再放到 `shared/`，且前端统一使用 `@shared/...` 引用。',
     '如果用户只是弱约束地要求生成官网/落地页/作品集/餐厅/工作室网站，走短路径：有限 todo，优先一次性填充 `client/src/App.jsx` 与 `client/src/styles.css`，不要额外安装依赖、启动本地服务或反复检查契约文件。',
     '源码交付场景中，完成主要页面、样式、验收标识和一次宏观自检后即可 `complete_task`；平台部署链路会在后续验证 build/start/public runtime/analytics。',
     '保持这些契约不变：`package.json` 的 build/start、固定 Node Web Shell、`oneceo.manifest.json`、`client/index.html` 的 analytics hook、`/api/system/health`。',

@@ -856,8 +856,9 @@ test('deployment source normalization converts vite-style frontend into the offi
     assert.match(serverSource, /node:http/);
     assert.match(serverSource, /VITE_ANALYTICS_WEBSITE_ID/);
     assert.match(serverSource, /injectRuntimeAnalytics/);
-    assert.match(viteConfigSource, /jsxInject/);
-    assert.match(appSource, /^import React from 'react';/);
+    assert.match(viteConfigSource, /'@shared': path\.resolve\(__dirname, 'shared'\)/);
+    assert.doesNotMatch(viteConfigSource, /jsxInject/);
+    assert.match(appSource, /^import \* as React from 'react';/);
     assert.equal(compliance.ok, true);
     assert.equal(compliance.manifest.start.command, 'node dist/index.js');
     assert.equal(compliance.manifest.build.outputDir, 'dist/public');
@@ -910,8 +911,8 @@ test('deployment source normalization binds React namespace references in JS ent
     const appSource = await readFile(join(workspace, 'client', 'src', 'App.js'), 'utf-8');
 
     assert.equal(normalization.adaptedOfficialFrontendShell, true);
-    assert.match(mainSource, /^import React from 'react';/);
-    assert.match(appSource, /^import React from 'react';/);
+    assert.match(mainSource, /^import \* as React from 'react';/);
+    assert.match(appSource, /^import \* as React from 'react';/);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

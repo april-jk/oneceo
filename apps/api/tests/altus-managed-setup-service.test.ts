@@ -19,6 +19,7 @@ process.env.ALTUS_CLARIFICATION_TRANSITION_DISABLED = 'true';
 afterEach(() => {
   mock.reset();
   delete process.env.OPENCODE_TASK_WORKSPACE_ROOT;
+  delete process.env.LLM_PROXY_UPSTREAM_BASE_URL;
   process.env.ALTUS_CLARIFICATION_TRANSITION_DISABLED = 'true';
 });
 
@@ -750,6 +751,98 @@ test('buildTaskIntentProfile preserves explicit deploy authorization after produ
   const service = new AltusManagedSetupService();
   const profile = await service.buildTaskIntentProfile(
     'session-deploy-risk-confirmation-answer',
+    '确认继续',
+    'user_response'
+  );
+
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.deploymentAllowed, true);
+  assert.equal(profile.deployRequested, true);
+  assert.equal(profile.platformCapabilityIntent?.mode, 'execute');
+  assert.equal(profile.platformCapabilityIntent?.capabilityKind, 'deploy');
+  assert.equal(profile.clarificationTransition?.nextState, 'ready_to_execute');
+  assert.equal(profile.reason, 'latest_deployable_request');
+});
+
+test('buildTaskIntentProfile preserves deploy authorization for production confirmation answer without pending clarification type', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我部署当前项目',
+      metadata: {},
+    },
+    {
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这会部署到生产环境，请明确确认是否继续。',
+      metadata: {},
+    },
+    {
+      role: 'user',
+      messageType: 'user_response',
+      content: '继续',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    pendingQuestion: '这会部署到生产环境，请明确确认是否继续。',
+    pendingOptions: undefined,
+    pendingClarificationType: undefined,
+  }) as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-deploy-risk-confirmation-answer-untyped',
+    '继续',
+    'user_response'
+  );
+
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.deploymentAllowed, true);
+  assert.equal(profile.deployRequested, true);
+  assert.equal(profile.platformCapabilityIntent?.mode, 'execute');
+  assert.equal(profile.platformCapabilityIntent?.capabilityKind, 'deploy');
+  assert.equal(profile.clarificationTransition?.nextState, 'ready_to_execute');
+  assert.equal(profile.reason, 'latest_deployable_request');
+});
+
+test('buildTaskIntentProfile bypasses clarification transition agent for production confirmation answer', async () => {
+  process.env.ALTUS_CLARIFICATION_TRANSITION_DISABLED = 'false';
+  process.env.LLM_PROXY_UPSTREAM_BASE_URL = 'http://example.test';
+
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我部署当前项目',
+      metadata: {},
+    },
+    {
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这会部署到生产环境，请明确确认是否继续。',
+      metadata: {},
+    },
+    {
+      role: 'user',
+      messageType: 'user_response',
+      content: '确认继续',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    pendingQuestion: '这会部署到生产环境，请明确确认是否继续。',
+    pendingOptions: undefined,
+    pendingClarificationType: 'acceptance_requirement',
+  }) as any);
+  mock.method(altusClarificationTransitionAgent, 'propose', async () => {
+    throw new Error('clarification transition agent should not run for confirmed production deploy answer');
+  });
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-deploy-risk-confirmation-answer-preempts-agent',
     '确认继续',
     'user_response'
   );

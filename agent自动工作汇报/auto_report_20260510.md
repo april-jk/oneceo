@@ -27,3 +27,15 @@
 3. 本轮把“pending question 已是生产/预览部署风险确认，且当前回复是确认语句”这条判断前置到 transition agent 之前，并补了两条回归测试：
    - `pendingClarificationType` 缺失时仍可恢复部署意图
    - 即使 transition agent 在线，也不得再次接管这类确认回复
+
+补充了 sandbox 模板层稳定性改造：
+
+1. 基于现有 `opencode-playwright-mcp` 新建 `opencode-playwright-mcp-deploy-stable` 模板，作为部署稳定主模板。
+2. 模板在构建阶段固定 Node `20.19.5` 与 `pnpm@9.12.3`，避免部署预检阶段出现 Vite/Node 兼容漂移与安装器漂移。
+3. 模板继续预装 Playwright/Chromium 并保留 OSAC + n.eko patch 链路，不改变现有 debug/automation 契约。
+4. `apps/api/src/config/e2b-config.ts` 默认模板名切到 `opencode-browseruse-playwright-mcp-v2-20260510`，后续新建 sandbox 默认走稳定模板。
+
+继续补了两处部署稳定性收口：
+
+1. `altus-managed-deployment-tool-service` 对 `public_settling + latestStatus=SUCCESS + 可用公网 URL` 改为直接按成功返回，不再继续标记为 `deployment_pending`，减少“已成功但反复重试”的链路抖动。
+2. `e2b-connector.createSandbox` 增加模板不可用识别：若创建失败命中模板不存在语义，统一抛出 `e2b_template_unavailable:<template>`，便于平台快速定位“代码已切模板名但 E2B 制品未发布”的问题。

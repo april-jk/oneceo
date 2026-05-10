@@ -79,10 +79,11 @@ export class SandboxEnvironmentService {
       allowInternetAccess: e2bConfig.allowInternetAccess,
       allowPublicTraffic: e2bConfig.allowPublicTraffic,
     });
+    const actualTemplate = e2bConnector.getTemplateHint(sandbox) || selectedTemplate;
 
     const securityProfile = this.buildSecurityProfile();
     const mapping = {
-      baseImage: selectedTemplate,
+      baseImage: actualTemplate,
       incrementalStorageDir: 'e2b',
       incrementalFileName: sandbox.sandboxId,
       incrementalFilePath: sandbox.sandboxId,
@@ -96,10 +97,11 @@ export class SandboxEnvironmentService {
       pendingArchiveUpdate: false,
       e2b: {
         sandboxId: sandbox.sandboxId,
-        template: selectedTemplate,
+        template: actualTemplate,
         timeoutMs: e2bConfig.timeoutMs,
         sandboxDomain: sandbox.sandboxDomain,
         trafficAccessToken: sandbox.trafficAccessToken || null,
+        requestedTemplate: selectedTemplate,
       },
     };
 

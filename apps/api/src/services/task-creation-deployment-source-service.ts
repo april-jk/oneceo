@@ -512,8 +512,10 @@ import path from 'node:path';
 export default defineConfig({
   root: path.resolve(__dirname, 'client'),
   publicDir: path.resolve(__dirname, 'client/public'),
-  esbuild: {
-    jsxInject: "import React from 'react'",
+  resolve: {
+    alias: {
+      '@shared': path.resolve(__dirname, 'shared'),
+    },
   },
   build: {
     outDir: path.resolve(__dirname, 'dist/public'),
@@ -1093,7 +1095,7 @@ function hasReactImport(source: string) {
 }
 
 function shouldEnsureReactImport(source: string) {
-  return /\bReact\./.test(source) || /<[A-Za-z][A-Za-z0-9.:-]*(\s|>|\/)/.test(source);
+  return /\bReact\./.test(source);
 }
 
 async function ensureReactNamespaceImports(sourceDir: string) {
@@ -1104,7 +1106,7 @@ async function ensureReactNamespaceImports(sourceDir: string) {
   for (const filePath of candidates) {
     const source = await readTextIfExists(filePath);
     if (!source || !shouldEnsureReactImport(source) || hasReactImport(source)) continue;
-    await writeFile(filePath, `import React from 'react';\n${source}`, 'utf-8');
+    await writeFile(filePath, `import * as React from 'react';\n${source}`, 'utf-8');
   }
 }
 

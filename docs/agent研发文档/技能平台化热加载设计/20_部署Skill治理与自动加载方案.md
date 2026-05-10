@@ -251,6 +251,12 @@ deployment skill 自动加载还需要补一条运行时约束：
 
 这条规则只适用于“有待回答的部署风险确认问题”场景，不适用于普通多轮闲聊。也就是说，系统仍然保留“模糊当前轮不能平白继承历史部署动作”的主规则，只是在风险确认闭环里允许继承。
 
+补充执行顺序约束：
+
+1. 这类“确认继续”判断必须在 clarification transition agent 之前命中
+2. 不能先交给 transition agent 再回退，否则 agent 可能把确认回复再次解释成 `request_risk_confirmation`
+3. 命中后即直接进入 `ready_to_execute`，不得重复弹出同一条生产部署确认问题
+
 在平台 skill 数据层或 service 聚合层补齐：
 
 1. `systemRole`

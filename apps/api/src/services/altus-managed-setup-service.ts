@@ -1377,6 +1377,33 @@ export class AltusManagedSetupService {
     const baseProfile = deriveManagedTaskIntentProfile(texts);
     const shape = classifyTaskIntentShape(texts);
     const workspaceHints = await deriveWorkspaceTechStackHints(resolveOpencodeWorkspacePath(sessionId));
+    if (
+      messageType === 'user_response' &&
+      currentText &&
+      isDeploymentRiskConfirmationQuestion(pendingQuestion) &&
+      isConfirmationLikeResponse(currentText)
+    ) {
+      return buildProfileFromTransition({
+        baseProfile,
+        shape,
+        todoDecision: resolveTodoDecision(shape, {
+          deployableWebAppBlueprintRequired: shouldRequireDeployableWebAppBlueprint({
+            profile: baseProfile,
+            needsClarification: false,
+          }),
+        }),
+        reduced: {
+          accepted: true,
+          nextState: 'ready_to_execute',
+          clearedPending: true,
+          assumptions: [currentText],
+          reason: 'confirmed_pending_deployment_risk',
+        },
+        currentText,
+        pendingQuestion,
+        texts,
+      });
+    }
     if (shouldUseClarificationTransitionAgent({ baseProfile, shape, pendingClarificationType })) {
       try {
         const proposal = await altusClarificationTransitionAgent.propose({
@@ -1421,34 +1448,6 @@ export class AltusManagedSetupService {
       } catch (error) {
         console.warn('[altus] clarification transition agent failed; falling back to deterministic gate', error);
       }
-    }
-    if (
-      messageType === 'user_response' &&
-      pendingClarificationType &&
-      currentText &&
-      isDeploymentRiskConfirmationQuestion(pendingQuestion) &&
-      isConfirmationLikeResponse(currentText)
-    ) {
-      return buildProfileFromTransition({
-        baseProfile,
-        shape,
-        todoDecision: resolveTodoDecision(shape, {
-          deployableWebAppBlueprintRequired: shouldRequireDeployableWebAppBlueprint({
-            profile: baseProfile,
-            needsClarification: false,
-          }),
-        }),
-        reduced: {
-          accepted: true,
-          nextState: 'ready_to_execute',
-          clearedPending: true,
-          assumptions: [currentText],
-          reason: 'confirmed_pending_deployment_risk',
-        },
-        currentText,
-        pendingQuestion,
-        texts,
-      });
     }
     if (
       messageType === 'user_response' &&

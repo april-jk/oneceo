@@ -1091,7 +1091,7 @@ export function ConnectorCenterPanel({
 
     return (
       <ScrollArea className="h-full">
-        <div className="space-y-6 px-6 pb-6">
+        <div data-tour="connectors-directory" className="space-y-6 px-6 pb-6">
           {featuredCatalog.length > 0 ? (
             <section className="space-y-3">
               <div className="text-sm text-muted-foreground">{t("connectors.featured")}</div>
@@ -1530,7 +1530,7 @@ export function ConnectorCenterPanel({
     <div className="flex h-full flex-col overflow-hidden bg-transparent">
       <div className="border-b border-border/70 px-6 py-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2">
+          <div data-tour="connectors-tabs" className="flex items-center gap-2">
             {CONNECTOR_TABS.map((tab) => (
               <button
                 key={tab.key}
@@ -1551,7 +1551,7 @@ export function ConnectorCenterPanel({
               </button>
             ))}
           </div>
-          <div className="w-full sm:w-[220px]">
+          <div data-tour="connectors-search" className="w-full sm:w-[220px]">
             <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}

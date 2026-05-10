@@ -56,8 +56,23 @@ test('materializeOfficialWebShellInSandbox writes the official scaffold into an 
     assert.ok(commands.some((command) => command.includes('mkdir -p')));
     assert.ok(writes.some((item) => item.path.endsWith('/client/index.html')));
     assert.ok(writes.some((item) => item.path.endsWith('/client/src/App.jsx')));
-    assert.ok(writes.some((item) => item.path.endsWith('/client/src/App.jsx') && item.content.startsWith("import React from 'react';")));
-    assert.ok(writes.some((item) => item.path.endsWith('/vite.config.ts') && item.content.includes('jsxInject')));
+    assert.ok(writes.some((item) => item.path.endsWith('/client/src/App.jsx') && !item.content.includes("import React from 'react'")));
+    assert.ok(
+      writes.some(
+        (item) =>
+          item.path.endsWith('/client/src/main.jsx') &&
+          item.content.includes("import { StrictMode } from 'react';") &&
+          item.content.includes("import { createRoot } from 'react-dom/client';")
+      )
+    );
+    assert.ok(
+      writes.some(
+        (item) =>
+          item.path.endsWith('/vite.config.ts') &&
+          item.content.includes("'@shared': path.resolve(__dirname, 'shared')") &&
+          !item.content.includes('jsxInject')
+      )
+    );
     assert.ok(writes.some((item) => item.path.endsWith('/server/index.ts')));
     assert.ok(writes.some((item) => item.path.endsWith('/package.json') && item.content.includes('"start": "node dist/index.js"')));
     assert.ok(writes.some((item) => item.path.endsWith('/package.json') && !item.content.includes('"express"')));
@@ -164,5 +179,6 @@ test('buildOfficialWebShellMaterializationGuidance tells Altus to edit within th
   assert.match(guidance, /验收标识/);
   assert.match(guidance, /弱约束地要求生成官网\/落地页\/作品集\/餐厅\/工作室网站/);
   assert.match(guidance, /不要额外安装依赖、启动本地服务或反复检查契约文件/);
+  assert.match(guidance, /@shared/);
   assert.match(guidance, /build\/start\/healthcheck\/analytics/);
 });

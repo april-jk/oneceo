@@ -597,6 +597,10 @@
         "name": "Figma",
         "description": "Use Figma through Composio managed authorization and oneceo API-brokered MCP tools."
       },
+      "google_super": {
+        "name": "Google Workspace",
+        "description": "Use Gmail, Drive, Docs, Sheets, Calendar, and related tools through Composio Google Super and oneceo API-brokered MCP."
+      },
       "vercel": {
         "name": "Vercel",
         "description": "Connect Vercel through the OneCEO hosted provider host and a Vercel Integration installation token."
@@ -687,12 +691,9 @@
       "unavailable": "Unavailable"
     },
     "empty": {
-      "customApiReserved": "The custom API entry is reserved",
       "customMcpReserved": "The custom MCP entry is reserved",
       "intro": "This release focuses on unifying the app connector directory, profile rules, and session attachment boundary.",
-      "customApiDetail": " Custom API schema import and runtime assembly will be added in the next stage.",
       "customMcpDetail": " Custom MCP creation forms and runtime assembly will be added in the next stage.",
-      "createCustomApi": "Create custom API",
       "createCustomMcp": "Create custom MCP",
       "noMatches": "No matching connectors found"
     },
@@ -837,6 +838,24 @@
           "composioToolkit": {
             "label": "Composio Figma Toolkit",
             "description": "Review the Composio-managed Figma toolkit"
+          }
+        }
+      },
+      "google_super": {
+        "intro": "The Google Workspace connector uses Composio Google Super managed authorization and exposes MCP tools through the oneceo API broker. Google tokens, Composio keys, and MCP headers are never sent to the frontend or sandbox.",
+        "steps": {
+          "0": "Click connect and finish the Composio/Google Workspace authorization flow.",
+          "1": "After authorization, attach Google Workspace to the current session or keep it as a reusable profile.",
+          "2": "The agent searches tools first, fetches schemas on demand, then executes through the broker. High-risk writes require one-time confirmation."
+        },
+        "tips": {
+          "0": "Do not paste Google tokens, Composio API keys, MCP URLs, or headers into chat, forms, shell, or sandbox files.",
+          "1": "Before sending email, changing calendars, sharing files, or editing Docs/Sheets, make the target object explicit."
+        },
+        "links": {
+          "composioToolkit": {
+            "label": "Composio Google Super Toolkit",
+            "description": "Review the Composio-managed Google Super toolkit"
           }
         }
       },

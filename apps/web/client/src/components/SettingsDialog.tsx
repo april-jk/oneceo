@@ -1561,6 +1561,8 @@ export function GlobalSettingsDialogHost() {
       callbackPath === "/slack/callback" && hasOauthCallbackParams;
     const isVercelCallback =
       callbackPath === "/vercel/callback" && hasOauthCallbackParams;
+    const isGoogleSuperCallback =
+      callbackPath === "/google-super/callback" && hasOauthCallbackParams;
     const isGithubCallback =
       callbackPath === "/github/callback" && hasOauthCallbackParams;
     return {
@@ -1572,12 +1574,14 @@ export function GlobalSettingsDialogHost() {
         isSupabaseCallback ||
         isSlackCallback ||
         isVercelCallback ||
+        isGoogleSuperCallback ||
         isGithubCallback,
       settingsTab:
         isNotionCallback ||
         isSupabaseCallback ||
         isSlackCallback ||
         isVercelCallback ||
+        isGoogleSuperCallback ||
         isGithubCallback
           ? "connectors"
           : params.get("settingsTab"),
@@ -1590,6 +1594,8 @@ export function GlobalSettingsDialogHost() {
           ? "supabase"
         : isSlackCallback
           ? "slack"
+        : isGoogleSuperCallback
+          ? "google_super"
           : isVercelCallback
             ? "vercel"
             : params.get("connector"),

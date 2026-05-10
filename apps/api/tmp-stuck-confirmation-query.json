@@ -1,0 +1,172 @@
+[
+  {
+    "run_id": "cbcba46b-d7ea-4143-901a-f6841011321b",
+    "session_id": "8f281c6a-f2b3-46f0-971e-193a90f09f4d",
+    "status": "waiting_user",
+    "stop_reason": null,
+    "created_at": "2026-05-05T05:25:39.901Z",
+    "started_at": "2026-05-04T21:25:44.304Z",
+    "completed_at": null,
+    "sequence": 70,
+    "event_type": "tool_call_completed",
+    "payload_json": {
+      "content": "工具 mcp__google_super_composio_multi_execute_tool__b279f47884e1 已完成",
+      "toolName": "mcp__google_super_composio_multi_execute_tool__b279f47884e1",
+      "arguments": {
+        "tools": [
+          {
+            "arguments": {
+              "body": "当前时间: 2026-05-05T05:26:00.528Z",
+              "subject": "测试",
+              "user_id": "me",
+              "recipient_email": "3065025109@qq.com"
+            },
+            "tool_slug": "GOOGLESUPER_SEND_EMAIL"
+          }
+        ],
+        "thought": "Sending email with current timestamp to specified recipient",
+        "current_step": "SENDING_EMAIL"
+      },
+      "toolCallId": "call_6fcf7cb5f0ac49a2ad7c6730",
+      "outputPreview": "{\"providerId\":\"task_session:8f281c6a-f2b3-46f0-971e-193a90f09f4d:connector:google_super:profile:8bb22277-4a51-4b31-aaa9-4e388a49420a\",\"toolName\":\"google_super__COMPOSIO_MULTI_EXECUTE_TOOL\",\"result\":{\"content\":[{\"text\":\"{\\\"type\\\":\\\"confirmation_required\\\",\\\"connectorKey\\\":\\\"google_super\\\",\\\"toolName\\\":\\\"google_super__COMPOSIO_MULTI_EXECUTE_TOOL\\\",\\\"confirmationId\\\":\\\"b7fe12a4-5073-4906-9837-f2b8e35cefaf\\\",\\\"summary\\\":{\\\"connectorKey\\\":\\\"google_super\\\",\\\"toolName\\\":\\\"google_super__COMPOSIO_MULTI_EXECUTE_TOOL\\\",\\\"action\\\":\\\"google_workspace_write\\\",\\\"target\\\":\\\"3065025109@qq.com\\\",\\\"impact\\\":\\\"Execute one Google Workspace write operation through google_super__COMPOSIO_MULTI_EXECUTE_TOOL.\\\",\\\"parameterSummary\\\":{\\\"thought\\\":\\\"Sending email with current timestamp to specified recipient\\\",\\\"current_step\\\":\\\"SENDING_EMAIL\\\"}}}\",\"type\":\"text\"}],\"structuredContent\":{\"confirmationId\":\"b7fe12a4-5073-4906-9837-f2b8e35cefaf\",\"connectorKey\":\"google_super\",\"summary\":{\"action\":\"google_workspace_write\",\"connectorKey\":\"google_super\",\"impact\":\"Execute one Google Workspace write operation through google_super__COMPOSIO_MULTI_EXECUTE_TOOL.\",\"parameterSummary\":{\"current_step\":\"SENDING_EMAIL\",\"thought\":\"Sending email with current timestamp to specified recipient\"},\"target\":\"3065025109@qq.com\",\"toolName\":\"google_super__COMPOSIO_MULTI_EXECUTE_TOOL\"},\"toolName\":\"google_super__COMPOSIO_MULTI_EXECUTE_TOOL\",\"type\":\"confirmation_required\"}}}",
+      "transitionReason": "tool_result_continue",
+      "toolResultEnvelope": {
+        "args": {
+          "tools": [
+            {
+              "arguments": {
+                "body": "当前时间: 2026-05-05T05:26:00.528Z",
+                "subject": "测试",
+                "user_id": "me",
+                "recipient_email": "3065025109@qq.com"
+              },
+              "tool_slug": "GOOGLESUPER_SEND_EMAIL"
+            }
+          ],
+          "thought": "Sending email with current timestamp to specified recipient",
+          "current_step": "SENDING_EMAIL"
+        },
+        "runId": "cbcba46b-d7ea-4143-901a-f6841011321b",
+        "result": "{\"providerId\":\"task_session:8f281c6a-f2b3-46f0-971e-193a90f09f4d:connector:google_super:profile:8bb22277-4a51-4b31-aaa9-4e388a49420a\",\"toolName\":\"google_super__COMPOSIO_MULTI_EXECUTE_TOOL\",\"result\":{\"content\":[{\"text\":\"{\\\"type\\\":\\\"confirmation_required\\\",\\\"connectorKey\\\":\\\"google_super\\\",\\\"toolName\\\":\\\"google_super__COMPOSIO_MULTI_EXECUTE_TOOL\\\",\\\"confirmationId\\\":\\\"b7fe12a4-5073-4906-9837-f2b8e35cefaf\\\",\\\"summary\\\":{\\\"connectorKey\\\":\\\"google_super\\\",\\\"toolName\\\":\\\"google_super__COMPOSIO_MULTI_EXECUTE_TOOL\\\",\\\"action\\\":\\\"google_workspace_write\\\",\\\"target\\\":\\\"3065025109@qq.com\\\",\\\"impact\\\":\\\"Execute one Google Workspace write operation through google_super__COMPOSIO_MULTI_EXECUTE_TOOL.\\\",\\\"parameterSummary\\\":{\\\"thought\\\":\\\"Sending email with current timestamp to specified recipient\\\",\\\"current_step\\\":\\\"SENDING_EMAIL\\\"}}}\",\"type\":\"text\"}],\"structuredContent\":{\"confirmationId\":\"b7fe12a4-5073-4906-9837-f2b8e35cefaf\",\"connectorKey\":\"google_super\",\"summary\":{\"action\":\"google_workspace_write\",\"connectorKey\":\"google_super\",\"impact\":\"Execute one Google Workspace write operation through google_super__COMPOSIO_MULTI_EXECUTE_TOOL.\",\"parameterSummary\":{\"current_step\":\"SENDING_EMAIL\",\"thought\":\"Sending email with current timestamp to specified recipient\"},\"target\":\"3065025109@qq.com\",\"toolName\":\"google_super__COMPOSIO_MULTI_EXECUTE_TOOL\"},\"toolName\":\"google_super__COMPOSIO_MULTI_EXECUTE_TOOL\",\"type\":\"confirmation_required\"}}}",
+        "status": "ok",
+        "toolName": "mcp__google_super_composio_multi_execute_tool__b279f47884e1",
+        "retryable": false,
+        "toolUseId": "call_6fcf7cb5f0ac49a2ad7c6730",
+        "sideEffects": [],
+        "modelRoundId": "4",
+        "contentForUser": "工具 mcp__google_super_composio_multi_execute_tool__b279f47884e1 已完成",
+        "activatedSkills": [],
+        "contentForModel": "{\"providerId\":\"task_session:8f281c6a-f2b3-46f0-971e-193a90f09f4d:connector:google_super:profile:8bb22277-4a51-4b31-aaa9-4e388a49420a\",\"toolName\":\"google_super__COMPOSIO_MULTI_EXECUTE_TOOL\",\"result\":{\"content\":[{\"text\":\"{\\\"type\\\":\\\"confirmation_required\\\",\\\"connectorKey\\\":\\\"google_super\\\",\\\"toolName\\\":\\\"google_super__COMPOSIO_MULTI_EXECUTE_TOOL\\\",\\\"confirmationId\\\":\\\"b7fe12a4-5073-4906-9837-f2b8e35cefaf\\\",\\\"summary\\\":{\\\"connectorKey\\\":\\\"google_super\\\",\\\"toolName\\\":\\\"google_super__COMPOSIO_MULTI_EXECUTE_TOOL\\\",\\\"action\\\":\\\"google_workspace_write\\\",\\\"target\\\":\\\"3065025109@qq.com\\\",\\\"impact\\\":\\\"Execute one Google Workspace write operation through google_super__COMPOSIO_MULTI_EXECUTE_TOOL.\\\",\\\"parameterSummary\\\":{\\\"thought\\\":\\\"Sending email with current timestamp to specified recipient\\\",\\\"current_step\\\":\\\"SENDING_EMAIL\\\"}}}\",\"type\":\"text\"}],\"structuredContent\":{\"confirmationId\":\"b7fe12a4-5073-4906-9837-f2b8e35cefaf\",\"connectorKey\":\"google_super\",\"summary\":{\"action\":\"google_workspace_write\",\"connectorKey\":\"google_super\",\"impact\":\"Execute one Google Workspace write operation through google_super__COMPOSIO_MULTI_EXECUTE_TOOL.\",\"parameterSummary\":{\"current_step\":\"SENDING_EMAIL\",\"thought\":\"Sending email with current timestamp to specified recipient\"},\"target\":\"3065025109@qq.com\",\"toolName\":\"google_super__COMPOSIO_MULTI_EXECUTE_TOOL\"},\"toolName\":\"google_super__COMPOSIO_MULTI_EXECUTE_TOOL\",\"type\":\"confirmation_required\"}}}"
+      }
+    },
+    "event_created_at": "2026-05-05T05:26:15.142Z"
+  },
+  {
+    "run_id": "cbcba46b-d7ea-4143-901a-f6841011321b",
+    "session_id": "8f281c6a-f2b3-46f0-971e-193a90f09f4d",
+    "status": "waiting_user",
+    "stop_reason": null,
+    "created_at": "2026-05-05T05:25:39.901Z",
+    "started_at": "2026-05-04T21:25:44.304Z",
+    "completed_at": null,
+    "sequence": 69,
+    "event_type": "tool_call_started",
+    "payload_json": {
+      "content": "调用工具 mcp__google_super_composio_multi_execute_tool__b279f47884e1",
+      "toolName": "mcp__google_super_composio_multi_execute_tool__b279f47884e1",
+      "arguments": {
+        "tools": [
+          {
+            "arguments": {
+              "body": "当前时间: 2026-05-05T05:26:00.528Z",
+              "subject": "测试",
+              "user_id": "me",
+              "recipient_email": "3065025109@qq.com"
+            },
+            "tool_slug": "GOOGLESUPER_SEND_EMAIL"
+          }
+        ],
+        "thought": "Sending email with current timestamp to specified recipient",
+        "current_step": "SENDING_EMAIL"
+      },
+      "toolCallId": "call_6fcf7cb5f0ac49a2ad7c6730"
+    },
+    "event_created_at": "2026-05-05T05:26:14.714Z"
+  },
+  {
+    "run_id": "cbcba46b-d7ea-4143-901a-f6841011321b",
+    "session_id": "8f281c6a-f2b3-46f0-971e-193a90f09f4d",
+    "status": "waiting_user",
+    "stop_reason": null,
+    "created_at": "2026-05-05T05:25:39.901Z",
+    "started_at": "2026-05-04T21:25:44.304Z",
+    "completed_at": null,
+    "sequence": 68,
+    "event_type": "tool_call_progress",
+    "payload_json": {
+      "content": "正在准备工具 mcp__google_super_composio_multi_execute_tool__b279f47884e1",
+      "toolName": "mcp__google_super_composio_multi_execute_tool__b279f47884e1",
+      "arguments": {},
+      "toolCallId": "call_6fcf7cb5f0ac49a2ad7c6730",
+      "rawArguments": "{\"tools\": \n[{\"tool_slug\": \"GOOGLESUPER_SEND_EMAIL\", \"arguments\": {\"recipient_email\": \"3065025109@qq.com\", \"subject\": \"测试\", \"body\": \"当前时间: 2026-05-05T05:26:00.528Z\", \"user_id\": \"me\"}}]\n\n, \"thought\": \"Sending email with current timestamp to specified recipient"
+    },
+    "event_created_at": "2026-05-05T05:26:14.075Z"
+  },
+  {
+    "run_id": "cbcba46b-d7ea-4143-901a-f6841011321b",
+    "session_id": "8f281c6a-f2b3-46f0-971e-193a90f09f4d",
+    "status": "waiting_user",
+    "stop_reason": null,
+    "created_at": "2026-05-05T05:25:39.901Z",
+    "started_at": "2026-05-04T21:25:44.304Z",
+    "completed_at": null,
+    "sequence": 67,
+    "event_type": "tool_call_progress",
+    "payload_json": {
+      "content": "正在准备工具 mcp__google_super_composio_multi_execute_tool__b279f47884e1",
+      "toolName": "mcp__google_super_composio_multi_execute_tool__b279f47884e1",
+      "arguments": {},
+      "toolCallId": "call_6fcf7cb5f0ac49a2ad7c6730",
+      "rawArguments": "{\"tools\": \n[{\"tool_slug\": \"GOOGLESUPER_SEND_EMAIL\", \"arguments\": {\"recipient_email\": \"3065025109@qq.com\", \"subject\": \"测试\", \"body\": \"当前时间: 2026-05-05T05:26:00.528Z\", \"user_id\": \"me\"}}]\n\n"
+    },
+    "event_created_at": "2026-05-05T05:26:13.624Z"
+  },
+  {
+    "run_id": "cbcba46b-d7ea-4143-901a-f6841011321b",
+    "session_id": "8f281c6a-f2b3-46f0-971e-193a90f09f4d",
+    "status": "waiting_user",
+    "stop_reason": null,
+    "created_at": "2026-05-05T05:25:39.901Z",
+    "started_at": "2026-05-04T21:25:44.304Z",
+    "completed_at": null,
+    "sequence": 66,
+    "event_type": "tool_call_progress",
+    "payload_json": {
+      "content": "正在准备工具 mcp__google_super_composio_multi_execute_tool__b279f47884e1",
+      "toolName": "mcp__google_super_composio_multi_execute_tool__b279f47884e1",
+      "arguments": {},
+      "toolCallId": "call_6fcf7cb5f0ac49a2ad7c6730",
+      "rawArguments": "{\"tools\": "
+    },
+    "event_created_at": "2026-05-05T05:26:11.142Z"
+  },
+  {
+    "run_id": "cbcba46b-d7ea-4143-901a-f6841011321b",
+    "session_id": "8f281c6a-f2b3-46f0-971e-193a90f09f4d",
+    "status": "waiting_user",
+    "stop_reason": null,
+    "created_at": "2026-05-05T05:25:39.901Z",
+    "started_at": "2026-05-04T21:25:44.304Z",
+    "completed_at": null,
+    "sequence": 65,
+    "event_type": "tool_call_progress",
+    "payload_json": {
+      "content": "正在准备工具 mcp__google_super_composio_multi_execute_tool__b279f47884e1",
+      "toolName": "mcp__google_super_composio_multi_execute_tool__b279f47884e1",
+      "arguments": {},
+      "toolCallId": "call_6fcf7cb5f0ac49a2ad7c6730",
+      "rawArguments": ""
+    },
+    "event_created_at": "2026-05-05T05:26:10.963Z"
+  }
+]

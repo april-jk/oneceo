@@ -4,6 +4,7 @@ import {
   taskSessionConnectorBindingDAO,
 } from '../db/dao';
 import type { CustomApiDefinition, CustomApiEndpointTool } from '../db/schema';
+import { isCustomApiEnabled } from './custom-api-feature-flag';
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -74,6 +75,7 @@ export class CustomApiMcpToolService {
   }
 
   async listToolsForSession(taskSessionId: string): Promise<CustomApiMcpTool[]> {
+    if (!isCustomApiEnabled()) return [];
     const binding = await taskSessionConnectorBindingDAO.getByTaskSessionAndConnectorKey(taskSessionId, 'custom_api');
     if (!binding || binding.desiredState !== 'attached') return [];
     const sessionConfig = pickObject(binding.sessionConfigJson);

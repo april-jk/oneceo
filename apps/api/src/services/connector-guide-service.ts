@@ -153,6 +153,29 @@ const BUILTIN_CONNECTOR_GUIDES: Record<string, BuiltinConnectorGuide> = {
     ].join('\n'),
     notes: `${BUILTIN_NOTES_PREFIX} v1-figma-composio-router.`,
   },
+  google_super: {
+    description: 'Google Workspace connector prompt guide',
+    triggerMode: 'on_attach',
+    serverInstructionsMarkdown: [
+      'Google Workspace is connected through oneceo API broker and Composio Google Super, not through a sandbox-installed Google MCP server or user-provided Google token.',
+      'Never ask the user to paste Google OAuth tokens, refresh tokens, Composio API keys, MCP URLs, or MCP headers into chat, shell, environment variables, or sandbox files.',
+      'Use the attached Google Workspace MCP router tools exposed in this session. Start with `google_super__COMPOSIO_SEARCH_TOOLS` to find Google actions, then use `google_super__COMPOSIO_GET_TOOL_SCHEMAS` and `google_super__COMPOSIO_MULTI_EXECUTE_TOOL` for execution.',
+      'Do not load or summarize every Google Super tool schema up front. Discover only the current task-relevant tools by search and schema lookup.',
+      'For Gmail, Calendar, Drive, Docs, Sheets, and Tasks writes, identify the target recipient, event, file, document, spreadsheet, or task before executing.',
+      'High-risk Google write operations require one-time user confirmation through the platform confirmation flow. A confirmation only applies to the same tool and argument hash once.',
+    ].join('\n'),
+    guideReminderMarkdown: [
+      'A Google Workspace connector guide is active for this session.',
+      'Use the already attached Composio-backed Google Super router tools; do not request tokens or install Google MCP servers in shell.',
+      'Search tools first, fetch schema only for selected actions, and expect write operations to require one-time confirmation.',
+    ].join('\n'),
+    blockingRulesMarkdown: [
+      'Do not run local Google MCP servers, curl Composio MCP URLs, or expose Composio/Google credentials in sandbox.',
+      'Do not send email, invite attendees, update calendars, mutate Drive permissions/files, or edit Docs/Sheets until the target object and side effect are explicit.',
+      'Do not retry a rejected or expired confirmation by changing arguments silently; ask the user for the specific operation again.',
+    ].join('\n'),
+    notes: `${BUILTIN_NOTES_PREFIX} v1-google-super-composio-router-confirmation.`,
+  },
   custom_api: {
     description: 'Custom API MCP broker prompt guide',
     triggerMode: 'on_attach',

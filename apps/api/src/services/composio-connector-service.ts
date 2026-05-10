@@ -1,4 +1,5 @@
 import type { ConnectorAccountSecret, ConnectorCatalogItem, ConnectorKey } from './connector-registry';
+import { mcpToolConfirmationService } from './mcp-tool-confirmation-service';
 
 type ComposioTool = {
   name: string;
@@ -12,6 +13,7 @@ type ComposioRuntimeContext = {
   taskSessionId: string;
   userId: string;
   profileId: string;
+  agentRunId?: string | null;
   profileSecret: ConnectorAccountSecret | null;
   profileMetadata: Record<string, unknown>;
   catalogItem: ConnectorCatalogItem;
@@ -630,12 +632,67 @@ export class ComposioConnectorService {
         throw new Error(`${runtimeContext.catalogItem.name} tool is not allowed: ${requestedName}`);
       }
       const rawArguments = pickObject(params.arguments);
+      const confirmationToken =
+        asText(params.confirmationToken) || asText(rawArguments.confirmationToken);
+      const confirmationAgentRunId =
+        asText(params.confirmationAgentRunId) || asText(rawArguments.confirmationAgentRunId);
+      const sanitizedArguments = { ...rawArguments };
+      delete sanitizedArguments.confirmationToken;
+      delete sanitizedArguments.confirmationAgentRunId;
       const toolArguments =
         composioToolName === 'COMPOSIO_SEARCH_TOOLS'
-          ? normalizeComposioSearchToolsArguments(rawArguments, runtimeContext)
-          : rawArguments;
+          ? normalizeComposioSearchToolsArguments(sanitizedArguments, runtimeContext)
+          : sanitizedArguments;
       if (runtimeContext.connectorKey === 'figma' && composioToolName === 'COMPOSIO_SEARCH_TOOLS') {
         return sanitizeValue(buildFigmaSearchToolsResult(rawArguments, runtimeContext));
+      }
+      if (
+        mcpToolConfirmationService.classifyRisk(
+          runtimeContext.connectorKey,
+          requestedName,
+          toolArguments
+        ) === 'high'
+      ) {
+        const scopedAgentRunId = confirmationToken
+          ? confirmationAgentRunId || null
+          : runtimeContext.agentRunId || null;
+        const scope = {
+          appUserId: runtimeContext.userId,
+          taskSessionId: runtimeContext.taskSessionId,
+          agentRunId: scopedAgentRunId,
+          connectorKey: runtimeContext.connectorKey,
+          toolName: requestedName,
+          argumentsJson: toolArguments,
+        };
+        const confirmed = await mcpToolConfirmationService.verifyAndConsumeConfirmation({
+          ...scope,
+          confirmationToken,
+        });
+        if (!confirmed) {
+          const pending = await mcpToolConfirmationService.createPendingConfirmation(scope);
+          const publicSummary = mcpToolConfirmationService.getPublicSummary(pending.summaryJson);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  type: 'confirmation_required',
+                  connectorKey: runtimeContext.connectorKey,
+                  toolName: requestedName,
+                  confirmationId: pending.id,
+                  summary: publicSummary,
+                }),
+              },
+            ],
+            structuredContent: {
+              type: 'confirmation_required',
+              connectorKey: runtimeContext.connectorKey,
+              toolName: requestedName,
+              confirmationId: pending.id,
+              summary: publicSummary,
+            },
+          };
+        }
       }
       const result = await this.callComposioMcp(runtimeContext, 'tools/call', {
         name: composioToolName,

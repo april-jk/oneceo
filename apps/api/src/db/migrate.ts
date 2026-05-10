@@ -45,6 +45,7 @@ const REQUIRED_TABLES = [
   'custom_api_definitions',
   'custom_api_endpoint_tools',
   'custom_api_confirmations',
+  'task_session_mcp_tool_confirmations',
   'custom_api_call_audit_logs',
   'user_platform_skill_bindings',
   'user_custom_skills',
@@ -187,6 +188,11 @@ const REQUIRED_COLUMNS = [
   ['custom_api_call_audit_logs', 'status'],
   ['custom_api_confirmations', 'arguments_hash'],
   ['custom_api_confirmations', 'expires_at'],
+  ['task_session_mcp_tool_confirmations', 'arguments_hash'],
+  ['task_session_mcp_tool_confirmations', 'confirmation_token_hash'],
+  ['task_session_mcp_tool_confirmations', 'summary_json'],
+  ['task_session_mcp_tool_confirmations', 'status'],
+  ['task_session_mcp_tool_confirmations', 'expires_at'],
   ['platform_skills', 'slug'],
   ['platform_skills', 'metadata_json'],
   ['platform_skills', 'published_revision_id'],
@@ -924,6 +930,24 @@ CREATE TABLE IF NOT EXISTS custom_api_confirmations (
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS task_session_mcp_tool_confirmations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  app_user_id TEXT NOT NULL,
+  task_session_id TEXT NOT NULL,
+  agent_run_id TEXT,
+  connector_key TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  arguments_hash TEXT NOT NULL,
+  confirmation_token_hash TEXT,
+  summary_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'pending',
+  expires_at TIMESTAMP NOT NULL,
+  approved_at TIMESTAMP,
+  consumed_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS custom_api_call_audit_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id TEXT NOT NULL,
@@ -970,6 +994,10 @@ CREATE INDEX IF NOT EXISTS idx_custom_api_endpoint_tools_definition_status
   ON custom_api_endpoint_tools (definition_id, review_status);
 CREATE INDEX IF NOT EXISTS idx_custom_api_confirmations_lookup
   ON custom_api_confirmations (user_id, task_session_id, endpoint_tool_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_mcp_tool_confirmations_lookup
+  ON task_session_mcp_tool_confirmations (app_user_id, task_session_id, connector_key, tool_name);
+CREATE INDEX IF NOT EXISTS idx_task_session_mcp_tool_confirmations_token_hash
+  ON task_session_mcp_tool_confirmations (confirmation_token_hash);
 CREATE INDEX IF NOT EXISTS idx_custom_api_call_audit_logs_session_created
   ON custom_api_call_audit_logs (task_session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_custom_api_call_audit_logs_tool_created

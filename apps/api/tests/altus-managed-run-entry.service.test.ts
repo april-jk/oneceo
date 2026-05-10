@@ -4,6 +4,7 @@ import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-me
 import { taskSessionRunDAO } from '../src/db/dao';
 import { altusMemoryContextService } from '../src/services/altus-memory-context-service';
 import { AltusManagedRunEntryService } from '../src/services/altus-managed-run-entry-service';
+import { mcpToolConfirmationService } from '../src/services/mcp-tool-confirmation-service';
 import { taskSessionAltusMemoryService } from '../src/services/task-session-altus-memory-service';
 import { taskSessionSkillStateService } from '../src/services/task-session-skill-state-service';
 import { userSkillService } from '../src/services/user-skill-service';
@@ -1056,4 +1057,318 @@ test('getLatestRun falls back to db summary when recovery reconciliation throws'
   assert.equal(setupService.ensureSessionOwnership.mock.callCount(), 1);
   assert.equal(recoveryService.reconcileLatestRun.mock.callCount(), 1);
   assert.equal(eventWriter.toSummary.mock.callCount(), 1);
+});
+
+test('startRun accepts metadata-only mcp confirmation response', async () => {
+  const run = {
+    id: 'run-mcp-1',
+    sessionId: 'session-mcp-1',
+    status: 'queued',
+    model: 'altus-model',
+    stopReason: null,
+    startedAt: null,
+    completedAt: null,
+    updatedAt: new Date('2026-03-24T04:00:00.000Z'),
+  };
+
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    id: 'session-mcp-1',
+    title: 'MCP confirm',
+    pendingQuestion: null,
+  }) as any);
+  mock.method(altusMemoryContextService, 'buildPromptSectionForRun', async () => ({
+    promptSection: '',
+    userMemory: null,
+    projectMemory: null,
+    sessionMemory: null,
+  }));
+  mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  mock.method(taskSessionRunDAO, 'getLatestRun', async () => null);
+  mock.method(taskSessionRunDAO, 'createRun', async () => run as any);
+  mock.method(mcpToolConfirmationService, 'resolveApprovedReplay', async () => ({
+    confirmationId: 'confirmation-1',
+    agentRunId: 'run-origin-1',
+    toolName: 'google_super__GMAIL_SEND_EMAIL',
+    argumentsJson: {
+      to: 'user@example.com',
+      subject: 'hello',
+    },
+  }));
+  mock.method(userSkillService, 'listAvailableSkills', async () => [] as any);
+  mock.method(taskSessionSkillStateService, 'prepareRunState', async () => ({
+    skillCatalog: [],
+    skills: [],
+    activeSkillsForTurn: [],
+    residentSkillSelections: [],
+    sessionSkillState: null,
+    residentSelectionsForSync: [],
+  }) as any);
+
+  const timelineCalls: Record<string, unknown>[] = [];
+  const setupService = {
+    ensureSessionOwnership: mock.fn(async () => {}),
+    buildTaskIntentProfile: mock.fn(async () => ({
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: [],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+    })),
+    captureConnectorSnapshot: mock.fn(async () => ({
+      snapshotId: 'snapshot-mcp-1',
+      statuses: [],
+    })),
+    captureMcpToolSnapshot: mock.fn(async () => ({
+      snapshotId: 'mcp-snapshot-mcp-1',
+      providers: [],
+    })),
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      timelineCalls.push(input);
+    }),
+    updateSessionLifecycle: mock.fn(async () => {}),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async () => ({ sequence: 1, payload: {} })),
+    toSummary: mock.fn(async (value: any) => ({
+      id: value.id,
+      sessionId: value.sessionId,
+      status: value.status,
+      model: value.model,
+      streamUrl: `/api/altus-managed/runs/${value.id}/stream`,
+      sequence: 1,
+    })),
+  };
+  let capturedState: any = null;
+  const coordinator = {
+    execute: mock.fn(async (state: any) => {
+      capturedState = state;
+    }),
+  };
+  const recoveryService = {
+    reconcileLatestRun: mock.fn(async () => null),
+    buildRecoverySnapshot: mock.fn(async () => ({
+      model: 'altus-model',
+      status: 'queued',
+      sequence: 1,
+      sandbox: { sandboxId: null, workspaceRoot: null, reused: false, updatedAt: null },
+      connectorRuntime: { providerIds: [], updatedAt: null },
+      stream: { latestSequence: 1, latestEventType: null },
+    })),
+  };
+  const redisStateService = {
+    registerRun: mock.fn(async () => {}),
+    setRecoverySnapshot: mock.fn(async () => {}),
+    touchHeartbeat: mock.fn(async () => {}),
+  };
+
+  const service = new AltusManagedRunEntryService(
+    setupService as any,
+    eventWriter as any,
+    {} as any,
+    coordinator as any,
+    redisStateService as any,
+    recoveryService as any
+  );
+
+  await service.startRun('session-mcp-1', 'user-1', {
+    content: '',
+    messageKey: 'msg-mcp-1',
+    metadata: {
+      source: 'mcp_tool_confirmation_approved',
+      mcpToolConfirmation: {
+        action: 'approve',
+        connectorKey: 'google_super',
+        confirmationId: 'confirmation-1',
+        toolName: 'google_super__GMAIL_SEND_EMAIL',
+        confirmationToken: 'token-1',
+        confirmationAgentRunId: 'run-origin-1',
+        summary: {
+          action: 'send_email',
+          target: 'user@example.com',
+          impact: 'Send one email.',
+          parameterSummary: {
+            to: 'user@example.com',
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal((timelineCalls[0] as any)?.messageType, 'user_response');
+  assert.equal((timelineCalls[0] as any)?.content, '');
+  assert.equal(capturedState?.input.mcpToolConfirmationPrompt, null);
+  assert.deepEqual(capturedState?.input.confirmedMcpToolReplay, {
+    confirmationId: 'confirmation-1',
+    confirmationToken: 'token-1',
+    confirmationAgentRunId: 'run-origin-1',
+    toolName: 'google_super__GMAIL_SEND_EMAIL',
+    argumentsJson: {
+      to: 'user@example.com',
+      subject: 'hello',
+    },
+  });
+});
+
+test('startRun converts approved mcp confirmation into hidden replay state instead of visible prompt', async () => {
+  const run = {
+    id: 'run-confirmation-1',
+    sessionId: 'session-confirmation-1',
+    status: 'queued',
+    model: 'altus-model',
+  };
+
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    id: 'session-confirmation-1',
+    title: 'Google Docs task',
+    pendingQuestion: null,
+  }) as any);
+  mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  mock.method(taskSessionRunDAO, 'getLatestRun', async () => null);
+  mock.method(userSkillService, 'listAvailableSkills', async () => []);
+  mock.method(taskSessionSkillStateService, 'prepareRunState', async () => ({
+    skillCatalog: [],
+    skills: [],
+    activeSkillsForTurn: [],
+    residentSkillSelections: [],
+    sessionSkillState: null,
+    residentSelectionsForSync: [],
+  }) as any);
+  mock.method(altusMemoryContextService, 'buildPromptSectionForRun', async () => ({
+    promptSection: '',
+    userMemory: {},
+    projectMemory: null,
+    sessionMemory: null,
+  }) as any);
+  mock.method(mcpToolConfirmationService, 'resolveApprovedReplay', async () => ({
+    confirmationId: 'confirmation-1',
+    agentRunId: 'run-origin-1',
+    toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+    argumentsJson: {
+      tool_slug: 'GOOGLEDOCS_CREATE_DOCUMENT',
+      arguments: {
+        title: '项目周报',
+      },
+    },
+  }));
+  mock.method(taskSessionRunDAO, 'createRun', async () => run as any);
+
+  const setupService = {
+    ensureSessionOwnership: mock.fn(async () => {}),
+    captureConnectorSnapshot: mock.fn(async () => ({
+      snapshotId: 'snapshot-1',
+      statuses: [],
+    })),
+    captureMcpToolSnapshot: mock.fn(async () => ({
+      snapshotId: 'mcp-snapshot-1',
+      providers: [],
+    })),
+    buildTaskIntentProfile: mock.fn(async () => ({
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: [],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: false,
+      todoReason: 'none',
+    })),
+    persistTimelineMessage: mock.fn(async () => undefined),
+    updateSessionLifecycle: mock.fn(async () => undefined),
+  };
+
+  let capturedState: any = null;
+  const coordinator = {
+    execute: mock.fn(async (state: any) => {
+      capturedState = state;
+    }),
+  };
+  const recoveryService = {
+    reconcileLatestRun: mock.fn(async () => null),
+    buildRecoverySnapshot: mock.fn(async () => ({
+      model: 'altus-model',
+      status: 'queued',
+      sequence: 1,
+      sandbox: {
+        sandboxId: null,
+        workspaceRoot: null,
+        reused: false,
+        updatedAt: null,
+      },
+      connectorRuntime: {
+        providerIds: [],
+        updatedAt: null,
+      },
+      stream: {
+        latestSequence: 1,
+        latestEventType: null,
+      },
+    })),
+  };
+  const redisStateService = {
+    registerRun: mock.fn(async () => {}),
+    setRecoverySnapshot: mock.fn(async () => {}),
+    touchHeartbeat: mock.fn(async () => {}),
+  };
+
+  const service = new AltusManagedRunEntryService(
+    setupService as any,
+    {
+      appendRunEvent: mock.fn(async () => ({ sequence: 1, payload: {} })),
+      toSummary: mock.fn(async (value: any) => value),
+    } as any,
+    {} as any,
+    coordinator as any,
+    redisStateService as any,
+    recoveryService as any
+  );
+
+  await service.startRun('session-confirmation-1', 'user-1', {
+    content: '',
+    metadata: {
+      mcpToolConfirmation: {
+        action: 'approve',
+        connectorKey: 'google_super',
+        confirmationId: 'confirmation-1',
+        toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+        confirmationToken: 'token-1',
+        confirmationAgentRunId: 'run-origin-1',
+        summary: {
+          action: 'create_resource',
+          target: '项目周报',
+          parameterSummary: {
+            title: '项目周报',
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(capturedState?.input.userInput, '');
+  assert.equal(capturedState?.input.mcpToolConfirmationPrompt, null);
+  assert.deepEqual(capturedState?.input.confirmedMcpToolReplay, {
+    confirmationId: 'confirmation-1',
+    confirmationToken: 'token-1',
+    confirmationAgentRunId: 'run-origin-1',
+    toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+    argumentsJson: {
+      tool_slug: 'GOOGLEDOCS_CREATE_DOCUMENT',
+      arguments: {
+        title: '项目周报',
+      },
+    },
+  });
 });

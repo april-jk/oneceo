@@ -20,7 +20,9 @@ const envBackup = {
   NO_PROXY: process.env.NO_PROXY,
   COMPOSIO_API_KEY: process.env.COMPOSIO_API_KEY,
   COMPOSIO_GITHUB_TOOLKITS: process.env.COMPOSIO_GITHUB_TOOLKITS,
+  COMPOSIO_GOOGLE_SUPER_TOOLKITS: process.env.COMPOSIO_GOOGLE_SUPER_TOOLKITS,
   COMPOSIO_SLACK_TOOLKITS: process.env.COMPOSIO_SLACK_TOOLKITS,
+  ONECEO_CUSTOM_API_ENABLED: process.env.ONECEO_CUSTOM_API_ENABLED,
 };
 
 beforeEach(() => {
@@ -38,7 +40,9 @@ beforeEach(() => {
   process.env.NO_PROXY = 'localhost,127.0.0.1';
   process.env.COMPOSIO_API_KEY = 'composio-test-key';
   process.env.COMPOSIO_GITHUB_TOOLKITS = 'github';
+  process.env.COMPOSIO_GOOGLE_SUPER_TOOLKITS = 'googlesuper';
   process.env.COMPOSIO_SLACK_TOOLKITS = 'slack';
+  delete process.env.ONECEO_CUSTOM_API_ENABLED;
 });
 
 afterEach(() => {
@@ -86,8 +90,10 @@ test('connector registry exposes built-in connectors with availability metadata'
   const github = catalog.find((item) => item.key === 'github');
   const slack = catalog.find((item) => item.key === 'slack');
   const notion = catalog.find((item) => item.key === 'notion');
-  assert.equal(catalog.length, 7);
-  assert.equal(connectorRegistry.listVisibleCatalog().length, 6);
+  const customApi = catalog.find((item) => item.key === 'custom_api');
+  const googleSuper = catalog.find((item) => item.key === 'google_super');
+  assert.equal(catalog.length, 10);
+  assert.equal(connectorRegistry.listVisibleCatalog().length, 8);
   assert.equal(github?.available, true);
   assert.equal(github?.authMode, 'oauth');
   assert.deepEqual(github?.configFields, []);
@@ -102,6 +108,11 @@ test('connector registry exposes built-in connectors with availability metadata'
   assert.equal(notion?.authMode, 'oauth');
   assert.deepEqual(notion?.configFields, []);
   assert.equal(notionProvider, undefined);
+  assert.equal(googleSuper?.available, true);
+  assert.equal(googleSuper?.authMode, 'oauth');
+  assert.deepEqual(googleSuper?.configFields, []);
+  assert.equal(googleSuper?.oauth?.provider, 'composio');
+  assert.deepEqual(googleSuper?.composio?.toolkitSlugs, ['googlesuper']);
   assert.equal(catalog.find((item) => item.key === 'supabase')?.authMode, 'oauth');
   assert.deepEqual(catalog.find((item) => item.key === 'supabase')?.configFields, []);
   assert.equal(catalog.find((item) => item.key === 'vercel')?.available, true);
@@ -111,6 +122,9 @@ test('connector registry exposes built-in connectors with availability metadata'
     false
   );
   assert.equal(catalog.find((item) => item.key === 'postgres')?.visibleInMenu, false);
+  assert.equal(customApi?.visibleInMenu, false);
+  assert.equal(customApi?.available, false);
+  assert.match(String(customApi?.availabilityReason || ''), /ONECEO_CUSTOM_API_ENABLED/);
 });
 
 test('connector registry materializes current MCP connector runtimes', () => {
@@ -143,6 +157,13 @@ test('connector registry materializes current MCP connector runtimes', () => {
   });
   assert.equal(notionConfig.type, 'hosted');
   assert.equal(notionConfig.provider, 'notion');
+
+  const googleSuperConfig = connectorRegistry.materializeRuntimeConfig({
+    connectorKey: 'google_super',
+    account: buildComposioAccount('google_super'),
+  });
+  assert.equal(googleSuperConfig.type, 'hosted');
+  assert.equal(googleSuperConfig.provider, 'google_super');
 
   const vercelConfig = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'vercel',
@@ -182,6 +203,49 @@ test('connector registry materializes Slack as Composio hosted provider without 
   assert.equal(runtime.provider, 'slack');
 });
 
+test('custom api is hidden and cannot materialize while feature flag is disabled', () => {
+  const visibleKeys = connectorRegistry.listVisibleCatalog().map((item) => item.key);
+  assert.equal(visibleKeys.includes('custom_api'), false);
+
+  assert.throws(
+    () =>
+      connectorRegistry.materializeRuntimeConfig({
+        connectorKey: 'custom_api',
+        account: {
+          profileId: 'custom-api-profile',
+          connectorKey: 'custom_api',
+          authMode: 'token',
+          authStatus: 'authorized',
+          configJson: {},
+          secret: { accessToken: 'secret-token' },
+        },
+      }),
+    /custom_api_disabled/
+  );
+});
+
+test('custom api can only materialize when explicitly enabled', () => {
+  process.env.ONECEO_CUSTOM_API_ENABLED = 'true';
+
+  const customApi = connectorRegistry.listCatalog().find((item) => item.key === 'custom_api');
+  assert.equal(customApi?.visibleInMenu, false);
+  assert.equal(customApi?.available, true);
+
+  const runtime = connectorRegistry.materializeRuntimeConfig({
+    connectorKey: 'custom_api',
+    account: {
+      profileId: 'custom-api-profile',
+      connectorKey: 'custom_api',
+      authMode: 'token',
+      authStatus: 'authorized',
+      configJson: {},
+      secret: { accessToken: 'secret-token' },
+    },
+  });
+  assert.equal(runtime.type, 'hosted');
+  assert.equal(runtime.provider, 'custom_api');
+});
+
 test('slack catalog is unavailable when Composio API key is missing', () => {
   delete process.env.COMPOSIO_API_KEY;
   const slack = connectorRegistry.listCatalog().find((item) => item.key === 'slack');
@@ -201,6 +265,13 @@ test('github catalog is unavailable when Composio API key is missing', () => {
   const github = connectorRegistry.listCatalog().find((item) => item.key === 'github');
   assert.equal(github?.available, false);
   assert.match(String(github?.availabilityReason || ''), /COMPOSIO_API_KEY/);
+});
+
+test('google super catalog is unavailable when Composio API key is missing', () => {
+  delete process.env.COMPOSIO_API_KEY;
+  const googleSuper = connectorRegistry.listCatalog().find((item) => item.key === 'google_super');
+  assert.equal(googleSuper?.available, false);
+  assert.match(String(googleSuper?.availabilityReason || ''), /COMPOSIO_API_KEY/);
 });
 
 test('supabase catalog is unavailable when Composio API key is missing', () => {

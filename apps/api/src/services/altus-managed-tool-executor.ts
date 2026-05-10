@@ -83,6 +83,7 @@ export class AltusManagedToolExecutor {
   async executeToolCall(input: {
     toolCall: ToolCall;
     args: Record<string, unknown>;
+    eventArgs?: Record<string, unknown>;
     signal: AbortSignal;
     modelRoundId?: string | number | null;
     onResult?: (result: Extract<ManagedToolResult, { type: 'result' }>) => ToolResultDisposition;
@@ -91,6 +92,7 @@ export class AltusManagedToolExecutor {
     const toolName = asText(input.toolCall?.function?.name);
     const toolCallId = asText(input.toolCall?.id);
     const toolStartedAt = new Date();
+    const eventArgs = input.eventArgs || input.args;
 
     const toolTrace = await traceToolCallStart({
       sessionId: this.input.sessionId,
@@ -108,7 +110,7 @@ export class AltusManagedToolExecutor {
       {
         toolName,
         content: this.input.buildToolEventContent(toolName, 'started'),
-        arguments: input.args,
+        arguments: eventArgs,
         toolCallId,
       }
     );
@@ -122,7 +124,7 @@ export class AltusManagedToolExecutor {
           toolUseId: toolCallId,
           toolName,
           modelRoundId: input.modelRoundId,
-          args: input.args,
+          args: eventArgs,
           content: result.question,
           contentForUser: result.question,
           activatedSkills: result.activatedSkills as any,
@@ -149,7 +151,7 @@ export class AltusManagedToolExecutor {
           toolUseId: toolCallId,
           toolName,
           modelRoundId: input.modelRoundId,
-          args: input.args,
+          args: eventArgs,
           content: JSON.stringify({
             summary: result.summary,
             verification: result.verification || [],
@@ -180,7 +182,7 @@ export class AltusManagedToolExecutor {
         toolUseId: toolCallId,
         toolName,
         modelRoundId: input.modelRoundId,
-        args: input.args,
+        args: eventArgs,
         content: result.content,
         contentForUser: this.input.buildToolEventContent(toolName, 'completed'),
         activatedSkills: result.activatedSkills as any,
@@ -194,7 +196,7 @@ export class AltusManagedToolExecutor {
         {
           toolName,
           content: this.input.buildToolEventContent(toolName, 'completed'),
-          arguments: input.args,
+          arguments: eventArgs,
           toolCallId,
           toolResultEnvelope,
           ...(disposition.eventPayload || {}),
@@ -227,7 +229,7 @@ export class AltusManagedToolExecutor {
         toolUseId: toolCallId,
         toolName,
         modelRoundId: input.modelRoundId,
-        args: input.args,
+        args: eventArgs,
         content: sanitizedError,
         contentForUser: sanitizedError,
         errorMessage: rawError,
@@ -241,7 +243,7 @@ export class AltusManagedToolExecutor {
         {
           toolName,
           content: this.input.buildToolEventContent(toolName, 'failed'),
-          arguments: input.args,
+          arguments: eventArgs,
           toolCallId,
           error: sanitizedError,
           toolResultEnvelope,

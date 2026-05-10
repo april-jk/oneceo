@@ -252,6 +252,75 @@ test('buildConversationMessages injects latest successful todowrite snapshot as 
   assert.match(String(messages[1]?.content), /\[in_progress\] 修改后端主链/);
 });
 
+test('buildConversationMessages currently omits prior executor tool events during mcp confirmation recovery', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我创建一个 Google Docs 文档',
+      metadata: {},
+    },
+    {
+      role: 'agent',
+      messageType: 'executor_event',
+      content: 'Google Workspace 需要确认后才能继续执行',
+      metadata: {
+        eventType: 'tool_call_completed',
+        toolName: 'mcp__google_super_composio_multi_execute_tool__4b524854a70b',
+        arguments: {
+          toolName: 'GOOGLEDOCS_CREATE_DOCUMENT',
+          title: '项目周报',
+        },
+      },
+    },
+    {
+      role: 'agent',
+      messageType: 'assistant_message',
+      content: '请确认这次 Google Workspace 写操作。',
+      metadata: {},
+    },
+    {
+      role: 'user',
+      messageType: 'user_response',
+      content: '[mcp_tool_confirmation:approve]',
+      metadata: {
+        mcpToolConfirmation: {
+          action: 'approve',
+          connectorKey: 'google_super',
+          confirmationId: 'confirmation-1',
+          toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+          confirmationToken: 'token-1',
+          confirmationAgentRunId: 'run-origin-1',
+        },
+      },
+    },
+  ] as any);
+
+  const service = new AltusManagedSetupService();
+  const messages = await service.buildConversationMessages(
+    'session-mcp-confirmation-gap',
+    '[mcp_tool_confirmation:approve]',
+    'SYSTEM PROMPT',
+    {
+      turnStatePrompt: [
+        '# MCP confirmation recovery',
+        'toolName: google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+        'confirmationToken: token-1',
+      ].join('\n'),
+    }
+  );
+
+  assert.equal(messages.some((item) => item.role === 'system' && String(item.content).includes('confirmationToken: token-1')), true);
+  assert.equal(
+    messages.some((item) => String(item.content).includes('GOOGLEDOCS_CREATE_DOCUMENT')),
+    false
+  );
+  assert.equal(
+    messages.some((item) => String(item.content).includes('mcp__google_super_composio_multi_execute_tool__4b524854a70b')),
+    false
+  );
+});
+
 test('buildTaskIntentProfile keeps trivial single-point tasks off the todo path', async () => {
   mock.method(taskCreationSessionDAO, 'getMessages', async () => [
     {

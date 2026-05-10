@@ -54,6 +54,7 @@ import { codexRemoteService } from '../services/codex-remote-service';
 import { restoreWorkspaceIfArchived } from '../services/sandbox-archive-service';
 import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registry';
 import { resolveAttachConnectorError, sessionConnectorService } from '../services/session-connector-service';
+import { mcpToolConfirmationService } from '../services/mcp-tool-confirmation-service';
 import { sessionConnectorDraftService } from '../services/session-connector-draft-service';
 import { connectorGuideService } from '../services/connector-guide-service';
 import { sessionMcpRecoveryService } from '../services/session-mcp-recovery-service';
@@ -77,6 +78,8 @@ import { altusMemoryContextService } from '../services/altus-memory-context-serv
 import { projectDefaultConnectorService } from '../services/project-default-connector-service';
 import { taskCreationProjectRedisCacheService } from '../services/task-creation-project-redis-cache-service';
 import { taskSessionDeploymentRedisCacheService } from '../services/task-session-deployment-redis-cache-service';
+import { altusManagedRunService } from '../services/altus-managed-run-service';
+import { buildManagedMcpToolConfirmationMetadata } from '../services/managed-mcp-tool-confirmation';
 import { isLegacyClientUserId, isSameUserId, normalizeUserId } from '../utils/user-id';
 
 const router = express.Router();
@@ -8792,6 +8795,94 @@ router.delete('/sessions/:sessionId', async (req, res) => {
     res.status(500).json({
       success: false,
       error: getPublicErrorMessage('删除会话失败，请稍后重试'),
+    });
+  }
+});
+
+router.post('/sessions/:sessionId/mcp-confirmations/:confirmationId/approve', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { sessionId, confirmationId } = req.params;
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const result = await mcpToolConfirmationService.approveConfirmation({
+      appUserId: currentUser.userId,
+      taskSessionId: sessionId,
+      confirmationId,
+    });
+    const resumedRun = await altusManagedRunService.startRun(sessionId, currentUser.userId, {
+      content: '',
+      messageKey: `managed:mcp-confirmation-approve:${confirmationId}`,
+      metadata: buildManagedMcpToolConfirmationMetadata({
+        action: 'approve',
+        confirmationId: result.confirmationId,
+        connectorKey: result.connectorKey,
+        toolName: result.toolName,
+        confirmationToken: result.confirmationToken,
+        confirmationAgentRunId: result.confirmationAgentRunId || undefined,
+        summary: result.summary,
+      }),
+    });
+    return res.json({
+      success: true,
+      data: {
+        ...result,
+        run: resumedRun,
+      },
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(
+        authError?.message || ownershipError?.message || error?.message || '确认 MCP 工具执行失败'
+      ),
+    });
+  }
+});
+
+router.post('/sessions/:sessionId/mcp-confirmations/:confirmationId/reject', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { sessionId, confirmationId } = req.params;
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const result = await mcpToolConfirmationService.rejectConfirmation({
+      appUserId: currentUser.userId,
+      taskSessionId: sessionId,
+      confirmationId,
+    });
+    const publicSummary = mcpToolConfirmationService.getPublicSummary(result.summaryJson);
+    const rejectionRun = await altusManagedRunService.startRun(sessionId, currentUser.userId, {
+      content: '',
+      messageKey: `managed:mcp-confirmation-reject:${confirmationId}`,
+      metadata: buildManagedMcpToolConfirmationMetadata({
+        action: 'reject',
+        confirmationId: result.id,
+        connectorKey: result.connectorKey,
+        toolName: result.toolName,
+        confirmationAgentRunId:
+          typeof result.agentRunId === 'string' && result.agentRunId.trim()
+            ? result.agentRunId
+            : undefined,
+        summary: publicSummary,
+      }),
+    });
+    return res.json({
+      success: true,
+      data: {
+        confirmationId: result.id,
+        status: result.status,
+        run: rejectionRun,
+      },
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(
+        authError?.message || ownershipError?.message || error?.message || '拒绝 MCP 工具执行失败'
+      ),
     });
   }
 });

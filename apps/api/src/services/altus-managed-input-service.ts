@@ -18,6 +18,7 @@ import { managedImageObjectService, type ManagedImageObjectService } from './man
 import { classifyTaskIntentShape } from './task-intent-shape-service';
 import { userSkillService } from './user-skill-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
+import { readManagedMcpToolConfirmationPayload } from './managed-mcp-tool-confirmation';
 
 type SubmitManagedInput = {
   sessionId?: string;
@@ -176,7 +177,9 @@ export class AltusManagedInputService {
     const resolvedMessageKey = asText(input.messageKey) || `managed-input:${randomUUID()}`;
     const normalizedUploads = normalizeAttachmentUploads(Array.isArray(input.files) ? input.files : []);
     const content = asText(input.content);
-    if (!content && normalizedUploads.length === 0) {
+    const baseMetadata = pickObject(input.metadata);
+    const managedMcpToolConfirmation = readManagedMcpToolConfirmationPayload(baseMetadata);
+    if (!content && normalizedUploads.length === 0 && !managedMcpToolConfirmation) {
       throw new Error('消息内容不能为空');
     }
 
@@ -203,7 +206,6 @@ export class AltusManagedInputService {
       userId,
       availableSkillCount: availableSkills.length,
     });
-    const baseMetadata = pickObject(input.metadata);
     const explicitSkillSelections = normalizeSkillSelections(baseMetadata.skills);
     let mergedSkillSelections = explicitSkillSelections;
     const taskIntentShape = classifyTaskIntentShape(content);

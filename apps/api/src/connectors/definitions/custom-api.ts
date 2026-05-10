@@ -1,6 +1,8 @@
 import type { ConnectorDefinition } from './types';
+import { isCustomApiEnabled } from '../../services/custom-api-feature-flag';
 
 export function buildCustomApiDefinition(): ConnectorDefinition {
+  const enabled = isCustomApiEnabled();
   return {
     key: 'custom_api',
     category: 'custom_api',
@@ -9,10 +11,11 @@ export function buildCustomApiDefinition(): ConnectorDefinition {
     icon: 'plug',
     sortOrder: 80,
     authMode: 'token',
-    available: true,
+    available: enabled,
+    availabilityReason: enabled ? undefined : 'ONECEO_CUSTOM_API_ENABLED is not enabled',
     configFields: [],
     activityMatcherVerified: true,
-    visibleInMenu: true,
+    visibleInMenu: false,
     runtime: {
       type: 'hosted',
       transport: 'streamable_http',

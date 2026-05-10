@@ -9,6 +9,7 @@ import {
   asText,
   buildManagedToolDefinitionsWithMcp,
   parseToolArguments,
+  pickObject,
   truncate,
   type ChatMessage,
   type ToolCall,
@@ -21,7 +22,10 @@ import {
   altusManagedContextBudgetService,
 } from './altus-managed-context-budget-service';
 import { altusManagedContextService } from './altus-managed-context-service';
-import { AltusManagedToolExecutor } from './altus-managed-tool-executor';
+import {
+  AltusManagedToolExecutor,
+  type AltusManagedToolExecutionEnvelope,
+} from './altus-managed-tool-executor';
 import {
   buildManagedToolResultEnvelope,
   stringifyManagedToolResultEnvelope,
@@ -1936,6 +1940,102 @@ private async chargeForModelCall(state: AltusRunState, input: {
       : normalizedCompletionMessage;
   }
 
+  private tryParseJson(value: string): unknown | null {
+    const trimmed = asText(value).trim();
+    if (!trimmed) return null;
+    try {
+      return JSON.parse(trimmed) as unknown;
+    } catch {
+      return null;
+    }
+  }
+
+  private extractConfirmationRequiredPayload(
+    value: unknown,
+    depth = 0
+  ): Record<string, unknown> | null {
+    if (depth > 8 || value == null) {
+      return null;
+    }
+    if (typeof value === 'string') {
+      const parsed = this.tryParseJson(value);
+      return parsed == null ? null : this.extractConfirmationRequiredPayload(parsed, depth + 1);
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const nested = this.extractConfirmationRequiredPayload(item, depth + 1);
+        if (nested) {
+          return nested;
+        }
+      }
+      return null;
+    }
+
+    const record = pickObject(value);
+    if (asText(record.type) === 'confirmation_required') {
+      return record;
+    }
+
+    for (const candidate of [record.structuredContent, record.result, record.content, record.payload]) {
+      const nested = this.extractConfirmationRequiredPayload(candidate, depth + 1);
+      if (nested) {
+        return nested;
+      }
+    }
+    return null;
+  }
+
+  private readConfirmationRequiredPayload(rawContent: string): Record<string, unknown> | null {
+    const parsed = this.tryParseJson(rawContent);
+    return parsed == null ? null : this.extractConfirmationRequiredPayload(parsed);
+  }
+
+  private async replayApprovedMcpToolCall(input: {
+    state: AltusRunState;
+    signal: AbortSignal;
+    toolExecutor: AltusManagedToolExecutor;
+    messages: ChatMessage[];
+  }): Promise<AltusManagedToolExecutionEnvelope | null> {
+    const replay = input.state.input.confirmedMcpToolReplay;
+    if (!replay) return null;
+    const sanitizedArgs = { ...replay.argumentsJson };
+    const executionArgs = {
+      ...sanitizedArgs,
+      confirmationToken: replay.confirmationToken,
+      confirmationAgentRunId: replay.confirmationAgentRunId || undefined,
+    };
+    const syntheticToolCallId = `confirmed:${replay.confirmationId}`;
+    const toolCall: ToolCall = {
+      id: syntheticToolCallId,
+      type: 'function',
+      function: {
+        name: replay.toolName,
+        arguments: JSON.stringify(sanitizedArgs),
+      },
+    };
+    input.messages.push({
+      role: 'assistant',
+      content: '',
+      tool_calls: [toolCall],
+    });
+    const envelope = await input.toolExecutor.executeToolCall({
+      toolCall,
+      args: executionArgs,
+      eventArgs: sanitizedArgs,
+      signal: input.signal,
+    });
+    if (envelope.status === 'ask_user') {
+      throw new Error('managed_mcp_confirmation_replay_ask_user_unsupported');
+    }
+    input.messages.push({
+      role: 'tool',
+      tool_call_id: toolCall.id,
+      name: replay.toolName,
+      content: stringifyManagedToolResultEnvelope(envelope.toolResultEnvelope),
+    });
+    return envelope;
+  }
+
   private async runModelLoop(state: AltusRunState, signal: AbortSignal) {
     if (!state.workspaceRoot || !state.sandboxId) {
       throw new Error('managed_run_missing_sandbox_context');
@@ -2010,6 +2110,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
     });
     const turnStatePrompt = [
       runtimeContextPrompt,
+      state.input.mcpToolConfirmationPrompt || '',
       dynamicContextPrompt,
       state.input.memoryContextPrompt || '',
       skillCatalogPrompt,
@@ -2026,6 +2127,24 @@ private async chargeForModelCall(state: AltusRunState, input: {
       }
     );
     let plainTextRecoveryUsed = false;
+    const replayEnvelope = await this.replayApprovedMcpToolCall({
+      state,
+      signal,
+      toolExecutor,
+      messages,
+    });
+    if (replayEnvelope?.status === 'failed') {
+      await this.syncLoopSnapshot(state, {
+        lastTransitionReason: replayEnvelope.transitionReason,
+        recoveryMode: replayEnvelope.recoveryMode,
+        currentRound: 0,
+        maxRounds: this.getMaxToolRounds(),
+        plainTextRecoveryUsed,
+        lastToolName: replayEnvelope.toolName,
+        lastToolCallId: replayEnvelope.toolCallId,
+      });
+      throw new Error(replayEnvelope.error);
+    }
     const assistantStreamMessageKey = `managed:${state.input.runId}:assistant`;
     const finalAssistantMessageKey = `managed:${state.input.runId}:assistant:final`;
     const deploymentCompletionIntent = this.resolveDeploymentCompletionIntent(
@@ -2910,6 +3029,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
 
         if (envelope.status === 'result') {
           const result = envelope.result;
+          const confirmationRequired = this.readConfirmationRequiredPayload(result.content);
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
@@ -2917,6 +3037,18 @@ private async chargeForModelCall(state: AltusRunState, input: {
             content: stringifyManagedToolResultEnvelope(envelope.toolResultEnvelope),
           });
           completedToolCallIds.add(toolCall.id);
+          if (confirmationRequired) {
+            await this.syncLoopSnapshot(state, {
+              lastTransitionReason: 'tool_confirmation_requested',
+              recoveryMode: 'awaiting_user',
+              currentRound,
+              maxRounds: maxToolRounds,
+              plainTextRecoveryUsed,
+              lastToolName: toolName,
+              lastToolCallId: toolCall.id,
+            });
+            return { outcome: 'waiting_user' as const };
+          }
           nextRoundStatusContent = this.buildPostToolRunStatusContent({
             toolName,
             args,

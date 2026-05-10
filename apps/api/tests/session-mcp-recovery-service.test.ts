@@ -109,13 +109,18 @@ test('markPendingRecoverByOrchestratorSessionId does not rewrite Composio notion
   }) as any);
   mock.method(taskSessionConnectorBindingDAO, 'listByTaskSessionId', async () => [
     {
+      id: 'binding-1',
       taskSessionId: 'session-1',
       connectorKey: 'notion',
       desiredState: 'attached',
       runtimeTransport: 'api_brokered_mcp',
     },
   ] as any);
-  const updateMock = mock.method(taskSessionConnectorBindingDAO, 'updateRuntime', async () => ({} as any));
+  const updateMock = mock.method(
+    taskSessionConnectorBindingDAO,
+    'updateRuntimeByBindingId',
+    async () => ({} as any)
+  );
   mock.method(
     taskSessionRedisCacheService,
     'invalidateConnectorProjectionBySessionId',
@@ -125,7 +130,8 @@ test('markPendingRecoverByOrchestratorSessionId does not rewrite Composio notion
   await sessionMcpRecoveryService.markPendingRecoverByOrchestratorSessionId('orch-1');
 
   assert.equal(updateMock.mock.callCount(), 1);
-  const patch = updateMock.mock.calls[0]?.arguments[2] as Record<string, unknown>;
+  assert.equal(updateMock.mock.calls[0]?.arguments[0], 'binding-1');
+  const patch = updateMock.mock.calls[0]?.arguments[1] as Record<string, unknown>;
   assert.equal(patch.runtimeStatus, 'pending_recover');
   assert.equal(patch.runtimeTransport, undefined);
   assert.equal(patch.lastError, 'sandbox_unavailable_pending_recover');

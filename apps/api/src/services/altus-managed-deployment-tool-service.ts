@@ -438,6 +438,7 @@ function buildPendingResult(
 
 const DEPLOYMENT_FAILED_STATUSES = new Set(['failed', 'crashed', 'removed']);
 const DEPLOYMENT_PENDING_BINDING_STATES = new Set(['provisioning', 'public_settling']);
+const TERMINAL_SUCCESS_DEPLOYMENT_STATUSES = new Set(['SUCCESS', 'DEPLOYED', 'ACTIVE']);
 
 function normalizeDeploymentStatus(value: unknown): string {
   return asText(value).toLowerCase();
@@ -634,6 +635,14 @@ function buildSuccessResult(input: {
   };
 }
 
+function isPublicSettlingButAlreadyReady(panel: RailwayDeploymentPanelData): boolean {
+  const bindingState = asText(panel.bindingState).toLowerCase();
+  if (bindingState !== 'public_settling') return false;
+  const deploymentStatus = asText(panel.latestStatus).toUpperCase();
+  if (!TERMINAL_SUCCESS_DEPLOYMENT_STATUSES.has(deploymentStatus)) return false;
+  return Boolean(resolvePreferredPanelPublicUrl(panel));
+}
+
 type ManagedDeploymentAction = 'deploy' | 'redeploy' | 'rollback';
 
 function mapToolActionToRuntimeAction(action: AltusManagedDeploymentToolName): ManagedDeploymentAction {
@@ -779,8 +788,9 @@ export class AltusManagedDeploymentToolService {
           resolvedOrchestratorSessionId: input.sandboxId,
         });
         if (
-          panel.activeDeploymentPending ||
-          DEPLOYMENT_PENDING_BINDING_STATES.has(asText(panel.bindingState))
+          (panel.activeDeploymentPending ||
+            DEPLOYMENT_PENDING_BINDING_STATES.has(asText(panel.bindingState))) &&
+          !isPublicSettlingButAlreadyReady(panel)
         ) {
           deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
             type: 'PROVIDER_STATUS',
@@ -933,8 +943,9 @@ export class AltusManagedDeploymentToolService {
         deploymentId: asText(result.panel.deploymentId) || undefined,
       });
       if (
-        result.panel.activeDeploymentPending ||
-        DEPLOYMENT_PENDING_BINDING_STATES.has(asText(result.panel.bindingState))
+        (result.panel.activeDeploymentPending ||
+          DEPLOYMENT_PENDING_BINDING_STATES.has(asText(result.panel.bindingState))) &&
+        !isPublicSettlingButAlreadyReady(result.panel)
       ) {
         deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
           type: 'PROVIDER_STATUS',

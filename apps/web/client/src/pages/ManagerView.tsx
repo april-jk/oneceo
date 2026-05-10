@@ -35,6 +35,7 @@ import {
   type TaskCreationSessionSummary,
 } from "@/lib/task-creation-client";
 import { isDevRuntime } from "@/lib/runtime-env";
+import { GuidedTour, type GuidedTourStep } from "@/components/GuidedTour";
 
 type ProjectSessionItem = {
   sessionId: string;
@@ -42,6 +43,45 @@ type ProjectSessionItem = {
   status: string;
   updatedAt?: string;
 };
+
+const PROJECTS_OVERVIEW_TOUR_KEY = "oneceo:tour.projects.overview.completed";
+const PROJECTS_OVERVIEW_STEPS: GuidedTourStep[] = [
+  {
+    id: "create-project",
+    selector: '[data-tour="projects-create-button"]',
+    title: "新建项目",
+    body: "项目用于把多个会话和任务收拢到同一个目标下。需要长期指令、默认连接器或复盘交付时，再新建项目。",
+    placement: "left",
+  },
+  {
+    id: "manual-projects",
+    selector: '[data-tour="projects-manual-section"]',
+    title: "普通项目",
+    body: "普通项目由你创建，后续任务可以归属进来。项目指令会作为长期约束影响相关会话。",
+    placement: "bottom",
+  },
+  {
+    id: "self-organized-projects",
+    selector: '[data-tour="projects-self-organized-toggle"]',
+    title: "自组织项目",
+    body: "这里展示系统示例或已形成组织结构的项目，适合查看经理和员工分工。",
+    placement: "top",
+  },
+  {
+    id: "project-card",
+    selector: '[data-tour="projects-self-organized-card"]',
+    title: "项目卡片",
+    body: "进度、经理数、员工数帮助你快速判断执行状态。点击查看详情进入项目层级。",
+    placement: "top",
+  },
+  {
+    id: "manager-row",
+    selector: '[data-tour="projects-manager-row"]',
+    title: "经理与员工",
+    body: "经理负责一个方向的任务拆分和协调；展开后能看到员工技能、状态和当前任务。",
+    placement: "top",
+  },
+];
 
 export default function ManagerView() {
   const showSelfOrganizedProjects = isDevRuntime();
@@ -260,18 +300,23 @@ export default function ManagerView() {
   return (
     <WorkspaceLayout>
       <div className="space-y-6">
+        <GuidedTour
+          storageKey={PROJECTS_OVERVIEW_TOUR_KEY}
+          steps={PROJECTS_OVERVIEW_STEPS}
+          autoStart
+        />
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">{t("managerView.title")}</h1>
             <p className="mt-1 text-muted-foreground">{t("managerView.subtitle")}</p>
           </div>
-          <Button className="gap-2" onClick={requestCreateProject}>
+          <Button data-tour="projects-create-button" className="gap-2" onClick={requestCreateProject}>
             <Plus className="h-4 w-4" />
             {t("managerView.createProject")}
           </Button>
         </div>
 
-        <section className="space-y-4">
+        <section data-tour="projects-manual-section" className="space-y-4">
           <div className="flex items-center gap-2">
             <Layers3 className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">
@@ -426,9 +471,10 @@ export default function ManagerView() {
         </section>
 
         {showSelfOrganizedProjects ? (
-          <section className="space-y-4">
+          <section data-tour="projects-self-organized-section" className="space-y-4">
             <button
               type="button"
+              data-tour="projects-self-organized-toggle"
               className="flex w-full items-center justify-between rounded-2xl border border-border/70 bg-card px-4 py-3 text-left transition-colors hover:bg-accent/30"
               onClick={() => setSelfOrganizedExpanded((prev) => !prev)}
             >
@@ -459,9 +505,12 @@ export default function ManagerView() {
                   transition={{ duration: 0.2 }}
                   className="space-y-4 overflow-hidden"
                 >
-                  {SELF_ORGANIZED_PROJECTS.map((project) => (
+                  {SELF_ORGANIZED_PROJECTS.map((project, projectIndex) => (
                     <Card key={project.id} className="p-6">
-                    <div className="mb-4 flex items-start justify-between">
+                    <div
+                      data-tour={projectIndex === 0 ? "projects-self-organized-card" : undefined}
+                      className="mb-4 flex items-start justify-between"
+                    >
                       <div className="flex-1">
                         <div className="mb-2 flex items-center gap-3">
                           <Button
@@ -529,9 +578,14 @@ export default function ManagerView() {
                           transition={{ duration: 0.2 }}
                           className="ml-12 space-y-3"
                         >
-                          {project.managers.map((manager) => (
+                          {project.managers.map((manager, managerIndex) => (
                             <div
                               key={manager.id}
+                              data-tour={
+                                projectIndex === 0 && managerIndex === 0
+                                  ? "projects-manager-row"
+                                  : undefined
+                              }
                               className="rounded-lg border-l-4 border-primary bg-muted/30 p-4"
                             >
                               <div className="mb-3 flex items-start justify-between">

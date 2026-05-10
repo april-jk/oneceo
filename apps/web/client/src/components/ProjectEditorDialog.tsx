@@ -27,6 +27,11 @@ import type {
   TaskCreationProjectDefaultConnector,
   TaskCreationProjectSummary,
 } from "@/lib/task-creation-client";
+import {
+  GuidedTour,
+  isGuidedTourInteraction,
+  type GuidedTourStep,
+} from "@/components/GuidedTour";
 
 type ProjectEditorDialogProps = {
   open: boolean;
@@ -47,6 +52,43 @@ type ProjectEditorDialogProps = {
 type SelectableConnector = TaskCreationProjectDefaultConnector & {
   connectorName?: string | null;
 };
+
+const PROJECT_CREATE_TOUR_KEY = "oneceo:tour.projects.create.completed";
+const PROJECT_CREATE_STEPS: GuidedTourStep[] = [
+  {
+    id: "project-name",
+    selector: '[data-tour="project-create-name"]',
+    title: "项目名称",
+    body: "给目标一个可复用的工作空间名称，后续会话可以归属到这个项目里。",
+    placement: "bottom",
+  },
+  {
+    id: "project-instruction",
+    selector: '[data-tour="project-create-instruction"]',
+    title: "项目指令",
+    body: "写长期约束，例如技术栈、部署要求、语气、验收标准或默认交付格式。",
+    placement: "bottom",
+  },
+  {
+    id: "default-connectors",
+    selector: '[data-tour="project-create-connectors"]',
+    title: "默认连接器",
+    body: "项目内任务可优先使用这些授权工具。未授权时先去设置里完成连接。",
+    placement: "top",
+  },
+  {
+    id: "submit-project",
+    selector: '[data-tour="project-create-submit"]',
+    title: "创建后开始收拢任务",
+    body: "创建后可以在任务输入区选择项目归属，让相关会话和产出集中管理。",
+    placement: "top",
+  },
+];
+
+function hasCompletedProjectTour(storageKey: string) {
+  if (typeof window === "undefined") return true;
+  return window.localStorage.getItem(storageKey) === "completed";
+}
 
 function profileDisplayName(profile: Pick<ConnectorProfile, "profileName" | "displayName">) {
   return profile.displayName?.trim() || profile.profileName?.trim() || "";
@@ -81,6 +123,26 @@ export function ProjectEditorDialog({
   const [catalog, setCatalog] = React.useState<ConnectorCatalogItem[]>([]);
   const [profiles, setProfiles] = React.useState<ConnectorProfile[]>([]);
   const [loadingProfiles, setLoadingProfiles] = React.useState(false);
+  const [projectCreateTourOpen, setProjectCreateTourOpen] = React.useState(false);
+
+  const preventGuidedTourOutsideClose = React.useMemo(
+    () => (event: Event) => {
+      if (isGuidedTourInteraction(event)) {
+        event.preventDefault();
+      }
+    },
+    [],
+  );
+
+  React.useEffect(() => {
+    if (!open || mode !== "create") {
+      setProjectCreateTourOpen(false);
+      return;
+    }
+    if (hasCompletedProjectTour(PROJECT_CREATE_TOUR_KEY)) return;
+    const timer = window.setTimeout(() => setProjectCreateTourOpen(true), 260);
+    return () => window.clearTimeout(timer);
+  }, [mode, open]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -226,7 +288,11 @@ export function ProjectEditorDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent
+        className="sm:max-w-2xl"
+        onInteractOutside={preventGuidedTourOutsideClose}
+        onPointerDownOutside={preventGuidedTourOutsideClose}
+      >
         <DialogHeader>
           <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-muted/60">
             <FolderOpen className="h-8 w-8 text-foreground" />
@@ -241,6 +307,7 @@ export function ProjectEditorDialog({
             <Label htmlFor="project-editor-name">{t("sidebar.projectNameLabel")}</Label>
             <Input
               id="project-editor-name"
+              data-tour="project-create-name"
               value={name}
               onChange={(event) => setName(event.target.value)}
               placeholder={t("sidebar.projectNamePlaceholder")}
@@ -258,6 +325,7 @@ export function ProjectEditorDialog({
             <Label htmlFor="project-editor-instruction">{t("projectEditor.projectInstructionLabel")}</Label>
             <Textarea
               id="project-editor-instruction"
+              data-tour="project-create-instruction"
               value={projectInstruction}
               onChange={(event) => setProjectInstruction(event.target.value.slice(0, 8000))}
               placeholder={t("projectEditor.projectInstructionPlaceholder")}
@@ -271,6 +339,7 @@ export function ProjectEditorDialog({
               <PopoverTrigger asChild>
                 <button
                   type="button"
+                  data-tour="project-create-connectors"
                   className="inline-flex h-[36px] min-w-[72px] w-full items-center justify-between gap-[6px] whitespace-nowrap rounded-[8px] bg-transparent px-[12px] py-[8px] text-sm font-medium text-[var(--text-primary)] outline outline-1 -outline-offset-1 outline-[var(--Button-border-secondary)] transition-colors hover:bg-[var(--fill-tsp-white-light)] hover:opacity-90 active:opacity-80"
                 >
                   <div className="text-[13px]">
@@ -452,7 +521,11 @@ export function ProjectEditorDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t("common.cancel")}
           </Button>
-          <Button onClick={() => void handleSubmit()} disabled={submitting || !name.trim()}>
+          <Button
+            data-tour="project-create-submit"
+            onClick={() => void handleSubmit()}
+            disabled={submitting || !name.trim()}
+          >
             {submitting
               ? t("sidebar.saving")
               : mode === "create"
@@ -460,6 +533,12 @@ export function ProjectEditorDialog({
                 : t("common.save")}
           </Button>
         </DialogFooter>
+        <GuidedTour
+          storageKey={PROJECT_CREATE_TOUR_KEY}
+          steps={PROJECT_CREATE_STEPS}
+          open={projectCreateTourOpen}
+          onOpenChange={setProjectCreateTourOpen}
+        />
       </DialogContent>
     </Dialog>
   );

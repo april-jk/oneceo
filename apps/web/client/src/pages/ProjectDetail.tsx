@@ -21,6 +21,7 @@ import WorkspaceLayout from '@/components/WorkspaceLayout';
 import { useTranslation } from 'react-i18next';
 import { EmployeeDeliverableViewer } from '@/components/DeliverableViewer';
 import TaskDocumentsDialog from '@/components/TaskDocumentsDialog';
+import { GuidedTour, type GuidedTourStep } from '@/components/GuidedTour';
 
 interface EmployeeAssignment {
   employeeId: string;
@@ -62,6 +63,38 @@ interface ProjectDetailProps {
   projectId?: string;
   onBack?: () => void;
 }
+
+const PROJECT_DETAIL_TOUR_KEY = 'oneceo:tour.project_detail.completed';
+const PROJECT_DETAIL_STEPS: GuidedTourStep[] = [
+  {
+    id: 'create-manager',
+    selector: '[data-tour="project-detail-create-manager"]',
+    title: '创建经理',
+    body: '需要新增职责线时再创建经理。经理负责一个方向的任务拆分、协调和验收。',
+    placement: 'left',
+  },
+  {
+    id: 'manager-card',
+    selector: '[data-tour="project-detail-manager-card"]',
+    title: '经理卡片',
+    body: '每个经理代表一条职责线，例如开发、运营、设计或 QA。展开后可以查看它负责的任务。',
+    placement: 'bottom',
+  },
+  {
+    id: 'task-card',
+    selector: '[data-tour="project-detail-task-card"]',
+    title: '任务卡片',
+    body: '任务展示优先级、状态、截止日期和参与员工。点击任务可以展开协作员工与交付状态。',
+    placement: 'top',
+  },
+  {
+    id: 'task-documents',
+    selector: '[data-tour="project-detail-task-documents"]',
+    title: '交付文档',
+    body: '这里是验收证据，不只是聊天记录。进入后可以查看该任务下的全部交付文档。',
+    placement: 'left',
+  },
+];
 
 export default function ProjectDetail({ projectId: propProjectId, onBack }: ProjectDetailProps = {}) {
   const [location] = useLocation();
@@ -326,6 +359,11 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
 
   return (
       <div className="flex-1 flex flex-col">
+        <GuidedTour
+          storageKey={PROJECT_DETAIL_TOUR_KEY}
+          steps={PROJECT_DETAIL_STEPS}
+          autoStart
+        />
         {/* Header */}
         <div className="border-b border-border bg-background px-6 py-4">
           <div className="flex items-center justify-between">
@@ -350,7 +388,7 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
             </div>
             <Dialog open={createManagerOpen} onOpenChange={setCreateManagerOpen}>
               <DialogTrigger asChild>
-                <Button className="gap-2">
+                <Button data-tour="project-detail-create-manager" className="gap-2">
                   <Plus className="w-4 h-4" />
                   {t('projectDetail.createManager')}
                 </Button>
@@ -408,14 +446,17 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
         {/* Main Content */}
         <ScrollArea className="flex-1">
           <div className="p-6 space-y-4">
-            {managers.map((manager) => (
+            {managers.map((manager, managerIndex) => (
               <motion.div
                 key={manager.id}
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.3 }}
               >
-                <Card className="overflow-hidden">
+                <Card
+                  data-tour={managerIndex === 0 ? 'project-detail-manager-card' : undefined}
+                  className="overflow-hidden"
+                >
                   <CardHeader 
                     className="cursor-pointer hover:bg-muted/50 transition-colors" 
                     onClick={() => toggleManager(manager.id)}
@@ -463,8 +504,12 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
                               {t('projectDetail.noTasks')}
                             </div>
                           ) : (
-                            manager.tasks.map((task) => (
-                              <Card key={task.id} className="border-l-4 border-l-foreground/20">
+                            manager.tasks.map((task, taskIndex) => (
+                              <Card
+                                key={task.id}
+                                data-tour={managerIndex === 0 && taskIndex === 0 ? 'project-detail-task-card' : undefined}
+                                className="border-l-4 border-l-foreground/20"
+                              >
                                 <CardHeader 
                                   className="cursor-pointer hover:bg-muted/30 transition-colors py-4"
                                   onClick={() => toggleTask(manager.id, task.id)}
@@ -502,6 +547,7 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
                                         <span>{task.deadline}</span>
                                       </div>
                                       <Button
+                                        data-tour={managerIndex === 0 && taskIndex === 0 ? 'project-detail-task-documents' : undefined}
                                         size="sm"
                                         variant="outline"
                                         className="gap-2"

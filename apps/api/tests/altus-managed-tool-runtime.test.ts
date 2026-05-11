@@ -665,6 +665,68 @@ test('mcp tool call is blocked until active connector guide is loaded', async ()
   assert.equal(guideMock.mock.callCount(), 1);
 });
 
+test('composio search tool call is blocked until active connector guide is loaded', async () => {
+  const managedToolName = buildManagedMcpToolName('provider-google', 'google_super__COMPOSIO_SEARCH_TOOLS');
+  const guideMock = mock.method(connectorGuideService, 'getActiveGuideForConnector', async (_sessionId, connectorKey) => {
+    if (connectorKey !== 'google_super') return null;
+    return {
+      connectorKey: 'google_super',
+      policyId: 'policy-google',
+      revisionId: 'rev-google-2',
+      triggerMode: 'on_attach',
+      serverInstructionsMarkdown: 'Use search only after loading this guide.',
+      guideReminderMarkdown: 'Google guide active.',
+      blockingRulesMarkdown: 'Load the guide before Google router usage.',
+    };
+  });
+  const mcpMock = mock.method(osacAgentService, 'callSessionMcpTool', async () => ({
+    providerId: 'provider-google',
+    toolName: 'google_super__COMPOSIO_SEARCH_TOOLS',
+    result: { ok: true },
+    isError: false,
+  }));
+
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-google-search-block',
+    userId: 'user-1',
+    sandboxId: 'sandbox-google-search-block',
+    workspaceRoot: '/workspace/session-google-search-block',
+    activeSkills: [],
+    mcpProviders: [
+      {
+        connectorKey: 'google_super',
+        providerId: 'provider-google',
+        tools: [{ providerId: 'provider-google', toolName: 'google_super__COMPOSIO_SEARCH_TOOLS' }],
+      },
+    ],
+  });
+
+  await assert.rejects(
+    runtime.execute(managedToolName, {
+      queries: [{ use_case: 'search Gmail messages by sender' }],
+      session: { generate_id: true },
+    }),
+    (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      assert.match(message, /connector_guide_blocked:google_super/);
+      assert.match(message, /Search is also a connector MCP tool/);
+      return true;
+    }
+  );
+
+  await runtime.execute('load_connector_guide', {
+    connectorKey: 'google_super',
+  });
+  const result = await runtime.execute(managedToolName, {
+    queries: [{ use_case: 'search Gmail messages by sender' }],
+    session: { generate_id: true },
+  });
+
+  assert.equal(result.type, 'result');
+  assert.equal(mcpMock.mock.callCount(), 1);
+  assert.ok(guideMock.mock.callCount() >= 2);
+});
+
 test('vercel mcp tool call is blocked until active vercel connector guide is loaded', async () => {
   const managedToolName = buildManagedMcpToolName('provider-vercel', 'list_projects');
   const guideMock = mock.method(connectorGuideService, 'getActiveGuideForConnector', async (_sessionId, connectorKey) => {

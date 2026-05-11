@@ -48,3 +48,9 @@
 - 做了什么：检查当前分支未提交内容，确认 tracked 改动属于 Google Workspace MCP 确认流与连接器 UI 同一主题。
 - 遇到什么：工作区存在未跟踪 `.env` 文件和本地开发日志，包含环境配置风险，不适合提交。
 - 计划如何解决：只暂存代码、测试与文档相关文件；保留 `.codex-dev-logs/`、`apps/1.env`、`apps/1212.env` 在本地未跟踪状态。
+
+## Composio Router Guide-First 调整
+
+- 做了什么：按已采用方案调整 Altus managed prompt、connector guide 预加载区块和 runtime 拦截文案，确保 Composio Router MCP 在 Search 前先加载 `load_connector_guide`。
+- 遇到什么：整跑相关测试时遇到既有 Windows `file://` 路径断言和 route 鉴权 401 失败；新增覆盖与 coordinator 回归通过。
+- 计划如何解决：本次改动只收口 guide-first 链路；既有环境相关测试失败单独处理，不混入本功能提交。

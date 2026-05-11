@@ -1261,6 +1261,9 @@ export class AltusManagedToolRuntime {
             [
               `connector_guide_blocked:${mcpTool.connectorKey}`,
               `Call load_connector_guide with connectorKey=${mcpTool.connectorKey} before using ${mcpTool.displayName}.`,
+              mcpTool.toolName.includes('COMPOSIO_SEARCH_TOOLS')
+                ? 'Search is also a connector MCP tool. Load the connector guide first, then decide whether search is needed.'
+                : '',
               activeGuide.blockingRulesMarkdown || activeGuide.serverInstructionsMarkdown || activeGuide.guideReminderMarkdown,
             ]
               .filter(Boolean)

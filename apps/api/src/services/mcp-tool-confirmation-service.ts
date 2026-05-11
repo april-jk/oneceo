@@ -214,9 +214,6 @@ function buildParameterSummary(args: Record<string, unknown>, prefix = '', depth
     const normalized = key.toLowerCase();
     const outputKey = prefix ? `${prefix}.${key}` : key;
     if (
-      normalized.includes('body') ||
-      normalized.includes('content') ||
-      normalized.includes('html') ||
       normalized.includes('token') ||
       normalized.includes('secret') ||
       normalized.includes('authorization') ||
@@ -226,7 +223,10 @@ function buildParameterSummary(args: Record<string, unknown>, prefix = '', depth
       continue;
     }
     if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-      summary[outputKey] = value;
+      summary[outputKey] =
+        typeof value === 'string' && value.length > 4000
+          ? `${value.slice(0, 4000)}...`
+          : value;
       continue;
     }
     if (depth < 2 && value && typeof value === 'object' && !Array.isArray(value)) {
@@ -346,13 +346,19 @@ function buildStoredSummary(scope: ConfirmationScope): StoredConfirmationSummary
 
 function sanitizeSummary(summary: unknown): ConfirmationSummary {
   const record = pickObject(summary);
+  const replay = readReplaySnapshot(record);
+  const replayParameterSummary = replay ? buildParameterSummary(replay.argumentsJson) : {};
+  const storedParameterSummary = buildParameterSummary(pickObject(record.parameterSummary));
   return {
     connectorKey: asText(record.connectorKey),
     toolName: asText(record.toolName),
     action: asText(record.action),
     target: asText(record.target),
     impact: asText(record.impact),
-    parameterSummary: buildParameterSummary(pickObject(record.parameterSummary)),
+    parameterSummary: {
+      ...replayParameterSummary,
+      ...storedParameterSummary,
+    },
   };
 }
 

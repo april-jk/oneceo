@@ -127,3 +127,23 @@ export function buildManagedMcpToolConfirmationPrompt(
     '请向用户说明该操作已取消，并等待新的明确指令。',
   ].join('\n');
 }
+
+function getConnectorLabel(connectorKey: string) {
+  if (connectorKey === 'google_super') return 'Google Workspace';
+  return connectorKey || 'MCP';
+}
+
+export function buildManagedMcpToolRejectionCompletionText(
+  payload: ManagedMcpToolConfirmationPayload
+) {
+  const summary = payload.summary || {};
+  const connectorLabel = getConnectorLabel(payload.connectorKey);
+  const action = asText(summary.action) || asText(payload.toolName) || '高风险操作';
+  const target = asText(summary.target);
+  const targetText = target ? `，目标：${target}` : '';
+  return [
+    `已取消本次 ${connectorLabel} 高风险操作（${action}${targetText}）。`,
+    '该 MCP 工具调用不会重试，也不会继续执行同一写操作。',
+    '如需执行其他 Google MCP 工具测试，请提供新的明确指令。',
+  ].join('\n\n');
+}

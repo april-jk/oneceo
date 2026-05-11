@@ -622,3 +622,24 @@ test('managed prompt labels attached connectors by runtime status instead of tre
   assert.match(prompt, /github \| runtime_status=connected \| tool_access=available/i);
   assert.match(prompt, /slack \| runtime_status=failed \| tool_access=blocked_attach_failed/i);
 });
+
+test('managed prompt requires connector guide loading before composio search', () => {
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-connector-guide-first-test',
+    sessionTitle: 'connector guide first',
+    workspaceRoot: '/workspace/session-connector-guide-first-test',
+    connectors: [],
+    connectorGuideSections: {
+      instructionsSection:
+        '# Connector MCP Instructions\n\n## notion\n- notion: Active connector guide exists. Before using any notion MCP tool, call load_connector_guide with connectorKey=notion.',
+      reminderSection:
+        '# Relevant Connector Guides\n\n## notion\n- notion: Full connector guide content is available only after load_connector_guide returns.',
+    },
+  });
+
+  assert.match(prompt, /load_connector_guide` is the first connector tool call/);
+  assert.match(prompt, /including `\*_COMPOSIO_SEARCH_TOOLS`/);
+  assert.match(prompt, /COMPOSIO_SEARCH_TOOLS` is optional connector discovery, not a fixed first step/);
+  assert.match(prompt, /Do not guess the search schema before loading the guide/);
+  assert.match(prompt, /except connector MCP tools must first satisfy `load_connector_guide` ordering/);
+});

@@ -103,6 +103,34 @@ test('ensureSessionGuidesUpToDate skips recompute when connector sets already ma
   assert.equal(recomputeCount, 0);
 });
 
+test('buildPromptSections exposes only guide preload instructions before load_connector_guide', async () => {
+  connectorGuideDAOAny.listSessionGuides = async () => [
+    {
+      sessionGuide: {
+        connectorKey: 'notion',
+        policyId: 'policy-notion',
+        revisionId: 'rev-notion',
+        triggerMode: 'on_attach',
+      },
+      revision: {
+        serverInstructionsMarkdown:
+          'Use the attached Notion MCP router tools exposed in this session. Start with `notion__COMPOSIO_SEARCH_TOOLS` to find Notion actions.',
+        guideReminderMarkdown:
+          'Identify the target workspace/page/database first, then call `notion__COMPOSIO_SEARCH_TOOLS`.',
+        blockingRulesMarkdown: 'Do not use local Notion MCP.',
+      },
+    },
+  ];
+
+  const sections = await connectorGuideService.buildPromptSections('session-guide-preload');
+  const combined = `${sections.instructionsSection}\n${sections.reminderSection}`;
+
+  assert.match(combined, /load_connector_guide with connectorKey=notion/);
+  assert.doesNotMatch(combined, /Start with `notion__COMPOSIO_SEARCH_TOOLS`/);
+  assert.doesNotMatch(combined, /then call `notion__COMPOSIO_SEARCH_TOOLS`/);
+  assert.doesNotMatch(combined, /Search tools first/);
+});
+
 test('GET /sessions/:sessionId/connectors triggers on-demand guide check', async () => {
   const server = await startServer();
   let ensureCalledWith = '';

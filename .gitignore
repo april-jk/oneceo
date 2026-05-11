@@ -23,6 +23,8 @@ build/
 .env.develop
 .env.staging
 .env.product
+apps/1.env
+apps/1212.env
 
 # Logs
 logs/
@@ -68,6 +70,7 @@ uploads/
 .turbo/
 
 # Local debug artifacts
+.codex-dev-logs/
 .playwright-mcp/
 apps/api/scripts/_tmp/
 apps/api/tests/e2e/reports/

@@ -277,6 +277,8 @@ export class AltusManagedRunEntryService {
         mcpToolConfirmation?.action === 'reject'
           ? buildManagedMcpToolConfirmationPrompt(mcpToolConfirmation)
           : null,
+      rejectedMcpToolConfirmation:
+        mcpToolConfirmation?.action === 'reject' ? mcpToolConfirmation : null,
       confirmedMcpToolReplay:
         mcpToolConfirmation?.action === 'approve' && approvedMcpReplay && mcpToolConfirmation.confirmationToken
           ? {

@@ -3141,6 +3141,129 @@ test('execute records plain-text continuation recovery before failing the manage
   );
 });
 
+test('execute completes rejected mcp confirmation without model retry failure', async () => {
+  const state = createState(
+    'run-coordinator-mcp-confirmation-reject',
+    'session-coordinator-mcp-confirmation-reject',
+    '',
+    'user_response'
+  );
+  state.input.rejectedMcpToolConfirmation = {
+    action: 'reject',
+    connectorKey: 'google_super',
+    confirmationId: 'confirmation-reject-1',
+    toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+    summary: {
+      action: 'send_email',
+      target: 'user@example.com',
+      impact: 'Send one email.',
+      parameterSummary: {
+        recipient_email: 'user@example.com',
+      },
+    },
+  };
+
+  const lifecycleCalls: string[] = [];
+  const loopSnapshots: Array<Record<string, unknown>> = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const timelineCalls: Array<Record<string, unknown>> = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-mcp-confirmation-reject',
+      workspaceRoot: '/workspace/session-coordinator-mcp-confirmation-reject',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async () => {
+      throw new Error('conversation messages should not be built for rejected MCP confirmation');
+    }),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      timelineCalls.push(input);
+    }),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(
+      async (
+        _runId: string,
+        _sessionId: string,
+        _userId: string,
+        eventType: string,
+        payload: Record<string, unknown>
+      ) => {
+        eventCalls.push({ eventType, payload });
+        return {
+          sequence: eventCalls.length,
+          payload,
+        };
+      }
+    ),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+    syncLoopSnapshot: mock.fn(async (_state: any, loop: Record<string, unknown>) => {
+      loopSnapshots.push(loop);
+    }),
+  };
+
+  global.fetch = mock.fn(async () => {
+    throw new Error('model should not be called for rejected MCP confirmation');
+  }) as typeof fetch;
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => {
+    throw new Error('tool runtime should not execute rejected MCP confirmation');
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(setupService.buildConversationMessages.mock.callCount(), 0);
+  assert.equal((global.fetch as any).mock.callCount(), 0);
+  assert.equal(executeMock.mock.callCount(), 0);
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+  assert.equal(state.status, 'completed');
+  assert.equal(timelineCalls[0]?.messageType, 'assistant_message');
+  assert.match(String(timelineCalls[0]?.content || ''), /已取消本次 Google Workspace 高风险操作/);
+  assert.doesNotMatch(
+    String(timelineCalls[0]?.content || ''),
+    /失败|错误|managed_model_plain_text_without_tool_call/
+  );
+  assert.equal(
+    loopSnapshots.some(
+      (snapshot) => snapshot.lastTransitionReason === 'plain_text_conversation_completed'
+    ),
+    true
+  );
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'run_status' &&
+        entry.payload.content === 'MCP 高风险操作已按用户拒绝结果取消'
+    ),
+    true
+  );
+});
+
 test('execute replays approved mcp tool calls before the next model round without exposing confirmation prompt text', async () => {
   const state = createState(
     'run-coordinator-mcp-confirmation-replay',

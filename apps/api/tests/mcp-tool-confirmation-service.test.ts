@@ -50,7 +50,8 @@ test('Google Super write tools require confirmation and summarize target', () =>
   });
   assert.equal(summary.action, 'send_email');
   assert.equal(summary.target, 'user@example.com');
-  assert.equal(summary.parameterSummary.body, '[redacted]');
+  assert.equal(summary.parameterSummary.subject, 'Quarterly plan');
+  assert.equal(summary.parameterSummary.body, 'private message');
 });
 
 test('Google Super multi execute nested Gmail send arguments summarize recipient target', () => {
@@ -85,7 +86,7 @@ test('Google Super multi execute nested Gmail send arguments summarize recipient
   assert.equal(summary.target, '3095025109@qq.com');
   assert.equal(summary.parameterSummary['arguments.recipient_email'], '3095025109@qq.com');
   assert.equal(summary.parameterSummary['arguments.subject'], '测试确认');
-  assert.equal(summary.parameterSummary['arguments.body'], '[redacted]');
+  assert.equal(summary.parameterSummary['arguments.body'], '这是一封测试邮件');
 });
 
 test('Google Super multi execute tools array extracts document title target', () => {
@@ -179,6 +180,38 @@ test('createPendingConfirmation stores hidden replay snapshot but public summary
   assert.equal((publicSummary as any).__internalReplay, undefined);
   assert.equal(publicSummary.toolName, 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL');
   assert.equal(publicSummary.target, '项目周报');
+});
+
+test('getPublicSummary backfills public fields from hidden replay snapshot', () => {
+  const publicSummary = mcpToolConfirmationService.getPublicSummary({
+    connectorKey: 'google_super',
+    toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+    action: 'send_email',
+    target: '3095025109@qq.com',
+    impact: 'Execute one Google Workspace write operation.',
+    parameterSummary: {
+      current_step: 'SENDING_TEST_EMAIL',
+      thought: 'Sending a new test email.',
+    },
+    __internalReplay: {
+      toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+      argumentsJson: {
+        tool_slug: 'GOOGLESUPER_SEND_EMAIL',
+        arguments: {
+          recipient_email: '3095025109@qq.com',
+          subject: 'Gmail 连接器测试邮件（重试）',
+          body: '您好，这是再次尝试发送的 Gmail 连接器测试邮件。请确认是否收到。',
+        },
+      },
+    },
+  });
+
+  assert.equal(publicSummary.parameterSummary.current_step, 'SENDING_TEST_EMAIL');
+  assert.equal(publicSummary.parameterSummary['arguments.subject'], 'Gmail 连接器测试邮件（重试）');
+  assert.equal(
+    publicSummary.parameterSummary['arguments.body'],
+    '您好，这是再次尝试发送的 Gmail 连接器测试邮件。请确认是否收到。'
+  );
 });
 
 test('createPendingConfirmation reuses existing pending confirmation for same run and arguments', async () => {

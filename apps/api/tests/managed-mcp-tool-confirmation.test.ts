@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   buildManagedMcpToolConfirmationPrompt,
+  buildManagedMcpToolRejectionCompletionText,
   readManagedMcpToolConfirmationPayload,
 } from '../src/services/managed-mcp-tool-confirmation';
 
@@ -75,4 +76,25 @@ test('builds rejection prompt that forbids retry', () => {
 
   assert.match(prompt, /用户已拒绝本次高风险操作/);
   assert.match(prompt, /不得重试这个 MCP tool call/);
+});
+
+test('builds user-visible rejection completion text without error wording', () => {
+  const text = buildManagedMcpToolRejectionCompletionText({
+    action: 'reject',
+    connectorKey: 'google_super',
+    confirmationId: 'confirmation-2',
+    toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+    summary: {
+      action: 'send_email',
+      target: 'user@example.com',
+      impact: 'Send one email.',
+      parameterSummary: {},
+    },
+  });
+
+  assert.match(text, /已取消本次 Google Workspace 高风险操作/);
+  assert.match(text, /send_email/);
+  assert.match(text, /user@example.com/);
+  assert.match(text, /不会重试/);
+  assert.doesNotMatch(text, /失败|错误|managed_model_plain_text_without_tool_call/);
 });

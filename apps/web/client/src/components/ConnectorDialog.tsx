@@ -226,6 +226,29 @@ type ConnectorDialogEntry = {
   selectedProfile: ConnectorProfile | null;
 };
 
+export function isConnectorDialogEntryEnabled(
+  entry: Pick<ConnectorDialogEntry, "item" | "session" | "selectedProfileId">
+) {
+  if (entry.item.key === "custom_mcp") {
+    return Boolean(
+      entry.session?.attached && entry.session?.attachedProfileId === entry.selectedProfileId
+    );
+  }
+  return Boolean(entry.session?.attached);
+}
+
+export function sortConnectorDialogEntries(entries: ConnectorDialogEntry[]) {
+  return entries
+    .map((entry, index) => ({ entry, index }))
+    .sort((left, right) => {
+      const leftEnabled = isConnectorDialogEntryEnabled(left.entry);
+      const rightEnabled = isConnectorDialogEntryEnabled(right.entry);
+      if (leftEnabled !== rightEnabled) return leftEnabled ? -1 : 1;
+      return left.index - right.index;
+    })
+    .map(({ entry }) => entry);
+}
+
 function resolvePreferredProfileId(
   connectorProfiles: ConnectorProfile[],
   session?: SessionConnectorStatus,
@@ -451,7 +474,7 @@ export default function ConnectorDialog({
           }))
         : [];
 
-      return [...appEntries, ...customMcpEntries];
+      return sortConnectorDialogEntries([...appEntries, ...customMcpEntries]);
     },
     [catalog, profileSelection, profilesByConnector, sessionStatuses]
   );
@@ -549,12 +572,7 @@ export default function ConnectorDialog({
   };
 
   const attachedConnectors = useMemo(
-    () =>
-      mergedConnectors.filter(({ item, session, selectedProfileId }) =>
-        item.key === "custom_mcp"
-          ? Boolean(session?.attached && session?.attachedProfileId === selectedProfileId)
-          : Boolean(session?.attached)
-      ),
+    () => mergedConnectors.filter(isConnectorDialogEntryEnabled),
     [mergedConnectors]
   );
 
@@ -894,7 +912,11 @@ export default function ConnectorDialog({
                         session?.attachedProfileId === selectedProfileId;
                       const isGithub = item.key === "github";
                       const isCustomMcp = item.key === "custom_mcp";
-                      const checked = isCustomMcp ? attachedToSelected : Boolean(session?.attached);
+                      const checked = isConnectorDialogEntryEnabled({
+                        item,
+                        session,
+                        selectedProfileId,
+                      });
                       const DetailIcon = resolveConnectorIcon(item.icon) || Link2;
                       const canAttach =
                         item.available &&

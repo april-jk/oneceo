@@ -271,6 +271,104 @@ function getMcpConfirmationConnectorLabel(connectorKeyRaw: string) {
   return connectorKey || "MCP";
 }
 
+function isChineseUiLocale() {
+  const language = String(i18n.language || "").toLowerCase();
+  return !language || language.startsWith("zh");
+}
+
+function getMcpConfirmationConnectorDisplayLabel(connectorKeyRaw: string) {
+  const connectorKey = asText(connectorKeyRaw);
+  if (connectorKey === "google_super") {
+    return isChineseUiLocale() ? "Google 工作区" : "Google Workspace";
+  }
+  return getMcpConfirmationConnectorLabel(connectorKey);
+}
+
+function getMcpConfirmationActionDisplayLabel(actionRaw: string) {
+  const action = asText(actionRaw);
+  const normalized = action.toLowerCase();
+  const zh = isChineseUiLocale();
+  if (normalized === "send_email" || normalized.includes("email") || normalized.includes("mail")) {
+    return zh ? "发送邮件" : "Send email";
+  }
+  if (normalized.includes("calendar") || normalized.includes("event")) {
+    return zh ? "变更日历" : "Update calendar";
+  }
+  if (normalized.includes("drive") || normalized.includes("file")) {
+    return zh ? "变更云端文件" : "Update Drive file";
+  }
+  if (normalized.includes("document") || normalized.includes("doc")) {
+    return zh ? "变更文档" : "Update document";
+  }
+  if (normalized.includes("sheet")) {
+    return zh ? "变更表格" : "Update spreadsheet";
+  }
+  if (normalized.includes("delete") || normalized.includes("remove")) {
+    return zh ? "删除或移除" : "Delete or remove";
+  }
+  if (normalized.includes("create")) {
+    return zh ? "创建资源" : "Create resource";
+  }
+  if (normalized.includes("update") || normalized.includes("write") || normalized.includes("append")) {
+    return zh ? "写入或更新" : "Write or update";
+  }
+  return zh ? "写操作" : action || "Write operation";
+}
+
+function getMcpConfirmationParameterLabel(keyRaw: string) {
+  const key = asText(keyRaw);
+  const tail = key.toLowerCase().split(".").pop() || key.toLowerCase();
+  const zh = isChineseUiLocale();
+  if (!zh) return key;
+  const labels: Record<string, string> = {
+    current_step: "当前步骤",
+    thought: "操作说明",
+    session_id: "会话",
+    recipient_email: "收件人",
+    recipientemail: "收件人",
+    to: "收件人",
+    to_email: "收件人",
+    email: "邮箱",
+    email_address: "邮箱",
+    subject: "题目",
+    title: "题目",
+    name: "名称",
+    body: "邮件内容",
+    email_body: "邮件内容",
+    emailbody: "邮件内容",
+    content: "内容",
+    message: "内容",
+    text: "正文",
+    markdown: "文档内容",
+    html: "HTML 内容",
+  };
+  return labels[tail] || key;
+}
+
+function getMcpConfirmationParameterValue(value: unknown) {
+  const text = typeof value === "string" ? value : value == null ? "" : String(value);
+  if (!isChineseUiLocale()) return text;
+  const normalized = text.trim().toLowerCase();
+  if (normalized === "sending_test_email") return "发送测试邮件";
+  if (normalized === "sending_email") return "发送邮件";
+  if (normalized === "creating_document") return "创建文档";
+  if (normalized === "updating_document") return "更新文档";
+  if (/^sending (a )?(new )?test email/i.test(text)) {
+    return "正在发送测试邮件。";
+  }
+  return text;
+}
+
+function buildMcpConfirmationImpactText(confirmation: GoogleWorkspaceConfirmationView) {
+  const zh = isChineseUiLocale();
+  const connectorLabel = getMcpConfirmationConnectorDisplayLabel(confirmation.connectorKey);
+  const actionLabel = getMcpConfirmationActionDisplayLabel(confirmation.action);
+  if (zh) {
+    return `即将通过 ${connectorLabel} 执行“${actionLabel}”。请确认目标对象与参数无误后继续。`;
+  }
+  return `This will run "${actionLabel}" through ${connectorLabel}. Review the target and parameters before continuing.`;
+}
+
 type ComposerReferenceToken = {
   id: string;
   kind: SlashReferenceKind;
@@ -1919,6 +2017,7 @@ export default function Home() {
         },
         { sessionId },
       );
+      await awaitManagedRunRecovery(sessionId);
       setHandledGoogleConfirmationIds((prev) =>
         prev.includes(confirmation.confirmationId)
           ? prev
@@ -1926,7 +2025,7 @@ export default function Home() {
       );
       toast.success(`已拒绝 ${connectorLabel} 操作`);
     },
-    [sessionId, t],
+    [awaitManagedRunRecovery, sessionId, t],
   );
 
   const submitDeploymentPrompt = async (
@@ -7534,7 +7633,6 @@ function GoogleWorkspaceConfirmationPanel({
     !confirmation.confirmationId ||
     !onApprove ||
     !onReject;
-  const connectorLabel = getMcpConfirmationConnectorLabel(confirmation.connectorKey);
   const parameterEntries = Object.entries(confirmation.parameterSummary).slice(0, 6);
 
   const runAction = async (action: "approve" | "reject") => {
@@ -7549,6 +7647,34 @@ function GoogleWorkspaceConfirmationPanel({
       setPendingAction(null);
     }
   };
+  const displayConnectorLabel = getMcpConfirmationConnectorDisplayLabel(
+    confirmation.connectorKey,
+  );
+  const displayActionLabel = getMcpConfirmationActionDisplayLabel(confirmation.action);
+  const displayImpactText = buildMcpConfirmationImpactText(confirmation);
+  const uiText = isChineseUiLocale()
+    ? {
+        title: "确认高风险操作",
+        subtitle: `${displayConnectorLabel} 写操作需要确认`,
+        connector: "连接器",
+        target: "目标对象",
+        action: "动作",
+        pending: "待确认",
+        targetUnknown: "未识别",
+        approve: "确认执行",
+        reject: "拒绝",
+      }
+    : {
+        title: "Confirm high-risk operation",
+        subtitle: `${displayConnectorLabel} write operation requires confirmation`,
+        connector: "Connector",
+        target: "Target",
+        action: "Action",
+        pending: "Pending",
+        targetUnknown: "Unknown",
+        approve: "Confirm",
+        reject: "Reject",
+      };
 
   return (
     <motion.div
@@ -7565,39 +7691,39 @@ function GoogleWorkspaceConfirmationPanel({
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-[12px] font-semibold leading-5">
-              确认高风险 MCP 操作
+              {uiText.title}
             </div>
             <div className="truncate text-[11px] leading-5 opacity-75">
-              {confirmation.toolName}
+              {uiText.subtitle}
             </div>
           </div>
           <span className="shrink-0 rounded-md border border-current/20 px-1.5 py-0.5 text-[10px] font-medium">
-            待确认
+            {uiText.pending}
           </span>
         </div>
         <div className="grid gap-2 text-[12px] leading-5 sm:grid-cols-2">
           <div className="min-w-0">
             <div className="text-[10px] font-medium uppercase tracking-[0.16em] opacity-60">
-              Connector
+              {uiText.connector}
             </div>
-            <div className="truncate" title={connectorLabel}>
-              {connectorLabel}
+            <div className="truncate" title={displayConnectorLabel}>
+              {displayConnectorLabel}
             </div>
           </div>
           <div className="min-w-0">
             <div className="text-[10px] font-medium uppercase tracking-[0.16em] opacity-60">
-              目标对象
+              {uiText.target}
             </div>
             <div className="truncate" title={confirmation.target}>
-              {confirmation.target || "未识别"}
+              {confirmation.target || uiText.targetUnknown}
             </div>
           </div>
           <div className="min-w-0">
             <div className="text-[10px] font-medium uppercase tracking-[0.16em] opacity-60">
-              动作
+              {uiText.action}
             </div>
-            <div className="truncate" title={confirmation.action}>
-              {confirmation.action || "write_operation"}
+            <div className="truncate" title={displayActionLabel}>
+              {displayActionLabel}
             </div>
           </div>
         </div>
@@ -7605,15 +7731,13 @@ function GoogleWorkspaceConfirmationPanel({
           <div className="grid gap-1 text-[11px] leading-5 sm:grid-cols-2">
             {parameterEntries.map(([key, value]) => (
               <div key={key} className="min-w-0 rounded-md bg-background/45 px-2 py-1">
-                <span className="mr-1 opacity-60">{key}:</span>
-                <span className="break-all">{String(value)}</span>
+                <span className="mr-1 opacity-60">{getMcpConfirmationParameterLabel(key)}:</span>
+                <span className="break-all">{getMcpConfirmationParameterValue(value)}</span>
               </div>
             ))}
           </div>
         ) : null}
-        {confirmation.impact ? (
-          <div className="text-[12px] leading-5 opacity-80">{confirmation.impact}</div>
-        ) : null}
+        <div className="text-[12px] leading-5 opacity-80">{displayImpactText}</div>
         <div className="flex flex-wrap items-center gap-2">
           <Button
             type="button"
@@ -7626,7 +7750,7 @@ function GoogleWorkspaceConfirmationPanel({
             ) : (
               <Check className="h-3.5 w-3.5" />
             )}
-            确认执行
+            {uiText.approve}
           </Button>
           <Button
             type="button"
@@ -7640,7 +7764,7 @@ function GoogleWorkspaceConfirmationPanel({
             ) : (
               <X className="h-3.5 w-3.5" />
             )}
-            拒绝
+            {uiText.reject}
           </Button>
         </div>
       </div>

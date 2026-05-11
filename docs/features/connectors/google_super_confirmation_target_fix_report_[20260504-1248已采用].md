@@ -144,3 +144,104 @@ pnpm --filter api exec tsx --test tests/mcp-tool-confirmation-service.test.ts te
   - 新增 approve 后刷新 token 过期时间的测试，覆盖 `mcp_confirmation_expired` 修复。
 - `apps/api/tests/altus-managed-run-entry.service.test.ts`
   - 新增 metadata-only MCP confirmation 请求测试，验证后端可在 `content` 为空时继续接收并构造运行态输入。
+
+## 2026-05-11 补充：拒绝后结果回流修复
+
+现象：用户点击 Google Super / MCP 高风险确认卡片的拒绝后，前端只追加本地状态消息并隐藏确认卡片，没有像点击确认一样等待 managed run 恢复，因此用户看不到 agent 对“已取消/已拒绝”的正式返回。
+
+根因：后端已存在 `POST /api/task-creation/sessions/:sessionId/mcp-confirmations/:confirmationId/reject`，并会通过 `altusManagedRunService.startRun` 创建 `mcp_tool_confirmation_rejected` 结构化输入；但前端 `rejectGoogleWorkspaceConfirmation` 没有调用 `awaitManagedRunRecovery(sessionId)`，与确认分支不对称。
+
+修复规则：确认与拒绝都必须走同一类型的结果回流：
+
+1. 点击确认：调用 approve API，启动 managed run，前端等待 run 恢复并展示后续执行结果。
+2. 点击拒绝：调用 reject API，启动 managed run，前端同样等待 run 恢复并展示 agent 的取消结果。
+3. 拒绝只表示本次高风险 tool call 不执行，不生成 confirmation token，不重试原 tool call。
+
+## 2026-05-11 补充：拒绝后不得显示 managed run 失败
+
+现象：拒绝 Google Super 高风险操作后，页面已经显示“操作已取消”的 assistant 说明，但随后又出现红框错误：
+
+```text
+managed_model_plain_text_without_tool_call:complete_task 已调用，任务结束。
+```
+
+根因：拒绝分支虽然已经通过结构化 metadata 进入 managed run，但后端仍把它交给通用模型工具循环处理。拒绝本身是一个正常终态，模型输出“已取消/已拒绝”的纯文本说明时，通用工具循环会继续注入“请选择工具或 complete_task”的提醒；若下一轮仍没有有效工具调用，就被标记为 `managed_model_plain_text_without_tool_call`，最终前端显示为运行失败。
+
+修复规则：
+
+1. `mcp_tool_confirmation_rejected` 是确认流程的终态，不再要求模型继续选择工具，也不要求调用 `complete_task`。
+2. 后端在 run 启动后直接生成正式 assistant 取消说明，写入时间线并把 run 标记为 completed。
+3. 拒绝分支不得重试原 MCP tool call，不得继续同一写操作，也不得产生 `run_failed` / `tool_call_failed` 红框。
+
+涉及文件：
+
+- `apps/api/src/services/managed-mcp-tool-confirmation.ts`
+- `apps/api/src/services/altus-managed-run-entry-service.ts`
+- `apps/api/src/services/altus-run-state.ts`
+- `apps/api/src/services/altus-run-coordinator.ts`
+- `apps/api/tests/managed-mcp-tool-confirmation.test.ts`
+- `apps/api/tests/altus-run-coordinator.test.ts`
+
+## 2026-05-11 补充：确认拦截 UI 改为草稿邮件式复核面板
+
+现象：原确认拦截卡片使用琥珀色告警底色和紧凑参数块，视觉上更像错误/警告，和“用户需要复核并决定是否继续执行”的产品语义不一致，也不符合 Google Workspace 邮件发送场景的用户心智。
+
+修复规则：
+
+1. Google Workspace 邮件类确认使用“草稿邮件”式面板：顶部展示 Google Workspace 识别、正文按收件人、主题、内容、附件、参数分区排布。
+2. 取消琥珀色告警块，改为 `bg-card`、`border-border`、轻阴影、圆角结构，和 oneceo 工作台整体 UI 保持一致。
+3. 按钮保持真实业务语义：`取消` 对应拒绝，`发送` 对应确认执行；非邮件类 Google MCP 写操作仍显示 `确认执行`。
+4. 参数仅作为复核证据展示，不伪造“保存到 Gmail 草稿”等尚未实现的业务动作。
+
+### 2026-05-11 细节修正
+
+1. 删除顶部 Google 彩色图标，避免拦截卡片视觉重心过重。
+2. 删除“附件”和“参数”复核区，保留收件人、题目、内容与操作按钮，让卡片更简洁。
+3. `主题` 字段改为 `题目`。
+4. `内容` 字段根据操作类型显示为 `邮件内容` 或 `文件内容`；不再使用 Google Workspace impact 文案充当正文内容。
+
+### 2026-05-11 参数透传修正
+
+1. 现象：确认卡片里能显示收件人，但题目和邮件内容显示“未提供”。
+2. 根因：
+   - Google Super `COMPOSIO_MULTI_EXECUTE_TOOL` 的真实字段通常位于 `arguments.subject`、`arguments.body`、`arguments.markdown` 这类嵌套 key 下，前端此前只读取顶层 `subject/body/content`。
+   - 后端 `parameterSummary` 此前会把 `body/content/html` 脱敏为 `[redacted]`，导致即使模型传入正文，前端也拿不到可复核内容。
+3. 修复：
+   - 前端支持按 key 尾段识别嵌套字段，例如 `arguments.subject`、`arguments.body`、`arguments.markdown`。
+   - 后端继续脱敏 token/secret/authorization/api_key，但邮件正文、文件内容、HTML 正文作为用户确认所需信息保留并限制最大长度。
+   - 对已经创建的 pending confirmation，`getPublicSummary` 会从隐藏 replay snapshot 中回填可公开的题目/正文参数，避免旧记录继续显示“未提供”。
+
+涉及文件：
+
+- `apps/web/client/src/pages/Home.tsx`
+- `apps/api/src/services/mcp-tool-confirmation-service.ts`
+
+## 2026-05-11 补充：确认拦截 UI 回退为原始确认卡
+
+结论：草稿邮件式复核面板已按用户要求回退，不作为当前采用 UI。
+
+当前规则：
+
+1. 继续使用最开始的琥珀色高风险确认卡。
+2. 保留 Connector、目标对象、动作、参数摘要、影响说明和确认/拒绝按钮。
+3. 不回退后端拒绝结果回流、拒绝后不显示 run failed、参数透传与旧 pending confirmation 回填逻辑。
+
+涉及文件：
+
+- `apps/web/client/src/pages/Home.tsx`
+
+## 2026-05-11 补充：确认卡中文化与内部工具名隐藏
+
+现象：原始确认卡虽然结构已恢复，但仍暴露 `google_super__COMPOSIO_MULTI_EXECUTE_TOOL`、`Connector`、`send_email`、`current_step` 等内部或英文词汇，中文主题下可读性差。
+
+修复规则：
+
+1. 确认卡标题改为中文业务表达，不展示原始 MCP 工具名。
+2. `Connector` 显示为 `连接器`，`Google Workspace` 在中文环境下显示为 `Google 工作区`。
+3. 动作字段转为中文业务动作，例如 `send_email` 显示为 `发送邮件`。
+4. 参数 key 转为中文，例如 `current_step` 显示为 `当前步骤`，`thought` 显示为 `操作说明`。
+5. 影响说明不再拼接原始工具名，改为“即将通过 Google 工作区执行……请确认目标对象与参数无误后继续。”
+
+涉及文件：
+
+- `apps/web/client/src/pages/Home.tsx`

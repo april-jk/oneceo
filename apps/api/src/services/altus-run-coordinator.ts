@@ -65,6 +65,7 @@ import {
   LLM_PROXY_INTERNAL_OVERRIDE_HEADER,
   getLlmProxyInternalOverrideToken,
 } from './llm-proxy-internal-auth';
+import { buildManagedMcpToolRejectionCompletionText } from './managed-mcp-tool-confirmation';
 
 const DELIVERABLES_READY_TEXT = '交付文件已生成';
 const DEPLOYMENT_COMPLETION_BLOCKED_PREFIX = 'deployment_completion_blocked:';
@@ -2039,6 +2040,36 @@ private async chargeForModelCall(state: AltusRunState, input: {
   private async runModelLoop(state: AltusRunState, signal: AbortSignal) {
     if (!state.workspaceRoot || !state.sandboxId) {
       throw new Error('managed_run_missing_sandbox_context');
+    }
+    if (state.input.rejectedMcpToolConfirmation) {
+      const finalContent = buildManagedMcpToolRejectionCompletionText(
+        state.input.rejectedMcpToolConfirmation
+      );
+      await this.syncLoopSnapshot(state, {
+        lastTransitionReason: 'plain_text_conversation_completed',
+        recoveryMode: 'none',
+        currentRound: 0,
+        maxRounds: this.getMaxToolRounds(),
+        plainTextRecoveryUsed: false,
+        lastToolName: state.input.rejectedMcpToolConfirmation.toolName,
+        lastToolCallId: null,
+      });
+      await this.eventWriter.appendRunEvent(
+        state.input.runId,
+        state.input.sessionId,
+        state.input.userId,
+        'run_status',
+        {
+          status: 'running',
+          content: 'MCP 高风险操作已按用户拒绝结果取消',
+          transitionReason: 'plain_text_conversation_completed',
+        }
+      );
+      return this.finalizePlainTextConversationCompletion(
+        state,
+        finalContent,
+        `managed:${state.input.runId}:assistant:final`,
+      );
     }
 
     const runtime = new AltusManagedToolRuntime({

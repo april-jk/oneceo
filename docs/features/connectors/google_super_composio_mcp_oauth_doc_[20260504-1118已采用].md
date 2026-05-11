@@ -560,3 +560,25 @@ Web 测试：
 状态：`[20260504-1118已采用]`
 
 原因：用户已明确要求按本文档进入代码实现阶段，状态更新为 `[20260504-1118已采用]`。
+
+## 2026-05-11 UI 展示补充：Google Workspace 图标
+
+Google Workspace / Google Super 是统一 Google 工作区能力入口，不应在连接器中心、项目默认连接器选择器或会话连接器展示中使用信封 / Mail 图标作为主视觉。信封会把用户理解引导到 Gmail 单点能力，和 Google Workspace 覆盖 Drive、Docs、Sheets、Calendar、Gmail 的 MCP 能力范围不一致。
+
+展示规则：
+
+1. `google_super` 的用户可见名称仍为 `Google Workspace`。
+2. `icon: "google"` 在前端展示层解析为单色 Google G 标识，不再解析为信封图标；图标继承当前位置文字色，避免四色品牌色在高密度连接器弹层中过度突出。
+3. 不新增 `gmail` 级别连接器，也不把 Google Super 拆成多个入口。
+4. 连接器卡片、详情弹窗、项目默认连接器选择器等复用统一 `resolveConnectorIcon("google")` 的位置必须保持一致。
+
+## 2026-05-11 连接器弹层开启项排序补充
+
+会话输入框旁的连接器弹层中，已开启的 MCP / connector 需要优先展示在列表顶部，避免当前会话已启用能力被原始目录顺序埋在中间。
+
+展示规则：
+
+1. 弹层列表合并 app connector 与 custom MCP profile 后，先按“当前行是否已开启”分组排序。
+2. 已开启项统一展示在最上方。
+3. 已开启组内部保持原始相对顺序；未开启组内部也保持原始相对顺序，避免列表跳动过大。
+4. custom MCP 只有在当前行 profile 与 `attachedProfileId` 一致时才视为已开启，避免多个 custom MCP profile 误判。

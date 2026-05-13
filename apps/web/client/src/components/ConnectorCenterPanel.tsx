@@ -1043,6 +1043,7 @@ export function ConnectorCenterPanel({
         <button
           key={`${item.key}-${item.featured ? "featured" : "list"}`}
           type="button"
+          data-tour="connectors-directory-card"
           onClick={() => {
             setDetailKey(item.key);
             setActiveTab("app");
@@ -1085,7 +1086,7 @@ export function ConnectorCenterPanel({
 
     return (
       <ScrollArea className="h-full">
-        <div data-tour="connectors-directory" className="space-y-6 px-6 pb-6">
+        <div className="space-y-6 px-6 pb-6">
           {featuredCatalog.length > 0 ? (
             <section className="space-y-3">
               <div className="text-sm text-muted-foreground">{t("connectors.featured")}</div>

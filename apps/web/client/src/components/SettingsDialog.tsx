@@ -113,9 +113,6 @@ const SETTINGS_OVERVIEW_STEPS: GuidedTourStep[] = [
     body: "个性化和项目指令影响后续任务；模型接管会影响执行链路；连接器和 Skills 只在需要外部工具或专门方法时配置。",
     placement: "left",
   },
-];
-const SETTINGS_CONNECTORS_TOUR_KEY = "oneceo:tour.settings.connectors.completed";
-const SETTINGS_CONNECTORS_STEPS: GuidedTourStep[] = [
   {
     id: "connectors-tabs",
     selector: '[data-tour="connectors-tabs"]',
@@ -132,14 +129,11 @@ const SETTINGS_CONNECTORS_STEPS: GuidedTourStep[] = [
   },
   {
     id: "connectors-directory",
-    selector: '[data-tour="connectors-directory"]',
+    selector: '[data-tour="connectors-directory-card"]',
     title: "授权与管理",
     body: "点击连接器卡片进入详情。未授权时先连接；已授权后可以重连、断开或设置默认 profile。",
     placement: "top",
   },
-];
-const SETTINGS_BILLING_TOUR_KEY = "oneceo:tour.settings.billing.completed";
-const SETTINGS_BILLING_STEPS: GuidedTourStep[] = [
   {
     id: "billing-balance",
     selector: '[data-tour="billing-balance"]',
@@ -156,7 +150,7 @@ const SETTINGS_BILLING_STEPS: GuidedTourStep[] = [
   },
   {
     id: "billing-records",
-    selector: '[data-tour="billing-records"]',
+    selector: '[data-tour="billing-records-header"]',
     title: "消费记录",
     body: "每条记录可以回到对应会话，用于复核是哪次任务产生了消耗。",
     placement: "top",
@@ -164,16 +158,12 @@ const SETTINGS_BILLING_STEPS: GuidedTourStep[] = [
 ];
 const USER_GUIDED_TOUR_KEYS = [
   "oneceo:tour.home_core.completed",
-  "oneceo:tour.home_attachment.seen",
-  "oneceo:tour.home_connectors.seen",
-  "oneceo:tour.home_model.seen",
+  "oneceo:tour.home_scenario_demo.completed",
   "oneceo:tour.projects.overview.completed",
   "oneceo:tour.projects.create.completed",
   "oneceo:tour.project_detail.completed",
   "oneceo:tour.ceo_view.completed",
   SETTINGS_OVERVIEW_TOUR_KEY,
-  SETTINGS_CONNECTORS_TOUR_KEY,
-  SETTINGS_BILLING_TOUR_KEY,
 ];
 const ACCOUNT_AVATAR_TONES = [
   "bg-emerald-500",
@@ -1637,10 +1627,6 @@ export function SettingsDialog({
 }: SettingsDialogProps) {
   const { t } = useTranslation();
   const [settingsTourOpen, setSettingsTourOpen] = useState(false);
-  const [settingsFocusedTour, setSettingsFocusedTour] = useState<{
-    storageKey: string;
-    steps: GuidedTourStep[];
-  } | null>(null);
 
   const preventGuidedTourOutsideClose = useMemo(
     () => (event: Event) => {
@@ -1653,28 +1639,25 @@ export function SettingsDialog({
 
   const replaySettingsGuide = useCallback(() => {
     window.localStorage.removeItem(SETTINGS_OVERVIEW_TOUR_KEY);
-    setSettingsFocusedTour(null);
     setSettingsTourOpen(false);
+    onActiveTabChange("settings");
     window.setTimeout(() => setSettingsTourOpen(true), 80);
     toast.success("已重新加载设置引导");
-  }, []);
+  }, [onActiveTabChange]);
 
   const resetAllGuides = useCallback(() => {
     USER_GUIDED_TOUR_KEYS.forEach((storageKey) => {
       window.localStorage.removeItem(storageKey);
     });
-    setSettingsFocusedTour(null);
     setSettingsTourOpen(false);
+    onActiveTabChange("settings");
     window.setTimeout(() => setSettingsTourOpen(true), 80);
     toast.success("已重新加载全部引导");
-  }, []);
+  }, [onActiveTabChange]);
 
   useEffect(() => {
     if (!open) {
       setSettingsTourOpen(false);
-      return;
-    }
-    if (activeTab === "connectors" || activeTab === "billing") {
       return;
     }
     if (window.localStorage.getItem(SETTINGS_OVERVIEW_TOUR_KEY) === "completed") {
@@ -1682,36 +1665,31 @@ export function SettingsDialog({
     }
     const timer = window.setTimeout(() => setSettingsTourOpen(true), 360);
     return () => window.clearTimeout(timer);
-  }, [activeTab, open]);
+  }, [open]);
 
-  useEffect(() => {
-    if (!open) {
-      setSettingsFocusedTour(null);
-      return;
-    }
-    const config =
-      activeTab === "connectors"
-        ? {
-            storageKey: SETTINGS_CONNECTORS_TOUR_KEY,
-            steps: SETTINGS_CONNECTORS_STEPS,
-          }
-        : activeTab === "billing"
-          ? {
-              storageKey: SETTINGS_BILLING_TOUR_KEY,
-              steps: SETTINGS_BILLING_STEPS,
-            }
-          : null;
-    if (!config) {
-      setSettingsFocusedTour(null);
-      return;
-    }
-    if (window.localStorage.getItem(config.storageKey) === "completed") {
-      setSettingsFocusedTour(null);
-      return;
-    }
-    const timer = window.setTimeout(() => setSettingsFocusedTour(config), 420);
-    return () => window.clearTimeout(timer);
-  }, [activeTab, open]);
+  const handleSettingsTourStepChange = useCallback(
+    (step: GuidedTourStep) => {
+      if (step.id.startsWith("connectors-")) {
+        if (activeTab !== "connectors") {
+          onActiveTabChange("connectors");
+        }
+        window.setTimeout(() => window.dispatchEvent(new Event("resize")), 80);
+        return;
+      }
+      if (step.id.startsWith("billing-")) {
+        if (activeTab !== "billing") {
+          onActiveTabChange("billing");
+        }
+        window.setTimeout(() => window.dispatchEvent(new Event("resize")), 80);
+        return;
+      }
+      if (activeTab !== "settings") {
+        onActiveTabChange("settings");
+      }
+      window.setTimeout(() => window.dispatchEvent(new Event("resize")), 80);
+    },
+    [activeTab, onActiveTabChange],
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1739,22 +1717,12 @@ export function SettingsDialog({
         <GuidedTour
           storageKey={SETTINGS_OVERVIEW_TOUR_KEY}
           steps={SETTINGS_OVERVIEW_STEPS}
+          allowUnresolvedSteps
           open={settingsTourOpen}
           onOpenChange={setSettingsTourOpen}
+          onStepChange={handleSettingsTourStepChange}
+          onComplete={() => onActiveTabChange("settings")}
         />
-        {settingsFocusedTour ? (
-          <GuidedTour
-            storageKey={settingsFocusedTour.storageKey}
-            steps={settingsFocusedTour.steps}
-            open
-            onOpenChange={(nextOpen) => {
-              if (!nextOpen) {
-                setSettingsFocusedTour(null);
-              }
-            }}
-            onComplete={() => setSettingsFocusedTour(null)}
-          />
-        ) : null}
       </DialogContent>
     </Dialog>
   );

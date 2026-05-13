@@ -365,6 +365,95 @@
       margin-top: 6px;
     }
 
+    /* Prompt preview */
+    .prompt-preview {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+    .prompt-preview-header {
+      padding: 8px 12px;
+      background: var(--surface-raised);
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .prompt-preview-body {
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .prompt-msg {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .prompt-msg-role {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-secondary);
+    }
+    .prompt-msg-role::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .prompt-msg-system .prompt-msg-role::before { background: var(--neutral); }
+    .prompt-msg-user .prompt-msg-role::before { background: var(--info); }
+    .prompt-msg-assistant .prompt-msg-role::before { background: var(--success); }
+    .prompt-msg-tool .prompt-msg-role::before { background: var(--warning); }
+    .prompt-msg-content {
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .prompt-msg-system .prompt-msg-content {
+      background: var(--surface-raised);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+    }
+    .prompt-msg-user .prompt-msg-content {
+      background: var(--info);
+      color: #f6fbff;
+      border-radius: 12px 12px 4px 12px;
+    }
+    .prompt-msg-assistant .prompt-msg-content {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px 12px 12px 4px;
+    }
+    .prompt-msg-tool .prompt-msg-content {
+      background: rgba(154,103,0,0.06);
+      border: 1px solid rgba(154,103,0,0.18);
+    }
+    .prompt-msg-tool-call {
+      font-family: var(--mono);
+      font-size: 11px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px;
+      margin-top: 4px;
+    }
+
     /* Trace inline detail */
     .trace-detail {
       background: var(--surface);
@@ -892,6 +981,44 @@
           html += '<div class="trace-metric"><div class="trace-metric-value">' + trace.cacheCreationTokens + '</div><div class="trace-metric-label">Cache 创建</div></div>';
         }
         html += '</div>';
+      }
+
+      // Prompt preview (for LLM requests)
+      if (trace.traceType === 'llm_request' && trace.requestBody && trace.requestBody.messages) {
+        var msgs = trace.requestBody.messages;
+        html += '<div class="prompt-preview">';
+        html += '<div class="prompt-preview-header">Prompt 上下文 <span style="font-weight:400;color:var(--text-faint);">' + msgs.length + ' 条消息</span></div>';
+        html += '<div class="prompt-preview-body">';
+        for (var mi = 0; mi < msgs.length; mi++) {
+          var msg = msgs[mi];
+          var role = msg.role || 'unknown';
+          var content = msg.content || '';
+          var roleClass = 'prompt-msg-' + role;
+          var roleLabel = role === 'system' ? 'System' : role === 'user' ? 'User' : role === 'assistant' ? 'Assistant' : role === 'tool' ? 'Tool' : role;
+          html += '<div class="prompt-msg ' + roleClass + '">';
+          html += '<div class="prompt-msg-role">' + roleLabel + '</div>';
+          if (typeof content === 'string' && content) {
+            html += '<div class="prompt-msg-content">' + escapeHtml(content) + '</div>';
+          } else if (Array.isArray(content)) {
+            // multimodal content array
+            for (var ci = 0; ci < content.length; ci++) {
+              var part = content[ci];
+              if (part.type === 'text' && part.text) {
+                html += '<div class="prompt-msg-content">' + escapeHtml(part.text) + '</div>';
+              } else if (part.type === 'image_url' && part.image_url) {
+                html += '<div class="prompt-msg-content" style="font-style:italic;color:var(--text-faint);">[图片: ' + escapeHtml(String(part.image_url.url || part.image_url).slice(0, 60)) + '...]</div>';
+              }
+            }
+          }
+          if (msg.tool_calls) {
+            html += '<div class="prompt-msg-tool-call">工具调用: ' + escapeHtml(JSON.stringify(msg.tool_calls, null, 2)) + '</div>';
+          }
+          if (msg.tool_call_id) {
+            html += '<div class="prompt-msg-tool-call">tool_call_id: ' + escapeHtml(msg.tool_call_id) + '</div>';
+          }
+          html += '</div>';
+        }
+        html += '</div></div>';
       }
 
       // Error

@@ -577,6 +577,15 @@ function normalizeToolChoice(
   };
 }
 
+function normalizeAnthropicSystem(systemMessages: string[]) {
+  if (systemMessages.length === 0) return undefined;
+  return systemMessages.map((text, index) => ({
+    type: 'text' as const,
+    text,
+    ...(index === 0 ? { cache_control: { type: 'ephemeral' as const } } : {}),
+  }));
+}
+
 export function toAnthropicRequest(payload: OpenAiChatCompletionRequest): AnthropicMessageRequest {
   payload = sanitizeOpenAiChatCompletionPayload(payload);
   const model = String(payload.model || '').trim();
@@ -585,12 +594,11 @@ export function toAnthropicRequest(payload: OpenAiChatCompletionRequest): Anthro
   }
 
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
-  const system = messages
+  const systemMessages = messages
     .filter((message) => message?.role === 'system')
     .map((message) => extractTextContent(message.content))
-    .filter(Boolean)
-    .join('\n\n')
-    .trim();
+    .filter(Boolean);
+  const normalizedSystem = normalizeAnthropicSystem(systemMessages);
 
   const normalizedMessages: AnthropicMessageRequest['messages'] = [];
   let pendingToolResults: Array<{ type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }> = [];
@@ -678,9 +686,7 @@ export function toAnthropicRequest(payload: OpenAiChatCompletionRequest): Anthro
 
   return {
     model,
-    ...(system
-      ? { system: [{ type: 'text' as const, text: system, cache_control: { type: 'ephemeral' as const } }] }
-      : {}),
+    ...(normalizedSystem ? { system: normalizedSystem } : {}),
     messages: normalizedMessages,
     ...(normalizeOpenAiTools(payload) ? { tools: normalizeOpenAiTools(payload) } : {}),
     ...(normalizeOpenAiTools(payload) ? { tool_choice: normalizeToolChoice(payload.tool_choice) } : {}),

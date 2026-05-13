@@ -53,6 +53,66 @@ beforeEach(() => {
   mock.method(taskSessionAltusMemoryService, 'saveTimelineDerivedMemory', async () => null as any);
   mock.method(taskSessionAltusMemoryService, 'markMaterialized', async (input: any) => input.state || null);
   mock.method(taskSessionAltusMemoryService, 'saveSandboxFileMemoryToDb', async () => null as any);
+  mock.method(taskSessionAltusMemoryService, 'ensureLlmContextAnchor', async (input: any) => ({
+    version: 0,
+    summary: { goal: '', latestOutcome: '', openQuestions: [] },
+    constraints: [],
+    decisions: [],
+    workingNotes: [],
+    sandboxMaterialization: { snapshotVersion: 0, lastSandboxId: null, lastSyncedAt: null },
+    fileMemorySnapshot: {
+      snapshotVersion: 0,
+      savedAt: null,
+      sourceSandboxId: null,
+      archiveId: null,
+      workspaceMemoryPath: '.oneceo/session-memory/altus-memory.json',
+    },
+    updatedAt: null,
+    lastWriterRunId: input?.runId || null,
+    llmContext: {
+      contextId: 'altus_ctx_test',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      lastRunId: input?.runId || null,
+      lastModel: input?.model || 'altus-model',
+      lastProvider: input?.provider || 'openai',
+      callCount: 0,
+      lastPromptTokens: 0,
+      lastCachedTokens: 0,
+      lastCacheCreationTokens: 0,
+      lastCacheHitRatio: 0,
+    },
+  }) as any);
+  mock.method(taskSessionAltusMemoryService, 'recordLlmContextUsage', async () => ({
+    version: 0,
+    summary: { goal: '', latestOutcome: '', openQuestions: [] },
+    constraints: [],
+    decisions: [],
+    workingNotes: [],
+    sandboxMaterialization: { snapshotVersion: 0, lastSandboxId: null, lastSyncedAt: null },
+    fileMemorySnapshot: {
+      snapshotVersion: 0,
+      savedAt: null,
+      sourceSandboxId: null,
+      archiveId: null,
+      workspaceMemoryPath: '.oneceo/session-memory/altus-memory.json',
+    },
+    updatedAt: null,
+    lastWriterRunId: null,
+    llmContext: {
+      contextId: 'altus_ctx_test',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      lastRunId: null,
+      lastModel: 'altus-model',
+      lastProvider: 'openai',
+      callCount: 1,
+      lastPromptTokens: 0,
+      lastCachedTokens: 0,
+      lastCacheCreationTokens: 0,
+      lastCacheHitRatio: 0,
+    },
+  }) as any);
 });
 
 afterEach(() => {

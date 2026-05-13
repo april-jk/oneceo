@@ -46,6 +46,7 @@ import {
 type AttachmentPickerButtonProps = {
   onSelectFiles: (files: File[]) => void | Promise<void>;
   onSelectSkills?: (skills: TaskCreationPlatformSkill[]) => void | Promise<void>;
+  selectedSkills?: TaskCreationPlatformSkill[];
   disabled?: boolean;
 };
 
@@ -66,6 +67,7 @@ function formatSkillResourceSummary(
 export default function AttachmentPickerButton({
   onSelectFiles,
   onSelectSkills,
+  selectedSkills = [],
   disabled = false,
 }: AttachmentPickerButtonProps) {
   const { t } = useTranslation();
@@ -78,6 +80,11 @@ export default function AttachmentPickerButton({
   const [skills, setSkills] = useState<TaskCreationPlatformSkill[]>([]);
   const [skillsLoaded, setSkillsLoaded] = useState(false);
   const [skillsLoading, setSkillsLoading] = useState(false);
+  const selectedSkillKeys = useMemo(
+    () =>
+      new Set(selectedSkills.map((item) => `${item.skillId}:${item.revisionId}`)),
+    [selectedSkills]
+  );
 
   const cloudProviderItems = useMemo(
     () =>
@@ -172,6 +179,12 @@ export default function AttachmentPickerButton({
 
   const handleSkillImport = async (skill: TaskCreationPlatformSkill) => {
     if (!onSelectSkills) return;
+    const skillKey = `${skill.skillId}:${skill.revisionId}`;
+    if (selectedSkillKeys.has(skillKey)) {
+      setMenuOpen(false);
+      toast.info(`已添加技能：${skill.name}`);
+      return;
+    }
     try {
       setMenuOpen(false);
       await Promise.resolve(onSelectSkills([skill]));
@@ -299,11 +312,16 @@ export default function AttachmentPickerButton({
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent className="w-72 rounded-2xl border-border/70 p-2 shadow-xl">
                 {skills.length > 0 ? (
-                  skills.map((item) => (
+                  skills.map((item) => {
+                    const skillKey = `${item.skillId}:${item.revisionId}`;
+                    const alreadySelected = selectedSkillKeys.has(skillKey);
+                    return (
                     <DropdownMenuItem
-                      key={`${item.skillId}:${item.revisionId}`}
+                      key={skillKey}
                       className="rounded-xl px-3 py-2"
+                      disabled={alreadySelected}
                       onSelect={() => {
+                        if (alreadySelected) return;
                         void handleSkillImport(item);
                       }}
                     >
@@ -319,8 +337,12 @@ export default function AttachmentPickerButton({
                           · {item.description} · {formatSkillResourceSummary(item, t)}
                         </span>
                       </div>
+                      {alreadySelected ? (
+                        <span className="text-xs text-muted-foreground">已添加</span>
+                      ) : null}
                     </DropdownMenuItem>
-                  ))
+                  );
+                  })
                 ) : (
                   <DropdownMenuItem
                     className="rounded-xl px-3 py-2"

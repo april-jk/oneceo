@@ -102,7 +102,7 @@ const CEO_VIEW_STEPS: GuidedTourStep[] = [
   },
   {
     id: "ceo-context",
-    selector: '[data-tour="ceo-context"]',
+    selector: '[data-tour="ceo-context-bubble"]',
     title: "总经理上下文",
     body: "适合问资源调度、项目优先级和团队绩效，不替代单任务执行。",
     placement: "bottom",
@@ -264,7 +264,10 @@ export default function CEOView() {
                   </span>
                 </div>
                 <div className="flex-1">
-                  <div className="bg-muted/50 rounded-2xl rounded-tl-none p-4">
+                  <div
+                    data-tour="ceo-context-bubble"
+                    className="bg-muted/50 rounded-2xl rounded-tl-none p-4"
+                  >
                     <p className="text-sm leading-relaxed">
                       {t("ceoView.welcomeIntro")}
                     </p>

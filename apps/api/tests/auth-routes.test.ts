@@ -402,7 +402,7 @@ test('GET /api/auth/oauth/google/callback rejects mismatched state and clears oa
     });
 
     assert.equal(response.status, 302);
-    assert.equal(response.headers.get('location'), '/login?oauth_error=OAuth%20state%20%E4%B8%8D%E5%8C%B9%E9%85%8D');
+    assert.equal(response.headers.get('location'), '/login?oauth_error=OAuth%20state%20%E9%9D%9E%E6%B3%95');
     assert.match(getSetCookieHeader(response), new RegExp(`${APP_OAUTH_STATE_COOKIE_NAME}=;`));
     assert.match(getSetCookieHeader(response), /Max-Age=0/);
   } finally {
@@ -433,7 +433,7 @@ test('GET /api/auth/oauth/google/callback rejects expired oauth state payload', 
     );
 
     assert.equal(response.status, 302);
-    assert.equal(response.headers.get('location'), '/login?oauth_error=OAuth%20state%20%E5%B7%B2%E8%BF%87%E6%9C%9F');
+    assert.equal(response.headers.get('location'), '/login?oauth_error=OAuth%20state%20%E9%9D%9E%E6%B3%95');
   } finally {
     await server.close();
   }

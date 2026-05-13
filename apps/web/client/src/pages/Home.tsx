@@ -38,7 +38,9 @@ import {
   Rocket,
   ChevronDown,
   ChevronRight,
+  Figma,
   Check,
+  Link,
   Trash2,
   X,
 } from "lucide-react";
@@ -153,6 +155,516 @@ import { useAuth } from "@/contexts/AuthContext";
 type PageMode = "input" | "chat";
 const BILLING_TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "stopped"]);
 const HOME_CORE_TOUR_KEY = "oneceo:tour.home_core.completed";
+const HOME_SCENARIO_TOUR_KEY = "oneceo:tour.home_scenario_demo.completed";
+
+type HomeScenarioModel = "lite" | "pro" | "max";
+
+type HomeCapabilityExample = {
+  id: string;
+  title: string;
+  prompt: string;
+  category?: string;
+};
+
+type HomeCapabilityGuideItem = {
+  id: string;
+  label: string;
+  description: string;
+  icon: LucideIcon;
+  model: HomeScenarioModel;
+  prompt: string;
+  examples: HomeCapabilityExample[];
+  skillHints?: string[];
+  mcpHints?: string[];
+};
+
+const HOME_CAPABILITY_GUIDE_ITEMS: HomeCapabilityGuideItem[] = [
+  {
+    id: "slides",
+    label: "制作幻灯片",
+    description: "从目标、素材到可复核大纲",
+    icon: FileText,
+    model: "max",
+    prompt: `请帮我制作一份面向 CEO 的产品复盘汇报 PPT。
+
+目标：
+1. 梳理本季度产品进展、关键风险和下一阶段优先级。
+2. 把结论整理成 8-10 页的汇报结构。
+3. 每页写清标题、核心观点、图表建议和需要补充的数据。
+
+约束：
+- 面向高层决策，不要堆砌过程细节。
+- 结论要可追问、可复核。
+- 输出先做成项目计划，方便我分配给团队继续补资料和设计。`,
+    examples: [
+      {
+        id: "slides-competition",
+        title: "出海竞品与渠道格局",
+        prompt: `为 oneceo 的出海计划制作竞品与渠道格局汇报，覆盖北美与东南亚市场。请比较 5 个 AI Agent 平台在定价、渠道、功能深度、合规能力与客户结构上的差异，并输出 SWOT 和 90 天可执行策略。`,
+      },
+      {
+        id: "slides-business-review",
+        title: "OPC 周经营复盘汇报",
+        prompt: `生成面向 OPC 团队负责人的周经营复盘 PPT：新增线索、渠道转化、试用到付费漏斗、ARPA、流失预警、交付效率和客服 SLA。要求给出异常原因、影响范围、责任人和下周动作。`,
+      },
+      {
+        id: "slides-market-opportunity",
+        title: "出海新市场机会评估",
+        prompt: `为 oneceo 评估“日本中型技术服务公司”市场机会，输出 TAM/SAM/SOM、客户画像、本地化需求、合规风险、进入路径与 12 个月收入预测，并给出关键验证假设。`,
+      },
+      {
+        id: "slides-team-status",
+        title: "OPC 跨团队周状态模板",
+        prompt: `创建 OPC 跨团队周状态报告模板，覆盖增长、销售、交付、客服四条线：本周目标达成、阻塞问题、资源占用、下周关键依赖和升级事项，适合管理层快速决策。`,
+      },
+    ],
+    skillHints: ["ppt", "presentation", "slides", "deck"],
+  },
+  {
+    id: "website",
+    label: "创建网站",
+    description: "从需求到结构、文案和验收",
+    icon: Rocket,
+    model: "max",
+    prompt: `请帮我复盘一个 SaaS 产品发布页改版任务。
+
+目标：
+1. 对比当前首页信息架构，指出最影响转化的 3 个问题。
+2. 给出一版新的首屏结构和模块顺序。
+3. 输出可执行的设计验收清单，方便我分配给设计师和前端。
+
+约束：
+- 面向 B2B 团队管理员。
+- 风格要克制、专业、可复核。
+- 请把结论整理成项目计划，不要只给灵感。`,
+    examples: [
+      {
+        id: "website-launch-ai-writer",
+        category: "landing",
+        title: "oneceo 出海落地页",
+        prompt: `为 oneceo 构建英文出海落地页，目标是获取北美中型团队试用注册。核心模块：价值主张首屏、行业场景卡片（SaaS/Agency/Consulting）、客户案例、定价入口、FAQ、预约演示表单。风格：专业克制、B2B 高信任感。`,
+      },
+      {
+        id: "website-mobile-app-download",
+        category: "landing",
+        title: "海外 Webinar 注册页",
+        prompt: `为 oneceo 海外 Webinar「Scale Ops with AI Agents」构建注册页。需要包含议程、讲者、受众收益、时间时区切换、注册表单与邮件确认说明，重点提升活动报名转化。`,
+      },
+      {
+        id: "website-brand-agency",
+        category: "landing",
+        title: "海外代理商合作页",
+        prompt: `为 oneceo 构建海外渠道代理合作页，目标是招募区域合作伙伴。模块包含合作收益、返佣机制、支持政策、成功案例、申请流程与资质要求。`,
+      },
+      {
+        id: "website-task-dashboard",
+        category: "dashboard",
+        title: "OPC 执行仪表盘",
+        prompt: `构建 oneceo 的 OPC 执行仪表盘，展示目标完成率、关键任务状态、跨团队阻塞、升级事项和负责人负载。强调高密度信息与可追责链路。`,
+      },
+      {
+        id: "website-crm-dashboard",
+        category: "dashboard",
+        title: "出海销售漏斗仪表盘",
+        prompt: `构建出海销售漏斗仪表盘，包含线索来源、Demo 预约、POC 转化、签约周期、客单价和销售代表表现，支持按国家和行业筛选。`,
+      },
+      {
+        id: "website-hr-dashboard",
+        category: "dashboard",
+        title: "全球团队用工健康看板",
+        prompt: `为出海团队构建用工健康看板，跟踪各地区人效、招聘进度、流失风险和人员成本，支持按区域、部门、岗位类型切换。`,
+      },
+    ],
+    skillHints: ["frontend", "design", "website"],
+    mcpHints: ["figma", "vercel"],
+  },
+  {
+    id: "app",
+    label: "开发应用",
+    description: "拆需求、写代码、预览和部署",
+    icon: Terminal,
+    model: "max",
+    prompt: `请帮我设计并推进一个内部运营看板应用。
+
+目标：
+1. 明确首页、项目列表、任务详情和数据筛选的核心交互。
+2. 拆出前端组件、接口依赖、状态管理和验收标准。
+3. 给出第一版可开发任务清单，并标注风险点。
+
+约束：
+- 面向平台管理员高频使用，信息密度要高但不能混乱。
+- 每个任务都要能被测试或人工验收。
+- 需要考虑后续预览、调试和部署。`,
+    examples: [
+      {
+        id: "app-admin-dashboard",
+        title: "构建 OPC 指挥台",
+        prompt: "为 oneceo 构建 OPC 指挥台，包含目标分解、任务推进、风险升级、责任人追踪和经营复盘入口，支持多团队并行协作。",
+      },
+      {
+        id: "app-workflow-tracker",
+        title: "搭建出海交付流转看板",
+        prompt: "构建出海交付流转看板，包含线索接入、方案评估、POC、交付中、上线验收阶段，支持时区、语言和地区合规标记。",
+      },
+      {
+        id: "app-release-console",
+        title: "开发全球发布控制台",
+        prompt: "开发全球发布控制台，支持多区域灰度、法规检查、发布审批、回滚策略和发布后观测，适用于跨国版本发布。",
+      },
+    ],
+    skillHints: ["frontend", "development", "app"],
+  },
+  {
+    id: "research",
+    label: "深度研究",
+    description: "收集证据、归纳判断和引用来源",
+    icon: Search,
+    model: "max",
+    prompt: `请帮我做一次 AI Agent 平台竞品研究。
+
+目标：
+1. 比较 Manus、OpenAI Codex、Claude Code 和至少 2 个同类产品。
+2. 提炼它们在任务入口、工具调用、交付物呈现和团队协作上的差异。
+3. 输出 oneceo 可以借鉴的 5 条产品机会。
+
+约束：
+- 需要区分事实、推断和建议。
+- 关键结论要有来源或证据说明。
+- 输出要适合放入产品决策文档。`,
+    examples: [
+      {
+        id: "research-competitor-matrix",
+        title: "出海竞品能力矩阵",
+        prompt: "研究 Manus、OpenAI Codex、Claude Code、Devin 在海外市场的能力与商业化差异，按目标客户、定价、合规和生态连接输出矩阵。",
+      },
+      {
+        id: "research-pricing-analysis",
+        title: "海外定价与包装策略",
+        prompt: "分析海外 Agent 产品的 seat/usage/hybrid 定价模型，给出 oneceo 的套餐包装、试用策略和续费提升建议。",
+      },
+      {
+        id: "research-go-to-market",
+        title: "出海 GTM 路径建议",
+        prompt: "围绕 OPC 与运营负责人场景，输出 oneceo 出海 GTM 方案：目标国家优先级、获客渠道、关键合作伙伴与 180 天执行节奏。",
+      },
+    ],
+    skillHints: ["research", "wide-research"],
+    mcpHints: ["notion", "github"],
+  },
+  {
+    id: "spreadsheet",
+    label: "分析表格",
+    description: "清洗数据、找异常和做图表",
+    icon: FileSearch,
+    model: "pro",
+    prompt: `请帮我分析一份团队运营表格。
+
+目标：
+1. 识别数据缺失、异常值和口径不一致的问题。
+2. 找出项目延期、成本超预算和人员负载过高的风险。
+3. 输出一份适合 CEO 快速查看的图表和结论清单。
+
+约束：
+- 先说明需要哪些字段和数据格式。
+- 结论必须能回到原始数据复核。
+- 不要只给笼统建议，要给下一步动作。`,
+    examples: [
+      {
+        id: "spreadsheet-risk-scan",
+        title: "识别出海经营风险",
+        prompt: "分析出海运营表，识别 CAC 异常上升、试用转化下滑、回款延迟和交付超期风险，输出风险等级与建议动作。",
+      },
+      {
+        id: "spreadsheet-ceo-brief",
+        title: "生成 OPC 周经营简报",
+        prompt: "基于运营数据生成 OPC 周经营简报：渠道表现、销售漏斗、交付效率、客户健康度和下周关键动作，结论可追溯。",
+      },
+      {
+        id: "spreadsheet-data-cleaning",
+        title: "统一跨区域数据口径",
+        prompt: "对多国家运营数据做清洗与标准化，统一币种、时区、渠道命名与客户阶段口径，并输出复核规则。",
+      },
+    ],
+    skillHints: ["spreadsheet", "excel", "table"],
+  },
+  {
+    id: "project",
+    label: "项目拆解",
+    description: "把目标变成可分配计划",
+    icon: FolderSearch2,
+    model: "pro",
+    prompt: `请帮我把“上线企业级权限系统”拆成一个可执行项目。
+
+目标：
+1. 拆出阶段、里程碑、负责人角色和交付物。
+2. 标出最容易延期或返工的依赖。
+3. 给出每周 CEO 复盘应该看的指标。
+
+约束：
+- 输出要便于放进 oneceo 项目管理。
+- 每个任务都要有清晰验收标准。
+- 不要做过度复杂的流程设计。`,
+    examples: [
+      {
+        id: "project-enterprise-permission",
+        title: "企业权限系统拆解",
+        prompt: "把“上线企业级权限系统”拆成可执行项目，给出阶段目标、关键依赖、任务清单、负责人和验收标准。",
+      },
+      {
+        id: "project-multi-team-delivery",
+        title: "跨团队交付计划",
+        prompt: "为跨前端、后端、设计和运维的项目构建交付计划，明确里程碑、阻塞点和每周复盘指标。",
+      },
+      {
+        id: "project-rescue-plan",
+        title: "延期项目抢救计划",
+        prompt: "针对已延期项目输出抢救计划：优先级重排、范围收敛、资源调整和风险兜底，并给出两周执行路线图。",
+      },
+    ],
+    skillHints: ["project", "plan"],
+  },
+  {
+    id: "debug",
+    label: "修复问题",
+    description: "定位缺陷、修代码和补验证",
+    icon: Bug,
+    model: "max",
+    prompt: `请帮我定位并修复一个前端交互问题。
+
+现象：
+点击引导的下一步后，当前设置界面会被意外关闭。
+
+目标：
+1. 找出触发关闭的事件链路。
+2. 给出最短路径修复方案并说明影响范围。
+3. 补充必要验证，确保引导不会打断原页面状态。
+
+约束：
+- 不做兼容性补丁，不绕过真实问题。
+- 不要改无关 UI。
+- 修复后需要说明验证路径。`,
+    examples: [
+      {
+        id: "debug-ui-regression",
+        title: "修复前端交互回归",
+        prompt: "定位并修复“点击下一步导致设置弹窗退出”的交互回归问题，给出根因、修复点、影响范围和验证路径。",
+      },
+      {
+        id: "debug-api-failure",
+        title: "排查接口偶发失败",
+        prompt: "排查任务提交接口偶发失败问题，输出复现条件、日志证据、根因判断和最短路径修复方案。",
+      },
+      {
+        id: "debug-performance-drop",
+        title: "修复性能退化",
+        prompt: "分析最近版本页面卡顿问题，找出主要性能瓶颈并给出优先级排序的优化方案与验收指标。",
+      },
+    ],
+    skillHints: ["debug", "code", "fix"],
+    mcpHints: ["github"],
+  },
+  {
+    id: "materials",
+    label: "资料整合",
+    description: "汇总多源材料形成可用结论",
+    icon: FileSearch,
+    model: "pro",
+    prompt: `请帮我整理一次多来源资料分析任务。
+
+目标：
+1. 汇总需求文档、设计稿、代码变更和会议记录里的关键信息。
+2. 找出当前结论之间的冲突、缺口和需要补证据的位置。
+3. 输出一份可以直接进入项目决策的资料摘要。
+
+约束：
+- 不要简单复制原文，要提炼事实、判断和待确认问题。
+- 每条关键结论都要能追溯到来源。
+- 输出要方便团队成员继续执行。`,
+    examples: [
+      {
+        id: "materials-design-dev-sync",
+        title: "设计与代码差异整合",
+        prompt: "整合 PRD、Figma 和代码变更，梳理设计与实现的差异，输出需要决策和需要修正的清单。",
+      },
+      {
+        id: "materials-meeting-brief",
+        title: "会议资料决策摘要",
+        prompt: "基于会议纪要、行动项和风险记录生成决策摘要，区分已确认结论、待确认问题和负责人。",
+      },
+      {
+        id: "materials-client-package",
+        title: "客户交付资料包",
+        prompt: "整理客户沟通、交付文档和变更记录，输出可直接发送的资料包目录与关键说明。",
+      },
+    ],
+    skillHints: ["document", "summary"],
+    mcpHints: ["notion", "google-drive"],
+  },
+  {
+    id: "visualization",
+    label: "数据可视化",
+    description: "把运营数据变成可解释图表",
+    icon: FileDiff,
+    model: "pro",
+    prompt: `请帮我设计一个 CEO 运营可视化看板。
+
+目标：
+1. 定义收入、项目进度、客户风险和团队负载的核心指标。
+2. 为每类指标选择图表形式，并说明为什么。
+3. 输出首屏布局和每个模块的复核口径。
+
+约束：
+- 面向高频管理决策，不做装饰性图表。
+- 每个图表都要能解释下一步动作。
+- 指标口径要清楚，避免误读。`,
+    examples: [
+      {
+        id: "visualization-exec-dashboard",
+        title: "经营驾驶舱",
+        prompt: "设计 CEO 经营驾驶舱，覆盖收入趋势、项目进度、客户风险和团队负载，强调可解释和可行动。",
+      },
+      {
+        id: "visualization-project-health",
+        title: "项目健康度看板",
+        prompt: "构建项目健康度看板，定义风险评分、进度偏差、阻塞时长、资源利用率等核心指标与图表。",
+      },
+      {
+        id: "visualization-weekly-ops",
+        title: "周运营复盘图表",
+        prompt: "为周运营复盘设计图表组合，突出异常波动、影响范围和建议动作，支持会议快速决策。",
+      },
+    ],
+    skillHints: ["visualization", "chart", "dashboard"],
+    mcpHints: ["supabase"],
+  },
+  {
+    id: "document",
+    label: "文档/PDF",
+    description: "整理文档、审阅材料和生成报告",
+    icon: FilePlus,
+    model: "pro",
+    prompt: `请帮我整理一份客户项目复盘文档。
+
+目标：
+1. 从会议记录、交付物和问题列表中提炼关键事实。
+2. 输出项目目标、执行过程、问题根因和下一步动作。
+3. 生成适合给客户和内部团队同时查看的版本结构。
+
+约束：
+- 客户版要克制、清楚，不暴露内部无关细节。
+- 内部版要保留可追责和可改进的信息。
+- 结论要能追溯到原始资料。`,
+    examples: [
+      {
+        id: "document-client-retro",
+        title: "客户项目复盘报告",
+        prompt: "整理客户项目复盘报告，分客户版与内部版，覆盖目标、过程、问题根因、改进动作和时间线。",
+      },
+      {
+        id: "document-implementation-plan",
+        title: "实施方案文档",
+        prompt: "生成实施方案文档，包含范围说明、技术方案、资源计划、风险控制和验收标准。",
+      },
+      {
+        id: "document-policy-brief",
+        title: "政策与流程说明书",
+        prompt: "将分散规范整合为流程说明书，明确角色职责、操作步骤、异常处理和审计要求。",
+      },
+    ],
+    skillHints: ["pdf", "document"],
+  },
+  {
+    id: "business_review",
+    label: "经营复盘",
+    description: "跨项目梳理风险、进度和动作",
+    icon: ChevronRight,
+    model: "pro",
+    prompt: `请帮我准备一次经营复盘。
+
+目标：
+1. 汇总当前项目、收入、客户风险和团队负载的关键变化。
+2. 标出需要 CEO 介入的阻塞点和决策点。
+3. 输出下一周优先处理的 5 个经营动作。
+
+约束：
+- 优先呈现异常和决策点，不要平均用力。
+- 每个风险都要说明影响、证据和建议动作。
+- 输出要便于周会上直接使用。`,
+    examples: [
+      {
+        id: "business-review-weekly",
+        title: "每周经营复盘",
+        prompt: "输出每周经营复盘，聚焦异常指标、关键风险、跨项目依赖和下周优先动作。",
+      },
+      {
+        id: "business-review-quarterly",
+        title: "季度经营总结",
+        prompt: "生成季度经营总结，包含增长结果、利润结构、执行偏差、管理洞见和下季度重点。",
+      },
+      {
+        id: "business-review-risk-radar",
+        title: "经营风险雷达",
+        prompt: "构建经营风险雷达，按财务、交付、客户和团队四象限评估风险并给出干预建议。",
+      },
+    ],
+    skillHints: ["business", "review"],
+    mcpHints: ["notion", "slack"],
+  },
+  {
+    id: "deployment",
+    label: "部署上线",
+    description: "把应用从预览推进到上线检查",
+    icon: Rocket,
+    model: "max",
+    prompt: `请帮我准备一个 Web 应用上线方案。
+
+目标：
+1. 梳理当前应用上线前需要完成的功能、配置、测试和部署检查。
+2. 标出最可能影响上线的风险和回滚方案。
+3. 输出一份上线执行清单，方便前端、后端和运维协同。
+
+约束：
+- 不做泛泛而谈的发布建议。
+- 每个检查项都要有负责人角色和验收方式。
+- 需要包含预览、调试、部署和回滚。`,
+    examples: [
+      {
+        id: "deployment-release-checklist",
+        title: "上线执行清单",
+        prompt: "生成发布上线执行清单，覆盖功能冻结、环境校验、回归验证、灰度策略和回滚预案。",
+      },
+      {
+        id: "deployment-risk-assessment",
+        title: "上线风险评估",
+        prompt: "输出上线风险评估报告，标出高风险变更、影响面、缓解策略和观测指标。",
+      },
+      {
+        id: "deployment-post-verification",
+        title: "上线后验证计划",
+        prompt: "设计上线后验证计划，包含关键链路监控、告警阈值、业务指标观察和应急处理流程。",
+      },
+    ],
+    skillHints: ["deploy", "release"],
+    mcpHints: ["vercel", "github"],
+  },
+];
+
+const HOME_PRIMARY_CAPABILITY_IDS = [
+  "slides",
+  "website",
+  "app",
+  "research",
+  "spreadsheet",
+];
+const HOME_PRIMARY_CAPABILITY_GUIDE_ITEMS = HOME_CAPABILITY_GUIDE_ITEMS.filter(
+  (item) => HOME_PRIMARY_CAPABILITY_IDS.includes(item.id),
+);
+const HOME_MORE_CAPABILITY_GUIDE_ITEMS = HOME_CAPABILITY_GUIDE_ITEMS.filter(
+  (item) => !HOME_PRIMARY_CAPABILITY_IDS.includes(item.id),
+);
+const HOME_DEFAULT_CAPABILITY =
+  HOME_CAPABILITY_GUIDE_ITEMS.find((item) => item.id === "website") ??
+  HOME_CAPABILITY_GUIDE_ITEMS[0]!;
 const HOME_CORE_TOUR_STEPS: GuidedTourStep[] = [
   {
     id: "new-task",
@@ -176,6 +688,20 @@ const HOME_CORE_TOUR_STEPS: GuidedTourStep[] = [
     placement: "top",
   },
   {
+    id: "connectors",
+    selector: '[data-tour="composer-connectors"]',
+    title: "连接器按任务启用",
+    body: "这里为本次任务启用 GitHub、Notion、Slack、Supabase、Figma 或 Vercel。未授权时先进入管理连接器完成配置。",
+    placement: "top",
+  },
+  {
+    id: "model",
+    selector: '[data-tour="composer-model"]',
+    title: "选择执行强度",
+    body: "Lite 更快，Pro 均衡，Max 适合复杂任务。默认 Pro 可以覆盖多数工作。",
+    placement: "top",
+  },
+  {
     id: "send",
     selector: '[data-tour="composer-send"]',
     title: "开始执行",
@@ -183,50 +709,50 @@ const HOME_CORE_TOUR_STEPS: GuidedTourStep[] = [
     placement: "top",
   },
 ];
-const HOME_LOCAL_TOURS: Record<string, { storageKey: string; steps: GuidedTourStep[] }> = {
-  attachments: {
-    storageKey: "oneceo:tour.home_attachment.seen",
-    steps: [
-      {
-        id: "attachments",
-        selector: '[data-tour="composer-attachments"]',
-        title: "附件、云端资料和 Skills",
-        body: "从这里可以添加资料，也可以把 Skills 注入本次任务。Skills 进入当前任务上下文，不等于全局永久开启。",
-        placement: "top",
-      },
-    ],
+const HOME_SCENARIO_TOUR_STEPS: GuidedTourStep[] = [
+  {
+    id: "scenario-entry",
+    selector: '[data-tour="home-capability-guide"]',
+    title: "选择一个能力入口",
+    body: "这里不是罗列按钮功能，而是把 oneceo 能做的事变成具体任务入口。选择一个入口后，系统会演示如何写需求、绑定项目、启用上下文并准备发送。",
+    placement: "bottom",
   },
-  connectors: {
-    storageKey: "oneceo:tour.home_connectors.seen",
-    steps: [
-      {
-        id: "connectors",
-        selector: '[data-tour="composer-connectors"]',
-        title: "连接器按任务启用",
-        body: "这里为本次任务启用 GitHub、Notion、Slack、Supabase、Figma 或 Vercel。未授权时先进入管理连接器完成配置。",
-        placement: "top",
-      },
-    ],
+  {
+    id: "scenario-prompt",
+    selector: '[data-tour="home-composer"]',
+    title: "选择示例再写入",
+    body: "点击下方示例提示词后，系统才会把对应需求写进输入框。先选场景，再按你的真实目标改写。",
+    placement: "top",
   },
-  model: {
-    storageKey: "oneceo:tour.home_model.seen",
-    steps: [
-      {
-        id: "model",
-        selector: '[data-tour="composer-model"]',
-        title: "选择执行强度",
-        body: "Lite 更快，Pro 均衡，Max 适合复杂任务。默认 Pro 可以覆盖多数工作。",
-        placement: "top",
-      },
-    ],
+  {
+    id: "scenario-project",
+    selector: '[data-tour="composer-project"]',
+    title: "把任务归属到项目",
+    body: "如果这不是一次临时问答，就把它挂到项目下。后续会话、产出和交付文档会更容易复核。",
+    placement: "top",
   },
-};
-
-function hasCompletedTour(storageKey: string) {
-  if (typeof window === "undefined") return true;
-  return window.localStorage.getItem(storageKey) === "completed";
-}
-
+  {
+    id: "scenario-connectors",
+    selector: '[data-tour="composer-connectors"]',
+    title: "按任务启用外部资料",
+    body: "真实任务通常需要 GitHub、Notion、Figma 或 Vercel 等上下文。连接器是在本次任务中按需启用，不是全局强制打开。",
+    placement: "top",
+  },
+  {
+    id: "scenario-model",
+    selector: '[data-tour="composer-model"]',
+    title: "复杂任务提高执行强度",
+    body: "演示会根据任务复杂度切到合适模型。普通任务保持 Pro，跨资料分析、开发和研究类任务可以用 Max。",
+    placement: "top",
+  },
+  {
+    id: "scenario-send",
+    selector: '[data-tour="composer-send"]',
+    title: "最后再发送",
+    body: "确认目标、项目、连接器和模型后再发送。oneceo 会把执行过程、文件和交付物跟随会话保存。",
+    placement: "top",
+  },
+];
 function isInsufficientCreditsError(error: unknown) {
   const text = error instanceof Error ? error.message : String(error || "");
   return /INSUFFICIENT_CREDITS|积分不足|\b402\b/i.test(text);
@@ -259,6 +785,53 @@ type ComposerReferenceToken = {
     category: string;
   };
 };
+
+const CAPABILITY_AUTO_REFERENCE_PREFIX = "auto-capability:";
+function buildSkillAttachmentId(skill: TaskCreationPlatformSkill) {
+  return `skill:${skill.skillId}:${skill.revisionId}`;
+}
+
+function normalizeCapabilityHint(value: string | null | undefined) {
+  return (value || "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+}
+
+function findBestCapabilitySkill(
+  catalog: TaskCreationPlatformSkill[],
+  hints: string[],
+) {
+  if (!catalog.length || !hints.length) return null;
+  const normalizedHints = hints.map((item) => normalizeCapabilityHint(item));
+  return (
+    catalog.find((item) => {
+      const haystack = [
+        item.slug,
+        item.name,
+        item.description,
+        item.category,
+        item.skillId,
+      ]
+        .map((text) => normalizeCapabilityHint(text))
+        .join(" ");
+      return normalizedHints.some((hint) => hint && haystack.includes(hint));
+    }) || null
+  );
+}
+
+function findBestCapabilityMcp(
+  catalog: Array<{ key: string; name: string; category: string }>,
+  hints: string[],
+) {
+  if (!catalog.length || !hints.length) return null;
+  const normalizedHints = hints.map((item) => normalizeCapabilityHint(item));
+  return (
+    catalog.find((item) => {
+      const haystack = [item.key, item.name, item.category]
+        .map((text) => normalizeCapabilityHint(text))
+        .join(" ");
+      return normalizedHints.some((hint) => hint && haystack.includes(hint));
+    }) || null
+  );
+}
 
 type SlashSuggestion = {
   id: string;
@@ -393,6 +966,11 @@ function clampProjectHintLabel(
 
 const NO_PROJECT_VALUE = "__no_project__";
 
+function hasCompletedGuidedTour(storageKey: string) {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(storageKey) === "completed";
+}
+
 export default function Home() {
   const { t } = useTranslation();
   const { refreshCredits } = useAuth();
@@ -472,10 +1050,23 @@ export default function Home() {
     messageKey?: string | null;
     messageIndex?: number | null;
   } | null>(null);
-  const [localTour, setLocalTour] = useState<{
-    storageKey: string;
-    steps: GuidedTourStep[];
-  } | null>(null);
+  const [scenarioTourOpen, setScenarioTourOpen] = useState(false);
+  const [scenarioDemo, setScenarioDemo] =
+    useState<HomeCapabilityGuideItem>(HOME_DEFAULT_CAPABILITY);
+  const [scenarioPrompt, setScenarioPrompt] = useState("");
+  const [selectedCapabilityId, setSelectedCapabilityId] = useState<string | null>(
+    null,
+  );
+  const [selectedCapabilityExampleId, setSelectedCapabilityExampleId] = useState<
+    string | null
+  >(null);
+  const [selectedCapabilityCategory, setSelectedCapabilityCategory] = useState<
+    string | null
+  >(null);
+  const [autoCapabilitySkillIds, setAutoCapabilitySkillIds] = useState<
+    string[]
+  >([]);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const isMobile = useIsMobile();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageScrollRef = useRef<HTMLDivElement>(null);
@@ -611,21 +1202,272 @@ export default function Home() {
     refreshCreditsRef.current = refreshCredits;
   }, [refreshCredits]);
 
-  useEffect(() => {
-    const handleTourTargetClick = (event: MouseEvent) => {
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      const trigger = target.closest<HTMLElement>("[data-tour-local]");
-      const tourId = trigger?.dataset.tourLocal;
-      if (!tourId) return;
-      const tour = HOME_LOCAL_TOURS[tourId];
-      if (!tour || hasCompletedTour(tour.storageKey)) return;
-      window.setTimeout(() => setLocalTour(tour), 180);
-    };
-    document.addEventListener("click", handleTourTargetClick, true);
-    return () => {
-      document.removeEventListener("click", handleTourTargetClick, true);
-    };
+  const selectedCapability = useMemo(() => {
+    if (!selectedCapabilityId) return null;
+    return (
+      HOME_CAPABILITY_GUIDE_ITEMS.find((item) => item.id === selectedCapabilityId) ??
+      null
+    );
+  }, [selectedCapabilityId]);
+
+  const selectedCapabilityCategories = useMemo(() => {
+    if (!selectedCapability?.examples.length) return [];
+    return Array.from(
+      new Set(
+        selectedCapability.examples
+          .map((example) => example.category?.trim())
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+  }, [selectedCapability]);
+
+  const visibleCapabilityExamples = useMemo(() => {
+    if (!selectedCapability) return [];
+    if (!selectedCapability.examples.length) {
+      return [
+        {
+          id: `${selectedCapability.id}-default`,
+          title: `用 ${selectedCapability.label} 启动一个任务`,
+          prompt: selectedCapability.prompt,
+        },
+      ];
+    }
+    if (!selectedCapabilityCategory) return selectedCapability.examples;
+    return selectedCapability.examples.filter(
+      (example) => example.category === selectedCapabilityCategory,
+    );
+  }, [selectedCapability, selectedCapabilityCategory]);
+
+  const SelectedCapabilityIcon = selectedCapability?.icon ?? null;
+
+  const applyScenarioPrompt = useCallback(
+    (demo: HomeCapabilityGuideItem, prompt: string, exampleId?: string | null) => {
+      setScenarioDemo(demo);
+      setScenarioPrompt(prompt);
+      setSelectedCapabilityId(demo.id);
+      setSelectedCapabilityExampleId(exampleId ?? null);
+      setSelectedModel(demo.model);
+      setModelMenuOpen(false);
+      setMessage(prompt);
+    },
+    [],
+  );
+
+  const applyCapabilityAutoReferences = useCallback(
+    async (demo: HomeCapabilityGuideItem) => {
+      const hasCatalog = slashCatalogLoaded && !slashCatalogLoading;
+      let skillCatalog = slashSkillCatalog;
+      let mcpCatalog = slashMcpCatalog;
+
+      if (!hasCatalog) {
+        try {
+          setSlashCatalogLoading(true);
+          const loaded = await (async () => {
+            const [skills, connectorAccounts] = await Promise.all([
+              listTaskCreationSkills(),
+              getMyConnectorAccounts(),
+            ]);
+            const nextSkills = Array.isArray(skills) ? skills : [];
+            const catalog = Array.isArray(connectorAccounts.catalog)
+              ? connectorAccounts.catalog.filter(
+                  (
+                    item,
+                  ): item is (typeof connectorAccounts.catalog)[number] =>
+                    Boolean(item && typeof item === "object" && "key" in item),
+                )
+              : [];
+            const accounts = Array.isArray(connectorAccounts.accounts)
+              ? connectorAccounts.accounts.filter(
+                  (
+                    item,
+                  ): item is (typeof connectorAccounts.accounts)[number] =>
+                    Boolean(
+                      item && typeof item === "object" && "connectorKey" in item,
+                    ),
+                )
+              : [];
+            const catalogByKey = new Map(
+              catalog.map((item) => [item.key, item] as const),
+            );
+            const nextMcpCatalog = accounts
+              .filter((item) => {
+                if (item.authStatus !== "authorized") return false;
+                const catalogItem = catalogByKey.get(item.connectorKey);
+                return (
+                  Boolean(catalogItem?.available) &&
+                  catalogItem?.category === "custom_mcp"
+                );
+              })
+              .map((item) => ({
+                key: item.connectorKey,
+                name:
+                  catalogByKey.get(item.connectorKey)?.name || item.connectorKey,
+                category: "custom_mcp",
+              }));
+            return {
+              skills: nextSkills,
+              mcp: nextMcpCatalog,
+            };
+          })();
+          skillCatalog = loaded.skills;
+          mcpCatalog = loaded.mcp;
+          setSlashSkillCatalog(loaded.skills);
+          setSlashMcpCatalog(loaded.mcp);
+          setSlashCatalogLoaded(true);
+        } catch {
+          // ignore auto-mapping failures; user can still select manually
+        } finally {
+          setSlashCatalogLoading(false);
+        }
+      }
+
+      const matchedSkill = findBestCapabilitySkill(
+        skillCatalog,
+        demo.skillHints || [],
+      );
+      const matchedMcp = findBestCapabilityMcp(mcpCatalog, demo.mcpHints || []);
+
+      const autoTokens: ComposerReferenceToken[] = [];
+      const nextAutoSkillIds = matchedSkill
+        ? [buildSkillAttachmentId(matchedSkill)]
+        : [];
+      if (matchedMcp) {
+        autoTokens.push({
+          id: `${CAPABILITY_AUTO_REFERENCE_PREFIX}mcp:${matchedMcp.key}`,
+          kind: "mcp",
+          label: matchedMcp.name,
+          queryText: buildSlashText("mcp", matchedMcp.key || matchedMcp.name),
+          mcp: matchedMcp,
+        });
+      }
+
+      setAttachments((current) => {
+        const withoutPreviousAuto = current.filter((item) => {
+          if (item.kind !== "skill") return true;
+          return !autoCapabilitySkillIds.includes(item.id);
+        });
+        if (!matchedSkill) {
+          return withoutPreviousAuto;
+        }
+        return mergePendingPlatformSkills(withoutPreviousAuto, [matchedSkill]);
+      });
+      setAutoCapabilitySkillIds(nextAutoSkillIds);
+
+      setComposerReferences((current) => {
+        const manual = current.filter(
+          (item) => !item.id.startsWith(CAPABILITY_AUTO_REFERENCE_PREFIX),
+        );
+        return [...manual, ...autoTokens];
+      });
+    },
+    [
+      autoCapabilitySkillIds,
+      slashCatalogLoaded,
+      slashCatalogLoading,
+      slashMcpCatalog,
+      slashSkillCatalog,
+    ],
+  );
+
+  const startScenarioTour = useCallback((
+    demo: HomeCapabilityGuideItem,
+    options?: {
+      prompt?: string;
+      exampleId?: string | null;
+      category?: string | null;
+    },
+  ) => {
+    const hasExplicitPrompt = Boolean(options?.prompt?.trim());
+    const prompt = hasExplicitPrompt ? options?.prompt?.trim() || "" : "";
+    const exampleId = options?.exampleId ?? null;
+    const nextCategory =
+      options?.category ??
+      (exampleId
+        ? demo.examples.find((example) => example.id === exampleId)?.category
+        : null) ??
+      null;
+    if (mode !== "input") {
+      setMode("input");
+    }
+    void applyCapabilityAutoReferences(demo);
+    setScenarioDemo(demo);
+    setScenarioPrompt(prompt);
+    setSelectedCapabilityId(demo.id);
+    setSelectedCapabilityExampleId(exampleId);
+    setSelectedCapabilityCategory(nextCategory ?? null);
+    setSelectedModel(demo.model);
+    setModelMenuOpen(false);
+    if (hasExplicitPrompt) {
+      setMessage(prompt);
+    }
+    setScenarioTourOpen(false);
+    if (hasCompletedGuidedTour(HOME_SCENARIO_TOUR_KEY)) {
+      if (hasExplicitPrompt) {
+        applyScenarioPrompt(demo, prompt, exampleId);
+      }
+      return;
+    }
+    window.setTimeout(() => setScenarioTourOpen(true), 80);
+  }, [applyCapabilityAutoReferences, applyScenarioPrompt, mode]);
+
+  const handleCapabilityExampleSelect = useCallback(
+    (demo: HomeCapabilityGuideItem, example: HomeCapabilityExample) => {
+      setSelectedCapabilityCategory(example.category ?? null);
+      setSelectedCapabilityId(demo.id);
+      setSelectedCapabilityExampleId(example.id);
+      if (hasCompletedGuidedTour(HOME_SCENARIO_TOUR_KEY)) {
+        applyScenarioPrompt(demo, example.prompt, example.id);
+        return;
+      }
+      startScenarioTour(demo, {
+        prompt: example.prompt,
+        exampleId: example.id,
+        category: example.category ?? null,
+      });
+    },
+    [applyScenarioPrompt, startScenarioTour],
+  );
+
+  const injectWebsiteReference = useCallback(() => {
+    setMessage((current) => {
+      const trimmed = current.trim();
+      if (!trimmed) {
+        return "网站参考：\n- 参考链接：\n- 需要保留的布局：\n- 不希望出现的风格：";
+      }
+      return `${trimmed}\n\n网站参考：\n- 参考链接：\n- 需要保留的布局：\n- 不希望出现的风格：`;
+    });
+    toast.success("已添加网站参考模板");
+  }, []);
+
+  const injectFigmaReference = useCallback(() => {
+    setMessage((current) => {
+      const trimmed = current.trim();
+      if (!trimmed) {
+        return "Figma 参考：\n- 文件链接：\n- 关键页面：\n- 需要对齐的组件：";
+      }
+      return `${trimmed}\n\nFigma 参考：\n- 文件链接：\n- 关键页面：\n- 需要对齐的组件：`;
+    });
+    toast.success("已添加 Figma 参考模板");
+  }, []);
+
+  const handleScenarioStepChange = useCallback((step: GuidedTourStep) => {
+    if (step.id === "scenario-prompt") {
+      setModelMenuOpen(false);
+      return;
+    }
+    if (step.id === "scenario-model") {
+      setSelectedModel(scenarioDemo.model);
+      setModelMenuOpen(true);
+      return;
+    }
+    setModelMenuOpen(false);
+  }, [scenarioDemo, scenarioPrompt]);
+
+  const closeScenarioTour = useCallback((nextOpen: boolean) => {
+    setScenarioTourOpen(nextOpen);
+    if (!nextOpen) {
+      setModelMenuOpen(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -672,6 +1514,47 @@ export default function Home() {
     }
   }, [projectOptionsLoading]);
 
+  const loadReferenceCatalog = useCallback(async () => {
+    const [skills, connectorAccounts] = await Promise.all([
+      listTaskCreationSkills(),
+      getMyConnectorAccounts(),
+    ]);
+    const nextSkills = Array.isArray(skills) ? skills : [];
+    const catalog = Array.isArray(connectorAccounts.catalog)
+      ? connectorAccounts.catalog.filter(
+          (item): item is (typeof connectorAccounts.catalog)[number] =>
+            Boolean(item && typeof item === "object" && "key" in item),
+        )
+      : [];
+    const accounts = Array.isArray(connectorAccounts.accounts)
+      ? connectorAccounts.accounts.filter(
+          (item): item is (typeof connectorAccounts.accounts)[number] =>
+            Boolean(item && typeof item === "object" && "connectorKey" in item),
+        )
+      : [];
+    const catalogByKey = new Map(
+      catalog.map((item) => [item.key, item] as const),
+    );
+    const nextMcpCatalog = accounts
+      .filter((item) => {
+        if (item.authStatus !== "authorized") return false;
+        const catalogItem = catalogByKey.get(item.connectorKey);
+        return (
+          Boolean(catalogItem?.available) &&
+          catalogItem?.category === "custom_mcp"
+        );
+      })
+      .map((item) => ({
+        key: item.connectorKey,
+        name: catalogByKey.get(item.connectorKey)?.name || item.connectorKey,
+        category: "custom_mcp",
+      }));
+    return {
+      skills: nextSkills,
+      mcp: nextMcpCatalog,
+    };
+  }, []);
+
   useEffect(() => {
     if (!slashQuery || slashCatalogLoaded || slashCatalogLoading) {
       return;
@@ -681,46 +1564,10 @@ export default function Home() {
     setSlashCatalogError(null);
     void (async () => {
       try {
-        const [skills, connectorAccounts] = await Promise.all([
-          listTaskCreationSkills(),
-          getMyConnectorAccounts(),
-        ]);
+        const nextCatalog = await loadReferenceCatalog();
         if (cancelled) return;
-        const nextSkills = Array.isArray(skills) ? skills : [];
-        const catalog = Array.isArray(connectorAccounts.catalog)
-          ? connectorAccounts.catalog.filter(
-              (item): item is (typeof connectorAccounts.catalog)[number] =>
-                Boolean(item && typeof item === "object" && "key" in item),
-            )
-          : [];
-        const accounts = Array.isArray(connectorAccounts.accounts)
-          ? connectorAccounts.accounts.filter(
-              (item): item is (typeof connectorAccounts.accounts)[number] =>
-                Boolean(
-                  item && typeof item === "object" && "connectorKey" in item,
-                ),
-            )
-          : [];
-        const catalogByKey = new Map(
-          catalog.map((item) => [item.key, item] as const),
-        );
-        const nextMcpCatalog = accounts
-          .filter((item) => {
-            if (item.authStatus !== "authorized") return false;
-            const catalogItem = catalogByKey.get(item.connectorKey);
-            return (
-              Boolean(catalogItem?.available) &&
-              catalogItem?.category === "custom_mcp"
-            );
-          })
-          .map((item) => ({
-            key: item.connectorKey,
-            name:
-              catalogByKey.get(item.connectorKey)?.name || item.connectorKey,
-            category: "custom_mcp",
-          }));
-        setSlashSkillCatalog(nextSkills);
-        setSlashMcpCatalog(nextMcpCatalog);
+        setSlashSkillCatalog(nextCatalog.skills);
+        setSlashMcpCatalog(nextCatalog.mcp);
         setSlashCatalogLoaded(true);
       } catch (error) {
         if (cancelled) return;
@@ -740,7 +1587,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [slashCatalogLoaded, slashQuery]);
+  }, [loadReferenceCatalog, slashCatalogLoaded, slashQuery]);
 
   useEffect(() => {
     if (location.startsWith("/new-task") && !projectOptionsLoaded) {
@@ -1028,6 +1875,16 @@ export default function Home() {
   const handleSkillSelect = (skills: TaskCreationPlatformSkill[]) => {
     setAttachments((current) => mergePendingPlatformSkills(current, skills));
   };
+  const selectedSkillAttachments = useMemo(
+    () =>
+      attachments
+        .filter(
+          (item): item is Extract<PendingAttachment, { kind: "skill" }> =>
+            item.kind === "skill",
+        )
+        .map((item) => item),
+    [attachments],
+  );
 
   const removeAttachment = (id: string) => {
     setAttachments((prev) => prev.filter((item) => item.id !== id));
@@ -2256,24 +3113,40 @@ export default function Home() {
                 <TooltipProvider>
                   <div className="flex items-center justify-between pt-2">
                     <div className="flex items-center gap-1">
-                      <span data-tour="composer-attachments" data-tour-local="attachments">
+                      <span data-tour="composer-attachments">
                         <AttachmentPickerButton
                           onSelectFiles={handleAttachmentSelect}
                           onSelectSkills={handleSkillSelect}
+                          selectedSkills={selectedSkillAttachments}
                         />
                       </span>
 
-                      <span data-tour="composer-connectors" data-tour-local="connectors">
+                      <span data-tour="composer-connectors">
                         <ConnectorDialog sessionId={sessionId} />
                       </span>
 
-                      <DropdownMenu>
+                      {selectedCapability && SelectedCapabilityIcon ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => startScenarioTour(selectedCapability)}
+                          className="h-9 gap-2 rounded-2xl border-[var(--brand-link)] bg-[var(--brand-soft)] px-3 text-sm font-medium text-[var(--brand-link)]"
+                        >
+                          <SelectedCapabilityIcon className="h-4 w-4" />
+                          {selectedCapability.label}
+                        </Button>
+                      ) : null}
+
+                      <DropdownMenu
+                        open={modelMenuOpen}
+                        onOpenChange={setModelMenuOpen}
+                      >
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <DropdownMenuTrigger asChild>
                               <Button
                                 data-tour="composer-model"
-                                data-tour-local="model"
                                 variant="ghost"
                                 size="sm"
                                 className="h-9 gap-2 rounded-xl px-3 transition-colors hover:bg-accent"
@@ -2410,19 +3283,16 @@ export default function Home() {
         steps={HOME_CORE_TOUR_STEPS}
         autoStart={mode === "input"}
       />
-      {localTour ? (
-        <GuidedTour
-          storageKey={localTour.storageKey}
-          steps={localTour.steps}
-          open
-          onOpenChange={(nextOpen) => {
-            if (!nextOpen) {
-              setLocalTour(null);
-            }
-          }}
-          onComplete={() => setLocalTour(null)}
-        />
-      ) : null}
+      <GuidedTour
+        storageKey={HOME_SCENARIO_TOUR_KEY}
+        steps={HOME_SCENARIO_TOUR_STEPS}
+        open={scenarioTourOpen}
+        onOpenChange={closeScenarioTour}
+        onStepChange={handleScenarioStepChange}
+        onComplete={() => setModelMenuOpen(false)}
+        nextLabel="继续演示"
+        finishLabel="开始修改"
+      />
       <div
         className={
           mode === "chat"
@@ -2515,25 +3385,41 @@ export default function Home() {
                         <div className="flex items-center justify-between pt-2">
                           {/* Left Side Actions */}
                           <div className="flex items-center gap-1">
-                            <span data-tour="composer-attachments" data-tour-local="attachments">
+                            <span data-tour="composer-attachments">
                               <AttachmentPickerButton
                                 onSelectFiles={handleAttachmentSelect}
                                 onSelectSkills={handleSkillSelect}
+                                selectedSkills={selectedSkillAttachments}
                               />
                             </span>
 
-                            <span data-tour="composer-connectors" data-tour-local="connectors">
+                            <span data-tour="composer-connectors">
                               <ConnectorDialog sessionId={sessionId} />
                             </span>
 
+                            {selectedCapability && SelectedCapabilityIcon ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => startScenarioTour(selectedCapability)}
+                                className="h-9 gap-2 rounded-2xl border-[var(--brand-link)] bg-[var(--brand-soft)] px-3 text-sm font-medium text-[var(--brand-link)]"
+                              >
+                                <SelectedCapabilityIcon className="h-4 w-4" />
+                                {selectedCapability.label}
+                              </Button>
+                            ) : null}
+
                             {/* Model Selection Button */}
-                            <DropdownMenu>
+                            <DropdownMenu
+                              open={modelMenuOpen}
+                              onOpenChange={setModelMenuOpen}
+                            >
                               <Tooltip>
                                 <TooltipTrigger asChild>
                                   <DropdownMenuTrigger asChild>
                                     <Button
                                       data-tour="composer-model"
-                                      data-tour-local="model"
                                       variant="ghost"
                                       size="sm"
                                       className="h-9 gap-2 rounded-xl transition-colors hover:bg-accent"
@@ -2643,6 +3529,7 @@ export default function Home() {
                       >
                         <DropdownMenuTrigger asChild>
                           <button
+                            data-tour="composer-project"
                             type="button"
                             className="relative z-0 -mt-5 mx-auto flex w-[94%] items-center justify-end rounded-b-[1.65rem] rounded-t-[0.9rem] border border-t-0 border-border/35 bg-muted/42 px-5 pb-3 pt-7 text-right shadow-[0_16px_28px_rgba(15,23,42,0.07)] backdrop-blur-[2px] transition-colors hover:bg-muted/54 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 dark:bg-muted/24 dark:hover:bg-muted/32 dark:shadow-[0_18px_32px_rgba(0,0,0,0.18)]"
                             aria-label={t("homePage.projectSelectorLabel")}
@@ -2707,6 +3594,175 @@ export default function Home() {
                           )}
                         </DropdownMenuContent>
                       </DropdownMenu>
+                    ) : null}
+                    <div
+                      data-tour="home-capability-guide"
+                      className="mx-auto mt-4 flex w-[94%] flex-wrap items-center justify-center gap-2"
+                    >
+                      {HOME_PRIMARY_CAPABILITY_GUIDE_ITEMS.map((item) => {
+                        const Icon = item.icon;
+                        const active = selectedCapabilityId === item.id;
+                        return (
+                          <Button
+                            key={item.id}
+                            type="button"
+                            variant="outline"
+                            onClick={() => startScenarioTour(item)}
+                            className={
+                              active
+                                ? "h-10 gap-2 rounded-full border-[var(--brand-link)] bg-[var(--brand-soft)] px-4 text-sm font-medium text-[var(--brand-link)] shadow-sm"
+                                : "h-10 gap-2 rounded-full border-border/70 bg-background/86 px-4 text-sm font-medium text-foreground/82 shadow-sm transition-colors hover:bg-muted/55 hover:text-foreground"
+                            }
+                          >
+                            <Icon
+                              className={
+                                active
+                                  ? "h-4 w-4 text-[var(--brand-link)]"
+                                  : "h-4 w-4 text-foreground/48"
+                              }
+                            />
+                            {item.label}
+                          </Button>
+                        );
+                      })}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="h-10 gap-2 rounded-full border-border/70 bg-background/86 px-4 text-sm font-medium text-foreground/82 shadow-sm transition-colors hover:bg-muted/55 hover:text-foreground"
+                          >
+                            更多
+                            <ChevronDown className="h-4 w-4 text-foreground/48" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent
+                          align="end"
+                          sideOffset={8}
+                          className="w-[19rem] max-w-[calc(100vw-2rem)] rounded-2xl border-border/70 p-2 shadow-xl"
+                        >
+                          {HOME_MORE_CAPABILITY_GUIDE_ITEMS.map((item) => {
+                            const Icon = item.icon;
+                            return (
+                              <DropdownMenuItem
+                                key={item.id}
+                                onSelect={() => startScenarioTour(item)}
+                                className="gap-3 rounded-xl px-3 py-2.5"
+                              >
+                                <Icon className="h-4 w-4 shrink-0 text-foreground/48" />
+                                <div className="min-w-0">
+                                  <div className="text-sm font-medium text-foreground">
+                                    {item.label}
+                                  </div>
+                                  <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                                    {item.description}
+                                  </div>
+                                </div>
+                              </DropdownMenuItem>
+                            );
+                          })}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                    {selectedCapability ? (
+                      <div className="mx-auto mt-3 w-[94%] space-y-3">
+                        {selectedCapabilityCategories.length > 0 ? (
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="text-sm font-semibold text-foreground">
+                                您想构建什么？
+                              </div>
+                              {selectedCapability.id === "website" ? (
+                                <div className="flex items-center gap-2">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={injectWebsiteReference}
+                                    className="h-8 gap-1.5 rounded-full px-2.5 text-xs text-muted-foreground hover:text-foreground"
+                                  >
+                                    <Link className="h-3.5 w-3.5" />
+                                    添加网站参考
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={injectFigmaReference}
+                                    className="h-8 gap-1.5 rounded-full px-2.5 text-xs text-muted-foreground hover:text-foreground"
+                                  >
+                                    <Figma className="h-3.5 w-3.5" />
+                                    从 Figma 导入
+                                  </Button>
+                                </div>
+                              ) : null}
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {selectedCapabilityCategories.map((category) => {
+                                const active = selectedCapabilityCategory === category;
+                                const categoryLabel =
+                                  category === "landing"
+                                    ? "着陆页"
+                                    : category === "dashboard"
+                                      ? "仪表盘"
+                                        : category;
+                                return (
+                                  <Button
+                                    key={category}
+                                    type="button"
+                                    variant="outline"
+                                    onClick={() => setSelectedCapabilityCategory(category)}
+                                    className={
+                                      active
+                                        ? "h-10 rounded-2xl border-[var(--brand-link)] bg-[var(--brand-soft)] px-4 text-sm font-medium text-[var(--brand-link)]"
+                                        : "h-10 rounded-2xl border-border/70 bg-background px-4 text-sm font-medium text-foreground/82"
+                                    }
+                                  >
+                                    {categoryLabel}
+                                  </Button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ) : null}
+                        <div className="space-y-1.5">
+                          <div className="text-sm font-semibold text-foreground">
+                            {selectedCapabilityCategories.length > 0
+                              ? "探索想法"
+                              : "示例提示词"}
+                          </div>
+                          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                            {visibleCapabilityExamples.map((example) => {
+                              const active =
+                                selectedCapabilityExampleId === example.id;
+                              return (
+                                <button
+                                  key={example.id}
+                                  type="button"
+                                  onClick={() =>
+                                    handleCapabilityExampleSelect(
+                                      selectedCapability,
+                                      example,
+                                    )
+                                  }
+                                  className={
+                                    active
+                                      ? "group flex min-h-[62px] flex-col justify-between rounded-2xl border border-[var(--brand-link)] bg-[var(--brand-soft)] px-3.5 py-2.5 text-left transition-colors"
+                                      : "group flex min-h-[62px] flex-col justify-between rounded-2xl border border-border/70 bg-background px-3.5 py-2.5 text-left transition-colors hover:border-border hover:bg-muted/25"
+                                  }
+                                >
+                                  <div className="text-[15px] font-medium leading-5 text-foreground">
+                                    {example.title}
+                                  </div>
+                                  <div className="flex items-center justify-end text-foreground/28 transition-transform group-hover:translate-x-0.5">
+                                    <ChevronRight className="h-3.5 w-3.5" />
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
                     ) : null}
                   </div>
                 </motion.div>

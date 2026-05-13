@@ -74,6 +74,17 @@ describe("shared manual projects helpers", () => {
     ]);
   });
 
+  it("reads sidebar expanded state from persisted local storage payload", () => {
+    const raw = JSON.stringify({
+      expandedProjectGroups: ["manual-projects", "self-organized", 42],
+    });
+
+    expect(readSidebarExpandedState(raw, "expandedProjectGroups", ["manual-projects"])).toEqual([
+      "manual-projects",
+      "self-organized",
+    ]);
+  });
+
   it("returns fallback when the target sidebar expand state field is not an array", () => {
     expect(
       readSidebarExpandedState(
@@ -82,6 +93,10 @@ describe("shared manual projects helpers", () => {
         ["fallback"],
       ),
     ).toEqual(["fallback"]);
+  });
+
+  it("returns fallback when sidebar expanded state payload is missing", () => {
+    expect(readSidebarExpandedState(null, "expandedProjects", ["fallback"])).toEqual(["fallback"]);
   });
 
   it("keeps only non-empty strings from sidebar expand state arrays", () => {

@@ -55,7 +55,7 @@ const PROJECTS_OVERVIEW_STEPS: GuidedTourStep[] = [
   },
   {
     id: "manual-projects",
-    selector: '[data-tour="projects-manual-section"]',
+    selector: '[data-tour="projects-manual-header"]',
     title: "普通项目",
     body: "普通项目由你创建，后续任务可以归属进来。项目指令会作为长期约束影响相关会话。",
     placement: "bottom",
@@ -69,14 +69,14 @@ const PROJECTS_OVERVIEW_STEPS: GuidedTourStep[] = [
   },
   {
     id: "project-card",
-    selector: '[data-tour="projects-self-organized-card"]',
+    selector: '[data-tour="projects-self-organized-summary"]',
     title: "项目卡片",
     body: "进度、经理数、员工数帮助你快速判断执行状态。点击查看详情进入项目层级。",
     placement: "top",
   },
   {
     id: "manager-row",
-    selector: '[data-tour="projects-manager-row"]',
+    selector: '[data-tour="projects-manager-header"]',
     title: "经理与员工",
     body: "经理负责一个方向的任务拆分和协调；展开后能看到员工技能、状态和当前任务。",
     placement: "top",
@@ -317,7 +317,7 @@ export default function ManagerView() {
         </div>
 
         <section data-tour="projects-manual-section" className="space-y-4">
-          <div className="flex items-center gap-2">
+          <div data-tour="projects-manual-header" className="flex items-center gap-2">
             <Layers3 className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">
               {t("sidebar.projects")}
@@ -507,10 +507,7 @@ export default function ManagerView() {
                 >
                   {SELF_ORGANIZED_PROJECTS.map((project, projectIndex) => (
                     <Card key={project.id} className="p-6">
-                    <div
-                      data-tour={projectIndex === 0 ? "projects-self-organized-card" : undefined}
-                      className="mb-4 flex items-start justify-between"
-                    >
+                    <div className="mb-4 flex items-start justify-between">
                       <div className="flex-1">
                         <div className="mb-2 flex items-center gap-3">
                           <Button
@@ -549,7 +546,10 @@ export default function ManagerView() {
                       </Button>
                     </div>
 
-                    <div className="mb-4 ml-12 flex items-center gap-6">
+                    <div
+                      data-tour={projectIndex === 0 ? "projects-self-organized-summary" : undefined}
+                      className="mb-4 ml-12 flex items-center gap-6"
+                    >
                       <div className="flex items-center gap-2 text-sm">
                         <BarChart className="h-4 w-4 text-muted-foreground" />
                         <span className="text-muted-foreground">{t("managerView.progressLabel")}</span>
@@ -581,14 +581,16 @@ export default function ManagerView() {
                           {project.managers.map((manager, managerIndex) => (
                             <div
                               key={manager.id}
-                              data-tour={
-                                projectIndex === 0 && managerIndex === 0
-                                  ? "projects-manager-row"
-                                  : undefined
-                              }
                               className="rounded-lg border-l-4 border-primary bg-muted/30 p-4"
                             >
-                              <div className="mb-3 flex items-start justify-between">
+                              <div
+                                data-tour={
+                                  projectIndex === 0 && managerIndex === 0
+                                    ? "projects-manager-header"
+                                    : undefined
+                                }
+                                className="mb-3 flex items-start justify-between"
+                              >
                                 <div className="flex-1">
                                   <div className="mb-1 flex items-center gap-2">
                                     <Button

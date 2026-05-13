@@ -529,6 +529,19 @@
       align-items: center;
       justify-content: space-between;
     }
+    .panel-copy-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      padding: 2px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 500;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .panel-copy-btn:hover { border-color: var(--info); color: var(--info); }
+    .panel-copy-btn.copied { border-color: var(--success); color: var(--success); }
     .trace-panel-body {
       padding: 12px;
       display: none;
@@ -880,13 +893,34 @@
       return lines.join('\n');
     }
 
-    function renderTracePanel(title, content, isOpen) {
-      const id = 'tp-' + Math.random().toString(36).slice(2, 8);
+    function copyToClipboard(text, btn) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function() {
+          if (btn) { btn.textContent = '已复制'; btn.classList.add('copied'); setTimeout(function() { btn.textContent = '复制'; btn.classList.remove('copied'); }, 1500); }
+        });
+      } else {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch(e) {}
+        document.body.removeChild(ta);
+        if (btn) { btn.textContent = '已复制'; btn.classList.add('copied'); setTimeout(function() { btn.textContent = '复制'; btn.classList.remove('copied'); }, 1500); }
+      }
+    }
+
+    function renderTracePanel(title, content, isOpen, rawContent) {
+      const copyId = 'cp-' + Math.random().toString(36).slice(2, 8);
+      const escapedRaw = rawContent !== undefined ? encodeURIComponent(String(rawContent)) : '';
       return (
         '<div class="trace-panel">' +
         '<div class="trace-panel-header" onclick="this.nextElementSibling.classList.toggle(\'open\')">' +
         '<span>' + title + '</span>' +
+        '<div style="display:flex;align-items:center;gap:8px;">' +
+        (escapedRaw ? '<button type="button" class="panel-copy-btn" id="' + copyId + '" onclick="event.stopPropagation();copyToClipboard(decodeURIComponent(\'' + escapedRaw + '\').replace(/\\\\n/g,\'\\n\'),this)">复制</button>' : '') +
         '<span style="font-size:11px;color:var(--text-secondary);">' + (isOpen ? '收起' : '展开') + '</span>' +
+        '</div>' +
         '</div>' +
         '<div class="trace-panel-body ' + (isOpen ? 'open' : '') + '">' +
         '<div class="trace-code">' + content + '</div>' +
@@ -987,7 +1021,7 @@
       if (trace.traceType === 'llm_request' && trace.requestBody && trace.requestBody.messages) {
         var msgs = trace.requestBody.messages;
         html += '<div class="prompt-preview">';
-        html += '<div class="prompt-preview-header">Prompt 上下文 <span style="font-weight:400;color:var(--text-faint);">' + msgs.length + ' 条消息</span></div>';
+        html += '<div class="prompt-preview-header" data-raw="' + encodeURIComponent(JSON.stringify(msgs, null, 2)) + '">Prompt 上下文 <span style="font-weight:400;color:var(--text-faint);">' + msgs.length + ' 条消息</span> <button type="button" class="panel-copy-btn" style="margin-left:8px;" onclick="event.stopPropagation();copyToClipboard(decodeURIComponent(this.parentElement.dataset.raw).replace(/\\\\n/g,\'\\n\'),this)">复制</button></div>';
         html += '<div class="prompt-preview-body">';
         for (var mi = 0; mi < msgs.length; mi++) {
           var msg = msgs[mi];
@@ -1024,7 +1058,7 @@
       // Error
       if (trace.errorMessage) {
         html += '<div class="trace-error-block">';
-        html += '<div class="trace-error-header">错误</div>';
+        html += '<div class="trace-error-header" data-raw="' + encodeURIComponent(trace.errorMessage) + '">错误 <button type="button" class="panel-copy-btn" style="margin-left:8px;" onclick="event.stopPropagation();copyToClipboard(decodeURIComponent(this.parentElement.dataset.raw).replace(/\\\\n/g,\'\\n\'),this)">复制</button></div>';
         html += '<div class="trace-error-body">' + escapeHtml(trace.errorMessage) + '</div>';
         html += '</div>';
       }
@@ -1032,19 +1066,19 @@
       // Request / Response
       if (trace.requestBody || trace.responseBody) {
         if (trace.requestBody) {
-          html += renderTracePanel('请求', renderJSONTree(trace.requestBody), true);
+          html += renderTracePanel('请求', renderJSONTree(trace.requestBody), true, JSON.stringify(trace.requestBody, null, 2));
         }
         if (trace.responseBody) {
-          html += renderTracePanel('响应', renderJSONTree(trace.responseBody), true);
+          html += renderTracePanel('响应', renderJSONTree(trace.responseBody), true, JSON.stringify(trace.responseBody, null, 2));
         }
       }
 
       // Raw HTTP
-      html += renderTracePanel('原始 HTTP', escapeHtml(formatRawHttp(trace)), false);
+      html += renderTracePanel('原始 HTTP', escapeHtml(formatRawHttp(trace)), false, formatRawHttp(trace));
 
       // Metadata
       if (trace.metadataJson && Object.keys(trace.metadataJson).length > 0) {
-        html += renderTracePanel('元数据', renderJSONTree(trace.metadataJson), false);
+        html += renderTracePanel('元数据', renderJSONTree(trace.metadataJson), false, JSON.stringify(trace.metadataJson, null, 2));
       }
 
       html += '</div>';

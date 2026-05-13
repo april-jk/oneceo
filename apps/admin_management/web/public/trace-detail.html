@@ -151,6 +151,19 @@
     }
     .panel-body.open { display: block; }
     .panel-toggle { font-size: 11px; color: var(--text-secondary); }
+    .panel-copy-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      padding: 2px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 500;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .panel-copy-btn:hover { border-color: var(--info); color: var(--info); }
+    .panel-copy-btn.copied { border-color: var(--success); color: var(--success); }
 
     /* JSON Tree styles */
     .json-tree {
@@ -464,20 +477,41 @@
       return lines.join('\n');
     }
 
-    function renderPanel(title, content, isOpen) {
+    function copyToClipboard(text, btn) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function() {
+          if (btn) { btn.textContent = '已复制'; btn.classList.add('copied'); setTimeout(function() { btn.textContent = '复制'; btn.classList.remove('copied'); }, 1500); }
+        });
+      } else {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch(e) {}
+        document.body.removeChild(ta);
+        if (btn) { btn.textContent = '已复制'; btn.classList.add('copied'); setTimeout(function() { btn.textContent = '复制'; btn.classList.remove('copied'); }, 1500); }
+      }
+    }
+
+    function renderPanel(title, content, isOpen, rawContent) {
       const id = 'panel-' + Math.random().toString(36).slice(2, 8);
       const openClass = isOpen ? 'open' : '';
-      return (
-        '<div class="panel">' +
-        '<div class="panel-header" onclick="document.getElementById(\'' + id + '\').classList.toggle(\'open\')">' +
-        '<span>' + title + '</span>' +
-        '<span class="panel-toggle">点击展开/收起</span>' +
-        '</div>' +
-        '<div class="panel-body ' + openClass + '" id="' + id + '">' +
-        '<pre>' + content + '</pre>' +
-        '</div>' +
-        '</div>'
-      );
+      const copyId = 'cp-' + Math.random().toString(36).slice(2, 8);
+      const escapedRaw = rawContent !== undefined ? encodeURIComponent(String(rawContent)) : '';
+      var html = '<div class="panel">';
+      html += '<div class="panel-header" onclick="document.getElementById(\'' + id + '\').classList.toggle(\'open\')">';
+      html += '<span>' + title + '</span>';
+      html += '<div style="display:flex;align-items:center;gap:8px;">';
+      if (escapedRaw) {
+        html += '<button type="button" class="panel-copy-btn" id="' + copyId + '" onclick="event.stopPropagation();copyToClipboard(decodeURIComponent(\'' + escapedRaw + '\').replace(/\\\\n/g,\'\\n\'),this)">复制</button>';
+      }
+      html += '<span class="panel-toggle">点击展开/收起</span>';
+      html += '</div></div>';
+      html += '<div class="panel-body ' + openClass + '" id="' + id + '">';
+      html += '<pre>' + content + '</pre>';
+      html += '</div></div>';
+      return html;
     }
 
     function renderJSONTree(data) {
@@ -609,7 +643,7 @@
       // Error
       if (trace.errorMessage) {
         html += '<div class="error-block">';
-        html += '<div class="error-header">错误</div>';
+        html += '<div class="error-header" data-raw="' + encodeURIComponent(trace.errorMessage) + '">错误 <button type="button" class="panel-copy-btn" style="margin-left:8px;" onclick="event.stopPropagation();copyToClipboard(decodeURIComponent(this.parentElement.dataset.raw).replace(/\\\\n/g,\'\\n\'),this)">复制</button></div>';
         html += '<div class="error-body">' + trace.errorMessage.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>';
         html += '</div>';
       }
@@ -618,7 +652,7 @@
       if (trace.traceType === 'llm_request' && trace.requestBody && trace.requestBody.messages) {
         var msgs = trace.requestBody.messages;
         html += '<div class="prompt-preview">';
-        html += '<div class="prompt-preview-header">Prompt 上下文 <span style="font-weight:400;color:var(--text-faint);">' + msgs.length + ' 条消息</span></div>';
+        html += '<div class="prompt-preview-header" data-raw="' + encodeURIComponent(JSON.stringify(msgs, null, 2)) + '">Prompt 上下文 <span style="font-weight:400;color:var(--text-faint);">' + msgs.length + ' 条消息</span> <button type="button" class="panel-copy-btn" style="margin-left:8px;" onclick="event.stopPropagation();copyToClipboard(decodeURIComponent(this.parentElement.dataset.raw).replace(/\\\\n/g,\'\\n\'),this)">复制</button></div>';
         html += '<div class="prompt-preview-body">';
         for (var mi = 0; mi < msgs.length; mi++) {
           var msg = msgs[mi];
@@ -655,20 +689,20 @@
       if (trace.requestBody || trace.responseBody) {
         html += '<div class="code-grid">';
         if (trace.requestBody) {
-          html += renderPanel('请求', renderJSONTree(trace.requestBody), true);
+          html += renderPanel('请求', renderJSONTree(trace.requestBody), true, JSON.stringify(trace.requestBody, null, 2));
         }
         if (trace.responseBody) {
-          html += renderPanel('响应', renderJSONTree(trace.responseBody), true);
+          html += renderPanel('响应', renderJSONTree(trace.responseBody), true, JSON.stringify(trace.responseBody, null, 2));
         }
         html += '</div>';
       }
 
       // Raw HTTP
-      html += renderPanel('原始 HTTP', formatRawHttp(trace).replace(/</g, '&lt;').replace(/>/g, '&gt;'), false);
+      html += renderPanel('原始 HTTP', formatRawHttp(trace).replace(/</g, '&lt;').replace(/>/g, '&gt;'), false, formatRawHttp(trace));
 
       // Metadata
       if (trace.metadataJson && Object.keys(trace.metadataJson).length > 0) {
-        html += renderPanel('元数据', renderJSONTree(trace.metadataJson), false);
+        html += renderPanel('元数据', renderJSONTree(trace.metadataJson), false, JSON.stringify(trace.metadataJson, null, 2));
       }
 
       document.getElementById('app').innerHTML = html;

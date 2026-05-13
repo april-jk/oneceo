@@ -15,10 +15,16 @@ type GuidedTourProps = {
   storageKey: string;
   steps: GuidedTourStep[];
   autoStart?: boolean;
+  allowUnresolvedSteps?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  onStepChange?: (step: GuidedTourStep, index: number) => void;
   onComplete?: () => void;
   className?: string;
+  nextLabel?: string;
+  finishLabel?: string;
+  skipLabel?: string;
+  pauseLabel?: string;
 };
 
 type TargetBox = {
@@ -75,10 +81,16 @@ export function GuidedTour({
   storageKey,
   steps,
   autoStart = false,
+  allowUnresolvedSteps = false,
   open,
   onOpenChange,
+  onStepChange,
   onComplete,
   className,
+  nextLabel = "下一步",
+  finishLabel = "完成",
+  skipLabel = "跳过",
+  pauseLabel = "稍后再看",
 }: GuidedTourProps) {
   const tourInstanceId = useId();
   const controlled = typeof open === "boolean";
@@ -118,6 +130,16 @@ export function GuidedTour({
       }),
     );
   }, [isOpen, tourInstanceId]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setActiveIndex(0);
+  }, [isOpen, steps]);
+
+  useEffect(() => {
+    if (!isOpen || !activeStep) return;
+    onStepChange?.(activeStep, activeIndex);
+  }, [activeIndex, activeStep, isOpen, onStepChange]);
 
   const updateTarget = useCallback(() => {
     if (!isOpen || !activeStep) return;
@@ -200,11 +222,15 @@ export function GuidedTour({
       (step, index) => index >= nextIndex && resolveTarget(step.selector),
     );
     if (nextAvailable < 0) {
+      if (allowUnresolvedSteps && nextIndex < steps.length) {
+        setActiveIndex(nextIndex);
+        return;
+      }
       complete();
       return;
     }
     setActiveIndex(nextAvailable);
-  }, [activeIndex, complete, steps]);
+  }, [activeIndex, allowUnresolvedSteps, complete, steps]);
 
   const spotlightStyle = useMemo(() => {
     if (!targetBox) return undefined;
@@ -287,7 +313,7 @@ export function GuidedTour({
             className="h-8 px-2 text-xs"
             onClick={skip}
           >
-            跳过
+            {skipLabel}
           </Button>
           <div className="flex items-center gap-2">
             <Button
@@ -296,14 +322,14 @@ export function GuidedTour({
               className="h-8 px-3 text-xs"
               onClick={() => setOpenState(false)}
             >
-              稍后再看
+              {pauseLabel}
             </Button>
             <Button
               size="sm"
               className="h-8 px-3 text-xs"
               onClick={isLast ? complete : goNext}
             >
-              {isLast ? "完成" : "下一步"}
+              {isLast ? finishLabel : nextLabel}
             </Button>
           </div>
         </div>

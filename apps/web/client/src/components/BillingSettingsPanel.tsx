@@ -104,8 +104,11 @@ export function BillingSettingsPanel({ onClose }: { onClose?: () => void }) {
       </div>
 
       {/* 消费记录列表 */}
-      <div data-tour="billing-records">
-        <div className="mb-4 flex items-center justify-between gap-3">
+      <div>
+        <div
+          data-tour="billing-records-header"
+          className="mb-4 flex items-center justify-between gap-3"
+        >
           <h3 className="text-lg font-semibold">消费记录</h3>
           <Button
             variant="ghost"

@@ -180,6 +180,13 @@ type StreamedToolCallState = {
   };
 };
 
+type ManagedLlmContextHint = {
+  contextId?: string | null;
+  turnIndex?: number | null;
+  sessionId?: string | null;
+  runId?: string | null;
+};
+
 function basenameLike(value: unknown) {
   const text = asText(value).replace(/\\/g, '/');
   if (!text) return '';
@@ -1587,6 +1594,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
     fallbackModel?: string | null;
     runtimeSnapshot?: AgentRuntimeSnapshot | null;
     runtimeTokenSource?: string | null;
+    llmContext?: ManagedLlmContextHint;
   }): Promise<{
     content?: string | null;
     tool_calls?: ToolCall[];
@@ -1608,6 +1616,23 @@ private async chargeForModelCall(state: AltusRunState, input: {
     if (input.runtimeTokenSource) {
       headers[LLM_PROXY_INTERNAL_OVERRIDE_HEADER] = getLlmProxyInternalOverrideToken();
       headers['x-oneceo-internal-llm-upstream-token-source'] = input.runtimeTokenSource;
+    }
+    const llmContextId = asText(input.llmContext?.contextId);
+    if (llmContextId) {
+      headers['x-oneceo-internal-llm-context-id'] = llmContextId;
+      headers['x-oneceo-llm-context-id'] = llmContextId;
+    }
+    const llmContextTurn = Number(input.llmContext?.turnIndex);
+    if (Number.isFinite(llmContextTurn) && llmContextTurn > 0) {
+      headers['x-oneceo-internal-llm-context-turn'] = String(Math.floor(llmContextTurn));
+    }
+    const llmContextSessionId = asText(input.llmContext?.sessionId);
+    if (llmContextSessionId) {
+      headers['x-oneceo-internal-llm-session-id'] = llmContextSessionId;
+    }
+    const llmContextRunId = asText(input.llmContext?.runId);
+    if (llmContextRunId) {
+      headers['x-oneceo-internal-llm-run-id'] = llmContextRunId;
     }
     const response = await fetch(baseUrl, {
       method: 'POST',
@@ -1662,6 +1687,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
     fallbackModel?: string | null;
     runtimeSnapshot?: AgentRuntimeSnapshot | null;
     runtimeTokenSource?: string | null;
+    llmContext?: ManagedLlmContextHint;
   }): Promise<{
     content?: string | null;
     tool_calls?: ToolCall[];
@@ -2247,6 +2273,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
       );
 
       await this.setupService.refreshInlineImageUrls(messages);
+      const llmContextId = asText(state.input.sessionAltusMemory?.llmContext?.contextId);
 
       const toolProgressLengths = new Map<string, number>();
       const modelName = this.getModelName(messages, state.input.model);
@@ -2285,6 +2312,12 @@ private async chargeForModelCall(state: AltusRunState, input: {
           fallbackModel: state.input.model,
           runtimeSnapshot: state.input.runtimeSnapshot || null,
           runtimeTokenSource: state.input.runtimeTokenSource || null,
+          llmContext: {
+            contextId: llmContextId || null,
+            turnIndex: currentRound,
+            sessionId: state.input.sessionId,
+            runId: state.input.runId,
+          },
           onRetryableError: async (error, attempt, delayMs) => {
           const parsed = this.extractModelError(error);
           await this.syncLoopSnapshot(state, {
@@ -2379,6 +2412,33 @@ private async chargeForModelCall(state: AltusRunState, input: {
         assistant,
         model: modelName,
       });
+      try {
+        const promptTokens = this.readUsageNumber(assistant?.usage?.prompt_tokens) || 0;
+        const cachedTokens =
+          this.readUsageNumber(assistant?.usage?.prompt_tokens_details?.cached_tokens) ||
+          this.readUsageNumber(assistant?.usage?.cached_tokens) ||
+          0;
+        const cacheCreationTokens =
+          this.readUsageNumber(assistant?.usage?.prompt_tokens_details?.cache_creation_input_tokens) ||
+          this.readUsageNumber(assistant?.usage?.cache_creation_input_tokens) ||
+          0;
+        state.input.sessionAltusMemory = await taskSessionAltusMemoryService.recordLlmContextUsage({
+          sessionId: state.input.sessionId,
+          runId: state.input.runId,
+          model: modelName,
+          provider: state.input.runtimeSnapshot?.apiType || 'openai',
+          promptTokens,
+          cachedTokens,
+          cacheCreationTokens,
+        });
+      } catch (error) {
+        console.warn('[ALTUS_RUN_CONTEXT_USAGE_WARN]', {
+          sessionId: state.input.sessionId,
+          runId: state.input.runId,
+          model: modelName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
 
       const assistantContent = truncate(asText(assistant.content), 24000);
       const rawToolCalls = Array.isArray(assistant.tool_calls) ? assistant.tool_calls : [];
@@ -3251,6 +3311,22 @@ private async chargeForModelCall(state: AltusRunState, input: {
         state.input.sessionAltusMemory = nextAltusMemory;
       } catch (error) {
         console.warn('[ALTUS_RUN_SKILL_MEMORY_INIT_WARN]', {
+          sessionId: state.input.sessionId,
+          runId: state.input.runId,
+          sandboxId: sandbox.sandboxId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      try {
+        const anchoredMemory = await taskSessionAltusMemoryService.ensureLlmContextAnchor({
+          sessionId: state.input.sessionId,
+          runId: state.input.runId,
+          model: state.input.model,
+          provider: state.input.runtimeSnapshot?.apiType || 'openai',
+        });
+        state.input.sessionAltusMemory = anchoredMemory;
+      } catch (error) {
+        console.warn('[ALTUS_RUN_CONTEXT_ANCHOR_WARN]', {
           sessionId: state.input.sessionId,
           runId: state.input.runId,
           sandboxId: sandbox.sandboxId,

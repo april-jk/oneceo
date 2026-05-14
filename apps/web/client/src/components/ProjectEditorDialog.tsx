@@ -27,11 +27,7 @@ import type {
   TaskCreationProjectDefaultConnector,
   TaskCreationProjectSummary,
 } from "@/lib/task-creation-client";
-import {
-  GuidedTour,
-  isGuidedTourInteraction,
-  type GuidedTourStep,
-} from "@/components/GuidedTour";
+import { isGuidedTourInteraction } from "@/components/GuidedTour";
 
 type ProjectEditorDialogProps = {
   open: boolean;
@@ -52,43 +48,6 @@ type ProjectEditorDialogProps = {
 type SelectableConnector = TaskCreationProjectDefaultConnector & {
   connectorName?: string | null;
 };
-
-const PROJECT_CREATE_TOUR_KEY = "oneceo:tour.projects.create.completed";
-const PROJECT_CREATE_STEPS: GuidedTourStep[] = [
-  {
-    id: "project-name",
-    selector: '[data-tour="project-create-name"]',
-    title: "项目名称",
-    body: "给目标一个可复用的工作空间名称，后续会话可以归属到这个项目里。",
-    placement: "bottom",
-  },
-  {
-    id: "project-instruction",
-    selector: '[data-tour="project-create-instruction"]',
-    title: "项目指令",
-    body: "写长期约束，例如技术栈、部署要求、语气、验收标准或默认交付格式。",
-    placement: "bottom",
-  },
-  {
-    id: "default-connectors",
-    selector: '[data-tour="project-create-connectors"]',
-    title: "默认连接器",
-    body: "项目内任务可优先使用这些授权工具。未授权时先去设置里完成连接。",
-    placement: "top",
-  },
-  {
-    id: "submit-project",
-    selector: '[data-tour="project-create-submit"]',
-    title: "创建后开始收拢任务",
-    body: "创建后可以在任务输入区选择项目归属，让相关会话和产出集中管理。",
-    placement: "top",
-  },
-];
-
-function hasCompletedProjectTour(storageKey: string) {
-  if (typeof window === "undefined") return true;
-  return window.localStorage.getItem(storageKey) === "completed";
-}
 
 function profileDisplayName(profile: Pick<ConnectorProfile, "profileName" | "displayName">) {
   return profile.displayName?.trim() || profile.profileName?.trim() || "";
@@ -123,8 +82,6 @@ export function ProjectEditorDialog({
   const [catalog, setCatalog] = React.useState<ConnectorCatalogItem[]>([]);
   const [profiles, setProfiles] = React.useState<ConnectorProfile[]>([]);
   const [loadingProfiles, setLoadingProfiles] = React.useState(false);
-  const [projectCreateTourOpen, setProjectCreateTourOpen] = React.useState(false);
-
   const preventGuidedTourOutsideClose = React.useMemo(
     () => (event: Event) => {
       if (isGuidedTourInteraction(event)) {
@@ -133,16 +90,6 @@ export function ProjectEditorDialog({
     },
     [],
   );
-
-  React.useEffect(() => {
-    if (!open || mode !== "create") {
-      setProjectCreateTourOpen(false);
-      return;
-    }
-    if (hasCompletedProjectTour(PROJECT_CREATE_TOUR_KEY)) return;
-    const timer = window.setTimeout(() => setProjectCreateTourOpen(true), 260);
-    return () => window.clearTimeout(timer);
-  }, [mode, open]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -533,12 +480,6 @@ export function ProjectEditorDialog({
                 : t("common.save")}
           </Button>
         </DialogFooter>
-        <GuidedTour
-          storageKey={PROJECT_CREATE_TOUR_KEY}
-          steps={PROJECT_CREATE_STEPS}
-          open={projectCreateTourOpen}
-          onOpenChange={setProjectCreateTourOpen}
-        />
       </DialogContent>
     </Dialog>
   );

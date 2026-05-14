@@ -82,7 +82,11 @@ import AltusArtifactPreviewCard, {
   type AltusArtifactFile,
 } from "@/components/AltusArtifactPreviewCard";
 import TaskDeliverableCard from "@/components/TaskDeliverableCard";
-import { GuidedTour, type GuidedTourStep } from "@/components/GuidedTour";
+import {
+  GuidedTour,
+  resolveGuidedTourStorageKey,
+  type GuidedTourStep,
+} from "@/components/GuidedTour";
 import AltusRunReplayDrawer, {
   type AltusDrawerView,
   type AltusReplayAction,
@@ -161,8 +165,7 @@ import { useAuth } from "@/contexts/AuthContext";
 
 type PageMode = "input" | "chat";
 const BILLING_TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "stopped"]);
-const HOME_CORE_TOUR_KEY = "oneceo:tour.home_core.completed";
-const HOME_SCENARIO_TOUR_KEY = "oneceo:tour.home_scenario_demo.completed";
+const HOME_NEW_TASK_TOUR_KEY = "oneceo:tour.home_new_task.completed";
 
 type HomeScenarioModel = "lite" | "pro" | "max";
 
@@ -672,63 +675,26 @@ const HOME_MORE_CAPABILITY_GUIDE_ITEMS = HOME_CAPABILITY_GUIDE_ITEMS.filter(
 const HOME_DEFAULT_CAPABILITY =
   HOME_CAPABILITY_GUIDE_ITEMS.find((item) => item.id === "website") ??
   HOME_CAPABILITY_GUIDE_ITEMS[0]!;
-const HOME_CORE_TOUR_STEPS: GuidedTourStep[] = [
+const HOME_NEW_TASK_TOUR_STEPS: GuidedTourStep[] = [
   {
-    id: "new-task",
-    selector: '[data-tour="sidebar-new-task"]',
-    title: "新建任务",
-    body: "从这里开启一个新的 Agent 会话。每个会话都会记录上下文、产出和后续操作。",
-    placement: "right",
+    id: "scenario-entry",
+    selector: '[data-tour="home-capability-guide"]',
+    title: "从任务入口开始",
+    body: "新建任务页第一次打开时，会直接演示一次真实起手方式。这里已经替你切到了“制作幻灯片”场景，用来说明 oneceo 如何从任务类型开始。",
+    placement: "bottom",
+  },
+  {
+    id: "scenario-examples",
+    selector: '[data-tour="capability-examples"]',
+    title: "示例提示词在这里选",
+    body: "点击示例提示词后，需求才会写入输入框。演示阶段不会自动塞进一大段 prompt，避免打断你的思路。",
+    placement: "top",
   },
   {
     id: "composer",
     selector: '[data-tour="home-composer"]',
-    title: "描述你要完成的事",
-    body: "直接写目标、约束和交付物。越接近真实需求，Altus 越容易给出可复核产出。",
-    placement: "top",
-  },
-  {
-    id: "attachment",
-    selector: '[data-tour="composer-attachments"]',
-    title: "补充资料和 Skills",
-    body: "这里可以添加本地文件、云端资料，或选择已启用的 Skills 进入本次任务。",
-    placement: "top",
-  },
-  {
-    id: "connectors",
-    selector: '[data-tour="composer-connectors"]',
-    title: "连接器按任务启用",
-    body: "这里为本次任务启用 GitHub、Notion、Slack、Supabase、Figma 或 Vercel。未授权时先进入管理连接器完成配置。",
-    placement: "top",
-  },
-  {
-    id: "model",
-    selector: '[data-tour="composer-model"]',
-    title: "选择执行强度",
-    body: "Lite 更快，Pro 均衡，Max 适合复杂任务。默认 Pro 可以覆盖多数工作。",
-    placement: "top",
-  },
-  {
-    id: "send",
-    selector: '[data-tour="composer-send"]',
-    title: "开始执行",
-    body: "发送后会进入会话执行链路，产出、文件、部署和调试信息会跟随会话保存。",
-    placement: "top",
-  },
-];
-const HOME_SCENARIO_TOUR_STEPS: GuidedTourStep[] = [
-  {
-    id: "scenario-entry",
-    selector: '[data-tour="home-capability-guide"]',
-    title: "选择一个能力入口",
-    body: "这里不是罗列按钮功能，而是把 oneceo 能做的事变成具体任务入口。选择一个入口后，系统会演示如何写需求、绑定项目、启用上下文并准备发送。",
-    placement: "bottom",
-  },
-  {
-    id: "scenario-prompt",
-    selector: '[data-tour="home-composer"]',
-    title: "选择示例再写入",
-    body: "点击下方示例提示词后，系统才会把对应需求写进输入框。先选场景，再按你的真实目标改写。",
+    title: "在这里改成你的任务",
+    body: "选完示例后，就在输入框里继续补目标、约束和交付物。越接近真实需求，输出越容易复核。",
     placement: "top",
   },
   {
@@ -1088,14 +1054,21 @@ function clampProjectHintLabel(
 
 const NO_PROJECT_VALUE = "__no_project__";
 
-function hasCompletedGuidedTour(storageKey: string) {
+function hasCompletedGuidedTour(
+  storageKey: string,
+  storageScope?: string | null,
+) {
   if (typeof window === "undefined") return false;
-  return window.localStorage.getItem(storageKey) === "completed";
+  return (
+    window.localStorage.getItem(
+      resolveGuidedTourStorageKey(storageKey, storageScope),
+    ) === "completed"
+  );
 }
 
 export default function Home() {
   const { t } = useTranslation();
-  const { refreshCredits } = useAuth();
+  const { user, refreshCredits } = useAuth();
   const MESSAGE_SCROLL_CACHE_PREFIX = "task_creation_history_scroll:";
   const PREVIEW_STATE_CACHE_PREFIX = "task_creation_preview_state:";
   const [location, setLocation] = useLocation();
@@ -1175,10 +1148,8 @@ export default function Home() {
     messageKey?: string | null;
     messageIndex?: number | null;
   } | null>(null);
-  const [scenarioTourOpen, setScenarioTourOpen] = useState(false);
   const [scenarioDemo, setScenarioDemo] =
     useState<HomeCapabilityGuideItem>(HOME_DEFAULT_CAPABILITY);
-  const [scenarioPrompt, setScenarioPrompt] = useState("");
   const [selectedCapabilityId, setSelectedCapabilityId] = useState<string | null>(
     null,
   );
@@ -1389,7 +1360,6 @@ export default function Home() {
   const applyScenarioPrompt = useCallback(
     (demo: HomeCapabilityGuideItem, prompt: string, exampleId?: string | null) => {
       setScenarioDemo(demo);
-      setScenarioPrompt(prompt);
       setSelectedCapabilityId(demo.id);
       setSelectedCapabilityExampleId(exampleId ?? null);
       setSelectedModel(demo.model);
@@ -1537,23 +1507,14 @@ export default function Home() {
     }
     void applyCapabilityAutoReferences(demo);
     setScenarioDemo(demo);
-    setScenarioPrompt(prompt);
     setSelectedCapabilityId(demo.id);
     setSelectedCapabilityExampleId(exampleId);
     setSelectedCapabilityCategory(nextCategory ?? null);
     setSelectedModel(demo.model);
     setModelMenuOpen(false);
     if (hasExplicitPrompt) {
-      setMessage(prompt);
+      applyScenarioPrompt(demo, prompt, exampleId);
     }
-    setScenarioTourOpen(false);
-    if (hasCompletedGuidedTour(HOME_SCENARIO_TOUR_KEY)) {
-      if (hasExplicitPrompt) {
-        applyScenarioPrompt(demo, prompt, exampleId);
-      }
-      return;
-    }
-    window.setTimeout(() => setScenarioTourOpen(true), 80);
   }, [applyCapabilityAutoReferences, applyScenarioPrompt, mode]);
 
   const handleCapabilityExampleSelect = useCallback(
@@ -1561,18 +1522,54 @@ export default function Home() {
       setSelectedCapabilityCategory(example.category ?? null);
       setSelectedCapabilityId(demo.id);
       setSelectedCapabilityExampleId(example.id);
-      if (hasCompletedGuidedTour(HOME_SCENARIO_TOUR_KEY)) {
-        applyScenarioPrompt(demo, example.prompt, example.id);
-        return;
-      }
       startScenarioTour(demo, {
         prompt: example.prompt,
         exampleId: example.id,
         category: example.category ?? null,
       });
     },
-    [applyScenarioPrompt, startScenarioTour],
+    [startScenarioTour],
   );
+
+  const clearSelectedCapability = useCallback(() => {
+    setScenarioDemo(HOME_DEFAULT_CAPABILITY);
+    setSelectedCapabilityId(null);
+    setSelectedCapabilityExampleId(null);
+    setSelectedCapabilityCategory(null);
+    setModelMenuOpen(false);
+    setAttachments((current) =>
+      current.filter((item) => {
+        if (item.kind !== "skill") return true;
+        return !autoCapabilitySkillIds.includes(item.id);
+      }),
+    );
+    setAutoCapabilitySkillIds([]);
+    setComposerReferences((current) =>
+      current.filter(
+        (item) => !item.id.startsWith(CAPABILITY_AUTO_REFERENCE_PREFIX),
+      ),
+    );
+  }, [autoCapabilitySkillIds]);
+
+  const selectedCapabilityBadge =
+    selectedCapability && SelectedCapabilityIcon ? (
+      <div className="group relative">
+        <div className="flex h-9 items-center gap-2 rounded-2xl border border-[var(--brand-link)] bg-[var(--brand-soft)] px-3 text-sm font-medium text-[var(--brand-link)] transition-colors">
+          <span className="relative flex h-4 w-4 shrink-0 items-center justify-center">
+            <SelectedCapabilityIcon className="h-4 w-4 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0" />
+            <button
+              type="button"
+              onClick={clearSelectedCapability}
+              className="absolute inset-0 flex items-center justify-center rounded-full bg-[var(--brand-link)]/14 text-[var(--brand-link)] opacity-0 transition-opacity duration-150 hover:bg-[var(--brand-link)]/18 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-link)]/35 group-hover:opacity-100 group-focus-within:opacity-100"
+              aria-label={`关闭当前能力：${selectedCapability.label}`}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+          <span>{selectedCapability.label}</span>
+        </div>
+      </div>
+    ) : null;
 
   const injectWebsiteReference = useCallback(() => {
     setMessage((current) => {
@@ -1596,8 +1593,8 @@ export default function Home() {
     toast.success("已添加 Figma 参考模板");
   }, []);
 
-  const handleScenarioStepChange = useCallback((step: GuidedTourStep) => {
-    if (step.id === "scenario-prompt") {
+  const handleNewTaskTourStepChange = useCallback((step: GuidedTourStep) => {
+    if (step.id === "scenario-examples" || step.id === "composer") {
       setModelMenuOpen(false);
       return;
     }
@@ -1607,14 +1604,17 @@ export default function Home() {
       return;
     }
     setModelMenuOpen(false);
-  }, [scenarioDemo, scenarioPrompt]);
+  }, [scenarioDemo]);
 
-  const closeScenarioTour = useCallback((nextOpen: boolean) => {
-    setScenarioTourOpen(nextOpen);
-    if (!nextOpen) {
-      setModelMenuOpen(false);
-    }
-  }, []);
+  useEffect(() => {
+    if (mode !== "input") return;
+    if (selectedCapabilityId) return;
+    if (hasCompletedGuidedTour(HOME_NEW_TASK_TOUR_KEY, user?.id)) return;
+    startScenarioTour(
+      HOME_CAPABILITY_GUIDE_ITEMS.find((item) => item.id === "slides") ??
+        HOME_DEFAULT_CAPABILITY,
+    );
+  }, [mode, selectedCapabilityId, startScenarioTour, user?.id]);
 
   useEffect(() => {
     if (!managedRunStatus || !BILLING_TERMINAL_RUN_STATUSES.has(managedRunStatus)) {
@@ -3381,18 +3381,7 @@ export default function Home() {
                         <ConnectorDialog sessionId={sessionId} />
                       </span>
 
-                      {selectedCapability && SelectedCapabilityIcon ? (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => startScenarioTour(selectedCapability)}
-                          className="h-9 gap-2 rounded-2xl border-[var(--brand-link)] bg-[var(--brand-soft)] px-3 text-sm font-medium text-[var(--brand-link)]"
-                        >
-                          <SelectedCapabilityIcon className="h-4 w-4" />
-                          {selectedCapability.label}
-                        </Button>
-                      ) : null}
+                      {selectedCapabilityBadge}
 
                       <DropdownMenu
                         open={modelMenuOpen}
@@ -3535,16 +3524,16 @@ export default function Home() {
       onSidebarCollapsedChange={setSidebarCollapsed}
     >
       <GuidedTour
-        storageKey={HOME_CORE_TOUR_KEY}
-        steps={HOME_CORE_TOUR_STEPS}
+        storageKey={HOME_NEW_TASK_TOUR_KEY}
+        storageScope={user?.id}
+        steps={HOME_NEW_TASK_TOUR_STEPS}
         autoStart={mode === "input"}
-      />
-      <GuidedTour
-        storageKey={HOME_SCENARIO_TOUR_KEY}
-        steps={HOME_SCENARIO_TOUR_STEPS}
-        open={scenarioTourOpen}
-        onOpenChange={closeScenarioTour}
-        onStepChange={handleScenarioStepChange}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) {
+            setModelMenuOpen(false);
+          }
+        }}
+        onStepChange={handleNewTaskTourStepChange}
         onComplete={() => setModelMenuOpen(false)}
         nextLabel="继续演示"
         finishLabel="开始修改"
@@ -3653,18 +3642,7 @@ export default function Home() {
                               <ConnectorDialog sessionId={sessionId} />
                             </span>
 
-                            {selectedCapability && SelectedCapabilityIcon ? (
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => startScenarioTour(selectedCapability)}
-                                className="h-9 gap-2 rounded-2xl border-[var(--brand-link)] bg-[var(--brand-soft)] px-3 text-sm font-medium text-[var(--brand-link)]"
-                              >
-                                <SelectedCapabilityIcon className="h-4 w-4" />
-                                {selectedCapability.label}
-                              </Button>
-                            ) : null}
+                            {selectedCapabilityBadge}
 
                             {/* Model Selection Button */}
                             <DropdownMenu
@@ -3785,12 +3763,14 @@ export default function Home() {
                       >
                         <DropdownMenuTrigger asChild>
                           <button
-                            data-tour="composer-project"
                             type="button"
                             className="relative z-0 -mt-5 mx-auto flex w-[94%] items-center justify-end rounded-b-[1.65rem] rounded-t-[0.9rem] border border-t-0 border-border/35 bg-muted/42 px-5 pb-3 pt-7 text-right shadow-[0_16px_28px_rgba(15,23,42,0.07)] backdrop-blur-[2px] transition-colors hover:bg-muted/54 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 dark:bg-muted/24 dark:hover:bg-muted/32 dark:shadow-[0_18px_32px_rgba(0,0,0,0.18)]"
                             aria-label={t("homePage.projectSelectorLabel")}
                           >
-                            <div className="flex min-w-0 items-center justify-end gap-2 text-right">
+                            <div
+                              data-tour="composer-project"
+                              className="flex min-w-0 items-center justify-end gap-2 text-right"
+                            >
                               <FolderSearch2 className="h-4 w-4 shrink-0 text-foreground/42" />
                               <span className="block truncate text-sm font-medium tracking-[0.01em] text-foreground/72">
                                 {inputProjectHintLabel}
@@ -3981,7 +3961,7 @@ export default function Home() {
                             </div>
                           </div>
                         ) : null}
-                        <div className="space-y-1.5">
+                        <div data-tour="capability-examples" className="space-y-1.5">
                           <div className="text-sm font-semibold text-foreground">
                             {selectedCapabilityCategories.length > 0
                               ? "探索想法"

@@ -1392,27 +1392,41 @@ export class SandboxAgentProvisionService {
         let codexConfigToml: string | null = null;
         let codexAuthJson: string | null = null;
 
-	        if (!isReused) {
-	          const restoreResult = await runStep('workspace_restore', () =>
-	            restoreWorkspaceIfArchived(
-	              sessionId,
-	              {
-	                snapshotKey: preferredRestoreSnapshotKey || undefined,
-	                taskSessionId,
-	                restoreRequired: reusableResolution.restoreRequired || Boolean(preferredRestoreSnapshotKey),
-	                expectedSourceSandboxId: reusableResolution.handoffSourceSandboxId || undefined,
-	                reason: reusableResolution.handoffReason || 'sandbox_provision',
-	              }
-	            )
-	          );
-	          if (restoreResult.status === 'missing_required_archive') {
-	            throw new Error(`workspace restore failed: ${restoreResult.reason}`);
-	          }
-	          if (restoreResult.status === 'restored' && taskSessionId) {
-	            await taskCreationCacheStore.invalidateWorkspaceBySession(taskSessionId);
-	            await taskSessionRedisCacheService.invalidateWorkspaceBySessionId(taskSessionId);
-	          }
-	        }
+        if (!isReused) {
+          const restoreRequired = reusableResolution.restoreRequired || Boolean(preferredRestoreSnapshotKey);
+          let restoreResult: Awaited<ReturnType<typeof restoreWorkspaceIfArchived>> | null = null;
+          try {
+            restoreResult = await runStep('workspace_restore', () =>
+              restoreWorkspaceIfArchived(
+                sessionId,
+                {
+                  snapshotKey: preferredRestoreSnapshotKey || undefined,
+                  taskSessionId,
+                  restoreRequired,
+                  expectedSourceSandboxId: reusableResolution.handoffSourceSandboxId || undefined,
+                  reason: reusableResolution.handoffReason || 'sandbox_provision',
+                }
+              )
+            );
+          } catch (error) {
+            if (restoreRequired) {
+              throw error;
+            }
+            writeConnectorDebugLog('[PROVISION_WORKSPACE_RESTORE_SKIPPED_NONBLOCKING]', {
+              taskSessionId: taskSessionId || null,
+              executor,
+              orchestratorSessionId: sessionId,
+              error: error instanceof Error ? error.message : String(error),
+            }, 'warn');
+          }
+          if (restoreResult?.status === 'missing_required_archive') {
+            throw new Error(`workspace restore failed: ${restoreResult.reason}`);
+          }
+          if (restoreResult?.status === 'restored' && taskSessionId) {
+            await taskCreationCacheStore.invalidateWorkspaceBySession(taskSessionId);
+            await taskSessionRedisCacheService.invalidateWorkspaceBySessionId(taskSessionId);
+          }
+        }
 
         let baseUrl: string | undefined;
         let host: string | undefined;

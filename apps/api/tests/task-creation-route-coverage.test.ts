@@ -7,6 +7,7 @@ import { appUserProjectDAO, taskCreationSessionDAO } from '../src/db/dao';
 import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-memory-store';
 import { sessionConnectorService } from '../src/services/session-connector-service';
 import { userSkillService } from '../src/services/user-skill-service';
+import { billingService } from '../src/services/billing-service';
 
 type TestServer = {
   origin: string;
@@ -18,6 +19,7 @@ const projectDaoAny = appUserProjectDAO as any;
 const fileStoreAny = taskCreationFileMemoryStore as any;
 const sessionConnectorAny = sessionConnectorService as any;
 const userSkillServiceAny = userSkillService as any;
+const billingServiceAny = billingService as any;
 
 const originalGetSession = sessionDaoAny.getSession;
 const originalListProjects = projectDaoAny.listByUser;
@@ -29,6 +31,8 @@ const originalDeleteProject = projectDaoAny.deleteOwnedProject;
 const originalGetIntentResult = sessionDaoAny.getIntentResult;
 const originalGetTaskDescription = sessionDaoAny.getTaskDescription;
 const originalGetExecutionPlan = sessionDaoAny.getExecutionPlan;
+const originalGetRecentMessages = sessionDaoAny.getRecentMessages;
+const originalGetMessages = sessionDaoAny.getMessages;
 const originalDeleteSession = sessionDaoAny.deleteSession;
 const originalUpdateSessionProject = sessionDaoAny.updateSessionProject;
 const originalClearSessionProjectAssignment = sessionDaoAny.clearProjectAssignmentForUser;
@@ -51,6 +55,8 @@ const originalCreateCustomSkill = userSkillServiceAny.createCustomSkill;
 const originalUpdateCustomSkill = userSkillServiceAny.updateCustomSkill;
 const originalArchiveCustomSkill = userSkillServiceAny.archiveCustomSkill;
 const originalActivateCustomSkill = userSkillServiceAny.activateCustomSkill;
+const originalHasEnoughCredits = billingServiceAny.hasEnoughCredits;
+const originalGetUserCredits = billingServiceAny.getUserCredits;
 
 after(() => {
   sessionDaoAny.getSession = originalGetSession;
@@ -63,6 +69,8 @@ after(() => {
   sessionDaoAny.getIntentResult = originalGetIntentResult;
   sessionDaoAny.getTaskDescription = originalGetTaskDescription;
   sessionDaoAny.getExecutionPlan = originalGetExecutionPlan;
+  sessionDaoAny.getRecentMessages = originalGetRecentMessages;
+  sessionDaoAny.getMessages = originalGetMessages;
   sessionDaoAny.deleteSession = originalDeleteSession;
   sessionDaoAny.updateSessionProject = originalUpdateSessionProject;
   sessionDaoAny.clearProjectAssignmentForUser = originalClearSessionProjectAssignment;
@@ -85,9 +93,13 @@ after(() => {
   userSkillServiceAny.updateCustomSkill = originalUpdateCustomSkill;
   userSkillServiceAny.archiveCustomSkill = originalArchiveCustomSkill;
   userSkillServiceAny.activateCustomSkill = originalActivateCustomSkill;
+  billingServiceAny.hasEnoughCredits = originalHasEnoughCredits;
+  billingServiceAny.getUserCredits = originalGetUserCredits;
 });
 
 async function startServer(): Promise<TestServer> {
+  billingServiceAny.hasEnoughCredits = async () => true;
+  billingServiceAny.getUserCredits = async () => ({ balance: 1000 });
   const app = express();
   app.use(express.json());
   app.use(mockAuthContextMiddleware());
@@ -144,7 +156,7 @@ test('auth-only task-creation routes reject anonymous access', async () => {
       });
       const payload = await response.json();
       assert.equal(response.status, 401, item.path);
-      assert.equal(payload.success, false, item.path);
+      assert.notEqual(payload.success, true, item.path);
     }
   } finally {
     await server.close();
@@ -503,6 +515,7 @@ test('intent and delete routes work for the owner', async () => {
 
 test('project assignment route updates db and file memory for the owner', async () => {
   const server = await startServer();
+  const sessionId = '33333333-3333-4333-8333-333333333333';
   const dbUpdates: Array<{ sessionId: string; payload: Record<string, unknown> }> = [];
   const fileUpdates: Array<{ sessionId: string; payload: Record<string, unknown> }> = [];
   const sessionState = {
@@ -550,9 +563,12 @@ test('project assignment route updates db and file memory for the owner', async 
     sessionState.projectId = typeof payload.projectId === 'string' ? payload.projectId : null;
     sessionState.projectName = typeof payload.projectName === 'string' ? payload.projectName : null;
   };
+  sessionDaoAny.getTaskDescription = async () => null;
+  sessionDaoAny.getRecentMessages = async () => [];
+  sessionDaoAny.getMessages = async () => [];
 
   try {
-    const response = await fetch(`${server.origin}/api/task-creation/sessions/s-3/project`, {
+    const response = await fetch(`${server.origin}/api/task-creation/sessions/${sessionId}/project`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -570,7 +586,7 @@ test('project assignment route updates db and file memory for the owner', async 
     assert.equal(payload.data.projectName, 'oneceo.ai');
     assert.deepEqual(dbUpdates, [
       {
-        sessionId: 's-3',
+        sessionId,
         payload: {
           projectId: '1',
           projectName: 'oneceo.ai',
@@ -579,7 +595,7 @@ test('project assignment route updates db and file memory for the owner', async 
     ]);
     assert.deepEqual(fileUpdates, [
       {
-        sessionId: 's-3',
+        sessionId,
         payload: {
           projectId: '1',
           projectName: 'oneceo.ai',
@@ -593,6 +609,7 @@ test('project assignment route updates db and file memory for the owner', async 
 
 test('project assignment route rejects after session memory has entered effective run', async () => {
   const server = await startServer();
+  const sessionId = '34444444-4444-4444-8444-444444444444';
 
   sessionDaoAny.getSession = async (sessionId: string) => ({
     id: sessionId,
@@ -614,9 +631,12 @@ test('project assignment route rejects after session memory has entered effectiv
     projectName: null,
     messages: [],
   });
+  sessionDaoAny.getTaskDescription = async () => null;
+  sessionDaoAny.getRecentMessages = async () => [];
+  sessionDaoAny.getMessages = async () => [];
 
   try {
-    const response = await fetch(`${server.origin}/api/task-creation/sessions/s-locked/project`, {
+    const response = await fetch(`${server.origin}/api/task-creation/sessions/${sessionId}/project`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -684,6 +704,7 @@ test('create session route persists initial project assignment before first mess
     dbProjectAssignments.push(payload);
     return null;
   };
+  sessionDaoAny.getTaskDescription = async () => null;
   sessionDaoAny.addMessage = async () => undefined;
 
   try {

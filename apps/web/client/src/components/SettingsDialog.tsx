@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useSearch } from "wouter";
 import {
@@ -34,6 +34,7 @@ import {
   Mail,
   Pencil,
   Plug,
+  RotateCcw,
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
@@ -45,6 +46,11 @@ import {
 import { ConnectorCenterPanel } from "@/components/ConnectorCenterPanel";
 import { UserSkillSettingsPanel } from "@/components/UserSkillSettingsPanel";
 import { BillingSettingsPanel } from "@/components/BillingSettingsPanel";
+import {
+  GuidedTour,
+  isGuidedTourInteraction,
+  type GuidedTourStep,
+} from "@/components/GuidedTour";
 import {
   ALTUS_MODE_STORAGE_KEY,
   DEFAULT_ALTUS_MODE,
@@ -78,6 +84,8 @@ type SettingsPanelProps = {
   onClose?: () => void;
   connectorTargetSessionId?: string | null;
   highlightedConnector?: ConnectorKey | null;
+  onReplaySettingsGuide?: () => void;
+  onResetAllGuides?: () => void;
 };
 
 const SETTINGS_TABS: SettingsTab[] = [
@@ -88,6 +96,74 @@ const SETTINGS_TABS: SettingsTab[] = [
   "skills",
   "connectors",
   "billing",
+];
+const SETTINGS_OVERVIEW_TOUR_KEY = "oneceo:tour.settings.overview.completed";
+const SETTINGS_OVERVIEW_STEPS: GuidedTourStep[] = [
+  {
+    id: "settings-tabs",
+    selector: '[data-tour="settings-tabs"]',
+    title: "设置分区",
+    body: "这里按长期偏好、账号、模型、外观通知、Skills、Connectors 和积分消费分区。先看分区，不需要一次填完。",
+    placement: "right",
+  },
+  {
+    id: "settings-content",
+    selector: '[data-tour="settings-content"]',
+    title: "按当前任务进入设置",
+    body: "个性化和项目指令影响后续任务；模型接管会影响执行链路；连接器和 Skills 只在需要外部工具或专门方法时配置。",
+    placement: "left",
+  },
+  {
+    id: "connectors-tabs",
+    selector: '[data-tour="connectors-tabs"]',
+    title: "连接器分区",
+    body: "应用连接器用于 GitHub、Notion、Slack 等常用集成；自定义 MCP 用于接入远程工具服务。",
+    placement: "bottom",
+  },
+  {
+    id: "connectors-search",
+    selector: '[data-tour="connectors-search"]',
+    title: "快速筛选",
+    body: "连接器较多时可以先搜索，再进入详情授权或选择 profile。",
+    placement: "left",
+  },
+  {
+    id: "connectors-directory",
+    selector: '[data-tour="connectors-directory-card"]',
+    title: "授权与管理",
+    body: "点击连接器卡片进入详情。未授权时先连接；已授权后可以重连、断开或设置默认 profile。",
+    placement: "top",
+  },
+  {
+    id: "billing-balance",
+    selector: '[data-tour="billing-balance"]',
+    title: "积分余额",
+    body: "这里显示当前可用积分、累计获得和累计消费，方便判断本账号的执行余量。",
+    placement: "bottom",
+  },
+  {
+    id: "billing-actions",
+    selector: '[data-tour="billing-actions"]',
+    title: "充值与激活码",
+    body: "需要补充额度时从这里充值；已有激活码时可以直接兑换。",
+    placement: "bottom",
+  },
+  {
+    id: "billing-records",
+    selector: '[data-tour="billing-records-header"]',
+    title: "消费记录",
+    body: "每条记录可以回到对应会话，用于复核是哪次任务产生了消耗。",
+    placement: "top",
+  },
+];
+const USER_GUIDED_TOUR_KEYS = [
+  "oneceo:tour.home_core.completed",
+  "oneceo:tour.home_scenario_demo.completed",
+  "oneceo:tour.projects.overview.completed",
+  "oneceo:tour.projects.create.completed",
+  "oneceo:tour.project_detail.completed",
+  "oneceo:tour.ceo_view.completed",
+  SETTINGS_OVERVIEW_TOUR_KEY,
 ];
 const ACCOUNT_AVATAR_TONES = [
   "bg-emerald-500",
@@ -324,6 +400,8 @@ export function SettingsPanel({
   onClose,
   connectorTargetSessionId,
   highlightedConnector,
+  onReplaySettingsGuide,
+  onResetAllGuides,
 }: SettingsPanelProps) {
   const { t, i18n } = useTranslation();
   const [, setLocation] = useLocation();
@@ -629,7 +707,7 @@ export function SettingsPanel({
         className="h-full"
       >
         <div className="flex h-full flex-col md:flex-row">
-          <aside className="shrink-0 border-b border-border/70 bg-background md:min-w-[236px] md:max-w-[236px] md:border-b-0 md:border-r md:m-4 md:mr-0 md:rounded-l-[22px]">
+          <aside data-tour="settings-tabs" className="shrink-0 border-b border-border/70 bg-background md:min-w-[236px] md:max-w-[236px] md:border-b-0 md:border-r md:m-4 md:mr-0 md:rounded-l-[22px]">
             <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-4 md:px-3 md:pb-5 md:pt-5">
               <TabsList className="flex h-full w-full flex-shrink-0 items-start justify-start gap-3 self-stretch overflow-x-auto bg-transparent px-0 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden md:flex-col md:overflow-x-visible md:overflow-y-auto">
                 <div className="flex items-start gap-3 self-stretch md:flex-col md:gap-1.5">
@@ -653,7 +731,7 @@ export function SettingsPanel({
             </div>
           </aside>
 
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background md:m-4 md:ml-0 md:rounded-r-[22px] md:border md:border-border/60">
+          <div data-tour="settings-content" className="flex min-h-0 min-w-0 flex-1 flex-col bg-background md:m-4 md:ml-0 md:rounded-r-[22px] md:border md:border-border/60">
             <div className="h-full flex-1 overflow-y-auto px-4 py-4 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden md:px-6 md:py-6">
               <TabsContent value="personalization" className="mt-0">
                 <div className="mx-auto flex w-full max-w-[720px] flex-col gap-6 pb-6">
@@ -1019,6 +1097,41 @@ export function SettingsPanel({
                       />
                     </div>
                   </div>
+                  </SettingsSection>
+
+                  <SettingsSection
+                    eyebrow="Guides"
+                    title="引导"
+                    description="重新查看工作台、项目、总经理视图和设置内的蒙层引导。"
+                  >
+                    <div className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-foreground">
+                          重新加载新手引导
+                        </div>
+                        <div className="mt-1 text-sm leading-6 text-muted-foreground">
+                          会清除本机已完成记录，并立即重放设置分区引导；其他页面会在下次进入时重新出现。
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-9 rounded-lg px-3"
+                          onClick={onReplaySettingsGuide}
+                        >
+                          <RotateCcw className="h-4 w-4" />
+                          重放设置引导
+                        </Button>
+                        <Button
+                          type="button"
+                          className="h-9 rounded-lg bg-foreground px-3 text-background hover:bg-foreground/90"
+                          onClick={onResetAllGuides}
+                        >
+                          重新加载全部
+                        </Button>
+                      </div>
+                    </div>
                   </SettingsSection>
                 </div>
               </TabsContent>
@@ -1513,12 +1626,78 @@ export function SettingsDialog({
   highlightedConnector,
 }: SettingsDialogProps) {
   const { t } = useTranslation();
+  const [settingsTourOpen, setSettingsTourOpen] = useState(false);
+
+  const preventGuidedTourOutsideClose = useMemo(
+    () => (event: Event) => {
+      if (isGuidedTourInteraction(event)) {
+        event.preventDefault();
+      }
+    },
+    [],
+  );
+
+  const replaySettingsGuide = useCallback(() => {
+    window.localStorage.removeItem(SETTINGS_OVERVIEW_TOUR_KEY);
+    setSettingsTourOpen(false);
+    onActiveTabChange("settings");
+    window.setTimeout(() => setSettingsTourOpen(true), 80);
+    toast.success("已重新加载设置引导");
+  }, [onActiveTabChange]);
+
+  const resetAllGuides = useCallback(() => {
+    USER_GUIDED_TOUR_KEYS.forEach((storageKey) => {
+      window.localStorage.removeItem(storageKey);
+    });
+    setSettingsTourOpen(false);
+    onActiveTabChange("settings");
+    window.setTimeout(() => setSettingsTourOpen(true), 80);
+    toast.success("已重新加载全部引导");
+  }, [onActiveTabChange]);
+
+  useEffect(() => {
+    if (!open) {
+      setSettingsTourOpen(false);
+      return;
+    }
+    if (window.localStorage.getItem(SETTINGS_OVERVIEW_TOUR_KEY) === "completed") {
+      return;
+    }
+    const timer = window.setTimeout(() => setSettingsTourOpen(true), 360);
+    return () => window.clearTimeout(timer);
+  }, [open]);
+
+  const handleSettingsTourStepChange = useCallback(
+    (step: GuidedTourStep) => {
+      if (step.id.startsWith("connectors-")) {
+        if (activeTab !== "connectors") {
+          onActiveTabChange("connectors");
+        }
+        window.setTimeout(() => window.dispatchEvent(new Event("resize")), 80);
+        return;
+      }
+      if (step.id.startsWith("billing-")) {
+        if (activeTab !== "billing") {
+          onActiveTabChange("billing");
+        }
+        window.setTimeout(() => window.dispatchEvent(new Event("resize")), 80);
+        return;
+      }
+      if (activeTab !== "settings") {
+        onActiveTabChange("settings");
+      }
+      window.setTimeout(() => window.dispatchEvent(new Event("resize")), 80);
+    },
+    [activeTab, onActiveTabChange],
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
         className="top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col w-[min(921px,calc(100vw-32px))] max-w-[921px] md:w-[min(973px,calc(100vw-32px))] md:max-w-[973px] h-[min(576px,calc(100vh-64px))] md:h-[min(608px,calc(100vh-64px))] rounded-[30px] border border-border p-0 overflow-hidden shadow-xl"
+        onInteractOutside={preventGuidedTourOutsideClose}
+        onPointerDownOutside={preventGuidedTourOutsideClose}
       >
         <DialogHeader className="sr-only">
           <DialogTitle>{t("settings.title")}</DialogTitle>
@@ -1531,8 +1710,19 @@ export function SettingsDialog({
             onClose={() => onOpenChange(false)}
             connectorTargetSessionId={connectorTargetSessionId}
             highlightedConnector={highlightedConnector}
+            onReplaySettingsGuide={replaySettingsGuide}
+            onResetAllGuides={resetAllGuides}
           />
         </div>
+        <GuidedTour
+          storageKey={SETTINGS_OVERVIEW_TOUR_KEY}
+          steps={SETTINGS_OVERVIEW_STEPS}
+          allowUnresolvedSteps
+          open={settingsTourOpen}
+          onOpenChange={setSettingsTourOpen}
+          onStepChange={handleSettingsTourStepChange}
+          onComplete={() => onActiveTabChange("settings")}
+        />
       </DialogContent>
     </Dialog>
   );
@@ -1561,6 +1751,8 @@ export function GlobalSettingsDialogHost() {
       callbackPath === "/slack/callback" && hasOauthCallbackParams;
     const isVercelCallback =
       callbackPath === "/vercel/callback" && hasOauthCallbackParams;
+    const isGoogleSuperCallback =
+      callbackPath === "/google-super/callback" && hasOauthCallbackParams;
     const isGithubCallback =
       callbackPath === "/github/callback" && hasOauthCallbackParams;
     return {
@@ -1572,12 +1764,14 @@ export function GlobalSettingsDialogHost() {
         isSupabaseCallback ||
         isSlackCallback ||
         isVercelCallback ||
+        isGoogleSuperCallback ||
         isGithubCallback,
       settingsTab:
         isNotionCallback ||
         isSupabaseCallback ||
         isSlackCallback ||
         isVercelCallback ||
+        isGoogleSuperCallback ||
         isGithubCallback
           ? "connectors"
           : params.get("settingsTab"),
@@ -1590,6 +1784,8 @@ export function GlobalSettingsDialogHost() {
           ? "supabase"
         : isSlackCallback
           ? "slack"
+        : isGoogleSuperCallback
+          ? "google_super"
           : isVercelCallback
             ? "vercel"
             : params.get("connector"),

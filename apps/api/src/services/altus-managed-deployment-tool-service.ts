@@ -3,6 +3,7 @@ import {
   buildTaskSessionDeploymentResponse,
   executeTaskSessionDeploymentAction,
   getTaskSessionDeploymentErrorMessage,
+  resolvePreferredPanelPublicUrl,
   resolveTaskSessionRecord,
 } from './task-session-deployment-runtime-service';
 import {
@@ -34,6 +35,8 @@ export type AltusManagedDeploymentToolName = (typeof ALTUS_MANAGED_DEPLOYMENT_TO
 type RepairCategory =
   | 'workspace_missing'
   | 'template_compliance'
+  | 'local_preflight'
+  | 'platform_capability'
   | 'deployment_configuration'
   | 'resource_binding'
   | 'deployment_pending'
@@ -54,6 +57,7 @@ type AltusManagedDeploymentDebug = {
   baselineErrors?: string[];
   sourceProfileVersion?: string;
   expectedRuntimeFamily?: TaskSessionProjectProfile['runtimeFamily'];
+  expectedTemplateFamily?: TaskSessionProjectProfile['templateFamily'];
 };
 
 export type AltusManagedDeploymentToolResult = {
@@ -80,6 +84,7 @@ type ManagedDeploymentToolInputSchema = {
   workspaceRoot: string;
   sourceProfileVersion?: string;
   expectedRuntimeFamily?: TaskSessionProjectProfile['runtimeFamily'];
+  expectedTemplateFamily?: TaskSessionProjectProfile['templateFamily'];
   repairPolicy: 'none' | 'safe_template_adapt' | 'skill_repair_then_retry';
   reason?: string;
 };
@@ -137,8 +142,53 @@ function buildSuggestedActions(checks: string[]) {
     if (check === 'database_contract_mismatch') {
       suggestions.add('修正数据库依赖与 manifest 契约，保持 Railway Postgres 与 pg/drizzle-orm 一致');
     }
+    if (check === 'non_official_frontend_template') {
+      suggestions.add('将当前前端项目收敛到 OneCEO 官方固定模板壳：client/server/shared + vite build + node dist/index.js');
+      suggestions.add('先补齐官方模板目录与构建/启动契约，再重新触发发布');
+    }
   }
   return Array.from(suggestions);
+}
+
+function shouldRequireOfficialFrontendTemplate(
+  profile: TaskSessionProjectProfile | undefined
+): boolean {
+  if (!profile) {
+    return false;
+  }
+  return (
+    (profile.artifactType === 'web_app' || profile.artifactType === 'static_site') &&
+    profile.templateFamily !== 'oneceo_official_vite_node_shell'
+  );
+}
+
+function buildTemplateFamilyRepairResult(input: {
+  action: AltusManagedDeploymentToolName;
+  baseline: DeploymentTemplateBaselineData;
+  projectProfile: TaskSessionProjectProfile;
+  deploymentFlow?: DeploymentFlowSnapshot;
+}): AltusManagedDeploymentToolResult {
+  return {
+    action: input.action,
+    phase: 'repair_required',
+    status: 'retryable_repair_required',
+    summary:
+      '当前前端项目还不是 OneCEO 官方固定模板壳，需先收敛到固定模板契约后再继续发布，以保证主链稳定性。',
+    repair: {
+      category: 'template_compliance',
+      checks: ['non_official_frontend_template'],
+      suggestedActions: buildSuggestedActions(['non_official_frontend_template']),
+    },
+    baseline: input.baseline,
+    projectProfile: input.projectProfile,
+    deploymentFlow: input.deploymentFlow,
+    debug: {
+      baselineStatus: input.baseline.status,
+      baselineErrors: input.baseline.errors,
+      expectedRuntimeFamily: input.projectProfile.runtimeFamily,
+      expectedTemplateFamily: 'oneceo_official_vite_node_shell',
+    },
+  };
 }
 
 function buildRepairResult(
@@ -271,6 +321,76 @@ function buildResourceBindingRepairResult(
   };
 }
 
+function buildLocalPreflightRepairResult(
+  action: AltusManagedDeploymentToolName,
+  rawError: string,
+  baseline?: DeploymentTemplateBaselineData | null,
+  extra?: {
+    projectProfile?: TaskSessionProjectProfile;
+    deploymentFlow?: DeploymentFlowSnapshot;
+  }
+): AltusManagedDeploymentToolResult {
+  return {
+    action,
+    phase: 'repair_required',
+    status: 'retryable_repair_required',
+    summary:
+      '当前项目在 sandbox 本地运行验收未通过，已停止 Railway 发布。Altus 需要先修复构建、启动或浏览器运行错误后再重新发布。',
+    repair: {
+      category: 'local_preflight',
+      checks: ['local_build_start_or_browser_smoke_failed'],
+      suggestedActions: [
+        '根据本地预检日志修复工作区里的 build/start/healthcheck 或页面运行错误，不要擅自切换固定模板运行时',
+        '修复后重新调用 deploy_application，让平台再次执行本地验收',
+        '本地验收通过前不要继续推送 Railway 部署',
+      ],
+    },
+    baseline: baseline || undefined,
+    projectProfile: extra?.projectProfile,
+    deploymentFlow: extra?.deploymentFlow,
+    debug: {
+      rawError,
+      baselineStatus: baseline?.status,
+      baselineErrors: baseline?.errors,
+    },
+  };
+}
+
+function buildPlatformCapabilityRepairResult(
+  action: AltusManagedDeploymentToolName,
+  rawError: string,
+  baseline?: DeploymentTemplateBaselineData | null,
+  extra?: {
+    projectProfile?: TaskSessionProjectProfile;
+    deploymentFlow?: DeploymentFlowSnapshot;
+  }
+): AltusManagedDeploymentToolResult {
+  return {
+    action,
+    phase: 'repair_required',
+    status: 'retryable_repair_required',
+    summary:
+      '当前部署被平台预检环境阻断，问题出在沙箱 Playwright/浏览器能力，而不是工作区源码。请先修复平台能力后再重新发布。',
+    repair: {
+      category: 'platform_capability',
+      checks: ['sandbox_playwright_unavailable'],
+      suggestedActions: [
+        '不要继续修改工作区源码、package.json、manifest 或固定模板契约文件',
+        '先修复沙箱 Playwright / 浏览器能力，再重新调用 deploy_application 或 redeploy_application',
+        '在平台能力恢复前，只允许汇报阻塞状态或重新查询部署状态，不要进入本地 build/start/browser 自修复循环',
+      ],
+    },
+    baseline: baseline || undefined,
+    projectProfile: extra?.projectProfile,
+    deploymentFlow: extra?.deploymentFlow,
+    debug: {
+      rawError,
+      baselineStatus: baseline?.status,
+      baselineErrors: baseline?.errors,
+    },
+  };
+}
+
 function buildPendingResult(
   action: AltusManagedDeploymentToolName,
   panel: RailwayDeploymentPanelData,
@@ -280,7 +400,7 @@ function buildPendingResult(
   }
 ): AltusManagedDeploymentToolResult {
   const deploymentStatus = asText(panel.latestStatus);
-  const url = asText(panel.latestStaticUrl || panel.latestUrl);
+  const url = resolvePreferredPanelPublicUrl(panel);
   const bindingState = asText(panel.bindingState);
   const waitingForPublicReadiness = bindingState === 'public_settling';
   return {
@@ -318,6 +438,7 @@ function buildPendingResult(
 
 const DEPLOYMENT_FAILED_STATUSES = new Set(['failed', 'crashed', 'removed']);
 const DEPLOYMENT_PENDING_BINDING_STATES = new Set(['provisioning', 'public_settling']);
+const TERMINAL_SUCCESS_DEPLOYMENT_STATUSES = new Set(['SUCCESS', 'DEPLOYED', 'ACTIVE']);
 
 function normalizeDeploymentStatus(value: unknown): string {
   return asText(value).toLowerCase();
@@ -362,7 +483,7 @@ function buildDeploymentFailedRepairResult(
   }
 ): AltusManagedDeploymentToolResult {
   const deploymentStatus = asText(panel.latestStatus) || 'unknown';
-  const url = asText(panel.latestStaticUrl || panel.latestUrl);
+  const url = resolvePreferredPanelPublicUrl(panel);
   const checks = [
     deploymentStatus,
     asText(panel.bindingState),
@@ -457,7 +578,7 @@ function buildSuccessResult(input: {
   deploymentFlow?: DeploymentFlowSnapshot;
 }): AltusManagedDeploymentToolResult {
   const deploymentStatus = asText(input.panel.latestStatus);
-  const url = asText(input.panel.latestStaticUrl || input.panel.latestUrl);
+  const url = resolvePreferredPanelPublicUrl(input.panel);
   const deploymentId = asText(input.panel.deploymentId);
 
   if (input.action === 'get_application_deployment_status') {
@@ -512,6 +633,14 @@ function buildSuccessResult(input: {
       deploymentId: deploymentId || undefined,
     },
   };
+}
+
+function isPublicSettlingButAlreadyReady(panel: RailwayDeploymentPanelData): boolean {
+  const bindingState = asText(panel.bindingState).toLowerCase();
+  if (bindingState !== 'public_settling') return false;
+  const deploymentStatus = asText(panel.latestStatus).toUpperCase();
+  if (!TERMINAL_SUCCESS_DEPLOYMENT_STATUSES.has(deploymentStatus)) return false;
+  return Boolean(resolvePreferredPanelPublicUrl(panel));
 }
 
 type ManagedDeploymentAction = 'deploy' | 'redeploy' | 'rollback';
@@ -601,10 +730,11 @@ export class AltusManagedDeploymentToolService {
       workspaceRoot: input.workspaceRoot,
       sourceProfileVersion: input.projectProfile?.version,
       expectedRuntimeFamily: input.projectProfile?.runtimeFamily,
+      expectedTemplateFamily: input.projectProfile?.templateFamily,
       repairPolicy:
         input.action === 'get_application_deployment_status'
           ? 'none'
-          : input.projectProfile?.deployability === 'ready'
+          : input.projectProfile?.templateFamily === 'oneceo_official_vite_node_shell'
             ? 'safe_template_adapt'
             : 'skill_repair_then_retry',
       reason: asText(input.notes) || undefined,
@@ -640,6 +770,7 @@ export class AltusManagedDeploymentToolService {
         updatedAt: new Date().toISOString(),
         artifactType: 'unknown',
         runtimeFamily: 'unknown',
+        templateFamily: 'unknown',
         deployability: 'unknown',
         entrypoints: [],
         commands: {},
@@ -657,13 +788,14 @@ export class AltusManagedDeploymentToolService {
           resolvedOrchestratorSessionId: input.sandboxId,
         });
         if (
-          panel.activeDeploymentPending ||
-          DEPLOYMENT_PENDING_BINDING_STATES.has(asText(panel.bindingState))
+          (panel.activeDeploymentPending ||
+            DEPLOYMENT_PENDING_BINDING_STATES.has(asText(panel.bindingState))) &&
+          !isPublicSettlingButAlreadyReady(panel)
         ) {
           deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
             type: 'PROVIDER_STATUS',
             status: asText(panel.latestStatus) || 'pending',
-            url: asText(panel.latestStaticUrl || panel.latestUrl) || undefined,
+            url: resolvePreferredPanelPublicUrl(panel) || undefined,
           });
           return buildPendingResult(input.action, panel, { projectProfile, deploymentFlow });
         }
@@ -671,14 +803,14 @@ export class AltusManagedDeploymentToolService {
           deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
             type: 'PROVIDER_STATUS',
             status: asText(panel.latestStatus) || 'FAILED',
-            url: asText(panel.latestStaticUrl || panel.latestUrl) || undefined,
+            url: resolvePreferredPanelPublicUrl(panel) || undefined,
           });
           return buildDeploymentFailedRepairResult(input.action, panel, { projectProfile, deploymentFlow });
         }
         deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
           type: 'PUBLIC_ACCESS_VERIFIED',
           statusCode: 200,
-          url: asText(panel.latestStaticUrl || panel.latestUrl) || '',
+          url: resolvePreferredPanelPublicUrl(panel) || '',
         });
         return buildSuccessResult({
           action: input.action,
@@ -699,6 +831,7 @@ export class AltusManagedDeploymentToolService {
             rawError: this.deps.getErrorMessage(error),
             sourceProfileVersion: schema.sourceProfileVersion,
             expectedRuntimeFamily: schema.expectedRuntimeFamily,
+            expectedTemplateFamily: schema.expectedTemplateFamily,
           },
         });
       }
@@ -716,6 +849,19 @@ export class AltusManagedDeploymentToolService {
       });
       if (baseline.status !== 'ready') {
         return buildRepairResult(input.action, baseline, undefined, { projectProfile, deploymentFlow });
+      }
+      if (projectProfile && shouldRequireOfficialFrontendTemplate(projectProfile)) {
+        deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
+          type: 'REPAIR_REQUIRED',
+          category: 'template_compliance',
+          checks: ['non_official_frontend_template'],
+        });
+        return buildTemplateFamilyRepairResult({
+          action: input.action,
+          baseline,
+          projectProfile,
+          deploymentFlow,
+        });
       }
       const resourceDeclarations = this.deps.getResourceDeclarations
         ? await this.deps.getResourceDeclarations(input.sessionId).catch(() => ({
@@ -797,13 +943,14 @@ export class AltusManagedDeploymentToolService {
         deploymentId: asText(result.panel.deploymentId) || undefined,
       });
       if (
-        result.panel.activeDeploymentPending ||
-        DEPLOYMENT_PENDING_BINDING_STATES.has(asText(result.panel.bindingState))
+        (result.panel.activeDeploymentPending ||
+          DEPLOYMENT_PENDING_BINDING_STATES.has(asText(result.panel.bindingState))) &&
+        !isPublicSettlingButAlreadyReady(result.panel)
       ) {
         deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
           type: 'PROVIDER_STATUS',
           status: asText(result.panel.latestStatus) || 'pending',
-          url: asText(result.panel.latestStaticUrl || result.panel.latestUrl) || undefined,
+          url: resolvePreferredPanelPublicUrl(result.panel) || undefined,
         });
         return buildPendingResult(input.action, result.panel, { projectProfile, deploymentFlow });
       }
@@ -811,14 +958,14 @@ export class AltusManagedDeploymentToolService {
         deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
           type: 'PROVIDER_STATUS',
           status: asText(result.panel.latestStatus) || 'FAILED',
-          url: asText(result.panel.latestStaticUrl || result.panel.latestUrl) || undefined,
+          url: resolvePreferredPanelPublicUrl(result.panel) || undefined,
         });
         return buildDeploymentFailedRepairResult(input.action, result.panel, { projectProfile, deploymentFlow });
       }
       deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
         type: 'PUBLIC_ACCESS_VERIFIED',
         statusCode: 200,
-        url: asText(result.panel.latestStaticUrl || result.panel.latestUrl) || '',
+        url: resolvePreferredPanelPublicUrl(result.panel) || '',
       });
       return buildSuccessResult({
         action: input.action,
@@ -847,6 +994,27 @@ export class AltusManagedDeploymentToolService {
         });
       }
       const classified = classifyRailwayDeploymentError(rawError);
+      if (classified.code === 'deployment_platform_capability_not_ready') {
+        deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
+          type: 'TERMINAL_FAILURE',
+          reason: rawError,
+        });
+        return buildPlatformCapabilityRepairResult(input.action, rawError, latestBaseline, {
+          projectProfile,
+          deploymentFlow,
+        });
+      }
+      if (classified.code === 'deployment_preflight_not_ready') {
+        deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
+          type: 'REPAIR_REQUIRED',
+          category: 'local_preflight',
+          checks: ['local_build_start_or_browser_smoke_failed'],
+        });
+        return buildLocalPreflightRepairResult(input.action, rawError, latestBaseline, {
+          projectProfile,
+          deploymentFlow,
+        });
+      }
       if (classified.bindingState === 'repair_required') {
         deploymentFlow = reduceDeploymentFlow(deploymentFlow, {
           type: 'REPAIR_REQUIRED',
@@ -887,6 +1055,7 @@ export class AltusManagedDeploymentToolService {
             baselineErrors: latestBaseline?.errors,
             sourceProfileVersion: schema.sourceProfileVersion,
             expectedRuntimeFamily: schema.expectedRuntimeFamily,
+            expectedTemplateFamily: schema.expectedTemplateFamily,
           },
         }
       );

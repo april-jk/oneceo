@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mock, test } from 'node:test';
 import {
   buildTaskSessionDeploymentResponse,
+  resolveDeploymentAnalyticsDomain,
   resolveDeploymentResourceProjectKey,
   resolveTaskSessionEnvironment,
   shouldCleanupFailedDeploymentResources,
@@ -43,6 +44,31 @@ test('validateTaskSessionDeploymentPublicReadiness enters public_settling before
   assert.equal(result.activeDeploymentPending, true);
   assert.equal(result.providerErrorCode, undefined);
   assert.match(result.message || '', /发布完成，正在等待公网生效/);
+});
+
+test('resolveDeploymentAnalyticsDomain prefers the reachable provider domain before custom public domain', () => {
+  const result = resolveDeploymentAnalyticsDomain({
+    metadata: {},
+    accountDomain: 'app-session-service.up.railway.app',
+    accountPublicUrl: 'https://app-session.oneceo.space',
+    accountPublicDomain: 'app-session.oneceo.space',
+  });
+
+  assert.equal(result, 'app-session-service.up.railway.app');
+});
+
+test('resolveDeploymentAnalyticsDomain prefers panel public URL when deployment panel has settled', () => {
+  const result = resolveDeploymentAnalyticsDomain({
+    metadata: {},
+    accountDomain: 'app-session-service.up.railway.app',
+    accountPublicUrl: 'https://app-session.oneceo.space',
+    panel: createPanel({
+      latestStaticUrl: 'https://live-provider.up.railway.app',
+      publicUrl: 'https://app-session.oneceo.space',
+    }),
+  });
+
+  assert.equal(result, 'https://live-provider.up.railway.app');
 });
 
 test('validateTaskSessionDeploymentPublicReadiness marks terminal success with unreachable public url as provider_error after the timeout window', async () => {
@@ -88,6 +114,31 @@ test('validateTaskSessionDeploymentPublicReadiness skips public validation while
   assert.equal(probeCalled, false);
   assert.equal(result.bindingState, 'provisioning');
   assert.equal(result.latestStatus, 'BUILDING');
+});
+
+test('validateTaskSessionDeploymentPublicReadiness surfaces terminal provider failures immediately', async () => {
+  let probeCalled = false;
+  const panel = createPanel({
+    bindingState: 'public_settling',
+    latestStatus: 'FAILED',
+    latestStaticUrl: 'https://example.com',
+    activeDeploymentPending: true,
+    publicReachabilityStartedAt: new Date().toISOString(),
+  });
+
+  const result = await validateTaskSessionDeploymentPublicReadiness({
+    panel,
+    probe: async () => {
+      probeCalled = true;
+      return { url: 'https://example.com', status: 200 };
+    },
+  });
+
+  assert.equal(probeCalled, false);
+  assert.equal(result.bindingState, 'repair_required');
+  assert.equal(result.activeDeploymentPending, false);
+  assert.equal(result.providerErrorCode, 'deployment_provider_error');
+  assert.match(result.providerErrorMessage || '', /FAILED/);
 });
 
 test('validateTaskSessionDeploymentPublicReadiness promotes a live successful deployment when the selected deployment is still queued', async () => {

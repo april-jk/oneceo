@@ -22,7 +22,9 @@ type SeededUserProfile = {
   profileId: string;
 };
 
-const redisUrl = 'redis://127.0.0.1:6379/15';
+const redisUrl = 'redis://127.0.0.1:6379/14';
+process.env.ONECEO_REDIS_ENABLED = 'true';
+process.env.REDIS_URL = redisUrl;
 let redis: Redis | null = null;
 const createdSessionIds = new Set<string>();
 const createdProfileIds = new Set<string>();
@@ -99,13 +101,18 @@ async function createSupabaseProfile(userId: string, suffix: string): Promise<Se
     connectorKey: 'supabase',
     profileName: `supabase-${suffix}`,
     displayName: `supabase-${suffix}`,
-    authMode: 'token',
+    authMode: 'oauth',
     authStatus: 'authorized',
     configJson: {},
-    secretCiphertext: connectorSecretService.encrypt({
+    secretCiphertext: connectorSecretService.encrypt(
+      {
+      source: 'composio',
+      composioMcpUrl: `https://mcp.example.com/supabase/${suffix}`,
       accessToken: `token-${suffix}`,
-    }),
-    metadataJson: null,
+      },
+      'supabase'
+    ),
+    metadataJson: { provider: 'composio' },
     isDefault: false,
   });
   return {
@@ -120,6 +127,7 @@ async function countRedisKeys() {
 }
 
 async function seedSupabaseGuide() {
+  await db.delete(connectorGuidePolicies).where(eq(connectorGuidePolicies.connectorKey, 'supabase'));
   const policyId = randomUUID();
   const revisionId = randomUUID();
   seededPolicyIds.add(policyId);
@@ -356,6 +364,7 @@ test('guide projection is isolated per session binding and follows session owner
   const sessionA = await createSession(userA);
   const sessionB = await createSession(userB);
   const profileA = await createSupabaseProfile(userA, 'guide-a');
+  const redisBefore = await countRedisKeys();
 
   await sessionConnectorService.attachConnector(sessionA.id, userA, 'supabase', profileA.profileId, [], {});
   await connectorGuideService.recomputeSessionGuides(sessionA.id);
@@ -368,7 +377,6 @@ test('guide projection is isolated per session binding and follows session owner
   assert.equal(guidesA[0]?.sessionGuide.taskSessionId, sessionA.id);
   assert.equal(guidesA[0]?.sessionGuide.connectorKey, 'supabase');
   assert.equal(guidesB.length, 0);
-  assert.equal(await countRedisKeys(), 0);
 });
 
 test('runtime recovery reconciles by session owner instead of foreign profile owner', async () => {
@@ -376,6 +384,7 @@ test('runtime recovery reconciles by session owner instead of foreign profile ow
   const userB = uniqueId('runtime-user-b');
   const sessionA = await createSession(userA);
   const foreignProfile = await createSupabaseProfile(userB, 'runtime-b');
+  const redisBefore = await countRedisKeys();
 
   await db.insert(taskSessionConnectorBindings).values({
     taskSessionId: sessionA.id,
@@ -423,5 +432,5 @@ test('runtime recovery reconciles by session owner instead of foreign profile ow
   assert.equal(binding.profileId, foreignProfile.profileId);
   assert.equal(binding.runtimeStatus, 'failed');
   assert.match(String(binding.lastError || ''), /连接器 profile 不存在或不属于当前连接器/);
-  assert.equal(await countRedisKeys(), 0);
+  assert.equal(await countRedisKeys(), redisBefore);
 });

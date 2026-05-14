@@ -260,6 +260,56 @@ test('submit text-only managed input starts run without waiting for sandbox boot
   assert.equal(startRunCall?.arguments[2]?.metadata?.managedSkillContext?.length, 1);
 });
 
+test('submit accepts empty content when managed mcp confirmation metadata is present', async () => {
+  mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  mock.method(userSkillService, 'listAvailableSkills', async () => []);
+  mock.method(userSkillService, 'resolveSelectionsForSession', async () => []);
+  const touchMock = mock.fn(async () => undefined);
+
+  const setupService = {
+    ensureSessionOwnership: mock.fn(async () => undefined),
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      reused: false,
+    })),
+  };
+  const runService = {
+    startRun: mock.fn(async (_sessionId: string, _userId: string, input: any) => ({
+      id: 'run-1',
+      sessionId: 'session-1',
+      status: 'queued',
+      input,
+    })),
+  };
+
+  const service = new AltusManagedInputService(setupService as any, runService as any, touchMock as any);
+  const result = await service.submit('user-1', {
+    sessionId: 'session-1',
+    content: '',
+    messageKey: 'msg-mcp-approve',
+    metadata: {
+      source: 'mcp_tool_confirmation_approved',
+      mcpToolConfirmation: {
+        action: 'approve',
+        connectorKey: 'google_super',
+        confirmationId: 'confirmation-1',
+        toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+        confirmationToken: 'token-1',
+      },
+    },
+  });
+
+  assert.equal(result.sessionId, 'session-1');
+  assert.equal(setupService.ensureSandbox.mock.callCount(), 0);
+  const startRunCall = runService.startRun.mock.calls[0];
+  assert.equal(startRunCall?.arguments[2]?.content, '');
+  assert.equal(
+    startRunCall?.arguments[2]?.metadata?.mcpToolConfirmation?.confirmationId,
+    'confirmation-1'
+  );
+});
+
 test('submit auto-attaches deployment orchestrator skill for deploy requests', async () => {
   mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
   mock.method(userSkillService, 'listAvailableSkills', async () => [

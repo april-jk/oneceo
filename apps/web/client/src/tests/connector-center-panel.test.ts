@@ -4,6 +4,7 @@ import {
   cleanupConnectorQuery,
   FIGMA_FIXED_CALLBACK_PATH,
   GITHUB_FIXED_CALLBACK_PATH,
+  GOOGLE_SUPER_FIXED_CALLBACK_PATH,
   normalizeEditableProfileId,
   resolveAuthorizedRepositoryLabel,
   resolveConnectorOauthCallbackContext,
@@ -26,6 +27,7 @@ describe("connector center panel profile id normalization", () => {
     expect(shouldUseConnectorLevelOauth("github")).toBe(true);
     expect(shouldUseConnectorLevelOauth("notion")).toBe(true);
     expect(shouldUseConnectorLevelOauth("figma")).toBe(true);
+    expect(shouldUseConnectorLevelOauth("google_super")).toBe(true);
     expect(shouldUseConnectorLevelOauth("slack")).toBe(true);
     expect(shouldUseConnectorLevelOauth("vercel")).toBe(true);
   });
@@ -35,6 +37,7 @@ describe("connector center panel profile id normalization", () => {
     expect(shouldUseUnifiedConnectorCard("slack")).toBe(true);
     expect(shouldUseUnifiedConnectorCard("notion")).toBe(true);
     expect(shouldUseUnifiedConnectorCard("figma")).toBe(true);
+    expect(shouldUseUnifiedConnectorCard("google_super")).toBe(true);
     expect(shouldUseUnifiedConnectorCard("vercel")).toBe(true);
     expect(shouldUseUnifiedConnectorCard("supabase")).toBe(true);
   });
@@ -53,6 +56,10 @@ describe("connector center panel profile id normalization", () => {
 
   it("uses the fixed Figma callback path", () => {
     expect(FIGMA_FIXED_CALLBACK_PATH).toBe("/figma/callback");
+  });
+
+  it("uses the fixed Google Super callback path", () => {
+    expect(GOOGLE_SUPER_FIXED_CALLBACK_PATH).toBe("/google-super/callback");
   });
 
   it("recognizes Slack fixed callback pages as connector OAuth callbacks", () => {
@@ -91,6 +98,15 @@ describe("connector center panel profile id normalization", () => {
     expect(callback.shouldHandle).toBe(true);
   });
 
+  it("recognizes Google Super fixed callback pages as connector OAuth callbacks", () => {
+    const params = new URLSearchParams("code=oauth-code&state=oauth-state");
+    const callback = resolveConnectorOauthCallbackContext("http://localhost/google-super/callback", params);
+
+    expect(callback.connector).toBe("google_super");
+    expect(callback.isFixedCallback).toBe(true);
+    expect(callback.shouldHandle).toBe(true);
+  });
+
   it("redirects Slack callback pages back to the target session after cleanup", () => {
     expect(
       cleanupConnectorQuery("/slack/callback", "?code=oauth-code&state=oauth-state", {
@@ -125,6 +141,14 @@ describe("connector center panel profile id normalization", () => {
         targetSessionId: "session-figma-1",
       })
     ).toBe("/session/session-figma-1");
+  });
+
+  it("redirects Google Super callback pages back to the target session after cleanup", () => {
+    expect(
+      cleanupConnectorQuery("/google-super/callback", "?code=oauth-code&state=oauth-state", {
+        targetSessionId: "session-google-1",
+      })
+    ).toBe("/session/session-google-1");
   });
 
   it("shows the selected GitHub repository name when profile config has repositories", () => {

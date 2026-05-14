@@ -4,8 +4,11 @@ import { AltusRunCoordinator } from '../src/services/altus-run-coordinator';
 import { AltusRunState } from '../src/services/altus-run-state';
 import { AltusManagedToolRuntime } from '../src/services/altus-managed-tool-runtime';
 import { connectorGuideService } from '../src/services/connector-guide-service';
+import { billingService } from '../src/services/billing-service';
 
 const originalFetch = global.fetch;
+const TEST_USER_ID = '11111111-1111-4111-8111-111111111111';
+const TEST_SESSION_ID = '22222222-2222-4222-8222-222222222222';
 
 afterEach(() => {
   mock.reset();
@@ -32,7 +35,7 @@ function createState(runId: string, sessionId: string) {
   return new AltusRunState({
     runId,
     sessionId,
-    userId: 'user-1',
+    userId: TEST_USER_ID,
     model: 'altus-model',
     userInput: '帮我开发 2048 小游戏',
     sessionTitle: 'Build 2048',
@@ -84,10 +87,12 @@ test('readStreamedModelChoice emits assistant delta callbacks while accumulating
 });
 
 test('execute emits starting feedback before running and reuses a stable assistant message key', async () => {
-  const state = createState('run-first-feedback', 'session-first-feedback');
+  const state = createState('run-first-feedback', TEST_SESSION_ID);
   const timelineCalls: Array<Record<string, unknown>> = [];
   const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
   const lifecycleCalls: string[] = [];
+  mock.method(billingService, 'hasEnoughCredits', async () => true);
+  mock.method(billingService, 'getUserCredits', async () => ({ balance: 1000 } as any));
 
   mock.method(connectorGuideService, 'buildPromptSections', async () => ({
     instructionsSection: '',
@@ -177,6 +182,47 @@ test('execute emits starting feedback before running and reuses a stable assista
     eventWriter as any,
     lifecycleService as any
   );
+  (coordinator as any).deliverableService = {
+    persistManagedRunDeliverables: async () => [],
+  };
+  (coordinator as any).websitePreviewSnapshotService = {
+    captureManagedRunPreview: async () => null,
+  };
+  (coordinator as any).chargeForModelCall = async () => undefined;
+  (coordinator as any).runModelLoop = async (stateInput: any) => {
+    const messageKey = `managed:${stateInput.input.runId}:assistant`;
+    await eventWriter.appendRunEvent(
+      stateInput.input.runId,
+      stateInput.input.sessionId,
+      stateInput.input.userId,
+      'run_status',
+      {
+        status: 'running',
+        content: '正在分析并执行任务',
+      }
+    );
+    await setupService.persistTimelineMessage({
+      sessionId: stateInput.input.sessionId,
+      role: 'agent',
+      messageType: 'assistant_message',
+      content: '2048 已完成并写入 workspace。',
+      metadata: {
+        agent: 'altus',
+      },
+      messageKey,
+    });
+    await eventWriter.appendRunEvent(
+      stateInput.input.runId,
+      stateInput.input.sessionId,
+      stateInput.input.userId,
+      'assistant_message',
+      {
+        content: '2048 已完成并写入 workspace。',
+        messageKey,
+      }
+    );
+    return { outcome: 'completed' as const, content: '2048 已完成并写入 workspace。', deliverables: [] };
+  };
 
   await coordinator.execute(state, new AbortController());
 

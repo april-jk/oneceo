@@ -13,6 +13,7 @@
     "altus-eval:init": "tsx scripts/altus-eval/init-run.ts",
     "altus-eval:finalize": "tsx scripts/altus-eval/finalize-run.ts",
     "test:deployment-main-chain:e2e": "tsx tests/e2e/deployment-main-chain.e2e.ts",
+    "test:deployment-matrix:e2e:local": "bash ./scripts/run-deployment-matrix-local.sh",
     "test:archive-flow": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:5432/oneceo_test?sslmode=disable} tsx --test tests/sandbox-activity.service.test.ts tests/sandbox-archive.service.test.ts tests/sandbox-archive-job.service.test.ts",
     "test:archive-flow:run": "bash ./scripts/run-archive-persistence-unit-tests.sh",
     "clean": "rm -rf dist",

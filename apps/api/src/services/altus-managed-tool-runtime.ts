@@ -1232,6 +1232,23 @@ export class AltusManagedToolRuntime {
           mcpTool.connectorKey
         );
         this.ensureNotAborted(signal);
+        const confirmationToken = asText(rawArgs.confirmationToken);
+        const confirmationAgentRunId = asText(rawArgs.confirmationAgentRunId);
+        if (
+          activeGuide &&
+          !this.loadedConnectorGuides.has(mcpTool.connectorKey) &&
+          confirmationToken
+        ) {
+          this.loadedConnectorGuides.add(mcpTool.connectorKey);
+          writeConnectorDebugLog('[CONNECTOR_GUIDE_RUNTIME_REPLAY_PRELOADED]', {
+            taskSessionId: this.input.sessionId,
+            connectorKey: mcpTool.connectorKey,
+            toolName: mcpTool.toolName,
+            managedToolName: toolName,
+            revisionId: activeGuide.revisionId,
+            replayMode: confirmationAgentRunId ? 'token_with_origin_run' : 'token_without_origin_run',
+          });
+        }
         if (activeGuide && !this.loadedConnectorGuides.has(mcpTool.connectorKey)) {
           writeConnectorDebugLog('[CONNECTOR_GUIDE_RUNTIME_BLOCKED]', {
             taskSessionId: this.input.sessionId,
@@ -1244,6 +1261,9 @@ export class AltusManagedToolRuntime {
             [
               `connector_guide_blocked:${mcpTool.connectorKey}`,
               `Call load_connector_guide with connectorKey=${mcpTool.connectorKey} before using ${mcpTool.displayName}.`,
+              mcpTool.toolName.includes('COMPOSIO_SEARCH_TOOLS')
+                ? 'Search is also a connector MCP tool. Load the connector guide first, then decide whether search is needed.'
+                : '',
               activeGuide.blockingRulesMarkdown || activeGuide.serverInstructionsMarkdown || activeGuide.guideReminderMarkdown,
             ]
               .filter(Boolean)
@@ -1360,10 +1380,9 @@ export class AltusManagedToolRuntime {
           ].join('\n')
         );
       }
-      if (
-        this.hasActiveSkill('deployment-orchestrator') &&
-        isLocalPreviewOrDevCommand(command)
-      ) {
+      const deploymentIntentActive =
+        this.hasActiveSkill('deployment-orchestrator') || this.input.taskIntentProfile?.deploymentAllowed === true;
+      if (deploymentIntentActive && isLocalPreviewOrDevCommand(command)) {
         throw new Error(
           'deployment_shell_preview_blocked:部署链路禁止使用本地 preview/dev 命令。请改用 deploy_application、redeploy_application 或 get_application_deployment_status，并依赖平台导出的标准 start/healthcheck 配置。'
         );

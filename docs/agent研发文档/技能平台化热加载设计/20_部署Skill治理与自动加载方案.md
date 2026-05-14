@@ -219,6 +219,44 @@ deployment skill 的资源建议固定出一个清晰骨架：
 
 ### Step 1：补齐治理元数据
 
+## 11. 回归补充约束
+
+部署 skill 的自动加载已经不是单纯的“输入识别”细节，而是部署主链的真实入口之一，因此后续回归必须覆盖聊天触发链路：
+
+1. 以普通会话消息发送“帮我部署当前项目”。
+2. 校验 runtime 最终走到 `deployment_orchestrator` 自动挂载链路，而不是只验证直接调用部署 API。
+3. 若部署面板进入 `public_settling`，但已经返回可探测的 `publicUrl` / `publicDomain` / provider URL，则回归脚本应继续执行公网探测与后续验证，不应仅因为状态仍在收敛中就提前超时失败。
+
+这样做的目的，是保证“部署 skill 自动挂载”与“部署结果对外可验证”两条链路一起被验证，而不是只测到半截。
+
+## 11.1 平台能力失败分流补充（2026-05-10）
+
+deployment skill 需要新增一条明确治理规则：
+
+1. 当部署工具返回 `repair.category=platform_capability` 时，表示失败点位于平台预检环境，而不是工作区源码
+2. 命中该类别后，deployment skill 不得继续引导 Altus 修改 `package.json`、`oneceo.manifest.json`、`vite.config.ts`、固定 healthcheck 壳或安装 Playwright 依赖
+3. deployment skill 只能汇报平台阻塞、等待平台能力恢复，或在恢复后重新触发部署工具
+
+这条规则的目的，是把“强模板策略”真正延伸到部署修复阶段，避免平台基础设施错误再次被误路由成工作区代码修复。
+
+## 11.2 风险确认后的部署意图继承（2026-05-10）
+
+deployment skill 自动加载还需要补一条运行时约束：
+
+1. 若上一条用户消息已经是显式部署动作
+2. 当前轮只是对 `deploy.production` / `deploy.preview` 风险确认问题的回答
+3. 用户回复是“确认”“确认继续”“继续”这类确认语句
+
+则 runtime 必须恢复上一条显式部署意图的 `deployRequested / deploymentAllowed / capabilityKind`，继续挂载 `deployment_orchestrator`。
+
+这条规则只适用于“有待回答的部署风险确认问题”场景，不适用于普通多轮闲聊。也就是说，系统仍然保留“模糊当前轮不能平白继承历史部署动作”的主规则，只是在风险确认闭环里允许继承。
+
+补充执行顺序约束：
+
+1. 这类“确认继续”判断必须在 clarification transition agent 之前命中
+2. 不能先交给 transition agent 再回退，否则 agent 可能把确认回复再次解释成 `request_risk_confirmation`
+3. 命中后即直接进入 `ready_to_execute`，不得重复弹出同一条生产部署确认问题
+
 在平台 skill 数据层或 service 聚合层补齐：
 
 1. `systemRole`

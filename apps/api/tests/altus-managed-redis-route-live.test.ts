@@ -16,7 +16,7 @@ import { altusRunRedisStateService } from '../src/services/altus-run-redis-state
 import { deriveTenantKeyForRedis, redisKeyspace } from '../src/services/redis-keyspace';
 
 process.env.ONECEO_REDIS_ENABLED = 'true';
-process.env.REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379/15';
+process.env.REDIS_URL = 'redis://127.0.0.1:6379/13';
 
 type TestServer = {
   origin: string;
@@ -51,14 +51,19 @@ const originalEnsureRecovered = recoveryAny.ensureSessionRecovered;
 const originalGetSessionFile = fileStoreAny.getSession;
 
 function buildIds(prefix: string) {
+  const normalized = prefix.padEnd(12, '1').slice(0, 12);
   return {
-    sessionId: `11111111-1111-4111-8111-${prefix.padEnd(12, '1').slice(0, 12)}`,
-    runId: `22222222-2222-4222-8222-${prefix.padEnd(12, '2').slice(0, 12)}`,
-    userId: 'owner-user',
+    sessionId: `11111111-1111-4111-8111-${normalized}`,
+    runId: `22222222-2222-4222-8222-${normalized}`,
+    userId: '33333333-3333-4333-8333-333333333333',
   };
 }
 
-function buildScope(sessionId: string, runId: string, userId = 'owner-user') {
+function buildScope(
+  sessionId: string,
+  runId: string,
+  userId = '33333333-3333-4333-8333-333333333333'
+) {
   return {
     sessionId,
     runId,
@@ -67,7 +72,7 @@ function buildScope(sessionId: string, runId: string, userId = 'owner-user') {
   };
 }
 
-function sessionRecord(sessionId: string, userId = 'owner-user') {
+function sessionRecord(sessionId: string, userId = '33333333-3333-4333-8333-333333333333') {
   return {
     id: sessionId,
     userId,
@@ -488,7 +493,7 @@ test('live route: GET /runs/:runId/stream rejects foreign authenticated user eve
     const response = await testFetch(
       `${server.origin}/api/altus-managed/runs/${ids.runId}/stream?userId=${ids.userId}`,
       {
-        headers: { 'x-test-user-id': 'other-user' },
+        headers: { 'x-test-user-id': '44444444-4444-4444-8444-444444444444' },
       }
     );
     assert.equal(response.status, 403);

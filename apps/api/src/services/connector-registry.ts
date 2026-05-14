@@ -7,6 +7,7 @@ import {
   type ConnectorOauthProvider,
   type RemoteMcpTransport,
 } from '../connectors/definitions';
+import { assertCustomApiEnabled } from './custom-api-feature-flag';
 export { CONNECTOR_KEYS, type ConnectorKey };
 
 export type ConnectorAuthMode = 'oauth' | 'token' | 'dsn' | 'none';
@@ -211,6 +212,7 @@ export class ConnectorRegistry {
     }
 
     if (connectorKey === 'custom_api') {
+      assertCustomApiEnabled();
       return {
         type: 'hosted',
         enabled: true,
@@ -295,6 +297,8 @@ export class ConnectorRegistry {
         return normalized.includes('supabase');
       case 'figma':
         return normalized.includes('figma');
+      case 'google_super':
+        return normalized.includes('google_super') || normalized.includes('google');
       case 'vercel':
         return normalized.includes('vercel');
       case 'postgres':

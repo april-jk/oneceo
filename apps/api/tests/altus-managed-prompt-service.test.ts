@@ -72,6 +72,20 @@ test('managed prompt explicitly skips pre-execution todo for simple tasks when t
   assert.match(prompt, /do not call `todowrite` just because the request sounds non-trivial/i);
 });
 
+test('runtime context uses stable current date instead of per-turn timestamp', () => {
+  const prompt = altusManagedPromptService.buildRuntimeContextPrompt({
+    sessionId: 'session-runtime-context-date',
+    sessionTitle: 'runtime date',
+    workspaceRoot: '/workspace/runtime-date',
+    connectors: [],
+    turnStatePrompt: '# Current turn state\n- latest_user_message_type: user_input',
+  });
+
+  assert.match(prompt, /# Runtime context/);
+  assert.match(prompt, /Current date: \d{4}-\d{2}-\d{2}/);
+  assert.doesNotMatch(prompt, /Current time:/);
+});
+
 test('managed prompt defaults debug and testing to Playwright on the same n.eko browser', () => {
   const prompt = altusManagedPromptService.buildSystemPrompt({
     sessionId: 'session-debug-tool-choice',
@@ -103,6 +117,30 @@ test('managed task intent requires todo workflow for explicit debug trigger', ()
 
   assert.equal(profile.todoRequired, true);
   assert.equal(profile.todoReason, 'debug_chain');
+});
+
+test('managed task intent requires blueprint todo for new deployable web app tasks', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '请在当前工作区用 Vite + React + Node Web Shell 固定模板直接实现一个可部署的企业官网源码，不要提问。页面包含 hero、服务介绍、案例、联系区；后端只保留 /api/system/health 和一个 contact 接口，不需要数据库、登录或外部集成。'
+  ]);
+
+  assert.equal(profile.mode, 'deployable_web_app');
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.todoRequired, true);
+  assert.equal(profile.todoReason, 'deployable_web_app_blueprint');
+});
+
+test('managed task intent keeps website source-only no-deploy requests on the web app path', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '请在当前工作区用 Vite + React + Node Web Shell 固定模板直接创建一个可部署的网站，不要提问，不要部署，只完成源码。页面主体必须显示 ONECEO_E2E_MARKER_test。',
+  ]);
+
+  assert.equal(profile.mode, 'deployable_web_app');
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.deploymentAllowed, false);
+  assert.equal(profile.explicitNoDeploy, true);
+  assert.equal(profile.todoRequired, true);
+  assert.equal(profile.todoReason, 'deployable_web_app_blueprint');
 });
 
 test('managed task intent profile carries a hard clarification gate for broad business-system requests', () => {
@@ -218,8 +256,62 @@ test('managed prompt requires deployment tools and auto-repair loop for publish 
 
   assert.match(prompt, /use the managed deployment tools instead of replying with plain text/i);
   assert.match(prompt, /use `deploy_application` for first publish or publishing the latest workspace changes/i);
+  assert.match(prompt, /If the workspace already contains the fixed OneCEO web shell, treat it as the canonical scaffold/i);
   assert.match(prompt, /returns `status=retryable_repair_required`, inspect `repair\.category` first/i);
   assert.match(prompt, /keep deployment debug details internal/i);
+});
+
+test('managed prompt fixes deployable web apps to the official vite-node shell', () => {
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-fixed-shell-test',
+    sessionTitle: 'fixed shell contract',
+    workspaceRoot: '/workspace/session-fixed-shell-test',
+    connectors: [],
+    taskIntentProfile: {
+      mode: 'deployable_web_app',
+      reason: 'latest_deployable_request',
+      recentUserMessages: ['帮我做一个企业官网'],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: true,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: true,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: true,
+      todoReason: 'deployable_web_app_blueprint',
+    },
+  });
+
+  assert.match(prompt, /ONECEO_FIXED_SHELL_ANCHOR/i);
+  assert.match(prompt, /ONECEO_WEBAPP_TODO_BLUEPRINT_ANCHOR/i);
+  assert.match(prompt, /ONECEO_WEBAPP_MACRO_REVIEW_ANCHOR/i);
+  assert.match(prompt, /keep todo updates sparse/i);
+  assert.match(prompt, /Do not call `todowrite` after every small file edit/i);
+  assert.match(prompt, /without an existing workspace stack to preserve, default to the fixed OneCEO web shell/i);
+  assert.match(prompt, /default stable delivery lane for new deployable websites, not as a global migration rule/i);
+  assert.match(prompt, /If the workspace already exists in another stack, or the user is debugging, repairing, or extending an existing project, preserve the existing stack/i);
+  assert.match(prompt, /root `client\/`, root `server\/`, optional root `shared\/`/i);
+  assert.match(prompt, /fixed Node web shell/i);
+  assert.match(prompt, /produce browser assets under `dist\/public` and a server entry at `dist\/index\.js`/i);
+  assert.match(prompt, /production start command should resolve to `node dist\/index\.js`/i);
+  assert.match(prompt, /do not introduce Express, Koa, Fastify/i);
+  assert.match(prompt, /homepage implementation, primary user-facing content, requested acceptance marker/i);
+  assert.match(prompt, /client\/src\/main\.\*` as the React mount file only/i);
+  assert.match(prompt, /Before the first code-editing step for a new deployable web app task, write a blueprint todo/i);
+  assert.match(prompt, /ONECEO_WEAK_WEBAPP_FAST_PATH_ANCHOR/i);
+  assert.match(prompt, /4-6 concrete items are usually enough/i);
+  assert.match(prompt, /Do not spend extra rounds on stack discovery, dependency installation, build\/start rewrites/i);
+  assert.match(prompt, /one focused implementation pass by editing `client\/src\/App\.jsx` and `client\/src\/styles\.css`/i);
+  assert.match(prompt, /must name the target path for each implementation item/i);
+  assert.match(prompt, /default the blueprint to a compact but complete site structure: hero, primary value or service section, proof\/case\/portfolio section, and CTA\/contact section/i);
+  assert.match(prompt, /bind that default structure to `client\/src\/App\.jsx` or `client\/src\/App\.tsx`/i);
+  assert.match(prompt, /run one macro self-check against the current todo/i);
+  assert.match(prompt, /Do not reread every file line-by-line/i);
+  assert.match(prompt, /creating a new deployable site from scratch, not as permission to switch the deployable runtime/i);
 });
 
 test('managed prompt fixes managed database engine to Railway Postgres', () => {
@@ -362,6 +454,35 @@ test('managed prompt builds minimal skill catalog index without full body', () =
   assert.doesNotMatch(prompt, /compatibility:\s*opencode/i);
 });
 
+test('managed prompt can suppress skill catalog dynamic block index when already provided elsewhere', () => {
+  const prompt = altusManagedPromptService.buildSkillCatalogPrompt(
+    [
+      {
+        sourceType: 'platform',
+        skillId: 'skill-1',
+        revisionId: 'rev-1',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: '按子任务编排准备 PPT 渲染指令草稿',
+        category: 'office',
+        revisionNumber: 3,
+        resourceSummary: {
+          totalCount: 1,
+          referenceCount: 1,
+          templateCount: 0,
+          paths: ['references/subtask-contracts.md'],
+        },
+      },
+    ],
+    { includeBlockIndex: false }
+  );
+
+  assert.match(prompt, /# Available skills catalog/);
+  assert.match(prompt, /ppt-workflow: 按子任务编排准备 PPT 渲染指令草稿/);
+  assert.doesNotMatch(prompt, /# Dynamic context blocks/);
+  assert.doesNotMatch(prompt, /id=skill-catalog:platform:skill-1:rev-1/);
+});
+
 test('managed prompt exposes ppt workflow as catalog-only pre-render skill', () => {
   const prompt = altusManagedPromptService.buildSkillCatalogPrompt([
     {
@@ -420,6 +541,36 @@ test('managed prompt shows active skill resource summary alongside full body', (
   assert.match(prompt, /id=skill:platform:skill-1:rev-1/);
   assert.match(prompt, /resources: 1 references, 1 templates/);
   assert.match(prompt, /# Skill Brief/);
+});
+
+test('managed prompt can suppress active skill block index when turn-level index already exists', () => {
+  const prompt = altusManagedPromptService.buildSkillContextPrompt(
+    [
+      {
+        sourceType: 'platform',
+        skillId: 'skill-1',
+        revisionId: 'rev-1',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: '按子任务编排准备 PPT 渲染指令草稿',
+        category: 'office',
+        renderedMarkdown: '# Skill Brief\n\nDo the work.',
+        revisionNumber: 3,
+        resourceSummary: {
+          totalCount: 2,
+          referenceCount: 1,
+          templateCount: 1,
+          paths: ['references/subtask-contracts.md', 'templates/render-instruction-draft.md'],
+        },
+      },
+    ],
+    { includeBlockIndex: false }
+  );
+
+  assert.match(prompt, /# Active skills/);
+  assert.match(prompt, /# Skill Brief/);
+  assert.doesNotMatch(prompt, /# Dynamic context blocks/);
+  assert.doesNotMatch(prompt, /id=skill:platform:skill-1:rev-1/);
 });
 
 test('managed prompt includes full ppt workflow instructions when skill is active', () => {
@@ -543,4 +694,25 @@ test('managed prompt labels attached connectors by runtime status instead of tre
   assert.match(prompt, /notion \| runtime_status=pending_recover \| tool_access=blocked_until_runtime_recovers/i);
   assert.match(prompt, /github \| runtime_status=connected \| tool_access=available/i);
   assert.match(prompt, /slack \| runtime_status=failed \| tool_access=blocked_attach_failed/i);
+});
+
+test('managed prompt requires connector guide loading before composio search', () => {
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-connector-guide-first-test',
+    sessionTitle: 'connector guide first',
+    workspaceRoot: '/workspace/session-connector-guide-first-test',
+    connectors: [],
+    connectorGuideSections: {
+      instructionsSection:
+        '# Connector MCP Instructions\n\n## notion\n- notion: Active connector guide exists. Before using any notion MCP tool, call load_connector_guide with connectorKey=notion.',
+      reminderSection:
+        '# Relevant Connector Guides\n\n## notion\n- notion: Full connector guide content is available only after load_connector_guide returns.',
+    },
+  });
+
+  assert.match(prompt, /load_connector_guide` is the first connector tool call/);
+  assert.match(prompt, /including `\*_COMPOSIO_SEARCH_TOOLS`/);
+  assert.match(prompt, /COMPOSIO_SEARCH_TOOLS` is optional connector discovery, not a fixed first step/);
+  assert.match(prompt, /Do not guess the search schema before loading the guide/);
+  assert.match(prompt, /except connector MCP tools must first satisfy `load_connector_guide` ordering/);
 });

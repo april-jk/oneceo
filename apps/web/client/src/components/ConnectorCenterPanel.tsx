@@ -78,11 +78,11 @@ export const NOTION_FIXED_CALLBACK_PATH = "/notion/callback";
 export const SUPABASE_FIXED_CALLBACK_PATH = "/supabase/callback";
 export const SLACK_FIXED_CALLBACK_PATH = "/slack/callback";
 export const FIGMA_FIXED_CALLBACK_PATH = "/figma/callback";
+export const GOOGLE_SUPER_FIXED_CALLBACK_PATH = "/google-super/callback";
 export const VERCEL_FIXED_CALLBACK_PATH = "/vercel/callback";
 const GITHUB_INSTALLATION_MISSING_PATTERN = /没有任何可用安装|未安装到任何账号|installation/i;
 const CONNECTOR_TABS: Array<{ key: ConnectorCenterTab; labelKey: string }> = [
   { key: "app", labelKey: "connectors.tabs.app" },
-  { key: "custom_api", labelKey: "connectors.tabs.customApi" },
   { key: "custom_mcp", labelKey: "connectors.tabs.customMcp" },
 ];
 
@@ -188,6 +188,7 @@ function isFixedConnectorCallbackPath(pathname: string) {
     pathname === SUPABASE_FIXED_CALLBACK_PATH ||
     pathname === SLACK_FIXED_CALLBACK_PATH ||
     pathname === FIGMA_FIXED_CALLBACK_PATH ||
+    pathname === GOOGLE_SUPER_FIXED_CALLBACK_PATH ||
     pathname === VERCEL_FIXED_CALLBACK_PATH
   );
 }
@@ -206,6 +207,8 @@ export function resolveConnectorOauthCallbackContext(location: string, params: U
         ? "slack"
         : currentPath === FIGMA_FIXED_CALLBACK_PATH
           ? "figma"
+        : currentPath === GOOGLE_SUPER_FIXED_CALLBACK_PATH
+          ? "google_super"
         : currentPath === VERCEL_FIXED_CALLBACK_PATH
           ? "vercel"
           : null;
@@ -336,28 +339,21 @@ function getDirectoryStatus(
 }
 
 function renderEmptyTab(tab: ConnectorCenterTab) {
-  const isApi = tab === "custom_api";
   return (
     <div className="flex h-full flex-col items-center justify-center px-6 py-16 text-center">
       <div className="rounded-2xl border border-border/70 bg-muted/30 px-4 py-2 text-sm text-muted-foreground">
         {i18n.t("connectors.comingSoon")}
       </div>
       <h4 className="mt-5 text-lg font-semibold text-foreground">
-        {isApi
-          ? i18n.t("connectors.empty.customApiReserved")
-          : i18n.t("connectors.empty.customMcpReserved")}
+        {i18n.t("connectors.empty.customMcpReserved")}
       </h4>
       <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
         {i18n.t("connectors.empty.intro")}
-        {isApi
-          ? i18n.t("connectors.empty.customApiDetail")
-          : i18n.t("connectors.empty.customMcpDetail")}
+        {i18n.t("connectors.empty.customMcpDetail")}
       </p>
       <Button disabled className="mt-6 rounded-xl">
         <Plus className="mr-2 h-4 w-4" />
-        {isApi
-          ? i18n.t("connectors.empty.createCustomApi")
-          : i18n.t("connectors.empty.createCustomMcp")}
+        {i18n.t("connectors.empty.createCustomMcp")}
       </Button>
     </div>
   );
@@ -373,6 +369,7 @@ export function shouldUseConnectorLevelOauth(connectorKey: ConnectorKey | null |
     connectorKey === "notion" ||
     connectorKey === "supabase" ||
     connectorKey === "figma" ||
+    connectorKey === "google_super" ||
     connectorKey === "slack" ||
     connectorKey === "vercel"
   );
@@ -528,7 +525,7 @@ export function ConnectorCenterPanel({
     const useConnectorLevelCallback = useConnectorLevelOauth;
     if (!callbackContext.shouldHandle) return;
     if (!state || !connector) return;
-    if (!code && connector !== "github" && connector !== "notion" && connector !== "slack" && connector !== "figma" && connector !== "supabase") return;
+    if (!code && connector !== "github" && connector !== "notion" && connector !== "slack" && connector !== "figma" && connector !== "google_super" && connector !== "supabase") return;
     if (!useConnectorLevelCallback && !profileId) return;
     if (callbackHandled.current) return;
     callbackHandled.current = true;
@@ -570,6 +567,10 @@ export function ConnectorCenterPanel({
               : connector === "figma"
                 ? {
                     callbackPath: FIGMA_FIXED_CALLBACK_PATH,
+                  }
+              : connector === "google_super"
+                ? {
+                    callbackPath: GOOGLE_SUPER_FIXED_CALLBACK_PATH,
                   }
               : connector === "vercel"
                 ? {
@@ -761,6 +762,7 @@ export function ConnectorCenterPanel({
       item.key !== "supabase" &&
       item.key !== "notion" &&
       item.key !== "figma" &&
+      item.key !== "google_super" &&
       item.key !== "vercel";
 
     if (requiresExplicitProfileName && !payload.profileName) {
@@ -854,7 +856,11 @@ export function ConnectorCenterPanel({
                     }
                   : detailItem.key === "figma"
                     ? {
-                        callbackPath: FIGMA_FIXED_CALLBACK_PATH,
+                      callbackPath: FIGMA_FIXED_CALLBACK_PATH,
+                    }
+                  : detailItem.key === "google_super"
+                    ? {
+                        callbackPath: GOOGLE_SUPER_FIXED_CALLBACK_PATH,
                       }
                   : detailItem.key === "vercel"
                     ? {
@@ -1043,6 +1049,7 @@ export function ConnectorCenterPanel({
         <button
           key={`${item.key}-${item.featured ? "featured" : "list"}`}
           type="button"
+          data-tour="connectors-directory-card"
           onClick={() => {
             setDetailKey(item.key);
             setActiveTab("app");
@@ -1524,7 +1531,7 @@ export function ConnectorCenterPanel({
     <div className="flex h-full flex-col overflow-hidden bg-transparent">
       <div className="border-b border-border/70 px-6 py-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2">
+          <div data-tour="connectors-tabs" className="flex items-center gap-2">
             {CONNECTOR_TABS.map((tab) => (
               <button
                 key={tab.key}
@@ -1545,7 +1552,7 @@ export function ConnectorCenterPanel({
               </button>
             ))}
           </div>
-          <div className="w-full sm:w-[220px]">
+          <div data-tour="connectors-search" className="w-full sm:w-[220px]">
             <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}

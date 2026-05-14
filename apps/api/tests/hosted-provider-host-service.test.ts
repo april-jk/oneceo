@@ -1,12 +1,23 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { afterEach, test } from 'node:test';
 import type { OsacMessage } from '../src/clients/osac-client';
 import { HostedProviderHostService } from '../src/services/hosted-provider-host-service';
+
+const originalCustomApiEnabled = process.env.ONECEO_CUSTOM_API_ENABLED;
+
+afterEach(() => {
+  if (originalCustomApiEnabled === undefined) {
+    delete process.env.ONECEO_CUSTOM_API_ENABLED;
+  } else {
+    process.env.ONECEO_CUSTOM_API_ENABLED = originalCustomApiEnabled;
+  }
+});
 
 function createHarness(input?: {
   binding?: Record<string, unknown> | null;
   session?: Record<string, unknown> | null;
   executeResult?: unknown;
+  customApiTools?: any[];
 }) {
   let handler: ((sessionId: string, message: OsacMessage) => void | Promise<void>) | null = null;
   const sent: Array<{ sessionId: string; message: OsacMessage }> = [];
@@ -50,6 +61,54 @@ function createHarness(input?: {
       async executeRpc(call) {
         calls.push(call);
         return input?.executeResult ?? { tools: [] };
+      },
+    },
+    composioService: {
+      async executeRpc(call) {
+        calls.push(call);
+        return input?.executeResult ?? { tools: [] };
+      },
+    },
+    userConnectorService: {
+      async getProfileMaterial() {
+        return {
+          profileId: 'profile-1',
+          connectorKey: 'github',
+          authStatus: 'authorized',
+          secret: null,
+          metadataJson: { provider: 'composio' },
+        };
+      },
+    },
+    connectorRegistry: {
+      getCatalogItem(connectorKey: string) {
+        return {
+          key: connectorKey,
+          name: connectorKey,
+          composio: { provider: 'composio' },
+        };
+      },
+    },
+    customApiService: {
+      async listToolsForSession() {
+        return input?.customApiTools || [];
+      },
+    },
+    customApiBroker: {
+      async executeCustomApiTool(call) {
+        calls.push(call);
+        return input?.executeResult ?? { content: [] };
+      },
+    },
+    customMcpClient: {
+      async initializeForProfile() {
+        return input?.executeResult ?? null;
+      },
+      async listToolsForProfile() {
+        return { tools: input?.customApiTools || [] };
+      },
+      async callToolForProfile() {
+        return input?.executeResult ?? { content: [] };
       },
     },
   });
@@ -96,6 +155,40 @@ test('hosted provider host routes vercel backend rpc requests and responds with 
       profileId: 'profile-1',
     },
   });
+});
+
+test('hosted provider host rejects custom api rpc while feature flag is disabled', async () => {
+  delete process.env.ONECEO_CUSTOM_API_ENABLED;
+  const harness = createHarness({
+    customApiTools: [
+      {
+        name: 'custom_api__crm__get_customer',
+        metadata: { endpointToolId: 'tool-1' },
+      },
+    ],
+  });
+
+  await harness.handler('orchestrator-1', {
+    type: 'BACKEND_MCP_RPC_REQUEST',
+    requestId: 'backend_mcp_rpc_custom_api_1',
+    payload: {
+      sessionId: 'orchestrator-1',
+      taskSessionId: 'task-1',
+      providerId: 'provider-1',
+      connectorKey: 'custom_api',
+      backendProvider: 'custom_api',
+      method: 'tools/list',
+      params: {},
+    },
+  });
+
+  assert.equal(harness.calls.length, 0);
+  assert.equal(harness.sent.length, 1);
+  assert.equal(harness.sent[0].message.payload?.isError, true);
+  assert.match(
+    String((harness.sent[0].message.payload?.error as Record<string, unknown>)?.message || ''),
+    /custom_api_disabled/
+  );
 });
 
 test('hosted provider host rejects mismatched vercel provider binding', async () => {

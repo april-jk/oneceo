@@ -275,6 +275,7 @@ export type AltusManagedTaskIntentProfile = {
     | 'multi_target'
     | 'debug_chain'
     | 'integration_chain'
+    | 'deployable_web_app_blueprint'
     | 'explicit_user_request'
     | 'none';
 };
@@ -309,18 +310,12 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
   let mode: AltusManagedTaskIntentProfile['mode'] = 'neutral';
   let reason: AltusManagedTaskIntentProfile['reason'] = 'unknown';
 
-  if (latestExplicitNoDeploy) {
-    mode = 'non_deployable_artifact';
-    reason = 'latest_explicit_no_deploy';
-  } else if (latestExplicitNoWeb) {
+  if (latestExplicitNoWeb) {
     mode = 'non_deployable_artifact';
     reason = 'latest_explicit_no_web';
   } else if (latestWebArtifact || latestDeployRequest) {
     mode = 'deployable_web_app';
     reason = 'latest_deployable_request';
-  } else if (explicitNoDeploy) {
-    mode = 'non_deployable_artifact';
-    reason = 'historical_explicit_no_deploy';
   } else if (explicitNoWeb) {
     mode = 'non_deployable_artifact';
     reason = 'historical_explicit_no_web';
@@ -330,7 +325,22 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
   } else if (scriptArtifactRequested || emailTemplateRequested) {
     mode = 'non_deployable_artifact';
     reason = 'script_or_template_artifact';
+  } else if (latestExplicitNoDeploy) {
+    mode = 'non_deployable_artifact';
+    reason = 'latest_explicit_no_deploy';
+  } else if (explicitNoDeploy) {
+    mode = 'non_deployable_artifact';
+    reason = 'historical_explicit_no_deploy';
   }
+
+  const needsClarification =
+    intentShape.needsClarification || intentShape.candidateClarificationType !== 'none';
+  const deployableWebAppBlueprintRequired =
+    mode === 'deployable_web_app' &&
+    !needsClarification &&
+    !explicitNoWeb &&
+    !scriptArtifactRequested &&
+    !emailTemplateRequested;
 
   return {
     mode,
@@ -344,8 +354,7 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
     scriptArtifactRequested,
     emailTemplateRequested,
     deploymentAllowed,
-    needsClarification:
-      intentShape.needsClarification || intentShape.candidateClarificationType !== 'none',
+    needsClarification,
     clarificationQuestion:
       intentShape.clarificationQuestion || intentShape.candidateClarificationQuestion,
     clarificationType: intentShape.candidateClarificationType,
@@ -357,9 +366,12 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
       intentShape.candidateTodoSignals.explicitTodoRequest ||
       intentShape.candidateTodoSignals.hasMultipleSubtasks ||
       intentShape.candidateTodoSignals.hasDebugChain ||
-      intentShape.candidateTodoSignals.hasIntegrationChain,
+      intentShape.candidateTodoSignals.hasIntegrationChain ||
+      deployableWebAppBlueprintRequired,
     todoReason: intentShape.candidateTodoSignals.explicitTodoRequest
       ? 'explicit_user_request'
+      : deployableWebAppBlueprintRequired
+        ? 'deployable_web_app_blueprint'
       : intentShape.candidateTodoSignals.hasMultipleSubtasks
         ? 'multi_step'
         : intentShape.candidateTodoSignals.hasDebugChain
@@ -512,7 +524,7 @@ export class AltusManagedPromptService {
             '- Use `redeploy_application` when the user wants the latest code changes published again.',
             '- Use `rollback_application_deployment` only when the user explicitly asks to rollback or revert the deployment.',
             '- Use `get_application_deployment_status` when the user asks for deployment progress, current URL, or deployment health.',
-            '- If `deploy_application`, `redeploy_application`, or `get_application_deployment_status` returns `status=retryable_repair_required`, inspect `repair.category` first. For `template_compliance`, `deployment_configuration`, or `workspace_missing`, repair the workspace baseline with file/code tools and then call the deployment tool again. For `deployment_failed`, read deployment status/log evidence and repair runtime/start/healthcheck/entry configuration before redeploying. For `resource_binding`, do not keep editing workspace files; continue with deployment/status tools until the platform resource binding is repaired or a clear blocker is surfaced. For `deployment_pending`, do not edit workspace files; keep calling `get_application_deployment_status` until the deployment becomes ready or the public-settling window clearly times out.',
+            '- If `deploy_application`, `redeploy_application`, or `get_application_deployment_status` returns `status=retryable_repair_required`, inspect `repair.category` first. For `template_compliance`, `deployment_configuration`, or `workspace_missing`, repair the workspace baseline with file/code tools and then call the deployment tool again. For `local_preflight`, only repair confirmed workspace build/start/healthcheck/page errors; do not switch runtime families, do not rewrite fixed-shell contract files, and do not install Playwright into the user project. For `platform_capability`, do not edit workspace files at all: treat it as a sandbox/platform blocker, report the blocked phase, and wait for the platform capability to be restored before retrying deployment. For `deployment_failed`, read deployment status/log evidence and repair runtime/start/healthcheck/entry configuration before redeploying. For `resource_binding`, do not keep editing workspace files; continue with deployment/status tools until the platform resource binding is repaired or a clear blocker is surfaced. For `deployment_pending`, do not edit workspace files; keep calling `get_application_deployment_status` until the deployment becomes ready or the public-settling window clearly times out.',
             '- `debug_open_page` only proves a local debug preview is reachable. It never proves that the managed public deployment succeeded.',
             '- For deploy/redeploy/rollback requests, do not call `complete_task` until deployment is actually ready online. Treat `bindingState=ready` plus a non-transient deployment status as the success condition. If the deployment tool reports `deployment_pending`, keep polling with `get_application_deployment_status`. If deployment is still failing, continue repairing or clearly report that the online deployment is not complete yet.',
             '- Keep deployment debug details internal. In user-facing replies, summarize only the current phase, whether auto-repair is happening, and the final result.',
@@ -587,19 +599,43 @@ export class AltusManagedPromptService {
     const todoGateSection =
       includeRuntimeState && taskIntentProfile && !taskIntentProfile.needsClarification
         ? taskIntentProfile.todoRequired
-          ? [
-              '# Todo gate',
-              `- The current request requires a pre-execution todo snapshot (reason=${taskIntentProfile.todoReason}).`,
-              '- Call `todowrite` before the first execution step, then update it after each major step.',
-              '- While work is ongoing, `todowrite` must contain exactly one `in_progress` item.',
-              '',
-            ].join('\n')
+          ? taskIntentProfile.todoReason === 'deployable_web_app_blueprint'
+            ? [
+                '# Todo gate',
+                `- The current request requires a pre-execution todo snapshot (reason=${taskIntentProfile.todoReason}).`,
+                '- Call `todowrite` before the first execution step.',
+                '- For fixed-shell source-only web app delivery, keep todo updates sparse: one initial blueprint, one update after the focused implementation pass, and one final completed snapshot before `complete_task` are enough unless a real blocker appears.',
+                '- Do not call `todowrite` after every small file edit, visual tweak, or read-only check.',
+                '- While work is ongoing, `todowrite` must contain exactly one `in_progress` item.',
+                '',
+              ].join('\n')
+            : [
+                '# Todo gate',
+                `- The current request requires a pre-execution todo snapshot (reason=${taskIntentProfile.todoReason}).`,
+                '- Call `todowrite` before the first execution step, then update it after each major step.',
+                '- While work is ongoing, `todowrite` must contain exactly one `in_progress` item.',
+                '',
+              ].join('\n')
           : [
               '# Simple-task gate',
               '- The current request does not require a pre-execution todo snapshot.',
               '- Do not call `todowrite` just because the request sounds non-trivial; execute directly with the minimum correct tool path.',
               '',
             ].join('\n')
+        : '';
+    const webAppFastPathSection =
+      includeRuntimeState &&
+      taskIntentProfile?.mode === 'deployable_web_app' &&
+      !taskIntentProfile.needsClarification
+        ? [
+            '# OneCEO weak web app fast path',
+            '- [ONECEO_WEAK_WEBAPP_FAST_PATH_ANCHOR] If the user broadly asks to generate a website, landing page, studio site, restaurant site, portfolio, or company homepage without custom backend/integration requirements, use the shortest fixed-shell delivery path.',
+            '- Keep the blueprint todo finite and proportional. For a weakly specified marketing website, 4-6 concrete items are usually enough: page content in `client/src/App.jsx`, visual system in `client/src/styles.css`, one optional lightweight interaction if useful, acceptance marker, macro self-check, and completion.',
+            '- Do not spend extra rounds on stack discovery, dependency installation, build/start rewrites, local preview servers, browser automation, or repeated read-only file probes when the fixed shell is already materialized and the user only asked for source code.',
+            '- Fill the requested site in one focused implementation pass by editing `client/src/App.jsx` and `client/src/styles.css`. Leave `server/index.ts`, `package.json`, `vite.config.ts`, and `oneceo.manifest.json` unchanged unless the user explicitly needs backend behavior.',
+            '- After writing the files, perform one macro self-check against the todo and call `complete_task`. Do not keep polishing optional copy, alternate layouts, or unused files after the requested site structure and marker exist.',
+            '',
+          ].join('\n')
         : '';
 
     return [
@@ -652,9 +688,12 @@ export class AltusManagedPromptService {
       '- If the user says they reconnected, reauthorized, or wants to retry a connector action, you must call the connector tool again in the current run before concluding it still fails.',
       '- Do not ask the user to manually create a GitHub repository or do other fallback steps unless the current run has produced a fresh connector/tool failure for that exact action.',
       '- Treat any connector failure that predates `last_authorized_at` as stale. If a connector shows a recent `last_authorized_at`, retry the real tool first and only trust the new result.',
-      '- If `# Connector MCP Instructions` or `# Relevant Connector Guides` shows an active connector guide, call `load_connector_guide` for that connector before the first MCP tool call for that connector in the current run.',
+      '- For connector MCP usage, `load_connector_guide` is the first connector tool call. Do not call any connector MCP tool, including `*_COMPOSIO_SEARCH_TOOLS`, before loading that connector guide in the current run.',
+      '- After `load_connector_guide` returns, read the guide result and choose the narrowest next step.',
+      '- `COMPOSIO_SEARCH_TOOLS` is optional connector discovery, not a fixed first step. Use it only when the loaded guide indicates search is needed to discover the action/tool slug or when the requested action is not already clear from the guide/context.',
+      '- If connector search is needed, build its arguments from the loaded guide. Do not guess the search schema before loading the guide.',
       '- If a connector MCP tool is blocked because the guide was not loaded yet, immediately call `load_connector_guide`, read the returned rules, then retry the connector MCP tool.',
-      '- Prefer read/search tools before editing or making assumptions.',
+      '- Prefer read/search tools before editing or making assumptions, except connector MCP tools must first satisfy `load_connector_guide` ordering.',
       '- Keep edits minimal and directly tied to the user request.',
       '- For complex tasks, use your todo as the execution contract: complete one step, validate it, then move to the next step.',
       '- For complex tasks, re-check the todo after each major tool result and update your next step accordingly instead of improvising a large unverified jump.',
@@ -701,13 +740,33 @@ export class AltusManagedPromptService {
       clarificationFocusSection,
       clarificationTransitionSection,
       todoGateSection,
+      webAppFastPathSection,
       '# OneCEO web app contract',
+      '- [ONECEO_FIXED_SHELL_ANCHOR] The fixed OneCEO web shell is the deployment contract. Do not replace its runtime family, start command, or directory ownership during ordinary website generation.',
       '- When the user asks for a website, web app, dashboard, admin panel, SaaS UI, landing page with working product flow, or other deployable browser product, you must build it as a OneCEO deployable web app instead of an ad-hoc static artifact.',
       '- For deployable web app tasks, you must produce a root `package.json` with working `build` and `start` scripts.',
       '- For deployable web app tasks, you must ensure a root `oneceo.manifest.json` exists before you finish.',
       '- The manifest must include: `templateVersion`, `appType`, `stack`, `build.command`, `build.outputDir`, `start.command`, `start.portEnv`, `healthcheck.path`, `features`, and `runtime`.',
       '- For deployable web app tasks, default `appType` to `web_app`, `templateVersion` to `1.0.0`, and `start.portEnv` to `PORT`.',
-      '- Prefer a Vite-based frontend and a simple Node/Express-compatible server boundary unless the existing workspace already dictates another web stack.',
+      '- For new deployable web app tasks without an existing workspace stack to preserve, default to the fixed OneCEO web shell instead of inventing a new runtime family: root `client/`, root `server/`, optional root `shared/`, root `package.json`, root `oneceo.manifest.json`.',
+      '- If the workspace already contains the fixed OneCEO web shell, treat it as the canonical scaffold. Extend and replace content inside it instead of rebuilding the shell from scratch.',
+      '- Treat the fixed OneCEO web shell as the default stable delivery lane for new deployable websites, not as a global migration rule for every task.',
+      '- If the workspace already exists in another stack, or the user is debugging, repairing, or extending an existing project, preserve the existing stack unless the user explicitly asks for a template migration.',
+      '- For the fixed OneCEO web shell, frontend build should be Vite-based, and the production runtime should stay on the fixed Node web shell.',
+      '- For the fixed OneCEO web shell, make the build pipeline produce browser assets under `dist/public` and a server entry at `dist/index.js`.',
+      '- For the fixed OneCEO web shell, the production start command should resolve to `node dist/index.js`. Do not end a new deployable web app task with `vite preview`, `php -S`, `python ...`, `java -jar`, or any other ad-hoc production runtime.',
+      '- For the fixed OneCEO web shell, do not introduce Express, Koa, Fastify, or other extra server frameworks unless the workspace already depends on them for an explicit repair task. The default shell must remain a self-contained Node web server.',
+      '- For the fixed OneCEO web shell, keep runtime ownership stable: browser UI and styling belong under `client/`; server routes and HTTP handling belong under `server/`; shared constants/types belong under `shared/`.',
+      '- For the fixed OneCEO web shell, the homepage implementation, primary user-facing content, requested acceptance marker, hero, main sections, and interactive browser UI must live in `client/src/App.jsx` or `client/src/App.tsx`. Keep `client/src/main.*` as the React mount file only.',
+      '- For React files in the fixed OneCEO web shell, avoid unresolved browser globals: if code uses `React.useState`, `React.useEffect`, `React.Fragment`, or any other `React.*` namespace, explicitly import React in that file. Prefer named imports such as `import { useState } from "react"` when only hooks are needed.',
+      '- [ONECEO_WEBAPP_TODO_BLUEPRINT_ANCHOR] Before the first code-editing step for a new deployable web app task, write a blueprint todo with `todowrite`.',
+      '- The deployable-web-app blueprint todo must scale with task size: include every major frontend, backend, integration, verification, and completion workstream, but do not pad it with arbitrary filler items.',
+      '- The deployable-web-app blueprint todo must name the target path for each implementation item, such as `client/src/App.jsx`, `client/src/styles.css`, `server/index.ts`, or a concrete file under `shared/`.',
+      '- The deployable-web-app blueprint todo must distinguish user-facing modules from contract files. Treat `package.json`, `oneceo.manifest.json`, and `vite.config.ts` as contract files that should stay stable unless the task is an explicit repair.',
+      '- If the request is a weakly specified website or landing page, default the blueprint to a compact but complete site structure: hero, primary value or service section, proof/case/portfolio section, and CTA/contact section. Only add more sections when the request clearly needs them.',
+      '- In weakly specified website tasks, bind that default structure to `client/src/App.jsx` or `client/src/App.tsx`, and put the visual system in `client/src/styles.css`.',
+      '- If the request clearly needs both frontend and backend behavior, the blueprint todo must cover both `client/` work and `server/` work before implementation starts.',
+      '- Treat user requests such as “use Java”, “use PHP”, or “use Python” for a website as content or implementation-style hints when you are creating a new deployable site from scratch, not as permission to switch the deployable runtime. If the workspace already exists in that stack and you are explicitly modifying it, preserve the existing runtime.',
       "- For Express/EJS projects, do not use `layout('...')` or a layout file with `<%- body %>` unless `express-ejs-layouts` or `ejs-mate` is installed and wired in the server. Otherwise use ordinary partial includes for head/header/footer.",
       '- For PHP sites that run with `php -S`, if you do not implement a dedicated JSON health endpoint, set `healthcheck.path` to `/` and make sure the homepage returns HTTP 200. Do not point PHP static-style sites at `/api/system/health` unless that route really exists.',
       '- If the app uses database persistence, default to Railway Postgres with `pg` or `drizzle-orm`; do not introduce MySQL by default.',
@@ -715,6 +774,8 @@ export class AltusManagedPromptService {
       '- If you touch the frontend entry for a deployable web app, keep a stable hook for platform analytics injection. Do not hard-code tracker host, websiteId, or vendor-specific script tags.',
       '- For deployable web app tasks, include a healthcheck route path in `oneceo.manifest.json`. Prefer `/api/system/health` when you own the server route design.',
       '- Do not finish a deployable web app task while required deployment files are missing. Before completion, verify at least: `package.json`, `oneceo.manifest.json`, and the primary app entry files exist.',
+      '- [ONECEO_WEBAPP_MACRO_REVIEW_ANCHOR] Before `complete_task`, run one macro self-check against the current todo: confirm the promised paths exist, the fixed shell contract still holds, the major requested modules are present, and no unexpected runtime or start-script drift was introduced.',
+      '- The macro self-check should stay high level. Do not reread every file line-by-line just to restate the todo; use one concise consistency pass before completion.',
       deploymentToolSection,
       resourceToolSection,
       '',
@@ -780,7 +841,7 @@ export class AltusManagedPromptService {
     turnStatePrompt?: string | null;
   }) {
     const title = asText(input.sessionTitle) || '未命名会话';
-    const now = new Date().toISOString();
+    const currentDate = new Date().toISOString().slice(0, 10);
     const profile = input.taskIntentProfile;
     const lines = [
       '# Runtime context',
@@ -791,7 +852,7 @@ export class AltusManagedPromptService {
       `- Session ID: ${input.sessionId}`,
       `- Session title: ${title}`,
       `- Sandbox workspace root: ${input.workspaceRoot}`,
-      `- Current time: ${now}`,
+      `- Current date: ${currentDate}`,
       '',
       '# Session connectors',
       formatConnectors(input.connectors),
@@ -871,14 +932,22 @@ export class AltusManagedPromptService {
     return lines.join('\n');
   }
 
-  buildSkillContextPrompt(skills: ManagedSkillContext[]) {
+  buildSkillContextPrompt(
+    skills: ManagedSkillContext[],
+    options: {
+      includeBlockIndex?: boolean;
+    } = {}
+  ) {
     if (!Array.isArray(skills) || skills.length === 0) {
       return '';
     }
     const hasPptWorkflow = skills.some((skill) => skill.slug === 'ppt-workflow');
-    const blockIndex = altusManagedDynamicContextBlockService.renderBlockIndex(
-      altusManagedDynamicContextBlockService.buildSkillBlocks({ activeSkills: skills })
-    );
+    const includeBlockIndex = options.includeBlockIndex !== false;
+    const blockIndex = includeBlockIndex
+      ? altusManagedDynamicContextBlockService.renderBlockIndex(
+          altusManagedDynamicContextBlockService.buildSkillBlocks({ activeSkills: skills })
+        )
+      : '';
 
     return [
       '# Active skills',
@@ -891,8 +960,7 @@ export class AltusManagedPromptService {
         ? '- For PPTX delivery, finish the ppt-workflow planning and preflight first, then call `render_pptx_from_instructions` with the final `PptRenderInstruction`; include the returned `.pptx` path in `complete_task.attachments`. Do not create PPTX through python-pptx, shell scripts, or manual office-generation code while ppt-workflow is active.'
         : '',
       '',
-      blockIndex,
-      '',
+      ...(includeBlockIndex ? [blockIndex, ''] : []),
       ...this.formatSkillSections(skills),
     ].filter(Boolean).join('\n');
   }
@@ -920,13 +988,21 @@ export class AltusManagedPromptService {
     ].join('\n');
   }
 
-  buildSkillCatalogPrompt(skills: ManagedSkillCatalogEntry[]) {
+  buildSkillCatalogPrompt(
+    skills: ManagedSkillCatalogEntry[],
+    options: {
+      includeBlockIndex?: boolean;
+    } = {}
+  ) {
     if (!Array.isArray(skills) || skills.length === 0) {
       return '';
     }
-    const blockIndex = altusManagedDynamicContextBlockService.renderBlockIndex(
-      altusManagedDynamicContextBlockService.buildSkillBlocks({ catalog: skills })
-    );
+    const includeBlockIndex = options.includeBlockIndex !== false;
+    const blockIndex = includeBlockIndex
+      ? altusManagedDynamicContextBlockService.renderBlockIndex(
+          altusManagedDynamicContextBlockService.buildSkillBlocks({ catalog: skills })
+        )
+      : '';
 
     const lines = skills.map((skill) => {
       const resourceSummary = skill.resourceSummary;
@@ -944,8 +1020,7 @@ export class AltusManagedPromptService {
       '- If the user explicitly selected a skill, its full body appears in the Active skills section.',
       '- If an active skill lists extra resources and you need one, call `load_skill_resource` with the raw active `skillId`, raw `revisionId`, and `resourcePath`; do not copy display ids such as `id=skill:platform:...`.',
       '- Catalog entries are diagnostic/index context only; do not treat them as loaded skill bodies.',
-      '',
-      blockIndex,
+      ...(includeBlockIndex ? ['', blockIndex] : []),
       '',
       ...lines,
     ].join('\n');

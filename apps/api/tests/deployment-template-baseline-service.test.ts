@@ -67,6 +67,108 @@ test('deployment template baseline marks manifest generation and platform analyt
   }
 });
 
+test('template compliance detects the official fixed vite-node shell contract', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-official-template-test-'));
+  try {
+    await mkdir(join(workspace, 'client', 'src'), { recursive: true });
+    await mkdir(join(workspace, 'server'), { recursive: true });
+    await mkdir(join(workspace, 'shared'), { recursive: true });
+    await writeFile(
+      join(workspace, 'package.json'),
+      JSON.stringify({
+        name: 'oneceo-official-shell',
+        scripts: {
+          build: 'vite build && esbuild server/index.ts --platform=node --bundle --outfile=dist/index.js',
+          start: 'node dist/index.js',
+        },
+        dependencies: {
+          react: '^19.0.0',
+          'react-dom': '^19.0.0',
+        },
+        devDependencies: {
+          esbuild: '^0.25.0',
+          vite: '^7.0.0',
+        },
+      }),
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'client/index.html'),
+      '<!doctype html><html><body><!-- ONECEO_ANALYTICS:START --><div id="root"></div></body></html>',
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'server/index.ts'),
+      "app.get('/api/system/health', (_req, res) => res.json({ ok: true }));\n",
+      'utf-8'
+    );
+
+    const compliance = await ensureTemplateCompliance(workspace);
+
+    assert.equal(compliance.ok, true);
+    assert.equal(compliance.manifest.stack, 'oneceo_fixed_vite_node_shell');
+    assert.equal(compliance.manifest.start.command, 'node dist/index.js');
+    assert.equal(compliance.manifest.build.outputDir, 'dist/public');
+    assert.equal(compliance.checks.officialTemplateDetected, true);
+    assert.match(compliance.warnings.join(' | '), /官方固定模板壳/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('deployment source normalization can adapt a generic frontend project into the official fixed shell', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-official-shell-adapt-test-'));
+  try {
+    await mkdir(join(workspace, 'src'), { recursive: true });
+    await mkdir(join(workspace, 'public'), { recursive: true });
+    await writeFile(
+      join(workspace, 'package.json'),
+      JSON.stringify({
+        name: 'generic-frontend-app',
+        scripts: {
+          build: 'vite build',
+          start: 'vite preview',
+        },
+        dependencies: {
+          react: '^19.0.0',
+          'react-dom': '^19.0.0',
+        },
+        devDependencies: {
+          vite: '^7.0.0',
+        },
+      }),
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'public/index.html'),
+      '<!doctype html><html><body><div id="root"></div></body></html>',
+      'utf-8'
+    );
+    await writeFile(join(workspace, 'src/main.jsx'), 'console.log("app");\n', 'utf-8');
+
+    const normalization = await normalizeDeploymentSourceDirectoryForPublish(workspace);
+    const compliance = await ensureTemplateCompliance(workspace);
+    const packageJson = JSON.parse(await readFile(join(workspace, 'package.json'), 'utf-8'));
+    const manifest = JSON.parse(await readFile(join(workspace, 'oneceo.manifest.json'), 'utf-8'));
+    const viteConfig = await readFile(join(workspace, 'vite.config.ts'), 'utf-8');
+    const serverSource = await readFile(join(workspace, 'server/index.ts'), 'utf-8');
+
+    assert.equal(normalization.adaptedOfficialFrontendShell, true);
+    assert.equal(packageJson.scripts.start, 'node dist/index.js');
+    assert.match(packageJson.scripts.build, /esbuild server\/index\.ts/);
+    assert.equal(packageJson.dependencies?.express, undefined);
+    assert.equal(manifest.stack, 'oneceo_fixed_vite_node_shell');
+    assert.equal(manifest.build.command, 'npm run build');
+    assert.equal(compliance.checks.officialTemplateDetected, true);
+    assert.match(viteConfig, /root: path\.resolve\(__dirname, 'client'\)/);
+    assert.match(viteConfig, /dist\/public/);
+    assert.match(serverSource, /oneceo-official-web-shell/);
+    assert.match(serverSource, /node:http/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('deployment template baseline does not auto-declare railway_postgres from pg dependency alone', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-pg-infer-test-'));
   try {
@@ -702,7 +804,7 @@ test('deployment template baseline injects analytics into spring boot resource t
   }
 });
 
-test('deployment source normalization converts vite-style frontend into dist-serving deployment baseline', async () => {
+test('deployment source normalization converts vite-style frontend into the official fixed shell', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-built-frontend-test-'));
   try {
     await mkdir(join(workspace, 'src'), { recursive: true });
@@ -731,31 +833,92 @@ test('deployment source normalization converts vite-style frontend into dist-ser
       'utf-8'
     );
     await writeFile(join(workspace, 'src/main.jsx'), 'console.log("hello");\n', 'utf-8');
+    await writeFile(
+      join(workspace, 'src/App.jsx'),
+      'export default function App() { return <button onClick={() => React.useState(0)}>Hello</button>; }\n',
+      'utf-8'
+    );
 
     const normalization = await normalizeDeploymentSourceDirectoryForPublish(workspace);
     const bootstrap = await ensureDeploymentTemplateBootstrap(workspace);
     const compliance = await ensureTemplateCompliance(workspace);
-    const serverSource = await readFile(join(workspace, 'server.cjs'), 'utf-8');
+    const serverSource = await readFile(join(workspace, 'server', 'index.ts'), 'utf-8');
+    const viteConfigSource = await readFile(join(workspace, 'vite.config.ts'), 'utf-8');
+    const appSource = await readFile(join(workspace, 'client', 'src', 'App.jsx'), 'utf-8');
     const packageJson = JSON.parse(await readFile(join(workspace, 'package.json'), 'utf-8'));
 
-    assert.equal(normalization.injectedBuiltFrontendBaseline, true);
+    assert.equal(normalization.adaptedOfficialFrontendShell, true);
+    assert.equal(normalization.injectedBuiltFrontendBaseline, false);
     assert.equal(normalization.injectedStaticBaseline, false);
     assert.equal(normalization.injectedNodeScriptBaseline, false);
-    assert.equal(packageJson.scripts.start, 'node server.cjs');
-    assert.match(serverSource, /rootDir = path\.join\(__dirname, 'dist'\)/);
-    assert.match(serverSource, /ONECEO_ANALYTICS:START/);
-    assert.match(serverSource, /data-oneceo-analytics/);
+    assert.equal(packageJson.scripts.start, 'node dist/index.js');
+    assert.match(serverSource, /oneceo-official-web-shell/);
+    assert.match(serverSource, /node:http/);
+    assert.match(serverSource, /VITE_ANALYTICS_WEBSITE_ID/);
+    assert.match(serverSource, /injectRuntimeAnalytics/);
+    assert.match(viteConfigSource, /'@shared': path\.resolve\(__dirname, 'shared'\)/);
+    assert.doesNotMatch(viteConfigSource, /jsxInject/);
+    assert.match(appSource, /^import \* as React from 'react';/);
     assert.equal(compliance.ok, true);
-    assert.equal(compliance.manifest.start.command, 'node server.cjs');
-    assert.equal(compliance.manifest.build.outputDir, 'dist');
+    assert.equal(compliance.manifest.start.command, 'node dist/index.js');
+    assert.equal(compliance.manifest.build.outputDir, 'dist/public');
     assert.equal(bootstrap.analyticsInjected, true);
-    await execFile('node', ['--check', join(workspace, 'server.cjs')]);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
 });
 
-test('deployment source normalization rewrites existing frontend manifest and railway config away from preview mode', async () => {
+test('deployment source normalization binds React namespace references in JS entries', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-react-js-entry-test-'));
+  try {
+    await mkdir(join(workspace, 'src'), { recursive: true });
+    await writeFile(
+      join(workspace, 'package.json'),
+      JSON.stringify({
+        name: 'baseline-react-js-entry-demo',
+        scripts: {
+          build: 'vite build',
+          start: 'vite preview',
+        },
+        dependencies: {
+          react: '^19.0.0',
+          'react-dom': '^19.0.0',
+        },
+        devDependencies: {
+          vite: '^7.0.0',
+        },
+      }),
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'index.html'),
+      '<!doctype html><html><body><div id="root"></div><script type="module" src="/src/main.jsx"></script></body></html>',
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'src/main.jsx'),
+      "import ReactDOM from 'react-dom/client';\nimport App from './App.js';\nReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));\n",
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'src/App.js'),
+      "import { useState } from 'react';\nexport default function App() { const [count] = useState(0); return React.createElement('main', null, count); }\n",
+      'utf-8'
+    );
+
+    const normalization = await normalizeDeploymentSourceDirectoryForPublish(workspace);
+    const mainSource = await readFile(join(workspace, 'client', 'src', 'main.jsx'), 'utf-8');
+    const appSource = await readFile(join(workspace, 'client', 'src', 'App.js'), 'utf-8');
+
+    assert.equal(normalization.adaptedOfficialFrontendShell, true);
+    assert.match(mainSource, /^import \* as React from 'react';/);
+    assert.match(appSource, /^import \* as React from 'react';/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('deployment source normalization rewrites existing frontend manifest and railway config onto the official fixed shell', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-frontend-manifest-test-'));
   try {
     await mkdir(join(workspace, 'src'), { recursive: true });
@@ -816,27 +979,30 @@ test('deployment source normalization rewrites existing frontend manifest and ra
     const packageJson = JSON.parse(await readFile(join(workspace, 'package.json'), 'utf-8'));
     const manifest = JSON.parse(await readFile(join(workspace, 'oneceo.manifest.json'), 'utf-8'));
     const railwayConfig = JSON.parse(await readFile(join(workspace, 'railway.json'), 'utf-8'));
-    const serverSource = await readFile(join(workspace, 'server.cjs'), 'utf-8');
+    const serverSource = await readFile(join(workspace, 'server', 'index.ts'), 'utf-8');
 
-    assert.equal(normalization.injectedBuiltFrontendBaseline, true);
-    assert.equal(packageJson.scripts.start, 'node server.cjs');
-    assert.equal(manifest.start.command, 'node server.cjs');
+    assert.equal(normalization.adaptedOfficialFrontendShell, true);
+    assert.equal(normalization.injectedBuiltFrontendBaseline, false);
+    assert.equal(packageJson.scripts.start, 'node dist/index.js');
+    assert.equal(manifest.start.command, 'node dist/index.js');
     assert.equal(manifest.start.portEnv, 'PORT');
     assert.equal(manifest.healthcheck.path, '/api/system/health');
-    assert.equal(manifest.build.outputDir, 'dist');
-    assert.equal(railwayConfig.deploy.startCommand, 'node server.cjs');
+    assert.equal(manifest.build.outputDir, 'dist/public');
+    assert.equal(railwayConfig.deploy.startCommand, 'node dist/index.js');
     assert.equal(railwayConfig.deploy.healthcheckPath, '/api/system/health');
-    assert.match(serverSource, /ONECEO_ANALYTICS:START/);
-    assert.match(serverSource, /data-oneceo-analytics/);
+    assert.match(serverSource, /oneceo-official-web-shell/);
+    assert.match(serverSource, /node:http/);
+    assert.match(serverSource, /VITE_ANALYTICS_WEBSITE_ID/);
+    assert.match(serverSource, /injectRuntimeAnalytics/);
     assert.equal(bootstrap.analyticsInjected, true);
     assert.equal(compliance.ok, true);
-    assert.equal(compliance.manifest.start.command, 'node server.cjs');
+    assert.equal(compliance.manifest.start.command, 'node dist/index.js');
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
 });
 
-test('deployment source normalization bypasses commonjs server when frontend package uses esm mode', async () => {
+test('deployment source normalization replaces commonjs server with the official fixed shell when frontend package uses esm mode', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-frontend-esm-server-test-'));
   try {
     await mkdir(join(workspace, 'src'), { recursive: true });
@@ -875,22 +1041,23 @@ test('deployment source normalization bypasses commonjs server when frontend pac
     await ensureDeploymentTemplateBootstrap(workspace);
     const compliance = await ensureTemplateCompliance(workspace);
     const packageJson = JSON.parse(await readFile(join(workspace, 'package.json'), 'utf-8'));
-    const generatedServer = await readFile(join(workspace, 'server.cjs'), 'utf-8');
+    const generatedServer = await readFile(join(workspace, 'server', 'index.ts'), 'utf-8');
     const originalServer = await readFile(join(workspace, 'server.js'), 'utf-8');
 
-    assert.equal(normalization.injectedBuiltFrontendBaseline, true);
-    assert.equal(packageJson.scripts.start, 'node server.cjs');
+    assert.equal(normalization.adaptedOfficialFrontendShell, true);
+    assert.equal(normalization.injectedBuiltFrontendBaseline, false);
+    assert.equal(packageJson.scripts.start, 'node dist/index.js');
     assert.match(originalServer, /require\('express'\)/);
-    assert.match(generatedServer, /oneceo-frontend-dist-server/);
+    assert.match(generatedServer, /oneceo-official-web-shell/);
+    assert.match(generatedServer, /node:http/);
     assert.equal(compliance.ok, true);
-    assert.equal(compliance.manifest.start.command, 'node server.cjs');
-    await execFile('node', ['--check', join(workspace, 'server.cjs')]);
+    assert.equal(compliance.manifest.start.command, 'node dist/index.js');
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
 });
 
-test('deployment source normalization replaces frontend server.cjs when runtime analytics is missing', async () => {
+test('deployment source normalization replaces frontend server shell with the official fixed shell when runtime analytics is missing', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-frontend-server-cjs-test-'));
   try {
     await mkdir(join(workspace, 'src'), { recursive: true });
@@ -929,15 +1096,15 @@ test('deployment source normalization replaces frontend server.cjs when runtime 
     await ensureDeploymentTemplateBootstrap(workspace);
     const compliance = await ensureTemplateCompliance(workspace);
     const packageJson = JSON.parse(await readFile(join(workspace, 'package.json'), 'utf-8'));
-    const generatedServer = await readFile(join(workspace, 'server.cjs'), 'utf-8');
+    const generatedServer = await readFile(join(workspace, 'server', 'index.ts'), 'utf-8');
 
-    assert.equal(normalization.injectedBuiltFrontendBaseline, true);
-    assert.equal(packageJson.scripts.start, 'node server.cjs');
-    assert.match(generatedServer, /ONECEO_ANALYTICS:START/);
-    assert.match(generatedServer, /oneceo-frontend-dist-server/);
+    assert.equal(normalization.adaptedOfficialFrontendShell, true);
+    assert.equal(normalization.injectedBuiltFrontendBaseline, false);
+    assert.equal(packageJson.scripts.start, 'node dist/index.js');
+    assert.match(generatedServer, /oneceo-official-web-shell/);
+    assert.match(generatedServer, /node:http/);
     assert.equal(compliance.ok, true);
-    assert.equal(compliance.manifest.start.command, 'node server.cjs');
-    await execFile('node', ['--check', join(workspace, 'server.cjs')]);
+    assert.equal(compliance.manifest.start.command, 'node dist/index.js');
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -1017,7 +1184,7 @@ test('deployment template baseline accepts analytics injected into public/index.
   }
 });
 
-test('deployment source normalization converts frontend projects with public/index.html into dist-serving deployment baseline', async () => {
+test('deployment source normalization converts frontend projects with public/index.html into the official fixed shell', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-public-frontend-test-'));
   try {
     await mkdir(join(workspace, 'public'), { recursive: true });
@@ -1050,20 +1217,18 @@ test('deployment source normalization converts frontend projects with public/ind
     await ensureDeploymentTemplateBootstrap(workspace);
     const compliance = await ensureTemplateCompliance(workspace);
     const packageJson = JSON.parse(await readFile(join(workspace, 'package.json'), 'utf-8'));
-    const serverSource = await readFile(join(workspace, 'server.cjs'), 'utf-8');
-    const rootIndex = await readFile(join(workspace, 'index.html'), 'utf-8');
+    const serverSource = await readFile(join(workspace, 'server', 'index.ts'), 'utf-8');
+    const rootIndex = await readFile(join(workspace, 'client', 'index.html'), 'utf-8');
 
-    assert.equal(normalization.injectedBuiltFrontendBaseline, true);
-    assert.equal(packageJson.scripts.start, 'node server.cjs');
+    assert.equal(normalization.adaptedOfficialFrontendShell, true);
+    assert.equal(normalization.injectedBuiltFrontendBaseline, false);
+    assert.equal(packageJson.scripts.start, 'node dist/index.js');
     assert.match(rootIndex, /<div id="root"><\/div>/);
-    assert.match(serverSource, /rootDir = path\.join\(__dirname, 'dist'\)/);
-    assert.match(serverSource, /ONECEO_ANALYTICS:START/);
-    assert.match(serverSource, /ANALYTICS_MARKER_END/);
-    assert.match(serverSource, /markerStartIndex/);
+    assert.match(serverSource, /oneceo-official-web-shell/);
+    assert.match(serverSource, /node:http/);
     assert.equal(compliance.ok, true);
-    assert.equal(compliance.manifest.start.command, 'node server.cjs');
-    assert.equal(compliance.manifest.build.outputDir, 'dist');
-    await execFile('node', ['--check', join(workspace, 'server.cjs')]);
+    assert.equal(compliance.manifest.start.command, 'node dist/index.js');
+    assert.equal(compliance.manifest.build.outputDir, 'dist/public');
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

@@ -7,6 +7,7 @@ type CachedSandbox = {
   sandbox: Sandbox;
   lastUsedAt: number;
 };
+type SandboxWithTemplateHint = Sandbox & { __oneceoTemplate?: string };
 
 type CreateSandboxInput = {
   template?: string;
@@ -140,9 +141,43 @@ function normalizeMetadata(metadata?: Record<string, unknown>): Record<string, s
   return normalized;
 }
 
+function isTemplateUnavailableMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('template') &&
+    (normalized.includes('not found') ||
+      normalized.includes('does not exist') ||
+      normalized.includes('unknown template') ||
+      normalized.includes('invalid template'))
+  );
+}
+
+function parseFallbackTemplates(): string[] {
+  const raw = String(process.env.E2B_TEMPLATE_FALLBACKS || '').trim();
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function resolveTemplateCandidates(selectedTemplate: string): string[] {
+  const candidates = [selectedTemplate, ...parseFallbackTemplates(), 'opencode-browseruse-playwright-mcp-v1-20260426'];
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const candidate of candidates) {
+    const next = candidate.trim();
+    if (!next || seen.has(next)) continue;
+    seen.add(next);
+    ordered.push(next);
+  }
+  return ordered;
+}
+
 async function createSandbox(input: CreateSandboxInput = {}): Promise<Sandbox> {
   requireE2bApiKey();
-  const sandbox = await withRetry<Sandbox>('createSandbox', () => {
+  const selectedTemplate = input.template || e2bConfig.template;
+  const create = (template: string) => {
     const options = {
       timeoutMs: input.timeoutMs ?? e2bConfig.timeoutMs,
       metadata: normalizeMetadata(input.metadata),
@@ -154,12 +189,33 @@ async function createSandbox(input: CreateSandboxInput = {}): Promise<Sandbox> {
       autoPause: true,
     };
     if (typeof (Sandbox as any).betaCreate === 'function') {
-      return (Sandbox as any).betaCreate(input.template || e2bConfig.template, options);
+      return (Sandbox as any).betaCreate(template, options);
     }
-    return Sandbox.create(input.template || e2bConfig.template, options as any);
-  });
-  touch(sandbox);
-  return sandbox;
+    return Sandbox.create(template, options as any);
+  };
+  const candidates = resolveTemplateCandidates(selectedTemplate);
+  let lastError: unknown = null;
+  for (const candidate of candidates) {
+    try {
+      const sandbox = await withRetry<Sandbox>('createSandbox', () => create(candidate));
+      (sandbox as SandboxWithTemplateHint).__oneceoTemplate = candidate;
+      if (candidate !== selectedTemplate) {
+        console.warn('[E2B_TEMPLATE_FALLBACK_USED]', {
+          requestedTemplate: selectedTemplate,
+          actualTemplate: candidate,
+        });
+      }
+      touch(sandbox);
+      return sandbox;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!isTemplateUnavailableMessage(message)) {
+        throw error;
+      }
+      lastError = error;
+    }
+  }
+  throw new Error(`e2b_template_unavailable:${selectedTemplate}:${candidates.join(',')}:${String(lastError || '')}`);
 }
 
 async function killSandbox(sandboxId: string): Promise<void> {
@@ -290,4 +346,8 @@ export const e2bConnector = {
   pauseSandbox,
   readFile,
   writeFile,
+  getTemplateHint: (sandbox: Sandbox): string | null => {
+    const hint = (sandbox as SandboxWithTemplateHint).__oneceoTemplate;
+    return typeof hint === 'string' && hint.trim() ? hint.trim() : null;
+  },
 };

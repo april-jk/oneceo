@@ -6,6 +6,7 @@ import { connectorGuideDAO, taskSessionConnectorBindingDAO } from '../src/db/dao
 import taskCreationRoutes from '../src/routes/task-creation-routes';
 import { currentUserResolver } from '../src/services/current-user-resolver';
 import { sessionConnectorService } from '../src/services/session-connector-service';
+import { mockAuthContextMiddleware } from './helpers/mock-auth-context';
 
 type TestServer = {
   origin: string;
@@ -17,6 +18,8 @@ const connectorGuideDAOAny = connectorGuideDAO as any;
 const bindingDAOAny = taskSessionConnectorBindingDAO as any;
 const currentUserResolverAny = currentUserResolver as any;
 const sessionConnectorServiceAny = sessionConnectorService as any;
+const SESSION_ONE_ID = '31111111-1111-4111-8111-111111111111';
+const SESSION_TWO_ID = '32222222-2222-4222-8222-222222222222';
 
 const originalListByTaskSessionId = bindingDAOAny.listByTaskSessionId;
 const originalListSessionGuides = connectorGuideDAOAny.listSessionGuides;
@@ -41,6 +44,7 @@ after(() => {
 async function startServer(): Promise<TestServer> {
   const app = express();
   app.use(express.json());
+  app.use(mockAuthContextMiddleware());
   app.use('/api/task-creation', taskCreationRoutes);
 
   const server = await new Promise<import('node:http').Server>((resolve) => {
@@ -103,13 +107,41 @@ test('ensureSessionGuidesUpToDate skips recompute when connector sets already ma
   assert.equal(recomputeCount, 0);
 });
 
+test('buildPromptSections exposes only guide preload instructions before load_connector_guide', async () => {
+  connectorGuideDAOAny.listSessionGuides = async () => [
+    {
+      sessionGuide: {
+        connectorKey: 'notion',
+        policyId: 'policy-notion',
+        revisionId: 'rev-notion',
+        triggerMode: 'on_attach',
+      },
+      revision: {
+        serverInstructionsMarkdown:
+          'Use the attached Notion MCP router tools exposed in this session. Start with `notion__COMPOSIO_SEARCH_TOOLS` to find Notion actions.',
+        guideReminderMarkdown:
+          'Identify the target workspace/page/database first, then call `notion__COMPOSIO_SEARCH_TOOLS`.',
+        blockingRulesMarkdown: 'Do not use local Notion MCP.',
+      },
+    },
+  ];
+
+  const sections = await connectorGuideService.buildPromptSections('session-guide-preload');
+  const combined = `${sections.instructionsSection}\n${sections.reminderSection}`;
+
+  assert.match(combined, /load_connector_guide with connectorKey=notion/);
+  assert.doesNotMatch(combined, /Start with `notion__COMPOSIO_SEARCH_TOOLS`/);
+  assert.doesNotMatch(combined, /then call `notion__COMPOSIO_SEARCH_TOOLS`/);
+  assert.doesNotMatch(combined, /Search tools first/);
+});
+
 test('GET /sessions/:sessionId/connectors triggers on-demand guide check', async () => {
   const server = await startServer();
   let ensureCalledWith = '';
 
   currentUserResolverAny.require = () => ({ userId: 'user-1' });
   sessionConnectorServiceAny.assertSessionOwnership = async (sessionId: string, userId: string) => {
-    assert.equal(sessionId, 'session-1');
+    assert.equal(sessionId, SESSION_ONE_ID);
     assert.equal(userId, 'user-1');
   };
   connectorGuideServiceAny.ensureSessionGuidesUpToDate = async (sessionId: string) => {
@@ -120,11 +152,15 @@ test('GET /sessions/:sessionId/connectors triggers on-demand guide check', async
   sessionConnectorServiceAny.summarizeStatuses = (items: unknown[]) => ({ total: items.length });
 
   try {
-    const response = await fetch(`${server.origin}/api/task-creation/sessions/session-1/connectors`);
+    const response = await fetch(`${server.origin}/api/task-creation/sessions/${SESSION_ONE_ID}/connectors`, {
+      headers: {
+        'x-test-user-id': 'user-1',
+      },
+    });
     const payload = await response.json();
     assert.equal(response.status, 200);
     assert.equal(payload.success, true);
-    assert.equal(ensureCalledWith, 'session-1');
+    assert.equal(ensureCalledWith, SESSION_ONE_ID);
     assert.equal(payload.data.summary.total, 1);
   } finally {
     await server.close();
@@ -143,7 +179,11 @@ test('GET /sessions/:sessionId/connectors still succeeds when on-demand guide ch
   sessionConnectorServiceAny.summarizeStatuses = () => ({ total: 1 });
 
   try {
-    const response = await fetch(`${server.origin}/api/task-creation/sessions/session-2/connectors`);
+    const response = await fetch(`${server.origin}/api/task-creation/sessions/${SESSION_TWO_ID}/connectors`, {
+      headers: {
+        'x-test-user-id': 'user-2',
+      },
+    });
     const payload = await response.json();
     assert.equal(response.status, 200);
     assert.equal(payload.success, true);
@@ -152,4 +192,3 @@ test('GET /sessions/:sessionId/connectors still succeeds when on-demand guide ch
     await server.close();
   }
 });
-

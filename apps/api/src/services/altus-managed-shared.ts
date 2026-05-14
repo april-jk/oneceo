@@ -902,8 +902,15 @@ export function buildManagedMcpToolName(providerId: string, toolName: string) {
 export function buildManagedToolDefinitionsWithMcp(input?: { mcpProviders?: ManagedMcpProvider[] }) {
   const baseTools = buildManagedToolDefinitions();
   const providers = Array.isArray(input?.mcpProviders) ? input?.mcpProviders : [];
-  const dynamicTools = providers.flatMap((provider) =>
-    (Array.isArray(provider.tools) ? provider.tools : []).map((tool) => {
+  const sortedProviders = [...providers].sort((left, right) => {
+    const leftKey = `${asText(left.providerId)}::${asText(left.connectorKey)}`;
+    const rightKey = `${asText(right.providerId)}::${asText(right.connectorKey)}`;
+    return leftKey.localeCompare(rightKey);
+  });
+  const dynamicTools = sortedProviders.flatMap((provider) =>
+    [...(Array.isArray(provider.tools) ? provider.tools : [])]
+      .sort((left, right) => asText(left.toolName).localeCompare(asText(right.toolName)))
+      .map((tool) => {
       const parameters =
         tool.inputSchema && typeof tool.inputSchema === 'object'
           ? tool.inputSchema
@@ -924,7 +931,10 @@ export function buildManagedToolDefinitionsWithMcp(input?: { mcpProviders?: Mana
       };
     })
   );
-  return [...baseTools, ...dynamicTools];
+  const stableDynamicTools = dynamicTools.sort((left, right) =>
+    asText(left.function?.name).localeCompare(asText(right.function?.name))
+  );
+  return [...baseTools, ...stableDynamicTools];
 }
 
 export function readManagedSkillContext(value: unknown): ManagedSkillContext[] {

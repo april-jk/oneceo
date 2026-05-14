@@ -5,6 +5,7 @@ import taskCreationRoutes from '../src/routes/task-creation-routes';
 import { mockAuthContextMiddleware } from './helpers/mock-auth-context';
 import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-memory-store';
 import { appUserLegacyIdMappingDAO, taskCreationSessionDAO } from '../src/db/dao';
+import { billingService } from '../src/services/billing-service';
 
 type TestServer = {
   origin: string;
@@ -14,6 +15,7 @@ type TestServer = {
 const fileStoreAny = taskCreationFileMemoryStore as any;
 const sessionDaoAny = taskCreationSessionDAO as any;
 const legacyMappingDaoAny = appUserLegacyIdMappingDAO as any;
+const billingServiceAny = billingService as any;
 
 const originalListSessions = fileStoreAny.listSessions;
 const originalCreateSession = fileStoreAny.createSession;
@@ -33,6 +35,8 @@ const originalAddMessageDao = sessionDaoAny.addMessage;
 const originalLegacyMappingUpsert = legacyMappingDaoAny.upsert;
 const originalLegacyMappingListByAppUserId = legacyMappingDaoAny.listLegacyIdsByAppUserId;
 const originalLegacyMappingResolveByLegacy = legacyMappingDaoAny.resolveAppUserIdByLegacyUserId;
+const originalHasEnoughCredits = billingServiceAny.hasEnoughCredits;
+const originalGetUserCredits = billingServiceAny.getUserCredits;
 
 after(() => {
   fileStoreAny.listSessions = originalListSessions;
@@ -53,9 +57,13 @@ after(() => {
   legacyMappingDaoAny.upsert = originalLegacyMappingUpsert;
   legacyMappingDaoAny.listLegacyIdsByAppUserId = originalLegacyMappingListByAppUserId;
   legacyMappingDaoAny.resolveAppUserIdByLegacyUserId = originalLegacyMappingResolveByLegacy;
+  billingServiceAny.hasEnoughCredits = originalHasEnoughCredits;
+  billingServiceAny.getUserCredits = originalGetUserCredits;
 });
 
 async function startServer(): Promise<TestServer> {
+  billingServiceAny.hasEnoughCredits = async () => true;
+  billingServiceAny.getUserCredits = async () => ({ balance: 1000 });
   const app = express();
   app.use(express.json());
   app.use(mockAuthContextMiddleware());

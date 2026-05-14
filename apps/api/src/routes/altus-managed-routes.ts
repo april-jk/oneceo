@@ -285,6 +285,7 @@ router.get('/sessions/:sessionId/context-debug', async (req, res) => {
           updatedAt: new Date().toISOString(),
           artifactType: 'unknown' as const,
           runtimeFamily: 'unknown' as const,
+          templateFamily: 'unknown' as const,
           deployability: 'unknown' as const,
           entrypoints: [],
           commands: {},

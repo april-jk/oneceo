@@ -1,0 +1,28 @@
+## 2026-05-08
+
+- 基于已采用的 Manus 固定模板方案，开始把 OneCEO 的 deployable web app 主链收敛到固定模板策略。
+- 更新 Altus managed prompt：新建可部署网站时强制使用 `client/server/shared + vite build + node dist/index.js` 的固定模板壳，不再把 Java / PHP / Python 视为新网站 runtime 选择。
+- 在模板合规与项目画像中增加官方固定模板识别：
+  - `template-compliance-service` 能检测 OneCEO 官方固定模板壳，并为自动生成的 manifest 固定 `oneceo_fixed_vite_node_shell` stack。
+  - `task-session-project-profile-service` 新增 `templateFamily`，区分官方固定模板与 legacy/custom 项目。
+- 补了固定模板相关单测，并完成 `pnpm exec tsx --test ...` 与 `pnpm --filter api type-check` 验证。
+- 当前仍未收缩 deploy tool 执行层，只先把“生成约束 + 模板识别 + 合规锚点”落稳，下一轮可以继续把部署主链真正向固定模板收拢。
+- 继续推进部署 preflight：`altus-managed-deployment-tool-service` 现在会优先看 `templateFamily`，并且只对 `frontend_dist + legacy/custom` 的 web app 触发官方固定模板修复要求，不影响非当前主链的已有栈项目。
+- 在部署导出副本上新增“官方固定模板壳安全自适应”：
+  - 对通用 `frontend_dist` 项目，发布前会在导出副本上补齐 `client/server/shared`、`vite.config.ts`、`server/index.ts`、`node dist/index.js` 启动契约和官方 manifest。
+  - 会顺手补上 `client/index.html` 的 analytics hook，确保固定模板壳自身满足平台注入与合规要求。
+  - 这条适配不改用户真实工作区，只作用于部署导出副本。
+- 为固定模板路线补了强/弱提示词部署 E2E 基建：
+  - `deployment-main-chain.e2e.ts` 现在支持按环境变量注入不同提示词，并把 `promptCategory/promptLabel` 写入报告。
+  - 工作区 marker 验收从“只盯根目录 index.html”改成“根据项目形态检查根静态文件或官方模板 React 入口源码”，避免固定模板 SPA 被壳文件误判。
+  - 新增 `deployment-prompt-strength-matrix.e2e.ts`，用于串行跑“强约束 vs 弱约束”提示词样本并汇总结论。
+- 真实 E2E 观察结论：
+  - 强约束样本能稳定收敛到官方模板并最终发布成功。
+  - 弱约束样本可以进入同一条模板/部署链，但生成耗时明显更长，且当前样本在公网可达阶段出现 `latestStatus=FAILED`。
+- 继续把 Manus 路线往前推进到“模板先注入”：
+  - 新增空工作区官方模板注入器，在 Altus run 进入模型循环前，如果任务是“新建可部署网站”且工作区仍为空，会先把官方 `client/server/shared + package.json + vite.config.ts + oneceo.manifest.json` scaffold 直接写进 sandbox 工作区。
+  - 同时给 Altus 注入系统级提示，明确“在现有模板内改内容，不要重建技术栈或改动 build/start/healthcheck/analytics 契约”。
+- 这轮真实弱约束复测的观察点：
+  - 新 run 生成阶段约 2 分钟完成，比之前更快进入固定模板形态。
+  - 工作区已经直接呈现官方模板结构，不再先漂移到自由结构再靠部署期修正。
+  - 这轮因本地 API 热重载和手动清理未拿到完整终态报告，但已经证明模板前置注入在“结构收敛速度”上是有效的。

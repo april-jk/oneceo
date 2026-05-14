@@ -11,6 +11,7 @@ import {
 import { connectorSecretService } from './connector-secret-service';
 import { customApiSecurityReviewService, type CustomApiRiskLevel } from './custom-api-security-review-service';
 import { buildCustomApiToolName } from './custom-api-mcp-tool-service';
+import { assertCustomApiEnabled } from './custom-api-feature-flag';
 import type { ConnectorAccountSecret } from './connector-registry';
 
 type ExecuteCustomApiToolInput = {
@@ -201,6 +202,7 @@ function preview(value: unknown, limit = 2000) {
 
 export class CustomApiBrokerService {
   async executeCustomApiTool(input: ExecuteCustomApiToolInput) {
+    assertCustomApiEnabled();
     const startedAt = Date.now();
     const requestId = randomUUID();
     let auditId: string | null = null;

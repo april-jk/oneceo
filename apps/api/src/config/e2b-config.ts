@@ -10,7 +10,7 @@ export type E2bConfig = {
   opencodeHost: string;
 };
 
-const DEFAULT_E2B_TEMPLATE = 'opencode-browseruse-playwright-mcp-v1-20260426';
+const DEFAULT_E2B_TEMPLATE = 'opencode-browseruse-playwright-mcp-stable';
 const DEFAULT_E2B_CODEX_WS_TEMPLATE = 'codex-ws-browseruse-playwright-sandbox-v1-20260426';
 
 function toBool(value: string | undefined, fallback: boolean): boolean {

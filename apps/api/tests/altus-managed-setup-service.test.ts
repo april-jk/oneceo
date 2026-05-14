@@ -19,6 +19,7 @@ process.env.ALTUS_CLARIFICATION_TRANSITION_DISABLED = 'true';
 afterEach(() => {
   mock.reset();
   delete process.env.OPENCODE_TASK_WORKSPACE_ROOT;
+  delete process.env.LLM_PROXY_UPSTREAM_BASE_URL;
   process.env.ALTUS_CLARIFICATION_TRANSITION_DISABLED = 'true';
 });
 
@@ -251,6 +252,75 @@ test('buildConversationMessages injects latest successful todowrite snapshot as 
   assert.match(String(messages[1]?.content), /\[in_progress\] 修改后端主链/);
 });
 
+test('buildConversationMessages currently omits prior executor tool events during mcp confirmation recovery', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我创建一个 Google Docs 文档',
+      metadata: {},
+    },
+    {
+      role: 'agent',
+      messageType: 'executor_event',
+      content: 'Google Workspace 需要确认后才能继续执行',
+      metadata: {
+        eventType: 'tool_call_completed',
+        toolName: 'mcp__google_super_composio_multi_execute_tool__4b524854a70b',
+        arguments: {
+          toolName: 'GOOGLEDOCS_CREATE_DOCUMENT',
+          title: '项目周报',
+        },
+      },
+    },
+    {
+      role: 'agent',
+      messageType: 'assistant_message',
+      content: '请确认这次 Google Workspace 写操作。',
+      metadata: {},
+    },
+    {
+      role: 'user',
+      messageType: 'user_response',
+      content: '[mcp_tool_confirmation:approve]',
+      metadata: {
+        mcpToolConfirmation: {
+          action: 'approve',
+          connectorKey: 'google_super',
+          confirmationId: 'confirmation-1',
+          toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+          confirmationToken: 'token-1',
+          confirmationAgentRunId: 'run-origin-1',
+        },
+      },
+    },
+  ] as any);
+
+  const service = new AltusManagedSetupService();
+  const messages = await service.buildConversationMessages(
+    'session-mcp-confirmation-gap',
+    '[mcp_tool_confirmation:approve]',
+    'SYSTEM PROMPT',
+    {
+      turnStatePrompt: [
+        '# MCP confirmation recovery',
+        'toolName: google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+        'confirmationToken: token-1',
+      ].join('\n'),
+    }
+  );
+
+  assert.equal(messages.some((item) => item.role === 'system' && String(item.content).includes('confirmationToken: token-1')), true);
+  assert.equal(
+    messages.some((item) => String(item.content).includes('GOOGLEDOCS_CREATE_DOCUMENT')),
+    false
+  );
+  assert.equal(
+    messages.some((item) => String(item.content).includes('mcp__google_super_composio_multi_execute_tool__4b524854a70b')),
+    false
+  );
+});
+
 test('buildTaskIntentProfile keeps trivial single-point tasks off the todo path', async () => {
   mock.method(taskCreationSessionDAO, 'getMessages', async () => [
     {
@@ -269,6 +339,30 @@ test('buildTaskIntentProfile keeps trivial single-point tasks off the todo path'
   assert.equal(profile.todoReason, 'none');
   assert.equal(profile.needsClarification, false);
   assert.equal(profile.clarificationType, 'none');
+});
+
+test('buildTaskIntentProfile requires blueprint todo for new deployable web app tasks', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '请在当前工作区用 Vite + React + Node Web Shell 固定模板直接实现一个可部署的企业官网源码，不要提问。页面包含 hero、服务介绍、案例、联系区；后端只保留 /api/system/health 和一个 contact 接口，不需要数据库、登录或外部集成。',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => null as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-webapp-blueprint',
+    '请在当前工作区用 Vite + React + Node Web Shell 固定模板直接实现一个可部署的企业官网源码，不要提问。页面包含 hero、服务介绍、案例、联系区；后端只保留 /api/system/health 和一个 contact 接口，不需要数据库、登录或外部集成。',
+    'user_input'
+  );
+
+  assert.equal(profile.mode, 'deployable_web_app');
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.todoRequired, true);
+  assert.equal(profile.todoReason, 'deployable_web_app_blueprint');
 });
 
 test('buildTaskIntentProfile suppresses tech-stack clarification when workspace root already constrains the stack', async () => {
@@ -694,6 +788,141 @@ test('buildTaskIntentProfile routes protected capability delegation to user conf
   assert.equal(profile.clarificationType, 'acceptance_requirement');
   assert.match(profile.clarificationQuestion, /生产环境/);
   assert.equal(profile.clarificationTransition?.nextState, 'risk_confirmation');
+});
+
+test('buildTaskIntentProfile preserves explicit deploy authorization after production confirmation answer', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我部署当前项目',
+      metadata: {},
+    },
+    {
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这会部署到生产环境，请明确确认是否继续。',
+      metadata: {},
+    },
+    {
+      role: 'user',
+      messageType: 'user_response',
+      content: '确认继续',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    pendingQuestion: '这会部署到生产环境，请明确确认是否继续。',
+    pendingOptions: undefined,
+    pendingClarificationType: 'acceptance_requirement',
+  }) as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-deploy-risk-confirmation-answer',
+    '确认继续',
+    'user_response'
+  );
+
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.deploymentAllowed, true);
+  assert.equal(profile.deployRequested, true);
+  assert.equal(profile.platformCapabilityIntent?.mode, 'execute');
+  assert.equal(profile.platformCapabilityIntent?.capabilityKind, 'deploy');
+  assert.equal(profile.clarificationTransition?.nextState, 'ready_to_execute');
+  assert.equal(profile.reason, 'latest_deployable_request');
+});
+
+test('buildTaskIntentProfile preserves deploy authorization for production confirmation answer without pending clarification type', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我部署当前项目',
+      metadata: {},
+    },
+    {
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这会部署到生产环境，请明确确认是否继续。',
+      metadata: {},
+    },
+    {
+      role: 'user',
+      messageType: 'user_response',
+      content: '继续',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    pendingQuestion: '这会部署到生产环境，请明确确认是否继续。',
+    pendingOptions: undefined,
+    pendingClarificationType: undefined,
+  }) as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-deploy-risk-confirmation-answer-untyped',
+    '继续',
+    'user_response'
+  );
+
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.deploymentAllowed, true);
+  assert.equal(profile.deployRequested, true);
+  assert.equal(profile.platformCapabilityIntent?.mode, 'execute');
+  assert.equal(profile.platformCapabilityIntent?.capabilityKind, 'deploy');
+  assert.equal(profile.clarificationTransition?.nextState, 'ready_to_execute');
+  assert.equal(profile.reason, 'latest_deployable_request');
+});
+
+test('buildTaskIntentProfile bypasses clarification transition agent for production confirmation answer', async () => {
+  process.env.ALTUS_CLARIFICATION_TRANSITION_DISABLED = 'false';
+  process.env.LLM_PROXY_UPSTREAM_BASE_URL = 'http://example.test';
+
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我部署当前项目',
+      metadata: {},
+    },
+    {
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这会部署到生产环境，请明确确认是否继续。',
+      metadata: {},
+    },
+    {
+      role: 'user',
+      messageType: 'user_response',
+      content: '确认继续',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    pendingQuestion: '这会部署到生产环境，请明确确认是否继续。',
+    pendingOptions: undefined,
+    pendingClarificationType: 'acceptance_requirement',
+  }) as any);
+  mock.method(altusClarificationTransitionAgent, 'propose', async () => {
+    throw new Error('clarification transition agent should not run for confirmed production deploy answer');
+  });
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-deploy-risk-confirmation-answer-preempts-agent',
+    '确认继续',
+    'user_response'
+  );
+
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.deploymentAllowed, true);
+  assert.equal(profile.deployRequested, true);
+  assert.equal(profile.platformCapabilityIntent?.mode, 'execute');
+  assert.equal(profile.platformCapabilityIntent?.capabilityKind, 'deploy');
+  assert.equal(profile.clarificationTransition?.nextState, 'ready_to_execute');
+  assert.equal(profile.reason, 'latest_deployable_request');
 });
 
 test('captureMcpToolSnapshot exposes only Composio brokered Notion tools', async () => {

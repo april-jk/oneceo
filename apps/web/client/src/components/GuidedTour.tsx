@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { AnimatePresence, motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -13,6 +14,7 @@ export type GuidedTourStep = {
 
 type GuidedTourProps = {
   storageKey: string;
+  storageScope?: string | null;
   steps: GuidedTourStep[];
   autoStart?: boolean;
   allowUnresolvedSteps?: boolean;
@@ -36,14 +38,30 @@ type TargetBox = {
 
 const GUIDED_TOUR_OPEN_EVENT = "oneceo-guided-tour-open";
 
-function readCompleted(storageKey: string) {
-  if (typeof window === "undefined") return true;
-  return window.localStorage.getItem(storageKey) === "completed";
+export function resolveGuidedTourStorageKey(
+  storageKey: string,
+  storageScope?: string | null,
+) {
+  const scope = (storageScope || "").trim();
+  if (!scope) return storageKey;
+  return `${storageKey}:${scope}`;
 }
 
-function markCompleted(storageKey: string) {
+function readCompleted(storageKey: string, storageScope?: string | null) {
+  if (typeof window === "undefined") return true;
+  return (
+    window.localStorage.getItem(
+      resolveGuidedTourStorageKey(storageKey, storageScope),
+    ) === "completed"
+  );
+}
+
+function markCompleted(storageKey: string, storageScope?: string | null) {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(storageKey, "completed");
+  window.localStorage.setItem(
+    resolveGuidedTourStorageKey(storageKey, storageScope),
+    "completed",
+  );
 }
 
 function resolveTarget(selector: string): HTMLElement | null {
@@ -79,6 +97,7 @@ function clamp(value: number, min: number, max: number) {
 
 export function GuidedTour({
   storageKey,
+  storageScope,
   steps,
   autoStart = false,
   allowUnresolvedSteps = false,
@@ -170,7 +189,8 @@ export function GuidedTour({
   }, [activeIndex, activeStep, isOpen, updateTarget]);
 
   useEffect(() => {
-    if (!autoStart || controlled || readCompleted(storageKey)) return;
+    if (!autoStart || controlled || readCompleted(storageKey, storageScope))
+      return;
     const timer = window.setTimeout(() => {
       const firstAvailable = steps.findIndex((step) =>
         resolveTarget(step.selector),
@@ -180,7 +200,7 @@ export function GuidedTour({
       setInternalOpen(true);
     }, 600);
     return () => window.clearTimeout(timer);
-  }, [autoStart, controlled, steps, storageKey]);
+  }, [autoStart, controlled, steps, storageKey, storageScope]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -205,16 +225,16 @@ export function GuidedTour({
   }, [isOpen, setOpenState]);
 
   const complete = useCallback(() => {
-    markCompleted(storageKey);
+    markCompleted(storageKey, storageScope);
     setOpenState(false);
     onComplete?.();
-  }, [onComplete, setOpenState, storageKey]);
+  }, [onComplete, setOpenState, storageKey, storageScope]);
 
   const skip = useCallback(() => {
-    markCompleted(storageKey);
+    markCompleted(storageKey, storageScope);
     setOpenState(false);
     onComplete?.();
-  }, [onComplete, setOpenState, storageKey]);
+  }, [onComplete, setOpenState, storageKey, storageScope]);
 
   const goNext = useCallback(() => {
     const nextIndex = activeIndex + 1;
@@ -281,60 +301,97 @@ export function GuidedTour({
   const isLast = activeIndex >= steps.length - 1;
 
   const content = (
-    <div
-      data-guided-tour-root
-      className={cn("fixed inset-0 z-[80] pointer-events-none", className)}
-    >
-      <div className="absolute inset-0 bg-[#1f2328]/50" />
-      {spotlightStyle ? (
-        <div
-          className="absolute rounded-[14px] border border-blue-500 bg-transparent shadow-[0_0_0_9999px_rgba(31,35,40,0.50),0_0_0_4px_rgba(9,105,218,0.18),0_14px_36px_rgba(9,105,218,0.20)]"
-          style={spotlightStyle}
-        />
-      ) : null}
-      <section
-        className="pointer-events-auto absolute rounded-xl border border-border bg-background p-4 text-foreground shadow-[0_28px_80px_rgba(31,35,40,0.18),0_4px_14px_rgba(31,35,40,0.10)]"
-        style={cardStyle}
-        aria-live="polite"
+    <AnimatePresence>
+      <motion.div
+        data-guided-tour-root
+        className={cn("fixed inset-0 z-[80] pointer-events-none", className)}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.22, ease: "easeOut" }}
       >
-        <div className="mb-1 text-[11px] font-extrabold uppercase tracking-[0.08em] text-muted-foreground">
-          {activeIndex + 1} / {steps.length}
-        </div>
-        <h2 className="text-[14px] font-extrabold leading-5">
-          {activeStep.title}
-        </h2>
-        <p className="mt-2 text-[13px] leading-5 text-muted-foreground">
-          {activeStep.body}
-        </p>
-        <div className="mt-4 flex items-center justify-between gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 px-2 text-xs"
-            onClick={skip}
-          >
-            {skipLabel}
-          </Button>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 px-3 text-xs"
-              onClick={() => setOpenState(false)}
-            >
-              {pauseLabel}
-            </Button>
-            <Button
-              size="sm"
-              className="h-8 px-3 text-xs"
-              onClick={isLast ? complete : goNext}
-            >
-              {isLast ? finishLabel : nextLabel}
-            </Button>
+        <motion.div
+          className="absolute inset-0 bg-[#1f2328]/50"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.24, ease: "easeOut" }}
+        />
+        {spotlightStyle ? (
+          <motion.div
+            className="absolute rounded-[14px] border border-blue-500 bg-transparent shadow-[0_0_0_9999px_rgba(31,35,40,0.50),0_0_0_4px_rgba(9,105,218,0.18),0_14px_36px_rgba(9,105,218,0.20)]"
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{
+              opacity: 1,
+              scale: 1,
+              top: spotlightStyle.top,
+              left: spotlightStyle.left,
+              width: spotlightStyle.width,
+              height: spotlightStyle.height,
+            }}
+            exit={{ opacity: 0, scale: 0.98 }}
+            transition={{
+              type: "spring",
+              stiffness: 380,
+              damping: 34,
+              mass: 0.9,
+            }}
+          />
+        ) : null}
+        <motion.section
+          key={activeStep.id}
+          className="pointer-events-auto absolute rounded-xl border border-border bg-background p-4 text-foreground shadow-[0_28px_80px_rgba(31,35,40,0.18),0_4px_14px_rgba(31,35,40,0.10)]"
+          style={cardStyle}
+          aria-live="polite"
+          initial={{ opacity: 0, y: 18, scale: 0.96 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 10, scale: 0.98 }}
+          transition={{
+            type: "spring",
+            stiffness: 320,
+            damping: 28,
+            mass: 0.95,
+          }}
+        >
+          <div className="mb-1 text-[11px] font-extrabold uppercase tracking-[0.08em] text-muted-foreground">
+            {activeIndex + 1} / {steps.length}
           </div>
-        </div>
-      </section>
-    </div>
+          <h2 className="text-[14px] font-extrabold leading-5">
+            {activeStep.title}
+          </h2>
+          <p className="mt-2 text-[13px] leading-5 text-muted-foreground">
+            {activeStep.body}
+          </p>
+          <div className="mt-4 flex items-center justify-between gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 px-2 text-xs"
+              onClick={skip}
+            >
+              {skipLabel}
+            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 px-3 text-xs"
+                onClick={() => setOpenState(false)}
+              >
+                {pauseLabel}
+              </Button>
+              <Button
+                size="sm"
+                className="h-8 px-3 text-xs"
+                onClick={isLast ? complete : goNext}
+              >
+                {isLast ? finishLabel : nextLabel}
+              </Button>
+            </div>
+          </div>
+        </motion.section>
+      </motion.div>
+    </AnimatePresence>
   );
 
   if (typeof document === "undefined") {
@@ -344,7 +401,12 @@ export function GuidedTour({
   return createPortal(content, document.body);
 }
 
-export function resetGuidedTour(storageKey: string) {
+export function resetGuidedTour(
+  storageKey: string,
+  storageScope?: string | null,
+) {
   if (typeof window === "undefined") return;
-  window.localStorage.removeItem(storageKey);
+  window.localStorage.removeItem(
+    resolveGuidedTourStorageKey(storageKey, storageScope),
+  );
 }

@@ -35,7 +35,6 @@ import {
   type TaskCreationSessionSummary,
 } from "@/lib/task-creation-client";
 import { isDevRuntime } from "@/lib/runtime-env";
-import { GuidedTour, type GuidedTourStep } from "@/components/GuidedTour";
 
 type ProjectSessionItem = {
   sessionId: string;
@@ -43,45 +42,6 @@ type ProjectSessionItem = {
   status: string;
   updatedAt?: string;
 };
-
-const PROJECTS_OVERVIEW_TOUR_KEY = "oneceo:tour.projects.overview.completed";
-const PROJECTS_OVERVIEW_STEPS: GuidedTourStep[] = [
-  {
-    id: "create-project",
-    selector: '[data-tour="projects-create-button"]',
-    title: "新建项目",
-    body: "项目用于把多个会话和任务收拢到同一个目标下。需要长期指令、默认连接器或复盘交付时，再新建项目。",
-    placement: "left",
-  },
-  {
-    id: "manual-projects",
-    selector: '[data-tour="projects-manual-header"]',
-    title: "普通项目",
-    body: "普通项目由你创建，后续任务可以归属进来。项目指令会作为长期约束影响相关会话。",
-    placement: "bottom",
-  },
-  {
-    id: "self-organized-projects",
-    selector: '[data-tour="projects-self-organized-toggle"]',
-    title: "自组织项目",
-    body: "这里展示系统示例或已形成组织结构的项目，适合查看经理和员工分工。",
-    placement: "top",
-  },
-  {
-    id: "project-card",
-    selector: '[data-tour="projects-self-organized-summary"]',
-    title: "项目卡片",
-    body: "进度、经理数、员工数帮助你快速判断执行状态。点击查看详情进入项目层级。",
-    placement: "top",
-  },
-  {
-    id: "manager-row",
-    selector: '[data-tour="projects-manager-header"]',
-    title: "经理与员工",
-    body: "经理负责一个方向的任务拆分和协调；展开后能看到员工技能、状态和当前任务。",
-    placement: "top",
-  },
-];
 
 export default function ManagerView() {
   const showSelfOrganizedProjects = isDevRuntime();
@@ -300,11 +260,6 @@ export default function ManagerView() {
   return (
     <WorkspaceLayout>
       <div className="space-y-6">
-        <GuidedTour
-          storageKey={PROJECTS_OVERVIEW_TOUR_KEY}
-          steps={PROJECTS_OVERVIEW_STEPS}
-          autoStart
-        />
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">{t("managerView.title")}</h1>

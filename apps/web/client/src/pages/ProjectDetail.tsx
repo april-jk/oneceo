@@ -21,7 +21,6 @@ import WorkspaceLayout from '@/components/WorkspaceLayout';
 import { useTranslation } from 'react-i18next';
 import { EmployeeDeliverableViewer } from '@/components/DeliverableViewer';
 import TaskDocumentsDialog from '@/components/TaskDocumentsDialog';
-import { GuidedTour, type GuidedTourStep } from '@/components/GuidedTour';
 
 interface EmployeeAssignment {
   employeeId: string;
@@ -63,38 +62,6 @@ interface ProjectDetailProps {
   projectId?: string;
   onBack?: () => void;
 }
-
-const PROJECT_DETAIL_TOUR_KEY = 'oneceo:tour.project_detail.completed';
-const PROJECT_DETAIL_STEPS: GuidedTourStep[] = [
-  {
-    id: 'create-manager',
-    selector: '[data-tour="project-detail-create-manager"]',
-    title: '创建经理',
-    body: '需要新增职责线时再创建经理。经理负责一个方向的任务拆分、协调和验收。',
-    placement: 'left',
-  },
-  {
-    id: 'manager-card',
-    selector: '[data-tour="project-detail-manager-card"]',
-    title: '经理卡片',
-    body: '每个经理代表一条职责线，例如开发、运营、设计或 QA。展开后可以查看它负责的任务。',
-    placement: 'bottom',
-  },
-  {
-    id: 'task-card',
-    selector: '[data-tour="project-detail-task-card"]',
-    title: '任务卡片',
-    body: '任务展示优先级、状态、截止日期和参与员工。点击任务可以展开协作员工与交付状态。',
-    placement: 'top',
-  },
-  {
-    id: 'task-documents',
-    selector: '[data-tour="project-detail-task-documents"]',
-    title: '交付文档',
-    body: '这里是验收证据，不只是聊天记录。进入后可以查看该任务下的全部交付文档。',
-    placement: 'left',
-  },
-];
 
 export default function ProjectDetail({ projectId: propProjectId, onBack }: ProjectDetailProps = {}) {
   const [location] = useLocation();
@@ -359,11 +326,6 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
 
   return (
       <div className="flex-1 flex flex-col">
-        <GuidedTour
-          storageKey={PROJECT_DETAIL_TOUR_KEY}
-          steps={PROJECT_DETAIL_STEPS}
-          autoStart
-        />
         {/* Header */}
         <div className="border-b border-border bg-background px-6 py-4">
           <div className="flex items-center justify-between">

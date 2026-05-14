@@ -290,6 +290,53 @@ test('callModel sanitizes malformed assistant tool arguments at the final reques
   );
 });
 
+test('callModel attaches llm context headers for managed session reuse', async () => {
+  const capturedHeaders: Array<Record<string, string>> = [];
+  global.fetch = mock.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+    capturedHeaders.push((init?.headers || {}) as Record<string, string>);
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: 'ok',
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const coordinator = new AltusRunCoordinator(
+    {} as any,
+    {} as any,
+    {} as any,
+    {} as any,
+    {
+      projectMessagesForModel: (messages: any[]) => messages,
+    } as any
+  );
+
+  await (coordinator as any).callModel({
+    messages: [{ role: 'user', content: '继续' }],
+    signal: new AbortController().signal,
+    llmContext: {
+      contextId: 'altus_ctx_reuse_1',
+      turnIndex: 2,
+      sessionId: 'session-reuse-1',
+      runId: 'run-reuse-1',
+    },
+  });
+
+  assert.equal(capturedHeaders.length, 1);
+  assert.equal(capturedHeaders[0]?.['x-oneceo-internal-llm-context-id'], 'altus_ctx_reuse_1');
+  assert.equal(capturedHeaders[0]?.['x-oneceo-llm-context-id'], 'altus_ctx_reuse_1');
+  assert.equal(capturedHeaders[0]?.['x-oneceo-internal-llm-context-turn'], '2');
+  assert.equal(capturedHeaders[0]?.['x-oneceo-internal-llm-session-id'], 'session-reuse-1');
+  assert.equal(capturedHeaders[0]?.['x-oneceo-internal-llm-run-id'], 'run-reuse-1');
+});
+
 test('execute feeds malformed current tool arguments back to the model instead of executing the tool', async () => {
   const state = createState('run-invalid-current-tool-args', 'session-invalid-current-tool-args');
   const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
@@ -1720,6 +1767,7 @@ test('execute injects skill catalog prompt before active skill body', async () =
       assert.match(turnStatePrompt, /ppt-workflow: PPT 子任务编排/);
       assert.match(turnStatePrompt, /# Active skills/);
       assert.match(turnStatePrompt, /# Skill Brief/);
+      assert.equal((turnStatePrompt.match(/# Dynamic context blocks/g) || []).length, 1);
       return [
         { role: 'system', content: systemPrompt },
         { role: 'system', content: turnStatePrompt },

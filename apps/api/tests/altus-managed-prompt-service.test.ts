@@ -72,6 +72,20 @@ test('managed prompt explicitly skips pre-execution todo for simple tasks when t
   assert.match(prompt, /do not call `todowrite` just because the request sounds non-trivial/i);
 });
 
+test('runtime context uses stable current date instead of per-turn timestamp', () => {
+  const prompt = altusManagedPromptService.buildRuntimeContextPrompt({
+    sessionId: 'session-runtime-context-date',
+    sessionTitle: 'runtime date',
+    workspaceRoot: '/workspace/runtime-date',
+    connectors: [],
+    turnStatePrompt: '# Current turn state\n- latest_user_message_type: user_input',
+  });
+
+  assert.match(prompt, /# Runtime context/);
+  assert.match(prompt, /Current date: \d{4}-\d{2}-\d{2}/);
+  assert.doesNotMatch(prompt, /Current time:/);
+});
+
 test('managed prompt defaults debug and testing to Playwright on the same n.eko browser', () => {
   const prompt = altusManagedPromptService.buildSystemPrompt({
     sessionId: 'session-debug-tool-choice',
@@ -440,6 +454,35 @@ test('managed prompt builds minimal skill catalog index without full body', () =
   assert.doesNotMatch(prompt, /compatibility:\s*opencode/i);
 });
 
+test('managed prompt can suppress skill catalog dynamic block index when already provided elsewhere', () => {
+  const prompt = altusManagedPromptService.buildSkillCatalogPrompt(
+    [
+      {
+        sourceType: 'platform',
+        skillId: 'skill-1',
+        revisionId: 'rev-1',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: '按子任务编排准备 PPT 渲染指令草稿',
+        category: 'office',
+        revisionNumber: 3,
+        resourceSummary: {
+          totalCount: 1,
+          referenceCount: 1,
+          templateCount: 0,
+          paths: ['references/subtask-contracts.md'],
+        },
+      },
+    ],
+    { includeBlockIndex: false }
+  );
+
+  assert.match(prompt, /# Available skills catalog/);
+  assert.match(prompt, /ppt-workflow: 按子任务编排准备 PPT 渲染指令草稿/);
+  assert.doesNotMatch(prompt, /# Dynamic context blocks/);
+  assert.doesNotMatch(prompt, /id=skill-catalog:platform:skill-1:rev-1/);
+});
+
 test('managed prompt exposes ppt workflow as catalog-only pre-render skill', () => {
   const prompt = altusManagedPromptService.buildSkillCatalogPrompt([
     {
@@ -498,6 +541,36 @@ test('managed prompt shows active skill resource summary alongside full body', (
   assert.match(prompt, /id=skill:platform:skill-1:rev-1/);
   assert.match(prompt, /resources: 1 references, 1 templates/);
   assert.match(prompt, /# Skill Brief/);
+});
+
+test('managed prompt can suppress active skill block index when turn-level index already exists', () => {
+  const prompt = altusManagedPromptService.buildSkillContextPrompt(
+    [
+      {
+        sourceType: 'platform',
+        skillId: 'skill-1',
+        revisionId: 'rev-1',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: '按子任务编排准备 PPT 渲染指令草稿',
+        category: 'office',
+        renderedMarkdown: '# Skill Brief\n\nDo the work.',
+        revisionNumber: 3,
+        resourceSummary: {
+          totalCount: 2,
+          referenceCount: 1,
+          templateCount: 1,
+          paths: ['references/subtask-contracts.md', 'templates/render-instruction-draft.md'],
+        },
+      },
+    ],
+    { includeBlockIndex: false }
+  );
+
+  assert.match(prompt, /# Active skills/);
+  assert.match(prompt, /# Skill Brief/);
+  assert.doesNotMatch(prompt, /# Dynamic context blocks/);
+  assert.doesNotMatch(prompt, /id=skill:platform:skill-1:rev-1/);
 });
 
 test('managed prompt includes full ppt workflow instructions when skill is active', () => {

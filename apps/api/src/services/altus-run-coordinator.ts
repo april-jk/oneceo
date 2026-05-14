@@ -2135,8 +2135,12 @@ private async chargeForModelCall(state: AltusRunState, input: {
       hasConnectorGuideReminders: Boolean(connectorGuideSections.reminderSection),
       connectorCount: Array.isArray(state.input.connectors) ? state.input.connectors.length : 0,
     });
-    const skillCatalogPrompt = altusManagedPromptService.buildSkillCatalogPrompt(state.input.skillCatalog);
-    const skillPrompt = altusManagedPromptService.buildSkillContextPrompt(state.input.skills);
+    const skillCatalogPrompt = altusManagedPromptService.buildSkillCatalogPrompt(state.input.skillCatalog, {
+      includeBlockIndex: false,
+    });
+    const skillPrompt = altusManagedPromptService.buildSkillContextPrompt(state.input.skills, {
+      includeBlockIndex: false,
+    });
     const dynamicContextPrompt = altusManagedDynamicContextBlockService.renderBlockIndex([
       ...altusManagedDynamicContextBlockService.buildSkillBlocks({
         activeSkills: state.input.skills,

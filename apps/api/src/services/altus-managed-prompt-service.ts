@@ -841,7 +841,7 @@ export class AltusManagedPromptService {
     turnStatePrompt?: string | null;
   }) {
     const title = asText(input.sessionTitle) || '未命名会话';
-    const now = new Date().toISOString();
+    const currentDate = new Date().toISOString().slice(0, 10);
     const profile = input.taskIntentProfile;
     const lines = [
       '# Runtime context',
@@ -852,7 +852,7 @@ export class AltusManagedPromptService {
       `- Session ID: ${input.sessionId}`,
       `- Session title: ${title}`,
       `- Sandbox workspace root: ${input.workspaceRoot}`,
-      `- Current time: ${now}`,
+      `- Current date: ${currentDate}`,
       '',
       '# Session connectors',
       formatConnectors(input.connectors),
@@ -932,14 +932,22 @@ export class AltusManagedPromptService {
     return lines.join('\n');
   }
 
-  buildSkillContextPrompt(skills: ManagedSkillContext[]) {
+  buildSkillContextPrompt(
+    skills: ManagedSkillContext[],
+    options: {
+      includeBlockIndex?: boolean;
+    } = {}
+  ) {
     if (!Array.isArray(skills) || skills.length === 0) {
       return '';
     }
     const hasPptWorkflow = skills.some((skill) => skill.slug === 'ppt-workflow');
-    const blockIndex = altusManagedDynamicContextBlockService.renderBlockIndex(
-      altusManagedDynamicContextBlockService.buildSkillBlocks({ activeSkills: skills })
-    );
+    const includeBlockIndex = options.includeBlockIndex !== false;
+    const blockIndex = includeBlockIndex
+      ? altusManagedDynamicContextBlockService.renderBlockIndex(
+          altusManagedDynamicContextBlockService.buildSkillBlocks({ activeSkills: skills })
+        )
+      : '';
 
     return [
       '# Active skills',
@@ -952,8 +960,7 @@ export class AltusManagedPromptService {
         ? '- For PPTX delivery, finish the ppt-workflow planning and preflight first, then call `render_pptx_from_instructions` with the final `PptRenderInstruction`; include the returned `.pptx` path in `complete_task.attachments`. Do not create PPTX through python-pptx, shell scripts, or manual office-generation code while ppt-workflow is active.'
         : '',
       '',
-      blockIndex,
-      '',
+      ...(includeBlockIndex ? [blockIndex, ''] : []),
       ...this.formatSkillSections(skills),
     ].filter(Boolean).join('\n');
   }
@@ -981,13 +988,21 @@ export class AltusManagedPromptService {
     ].join('\n');
   }
 
-  buildSkillCatalogPrompt(skills: ManagedSkillCatalogEntry[]) {
+  buildSkillCatalogPrompt(
+    skills: ManagedSkillCatalogEntry[],
+    options: {
+      includeBlockIndex?: boolean;
+    } = {}
+  ) {
     if (!Array.isArray(skills) || skills.length === 0) {
       return '';
     }
-    const blockIndex = altusManagedDynamicContextBlockService.renderBlockIndex(
-      altusManagedDynamicContextBlockService.buildSkillBlocks({ catalog: skills })
-    );
+    const includeBlockIndex = options.includeBlockIndex !== false;
+    const blockIndex = includeBlockIndex
+      ? altusManagedDynamicContextBlockService.renderBlockIndex(
+          altusManagedDynamicContextBlockService.buildSkillBlocks({ catalog: skills })
+        )
+      : '';
 
     const lines = skills.map((skill) => {
       const resourceSummary = skill.resourceSummary;
@@ -1005,8 +1020,7 @@ export class AltusManagedPromptService {
       '- If the user explicitly selected a skill, its full body appears in the Active skills section.',
       '- If an active skill lists extra resources and you need one, call `load_skill_resource` with the raw active `skillId`, raw `revisionId`, and `resourcePath`; do not copy display ids such as `id=skill:platform:...`.',
       '- Catalog entries are diagnostic/index context only; do not treat them as loaded skill bodies.',
-      '',
-      blockIndex,
+      ...(includeBlockIndex ? ['', blockIndex] : []),
       '',
       ...lines,
     ].join('\n');

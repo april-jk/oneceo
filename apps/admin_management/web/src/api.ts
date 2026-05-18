@@ -2,7 +2,6 @@ import type {
   AdminThemeKey,
   AdminThemeMode,
   AdminThemeSettings,
-  AgentManagementOverview,
   AppUserDetailResponse,
   AppUserListResponse,
   ConversationSessionDetailResponse,
@@ -793,8 +792,10 @@ export const api = {
       timeoutMs: 20000,
       abortMessage: '加载运行关联信息超时，请稍后重试',
     }),
-  getAgentManagementOverview: () =>
-    request<AgentManagementOverview>('/api/agent-management/overview'),
+  health: () =>
+    request<{ status: string; timestamp: string }>('/health'),
+  getAgentHealth: () =>
+    request<{ success: boolean; message: string; timestamp: string }>('/api/agents/health'),
   getSandboxManagementOverview: (limit = 50) =>
     request<SandboxManagementOverview>(`/api/sandbox-management/overview?limit=${limit}`),
   getSandboxLiveSummary: (options?: { forceRefresh?: boolean }) =>

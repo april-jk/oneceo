@@ -61,7 +61,7 @@
       color: var(--text-secondary);
       margin-bottom: 8px;
     }
-    .title { font-size: 20px; font-weight: 600; overflow-wrap: break-word; }
+    .title { font-size: 24px; font-weight: 700; overflow-wrap: break-word; }
     .subtitle { font-size: 13px; color: var(--text-secondary); margin-top: 4px; }
     .close-btn {
       background: var(--surface-raised);
@@ -100,6 +100,25 @@
     .filter-pill:hover { border-color: var(--text-secondary); color: var(--text); }
     .filter-pill.active { background: var(--info); border-color: var(--info); color: #fff; }
     .filter-count { font-size: 12px; color: var(--text-secondary); margin-left: auto; }
+    .search-input {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 6px 12px;
+      font-size: 13px;
+      font-family: inherit;
+      color: var(--text);
+      min-width: 200px;
+      flex: 1;
+      max-width: 320px;
+      margin-left: auto;
+    }
+    .search-input:focus {
+      outline: 2px solid var(--info);
+      outline-offset: 2px;
+      border-color: var(--info);
+    }
+    .search-input::placeholder { color: var(--text-faint); }
 
     /* Timeline */
     .timeline { display: flex; flex-direction: column; gap: 8px; position: relative; padding-left: 24px; }
@@ -143,7 +162,7 @@
     .row-user::before { border-color: var(--info); background: var(--info); }
     .row-agent::before { border-color: var(--text-secondary); }
     .row-trace::before { border-color: var(--warning); background: var(--warning); }
-    .row-error::before { border-color: var(--danger); background: var(--danger); }
+    .row-error::before { border-color: var(--danger); background: var(--danger); width: 12px; height: 12px; left: -22px; }
 
     /* User bubble */
     .user-bubble {
@@ -166,7 +185,11 @@
       line-height: 1.6;
       overflow-wrap: break-word;
     }
-    .agent-block-error { border-color: color-mix(in srgb, var(--danger) 30%, transparent); }
+    .agent-block-error {
+      border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+      border-top: 2px solid var(--danger);
+      background: color-mix(in srgb, var(--danger) 4%, var(--surface));
+    }
     .agent-author { font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
     .agent-text { white-space: pre-wrap; }
 
@@ -179,9 +202,9 @@
       font-size: 12px;
       font-weight: 500;
     }
-    .capsule-system { background: color-mix(in srgb, var(--neutral) 10%, transparent); color: #4b5563; }
-    .capsule-intent { background: color-mix(in srgb, var(--info) 8%, transparent); color: #0550ae; }
-    .capsule-planning { background: color-mix(in srgb, var(--warning) 8%, transparent); color: #7a5100; }
+    .capsule-system { background: color-mix(in srgb, var(--neutral) 6%, transparent); color: var(--text-faint); padding: 3px 10px; font-size: 11px; }
+    .capsule-intent { background: color-mix(in srgb, var(--info) 5%, transparent); color: var(--text-soft); padding: 3px 10px; font-size: 11px; }
+    .capsule-planning { background: color-mix(in srgb, var(--warning) 5%, transparent); color: var(--text-soft); padding: 3px 10px; font-size: 11px; }
     .capsule-execution { background: color-mix(in srgb, var(--success) 8%, transparent); color: #1a5c3e; }
     .capsule-review { background: color-mix(in srgb, var(--warning) 8%, transparent); color: #7a5100; }
     .capsule-error { background: color-mix(in srgb, var(--danger) 8%, transparent); color: #9e1c23; }
@@ -239,6 +262,10 @@
       position: relative;
     }
     .trace-card:hover { background: var(--surface-raised); border-color: var(--text-secondary); }
+    .trace-card-error {
+      border-top: 2px solid var(--danger);
+      background: color-mix(in srgb, var(--danger) 4%, var(--surface));
+    }
     .trace-card::before {
       content: '';
       position: absolute;
@@ -265,6 +292,61 @@
     .trace-status { flex-shrink: 0; font-size: 11px; }
     .trace-duration { font-family: var(--mono); color: var(--text-secondary); flex-shrink: 0; }
     .trace-tokens { font-family: var(--mono); color: var(--text-secondary); flex-shrink: 0; font-size: 11px; }
+
+    /* Drawer */
+    .drawer-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.25);
+      display: none;
+      z-index: 200;
+    }
+    .drawer-overlay.open { display: block; }
+    .drawer-panel {
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: 680px;
+      max-width: 90vw;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      box-shadow: 0 28px 80px color-mix(in srgb, #1f2328 18%, transparent), 0 4px 14px color-mix(in srgb, #1f2328 10%, transparent);
+      display: flex;
+      flex-direction: column;
+      transform: translateX(100%);
+      transition: transform 0.25s cubic-bezier(0.25, 1, 0.5, 1);
+    }
+    .drawer-overlay.open .drawer-panel { transform: translateX(0); }
+    .drawer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .drawer-header h3 { font-size: 15px; font-weight: 700; margin: 0; }
+    .drawer-close {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      line-height: 1;
+    }
+    .drawer-close:hover { background: var(--surface-raised); color: var(--danger); border-color: var(--danger); }
+    .drawer-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+    }
 
     /* Loading */
     .loading { text-align: center; padding: 60px 20px; color: var(--text-secondary); }
@@ -454,25 +536,19 @@
       margin-top: 4px;
     }
 
-    /* Trace inline detail */
+    /* Trace detail (drawer) */
     .trace-detail {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      margin-top: 8px;
-      padding: 16px;
+      padding: 0;
       width: 100%;
-      animation: slideDown 0.2s ease;
-    }
-    @keyframes slideDown {
-      from { opacity: 0; transform: translateY(-4px); }
-      to { opacity: 1; transform: translateY(0); }
     }
     .trace-detail-header {
       display: flex;
       align-items: center;
       gap: 10px;
-      margin-bottom: 12px;
+      margin-bottom: 16px;
       flex-wrap: wrap;
     }
     .trace-detail-title {
@@ -492,7 +568,7 @@
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
       gap: 8px;
-      margin-bottom: 12px;
+      margin-bottom: 16px;
     }
     .trace-metric {
       background: var(--bg);
@@ -654,6 +730,7 @@
       .row { animation: none; }
       .trace-detail { animation: none; }
       html { scroll-behavior: auto; }
+      .drawer-panel { transition: none; }
     }
   </style>
 </head>
@@ -665,18 +742,30 @@
     </div>
   </div>
 
+  <div class="drawer-overlay" id="drawer-overlay" onclick="closeTraceDrawer()">
+    <div class="drawer-panel" onclick="event.stopPropagation()">
+      <div class="drawer-header">
+        <h3>Trace 详情</h3>
+        <button class="drawer-close" onclick="closeTraceDrawer()" title="关闭 (Esc)">&times;</button>
+      </div>
+      <div class="drawer-body" id="drawer-body"></div>
+    </div>
+  </div>
+
   <div class="help-overlay" id="help-overlay" onclick="showHelp(false)">
     <div class="help-modal" onclick="event.stopPropagation()">
       <h3>键盘快捷键</h3>
-      <div class="help-row"><span>向下导航</span><span class="help-key">j / ↓</span></div>
-      <div class="help-row"><span>向上导航</span><span class="help-key">k / ↑</span></div>
+      <div class="help-row"><span>向下导航</span><span class="help-key">j / &darr;</span></div>
+      <div class="help-row"><span>向上导航</span><span class="help-key">k / &uarr;</span></div>
+      <div class="help-row"><span>下一个错误</span><span class="help-key">n</span></div>
+      <div class="help-row"><span>上一个错误</span><span class="help-key">p</span></div>
       <div class="help-row"><span>展开/收起 Trace</span><span class="help-key">Enter</span></div>
       <div class="help-row"><span>显示帮助</span><span class="help-key">?</span></div>
       <div class="help-row"><span>取消聚焦</span><span class="help-key">Esc</span></div>
     </div>
   </div>
 
-  <button class="back-to-top" id="back-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="回到顶部">↑</button>
+  <button class="back-to-top" id="back-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="回到顶部">&uarr;</button>
 
   <script>
     const API_BASE = '';
@@ -685,6 +774,8 @@
     let sessionTitle = '';
     let sessionMeta = {};
     let filter = 'all';
+    let searchQuery = '';
+    let activeTraceId = null;
     const expandedTraceIds = new Set();
     let focusedIndex = -1;
     let mergedItems = [];
@@ -717,7 +808,7 @@
       for (const f of fallback) {
         if (text.startsWith(f)) {
           const rest = text.slice(f.length).trim();
-          return { label: f, rest: rest ? rest.replace(/^[：:]\s*/, '') : '' };
+          return { label: f, rest: rest ? rest.replace(/^[\uff1a:]\s*/, '') : '' };
         }
       }
       return null;
@@ -793,25 +884,47 @@
       return items;
     }
 
+    function filterItemsBySearch(items) {
+      if (!searchQuery.trim()) return items;
+      const q = normalizeText(searchQuery);
+      return items.filter(function(item) {
+        if (item.kind === 'user') return normalizeText(item.text).includes(q);
+        if (item.kind === 'agent' || item.kind === 'error') return normalizeText(item.text).includes(q) || normalizeText(item.author || '').includes(q);
+        if (item.kind === 'capsule') return normalizeText(item.label + ' ' + item.text).includes(q);
+        if (item.kind === 'clarification') return normalizeText(item.text).includes(q);
+        if (item.kind === 'tool') return normalizeText(item.toolName + ' ' + item.preview).includes(q);
+        if (item.kind === 'api_trace') {
+          const t = item.trace;
+          return normalizeText(t.model || t.toolName || t.serviceName || t.endpoint || t.traceType).includes(q) ||
+                 normalizeText(t.errorMessage || '').includes(q);
+        }
+        return false;
+      });
+    }
+
     function mergeItems(replayItems, traceItems) {
-      const traceObjs = traceItems.map((t) => ({
-        kind: 'api_trace',
-        id: t.id,
-        trace: t,
-        timestamp: t.createdAt,
-      }));
+      const traceObjs = traceItems.map(function(t) {
+        return {
+          kind: 'api_trace',
+          id: t.id,
+          trace: t,
+          timestamp: t.createdAt,
+        };
+      });
       const merged = [...replayItems, ...traceObjs].sort(
-        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        function(a, b) { return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(); }
       );
+      let filtered;
       if (filter === 'messages-only') {
-        return merged.filter((item) => item.kind !== 'api_trace');
+        filtered = merged.filter(function(item) { return item.kind !== 'api_trace'; });
+      } else if (filter !== 'all') {
+        filtered = merged.filter(function(item) {
+          return item.kind !== 'api_trace' || item.trace.traceType === filter;
+        });
+      } else {
+        filtered = merged;
       }
-      if (filter !== 'all') {
-        return merged.filter((item) =>
-          item.kind !== 'api_trace' || item.trace.traceType === filter
-        );
-      }
-      return merged;
+      return filterItemsBySearch(filtered);
     }
 
     function renderBadge(typeLabel, typeTone) {
@@ -822,9 +935,8 @@
       const typeLabel = trace.traceType === 'llm_request' ? 'LLM' : trace.traceType === 'tool_call' ? '工具' : trace.traceType === 'service_api' ? '服务' : '连接器';
       const typeTone = trace.traceType === 'llm_request' ? 'info' : trace.traceType === 'tool_call' ? 'warning' : 'neutral';
       const hasError = !!trace.errorMessage;
-      const isExpanded = expandedTraceIds.has(trace.id);
       let html = '<button type="button" class="trace-card trace-card-' + typeTone + (hasError ? ' trace-card-error' : '') + '"';
-      html += ' onclick="toggleTraceDetail(\'' + trace.id + '\')">';
+      html += ' onclick="openTraceDetailDrawer(\'' + trace.id + '\')">';
       html += '<span class="trace-badge trace-badge-' + typeTone + '" style="margin-right:6px;">' + typeLabel + '</span>';
       html += '<span class="trace-name">' + (trace.model || trace.toolName || trace.serviceName || trace.endpoint || trace.traceType) + '</span>';
       html += '<span class="trace-status ' + (hasError ? 'status-error' : 'status-success') + '" style="color:' + (hasError ? 'var(--danger)' : 'var(--success)') + ';font-size:11px;">' + (hasError ? '失败' : '成功') + '</span>';
@@ -833,19 +945,26 @@
         html += '<span class="trace-tokens">' + (trace.promptTokens || 0) + '+' + (trace.completionTokens || 0) + '=' + trace.totalTokens + '</span>';
       }
       html += '</button>';
-      if (isExpanded) {
-        html += renderTraceInlineDetail(trace);
-      }
       return html;
     }
 
+    function openTraceDetailDrawer(traceId) {
+      activeTraceId = traceId;
+      const trace = traces.find(function(t) { return t.id === traceId; });
+      if (!trace) return;
+      document.getElementById('drawer-body').innerHTML = renderTraceDrawerContent(trace);
+      document.getElementById('drawer-overlay').classList.add('open');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeTraceDrawer() {
+      activeTraceId = null;
+      document.getElementById('drawer-overlay').classList.remove('open');
+      document.body.style.overflow = '';
+    }
+
     function toggleTraceDetail(traceId) {
-      if (expandedTraceIds.has(traceId)) {
-        expandedTraceIds.delete(traceId);
-      } else {
-        expandedTraceIds.add(traceId);
-      }
-      render();
+      openTraceDetailDrawer(traceId);
     }
 
     function syntaxHighlightJSON(json) {
@@ -949,7 +1068,7 @@
         var count = type === 'array' ? val.length : Object.keys(val).length;
 
         var html = '<div class="json-tree-node json-tree-branch">';
-        html += '<button type="button" class="json-tree-toggle" onclick="document.getElementById(\'' + id + '\').classList.toggle(\'open\');this.textContent=document.getElementById(\'' + id + '\').classList.contains(\'open\')?\'▼\':\'▶\'">▼</button>';
+        html += '<button type="button" class="json-tree-toggle" onclick="document.getElementById(\'' + id + '\').classList.toggle(\'open\');this.textContent=document.getElementById(\'' + id + '\').classList.contains(\'open\')?\'\u25bc\':\'\u25b6\'">\u25bc</button>';
 
         if (key !== undefined) {
           html += '<span class="json-tree-key">' + escapeHtml(String(key)) + '</span>';
@@ -979,7 +1098,7 @@
       return '<div class="json-tree">' + renderValue(data, undefined, 0) + '</div>';
     }
 
-    function renderTraceInlineDetail(trace) {
+    function renderTraceDrawerContent(trace) {
       const typeLabel = trace.traceType === 'llm_request' ? 'LLM' : trace.traceType === 'tool_call' ? '工具' : trace.traceType === 'service_api' ? '服务' : '连接器';
       const typeTone = trace.traceType === 'llm_request' ? 'info' : trace.traceType === 'tool_call' ? 'warning' : 'neutral';
       const hasError = !!trace.errorMessage;
@@ -993,7 +1112,7 @@
       html += '<span class="mono">' + (trace.model || trace.toolName || trace.serviceName || trace.endpoint || trace.traceType) + '</span>';
       html += '</div>';
       html += '<div class="trace-detail-meta">';
-      html += '<span class="' + (hasError ? 'status-error' : 'status-success') + '">' + (hasError ? '● 失败' : '● 成功') + '</span>';
+      html += '<span class="' + (hasError ? 'status-error' : 'status-success') + '">' + (hasError ? '\u25cf 失败' : '\u25cf 成功') + '</span>';
       html += '<span class="mono">' + (trace.durationMs ? trace.durationMs + 'ms' : '-') + '</span>';
       html += '<span class="mono">' + formatDateTime(trace.createdAt) + '</span>';
       if (trace.sequence !== undefined) {
@@ -1085,6 +1204,11 @@
       return html;
     }
 
+    function renderTraceInlineDetail(trace) {
+      // Kept for backward compatibility, delegates to drawer
+      return renderTraceDrawerContent(trace);
+    }
+
     function render() {
       mergedItems = mergeItems(buildReplayItems(messages), traces);
       let html = '';
@@ -1094,12 +1218,12 @@
       html += '<div class="header-left">';
       html += '<div class="section-tag">对话回放</div>';
       html += '<div class="title">' + (sessionTitle || '会话回放') + '</div>';
-      html += '<div class="subtitle">' + messages.length + ' 条消息 · ' + traces.length + ' 条 API Trace';
+      html += '<div class="subtitle">' + messages.length + ' 条消息 \u00b7 ' + traces.length + ' 条 API Trace';
       if (sessionMeta.createdAt) {
-        html += ' · ' + formatDateTime(sessionMeta.createdAt);
+        html += ' \u00b7 ' + formatDateTime(sessionMeta.createdAt);
       }
       if (sessionMeta.status) {
-        html += ' · 状态: ' + escapeHtml(sessionMeta.status);
+        html += ' \u00b7 状态: ' + escapeHtml(sessionMeta.status);
       }
       html += '</div>';
       html += '<div class="keyboard-hint">按 ? 查看键盘快捷键</div>';
@@ -1120,13 +1244,14 @@
       for (const f of filters) {
         html += '<button type="button" class="filter-pill ' + (filter === f.key ? 'active' : '') + '" onclick="setFilter(\'' + f.key + '\')">' + f.label + '</button>';
       }
+      html += '<input type="text" class="search-input" id="search-input" placeholder="\u641c\u7d22\u6d88\u606f\u3001trace\u3001\u5de5\u5177\u2026" value="' + escapeHtml(searchQuery) + '">';
       html += '<span class="filter-count">' + mergedItems.length + ' 条</span>';
       html += '</div>';
 
       // Timeline
       html += '<div class="timeline" id="timeline">';
       if (mergedItems.length === 0) {
-        html += '<div class="empty"><h2>暂无数据</h2><p>当前筛选条件下没有可展示的内容</p></div>';
+        html += '<div class="empty"><h2>\u6682\u65e0\u6570\u636e</h2><p>\u5f53\u524d\u7b5b\u9009\u6761\u4ef6\u4e0b\u6ca1\u6709\u53ef\u5c55\u793a\u7684\u5185\u5bb9</p></div>';
       } else {
         for (const item of mergedItems) {
           if (item.kind === 'user') {
@@ -1149,7 +1274,7 @@
             html += '</div>';
           } else if (item.kind === 'capsule') {
             html += '<div class="row row-agent">';
-            html += '<div class="capsule capsule-' + item.tone + '">' + escapeHtml(item.label) + (item.text ? ' · ' + escapeHtml(item.text) : '') + '</div>';
+            html += '<div class="capsule capsule-' + item.tone + '">' + escapeHtml(item.label) + (item.text ? ' \u00b7 ' + escapeHtml(item.text) : '') + '</div>';
             html += '</div>';
           } else if (item.kind === 'clarification') {
             html += '<div class="row row-agent">';
@@ -1157,11 +1282,11 @@
             html += '</div>';
           } else if (item.kind === 'tool') {
             const statusClass = item.status === 'failed' ? 'tool-status-failed' : 'tool-status-success';
-            const statusText = item.status === 'failed' ? '失败' : item.status === 'completed' ? '已完成' : '进行中';
+            const statusText = item.status === 'failed' ? '\u5931\u8d25' : item.status === 'completed' ? '\u5df2\u5b8c\u6210' : '\u8fdb\u884c\u4e2d';
             html += '<div class="row row-agent">';
             html += '<div class="tool-block">';
             html += '<div class="tool-header">';
-            html += '<span class="tool-badge">工</span>';
+            html += '<span class="tool-badge">\u5de5</span>';
             html += '<span class="tool-title">' + escapeHtml(item.toolName) + '</span>';
             html += '<span class="tool-status ' + statusClass + '" style="margin-left:auto;">' + statusText + '</span>';
             html += '</div>';
@@ -1180,6 +1305,19 @@
       html += '</div>';
 
       document.getElementById('app').innerHTML = html;
+
+      // Bind search input
+      const searchInput = document.getElementById('search-input');
+      if (searchInput) {
+        searchInput.addEventListener('input', function(e) {
+          searchQuery = e.target.value;
+          render();
+          requestAnimationFrame(function() {
+            const el = document.getElementById('search-input');
+            if (el) { el.focus(); }
+          });
+        });
+      }
 
       // Restore focus after render
       if (focusedIndex >= 0) {
@@ -1201,7 +1339,7 @@
 
     function updateFocus() {
       const rows = document.querySelectorAll('.timeline > .row');
-      rows.forEach((row, i) => {
+      rows.forEach(function(row, i) {
         row.classList.toggle('row-focused', i === focusedIndex);
       });
       if (focusedIndex >= 0 && rows[focusedIndex]) {
@@ -1216,11 +1354,24 @@
       updateFocus();
     }
 
+    function findNextError(direction) {
+      const rows = document.querySelectorAll('.timeline > .row');
+      if (rows.length === 0) return;
+      let start = focusedIndex >= 0 ? focusedIndex : (direction > 0 ? -1 : rows.length);
+      for (let i = start + direction; i >= 0 && i < rows.length; i += direction) {
+        const item = mergedItems[i];
+        if (!item) continue;
+        if (item.kind === 'error') { focusedIndex = i; updateFocus(); return; }
+        if (item.kind === 'api_trace' && item.trace.errorMessage) { focusedIndex = i; updateFocus(); return; }
+        if (item.kind === 'tool' && item.status === 'failed') { focusedIndex = i; updateFocus(); return; }
+      }
+    }
+
     function toggleFocusedTrace() {
       if (focusedIndex < 0) return;
       const item = mergedItems[focusedIndex];
       if (item && item.kind === 'api_trace') {
-        toggleTraceDetail(item.trace.id);
+        openTraceDetailDrawer(item.trace.id);
       }
     }
 
@@ -1237,6 +1388,13 @@
         }
         return;
       }
+      if (document.getElementById('drawer-overlay').classList.contains('open')) {
+        if (e.key === 'Escape') {
+          closeTraceDrawer();
+          e.preventDefault();
+        }
+        return;
+      }
       switch (e.key) {
         case 'j':
         case 'ArrowDown':
@@ -1246,6 +1404,14 @@
         case 'k':
         case 'ArrowUp':
           navigateFocus(-1);
+          e.preventDefault();
+          break;
+        case 'n':
+          findNextError(1);
+          e.preventDefault();
+          break;
+        case 'p':
+          findNextError(-1);
           e.preventDefault();
           break;
         case 'Enter':
@@ -1274,7 +1440,7 @@
       const params = new URLSearchParams(window.location.search);
       const sessionId = params.get('session');
       if (!sessionId) {
-        document.getElementById('app').innerHTML = '<div class="error"><h2>参数错误</h2><p>缺少会话 ID</p></div>';
+        document.getElementById('app').innerHTML = '<div class="error"><h2>\u53c2\u6570\u9519\u8bef</h2><p>\u7f3a\u5c11\u4f1a\u8bdd ID</p></div>';
         return;
       }
 
@@ -1308,7 +1474,7 @@
 
         render();
       } catch (err) {
-        document.getElementById('app').innerHTML = '<div class="error"><h2>加载失败</h2><p>' + escapeHtml(err.message) + '</p></div>';
+        document.getElementById('app').innerHTML = '<div class="error"><h2>\u52a0\u8f7d\u5931\u8d25</h2><p>' + escapeHtml(err.message) + '</p></div>';
       }
     }
 

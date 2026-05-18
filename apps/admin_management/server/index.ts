@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 import { config, isAllowedCorsOrigin } from './config';
 import { kvmOrchestratorConnector } from './connectors/kvm-orchestrator-connector';
 import { oneceoApiConnector } from './connectors/oneceo-api-connector';
-import { createAgentManagementRoutes } from './routes/agent-management-routes';
 import { createAdminAuthRoutes } from './routes/admin-auth-routes';
 import { createAdminThemeRoutes } from './routes/admin-theme-routes';
 import { createConversationRoutes } from './routes/conversation-routes';
@@ -24,7 +23,6 @@ import { createBillingManagementRoutes } from './routes/billing-management-route
 import { createNotificationManagementRoutes } from './routes/notification-management-routes';
 import { createMembershipManagementRoutes } from './routes/membership-management-routes';
 import { createPromoBannerManagementRoutes } from './routes/promo-banner-management-routes';
-import { AgentManagementService } from './services/agent-management-service';
 import { AdminThemeService } from './services/admin-theme-service';
 import { ConversationManagementService } from './services/conversation-management-service';
 import { DeploymentManagementService } from './services/deployment-management-service';
@@ -58,7 +56,6 @@ const dashboardService = new DashboardService(kvmOrchestratorConnector);
 const hostRuntimeService = new HostRuntimeService(kvmOrchestratorConnector);
 const conversationService = new ConversationManagementService(oneceoApiConnector, kvmOrchestratorConnector);
 const deploymentManagementService = new DeploymentManagementService(oneceoApiConnector);
-const agentManagementService = new AgentManagementService(oneceoApiConnector);
 const sandboxManagementService = new SandboxManagementService();
 const skillManagementService = new SkillManagementService(oneceoApiConnector);
 const connectorGuideManagementService = new ConnectorGuideManagementService(oneceoApiConnector);
@@ -111,13 +108,23 @@ app.get('/health', (_req, res) => {
 });
 
 app.use('/api/admin/auth', createAdminAuthRoutes(oneceoApiConnector));
+
+// 轻量代理：智能体健康检查（无需认证，供运营概览使用）
+app.get('/api/agents/health', async (_req, res) => {
+  try {
+    const data = await oneceoApiConnector.getAgentHealth();
+    res.json(data);
+  } catch (error) {
+    res.status(502).json({ success: false, message: error instanceof Error ? error.message : '智能体接口不可用' });
+  }
+});
+
 app.use('/api', createAdminAuthMiddleware(oneceoApiConnector));
 app.use('/api/kvm', createKvmRoutes(kvmService));
 app.use('/api/hosts', createHostRoutes(hostRuntimeService));
 app.use('/api/dashboard', createDashboardRoutes(dashboardService));
 app.use('/api/conversations', createConversationRoutes(conversationService));
 app.use('/api/deployment-management', createDeploymentManagementRoutes(deploymentManagementService));
-app.use('/api/agent-management', createAgentManagementRoutes(agentManagementService));
 app.use('/api/theme', createAdminThemeRoutes(adminThemeService));
 app.use('/api/sandbox-management', createSandboxManagementRoutes(sandboxManagementService));
 app.use('/api/user-management', createUserManagementRoutes(userManagementService));

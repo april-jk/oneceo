@@ -32,6 +32,7 @@ import {
   KeyRound,
   LogOut,
   Mail,
+  Mic,
   Pencil,
   Plug,
   RotateCcw,
@@ -92,6 +93,7 @@ const SETTINGS_TABS: SettingsTab[] = [
   "account",
   "model",
   "settings",
+  "voice",
   "skills",
   "connectors",
   "billing",
@@ -494,6 +496,11 @@ export function SettingsPanel({
       value: "settings" as const,
       label: t("settings.settingsTab"),
       icon: Settings2,
+    },
+    {
+      value: "voice" as const,
+      label: t("settings.voiceTab"),
+      icon: Mic,
     },
     {
       value: "skills" as const,
@@ -1026,40 +1033,6 @@ export function SettingsPanel({
                   </SettingsSection>
 
                   <SettingsSection
-                    eyebrow="Voice input"
-                    title={t("settings.voiceRecognitionProviderLabel")}
-                    description={t(
-                      "settings.voiceRecognitionProviderDescription",
-                    )}
-                  >
-                    <Select
-                      value={voiceRecognitionProvider}
-                      onValueChange={(value) =>
-                        setVoiceRecognitionProvider(
-                          value as VoiceRecognitionProvider,
-                        )
-                      }
-                    >
-                      <SelectTrigger className="w-full max-w-xs rounded-xl border-border/70 bg-background/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="rounded-xl">
-                        <SelectItem value="browser" className="rounded-md">
-                          {t("settings.voiceRecognitionProviderBrowser")}
-                        </SelectItem>
-                        <SelectItem value="volcengine" className="rounded-md">
-                          {t("settings.voiceRecognitionProviderVolcengine")}
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <p className="mt-3 max-w-[62ch] text-sm leading-6 text-muted-foreground">
-                      {voiceRecognitionProvider === "browser"
-                        ? t("settings.voiceRecognitionProviderBrowserHint")
-                        : t("settings.voiceRecognitionProviderVolcengineHint")}
-                    </p>
-                  </SettingsSection>
-
-                  <SettingsSection
                     eyebrow="Signals"
                     title={t("settings.notificationsLabel")}
                     description={t("settings.notificationsDescription")}
@@ -1194,6 +1167,56 @@ export function SettingsPanel({
                     </Select>
                   </SettingsSection>
                 ) : null}
+                </div>
+              </TabsContent>
+
+              {/* Voice Tab */}
+              <TabsContent value="voice" className="mt-0">
+                <div className="mx-auto flex w-full max-w-[720px] flex-col gap-6 pb-6">
+                  <SettingsSection
+                    eyebrow="Voice"
+                    title={t("settings.voiceTab")}
+                    description={t("settings.voiceTabDescription")}
+                  >
+                    <div className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-muted/20 p-4">
+                      <div className="flex flex-col gap-2 sm:max-w-xs">
+                        <Label htmlFor="voice-recognition-provider">
+                          {t("settings.voiceRecognitionProviderLabel")}
+                        </Label>
+                        <Select
+                          value={voiceRecognitionProvider}
+                          onValueChange={(value) =>
+                            setVoiceRecognitionProvider(
+                              value as VoiceRecognitionProvider,
+                            )
+                          }
+                        >
+                          <SelectTrigger
+                            id="voice-recognition-provider"
+                            className="w-full rounded-xl border-border/70 bg-background/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]"
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="rounded-xl">
+                            <SelectItem value="browser" className="rounded-md">
+                              {t("settings.voiceRecognitionProviderBrowser")}
+                            </SelectItem>
+                            <SelectItem
+                              value="volcengine"
+                              className="rounded-md"
+                            >
+                              {t("settings.voiceRecognitionProviderVolcengine")}
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <p className="text-sm leading-6 text-muted-foreground">
+                        {voiceRecognitionProvider === "browser"
+                          ? t("settings.voiceRecognitionProviderBrowserHint")
+                          : t("settings.voiceRecognitionProviderVolcengineHint")}
+                      </p>
+                    </div>
+                  </SettingsSection>
                 </div>
               </TabsContent>
 

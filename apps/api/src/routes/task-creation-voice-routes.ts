@@ -28,7 +28,8 @@ function toPublicVoiceErrorMessage(error: unknown): string {
   }
   if (
     /volcengine|x-api-|websocket|asr/i.test(raw) ||
-    raw.includes('语音识别未配置')
+    raw.includes('语音识别未配置') ||
+    raw.includes('在线语音识别暂未配置')
   ) {
     return '语音识别服务暂时不可用';
   }
@@ -53,7 +54,8 @@ function resolveVoiceErrorStatus(error: unknown): number {
   }
   if (
     raw.includes('语音输入暂未配置') ||
-    raw.includes('语音识别未配置')
+    raw.includes('语音识别未配置') ||
+    raw.includes('在线语音识别暂未配置')
   ) {
     return 503;
   }
@@ -85,7 +87,7 @@ function runUploadMiddleware(req: express.Request, res: express.Response) {
 router.post('/transcribe', async (req, res) => {
   try {
     await runUploadMiddleware(req, res);
-    currentUserResolver.require(req);
+    const currentUser = currentUserResolver.require(req);
     const clientTranscript = normalizeClientTranscript(
       req.body?.clientTranscript,
     );
@@ -93,7 +95,7 @@ router.post('/transcribe', async (req, res) => {
     if (!speechService && !clientTranscript) {
       return res.status(503).json({
         success: false,
-        error: '语音输入暂未配置',
+        error: '在线语音识别暂未配置',
       });
     }
 
@@ -116,6 +118,7 @@ router.post('/transcribe', async (req, res) => {
     try {
       transcript = await speechService.transcribeAudio(
         new Uint8Array(audioFile.buffer),
+        `oneceo-${currentUser.userId}`,
       );
     } catch (speechError) {
       console.warn('[TASK_CREATION_VOICE_TRANSCRIBE_FALLBACK]', speechError);

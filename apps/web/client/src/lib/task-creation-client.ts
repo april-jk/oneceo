@@ -231,8 +231,6 @@ export type TaskCreationWebsitePreviewSnapshot = {
   };
 };
 
-export type RemoteAttachmentProvider = "website" | "google-drive" | "onedrive";
-
 export type TaskCreationDebugInfo = {
   ready: boolean;
   url?: string;
@@ -1944,29 +1942,4 @@ export async function submitTaskCreationManagedInput(
     throw new Error("managed input result empty");
   }
   return result.data;
-}
-
-export async function fetchRemoteTaskAttachment(input: {
-  provider: RemoteAttachmentProvider;
-  url: string;
-}): Promise<File> {
-  const response = await fetch(`${getApiBaseUrl()}/api/task-creation/attachments/fetch`, {
-    method: "POST",
-    headers: buildClientIdentityHeaders({
-      "Content-Type": "application/json",
-    }),
-    body: JSON.stringify(input),
-  });
-  if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
-  }
-
-  const blob = await response.blob();
-  const headerName = response.headers.get("X-Attachment-Name");
-  const fallbackName = input.provider === "website" ? "website-file" : `${input.provider}-file`;
-  const fileName = headerName ? decodeURIComponent(headerName) : fallbackName;
-  return new File([blob], fileName, {
-    type: blob.type || "application/octet-stream",
-    lastModified: Date.now(),
-  });
 }

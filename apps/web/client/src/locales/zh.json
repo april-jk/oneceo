@@ -260,14 +260,6 @@
   "attachmentPicker": {
     "triggerLabel": "添加附件",
     "triggerAriaLabel": "添加附件",
-    "cloud": {
-      "title": "从云端添加",
-      "description": "Drive、OneDrive、网站下载",
-      "googleDriveDescription": "导入公开分享的 Drive 文件",
-      "oneDriveDescription": "导入公开分享的 OneDrive 文件",
-      "websiteLabel": "网站",
-      "websiteDescription": "从网页链接直接下载文件"
-    },
     "skills": {
       "title": "使用技能",
       "description": "选择你已启用的 skills 并同步到 sandbox",
@@ -284,31 +276,9 @@
       "title": "从本地文件添加",
       "description": "选择电脑上的文档、图片或代码文件"
     },
-    "dialog": {
-      "defaultTitle": "添加远程文件",
-      "urlLabel": "文件链接",
-      "hint": "支持公开可访问的分享链接。文件会先下载到浏览器，再按普通附件加入当前会话。",
-      "importing": "导入中...",
-      "confirm": "添加文件",
-      "website": {
-        "title": "从网站添加文件",
-        "description": "输入可直接访问的文件地址，系统会先下载再作为附件加入当前对话。"
-      },
-      "googleDrive": {
-        "title": "从 Google Drive 添加",
-        "description": "输入公开分享的 Google Drive 文件链接，系统会转换成可下载地址。"
-      },
-      "oneDrive": {
-        "title": "从 OneDrive 添加",
-        "description": "输入公开分享的 OneDrive 文件链接，系统会通过分享地址下载文件。"
-      }
-    },
     "toasts": {
       "skillAdded": "已添加技能：{{name}}",
       "skillAddFailed": "技能添加失败",
-      "urlRequired": "请输入文件链接",
-      "remoteAdded": "已从{{provider}}添加 {{name}}",
-      "remoteAddFailed": "远程文件添加失败",
       "localAddFailed": "本地附件添加失败"
     }
   },

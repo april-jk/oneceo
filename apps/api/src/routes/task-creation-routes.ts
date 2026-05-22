@@ -60,11 +60,6 @@ import { connectorGuideService } from '../services/connector-guide-service';
 import { sessionMcpRecoveryService } from '../services/session-mcp-recovery-service';
 import { taskSessionCacheFacade } from '../services/task-session-cache-facade';
 import {
-  inferFilenameFromResponse,
-  resolveRemoteAttachmentTarget,
-  type RemoteAttachmentProvider,
-} from '../services/remote-attachment-service';
-import {
   TASK_ATTACHMENT_MAX_BYTES,
   isAllowedAttachmentFile,
   sanitizeAttachmentName,
@@ -2148,25 +2143,6 @@ function resolveWorkspaceRelativeRequestPath(
 function shellEscape(value: string): string {
   if (!value) return "''";
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
-}
-
-function parseRemoteAttachmentProvider(value: unknown): RemoteAttachmentProvider {
-  const normalized = asText(value);
-  if (
-    normalized === 'website' ||
-    normalized === 'google-drive' ||
-    normalized === 'onedrive'
-  ) {
-    return normalized;
-  }
-  throw new Error('不支持的远程来源');
-}
-
-function shouldAllowPrivateRemoteAttachmentHosts() {
-  if (process.env.ALLOW_PRIVATE_REMOTE_ATTACHMENTS === '1') {
-    return true;
-  }
-  return process.env.NODE_ENV !== 'production';
 }
 
 function asText(value: unknown): string {
@@ -5167,69 +5143,6 @@ router.get('/sessions/:sessionId/messages', async (req, res) => {
     res.status(500).json({
       success: false,
       error: getPublicErrorMessage('获取对话消息失败，请稍后重试'),
-    });
-  }
-});
-
-router.post('/attachments/fetch', async (req, res) => {
-  try {
-    currentUserResolver.require(req);
-    const provider = parseRemoteAttachmentProvider(req.body?.provider);
-    const sourceUrl = asText(req.body?.url);
-    const target = resolveRemoteAttachmentTarget(provider, sourceUrl, {
-      allowPrivateHosts: shouldAllowPrivateRemoteAttachmentHosts(),
-    });
-
-    const upstream = await fetch(target.fetchUrl, {
-      redirect: 'follow',
-      headers: {
-        'user-agent': 'oneceo-remote-attachment/1.0',
-      },
-    });
-    if (!upstream.ok) {
-      throw new Error(`远程文件获取失败 (${upstream.status})`);
-    }
-
-    const declaredSize = asPositiveInt(upstream.headers.get('content-length'));
-    if (declaredSize !== null && declaredSize > TASK_ATTACHMENT_MAX_BYTES) {
-      throw new Error('单个附件不能超过 10 MB');
-    }
-
-    const rawBody = Buffer.from(await upstream.arrayBuffer());
-    if (!rawBody.length) {
-      throw new Error('远程文件内容为空');
-    }
-    if (rawBody.length > TASK_ATTACHMENT_MAX_BYTES) {
-      throw new Error('单个附件不能超过 10 MB');
-    }
-
-    const mimeType = asText(upstream.headers.get('content-type')).split(';')[0] || 'application/octet-stream';
-    const filename = inferFilenameFromResponse({
-      contentDisposition: upstream.headers.get('content-disposition'),
-      responseUrl: upstream.url || target.fetchUrl,
-      fallbackName: target.suggestedName,
-      mimeType,
-    });
-    if (!isAllowedAttachmentFile({ name: filename, mimeType })) {
-      throw new Error('仅支持文本、文档和图片类附件');
-    }
-
-    res.setHeader('Content-Type', mimeType);
-    res.setHeader('Content-Length', String(rawBody.length));
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader(
-      'Access-Control-Expose-Headers',
-      'Content-Type, Content-Length, X-Attachment-Name, X-Attachment-Provider'
-    );
-    res.setHeader('X-Attachment-Name', encodeURIComponent(filename));
-    res.setHeader('X-Attachment-Provider', provider);
-    return res.status(200).send(rawBody);
-  } catch (error: any) {
-    console.error('远程附件获取失败:', error);
-    const authError = resolveSessionConnectorOwnershipError(error);
-    return res.status(authError?.status || 400).json({
-      success: false,
-      error: getPublicErrorMessage(authError?.message || error?.message || '远程附件获取失败'),
     });
   }
 });

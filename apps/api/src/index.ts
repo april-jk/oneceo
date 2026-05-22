@@ -6,6 +6,7 @@ import { Server } from 'socket.io';
 import type { WebSocketEvent } from '@oneceo/shared';
 import agentRoutes from './routes/agent-routes';
 import taskCreationRoutes from './routes/task-creation-routes';
+import taskCreationVoiceRoutes from './routes/task-creation-voice-routes';
 import altusManagedRoutes from './routes/altus-managed-routes';
 import sandboxRoutes from './routes/sandbox-routes';
 import osacRoutes from './routes/osac-routes';
@@ -176,6 +177,7 @@ app.post('/api/projects', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/auth', authOauthRoutes);
 app.use('/api/task-creation', taskCreationRoutes);
+app.use('/api/task-creation/voice', taskCreationVoiceRoutes);
 app.use('/api/altus-managed', altusManagedRoutes);
 app.use('/api/sandbox', sandboxRoutes);
 app.use('/api/sandbox/osac', osacRoutes);

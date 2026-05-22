@@ -20,7 +20,6 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import WorkspaceLayout from "@/components/WorkspaceLayout";
 import {
-  Mic,
   Send,
   Square,
   Sparkles,
@@ -74,6 +73,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import ConnectorDialog from "@/components/ConnectorDialog";
+import VoiceInputButton from "@/components/VoiceInputButton";
 import AttachmentChipList from "@/components/AttachmentChipList";
 import AttachmentPickerButton from "@/components/AttachmentPickerButton";
 import MessageAttachmentReference from "@/components/MessageAttachmentReference";
@@ -2342,6 +2342,22 @@ export default function Home() {
     setMessage("");
   };
 
+  async function handleResolvedVoiceTranscript(transcript: string) {
+    const spokenText = transcript.trim();
+    if (!spokenText) {
+      throw new Error("未识别到有效语音内容");
+    }
+
+    const mergedInput = [message.trim(), spokenText].filter(Boolean).join("\n");
+    setMode("chat");
+    if (currentQuestion) {
+      await submitQuestionAnswer(mergedInput);
+    } else {
+      await submitPrompt(mergedInput);
+    }
+    setMessage("");
+  }
+
   const handleStop = () => {
     if (!sessionId) return;
     void interruptCurrentRun(sessionId).catch((error) => {
@@ -3451,13 +3467,12 @@ export default function Home() {
                     <div className="flex items-center gap-1">
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-9 w-9 rounded-full transition-colors hover:bg-accent"
-                          >
-                            <Mic className="w-4 h-4 text-muted-foreground" />
-                          </Button>
+                          <span>
+                            <VoiceInputButton
+                              disabled={isInterrupting || showStopButton}
+                              onResolvedTranscript={handleResolvedVoiceTranscript}
+                            />
+                          </span>
                         </TooltipTrigger>
                         <TooltipContent>
                           <p>{t("homePage.voiceInput")}</p>
@@ -3718,13 +3733,12 @@ export default function Home() {
                             {/* Voice Input Button */}
                             <Tooltip>
                               <TooltipTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-9 w-9 rounded-full transition-colors hover:bg-accent"
-                                >
-                                  <Mic className="w-4 h-4 text-muted-foreground" />
-                                </Button>
+                                <span>
+                                  <VoiceInputButton
+                                    disabled={isInterrupting || isProcessing}
+                                    onResolvedTranscript={handleResolvedVoiceTranscript}
+                                  />
+                                </span>
                               </TooltipTrigger>
                               <TooltipContent>
                                 <p>{t("homePage.voiceInput")}</p>

@@ -1,10 +1,15 @@
 import { Loader2, Mic } from "lucide-react";
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { useStreamingSpeechRecognition } from "@/hooks/useStreamingSpeechRecognition";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
+import {
+  DEFAULT_VOICE_RECOGNITION_PROVIDER,
+  readVoiceRecognitionProvider,
+  type VoiceRecognitionProvider,
+} from "@/lib/altus-settings";
 import { transcribeTaskCreationVoiceInput } from "@/lib/task-creation-client";
 
 type VoiceInputButtonProps = {
@@ -21,10 +26,31 @@ export default function VoiceInputButton({
   onResolvedTranscript,
 }: VoiceInputButtonProps) {
   const recorder = useVoiceRecorder();
+  const [voiceRecognitionProvider, setVoiceRecognitionProvider] =
+    useState<VoiceRecognitionProvider>(DEFAULT_VOICE_RECOGNITION_PROVIDER);
+  const [isBrowserProcessing, setIsBrowserProcessing] = useState(false);
   const browserTranscriptRef = useRef("");
   const browserInterimTranscriptRef = useRef("");
   const streamingTranscriptRef = useRef("");
   const streamingInterimTranscriptRef = useRef("");
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const syncProvider = () => {
+      setVoiceRecognitionProvider(readVoiceRecognitionProvider());
+    };
+
+    syncProvider();
+    window.addEventListener("storage", syncProvider);
+    window.addEventListener("altus-settings-changed", syncProvider);
+    return () => {
+      window.removeEventListener("storage", syncProvider);
+      window.removeEventListener("altus-settings-changed", syncProvider);
+    };
+  }, []);
 
   const getTranscript = useCallback((finalText: string, interimText: string) => {
     return [finalText, interimText]
@@ -51,11 +77,21 @@ export default function VoiceInputButton({
     return getBrowserTranscript() || getStreamingTranscript();
   }, [getBrowserTranscript, getStreamingTranscript]);
 
+  const isBrowserMode = voiceRecognitionProvider === "browser";
+  const isVolcengineMode = voiceRecognitionProvider === "volcengine";
+
   const publishBrowserTranscript = useCallback(
     () => {
-      onPreviewTranscript?.(getPreferredTranscript());
+      onPreviewTranscript?.(
+        isBrowserMode ? getBrowserTranscript() : getStreamingTranscript(),
+      );
     },
-    [getPreferredTranscript, onPreviewTranscript],
+    [
+      getBrowserTranscript,
+      getStreamingTranscript,
+      isBrowserMode,
+      onPreviewTranscript,
+    ],
   );
 
   const browserSpeechRecognition = useSpeechRecognition({
@@ -72,14 +108,16 @@ export default function VoiceInputButton({
         browserTranscriptRef.current,
         nextChunk,
       );
-      publishBrowserTranscript();
+      if (isBrowserMode) {
+        publishBrowserTranscript();
+      }
     },
   });
 
   const speechRecognition = useStreamingSpeechRecognition({
     onInterimResult: (interimText) => {
       streamingInterimTranscriptRef.current = interimText.trim();
-      if (!browserSpeechRecognition.isSupported) {
+      if (isVolcengineMode) {
         publishBrowserTranscript();
       }
     },
@@ -91,13 +129,47 @@ export default function VoiceInputButton({
         streamingTranscriptRef.current,
         nextChunk,
       );
-      if (!browserSpeechRecognition.isSupported) {
+      if (isVolcengineMode) {
         publishBrowserTranscript();
       }
     },
   });
 
   const handleClick = useCallback(async () => {
+    if (isBrowserMode) {
+      try {
+        if (!browserSpeechRecognition.isSupported) {
+          throw new Error("当前浏览器不支持原生语音识别，请在设置中切换到火山语音识别");
+        }
+
+        if (!browserSpeechRecognition.isListening) {
+          browserTranscriptRef.current = "";
+          browserInterimTranscriptRef.current = "";
+          streamingTranscriptRef.current = "";
+          streamingInterimTranscriptRef.current = "";
+          onRecordingStart?.();
+          browserSpeechRecognition.startListening();
+          return;
+        }
+
+        setIsBrowserProcessing(true);
+        browserSpeechRecognition.stopListening();
+        const transcript = getBrowserTranscript();
+        if (!transcript.trim()) {
+          throw new Error("未识别到有效语音内容");
+        }
+        await onResolvedTranscript(transcript);
+        toast.success("语音已转成任务输入");
+      } catch (error) {
+        toast.error(
+          error instanceof Error ? error.message : "浏览器语音识别失败",
+        );
+      } finally {
+        setIsBrowserProcessing(false);
+      }
+      return;
+    }
+
     if (!recorder.isSupported) {
       toast.error("当前浏览器不支持语音录制");
       return;
@@ -107,47 +179,34 @@ export default function VoiceInputButton({
       return;
     }
 
-    if (!recorder.isRecording) {
-      browserTranscriptRef.current = "";
-      browserInterimTranscriptRef.current = "";
-      streamingTranscriptRef.current = "";
-      streamingInterimTranscriptRef.current = "";
-      onRecordingStart?.();
-      try {
-        if (browserSpeechRecognition.isSupported) {
-          browserSpeechRecognition.startListening();
-        }
+    try {
+      if (!recorder.isRecording) {
+        browserTranscriptRef.current = "";
+        browserInterimTranscriptRef.current = "";
+        streamingTranscriptRef.current = "";
+        streamingInterimTranscriptRef.current = "";
+        onRecordingStart?.();
         await speechRecognition.startListening();
         await recorder.startRecording({
           onPcmChunk: speechRecognition.sendAudioChunk,
         });
-      } catch (error) {
-        browserSpeechRecognition.stopListening();
-        await speechRecognition.stopListening();
-        toast.error(error instanceof Error ? error.message : "语音识别启动失败");
+        return;
       }
-      return;
-    }
 
-    const audio = await recorder.stopRecording();
-    browserSpeechRecognition.stopListening();
-    const streamingTranscript = await speechRecognition.stopListening();
-    if (streamingTranscript) {
-      streamingInterimTranscriptRef.current = "";
-      streamingTranscriptRef.current = streamingTranscript.trim();
-      if (!browserSpeechRecognition.isSupported) {
+      const audio = await recorder.stopRecording();
+      const streamingTranscript = await speechRecognition.stopListening();
+      if (streamingTranscript) {
+        streamingInterimTranscriptRef.current = "";
+        streamingTranscriptRef.current = streamingTranscript.trim();
         publishBrowserTranscript();
       }
-    }
-    if (!audio) {
-      return;
-    }
+      if (!audio) {
+        return;
+      }
 
-    recorder.setProcessing(true);
-    try {
-      const browserTranscript = getPreferredTranscript();
+      recorder.setProcessing(true);
       const transcript = await transcribeTaskCreationVoiceInput(audio, {
-        clientTranscript: browserTranscript,
+        clientTranscript: getStreamingTranscript(),
       });
       if (!transcript.text.trim()) {
         throw new Error("语音识别结果为空");
@@ -155,7 +214,7 @@ export default function VoiceInputButton({
       await onResolvedTranscript(transcript.text);
       toast.success("语音已转成任务输入");
     } catch (error) {
-      const fallbackTranscript = getPreferredTranscript();
+      const fallbackTranscript = getStreamingTranscript();
       if (fallbackTranscript) {
         await onResolvedTranscript(fallbackTranscript);
         toast.success("语音已转成任务输入");
@@ -166,28 +225,61 @@ export default function VoiceInputButton({
       recorder.setProcessing(false);
     }
   }, [
+    getBrowserTranscript,
+    getStreamingTranscript,
     onRecordingStart,
     onResolvedTranscript,
-    getPreferredTranscript,
     getTranscript,
     browserSpeechRecognition,
+    isBrowserMode,
+    isVolcengineMode,
+    publishBrowserTranscript,
     recorder,
     speechRecognition,
   ]);
 
-  const isProcessing = recorder.status === "processing";
-  const isRecording = recorder.isRecording;
-  const isReceivingSpeech =
-    speechRecognition.status === "receiving" ||
-    browserSpeechRecognition.status === "receiving";
+  const isProcessing = isBrowserMode
+    ? isBrowserProcessing
+    : recorder.status === "processing";
+  const isRecording = isBrowserMode
+    ? browserSpeechRecognition.isListening
+    : recorder.isRecording;
+  const isReceivingSpeech = isBrowserMode
+    ? browserSpeechRecognition.status === "receiving"
+    : speechRecognition.status === "receiving";
 
-  const title = !recorder.isSupported
-    ? "当前浏览器不支持语音录制"
-    : isRecording
-      ? "结束录音并识别"
-      : recorder.status === "processing"
-        ? "正在整理语音文本"
-        : "开始语音输入";
+  const title = useMemo(() => {
+    if (isBrowserMode) {
+      if (!browserSpeechRecognition.isSupported) {
+        return "当前浏览器不支持原生语音识别";
+      }
+      if (isRecording) {
+        return "结束录音";
+      }
+      if (isProcessing) {
+        return "正在识别语音";
+      }
+      return "开始语音输入（浏览器）";
+    }
+
+    if (!recorder.isSupported) {
+      return "当前浏览器不支持语音录制";
+    }
+    if (isRecording) {
+      return "结束录音";
+    }
+    if (recorder.status === "processing") {
+      return "正在整理语音文本";
+    }
+    return "开始语音输入（火山）";
+  }, [
+    browserSpeechRecognition.isSupported,
+    isBrowserMode,
+    isProcessing,
+    isRecording,
+    recorder.isSupported,
+    recorder.status,
+  ]);
 
   return (
     <Button
@@ -197,7 +289,12 @@ export default function VoiceInputButton({
       onClick={() => {
         void handleClick();
       }}
-      disabled={disabled || recorder.status === "requesting"}
+      disabled={
+        disabled ||
+        isProcessing ||
+        recorder.status === "requesting" ||
+        browserSpeechRecognition.status === "starting"
+      }
       className={`relative h-9 w-9 rounded-full transition-all hover:bg-accent ${
         isRecording
           ? "bg-red-50 text-red-600 shadow-[0_0_0_4px_rgba(220,38,38,0.12)] hover:bg-red-100"

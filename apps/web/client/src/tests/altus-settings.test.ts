@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_ALTUS_MODE,
+  DEFAULT_VOICE_RECOGNITION_PROVIDER,
   normalizeAltusMode,
+  normalizeVoiceRecognitionProvider,
   readAltusMode,
+  readVoiceRecognitionProvider,
   writeAltusMode,
+  writeVoiceRecognitionProvider,
 } from "@/lib/altus-settings";
 
 function createStorage(initial: Record<string, string> = {}): Storage {
@@ -64,5 +68,48 @@ describe("altus settings", () => {
     expect(normalizeAltusMode("managed")).toBe("managed");
     expect(normalizeAltusMode("sandbox")).toBe("sandbox");
     expect(normalizeAltusMode("")).toBe("managed");
+  });
+
+  it("defaults missing voice recognition provider to browser", () => {
+    const storage = createStorage();
+
+    expect(readVoiceRecognitionProvider(storage)).toBe(
+      DEFAULT_VOICE_RECOGNITION_PROVIDER,
+    );
+    expect(storage.getItem("voice_recognition_provider")).toBe("browser");
+  });
+
+  it("keeps explicit volcengine provider", () => {
+    const storage = createStorage({
+      voice_recognition_provider: "volcengine",
+    });
+
+    expect(readVoiceRecognitionProvider(storage)).toBe("volcengine");
+    expect(storage.getItem("voice_recognition_provider")).toBe("volcengine");
+  });
+
+  it("normalizes invalid voice provider back to browser", () => {
+    const storage = createStorage({
+      voice_recognition_provider: "broken",
+    });
+
+    expect(readVoiceRecognitionProvider(storage)).toBe("browser");
+    expect(storage.getItem("voice_recognition_provider")).toBe("browser");
+  });
+
+  it("writes browser and volcengine providers explicitly", () => {
+    const storage = createStorage();
+
+    writeVoiceRecognitionProvider("volcengine", storage);
+    expect(storage.getItem("voice_recognition_provider")).toBe("volcengine");
+
+    writeVoiceRecognitionProvider("browser", storage);
+    expect(storage.getItem("voice_recognition_provider")).toBe("browser");
+  });
+
+  it("treats non-volcengine values as browser", () => {
+    expect(normalizeVoiceRecognitionProvider("browser")).toBe("browser");
+    expect(normalizeVoiceRecognitionProvider("volcengine")).toBe("volcengine");
+    expect(normalizeVoiceRecognitionProvider("")).toBe("browser");
   });
 });

@@ -50,8 +50,12 @@ import { resolveGuidedTourStorageKey } from "@/components/GuidedTour";
 import {
   ALTUS_MODE_STORAGE_KEY,
   DEFAULT_ALTUS_MODE,
+  DEFAULT_VOICE_RECOGNITION_PROVIDER,
   readAltusMode,
+  readVoiceRecognitionProvider,
   type AltusMode,
+  type VoiceRecognitionProvider,
+  VOICE_RECOGNITION_PROVIDER_STORAGE_KEY,
 } from "@/lib/altus-settings";
 import { toast } from "sonner";
 import {
@@ -347,6 +351,8 @@ export function SettingsPanel({
   const [pushNotifications, setPushNotifications] = useState(true);
   const [executor, setExecutor] = useState("opencode");
   const [codexExecutionMode, setCodexExecutionMode] = useState("sdk");
+  const [voiceRecognitionProvider, setVoiceRecognitionProvider] =
+    useState<VoiceRecognitionProvider>(DEFAULT_VOICE_RECOGNITION_PROVIDER);
   const [accountDisplayNameDraft, setAccountDisplayNameDraft] = useState("");
   const [accountSaving, setAccountSaving] = useState(false);
   const [avatarSaving, setAvatarSaving] = useState(false);
@@ -356,6 +362,7 @@ export function SettingsPanel({
   const [accountView, setAccountView] = useState<"overview" | "details">(
     "overview",
   );
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   // Altus 控制模式：
   // - sandbox: 直通模式，前端输入直接转发到 sandbox 内执行器（当前为 OpenCode）。
   // - managed: Altus 接管模式，走三层智能体编排。
@@ -378,6 +385,7 @@ export function SettingsPanel({
       window.localStorage.setItem(EXECUTOR_STORAGE_KEY, executor);
     }
     setAltusMode(readAltusMode());
+    setVoiceRecognitionProvider(readVoiceRecognitionProvider());
     if (
       storedCodexExecutionMode === "sdk" ||
       storedCodexExecutionMode === "ws"
@@ -389,22 +397,39 @@ export function SettingsPanel({
         codexExecutionMode,
       );
     }
+    setSettingsLoaded(true);
   }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (!settingsLoaded) return;
     window.localStorage.setItem(EXECUTOR_STORAGE_KEY, executor);
     window.localStorage.setItem(ALTUS_MODE_STORAGE_KEY, altusMode);
+    window.localStorage.setItem(
+      VOICE_RECOGNITION_PROVIDER_STORAGE_KEY,
+      voiceRecognitionProvider,
+    );
     window.localStorage.setItem(
       CODEX_EXECUTION_MODE_STORAGE_KEY,
       codexExecutionMode,
     );
     window.dispatchEvent(
       new CustomEvent("altus-settings-changed", {
-        detail: { executor, altusMode, codexExecutionMode },
+        detail: {
+          executor,
+          altusMode,
+          codexExecutionMode,
+          voiceRecognitionProvider,
+        },
       }),
     );
-  }, [executor, altusMode, codexExecutionMode]);
+  }, [
+    codexExecutionMode,
+    executor,
+    altusMode,
+    settingsLoaded,
+    voiceRecognitionProvider,
+  ]);
 
   const shouldShowExecutorSettings = altusMode === "sandbox";
   const accountInitial = getAccountInitial(user?.displayName || user?.email);
@@ -998,6 +1023,40 @@ export function SettingsPanel({
                       );
                     })}
                   </div>
+                  </SettingsSection>
+
+                  <SettingsSection
+                    eyebrow="Voice input"
+                    title={t("settings.voiceRecognitionProviderLabel")}
+                    description={t(
+                      "settings.voiceRecognitionProviderDescription",
+                    )}
+                  >
+                    <Select
+                      value={voiceRecognitionProvider}
+                      onValueChange={(value) =>
+                        setVoiceRecognitionProvider(
+                          value as VoiceRecognitionProvider,
+                        )
+                      }
+                    >
+                      <SelectTrigger className="w-full max-w-xs rounded-xl border-border/70 bg-background/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="rounded-xl">
+                        <SelectItem value="browser" className="rounded-md">
+                          {t("settings.voiceRecognitionProviderBrowser")}
+                        </SelectItem>
+                        <SelectItem value="volcengine" className="rounded-md">
+                          {t("settings.voiceRecognitionProviderVolcengine")}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="mt-3 max-w-[62ch] text-sm leading-6 text-muted-foreground">
+                      {voiceRecognitionProvider === "browser"
+                        ? t("settings.voiceRecognitionProviderBrowserHint")
+                        : t("settings.voiceRecognitionProviderVolcengineHint")}
+                    </p>
                   </SettingsSection>
 
                   <SettingsSection

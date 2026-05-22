@@ -5,7 +5,7 @@ export type TaskCreationSessionSummary = {
   id: string;
   title?: string;
   titleLocked?: boolean;
-  titleSource?: "placeholder" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
+  titleSource?: "placeholder" | "first_user_input" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
   titleState?: "provisional" | "resolved" | "manual";
   titleResolvedAt?: string;
   isFavorite?: boolean;
@@ -520,7 +520,7 @@ export type TaskCreationSessionDetail = {
   id: string;
   title?: string;
   titleLocked?: boolean;
-  titleSource?: "placeholder" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
+  titleSource?: "placeholder" | "first_user_input" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
   titleState?: "provisional" | "resolved" | "manual";
   titleResolvedAt?: string;
   isFavorite?: boolean;
@@ -884,7 +884,9 @@ export async function getTaskCreationOlderMessages(
   );
 }
 
-export async function createTaskCreationDraftSession(title?: string): Promise<TaskCreationSessionDetail> {
+export async function createTaskCreationDraftSession(
+  input?: { title?: string; projectId?: string | null }
+): Promise<TaskCreationSessionDetail> {
   const url = `${getApiBaseUrl()}/api/task-creation/sessions/draft`;
   const response = await fetch(url, {
     method: "POST",
@@ -892,7 +894,8 @@ export async function createTaskCreationDraftSession(title?: string): Promise<Ta
       "Content-Type": "application/json",
     }),
     body: JSON.stringify({
-      title: title || undefined,
+      title: input?.title || undefined,
+      projectId: input?.projectId || undefined,
     }),
   });
   if (!response.ok) {
@@ -912,7 +915,7 @@ export async function resolveTaskCreationSessionTitle(
   id: string;
   title?: string;
   titleLocked?: boolean;
-  titleSource?: "placeholder" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
+  titleSource?: "placeholder" | "first_user_input" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
   titleState?: "provisional" | "resolved" | "manual";
   titleResolvedAt?: string | null;
   resolved?: boolean;

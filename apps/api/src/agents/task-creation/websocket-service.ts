@@ -26,6 +26,11 @@ import { getDirectModeDeploymentErrorMessage } from '../../services/direct-mode-
 import { appAuthService } from '../../services/app-auth-service';
 import { APP_SESSION_COOKIE_NAMES } from '../../utils/auth-session';
 import { readCookieValuesFromHeaderByNames } from '../../utils/http-cookie';
+import {
+  DEFAULT_SESSION_TITLE,
+  deriveAutoSessionTitle,
+  isPlaceholderSessionTitle,
+} from '../../services/task-session-title-service';
 
 function normalizeDirectOpencodeErrorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error || '');
@@ -629,7 +634,7 @@ export class TaskCreationWebSocketService {
       : incomingSessionId || this.sessionByClient.get(clientId);
     if (!sessionId) {
       sessionId = randomUUID();
-      await taskCreationFileMemoryStore.createSession(message.content || '新建任务', sessionId);
+      await taskCreationFileMemoryStore.createSession(DEFAULT_SESSION_TITLE, sessionId);
       await taskCreationFileMemoryStore.addMessage(
         sessionId,
         'system',
@@ -907,7 +912,7 @@ export class TaskCreationWebSocketService {
 
     try {
       if (createdSession) {
-        await taskCreationFileMemoryStore.createSession(message.content || '新建任务', taskSessionId);
+        await taskCreationFileMemoryStore.createSession(DEFAULT_SESSION_TITLE, taskSessionId);
         await taskCreationFileMemoryStore.addMessage(
           taskSessionId,
           'system',
@@ -999,6 +1004,22 @@ export class TaskCreationWebSocketService {
         } catch (error) {
           console.warn('[OPENCODE_INPUT_MESSAGE_DB_FAILED]', error);
         }
+      }
+
+      const currentSession = await taskCreationFileMemoryStore.getSession(taskSessionId);
+      const immediateTitle = deriveAutoSessionTitle(message.content || '');
+      if (
+        currentSession &&
+        immediateTitle &&
+        !currentSession.titleLocked &&
+        isPlaceholderSessionTitle(currentSession.title)
+      ) {
+        await taskCreationFileMemoryStore.updateSessionTitle(taskSessionId, immediateTitle, {
+          lock: true,
+          source: 'first_user_input',
+          state: 'provisional',
+          force: true,
+        });
       }
 
       const entryDecision = await directModeEntryService.decide({

@@ -260,14 +260,6 @@
   "attachmentPicker": {
     "triggerLabel": "Add attachment",
     "triggerAriaLabel": "Add attachment",
-    "cloud": {
-      "title": "Add from cloud",
-      "description": "Drive, OneDrive, website download",
-      "googleDriveDescription": "Import a publicly shared Drive file",
-      "oneDriveDescription": "Import a publicly shared OneDrive file",
-      "websiteLabel": "Website",
-      "websiteDescription": "Download a file directly from a web link"
-    },
     "skills": {
       "title": "Use skills",
       "description": "Select enabled skills and sync them to the sandbox",
@@ -284,31 +276,9 @@
       "title": "Add from local files",
       "description": "Choose documents, images, or code files from your computer"
     },
-    "dialog": {
-      "defaultTitle": "Add remote file",
-      "urlLabel": "File URL",
-      "hint": "Publicly accessible share links are supported. The file is downloaded in the browser first, then added to the current session like a normal attachment.",
-      "importing": "Importing...",
-      "confirm": "Add file",
-      "website": {
-        "title": "Add from website",
-        "description": "Enter a directly accessible file URL. The system downloads it first and then adds it as an attachment."
-      },
-      "googleDrive": {
-        "title": "Add from Google Drive",
-        "description": "Enter a publicly shared Google Drive file link. The system converts it to a downloadable URL."
-      },
-      "oneDrive": {
-        "title": "Add from OneDrive",
-        "description": "Enter a publicly shared OneDrive file link. The system downloads the file from the share link."
-      }
-    },
     "toasts": {
       "skillAdded": "Added skill: {{name}}",
       "skillAddFailed": "Failed to add skill",
-      "urlRequired": "Please enter a file URL",
-      "remoteAdded": "Added {{name}} from {{provider}}",
-      "remoteAddFailed": "Failed to add remote file",
       "localAddFailed": "Failed to add local attachment"
     }
   },

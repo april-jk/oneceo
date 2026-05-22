@@ -5367,7 +5367,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       let shouldBindCreatedSession = false;
       const initialProjectId = !activeSessionId ? initialProjectIdForNewSession || undefined : undefined;
       if (!activeSessionId) {
-        const created = await createTaskCreationDraftSession(text || "MCP 高风险操作确认");
+        const created = await createTaskCreationDraftSession({
+          title: text || "MCP 高风险操作确认",
+        });
         const createdSessionId = (created?.id || '').trim();
         if (!createdSessionId) {
           throw new Error('managed draft session id missing');

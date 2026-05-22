@@ -4,6 +4,7 @@
  * 负责 WebSocket 连接管理和消息推送
  */
 
+import type { IncomingMessage } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 import { TaskCreationService } from './task-creation-service';
 import type { WebSocketMessage } from './types/intent';
@@ -99,8 +100,11 @@ export class TaskCreationWebSocketService {
   /**
    * 初始化 WebSocket 服务器
    */
-  initialize(server: any): void {
-    this.wss = new WebSocketServer({ server, path: '/ws/task-creation' });
+  initialize(): void {
+    if (this.wss) {
+      return;
+    }
+    this.wss = new WebSocketServer({ noServer: true });
     this.wss.on('error', (error) => {
       console.error('[WebSocket] 服务异常:', error);
     });
@@ -1269,6 +1273,27 @@ export class TaskCreationWebSocketService {
       (timer as any).unref();
     }
     this.sessionCleanupTimers.set(clientId, timer);
+  }
+
+  handleUpgrade(
+    req: IncomingMessage,
+    socket: Parameters<WebSocketServer['handleUpgrade']>[1],
+    head: Parameters<WebSocketServer['handleUpgrade']>[2],
+  ): boolean {
+    const pathname = new URL(req.url || '', 'http://localhost').pathname;
+    if (pathname !== '/ws/task-creation') {
+      return false;
+    }
+
+    if (!this.wss) {
+      socket.destroy();
+      return true;
+    }
+
+    this.wss.handleUpgrade(req, socket, head, (ws) => {
+      this.wss?.emit('connection', ws, req);
+    });
+    return true;
   }
 
   /**

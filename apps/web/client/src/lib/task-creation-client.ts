@@ -1953,9 +1953,14 @@ export async function submitTaskCreationManagedInput(
 
 export async function transcribeTaskCreationVoiceInput(
   audio: Blob,
+  options: { clientTranscript?: string } = {},
 ): Promise<TaskCreationVoiceTranscriptResult> {
   const formData = new FormData();
   formData.set("audio", audio, "voice-input.wav");
+  const clientTranscript = options.clientTranscript?.trim();
+  if (clientTranscript) {
+    formData.set("clientTranscript", clientTranscript);
+  }
 
   const response = await fetch(
     `${getApiBaseUrl()}/api/task-creation/voice/transcribe`,

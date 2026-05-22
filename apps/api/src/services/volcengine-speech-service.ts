@@ -4,6 +4,7 @@ import { WebSocket } from 'ws';
 
 const DEFAULT_ASR_HTTP_ENDPOINT =
   'https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash';
+const DEFAULT_ASR_USER_ID = 'oneceo-voice-input';
 const DEFAULT_ASR_WS_RESOURCE_IDS = [
   'volc.bigasr.sauc.duration',
   'volc.bigasr.sauc.concurrent',
@@ -11,6 +12,12 @@ const DEFAULT_ASR_WS_RESOURCE_IDS = [
   'volc.seedasr.sauc.concurrent',
 ];
 const DEFAULT_ASR_HTTP_RESOURCE_ID = 'volc.bigasr.auc_turbo';
+const ASR_PCM_BYTES_PER_SECOND = 16000 * 2;
+const ASR_STREAM_CHUNK_MS = 200;
+const ASR_STREAM_CHUNK_BYTES =
+  (ASR_PCM_BYTES_PER_SECOND * ASR_STREAM_CHUNK_MS) / 1000;
+const ASR_STREAM_SEND_INTERVAL_MS = 40;
+const ASR_WS_RESPONSE_TIMEOUT_MS = 8_000;
 
 export type VolcengineSpeechConfig = {
   asrAppId: string;
@@ -147,6 +154,18 @@ function createWsFrame(
   return frame;
 }
 
+function splitAudioForWsStreaming(audioBytes: Uint8Array): Uint8Array[] {
+  const chunks: Uint8Array[] = [];
+  for (
+    let offset = 0;
+    offset < audioBytes.length;
+    offset += ASR_STREAM_CHUNK_BYTES
+  ) {
+    chunks.push(audioBytes.slice(offset, offset + ASR_STREAM_CHUNK_BYTES));
+  }
+  return chunks;
+}
+
 function decodeWsJsonPayload(
   payload: Uint8Array,
   compression: number,
@@ -182,7 +201,7 @@ class VolcengineSpeechService {
 
   async transcribeAudio(
     audioBytes: Uint8Array,
-    userId = 'oneceo-task-creation',
+    userId = DEFAULT_ASR_USER_ID,
   ): Promise<VolcengineSpeechTranscript> {
     if (isWebSocketEndpoint(this.config.asrEndpoint)) {
       return this.transcribeAudioWithWs(audioBytes, userId);
@@ -283,8 +302,12 @@ class VolcengineSpeechService {
     );
 
     const fullClientHeader = createProtocolHeader(0x1, 0x0, 0x1, 0x1);
+    const audioOnlyChunkHeader = createProtocolHeader(0x2, 0x0, 0x0, 0x1);
     const audioOnlyFinalHeader = createProtocolHeader(0x2, 0x2, 0x0, 0x1);
-    const audioPayload = gzipSync(Buffer.from(pcmBytes));
+    const audioChunks = splitAudioForWsStreaming(pcmBytes);
+    if (audioChunks.length === 0) {
+      throw new Error('Volcengine ASR received empty audio');
+    }
 
     const errors: string[] = [];
     for (const resourceId of DEFAULT_ASR_WS_RESOURCE_IDS) {
@@ -302,14 +325,58 @@ class VolcengineSpeechService {
             });
 
             let settled = false;
-            let sentAudio = false;
+            let startedStreamingAudio = false;
+            let latestTranscript: VolcengineSpeechTranscript | null = null;
+            const timers = new Set<ReturnType<typeof setTimeout>>();
             const finish = (callback: () => void) => {
               if (settled) return;
               settled = true;
+              for (const timer of timers) {
+                clearTimeout(timer);
+              }
+              timers.clear();
               try {
                 ws.close();
               } catch {}
               callback();
+            };
+            const timeoutTimer = setTimeout(() => {
+              finish(() =>
+                reject(new Error(`${resourceId}: websocket ASR timed out`)),
+              );
+            }, ASR_WS_RESPONSE_TIMEOUT_MS);
+            timers.add(timeoutTimer);
+
+            const startStreamingAudio = () => {
+              if (startedStreamingAudio) {
+                return;
+              }
+              startedStreamingAudio = true;
+              scheduleNextAudioChunk(0);
+            };
+
+            const scheduleNextAudioChunk = (index: number) => {
+              if (settled || ws.readyState !== WebSocket.OPEN) {
+                return;
+              }
+              const chunk = audioChunks[index];
+              if (!chunk) {
+                return;
+              }
+
+              const isFinalChunk = index === audioChunks.length - 1;
+              const header = isFinalChunk
+                ? audioOnlyFinalHeader
+                : audioOnlyChunkHeader;
+              ws.send(createWsFrame(header, gzipSync(Buffer.from(chunk))));
+
+              if (!isFinalChunk) {
+                const timer = setTimeout(() => {
+                  timers.delete(timer);
+                  scheduleNextAudioChunk(index + 1);
+                }, ASR_STREAM_SEND_INTERVAL_MS);
+                timers.add(timer);
+              }
             };
 
             ws.once('error', (error) => {
@@ -324,6 +391,11 @@ class VolcengineSpeechService {
 
             ws.once('open', () => {
               ws.send(createWsFrame(fullClientHeader, requestPayload));
+              const timer = setTimeout(() => {
+                timers.delete(timer);
+                startStreamingAudio();
+              }, ASR_STREAM_SEND_INTERVAL_MS);
+              timers.add(timer);
             });
 
             ws.on('message', (data) => {
@@ -371,11 +443,11 @@ class VolcengineSpeechService {
                 offset += 4;
                 const payload = bytes.slice(offset, offset + payloadSize);
                 const json = decodeWsJsonPayload(payload, compression);
-                if (!sentAudio) {
-                  sentAudio = true;
-                  ws.send(createWsFrame(audioOnlyFinalHeader, audioPayload));
-                }
+                startStreamingAudio();
                 const extracted = extractAsrResult(json);
+                if (extracted) {
+                  latestTranscript = extracted;
+                }
                 if (extracted && flags === 0x3) {
                   finish(() => resolve(extracted));
                 }
@@ -410,6 +482,14 @@ class VolcengineSpeechService {
             ws.once('close', () => {
               if (!settled) {
                 settled = true;
+                for (const timer of timers) {
+                  clearTimeout(timer);
+                }
+                timers.clear();
+                if (latestTranscript?.text) {
+                  resolve(latestTranscript);
+                  return;
+                }
                 reject(
                   new Error(
                     `${resourceId}: websocket closed before final ASR result`,
@@ -435,11 +515,9 @@ class VolcengineSpeechService {
 let cachedService: VolcengineSpeechService | null | undefined;
 
 export function getVolcengineSpeechService(): VolcengineSpeechService | null {
-  if (cachedService !== undefined) {
-    return cachedService;
-  }
   const config = loadVolcengineSpeechConfigFromEnv();
-  cachedService = config ? new VolcengineSpeechService(config) : null;
+  const nextService = config ? new VolcengineSpeechService(config) : null;
+  cachedService = nextService;
   return cachedService;
 }
 

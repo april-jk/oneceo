@@ -1123,6 +1123,7 @@ export default function Home() {
   const [pendingAltusReplayToolCallId, setPendingAltusReplayToolCallId] =
     useState<string | null>(null);
   const refreshCreditsRef = useRef(refreshCredits);
+  const voiceInputBaseRef = useRef("");
   const lastCreditRefreshRunStatusRef = useRef<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">(
     "pro",
@@ -2342,20 +2343,29 @@ export default function Home() {
     setMessage("");
   };
 
-  async function handleResolvedVoiceTranscript(transcript: string) {
+  function handleResolvedVoiceTranscript(transcript: string) {
     const spokenText = transcript.trim();
     if (!spokenText) {
       throw new Error("未识别到有效语音内容");
     }
 
-    const mergedInput = [message.trim(), spokenText].filter(Boolean).join("\n");
-    setMode("chat");
-    if (currentQuestion) {
-      await submitQuestionAnswer(mergedInput);
-    } else {
-      await submitPrompt(mergedInput);
-    }
-    setMessage("");
+    const mergedInput = [voiceInputBaseRef.current.trim(), spokenText]
+      .filter(Boolean)
+      .join("\n");
+    setMessage(mergedInput);
+    voiceInputBaseRef.current = "";
+  }
+
+  function handleVoiceRecordingStart() {
+    voiceInputBaseRef.current = message.trim();
+  }
+
+  function handleVoicePreviewTranscript(transcript: string) {
+    const previewText = transcript.trim();
+    const mergedInput = [voiceInputBaseRef.current.trim(), previewText]
+      .filter(Boolean)
+      .join("\n");
+    setMessage(mergedInput);
   }
 
   const handleStop = () => {
@@ -3470,6 +3480,8 @@ export default function Home() {
                           <span>
                             <VoiceInputButton
                               disabled={isInterrupting || showStopButton}
+                              onRecordingStart={handleVoiceRecordingStart}
+                              onPreviewTranscript={handleVoicePreviewTranscript}
                               onResolvedTranscript={handleResolvedVoiceTranscript}
                             />
                           </span>
@@ -3736,6 +3748,8 @@ export default function Home() {
                                 <span>
                                   <VoiceInputButton
                                     disabled={isInterrupting || isProcessing}
+                                    onRecordingStart={handleVoiceRecordingStart}
+                                    onPreviewTranscript={handleVoicePreviewTranscript}
                                     onResolvedTranscript={handleResolvedVoiceTranscript}
                                   />
                                 </span>

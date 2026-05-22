@@ -2,6 +2,7 @@ import { Loader2, Mic } from "lucide-react";
 import { useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { useStreamingSpeechRecognition } from "@/hooks/useStreamingSpeechRecognition";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { transcribeTaskCreationVoiceInput } from "@/lib/task-creation-client";
@@ -22,42 +23,77 @@ export default function VoiceInputButton({
   const recorder = useVoiceRecorder();
   const browserTranscriptRef = useRef("");
   const browserInterimTranscriptRef = useRef("");
+  const streamingTranscriptRef = useRef("");
+  const streamingInterimTranscriptRef = useRef("");
 
-  const getBrowserTranscript = useCallback(() => {
-    return [browserTranscriptRef.current, browserInterimTranscriptRef.current]
+  const getTranscript = useCallback((finalText: string, interimText: string) => {
+    return [finalText, interimText]
       .map((item) => item.trim())
       .filter(Boolean)
       .join(" ");
   }, []);
 
+  const getBrowserTranscript = useCallback(() => {
+    return getTranscript(
+      browserTranscriptRef.current,
+      browserInterimTranscriptRef.current,
+    );
+  }, [getTranscript]);
+
+  const getStreamingTranscript = useCallback(() => {
+    return getTranscript(
+      streamingTranscriptRef.current,
+      streamingInterimTranscriptRef.current,
+    );
+  }, [getTranscript]);
+
+  const getPreferredTranscript = useCallback(() => {
+    return getBrowserTranscript() || getStreamingTranscript();
+  }, [getBrowserTranscript, getStreamingTranscript]);
+
   const publishBrowserTranscript = useCallback(
-    (interimText = "") => {
-      const combined = [browserTranscriptRef.current, interimText]
-        .map((item) => item.trim())
-        .filter(Boolean)
-        .join(" ");
-      onPreviewTranscript?.(combined);
+    () => {
+      onPreviewTranscript?.(getPreferredTranscript());
     },
-    [onPreviewTranscript],
+    [getPreferredTranscript, onPreviewTranscript],
   );
 
-  const speechRecognition = useStreamingSpeechRecognition({
+  const browserSpeechRecognition = useSpeechRecognition({
+    lang: "zh-CN",
     onInterimResult: (interimText) => {
-      browserInterimTranscriptRef.current = interimText;
-      publishBrowserTranscript(interimText);
+      browserInterimTranscriptRef.current = interimText.trim();
+      publishBrowserTranscript();
     },
     onResult: (finalChunk) => {
       const nextChunk = finalChunk.trim();
       if (!nextChunk) return;
       browserInterimTranscriptRef.current = "";
-      browserTranscriptRef.current = [
+      browserTranscriptRef.current = getTranscript(
         browserTranscriptRef.current,
         nextChunk,
-      ]
-        .map((item) => item.trim())
-        .filter(Boolean)
-        .join(" ");
+      );
       publishBrowserTranscript();
+    },
+  });
+
+  const speechRecognition = useStreamingSpeechRecognition({
+    onInterimResult: (interimText) => {
+      streamingInterimTranscriptRef.current = interimText.trim();
+      if (!browserSpeechRecognition.isSupported) {
+        publishBrowserTranscript();
+      }
+    },
+    onResult: (finalChunk) => {
+      const nextChunk = finalChunk.trim();
+      if (!nextChunk) return;
+      streamingInterimTranscriptRef.current = "";
+      streamingTranscriptRef.current = getTranscript(
+        streamingTranscriptRef.current,
+        nextChunk,
+      );
+      if (!browserSpeechRecognition.isSupported) {
+        publishBrowserTranscript();
+      }
     },
   });
 
@@ -74,13 +110,19 @@ export default function VoiceInputButton({
     if (!recorder.isRecording) {
       browserTranscriptRef.current = "";
       browserInterimTranscriptRef.current = "";
+      streamingTranscriptRef.current = "";
+      streamingInterimTranscriptRef.current = "";
       onRecordingStart?.();
       try {
+        if (browserSpeechRecognition.isSupported) {
+          browserSpeechRecognition.startListening();
+        }
         await speechRecognition.startListening();
         await recorder.startRecording({
           onPcmChunk: speechRecognition.sendAudioChunk,
         });
       } catch (error) {
+        browserSpeechRecognition.stopListening();
         await speechRecognition.stopListening();
         toast.error(error instanceof Error ? error.message : "语音识别启动失败");
       }
@@ -88,11 +130,14 @@ export default function VoiceInputButton({
     }
 
     const audio = await recorder.stopRecording();
+    browserSpeechRecognition.stopListening();
     const streamingTranscript = await speechRecognition.stopListening();
     if (streamingTranscript) {
-      browserInterimTranscriptRef.current = "";
-      browserTranscriptRef.current = streamingTranscript;
-      publishBrowserTranscript();
+      streamingInterimTranscriptRef.current = "";
+      streamingTranscriptRef.current = streamingTranscript.trim();
+      if (!browserSpeechRecognition.isSupported) {
+        publishBrowserTranscript();
+      }
     }
     if (!audio) {
       return;
@@ -100,7 +145,7 @@ export default function VoiceInputButton({
 
     recorder.setProcessing(true);
     try {
-      const browserTranscript = getBrowserTranscript();
+      const browserTranscript = getPreferredTranscript();
       const transcript = await transcribeTaskCreationVoiceInput(audio, {
         clientTranscript: browserTranscript,
       });
@@ -110,7 +155,7 @@ export default function VoiceInputButton({
       await onResolvedTranscript(transcript.text);
       toast.success("语音已转成任务输入");
     } catch (error) {
-      const fallbackTranscript = getBrowserTranscript();
+      const fallbackTranscript = getPreferredTranscript();
       if (fallbackTranscript) {
         await onResolvedTranscript(fallbackTranscript);
         toast.success("语音已转成任务输入");
@@ -123,14 +168,18 @@ export default function VoiceInputButton({
   }, [
     onRecordingStart,
     onResolvedTranscript,
-    getBrowserTranscript,
+    getPreferredTranscript,
+    getTranscript,
+    browserSpeechRecognition,
     recorder,
     speechRecognition,
   ]);
 
   const isProcessing = recorder.status === "processing";
   const isRecording = recorder.isRecording;
-  const isReceivingSpeech = speechRecognition.status === "receiving";
+  const isReceivingSpeech =
+    speechRecognition.status === "receiving" ||
+    browserSpeechRecognition.status === "receiving";
 
   const title = !recorder.isSupported
     ? "当前浏览器不支持语音录制"

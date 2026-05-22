@@ -12,10 +12,14 @@ export interface UseVoiceRecorderReturn {
   isRecording: boolean;
   status: VoiceRecorderStatus;
   error: string | null;
-  startRecording: () => Promise<void>;
+  startRecording: (options?: VoiceRecorderStartOptions) => Promise<void>;
   stopRecording: () => Promise<Blob | null>;
   setProcessing: (processing: boolean) => void;
 }
+
+export type VoiceRecorderStartOptions = {
+  onPcmChunk?: (chunk: Uint8Array) => void;
+};
 
 function floatTo16BitPcm(value: number): number {
   const normalized = Math.max(-1, Math.min(1, value));
@@ -94,6 +98,18 @@ function encodeWav(samples: Float32Array, sampleRate: number): Blob {
   return new Blob([buffer], { type: "audio/wav" });
 }
 
+function encodePcm16Bytes(samples: Float32Array): Uint8Array {
+  const buffer = new ArrayBuffer(samples.length * 2);
+  const view = new DataView(buffer);
+  let offset = 0;
+  for (let index = 0; index < samples.length; index += 1) {
+    const sample = samples[index] ?? 0;
+    view.setInt16(offset, floatTo16BitPcm(sample), true);
+    offset += 2;
+  }
+  return new Uint8Array(buffer);
+}
+
 function mergeChunks(chunks: Float32Array[]): Float32Array {
   const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
   const output = new Float32Array(totalLength);
@@ -121,6 +137,9 @@ export function useVoiceRecorder(): UseVoiceRecorderReturn {
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const sampleRateRef = useRef<number>(44100);
   const chunksRef = useRef<Float32Array[]>([]);
+  const onPcmChunkRef = useRef<VoiceRecorderStartOptions["onPcmChunk"]>(
+    undefined,
+  );
 
   const cleanup = useCallback(() => {
     processorRef.current?.disconnect();
@@ -135,11 +154,12 @@ export function useVoiceRecorder(): UseVoiceRecorderReturn {
     }
     streamRef.current = null;
     chunksRef.current = [];
+    onPcmChunkRef.current = undefined;
   }, []);
 
   useEffect(() => cleanup, [cleanup]);
 
-  const startRecording = useCallback(async () => {
+  const startRecording = useCallback(async (options: VoiceRecorderStartOptions = {}) => {
     if (!isSupported) {
       setError("当前浏览器不支持语音录制");
       setStatus("error");
@@ -159,10 +179,20 @@ export function useVoiceRecorder(): UseVoiceRecorderReturn {
 
       sampleRateRef.current = context.sampleRate;
       chunksRef.current = [];
+      onPcmChunkRef.current = options.onPcmChunk;
 
       processor.onaudioprocess = (event) => {
         const channel = event.inputBuffer.getChannelData(0);
-        chunksRef.current.push(new Float32Array(channel));
+        const samples = new Float32Array(channel);
+        chunksRef.current.push(samples);
+        if (onPcmChunkRef.current) {
+          const downsampled = downsampleBuffer(
+            samples,
+            context.sampleRate,
+            16000,
+          );
+          onPcmChunkRef.current(encodePcm16Bytes(downsampled));
+        }
       };
 
       source.connect(processor);

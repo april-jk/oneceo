@@ -44,6 +44,7 @@ import { startSandboxArchiveJob, stopSandboxArchiveJob } from './services/sandbo
 import { startMembershipDailyRestoreJob, stopMembershipDailyRestoreJob } from './services/membership-daily-restore-job';
 import { startApiTraceCleanupJob, stopApiTraceCleanupJob } from './services/api-trace-cleanup-job';
 import { startApiRequestLogCleanupJob, stopApiRequestLogCleanupJob } from './services/api-request-log-cleanup-job';
+import { volcengineAsrWebSocketProxyService } from './services/volcengine-asr-websocket-proxy-service';
 import { requestLogMiddleware } from './middleware/request-log-middleware';
 import {
   startTaskSessionDeploymentSyncJob,
@@ -344,6 +345,12 @@ async function shutdown(signal: string, exitCode = 0) {
     console.warn('[API] taskCreationWebSocketService.close failed:', error);
   }
 
+  try {
+    volcengineAsrWebSocketProxyService.close();
+  } catch (error) {
+    console.warn('[API] volcengineAsrWebSocketProxyService.close failed:', error);
+  }
+
   await new Promise<void>((resolve) => {
     try {
       if (isListening) {
@@ -398,7 +405,20 @@ httpServer.on('error', (error: any) => {
 });
 
 // 初始化任务创建 WebSocket 服务
-taskCreationWebSocketService.initialize(httpServer);
+taskCreationWebSocketService.initialize();
+volcengineAsrWebSocketProxyService.initialize();
+httpServer.on('upgrade', (req, socket, head) => {
+  const pathname = new URL(req.url || '', 'http://localhost').pathname;
+  if (pathname === '/socket.io') {
+    return;
+  }
+  if (volcengineAsrWebSocketProxyService.handleUpgrade(req, socket, head)) {
+    return;
+  }
+  if (taskCreationWebSocketService.handleUpgrade(req, socket, head)) {
+    return;
+  }
+});
 osacLlmProxyBridgeService.initialize();
 hostedProviderHostService.initialize();
 

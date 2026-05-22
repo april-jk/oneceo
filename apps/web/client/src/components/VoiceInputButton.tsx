@@ -1,4 +1,4 @@
-import { Loader2, Mic } from "lucide-react";
+import { Mic } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,32 @@ type VoiceInputButtonProps = {
   onResolvedTranscript: (text: string) => void;
 };
 
+type OnlineVoiceUiState = "idle" | "starting" | "recording" | "processing";
+
+function RecordingWaveIcon() {
+  const bars = [
+    { height: "h-2.5", delay: "0ms" },
+    { height: "h-4", delay: "180ms" },
+    { height: "h-3", delay: "360ms" },
+    { height: "h-5", delay: "540ms" },
+  ];
+
+  return (
+    <span
+      aria-hidden="true"
+      className="relative z-10 flex h-5 w-5 items-center justify-center gap-[2px]"
+    >
+      {bars.map((bar, index) => (
+        <span
+          key={index}
+          className={`${bar.height} w-[2px] rounded-full bg-current voice-recording-wave-bar`}
+          style={{ animationDelay: bar.delay }}
+        />
+      ))}
+    </span>
+  );
+}
+
 export default function VoiceInputButton({
   disabled = false,
   onRecordingStart,
@@ -29,6 +55,8 @@ export default function VoiceInputButton({
   const [voiceRecognitionProvider, setVoiceRecognitionProvider] =
     useState<VoiceRecognitionProvider>(DEFAULT_VOICE_RECOGNITION_PROVIDER);
   const [isBrowserProcessing, setIsBrowserProcessing] = useState(false);
+  const [onlineVoiceUiState, setOnlineVoiceUiState] =
+    useState<OnlineVoiceUiState>("idle");
   const browserTranscriptRef = useRef("");
   const browserInterimTranscriptRef = useRef("");
   const streamingTranscriptRef = useRef("");
@@ -72,10 +100,6 @@ export default function VoiceInputButton({
       streamingInterimTranscriptRef.current,
     );
   }, [getTranscript]);
-
-  const getPreferredTranscript = useCallback(() => {
-    return getBrowserTranscript() || getStreamingTranscript();
-  }, [getBrowserTranscript, getStreamingTranscript]);
 
   const isBrowserMode = voiceRecognitionProvider === "browser";
   const isVolcengineMode = voiceRecognitionProvider === "volcengine";
@@ -139,7 +163,7 @@ export default function VoiceInputButton({
     if (isBrowserMode) {
       try {
         if (!browserSpeechRecognition.isSupported) {
-          throw new Error("当前浏览器不支持原生语音识别，请在设置中切换到火山语音识别");
+          throw new Error("当前浏览器不支持原生语音识别，请在设置中切换到在线语音识别");
         }
 
         if (!browserSpeechRecognition.isListening) {
@@ -175,24 +199,37 @@ export default function VoiceInputButton({
       return;
     }
 
-    if (recorder.status === "processing") {
+    if (onlineVoiceUiState === "processing") {
+      return;
+    }
+
+    if (onlineVoiceUiState === "idle") {
+      let streamStarted = false;
+      browserTranscriptRef.current = "";
+      browserInterimTranscriptRef.current = "";
+      streamingTranscriptRef.current = "";
+      streamingInterimTranscriptRef.current = "";
+      onRecordingStart?.();
+      setOnlineVoiceUiState("starting");
+      try {
+        await speechRecognition.startListening();
+        streamStarted = true;
+        await recorder.startRecording({
+          onPcmChunk: speechRecognition.sendAudioChunk,
+        });
+        setOnlineVoiceUiState("recording");
+      } catch (error) {
+        if (streamStarted) {
+          await speechRecognition.stopListening().catch(() => "");
+        }
+        setOnlineVoiceUiState("idle");
+        toast.error(error instanceof Error ? error.message : "语音识别启动失败");
+      }
       return;
     }
 
     try {
-      if (!recorder.isRecording) {
-        browserTranscriptRef.current = "";
-        browserInterimTranscriptRef.current = "";
-        streamingTranscriptRef.current = "";
-        streamingInterimTranscriptRef.current = "";
-        onRecordingStart?.();
-        await speechRecognition.startListening();
-        await recorder.startRecording({
-          onPcmChunk: speechRecognition.sendAudioChunk,
-        });
-        return;
-      }
-
+      setOnlineVoiceUiState("processing");
       const audio = await recorder.stopRecording();
       const streamingTranscript = await speechRecognition.stopListening();
       if (streamingTranscript) {
@@ -204,7 +241,6 @@ export default function VoiceInputButton({
         return;
       }
 
-      recorder.setProcessing(true);
       const transcript = await transcribeTaskCreationVoiceInput(audio, {
         clientTranscript: getStreamingTranscript(),
       });
@@ -222,6 +258,7 @@ export default function VoiceInputButton({
       }
       toast.error(error instanceof Error ? error.message : "语音识别失败");
     } finally {
+      setOnlineVoiceUiState("idle");
       recorder.setProcessing(false);
     }
   }, [
@@ -233,6 +270,7 @@ export default function VoiceInputButton({
     browserSpeechRecognition,
     isBrowserMode,
     isVolcengineMode,
+    onlineVoiceUiState,
     publishBrowserTranscript,
     recorder,
     speechRecognition,
@@ -240,13 +278,12 @@ export default function VoiceInputButton({
 
   const isProcessing = isBrowserMode
     ? isBrowserProcessing
-    : recorder.status === "processing";
+    : onlineVoiceUiState === "processing";
   const isRecording = isBrowserMode
-    ? browserSpeechRecognition.isListening
-    : recorder.isRecording;
-  const isReceivingSpeech = isBrowserMode
-    ? browserSpeechRecognition.status === "receiving"
-    : speechRecognition.status === "receiving";
+    ? browserSpeechRecognition.status === "starting" ||
+      browserSpeechRecognition.isListening
+    : onlineVoiceUiState === "starting" ||
+      onlineVoiceUiState === "recording";
 
   const title = useMemo(() => {
     if (isBrowserMode) {
@@ -268,10 +305,10 @@ export default function VoiceInputButton({
     if (isRecording) {
       return "结束录音";
     }
-    if (recorder.status === "processing") {
+    if (isProcessing) {
       return "正在整理语音文本";
     }
-    return "开始语音输入（火山）";
+    return "开始语音输入（在线）";
   }, [
     browserSpeechRecognition.isSupported,
     isBrowserMode,
@@ -292,14 +329,14 @@ export default function VoiceInputButton({
       disabled={
         disabled ||
         isProcessing ||
-        recorder.status === "requesting" ||
+        onlineVoiceUiState === "starting" ||
         browserSpeechRecognition.status === "starting"
       }
       className={`relative h-9 w-9 rounded-full transition-all hover:bg-accent ${
         isRecording
           ? "bg-red-50 text-red-600 shadow-[0_0_0_4px_rgba(220,38,38,0.12)] hover:bg-red-100"
           : ""
-      } ${isProcessing ? "text-primary" : ""}`}
+      }`}
       title={title}
       aria-label={title}
     >
@@ -307,18 +344,7 @@ export default function VoiceInputButton({
         <>
           <span className="absolute inset-0 rounded-full border border-red-300 animate-ping" />
           <span className="absolute inset-[3px] rounded-full bg-red-100/80" />
-          <Mic
-            className={`relative z-10 h-4 w-4 ${
-              isReceivingSpeech ? "animate-pulse" : ""
-            }`}
-          />
-        </>
-      ) : isProcessing ? (
-        <>
-          <Mic className="h-4 w-4 opacity-30" />
-          <span className="absolute -right-0.5 -top-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-background">
-            <Loader2 className="h-3 w-3 animate-spin" />
-          </span>
+          <RecordingWaveIcon />
         </>
       ) : (
         <Mic className="h-4 w-4" />

@@ -161,9 +161,10 @@ export function useVoiceRecorder(): UseVoiceRecorderReturn {
 
   const startRecording = useCallback(async (options: VoiceRecorderStartOptions = {}) => {
     if (!isSupported) {
-      setError("当前浏览器不支持语音录制");
+      const message = "当前浏览器不支持语音录制";
+      setError(message);
       setStatus("error");
-      return;
+      throw new Error(message);
     }
 
     cleanup();
@@ -205,12 +206,13 @@ export function useVoiceRecorder(): UseVoiceRecorderReturn {
       setStatus("recording");
     } catch (recordingError) {
       cleanup();
-      setError(
+      const message =
         recordingError instanceof Error
           ? recordingError.message
-          : "麦克风权限获取失败",
-      );
+          : "麦克风权限获取失败";
+      setError(message);
       setStatus("error");
+      throw new Error(message);
     }
   }, [cleanup, isSupported]);
 

@@ -260,6 +260,24 @@
   animation: shimmer 1.6s linear infinite;
 }
 
+@keyframes voice-recording-wave {
+  0%,
+  100% {
+    transform: scaleY(0.45);
+    opacity: 0.65;
+  }
+  45% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+.voice-recording-wave-bar {
+  animation: voice-recording-wave 1.08s ease-in-out infinite;
+  transform-origin: center;
+  will-change: transform, opacity;
+}
+
 @keyframes homepage-marquee {
   from {
     transform: translate3d(0, 0, 0);

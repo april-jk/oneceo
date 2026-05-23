@@ -1492,6 +1492,10 @@
       "websiteSnapshotAlt": "网站预览截图",
       "websiteSnapshotTitle": "网站预览",
       "websiteSnapshotUnavailable": "网站截图暂不可用。需要交互查看时，请进入调试页面或发布后打开线上地址。",
+      "artifactGenerated": "交付文件已生成",
+      "websiteSnapshotIssueTitle": "交付预览未通过视觉检测",
+      "websiteSnapshotIssueReason": "诊断原因",
+      "websiteSnapshotIssueDescription": "文件已经生成，但当前页面预览没有渲染成可交付状态。请查看源码或打开产物定位问题，修复后需要重新运行视觉检测。",
       "loadingFileContent": "正在加载文件内容",
       "noContent": "暂无内容"
     }

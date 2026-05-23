@@ -105,6 +105,14 @@ test('managed prompt defaults debug and testing to Playwright on the same n.eko 
   assert.match(prompt, /cover the core user flows implied by the request/i);
   assert.match(prompt, /record the failure in the test document, return to repair/i);
   assert.match(prompt, /use Playwright \/ playwright-mcp by default to inspect or test the same n\.eko Chromium session through CDP 9222/i);
+  assert.match(prompt, /ONECEO_PLAYWRIGHT_CDP_URL=http:\/\/127\.0\.0\.1:9222/i);
+  assert.match(prompt, /PLAYWRIGHT_BROWSERS_PATH=\/opt\/ms-playwright/i);
+  assert.match(prompt, /data-oneceo-app-status/i);
+  assert.match(prompt, /app_runtime_error/i);
+  assert.match(prompt, /Do not search for global Playwright paths/i);
+  assert.match(prompt, /do not create ad-hoc screenshot scripts such as `screenshot-test\.mjs`/i);
+  assert.match(prompt, /required screenshot evidence comes from platform tool results/i);
+  assert.match(prompt, /captured as a Playwright screenshot and attached to the corresponding Action/i);
   assert.match(prompt, /Do not launch a separate browser instance/i);
   assert.match(prompt, /not about:blank, a Chrome error page, or an unexpected fallback route/i);
   assert.match(prompt, /Use Browser Use for exploratory external-site access and interaction only/i);
@@ -288,7 +296,7 @@ test('managed prompt fixes deployable web apps to the official vite-node shell',
 
   assert.match(prompt, /ONECEO_FIXED_SHELL_ANCHOR/i);
   assert.match(prompt, /ONECEO_WEBAPP_TODO_BLUEPRINT_ANCHOR/i);
-  assert.match(prompt, /ONECEO_WEBAPP_MACRO_REVIEW_ANCHOR/i);
+  assert.match(prompt, /ONECEO_WEBAPP_VISUAL_DETECTION_ANCHOR/i);
   assert.match(prompt, /keep todo updates sparse/i);
   assert.match(prompt, /Do not call `todowrite` after every small file edit/i);
   assert.match(prompt, /without an existing workspace stack to preserve, default to the fixed OneCEO web shell/i);
@@ -304,13 +312,15 @@ test('managed prompt fixes deployable web apps to the official vite-node shell',
   assert.match(prompt, /Before the first code-editing step for a new deployable web app task, write a blueprint todo/i);
   assert.match(prompt, /ONECEO_WEAK_WEBAPP_FAST_PATH_ANCHOR/i);
   assert.match(prompt, /4-6 concrete items are usually enough/i);
-  assert.match(prompt, /Do not spend extra rounds on stack discovery, dependency installation, build\/start rewrites/i);
+  assert.match(prompt, /Run\/build verification and visual detection are still required before completion/i);
   assert.match(prompt, /one focused implementation pass by editing `client\/src\/App\.jsx` and `client\/src\/styles\.css`/i);
   assert.match(prompt, /must name the target path for each implementation item/i);
   assert.match(prompt, /default the blueprint to a compact but complete site structure: hero, primary value or service section, proof\/case\/portfolio section, and CTA\/contact section/i);
   assert.match(prompt, /bind that default structure to `client\/src\/App\.jsx` or `client\/src\/App\.tsx`/i);
-  assert.match(prompt, /run one macro self-check against the current todo/i);
-  assert.match(prompt, /Do not reread every file line-by-line/i);
+  assert.match(prompt, /正在进行视觉检测/i);
+  assert.match(prompt, /open it through `debug_open_page`/i);
+  assert.match(prompt, /capture Playwright\/n\.eko Action screenshots/i);
+  assert.doesNotMatch(prompt, /macro self-check/i);
   assert.match(prompt, /creating a new deployable site from scratch, not as permission to switch the deployable runtime/i);
 });
 

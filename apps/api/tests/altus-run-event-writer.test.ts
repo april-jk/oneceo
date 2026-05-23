@@ -86,6 +86,45 @@ test('appendRunEvent projects managed tool terminal events into conversation tim
   assert.deepEqual(callOrder, ['run_event', 'timeline_projection', 'redis_event', 'sse_publish']);
 });
 
+test('appendRunEvent projects browser screenshot evidence for replay actions', async () => {
+  mock.method(taskSessionRunDAO, 'appendRunEvent', async () => ({
+    id: 'run-event-browser-1',
+    sequence: 9,
+    createdAt: new Date('2026-05-22T06:50:00.000Z'),
+  }) as any);
+  const addMessageMock = mock.method(taskCreationSessionDAO, 'addMessage', async (input: any) => input);
+  mock.method(altusManagedStreamService, 'publish', () => undefined);
+  const writer = new AltusRunEventWriter({
+    appendRunEvent: async () => undefined,
+  } as any);
+
+  await writer.appendRunEvent('run-browser-1', 'session-browser-1', 'user-browser-1', 'tool_call_completed', {
+    toolName: 'browser_interact',
+    toolCallId: 'tool-browser-1',
+    content: '视觉检测步骤已完成',
+    browserScreenshot: {
+      type: 'browser_screenshot',
+      kind: 'browser_action_screenshot',
+      status: 'captured',
+      storageKey: 'sessions/session-browser-1/browser-actions/step.png',
+      mimeType: 'image/png',
+      width: 1280,
+      height: 720,
+      capturedAt: '2026-05-22T06:50:00.000Z',
+      source: {
+        sandboxId: 'sandbox-1',
+        cdpPort: 9222,
+        url: 'http://127.0.0.1:3000/',
+      },
+    },
+  });
+
+  const [projection] = addMessageMock.mock.calls[0]?.arguments as any[];
+  assert.equal(projection.metadata?.browserScreenshot?.status, 'captured');
+  assert.equal(projection.metadata?.browserScreenshot?.storageKey, 'sessions/session-browser-1/browser-actions/step.png');
+  assert.equal(projection.metadata?.browserScreenshot?.source?.cdpPort, 9222);
+});
+
 test('appendRunEvent projects contentful run_status into conversation timeline before publish', async () => {
   mock.method(taskSessionRunDAO, 'appendRunEvent', async () => ({
     id: 'run-event-2',

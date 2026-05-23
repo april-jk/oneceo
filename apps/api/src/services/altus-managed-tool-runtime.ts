@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { e2bConnector } from '../connectors/e2b-connector';
@@ -30,9 +31,15 @@ import {
 } from './altus-managed-shared';
 import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-service';
 import type { TaskClarificationType } from './task-intent-shape-service';
+import { uploadToR2 } from './r2-client';
 
 export type ManagedToolResult =
-  | { type: 'result'; content: string; activatedSkills?: ManagedSkillContext[] }
+  | {
+      type: 'result';
+      content: string;
+      activatedSkills?: ManagedSkillContext[];
+      evidence?: ManagedToolEvidence[];
+    }
   | {
       type: 'ask_user';
       question: string;
@@ -47,6 +54,38 @@ export type ManagedToolResult =
       attachments?: ManagedCompletionAttachment[];
       activatedSkills?: ManagedSkillContext[];
     };
+
+export type ManagedToolEvidence = {
+  type: 'browser_screenshot';
+  kind: 'browser_action_screenshot';
+  status: 'captured' | 'capture_failed' | 'storage_failed';
+  storageKey?: string;
+  mimeType?: 'image/png';
+  width?: number;
+  height?: number;
+  capturedAt?: string;
+  source?: {
+    sandboxId?: string;
+    cdpPort?: number;
+    url?: string;
+    title?: string;
+    toolName?: string;
+    action?: string;
+    description?: string;
+  };
+  visualCheck?: BrowserVisualCheck;
+  reasonCode?: string;
+  message?: string;
+};
+
+export type BrowserVisualCheckStatus = 'passed' | 'failed';
+
+export type BrowserVisualCheck = {
+  status: BrowserVisualCheckStatus;
+  reasonCode?: string;
+  message?: string;
+  diagnostics?: Record<string, unknown>;
+};
 
 type ManagedTodoStatus = 'pending' | 'in_progress' | 'completed';
 type ShellRunMode = 'auto' | 'foreground' | 'background_service';
@@ -165,6 +204,113 @@ function shellEscape(value: string): string {
 function truncate(value: string, limit = 16000) {
   if (!value || value.length <= limit) return value;
   return `${value.slice(0, limit)}\n...[truncated]`;
+}
+
+function truncateEvidenceMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error || '');
+  return raw.replace(/\s+/g, ' ').trim().slice(0, 500) || 'unknown error';
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function readBrowserVisualCheck(value: unknown): BrowserVisualCheck | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const status = asText(record.status);
+  if (status !== 'passed' && status !== 'failed') {
+    return undefined;
+  }
+  const diagnostics = record.diagnostics && typeof record.diagnostics === 'object' && !Array.isArray(record.diagnostics)
+    ? (record.diagnostics as Record<string, unknown>)
+    : undefined;
+  return {
+    status,
+    reasonCode: asText(record.reasonCode) || undefined,
+    message: asText(record.message) || undefined,
+    diagnostics,
+  };
+}
+
+function buildSandboxPlaywrightEnvPrelude(input?: { cdpPort?: number }) {
+  const cdpPort = asPositiveInt(input?.cdpPort, 9222, 65535);
+  return [
+    'export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/opt/ms-playwright}"',
+    'ONECEO_NPM_GLOBAL_ROOT="$(npm root -g 2>/dev/null || true)"',
+    'ONECEO_NODE_PATH="/usr/local/lib/node_modules"',
+    'if [ -n "$ONECEO_NPM_GLOBAL_ROOT" ]; then ONECEO_NODE_PATH="${ONECEO_NODE_PATH}:${ONECEO_NPM_GLOBAL_ROOT}"; fi',
+    'if [ -n "${NODE_PATH:-}" ]; then ONECEO_NODE_PATH="${ONECEO_NODE_PATH}:${NODE_PATH}"; fi',
+    'export NODE_PATH="$ONECEO_NODE_PATH"',
+    `export ONECEO_PLAYWRIGHT_CDP_URL="\${ONECEO_PLAYWRIGHT_CDP_URL:-http://127.0.0.1:${cdpPort}}"`,
+  ].join('\n');
+}
+
+function parseMarkedJsonLine(stdout: string, marker: string): Record<string, unknown> | null {
+  const lines = String(stdout || '').split(/\r?\n/);
+  const marked: Record<string, unknown>[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith(marker)) continue;
+    try {
+      marked.push(readRecord(JSON.parse(trimmed.slice(marker.length))));
+    } catch {
+      // Ignore malformed marker diagnostics.
+    }
+  }
+  if (marked.length > 0) {
+    const last = marked[marked.length - 1];
+    const hasSuccess = marked.some((item) => item.ok === true);
+    if (last?.ok === false && hasSuccess) {
+      return last;
+    }
+    return (
+      marked.find((item) => item.ok === false) ||
+      [...marked].reverse().find((item) => item.ok === true) ||
+      last ||
+      null
+    );
+  }
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index].trim();
+    if (!line) continue;
+    try {
+      return readRecord(JSON.parse(line));
+    } catch {
+      // Ignore non-JSON diagnostic lines.
+    }
+  }
+  return null;
+}
+
+function formatBrowserToolFailure(parsed: Record<string, unknown> | null, stdout: string, stderr: string, fallback: string) {
+  if (parsed) {
+    const reasonCode = asText(parsed.reasonCode);
+    const message = asText(parsed.message) || asText(parsed.error);
+    const diagnostics = readRecord(parsed.diagnostics);
+    const diagnosticBits = [
+      asText(diagnostics.stage),
+      asText(diagnostics.cdpEndpoint),
+      asText(diagnostics.playwrightPath),
+      asText(diagnostics.nodePath),
+    ].filter(Boolean);
+    const text = [reasonCode, message, diagnosticBits.length ? `diagnostics=${diagnosticBits.join(' | ')}` : '']
+      .filter(Boolean)
+      .join(': ');
+    if (text) return text;
+  }
+  return stderr || stdout || fallback;
+}
+
+function readBrowserScreenshotFailure(parsed: Record<string, unknown> | null, stdout: string, stderr: string) {
+  const reasonCode = asText(parsed?.reasonCode) || 'browser_screenshot_capture_failed';
+  return {
+    reasonCode,
+    message: truncateEvidenceMessage(formatBrowserToolFailure(parsed, stdout, stderr, 'browser screenshot failed')),
+  };
 }
 
 type NormalizedDebugTarget = {
@@ -296,12 +442,40 @@ function buildBrowserInteractCommand(input: {
   };
 
   return `
-set -euo pipefail
-export NODE_PATH="$(npm root -g 2>/dev/null || true)"
+set +e
+${buildSandboxPlaywrightEnvPrelude({ cdpPort: input.cdpPort })}
 ONECEO_BROWSER_ACTION=${shellEscape(JSON.stringify(payload))} node <<'NODE'
-const { chromium } = require('playwright');
-
 const payload = JSON.parse(process.env.ONECEO_BROWSER_ACTION || '{}');
+const RESULT_MARKER = '__ONECEO_BROWSER_INTERACT_RESULT__=';
+
+function emit(result) {
+  console.log(RESULT_MARKER + JSON.stringify(result));
+}
+
+function buildDiagnostics(stage, extra = {}) {
+  return {
+    stage,
+    cdpEndpoint: payload.cdpEndpoint || process.env.ONECEO_PLAYWRIGHT_CDP_URL || '',
+    nodePath: process.env.NODE_PATH || '',
+    playwrightBrowsersPath: process.env.PLAYWRIGHT_BROWSERS_PATH || '',
+    ...extra,
+  };
+}
+
+let chromium;
+let playwrightPath = '';
+try {
+  playwrightPath = require.resolve('playwright');
+  chromium = require('playwright').chromium;
+} catch (error) {
+  emit({
+    ok: false,
+    reasonCode: 'playwright_module_not_found',
+    message: error && error.message ? error.message : String(error),
+    diagnostics: buildDiagnostics('require_playwright', { playwrightPath }),
+  });
+  process.exit(0);
+}
 
 async function pickPage(browser) {
   for (const context of browser.contexts()) {
@@ -317,7 +491,8 @@ async function pickPage(browser) {
 }
 
 async function main() {
-  const browser = await chromium.connectOverCDP(payload.cdpEndpoint);
+  const cdpEndpoint = process.env.ONECEO_PLAYWRIGHT_CDP_URL || payload.cdpEndpoint;
+  const browser = await chromium.connectOverCDP(cdpEndpoint);
   try {
     const page = await pickPage(browser);
     const timeout = Number(payload.timeoutMs || 5000);
@@ -371,23 +546,412 @@ async function main() {
     }
 
     await page.waitForLoadState('domcontentloaded', { timeout: Math.min(timeout, 5000) }).catch(() => undefined);
-    console.log(JSON.stringify({
+    emit({
       ok: true,
       action,
       description: payload.description || '',
       url: page.url(),
       title: await page.title().catch(() => ''),
-    }));
+      diagnostics: buildDiagnostics('completed', { playwrightPath }),
+    });
   } finally {
-    await browser.close().catch(() => undefined);
+    await (typeof browser.disconnect === 'function' ? browser.disconnect() : browser.close()).catch(() => undefined);
   }
 }
 
 main().catch((error) => {
-  console.error(error && error.stack ? error.stack : String(error));
-  process.exit(1);
+  emit({
+    ok: false,
+    reasonCode: 'browser_interact_failed',
+    message: error && error.message ? error.message : String(error),
+    diagnostics: buildDiagnostics('playwright_action', {
+      stack: error && error.stack ? String(error.stack).slice(0, 2000) : '',
+      playwrightPath,
+    }),
+  });
+  process.exit(0);
 });
 NODE
+`;
+}
+
+function buildBrowserScreenshotCommand(input: {
+  cdpPort: number;
+  outputPath: string;
+  width: number;
+  height: number;
+}) {
+  const payload = {
+    cdpEndpoint: `http://127.0.0.1:${input.cdpPort}`,
+    outputPath: input.outputPath,
+    width: input.width,
+    height: input.height,
+  };
+
+  return `
+set +e
+${buildSandboxPlaywrightEnvPrelude({ cdpPort: input.cdpPort })}
+ONECEO_BROWSER_SCREENSHOT=${shellEscape(JSON.stringify(payload))} node <<'NODE'
+const fs = require('fs');
+const zlib = require('zlib');
+
+const payload = JSON.parse(process.env.ONECEO_BROWSER_SCREENSHOT || '{}');
+const RESULT_MARKER = '__ONECEO_BROWSER_SCREENSHOT_RESULT__=';
+
+function emit(result) {
+  console.log(RESULT_MARKER + JSON.stringify(result));
+}
+
+function buildDiagnostics(stage, extra = {}) {
+  return {
+    stage,
+    cdpEndpoint: payload.cdpEndpoint || process.env.ONECEO_PLAYWRIGHT_CDP_URL || '',
+    nodePath: process.env.NODE_PATH || '',
+    playwrightBrowsersPath: process.env.PLAYWRIGHT_BROWSERS_PATH || '',
+    ...extra,
+  };
+}
+
+let chromium;
+let playwrightPath = '';
+try {
+  playwrightPath = require.resolve('playwright');
+  chromium = require('playwright').chromium;
+} catch (error) {
+  emit({
+    ok: false,
+    reasonCode: 'playwright_module_not_found',
+    message: error && error.message ? error.message : String(error),
+    diagnostics: buildDiagnostics('require_playwright', { playwrightPath }),
+  });
+  process.exit(0);
+}
+
+function assessVisualHealth(diagnostics) {
+  const url = String(diagnostics.url || '');
+  const title = String(diagnostics.title || '');
+  const bodyTextLength = Number(diagnostics.bodyTextLength || 0);
+  const visibleTextLength = Number(diagnostics.visibleTextLength || 0);
+  const visibleElementCount = Number(diagnostics.visibleElementCount || 0);
+  const largestVisibleElementRatio = Number(diagnostics.largestVisibleElementRatio || 0);
+  const documentHeight = Number(diagnostics.documentHeight || 0);
+  const uniqueColorCount = Number(diagnostics.uniqueColorCount || 0);
+  const dominantColorRatio = Number(diagnostics.dominantColorRatio || 0);
+  const nearWhiteRatio = Number(diagnostics.nearWhiteRatio || 0);
+  const nearBlackRatio = Number(diagnostics.nearBlackRatio || 0);
+  const rootTextLength = Number(diagnostics.rootTextLength || 0);
+  const rootElementCount = Number(diagnostics.rootElementCount || 0);
+  const viewportArea = Number(diagnostics.viewportArea || 0);
+  const appStatus = String(diagnostics.oneCeoAppStatus || '');
+  const appRootStatus = String(diagnostics.oneCeoRootStatus || '');
+  const appErrors = Array.isArray(diagnostics.oneCeoAppErrors) ? diagnostics.oneCeoAppErrors : [];
+
+  if (!url || url === 'about:blank') {
+    return { status: 'failed', reasonCode: 'blank_page_url', message: '浏览器页面仍停留在空白地址。' };
+  }
+  if (/chrome-error:\\/\\//i.test(url) || /^(404|500|502|503|504)\\b/.test(title) || /ERR_[A-Z_]+/.test(title)) {
+    return { status: 'failed', reasonCode: 'chrome_error_page', message: '浏览器打开的是错误页，不是生成的网站页面。' };
+  }
+  if (appStatus === 'error' || appRootStatus === 'error') {
+    return {
+      status: 'failed',
+      reasonCode: 'app_runtime_error',
+      message: appErrors.length > 0 ? '页面浏览器运行时报错：' + String(appErrors[0]).slice(0, 240) : '页面浏览器运行时报错，疑似入口模块或 React 渲染失败。',
+    };
+  }
+  if (bodyTextLength < 8 && visibleTextLength < 8 && visibleElementCount < 3) {
+    return { status: 'failed', reasonCode: 'visible_text_too_short', message: '页面可见文本和元素过少，疑似白屏或空页面。' };
+  }
+  if (rootElementCount > 0 && rootTextLength < 4 && visibleTextLength < 8) {
+    return { status: 'failed', reasonCode: 'app_root_empty', message: '应用根节点存在但没有渲染出有效内容。' };
+  }
+  if (visibleElementCount < 2 && largestVisibleElementRatio < 0.05) {
+    return { status: 'failed', reasonCode: 'no_visible_content', message: '页面没有足够的可见内容。' };
+  }
+  if (documentHeight > 0 && documentHeight < 40 && visibleTextLength < 8) {
+    return { status: 'failed', reasonCode: 'document_too_small', message: '页面文档高度过小，疑似没有完成渲染。' };
+  }
+  if (viewportArea > 0 && uniqueColorCount <= 4 && dominantColorRatio >= 0.97) {
+    return { status: 'failed', reasonCode: 'screenshot_low_entropy', message: '截图几乎是单一颜色，疑似白屏或纯色空页面。' };
+  }
+  if ((nearWhiteRatio >= 0.985 || nearBlackRatio >= 0.985) && visibleTextLength < 20 && uniqueColorCount <= 12) {
+    return { status: 'failed', reasonCode: 'screenshot_near_blank', message: '截图接近纯白或纯黑，且缺少可见文本。' };
+  }
+  return { status: 'passed' };
+}
+
+function paethPredictor(a, b, c) {
+  const p = a + b - c;
+  const pa = Math.abs(p - a);
+  const pb = Math.abs(p - b);
+  const pc = Math.abs(p - c);
+  if (pa <= pb && pa <= pc) return a;
+  if (pb <= pc) return b;
+  return c;
+}
+
+function readPngPixelDiagnostics(outputPath) {
+  try {
+    const buffer = fs.readFileSync(outputPath);
+    if (buffer.length < 33 || buffer.toString('hex', 0, 8) !== '89504e470d0a1a0a') {
+      return { pixelDiagnosticError: 'not_png' };
+    }
+    let offset = 8;
+    let width = 0;
+    let height = 0;
+    let bitDepth = 0;
+    let colorType = 0;
+    const idat = [];
+    while (offset + 12 <= buffer.length) {
+      const length = buffer.readUInt32BE(offset);
+      const type = buffer.toString('ascii', offset + 4, offset + 8);
+      const dataStart = offset + 8;
+      const dataEnd = dataStart + length;
+      if (dataEnd + 4 > buffer.length) break;
+      if (type === 'IHDR') {
+        width = buffer.readUInt32BE(dataStart);
+        height = buffer.readUInt32BE(dataStart + 4);
+        bitDepth = buffer[dataStart + 8];
+        colorType = buffer[dataStart + 9];
+      } else if (type === 'IDAT') {
+        idat.push(buffer.subarray(dataStart, dataEnd));
+      } else if (type === 'IEND') {
+        break;
+      }
+      offset = dataEnd + 4;
+    }
+    if (!width || !height || bitDepth !== 8 || ![0, 2, 6].includes(colorType) || idat.length === 0) {
+      return { pixelDiagnosticError: 'unsupported_png' };
+    }
+    const channels = colorType === 6 ? 4 : colorType === 2 ? 3 : 1;
+    const bytesPerPixel = channels;
+    const stride = width * bytesPerPixel;
+    const raw = zlib.inflateSync(Buffer.concat(idat));
+    const sampleXStep = Math.max(1, Math.floor(width / 160));
+    const sampleYStep = Math.max(1, Math.floor(height / 90));
+    let previous = Buffer.alloc(stride);
+    let inputOffset = 0;
+    const buckets = new Map();
+    let nearWhite = 0;
+    let nearBlack = 0;
+    let opaque = 0;
+    for (let y = 0; y < height; y += 1) {
+      const filter = raw[inputOffset];
+      inputOffset += 1;
+      const scanline = Buffer.from(raw.subarray(inputOffset, inputOffset + stride));
+      inputOffset += stride;
+      for (let x = 0; x < stride; x += 1) {
+        const left = x >= bytesPerPixel ? scanline[x - bytesPerPixel] : 0;
+        const up = previous[x] || 0;
+        const upLeft = x >= bytesPerPixel ? previous[x - bytesPerPixel] || 0 : 0;
+        if (filter === 1) {
+          scanline[x] = (scanline[x] + left) & 255;
+        } else if (filter === 2) {
+          scanline[x] = (scanline[x] + up) & 255;
+        } else if (filter === 3) {
+          scanline[x] = (scanline[x] + Math.floor((left + up) / 2)) & 255;
+        } else if (filter === 4) {
+          scanline[x] = (scanline[x] + paethPredictor(left, up, upLeft)) & 255;
+        }
+      }
+      if (y % sampleYStep === 0) {
+        for (let x = 0; x < width; x += sampleXStep) {
+          const index = x * bytesPerPixel;
+          let r;
+          let g;
+          let b;
+          let a = 255;
+          if (colorType === 0) {
+            r = g = b = scanline[index];
+          } else {
+            r = scanline[index];
+            g = scanline[index + 1];
+            b = scanline[index + 2];
+            if (colorType === 6) a = scanline[index + 3];
+          }
+          if (a < 8) continue;
+          opaque += 1;
+          if (r > 245 && g > 245 && b > 245) nearWhite += 1;
+          if (r < 10 && g < 10 && b < 10) nearBlack += 1;
+          const bucket = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
+          buckets.set(bucket, (buckets.get(bucket) || 0) + 1);
+        }
+      }
+      previous = scanline;
+    }
+    const total = Math.max(1, opaque);
+    let dominant = 0;
+    for (const count of buckets.values()) dominant = Math.max(dominant, count);
+    return {
+      screenshotPixelWidth: width,
+      screenshotPixelHeight: height,
+      sampledPixelCount: total,
+      uniqueColorCount: buckets.size,
+      dominantColorRatio: dominant / total,
+      nearWhiteRatio: nearWhite / total,
+      nearBlackRatio: nearBlack / total,
+    };
+  } catch (error) {
+    return { pixelDiagnosticError: error && error.message ? error.message : String(error || '') };
+  }
+}
+
+async function collectVisualDiagnostics(page) {
+  return await page.evaluate(async () => {
+    const viewport = {
+      width: window.innerWidth || document.documentElement.clientWidth || 0,
+      height: window.innerHeight || document.documentElement.clientHeight || 0,
+    };
+    const viewportArea = Math.max(1, viewport.width * viewport.height);
+    const body = document.body;
+    const doc = document.documentElement;
+    const root = document.querySelector('#root, #app, [data-reactroot], main') || body || doc;
+    const bodyText = (body?.innerText || '').replace(/\\s+/g, ' ').trim();
+    const rootText = (root?.textContent || '').replace(/\\s+/g, ' ').trim();
+    const appStatusRecord = window.__ONECEO_APP_STATUS__ && typeof window.__ONECEO_APP_STATUS__ === 'object'
+      ? window.__ONECEO_APP_STATUS__
+      : null;
+    let visibleElementCount = 0;
+    let visibleTextLength = 0;
+    let largestVisibleElementArea = 0;
+    let rootElementCount = 0;
+    const selectors = Array.from(document.querySelectorAll('body *'));
+    for (const element of selectors) {
+      if (root && root !== body && root !== doc && root.contains(element)) {
+        rootElementCount += 1;
+      }
+      const style = window.getComputedStyle(element);
+      if (
+        style.display === 'none' ||
+        style.visibility === 'hidden' ||
+        Number(style.opacity || '1') < 0.02
+      ) {
+        continue;
+      }
+      const rect = element.getBoundingClientRect();
+      const width = Math.max(0, Math.min(rect.right, viewport.width) - Math.max(rect.left, 0));
+      const height = Math.max(0, Math.min(rect.bottom, viewport.height) - Math.max(rect.top, 0));
+      const area = width * height;
+      if (area < 4) continue;
+      visibleElementCount += 1;
+      largestVisibleElementArea = Math.max(largestVisibleElementArea, area);
+      const text = (element.innerText || element.textContent || '').replace(/\\s+/g, ' ').trim();
+      if (text) {
+        visibleTextLength += Math.min(text.length, 500);
+      }
+    }
+
+    return {
+      url: window.location.href,
+      title: document.title || '',
+      bodyTextLength: bodyText.length,
+      visibleTextLength,
+      visibleElementCount,
+      rootTextLength: rootText.length,
+      rootElementCount,
+      oneCeoAppStatus: appStatusRecord && typeof appStatusRecord.status === 'string' ? appStatusRecord.status : '',
+      oneCeoRootStatus: root && root.getAttribute ? root.getAttribute('data-oneceo-app-status') || '' : '',
+      oneCeoAppErrors: appStatusRecord && Array.isArray(appStatusRecord.errors)
+        ? appStatusRecord.errors.slice(0, 5).map((item) => String(item).slice(0, 500))
+        : [],
+      documentHeight: Math.max(
+        body?.scrollHeight || 0,
+        body?.offsetHeight || 0,
+        doc?.clientHeight || 0,
+        doc?.scrollHeight || 0,
+        doc?.offsetHeight || 0,
+      ),
+      viewportWidth: viewport.width,
+      viewportHeight: viewport.height,
+      viewportArea,
+      largestVisibleElementRatio: largestVisibleElementArea / viewportArea,
+    };
+  });
+}
+
+async function captureViewportScreenshot(page, outputPath) {
+  const timeout = 10000;
+  await page.screenshot({
+    path: outputPath,
+    fullPage: false,
+    timeout,
+  });
+  return {
+    screenshotMode: 'viewport',
+    screenshotTimeoutMs: timeout,
+  };
+}
+
+async function pickPage(browser) {
+  for (const context of browser.contexts()) {
+    const pages = context.pages();
+    const meaningful = pages.filter((page) => {
+      const url = page.url();
+      return url && url !== 'about:blank';
+    });
+    if (meaningful.length > 0) return meaningful[meaningful.length - 1];
+    if (pages.length > 0) return pages[pages.length - 1];
+  }
+  throw new Error('browser_screenshot_no_page');
+}
+
+async function main() {
+  const cdpEndpoint = process.env.ONECEO_PLAYWRIGHT_CDP_URL || payload.cdpEndpoint;
+  const browser = await chromium.connectOverCDP(cdpEndpoint);
+  try {
+    const page = await pickPage(browser);
+    await page.setViewportSize({
+      width: Number(payload.width || 1280),
+      height: Number(payload.height || 720),
+    }).catch(() => undefined);
+    await page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => undefined);
+    const screenshotDiagnostics = await captureViewportScreenshot(page, payload.outputPath);
+    const diagnostics = {
+      ...(await collectVisualDiagnostics(page).catch((error) => ({
+        domDiagnosticError: error && error.message ? error.message : String(error || ''),
+      }))),
+      ...readPngPixelDiagnostics(payload.outputPath),
+      ...screenshotDiagnostics,
+    };
+    const visualCheck = {
+      ...assessVisualHealth(diagnostics),
+      diagnostics,
+    };
+    emit({
+      ok: true,
+      url: page.url(),
+      title: await page.title().catch(() => ''),
+      outputPath: payload.outputPath,
+      visualCheck,
+      diagnostics: buildDiagnostics('completed', { playwrightPath }),
+    });
+  } finally {
+    await (typeof browser.disconnect === 'function' ? browser.disconnect() : browser.close()).catch(() => undefined);
+  }
+}
+
+main().catch((error) => {
+  emit({
+    ok: false,
+    reasonCode: 'browser_screenshot_capture_failed',
+    message: error && error.message ? error.message : String(error),
+    diagnostics: buildDiagnostics('capture_screenshot', {
+      stack: error && error.stack ? String(error.stack).slice(0, 2000) : '',
+      playwrightPath,
+    }),
+  });
+  process.exit(0);
+});
+NODE
+screenshot_result=$?
+if [ "$screenshot_result" -ne 0 ]; then
+  echo '__ONECEO_BROWSER_SCREENSHOT_RESULT__={"ok":false,"reasonCode":"browser_screenshot_node_failed","message":"node process failed","diagnostics":{"stage":"node_process"}}'
+  exit 0
+fi
+if [ ! -s ${shellEscape(input.outputPath)} ]; then
+  echo '__ONECEO_BROWSER_SCREENSHOT_RESULT__={"ok":false,"reasonCode":"browser_screenshot_file_missing","message":"screenshot file was not created","diagnostics":{"stage":"verify_file"}}'
+fi
+exit 0
 `;
 }
 
@@ -609,8 +1173,152 @@ export class AltusManagedToolRuntime {
     } = {
       ensureNekoDebug,
       issueIceServersForUser: (userId: string) => cloudflareTurnService.issueIceServersForUser(userId),
+    },
+    private readonly evidenceDeps: {
+      uploadToR2: typeof uploadToR2;
+    } = {
+      uploadToR2,
     }
   ) {}
+
+  private buildBrowserScreenshotStorageKey(input: {
+    toolName: string;
+    action?: string;
+  }) {
+    const stable = createHash('sha256')
+      .update(`${this.input.sessionId}:${this.input.sandboxId}:${input.toolName}:${input.action || ''}:${Date.now()}:${randomUUID()}`)
+      .digest('hex')
+      .slice(0, 16);
+    const safeTool = asText(input.toolName).replace(/[^a-z0-9_-]+/gi, '_') || 'browser';
+    const safeAction = asText(input.action).replace(/[^a-z0-9_-]+/gi, '_') || 'open';
+    return ['sessions', this.input.sessionId, 'browser-actions', `${Date.now()}-${safeTool}-${safeAction}-${stable}.png`].join('/');
+  }
+
+  private async captureBrowserScreenshotEvidence(input: {
+    toolName: string;
+    action?: string;
+    description?: string;
+    cdpPort: number;
+    width?: number;
+    height?: number;
+  }): Promise<ManagedToolEvidence> {
+    const width = Math.max(320, Math.min(Math.floor(Number(input.width) || 1280), 2560));
+    const height = Math.max(240, Math.min(Math.floor(Number(input.height) || 720), 1800));
+    const screenshotPath = `/tmp/oneceo-browser-action-${this.input.sessionId}-${randomUUID()}.png`;
+    const command = buildBrowserScreenshotCommand({
+      cdpPort: input.cdpPort,
+      outputPath: screenshotPath,
+      width,
+      height,
+    });
+    let pageUrl = '';
+    let pageTitle = '';
+    try {
+      const result = await this.runShell(
+        command,
+        {
+          cwd: this.input.workspaceRoot,
+          timeoutMs: 30_000,
+        }
+      );
+      const exitCode = Number((result as any)?.exitCode ?? -1);
+      const stdout = asText((result as any)?.stdout);
+      const stderr = asText((result as any)?.stderr);
+      const parsed = parseMarkedJsonLine(stdout, '__ONECEO_BROWSER_SCREENSHOT_RESULT__=');
+      const parsedOk = parsed?.ok === true;
+      if (parsed) {
+        pageUrl = asText(parsed.url);
+        pageTitle = asText(parsed.title);
+      }
+      const visualCheck = readBrowserVisualCheck(parsed?.visualCheck);
+      if (exitCode !== 0 || !parsedOk) {
+        const failure = readBrowserScreenshotFailure(parsed, stdout, stderr);
+        return {
+          type: 'browser_screenshot',
+          kind: 'browser_action_screenshot',
+          status: 'capture_failed',
+          reasonCode: failure.reasonCode,
+          message: failure.message,
+          source: {
+            sandboxId: this.input.sandboxId,
+            cdpPort: input.cdpPort,
+            toolName: input.toolName,
+            action: input.action,
+            description: input.description,
+          },
+        };
+      }
+
+      const bytes = Buffer.from(await e2bConnector.readFile(this.input.sandboxId, screenshotPath));
+      const storageKey = this.buildBrowserScreenshotStorageKey({
+        toolName: input.toolName,
+        action: input.action,
+      });
+      try {
+        await this.evidenceDeps.uploadToR2(storageKey, bytes);
+      } catch (error) {
+        return {
+          type: 'browser_screenshot',
+          kind: 'browser_action_screenshot',
+          status: 'storage_failed',
+          reasonCode: 'browser_screenshot_storage_failed',
+          message: truncateEvidenceMessage(error),
+          source: {
+            sandboxId: this.input.sandboxId,
+            cdpPort: input.cdpPort,
+            url: pageUrl || undefined,
+            title: pageTitle || undefined,
+            toolName: input.toolName,
+            action: input.action,
+            description: input.description,
+          },
+        };
+      }
+
+      return {
+        type: 'browser_screenshot',
+        kind: 'browser_action_screenshot',
+        status: 'captured',
+        storageKey,
+        mimeType: 'image/png',
+        width,
+        height,
+        capturedAt: new Date().toISOString(),
+        visualCheck,
+        source: {
+          sandboxId: this.input.sandboxId,
+          cdpPort: input.cdpPort,
+          url: pageUrl || undefined,
+          title: pageTitle || undefined,
+          toolName: input.toolName,
+          action: input.action,
+          description: input.description,
+        },
+      };
+  } catch (error) {
+      const reasonCode = /timeout/i.test(String((error as any)?.message || error || ''))
+        ? 'browser_screenshot_timeout'
+        : 'browser_screenshot_capture_failed';
+      return {
+        type: 'browser_screenshot',
+        kind: 'browser_action_screenshot',
+        status: 'capture_failed',
+        reasonCode,
+        message: truncateEvidenceMessage(error),
+        source: {
+          sandboxId: this.input.sandboxId,
+          cdpPort: input.cdpPort,
+          toolName: input.toolName,
+          action: input.action,
+          description: input.description,
+        },
+      };
+    } finally {
+      await e2bConnector
+        .runCommand(this.input.sandboxId, `rm -f ${shellEscape(screenshotPath)}`, { timeoutMs: 10_000 })
+        .catch(() => undefined);
+    }
+  }
 
   private buildMcpToolMap() {
     const providers = Array.isArray(this.input.mcpProviders) ? this.input.mcpProviders : [];
@@ -1557,9 +2265,16 @@ export class AltusManagedToolRuntime {
       }
 
       await this.markWorkspaceDirty('managed_debug_open_page');
+      const browserScreenshot = await this.captureBrowserScreenshotEvidence({
+        toolName: 'debug_open_page',
+        action: 'open_page',
+        description: `打开 ${targetUrl}`,
+        cdpPort,
+      });
       return {
         type: 'result',
         activatedSkills,
+        evidence: [browserScreenshot],
         content: JSON.stringify({
           targetUrl,
           debugUrl: debugInfo?.url,
@@ -1569,6 +2284,7 @@ export class AltusManagedToolRuntime {
           cdpPort,
           protocol: normalizedTarget.protocol,
           localFilePath: normalizedTarget.localFilePath,
+          browserScreenshot,
           output: stdout,
         }),
       };
@@ -1604,12 +2320,22 @@ export class AltusManagedToolRuntime {
       const exitCode = Number((result as any)?.exitCode ?? -1);
       const stdout = truncate(asText((result as any)?.stdout), 4000);
       const stderr = truncate(asText((result as any)?.stderr), 2000);
-      if (exitCode !== 0) {
-        throw new Error(`browser_interact_failed:${stderr || stdout || 'unknown error'}`);
+      const parsedInteraction = parseMarkedJsonLine(stdout, '__ONECEO_BROWSER_INTERACT_RESULT__=');
+      if (exitCode !== 0 || !parsedInteraction || parsedInteraction.ok !== true) {
+        throw new Error(
+          `browser_interact_failed:${formatBrowserToolFailure(parsedInteraction, stdout, stderr, 'missing structured browser_interact result')}`
+        );
       }
+      const browserScreenshot = await this.captureBrowserScreenshotEvidence({
+        toolName: 'browser_interact',
+        action,
+        description: asText(rawArgs.description),
+        cdpPort,
+      });
       return {
         type: 'result',
         activatedSkills,
+        evidence: [browserScreenshot],
         content: JSON.stringify({
           action,
           description: asText(rawArgs.description),
@@ -1620,6 +2346,7 @@ export class AltusManagedToolRuntime {
           loadState: normalizeLoadState(rawArgs.loadState),
           pixels: asPositiveInt(rawArgs.pixels, 600, 5000),
           cdpPort,
+          browserScreenshot,
           output: stdout,
         }),
       };

@@ -69,6 +69,7 @@ import { buildManagedMcpToolRejectionCompletionText } from './managed-mcp-tool-c
 
 const DELIVERABLES_READY_TEXT = '交付文件已生成';
 const DEPLOYMENT_COMPLETION_BLOCKED_PREFIX = 'deployment_completion_blocked:';
+const VISUAL_DETECTION_COMPLETION_BLOCKED_PREFIX = 'visual_detection_completion_blocked:';
 const DEPLOYMENT_PENDING_STATUSES = new Set([
   '',
   'unknown',
@@ -110,6 +111,18 @@ type DeploymentToolViewProjection = {
   internalView?: {
     detail: string;
   };
+};
+
+type VisualDetectionEvidenceState = {
+  capturedCount: number;
+  passedCount: number;
+  lastToolName: string;
+  lastAction: string;
+  lastUrl: string;
+  lastCapturedAt: string;
+  lastStatus: string;
+  lastReasonCode: string;
+  lastMessage: string;
 };
 
 function normalizeInlineBulletGlyphLine(line: string): string {
@@ -251,7 +264,7 @@ function buildBrowserInteractionSummary(args: Record<string, unknown>) {
   if (action === 'wait_for_timeout') {
     return '等待页面稳定';
   }
-  return target ? `执行 Playwright 操作：${target}` : '执行 Playwright 浏览器操作';
+  return target ? `执行 Playwright 操作：${target}` : '执行 Playwright 视觉检测';
 }
 
 type ExtractedJsonStringField = {
@@ -377,6 +390,16 @@ function hasVisionInput(messages: ChatMessage[]) {
     if (!Array.isArray(message.content)) return false;
     return message.content.some((part) => part?.type === 'image_url' && Boolean(part.image_url?.url));
   });
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function readBrowserScreenshotEvidence(value: unknown) {
+  const record = readRecord(value);
+  if (record.type !== 'browser_screenshot') return null;
+  return record;
 }
 
 export class AltusRunCoordinator {
@@ -1169,6 +1192,91 @@ private async chargeForModelCall(state: AltusRunState, input: {
     ].join(' ');
   }
 
+  private requiresVisualDetectionBeforeCompletion(
+    taskIntentProfile?: AltusManagedTaskIntentProfile
+  ) {
+    if (!taskIntentProfile) return false;
+    if (taskIntentProfile.needsClarification) return false;
+    if (taskIntentProfile.explicitNoWeb || taskIntentProfile.scriptArtifactRequested || taskIntentProfile.emailTemplateRequested) {
+      return false;
+    }
+    if (taskIntentProfile.webArtifactRequested) return true;
+    return taskIntentProfile.mode === 'deployable_web_app' && !taskIntentProfile.deployRequested;
+  }
+
+  private isVisualDetectionEvidenceSuccessful(evidence: VisualDetectionEvidenceState) {
+    return evidence.passedCount > 0;
+  }
+
+  private readVisualDetectionEvidence(
+    toolName: string,
+    result: Extract<Awaited<ReturnType<AltusManagedToolRuntime['execute']>>, { type: 'result' }>
+  ) {
+    if (toolName !== 'debug_open_page' && toolName !== 'browser_interact') {
+      return null;
+    }
+    const evidenceItems = Array.isArray(result.evidence) ? result.evidence : [];
+    const browserScreenshot =
+      evidenceItems.map((item) => readBrowserScreenshotEvidence(item)).find(Boolean) ||
+      (() => {
+        try {
+          return readBrowserScreenshotEvidence(JSON.parse(asText(result.content)).browserScreenshot);
+        } catch {
+          return null;
+        }
+      })();
+    if (!browserScreenshot) {
+      return null;
+    }
+    const source = readRecord(browserScreenshot.source);
+    const screenshotStatus = asText(browserScreenshot.status);
+    if (screenshotStatus !== 'captured') {
+      return {
+        toolName,
+        action: asText(source.action),
+        url: asText(source.url),
+        capturedAt: '',
+        visualStatus: screenshotStatus || 'capture_failed',
+        reasonCode: asText(browserScreenshot.reasonCode),
+        message: asText(browserScreenshot.message),
+        captured: false,
+        passed: false,
+      };
+    }
+    const visualCheck = readRecord(browserScreenshot.visualCheck);
+    const visualStatus = asText(visualCheck.status);
+    return {
+      toolName,
+      action: asText(source.action),
+      url: asText(source.url),
+      capturedAt: asText(browserScreenshot.capturedAt),
+      visualStatus,
+      reasonCode: asText(visualCheck.reasonCode),
+      message: asText(visualCheck.message),
+      captured: true,
+      passed: visualStatus === 'passed',
+    };
+  }
+
+  private buildVisualDetectionCompletionBlockedError(evidence: VisualDetectionEvidenceState) {
+    return [
+      VISUAL_DETECTION_COMPLETION_BLOCKED_PREFIX,
+      'website_or_web_app_delivery_requires_visual_detection',
+      `captured_count=${evidence.capturedCount}`,
+      `passed_count=${evidence.passedCount}`,
+      `last_tool=${evidence.lastToolName || 'none'}`,
+      `last_action=${evidence.lastAction || 'none'}`,
+      `last_visual_status=${evidence.lastStatus || 'none'}`,
+      `last_reason_code=${evidence.lastReasonCode || 'none'}`,
+      `last_message=${evidence.lastMessage || 'none'}`,
+      'run_or_build_the_app_first',
+      'say_正在进行视觉检测',
+      'call_debug_open_page_against_the_running_or_file_target',
+      'use_browser_interact_for_click_key_scroll_pagination_or_state_checks_when_relevant',
+      'retry_complete_task_only_after_browserScreenshot_visualCheck_status_passed',
+    ].join(' ');
+  }
+
   private isDeploymentTool(toolName: string) {
     return (
       toolName === 'deploy_application' ||
@@ -1304,9 +1412,14 @@ private async chargeForModelCall(state: AltusRunState, input: {
       return '部署状态查询暂未完成';
     }
     if (toolName === 'browser_interact') {
-      if (status === 'started' || status === 'progress') return '正在执行浏览器交互';
-      if (status === 'completed') return '浏览器交互已完成';
-      return '浏览器交互失败';
+      if (status === 'started' || status === 'progress') return '正在进行视觉检测';
+      if (status === 'completed') return '视觉检测步骤已完成';
+      return '视觉检测步骤失败';
+    }
+    if (toolName === 'debug_open_page') {
+      if (status === 'started' || status === 'progress') return '正在进行视觉检测';
+      if (status === 'completed') return '视觉检测页面已打开';
+      return '视觉检测页面打开失败';
     }
     if (status === 'started') return `调用工具 ${toolName}`;
     if (status === 'completed') return `工具 ${toolName} 已完成`;
@@ -1397,7 +1510,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
       return '这一步已经跑完了，我继续处理后面的内容';
     }
     if (toolName === 'debug_open_page') {
-      return '页面已经打开，我正在按测试文档确认功能是否符合要求';
+      return '页面已经打开，正在进行视觉检测';
     }
     if (toolName === 'browser_interact') {
       return `${buildBrowserInteractionSummary(args)}，页面已响应`;
@@ -1417,6 +1530,16 @@ private async chargeForModelCall(state: AltusRunState, input: {
   private sanitizeToolEventError(toolName: string, errorMessage: string) {
     if (errorMessage.startsWith(DEPLOYMENT_COMPLETION_BLOCKED_PREFIX)) {
       return '线上部署尚未完成，Altus 将继续修复并重试发布。';
+    }
+    if (errorMessage.startsWith(VISUAL_DETECTION_COMPLETION_BLOCKED_PREFIX)) {
+      if (
+        errorMessage.includes('captured_count=') &&
+        !errorMessage.includes('captured_count=0') &&
+        errorMessage.includes('passed_count=0')
+      ) {
+        return '页面已打开但没有通过视觉检测，Altus 将继续修复白屏、空内容或错误页问题后重新截图。';
+      }
+      return '交付前视觉检测还没完成，Altus 将继续通过 n.eko 和 Playwright 补齐截图证据。';
     }
     if (errorMessage.startsWith('deployment_tool_not_allowed_without_explicit_request')) {
       return '这次只是部署相关咨询，我不会在没有明确指令时触发部署工具。';
@@ -2213,6 +2336,17 @@ private async chargeForModelCall(state: AltusRunState, input: {
       state.input.taskIntentProfile
     );
     let lastDeploymentEvidence: DeploymentCompletionEvidence | null = null;
+    const visualDetectionEvidence: VisualDetectionEvidenceState = {
+      capturedCount: 0,
+      passedCount: 0,
+      lastToolName: '',
+      lastAction: '',
+      lastUrl: '',
+      lastCapturedAt: '',
+      lastStatus: '',
+      lastReasonCode: '',
+      lastMessage: '',
+    };
     let debugOpenPageSucceeded = false;
     const maxToolRounds = this.getMaxToolRounds();
     let nextRoundStatusContent = '正在分析并执行任务';
@@ -2700,6 +2834,22 @@ private async chargeForModelCall(state: AltusRunState, input: {
             if (toolName === 'debug_open_page') {
               debugOpenPageSucceeded = true;
             }
+            const visualEvidence = this.readVisualDetectionEvidence(toolName, result);
+            if (visualEvidence) {
+              if (visualEvidence.captured) {
+                visualDetectionEvidence.capturedCount += 1;
+              }
+              if (visualEvidence.passed) {
+                visualDetectionEvidence.passedCount += 1;
+              }
+              visualDetectionEvidence.lastToolName = visualEvidence.toolName;
+              visualDetectionEvidence.lastAction = visualEvidence.action;
+              visualDetectionEvidence.lastUrl = visualEvidence.url;
+              visualDetectionEvidence.lastCapturedAt = visualEvidence.capturedAt;
+              visualDetectionEvidence.lastStatus = visualEvidence.visualStatus;
+              visualDetectionEvidence.lastReasonCode = visualEvidence.reasonCode;
+              visualDetectionEvidence.lastMessage = visualEvidence.message;
+            }
 
             return {
               transitionReason: postToolTransitionReason,
@@ -2882,6 +3032,78 @@ private async chargeForModelCall(state: AltusRunState, input: {
                   modelRoundId: currentRound,
                   args,
                   errorCode: 'completion_blocked',
+                  errorMessage: blockedMessage,
+                  content: blockedEventError,
+                  contentForUser: blockedEventError,
+                })
+              ),
+            });
+            completedToolCallIds.add(toolCall.id);
+            continue;
+          }
+          if (
+            toolName === 'complete_task' &&
+            this.requiresVisualDetectionBeforeCompletion(state.input.taskIntentProfile) &&
+            !this.isVisualDetectionEvidenceSuccessful(visualDetectionEvidence)
+          ) {
+            const blockedMessage = this.buildVisualDetectionCompletionBlockedError(visualDetectionEvidence);
+            const blockedEventError = this.sanitizeToolEventError(toolName, blockedMessage);
+            await this.eventWriter.appendRunEvent(
+              state.input.runId,
+              state.input.sessionId,
+              state.input.userId,
+              'tool_call_failed',
+              {
+                toolName,
+                content: this.buildToolEventContent(toolName, 'failed'),
+                arguments: args,
+                toolCallId: toolCall.id,
+                toolResultEnvelope: buildManagedToolResultEnvelope({
+                  status: 'error',
+                  runId: state.input.runId,
+                  toolUseId: toolCall.id,
+                  toolName,
+                  modelRoundId: currentRound,
+                  args,
+                  errorCode: 'visual_detection_completion_blocked',
+                  errorMessage: blockedMessage,
+                  content: blockedEventError,
+                  contentForUser: blockedEventError,
+                }),
+                error: blockedEventError,
+                transitionReason: 'visual_detection_completion_blocked',
+                userView: {
+                  summary: blockedEventError,
+                  preview: blockedEventError,
+                  detail: blockedEventError,
+                },
+                internalView: {
+                  detail: [`工具: ${toolName}`, `rawError: ${blockedMessage}`].join('\n'),
+                },
+              }
+            );
+            await this.syncLoopSnapshot(state, {
+              lastTransitionReason: 'visual_detection_completion_blocked',
+              recoveryMode: 'tool_repair',
+              currentRound,
+              maxRounds: maxToolRounds,
+              plainTextRecoveryUsed,
+              lastToolName: toolName,
+              lastToolCallId: toolCall.id,
+            });
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              name: toolName,
+              content: stringifyManagedToolResultEnvelope(
+                buildManagedToolResultEnvelope({
+                  status: 'error',
+                  runId: state.input.runId,
+                  toolUseId: toolCall.id,
+                  toolName,
+                  modelRoundId: currentRound,
+                  args,
+                  errorCode: 'visual_detection_completion_blocked',
                   errorMessage: blockedMessage,
                   content: blockedEventError,
                   contentForUser: blockedEventError,

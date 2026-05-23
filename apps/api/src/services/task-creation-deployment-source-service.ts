@@ -353,6 +353,30 @@ const FRONTEND_DIST_TEMPLATE_MANIFEST: OneCeoDeploymentManifest = {
   },
 };
 
+const OFFICIAL_WEB_SHELL_APP_STATUS_BOOTSTRAP = `<script>
+  window.__ONECEO_APP_STATUS__ = { status: 'booting', errors: [] };
+  window.__ONECEO_REPORT_APP_ERROR__ = function (error) {
+    var message = error && (error.message || error.reason || error.type) ? String(error.message || error.reason || error.type) : String(error || 'Unknown browser runtime error');
+    window.__ONECEO_APP_STATUS__.status = 'error';
+    window.__ONECEO_APP_STATUS__.errors.push(message);
+    var root = document.getElementById('root');
+    if (!root) return;
+    root.setAttribute('data-oneceo-app-status', 'error');
+    var hasRenderedContent = false;
+    for (var index = 0; index < root.children.length; index += 1) {
+      var child = root.children[index];
+      if (child.tagName && child.tagName.toLowerCase() !== 'noscript') {
+        hasRenderedContent = true;
+        break;
+      }
+    }
+    if (hasRenderedContent) return;
+    root.innerHTML = '<main style="min-height:100vh;display:grid;place-items:center;padding:32px;font-family:system-ui,sans-serif;background:#fff;color:#111"><section style="max-width:640px;border:1px solid #e5e7eb;padding:24px"><p style="margin:0 0 8px;font-size:13px;color:#991b1b">OneCEO browser runtime error</p><h1 style="margin:0 0 12px;font-size:24px">页面渲染失败</h1><p style="margin:0;line-height:1.6;color:#4b5563">' + message.replace(/[&<>"']/g, function (ch) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]; }) + '</p></section></main>';
+  };
+  window.addEventListener('error', window.__ONECEO_REPORT_APP_ERROR__);
+  window.addEventListener('unhandledrejection', function (event) { window.__ONECEO_REPORT_APP_ERROR__(event.reason || event); });
+</script>`;
+
 const OFFICIAL_WEB_SHELL_SERVER_SOURCE = `import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -520,6 +544,9 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, 'dist/public'),
     emptyOutDir: true,
+  },
+  esbuild: {
+    jsx: 'automatic',
   },
 });
 `;
@@ -1022,14 +1049,35 @@ async function ensureOfficialFrontendWebShell(sourceDir: string) {
   }
 
   const clientIndexSource = await readTextIfExists(clientIndexPath);
-  if (clientIndexSource && !clientIndexSource.includes('ONECEO_ANALYTICS:START')) {
+  let nextClientIndexSource = clientIndexSource;
+  if (nextClientIndexSource && !nextClientIndexSource.includes('data-oneceo-app-status')) {
+    nextClientIndexSource = nextClientIndexSource.replace(
+      /<div\s+id=(["'])root\1\s*><\/div>/i,
+      '<div id="root" data-oneceo-app-status="booting"><noscript>请启用 JavaScript 查看这个 OneCEO 网站。</noscript></div>'
+    );
+  }
+  if (nextClientIndexSource && !nextClientIndexSource.includes('__ONECEO_APP_STATUS__')) {
+    const moduleScriptIndex = nextClientIndexSource.search(/<script\b[^>]*type=(["'])module\1/i);
+    if (moduleScriptIndex >= 0) {
+      nextClientIndexSource = `${nextClientIndexSource.slice(0, moduleScriptIndex)}${OFFICIAL_WEB_SHELL_APP_STATUS_BOOTSTRAP}\n${nextClientIndexSource.slice(moduleScriptIndex)}`;
+    } else {
+      const bodyCloseIndex = nextClientIndexSource.lastIndexOf('</body>');
+      nextClientIndexSource =
+        bodyCloseIndex >= 0
+          ? `${nextClientIndexSource.slice(0, bodyCloseIndex)}${OFFICIAL_WEB_SHELL_APP_STATUS_BOOTSTRAP}\n${nextClientIndexSource.slice(bodyCloseIndex)}`
+          : `${nextClientIndexSource}\n${OFFICIAL_WEB_SHELL_APP_STATUS_BOOTSTRAP}\n`;
+    }
+  }
+  if (nextClientIndexSource && !nextClientIndexSource.includes('ONECEO_ANALYTICS:START')) {
     const analyticsHook = '<!-- ONECEO_ANALYTICS:START --><!-- ONECEO_ANALYTICS:END -->';
-    const bodyCloseIndex = clientIndexSource.lastIndexOf('</body>');
-    const nextIndexSource =
+    const bodyCloseIndex = nextClientIndexSource.lastIndexOf('</body>');
+    nextClientIndexSource =
       bodyCloseIndex >= 0
-        ? `${clientIndexSource.slice(0, bodyCloseIndex)}${analyticsHook}\n${clientIndexSource.slice(bodyCloseIndex)}`
-        : `${clientIndexSource}\n${analyticsHook}\n`;
-    await writeFile(clientIndexPath, nextIndexSource, 'utf-8');
+        ? `${nextClientIndexSource.slice(0, bodyCloseIndex)}${analyticsHook}\n${nextClientIndexSource.slice(bodyCloseIndex)}`
+        : `${nextClientIndexSource}\n${analyticsHook}\n`;
+  }
+  if (nextClientIndexSource !== clientIndexSource) {
+    await writeFile(clientIndexPath, nextClientIndexSource, 'utf-8');
   }
 
   await ensureReactNamespaceImports(sourceDir);
@@ -1054,7 +1102,7 @@ async function ensureOfficialFrontendWebShell(sourceDir: string) {
       vite:
         asText(asObject(packageJson.dependencies).vite) ||
         asText(asObject(packageJson.devDependencies).vite) ||
-        '^7.0.0',
+        '^5.4.21',
     },
   };
   await writeFile(packageJsonPath, `${JSON.stringify(nextPackageJson, null, 2)}\n`, 'utf-8');

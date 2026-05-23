@@ -1187,6 +1187,14 @@ export class ConversationManagementService {
     };
   }
 
+  getBrowserActionScreenshot(input: {
+    sessionId: string;
+    runId: string;
+    toolCallId: string;
+  }) {
+    return this.oneceoApi.getTaskCreationBrowserActionScreenshot(input);
+  }
+
   async getSessionInfra(sessionId: string) {
     const detail = await this.getSessionDetail(sessionId);
     return {

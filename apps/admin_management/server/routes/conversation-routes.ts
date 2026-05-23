@@ -59,6 +59,23 @@ export function createConversationRoutes(service: ConversationManagementService)
   );
 
   router.get(
+    '/sessions/:sessionId/runs/:runId/tool-calls/:toolCallId/browser-screenshot.png',
+    asyncHandler(async (req, res) => {
+      const image = await service.getBrowserActionScreenshot({
+        sessionId: req.params.sessionId,
+        runId: req.params.runId,
+        toolCallId: req.params.toolCallId,
+      });
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.setHeader('Content-Type', image.contentType);
+      if (image.contentLength) {
+        res.setHeader('Content-Length', image.contentLength);
+      }
+      return res.status(200).send(image.body);
+    })
+  );
+
+  router.get(
     '/api-traces/aggregate',
     asyncHandler(async (req, res) => {
       const query = z.object({

@@ -21,6 +21,7 @@ import {
 } from "@/lib/workspace-preview";
 import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
 import {
+  AlertTriangle,
   Code2,
   ExternalLink,
   Loader2,
@@ -98,6 +99,55 @@ export function resolveArtifactDeploymentPreviewUrl(
     info.domains[0] ||
     ""
   );
+}
+
+export type WebsitePreviewSnapshotIssue = {
+  reasonCode?: string;
+  message: string;
+  visualStatus?: "failed";
+  status?: string;
+};
+
+function stripReasonPrefix(message: string, reasonCode?: string) {
+  if (!message || !reasonCode) return message;
+  const prefix = `${reasonCode}:`;
+  return message.startsWith(prefix) ? message.slice(prefix.length).trim() : message;
+}
+
+export function getWebsitePreviewSnapshotIssue(
+  snapshot: TaskCreationWebsitePreviewSnapshot | null | undefined,
+  options: { imageFailed?: boolean; hasPreviewPath?: boolean } = {},
+): WebsitePreviewSnapshotIssue | null {
+  if (snapshot?.kind !== "website_screenshot") return null;
+  const visualFailed = snapshot.visualCheck?.status === "failed";
+  const capturedWithoutImage =
+    snapshot.status === "captured" && (!snapshot.storageKey || options.imageFailed);
+  const unavailableWithoutFallback =
+    snapshot.status === "capture_unavailable" && !options.hasPreviewPath;
+  const failed =
+    snapshot.status === "capture_failed" ||
+    snapshot.status === "storage_failed" ||
+    visualFailed ||
+    capturedWithoutImage ||
+    unavailableWithoutFallback;
+  if (!failed) return null;
+
+  const reasonCode =
+    snapshot.visualCheck?.reasonCode ||
+    snapshot.reasonCode ||
+    (options.imageFailed ? "snapshot_image_load_failed" : undefined);
+  const message = stripReasonPrefix(
+    snapshot.visualCheck?.message ||
+      snapshot.message ||
+      i18n.t("previewPanel.artifactPreview.websiteSnapshotUnavailable"),
+    reasonCode,
+  );
+  return {
+    reasonCode,
+    message,
+    visualStatus: visualFailed ? "failed" : undefined,
+    status: snapshot.status,
+  };
 }
 
 function ScaledWebPreviewFrame({
@@ -290,19 +340,20 @@ export default function AltusArtifactPreviewCard({
   const snapshotHasCapturedMetadata = Boolean(
     runId &&
       previewSnapshot?.kind === "website_screenshot" &&
-      previewSnapshot.status === "captured",
+      previewSnapshot.status === "captured" &&
+      previewSnapshot.visualCheck?.status !== "failed",
   );
+  const snapshotIssue = getWebsitePreviewSnapshotIssue(previewSnapshot, {
+    imageFailed: snapshotImageFailed,
+    hasPreviewPath: Boolean(previewPath),
+  });
   const snapshotCaptured = Boolean(
-    snapshotHasCapturedMetadata && previewSnapshot?.storageKey && !snapshotImageFailed,
+    !snapshotIssue &&
+      snapshotHasCapturedMetadata &&
+      previewSnapshot?.storageKey &&
+      !snapshotImageFailed,
   );
-  const snapshotUnavailableForComplexWeb = Boolean(
-    previewSnapshot?.kind === "website_screenshot" &&
-      (previewSnapshot.status === "capture_failed" ||
-        previewSnapshot.status === "storage_failed" ||
-        (previewSnapshot.status === "capture_unavailable" && !previewPath) ||
-        (previewSnapshot.status === "captured" &&
-          (!previewSnapshot.storageKey || snapshotImageFailed))),
-  );
+  const snapshotUnavailableForComplexWeb = Boolean(snapshotIssue);
   const snapshotUrl =
     snapshotCaptured && runId
       ? getTaskCreationPreviewSnapshotUrl(sessionId, runId)
@@ -315,9 +366,19 @@ export default function AltusArtifactPreviewCard({
       !snapshotCaptured &&
       !snapshotUnavailableForComplexWeb,
   );
-  const frameClass = selectedIsWebArtifact || hasSnapshotMetadata
-    ? "group relative w-full overflow-hidden rounded-xl border bg-card pt-10 min-h-[240px] sm:h-[400px] max-h-[640px]"
-    : "group relative w-full overflow-hidden rounded-xl border bg-card pt-10 min-h-[320px]";
+  const frameClass = cn(
+    "group relative w-full overflow-hidden rounded-xl border bg-card pt-10",
+    snapshotUnavailableForComplexWeb && activeTab === "preview"
+      ? "min-h-[230px]"
+      : selectedIsWebArtifact || hasSnapshotMetadata
+        ? "min-h-[240px] sm:h-[400px] max-h-[640px]"
+        : "min-h-[320px]",
+  );
+  const headerLabel = snapshotIssue
+    ? visibleArtifacts.length > 0
+      ? i18n.t("previewPanel.artifactPreview.artifactGenerated")
+      : i18n.t("previewPanel.artifactPreview.websiteSnapshotIssueTitle")
+    : i18n.t("previewPanel.artifactPreview.taskComplete");
 
   useEffect(() => {
     setSnapshotImageFailed(false);
@@ -431,12 +492,14 @@ export default function AltusArtifactPreviewCard({
     <div className="w-full">
       <div className="mt-4 space-y-3">
         <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-          <span>{i18n.t("previewPanel.artifactPreview.taskComplete")}</span>
-          <span className="text-xs">
-            ({i18n.t("previewPanel.artifactPreview.fileCount", {
-              count: visibleArtifacts.length,
-            })})
-          </span>
+          <span>{headerLabel}</span>
+          {visibleArtifacts.length > 0 ? (
+            <span className="text-xs">
+              ({i18n.t("previewPanel.artifactPreview.fileCount", {
+                count: visibleArtifacts.length,
+              })})
+            </span>
+          ) : null}
         </div>
 
         <div className="space-y-4">
@@ -538,33 +601,54 @@ export default function AltusArtifactPreviewCard({
                             />
                           </div>
                         ) : snapshotUnavailableForComplexWeb ? (
-                          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-muted/20 px-6 text-center">
-                            <div className="max-w-md text-sm text-muted-foreground">
-                              {previewSnapshot?.message ||
-                                i18n.t("previewPanel.artifactPreview.websiteSnapshotUnavailable")}
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setActiveTab("code")}
-                              >
-                                {i18n.t("previewPanel.viewSource")}
-                              </Button>
-                              {selectedOpenUrl ? (
+                          <div className="absolute inset-0 overflow-auto bg-muted/20 px-4 py-12 sm:px-6">
+                            <div className="mx-auto flex w-full max-w-2xl flex-col gap-3 rounded-lg border border-amber-200 bg-background/95 p-4 text-left dark:border-amber-900/60 dark:bg-background/90">
+                              <div className="flex items-start gap-3">
+                                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
+                                  <AlertTriangle className="h-4 w-4" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <div className="text-sm font-semibold text-foreground">
+                                    {i18n.t("previewPanel.artifactPreview.websiteSnapshotIssueTitle")}
+                                  </div>
+                                  <div className="mt-1 text-sm leading-6 text-muted-foreground">
+                                    {snapshotIssue?.message ||
+                                      i18n.t("previewPanel.artifactPreview.websiteSnapshotUnavailable")}
+                                  </div>
+                                </div>
+                              </div>
+                              {snapshotIssue?.reasonCode ? (
+                                <div className="rounded-md bg-muted px-3 py-2 font-mono text-xs text-muted-foreground">
+                                  {i18n.t("previewPanel.artifactPreview.websiteSnapshotIssueReason")}:{" "}
+                                  {snapshotIssue.reasonCode}
+                                </div>
+                              ) : null}
+                              <div className="text-xs leading-5 text-muted-foreground">
+                                {i18n.t("previewPanel.artifactPreview.websiteSnapshotIssueDescription")}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
                                 <Button
                                   type="button"
-                                  variant="outline"
+                                  variant="ghost"
                                   size="sm"
-                                  onClick={() =>
-                                    window.open(selectedOpenUrl, "_blank", "noopener,noreferrer")
-                                  }
+                                  onClick={() => setActiveTab("code")}
                                 >
-                                  <ExternalLink className="mr-1 h-3.5 w-3.5" />
-                                  {i18n.t("previewPanel.artifactPreview.open")}
+                                  {i18n.t("previewPanel.viewSource")}
                                 </Button>
-                              ) : null}
+                                {selectedOpenUrl ? (
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() =>
+                                      window.open(selectedOpenUrl, "_blank", "noopener,noreferrer")
+                                    }
+                                  >
+                                    <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                                    {i18n.t("previewPanel.artifactPreview.open")}
+                                  </Button>
+                                ) : null}
+                              </div>
                             </div>
                           </div>
                         ) : webPreviewState === "ready" ? (

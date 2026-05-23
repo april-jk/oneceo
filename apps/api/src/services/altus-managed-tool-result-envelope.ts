@@ -40,6 +40,9 @@ export function classifyManagedToolErrorCode(rawError: string) {
   if (normalized.includes('complete_task_pptx_requires_render_pptx_from_instructions')) {
     return 'complete_task_pptx_requires_render_pptx_from_instructions';
   }
+  if (normalized.startsWith('visual_detection_completion_blocked:')) {
+    return 'visual_detection_completion_blocked';
+  }
   if (normalized.includes('managed_run_missing_sandbox_context') || normalized.includes('sandbox_not_ready')) {
     return 'sandbox_not_ready';
   }
@@ -60,6 +63,7 @@ export function isManagedToolErrorRetryable(errorCode: string) {
     errorCode === 'complete_task_attachment_path_invalid' ||
     errorCode === 'write_file_binary_deliverable_requires_generator' ||
     errorCode === 'complete_task_pptx_requires_render_pptx_from_instructions' ||
+    errorCode === 'visual_detection_completion_blocked' ||
     errorCode === 'sandbox_not_ready' ||
     errorCode === 'mcp_provider_not_found' ||
     errorCode === 'connector_guide_required' ||
@@ -121,6 +125,8 @@ function buildErrorDetail(errorCode: string, rawError?: string) {
       return 'write_file only supports UTF-8 text files. Final docx/xlsx/pptx/pdf and archive deliverables must be generated through a real document generator or renderer.';
     case 'complete_task_pptx_requires_render_pptx_from_instructions':
       return 'PPTX attachments must come from render_pptx_from_instructions before complete_task can deliver them.';
+    case 'visual_detection_completion_blocked':
+      return 'Website and web app delivery requires successful n.eko + Playwright visual detection screenshot evidence before complete_task.';
     default:
       return normalizedRawError || 'Tool execution failed.';
   }
@@ -142,6 +148,8 @@ function buildErrorInstruction(errorCode: string, toolName: string) {
       return 'Generate the final downloadable file through shell/python tooling or the managed renderer, verify it can be opened, then continue. Do not use write_file for docx/xlsx/pptx/pdf or archive outputs.';
     case 'complete_task_pptx_requires_render_pptx_from_instructions':
       return 'Call render_pptx_from_instructions first, then attach the returned PPTX path in complete_task.attachments.';
+    case 'visual_detection_completion_blocked':
+      return 'Continue the website verification flow: verify the app can run or build, say 正在进行视觉检测, open the target with debug_open_page, perform Playwright/n.eko browser_interact steps for visible controls or page movement, then retry complete_task after a captured Action screenshot exists.';
     case 'sandbox_not_ready':
       return 'Sandbox is not ready. Recover or wait for the sandbox before retrying.';
     case 'mcp_provider_not_found':

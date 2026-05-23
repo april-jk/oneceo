@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  buildPreviewSnapshotFromBrowserActionScreenshot,
   readPreviewSnapshot,
+  readPreviewDomDiagnosticsFromHtml,
   shouldCaptureWebsitePreview,
+  stripPreviewRuntimeSourceHtml,
   TaskSessionWebsitePreviewSnapshotService,
 } from '../src/services/task-session-website-preview-snapshot-service';
 
@@ -98,6 +101,79 @@ test('readPreviewSnapshot accepts only website screenshot metadata', () => {
   );
   assert.equal(readPreviewSnapshot({ kind: 'other', status: 'captured' }), null);
   assert.equal(readPreviewSnapshot({ kind: 'website_screenshot', status: 'unknown' }), null);
+});
+
+test('readPreviewDomDiagnosticsFromHtml ignores runtime fallback text inside scripts', () => {
+  const html = `<!doctype html>
+    <html>
+      <head><title>Working site</title></head>
+      <body>
+        <div id="root" data-oneceo-app-status="mounted">
+          <main><h1>真正可见的网站内容</h1><p>这里已经正常渲染。</p></main>
+        </div>
+        <script>
+          root.innerHTML = '<p>OneCEO browser runtime error</p>';
+        </script>
+      </body>
+    </html>`;
+
+  assert.equal(stripPreviewRuntimeSourceHtml(html).includes('root.innerHTML'), false);
+  const diagnostics = readPreviewDomDiagnosticsFromHtml(html, 'http://127.0.0.1:3000/');
+  assert.equal(diagnostics.oneCeoAppStatus, '');
+  assert.equal(diagnostics.oneCeoRootStatus, 'mounted');
+  assert.deepEqual(diagnostics.oneCeoAppErrors, []);
+  assert.ok(diagnostics.visibleTextLength > 8);
+});
+
+test('readPreviewDomDiagnosticsFromHtml still reports visible runtime fallback errors', () => {
+  const diagnostics = readPreviewDomDiagnosticsFromHtml(
+    '<div id="root" data-oneceo-app-status="error"><main><p>OneCEO browser runtime error</p><h1>页面渲染失败</h1></main></div>',
+    'http://127.0.0.1:3000/',
+  );
+
+  assert.equal(diagnostics.oneCeoAppStatus, 'error');
+  assert.equal(diagnostics.oneCeoRootStatus, 'error');
+  assert.deepEqual(diagnostics.oneCeoAppErrors, ['OneCEO browser runtime error']);
+});
+
+test('buildPreviewSnapshotFromBrowserActionScreenshot reuses only passed visual evidence', () => {
+  const screenshot = {
+    type: 'browser_screenshot',
+    kind: 'browser_action_screenshot',
+    status: 'captured',
+    storageKey: 'sessions/session-1/browser-actions/step.png',
+    mimeType: 'image/png',
+    width: 1280,
+    height: 720,
+    capturedAt: '2026-05-22T14:20:00.000Z',
+    source: {
+      sandboxId: 'sandbox-1',
+      cdpPort: 9222,
+      url: 'http://127.0.0.1:8080/',
+      toolName: 'debug_open_page',
+      action: 'open_page',
+    },
+    visualCheck: {
+      status: 'passed',
+      diagnostics: {
+        visibleTextLength: 128,
+      },
+    },
+  };
+
+  const snapshot = buildPreviewSnapshotFromBrowserActionScreenshot(screenshot);
+  assert.equal(snapshot?.status, 'captured');
+  assert.equal(snapshot?.storageKey, screenshot.storageKey);
+  assert.equal(snapshot?.source?.port, 8080);
+  assert.equal(snapshot?.visualCheck?.status, 'passed');
+
+  assert.equal(
+    buildPreviewSnapshotFromBrowserActionScreenshot({
+      ...screenshot,
+      visualCheck: { status: 'failed', reasonCode: 'screenshot_low_entropy' },
+    }),
+    null,
+  );
 });
 
 test('resolveCommandCandidate prefers runnable start/dev scripts and Vite ports', () => {

@@ -1918,6 +1918,195 @@ test('execute blocks website completion until visual detection screenshot eviden
   assert.deepEqual(completedToolNames, ['debug_open_page', 'complete_task']);
 });
 
+test('execute uses passed browser visual evidence when final preview smoke fails', async () => {
+  const state = createState(
+    'run-coordinator-preview-reuse-passed-visual',
+    'session-coordinator-preview-reuse-passed-visual',
+    '帮我做一个可交付的网站首页'
+  );
+  state.input.taskIntentProfile = {
+    mode: 'deployable_web_app',
+    reason: 'latest_web_artifact_request',
+    recentUserMessages: ['帮我做一个可交付的网站首页'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: true,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: false,
+    needsClarification: false,
+    clarificationQuestion: '',
+    clarificationType: 'none',
+    todoRequired: false,
+    todoReason: 'none',
+  };
+  const setupCalls: Record<string, unknown>[] = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-preview-reuse-passed-visual',
+      workspaceRoot: '/workspace/session-coordinator-preview-reuse-passed-visual',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      setupCalls.push({ type: 'timeline', input });
+    }),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return { sequence: eventCalls.length, payload };
+    }),
+  };
+  const lifecycleService = {
+    markRunning: mock.fn(async () => undefined),
+    markWaitingUser: mock.fn(async () => undefined),
+    markCompleted: mock.fn(async () => undefined),
+    markFailed: mock.fn(async () => undefined),
+    markStopped: mock.fn(async () => undefined),
+    syncLoopSnapshot: mock.fn(async () => undefined),
+  };
+  const deliverables = [
+    {
+      id: 'deliverable-preview-reuse',
+      runId: state.input.runId,
+      path: 'dist/index.html',
+      name: 'index.html',
+      mimeType: 'text/html',
+      size: 1024,
+      downloadPath: '/api/task-creation/sessions/session-coordinator-preview-reuse-passed-visual/deliverables/deliverable-preview-reuse/download',
+    },
+  ];
+  const deliverableService = {
+    persistManagedRunDeliverables: mock.fn(async () => deliverables),
+  };
+  const failedFinalPreview = {
+    kind: 'website_screenshot' as const,
+    status: 'capture_failed' as const,
+    reasonCode: 'preview_visual_check_failed',
+    message: 'app_runtime_error: 页面浏览器运行时报错，疑似入口模块或 React 渲染失败。',
+    visualCheck: {
+      status: 'failed' as const,
+      reasonCode: 'app_runtime_error',
+      message: '页面浏览器运行时报错，疑似入口模块或 React 渲染失败。',
+    },
+    source: {
+      sandboxId: 'sandbox-preview-reuse-passed-visual',
+      port: 3000,
+      url: 'http://127.0.0.1:3000/',
+      command: 'node dist/index.js',
+    },
+  };
+  const websitePreviewSnapshotService = {
+    captureManagedRunPreview: mock.fn(async () => failedFinalPreview),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    const tool =
+      fetchCount === 1
+        ? {
+            id: 'tool-debug-open-page-preview-reuse',
+            type: 'function',
+            function: {
+              name: 'debug_open_page',
+              arguments: JSON.stringify({ url: 'http://127.0.0.1:8080/' }),
+            },
+          }
+        : {
+            id: 'tool-complete-preview-reuse',
+            type: 'function',
+            function: {
+              name: 'complete_task',
+              arguments: JSON.stringify({
+                summary: '网站已完成，并完成视觉检测。',
+                verification: ['已打开页面并捕获浏览器截图'],
+                attachments: ['dist/index.html'],
+              }),
+            },
+          };
+    return new Response(
+      JSON.stringify({ choices: [{ message: { content: '', tool_calls: [tool] } }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const browserScreenshot = {
+    type: 'browser_screenshot',
+    kind: 'browser_action_screenshot',
+    status: 'captured',
+    storageKey: 'sessions/session-coordinator-preview-reuse-passed-visual/browser-actions/passed.png',
+    mimeType: 'image/png',
+    width: 1280,
+    height: 720,
+    capturedAt: '2026-05-22T14:20:00.000Z',
+    source: {
+      sandboxId: 'sandbox-preview-reuse-passed-visual',
+      cdpPort: 9222,
+      url: 'http://127.0.0.1:8080/',
+      title: '视觉检测页面',
+      toolName: 'debug_open_page',
+      action: 'open_page',
+    },
+    visualCheck: {
+      status: 'passed',
+      diagnostics: {
+        visibleTextLength: 128,
+        uniqueColorCount: 32,
+      },
+    },
+  };
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'debug_open_page') {
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({ browserScreenshot }),
+        evidence: [browserScreenshot],
+      };
+    }
+    return {
+      type: 'complete' as const,
+      summary: '网站已完成，并完成视觉检测。',
+      verification: ['已打开页面并捕获浏览器截图'],
+      attachments: ['dist/index.html'],
+    };
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+    deliverableService as any,
+    undefined as any,
+    websitePreviewSnapshotService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(fetchCount, 2);
+  assert.equal(executeMock.mock.callCount(), 2);
+  assert.equal(websitePreviewSnapshotService.captureManagedRunPreview.mock.callCount(), 1);
+  const deliverablesReady = eventCalls.find((entry) => entry.eventType === 'deliverables_ready');
+  assert.equal((deliverablesReady?.payload.previewSnapshot as any)?.status, 'captured');
+  assert.equal((deliverablesReady?.payload.previewSnapshot as any)?.storageKey, browserScreenshot.storageKey);
+  assert.equal((deliverablesReady?.payload.previewSnapshot as any)?.source?.port, 8080);
+  assert.equal((deliverablesReady?.payload.previewSnapshot as any)?.visualCheck?.status, 'passed');
+
+  const assistantTimeline = setupCalls.find(
+    (entry) => (entry as any).input?.messageType === 'assistant_message'
+  ) as any;
+  assert.equal(assistantTimeline?.input?.metadata?.previewSnapshot?.status, 'captured');
+  assert.equal(assistantTimeline?.input?.metadata?.previewSnapshot?.storageKey, browserScreenshot.storageKey);
+});
+
 test('execute keeps visual detection blocked when browser action screenshot capture fails', async () => {
   const previousMaxRounds = process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS;
   process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS = '3';

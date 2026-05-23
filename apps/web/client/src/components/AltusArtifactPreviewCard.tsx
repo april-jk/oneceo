@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  getTaskCreationBrowserActionScreenshotUrl,
   getWorkspaceFile,
   getTaskCreationDeploymentInfo,
   getTaskCreationPreviewSnapshotUrl,
@@ -29,6 +30,7 @@ import {
   Rocket,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import type { AltusReplayBrowserScreenshot } from "./AltusRunReplayDrawer";
 
 export type AltusArtifactFile = {
   path: string;
@@ -40,6 +42,10 @@ type AltusArtifactPreviewCardProps = {
   runId?: string;
   artifacts: AltusArtifactFile[];
   previewSnapshot?: TaskCreationWebsitePreviewSnapshot | null;
+  browserScreenshotFallback?: {
+    toolCallId: string;
+    screenshot: AltusReplayBrowserScreenshot;
+  } | null;
   displayMode?: "artifact-browser" | "web-preview";
   onOpenViewer?: (path: string) => void;
   onDeployRequested?: (path: string) => Promise<void> | void;
@@ -228,6 +234,7 @@ export default function AltusArtifactPreviewCard({
   runId,
   artifacts,
   previewSnapshot,
+  browserScreenshotFallback,
   displayMode = "artifact-browser",
   onOpenViewer,
   onDeployRequested,
@@ -258,7 +265,9 @@ export default function AltusArtifactPreviewCard({
     }
     return normalizedArtifacts;
   }, [displayMode, normalizedArtifacts]);
-  const hasSnapshotMetadata = Boolean(previewSnapshot?.kind === "website_screenshot");
+  const hasSnapshotMetadata = Boolean(
+    previewSnapshot?.kind === "website_screenshot" || browserScreenshotFallback?.screenshot,
+  );
 
   const defaultPath =
     visibleArtifacts.find((artifact) => isWebArtifact(artifact.path))?.path ||
@@ -337,27 +346,44 @@ export default function AltusArtifactPreviewCard({
   const selectedOpenUrl = selectedIsWebArtifact
     ? deploymentPreviewUrl || effectiveRawSelectedUrl
     : effectiveRawSelectedUrl;
+  const fallbackScreenshot = browserScreenshotFallback?.screenshot || null;
+  const hasPassedFallbackScreenshot = Boolean(
+    runId &&
+      browserScreenshotFallback?.toolCallId &&
+      fallbackScreenshot?.status === "captured" &&
+      fallbackScreenshot?.storageKey &&
+      fallbackScreenshot?.visualCheck?.status === "passed",
+  );
+  const fallbackSnapshotUrl =
+    hasPassedFallbackScreenshot && runId && browserScreenshotFallback?.toolCallId
+      ? getTaskCreationBrowserActionScreenshotUrl(
+          sessionId,
+          runId,
+          browserScreenshotFallback.toolCallId,
+        )
+      : "";
   const snapshotHasCapturedMetadata = Boolean(
     runId &&
       previewSnapshot?.kind === "website_screenshot" &&
       previewSnapshot.status === "captured" &&
       previewSnapshot.visualCheck?.status !== "failed",
   );
+  const baseSnapshotCaptured = Boolean(snapshotHasCapturedMetadata && previewSnapshot?.storageKey);
   const snapshotIssue = getWebsitePreviewSnapshotIssue(previewSnapshot, {
-    imageFailed: snapshotImageFailed,
+    imageFailed: snapshotImageFailed && baseSnapshotCaptured,
     hasPreviewPath: Boolean(previewPath),
   });
-  const snapshotCaptured = Boolean(
-    !snapshotIssue &&
-      snapshotHasCapturedMetadata &&
-      previewSnapshot?.storageKey &&
-      !snapshotImageFailed,
+  const snapshotCaptured = Boolean(!snapshotIssue && baseSnapshotCaptured && !snapshotImageFailed);
+  const fallbackScreenshotCaptured = Boolean(
+    !snapshotCaptured && hasPassedFallbackScreenshot && fallbackSnapshotUrl && !snapshotImageFailed,
   );
-  const snapshotUnavailableForComplexWeb = Boolean(snapshotIssue);
+  const snapshotUnavailableForComplexWeb = Boolean(snapshotIssue && !fallbackScreenshotCaptured);
   const snapshotUrl =
     snapshotCaptured && runId
       ? getTaskCreationPreviewSnapshotUrl(sessionId, runId)
-      : "";
+      : fallbackScreenshotCaptured
+        ? fallbackSnapshotUrl
+        : "";
   const hasPreviewTab = Boolean(previewPath || hasSnapshotMetadata);
   const previewCheckEnabled = Boolean(
     activeTab === "preview" &&
@@ -409,7 +435,7 @@ export default function AltusArtifactPreviewCard({
   }, [runtimeSwitchBlocked, sessionId, visibleArtifacts]);
 
   useEffect(() => {
-    if (snapshotCaptured || snapshotUnavailableForComplexWeb) {
+    if (snapshotCaptured || fallbackScreenshotCaptured || snapshotUnavailableForComplexWeb) {
       setWebPreviewState("ready");
       setWebPreviewMessage("");
       return;
@@ -422,7 +448,13 @@ export default function AltusArtifactPreviewCard({
     setWebPreviewState("checking");
     setWebPreviewMessage("");
     setWebPreviewNonce(Date.now());
-  }, [deploymentPreviewUrl, previewPath, snapshotCaptured, snapshotUnavailableForComplexWeb]);
+  }, [
+    deploymentPreviewUrl,
+    previewPath,
+    fallbackScreenshotCaptured,
+    snapshotCaptured,
+    snapshotUnavailableForComplexWeb,
+  ]);
 
   useEffect(() => {
     if (!previewCheckEnabled || !previewPath) {
@@ -590,7 +622,7 @@ export default function AltusArtifactPreviewCard({
                   <TabsContent value="preview" className="relative h-full data-[state=inactive]:hidden">
                     {previewPath || hasSnapshotMetadata ? (
                       <div className="absolute inset-0">
-                        {snapshotCaptured && snapshotUrl ? (
+                        {(snapshotCaptured || fallbackScreenshotCaptured) && snapshotUrl ? (
                           <div className="absolute inset-0 flex items-center justify-center bg-muted/20">
                             <img
                               src={snapshotUrl}

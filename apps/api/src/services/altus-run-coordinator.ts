@@ -49,8 +49,11 @@ import {
   taskSessionDeliverableService,
 } from './task-session-deliverable-service';
 import {
+  buildPreviewSnapshotFromBrowserActionScreenshot,
+  readBrowserActionScreenshot,
   taskSessionWebsitePreviewSnapshotService,
   type WebsitePreviewSnapshot,
+  type BrowserActionScreenshot,
   type TaskSessionWebsitePreviewSnapshotService,
 } from './task-session-website-preview-snapshot-service';
 import {
@@ -123,6 +126,7 @@ type VisualDetectionEvidenceState = {
   lastStatus: string;
   lastReasonCode: string;
   lastMessage: string;
+  lastPassedBrowserScreenshot: BrowserActionScreenshot | null;
 };
 
 function normalizeInlineBulletGlyphLine(line: string): string {
@@ -394,12 +398,6 @@ function hasVisionInput(messages: ChatMessage[]) {
 
 function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
-function readBrowserScreenshotEvidence(value: unknown) {
-  const record = readRecord(value);
-  if (record.type !== 'browser_screenshot') return null;
-  return record;
 }
 
 export class AltusRunCoordinator {
@@ -1208,6 +1206,19 @@ private async chargeForModelCall(state: AltusRunState, input: {
     return evidence.passedCount > 0;
   }
 
+  private resolveWebsitePreviewSnapshot(input: {
+    capturedSnapshot: WebsitePreviewSnapshot | null;
+    visualDetectionEvidence: VisualDetectionEvidenceState;
+  }): WebsitePreviewSnapshot | null {
+    if (input.capturedSnapshot?.status === 'captured') {
+      return input.capturedSnapshot;
+    }
+    const visualEvidenceSnapshot = buildPreviewSnapshotFromBrowserActionScreenshot(
+      input.visualDetectionEvidence.lastPassedBrowserScreenshot
+    );
+    return visualEvidenceSnapshot || input.capturedSnapshot;
+  }
+
   private readVisualDetectionEvidence(
     toolName: string,
     result: Extract<Awaited<ReturnType<AltusManagedToolRuntime['execute']>>, { type: 'result' }>
@@ -1217,10 +1228,10 @@ private async chargeForModelCall(state: AltusRunState, input: {
     }
     const evidenceItems = Array.isArray(result.evidence) ? result.evidence : [];
     const browserScreenshot =
-      evidenceItems.map((item) => readBrowserScreenshotEvidence(item)).find(Boolean) ||
+      evidenceItems.map((item) => readBrowserActionScreenshot(item)).find(Boolean) ||
       (() => {
         try {
-          return readBrowserScreenshotEvidence(JSON.parse(asText(result.content)).browserScreenshot);
+          return readBrowserActionScreenshot(JSON.parse(asText(result.content)).browserScreenshot);
         } catch {
           return null;
         }
@@ -1241,6 +1252,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
         message: asText(browserScreenshot.message),
         captured: false,
         passed: false,
+        browserScreenshot: null,
       };
     }
     const visualCheck = readRecord(browserScreenshot.visualCheck);
@@ -1255,6 +1267,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
       message: asText(visualCheck.message),
       captured: true,
       passed: visualStatus === 'passed',
+      browserScreenshot,
     };
   }
 
@@ -2346,6 +2359,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
       lastStatus: '',
       lastReasonCode: '',
       lastMessage: '',
+      lastPassedBrowserScreenshot: null,
     };
     let debugOpenPageSucceeded = false;
     const maxToolRounds = this.getMaxToolRounds();
@@ -2841,6 +2855,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
               }
               if (visualEvidence.passed) {
                 visualDetectionEvidence.passedCount += 1;
+                visualDetectionEvidence.lastPassedBrowserScreenshot = visualEvidence.browserScreenshot;
               }
               visualDetectionEvidence.lastToolName = visualEvidence.toolName;
               visualDetectionEvidence.lastAction = visualEvidence.action;
@@ -3221,7 +3236,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
               throw new Error('deliverables_persist_unexpected_empty');
             }
             state.deliverables = deliverables;
-            const previewSnapshot: WebsitePreviewSnapshot | null =
+            const capturedPreviewSnapshot: WebsitePreviewSnapshot | null =
               await this.websitePreviewSnapshotService.captureManagedRunPreview({
                 sessionId: state.input.sessionId,
                 runId: state.input.runId,
@@ -3232,6 +3247,10 @@ private async chargeForModelCall(state: AltusRunState, input: {
                 deliverables,
                 debugOpenPageSucceeded,
               });
+            const previewSnapshot: WebsitePreviewSnapshot | null = this.resolveWebsitePreviewSnapshot({
+              capturedSnapshot: capturedPreviewSnapshot,
+              visualDetectionEvidence,
+            });
             const completionMessage = this.buildCompletionMessage(result.summary, result.verification);
             const finalContent = this.resolveFinalAssistantContent(assistantContent, completionMessage);
             if (deliverables.length > 0 || previewSnapshot) {

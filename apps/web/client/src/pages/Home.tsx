@@ -4279,6 +4279,10 @@ export type ChatItem =
       runId: string;
       artifacts: AltusArtifactFile[];
       previewSnapshot?: TaskCreationWebsitePreviewSnapshot | null;
+      browserScreenshotFallback?: {
+        toolCallId: string;
+        screenshot: NonNullable<AltusReplayAction["browserScreenshot"]>;
+      } | null;
       messageKey?: string;
     }
   | {
@@ -4525,6 +4529,13 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
   const codexTurnFilePaths = new Map<string, string[]>();
   const lastCodexDiffIndexByTurn = new Map<string, number>();
   const managedArtifactsByRun = new Map<string, AltusArtifactFile[]>();
+  const managedBrowserScreenshotsByRun = new Map<
+    string,
+    Array<{
+      toolCallId: string;
+      screenshot: NonNullable<AltusReplayAction["browserScreenshot"]>;
+    }>
+  >();
   const emittedManagedCompletionRuns = new Set<string>();
   let managedStatusBuffer: {
     text: string;
@@ -4583,10 +4594,38 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     ]);
   };
 
+  const mergeManagedBrowserScreenshot = (
+    runId: string,
+    toolCallId: string,
+    screenshot: AltusReplayAction["browserScreenshot"],
+  ) => {
+    const normalizedRunId = runId.trim();
+    const normalizedToolCallId = toolCallId.trim();
+    if (!normalizedRunId || !normalizedToolCallId || !isPassedManagedBrowserScreenshot(screenshot)) {
+      return;
+    }
+    const existing = managedBrowserScreenshotsByRun.get(normalizedRunId) || [];
+    if (existing.some((item) => item.toolCallId === normalizedToolCallId)) return;
+    managedBrowserScreenshotsByRun.set(normalizedRunId, [
+      ...existing,
+      {
+        toolCallId: normalizedToolCallId,
+        screenshot: screenshot as NonNullable<AltusReplayAction["browserScreenshot"]>,
+      },
+    ]);
+  };
+
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     if (message.type !== "executor_event") continue;
     const metadata = toRecord(message.metadata);
+    if (isManagedExecutionEvent(metadata)) {
+      mergeManagedBrowserScreenshot(
+        asText(metadata.runId),
+        asText(metadata.toolCallId) || message.messageKey || "",
+        readManagedBrowserScreenshot(metadata),
+      );
+    }
     const event = toRecord(metadata.event);
     const item = toRecord(event.item);
     const eventType = asText(metadata.eventType).toLowerCase();
@@ -4871,6 +4910,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         message,
         managedArtifactsByRun,
         emittedManagedCompletionRuns,
+        browserScreenshotsByRun: managedBrowserScreenshotsByRun,
       });
       if (managedCompletionCard) {
         clearManagedStatus();
@@ -4938,6 +4978,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         message,
         managedArtifactsByRun,
         emittedManagedCompletionRuns,
+        browserScreenshotsByRun: managedBrowserScreenshotsByRun,
       });
       if (managedCompletionCard) {
         clearManagedStatus();
@@ -6772,6 +6813,7 @@ function MessageBubble({
           runId={item.runId}
           artifacts={item.artifacts}
           previewSnapshot={item.previewSnapshot}
+          browserScreenshotFallback={item.browserScreenshotFallback}
           onOpenViewer={onOpenWorkspacePreview}
           onDeployRequested={onDeployArtifact}
           runtimeSwitchBlocked={runtimeSwitchBlocked}
@@ -9305,10 +9347,51 @@ function extractManagedPreviewSnapshot(
   };
 }
 
+function isPassedManagedBrowserScreenshot(
+  screenshot: AltusReplayAction["browserScreenshot"],
+) {
+  return Boolean(
+    screenshot?.status === "captured" &&
+      screenshot.storageKey &&
+      screenshot.visualCheck?.status === "passed",
+  );
+}
+
+function findPassedBrowserScreenshotFallback(input: {
+  runId: string;
+  messageMetadata: Record<string, unknown>;
+  browserScreenshotsByRun?: Map<
+    string,
+    Array<{
+      toolCallId: string;
+      screenshot: NonNullable<AltusReplayAction["browserScreenshot"]>;
+    }>
+  >;
+}) {
+  const directToolCallId = asText(input.messageMetadata.toolCallId);
+  const directScreenshot = readManagedBrowserScreenshot(input.messageMetadata);
+  if (directToolCallId && isPassedManagedBrowserScreenshot(directScreenshot)) {
+    return {
+      toolCallId: directToolCallId,
+      screenshot: directScreenshot as NonNullable<AltusReplayAction["browserScreenshot"]>,
+    };
+  }
+
+  const screenshots = input.browserScreenshotsByRun?.get(input.runId) || [];
+  return screenshots.find((item) => isPassedManagedBrowserScreenshot(item.screenshot)) || null;
+}
+
 export function buildManagedCompletionCardItem(input: {
   message: AgentMessage;
   managedArtifactsByRun: Map<string, AltusArtifactFile[]>;
   emittedManagedCompletionRuns: Set<string>;
+  browserScreenshotsByRun?: Map<
+    string,
+    Array<{
+      toolCallId: string;
+      screenshot: NonNullable<AltusReplayAction["browserScreenshot"]>;
+    }>
+  >;
 }): ChatItem | null {
   const { message, managedArtifactsByRun, emittedManagedCompletionRuns } =
     input;
@@ -9326,6 +9409,11 @@ export function buildManagedCompletionCardItem(input: {
   const eventType = asText(metadata.eventType).toLowerCase();
   const deliverables = extractManagedDeliverables(metadata);
   const previewSnapshot = extractManagedPreviewSnapshot(metadata);
+  const browserScreenshotFallback = findPassedBrowserScreenshotFallback({
+    runId,
+    messageMetadata: metadata,
+    browserScreenshotsByRun: input.browserScreenshotsByRun,
+  });
   const managedArtifacts = managedArtifactsByRun.get(runId) || [];
   const webArtifacts = collectManagedWebArtifacts({
     deliverables,
@@ -9346,6 +9434,7 @@ export function buildManagedCompletionCardItem(input: {
       runId,
       artifacts: webArtifacts,
       previewSnapshot,
+      browserScreenshotFallback,
       messageKey: `managed:${runId}:artifact_card`,
     };
   }
@@ -9376,6 +9465,7 @@ export function buildManagedCompletionCardItem(input: {
     runId,
     artifacts: webArtifacts,
     previewSnapshot,
+    browserScreenshotFallback,
     messageKey: `managed:${runId}:artifact_card`,
   };
 }

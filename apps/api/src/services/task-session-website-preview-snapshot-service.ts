@@ -71,6 +71,19 @@ export type BrowserVisualCheck = {
   diagnostics?: Record<string, unknown>;
 };
 
+export type PreviewDomDiagnostics = {
+  url: string;
+  title: string;
+  bodyTextLength: number;
+  visibleTextLength: number;
+  visibleElementCount: number;
+  rootTextLength: number;
+  oneCeoAppStatus: string;
+  oneCeoRootStatus: string;
+  oneCeoAppErrors: string[];
+  documentHeight: number;
+};
+
 type E2BLikeConnector = Pick<typeof e2bConnector, 'readFile' | 'runCommand'>;
 
 type WebsitePreviewSnapshotDeps = {
@@ -110,6 +123,46 @@ function parseJsonRecord(value: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+export function stripPreviewRuntimeSourceHtml(html: string) {
+  return String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ');
+}
+
+function textFromPreviewHtml(html: string) {
+  return stripPreviewRuntimeSourceHtml(html)
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function readPreviewDomDiagnosticsFromHtml(htmlRaw: string, url = ''): PreviewDomDiagnostics {
+  const html = String(htmlRaw || '');
+  const visibleHtml = stripPreviewRuntimeSourceHtml(html);
+  const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '';
+  const rootMatch = html.match(/<(?:div|main|section)[^>]+(?:id=["'](?:root|app)["']|data-reactroot)[^>]*>([\s\S]*?)<\/(?:div|main|section)>/i);
+  const rootText = textFromPreviewHtml(rootMatch ? rootMatch[1] : '');
+  const text = textFromPreviewHtml(visibleHtml);
+  const elementMatches = visibleHtml.match(/<(?:div|main|section|article|header|footer|nav|h1|h2|h3|p|a|button|img|form|input|ul|ol|li)\b/gi) || [];
+  const heightMatch = visibleHtml.match(/height:\s*(\d{2,5})px/i);
+  const appStatusMatch = visibleHtml.match(/__ONECEO_APP_STATUS__[^\n]+status["']?\s*[:=]\s*["']([^"']+)["']/i);
+  const rootStatusMatch = html.match(/data-oneceo-app-status=["']([^"']+)["']/i);
+  const runtimeErrorMatch = visibleHtml.match(/OneCEO browser runtime error/i);
+  return {
+    url,
+    title: title.replace(/\s+/g, ' ').trim(),
+    bodyTextLength: text.length,
+    visibleTextLength: text.length,
+    visibleElementCount: elementMatches.length,
+    rootTextLength: rootText.length || text.length,
+    oneCeoAppStatus: runtimeErrorMatch ? 'error' : (appStatusMatch ? appStatusMatch[1] : ''),
+    oneCeoRootStatus: runtimeErrorMatch ? 'error' : (rootStatusMatch ? rootStatusMatch[1] : ''),
+    oneCeoAppErrors: runtimeErrorMatch ? ['OneCEO browser runtime error'] : [],
+    documentHeight: heightMatch ? Number(heightMatch[1]) : 0,
+  };
 }
 
 function readBrowserVisualCheck(value: unknown): BrowserVisualCheck | undefined {
@@ -282,6 +335,41 @@ export function readBrowserActionScreenshot(value: unknown): BrowserActionScreen
       toolName: asText(sourceRecord.toolName) || undefined,
       action: asText(sourceRecord.action) || undefined,
       description: asText(sourceRecord.description) || undefined,
+    },
+  };
+}
+
+function visualCheckPassed(value: BrowserVisualCheck | undefined) {
+  return value?.status === 'passed';
+}
+
+export function buildPreviewSnapshotFromBrowserActionScreenshot(
+  value: unknown
+): WebsitePreviewSnapshot | null {
+  const screenshot = readBrowserActionScreenshot(value);
+  if (
+    !screenshot ||
+    screenshot.status !== 'captured' ||
+    !screenshot.storageKey ||
+    !visualCheckPassed(screenshot.visualCheck)
+  ) {
+    return null;
+  }
+  const sourceUrl = asText(screenshot.source?.url);
+  const sourcePort = sourceUrl ? extractPortFromCommand(sourceUrl) : null;
+  return {
+    kind: 'website_screenshot',
+    status: 'captured',
+    storageKey: screenshot.storageKey,
+    mimeType: screenshot.mimeType,
+    width: screenshot.width,
+    height: screenshot.height,
+    capturedAt: screenshot.capturedAt,
+    visualCheck: screenshot.visualCheck,
+    source: {
+      sandboxId: screenshot.source?.sandboxId,
+      port: sourcePort || undefined,
+      url: sourceUrl || undefined,
     },
   };
 }
@@ -717,15 +805,18 @@ function readDomDiagnostics(domPath) {
   try {
     html = fs.readFileSync(domPath, 'utf8');
   } catch {}
+  const visibleHtml = String(html || '')
+    .replace(/<script[\\s\\S]*?<\\/script>/gi, ' ')
+    .replace(/<style[\\s\\S]*?<\\/style>/gi, ' ');
   const title = (html.match(/<title[^>]*>([\\s\\S]*?)<\\/title>/i) || [])[1] || '';
   const rootMatch = html.match(/<(?:div|main|section)[^>]+(?:id=["'](?:root|app)["']|data-reactroot)[^>]*>([\\s\\S]*?)<\\/(?:div|main|section)>/i);
   const rootText = textFromHtml(rootMatch ? rootMatch[1] : '');
-  const text = textFromHtml(html);
-  const elementMatches = html.match(/<(?:div|main|section|article|header|footer|nav|h1|h2|h3|p|a|button|img|form|input|ul|ol|li)\\b/gi) || [];
-  const heightMatch = html.match(/height:\\s*(\\d{2,5})px/i);
-  const appStatusMatch = html.match(/__ONECEO_APP_STATUS__[^\\n]+status["']?\\s*[:=]\\s*["']([^"']+)["']/i);
+  const text = textFromHtml(visibleHtml);
+  const elementMatches = visibleHtml.match(/<(?:div|main|section|article|header|footer|nav|h1|h2|h3|p|a|button|img|form|input|ul|ol|li)\\b/gi) || [];
+  const heightMatch = visibleHtml.match(/height:\\s*(\\d{2,5})px/i);
+  const appStatusMatch = visibleHtml.match(/__ONECEO_APP_STATUS__[^\\n]+status["']?\\s*[:=]\\s*["']([^"']+)["']/i);
   const rootStatusMatch = html.match(/data-oneceo-app-status=["']([^"']+)["']/i);
-  const runtimeErrorMatch = html.match(/OneCEO browser runtime error/i);
+  const runtimeErrorMatch = visibleHtml.match(/OneCEO browser runtime error/i);
   return {
     url: payload.url,
     title: title.replace(/\\s+/g, ' ').trim(),

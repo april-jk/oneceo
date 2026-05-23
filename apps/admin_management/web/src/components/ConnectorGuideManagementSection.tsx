@@ -13,7 +13,7 @@ import {
   DEFAULT_CONNECTOR_GUIDE_MANAGEMENT_VIEW_STATE,
 } from './adminViewState';
 import type { ConnectorGuideManagementViewState } from './adminViewState';
-import { AdminButton, AdminDetailShell, AdminStickyInspector, AdminTabs, DangerConfirmDialog, DiffDrawer, StatusBadge, getAdminActionIcon, getAdminModuleIcon } from './admin-ui';
+import { AdminButton, ConfirmDialog, AdminDetailShell, AdminStickyInspector, AdminTabs, DangerConfirmDialog, DiffDrawer, StatusBadge, getAdminActionIcon, getAdminModuleIcon } from './admin-ui';
 
 type Props = {
   onError: (message: string | null) => void;
@@ -23,7 +23,7 @@ type Props = {
   onStateChange?: (state: ConnectorGuideManagementViewState) => void;
 };
 
-type ConnectorDangerAction = {
+type InlineConfirmPayload = {
   kind: 'publish' | 'rollback';
   policyId: string;
   revisionId: string;
@@ -107,16 +107,31 @@ export function ConnectorGuideManagementSection({
   const [validationResult, setValidationResult] = useState<ConnectorGuideValidationResult | null>(null);
   const [filters, setFilters] = useState(initialState.filters);
   const [busy, setBusy] = useState(false);
-  const [editorModalOpen, setEditorModalOpen] = useState(false);
-  const [dangerAction, setDangerAction] = useState<ConnectorDangerAction | null>(null);
-  const [detailTab, setDetailTab] = useState<'configuration' | 'raw'>('configuration');
+  const [detailDialogOpen, setDetailDialogOpen] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [inlineConfirm, setInlineConfirm] = useState<InlineConfirmPayload | null>(null);
   const [diffOpen, setDiffOpen] = useState(false);
+  const [expandedPreviewCards, setExpandedPreviewCards] = useState<Set<string>>(new Set());
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const selectedRevisionIdRef = useRef<string | null>(initialState.selectedRevisionId);
 
   const revision = useMemo(
     () => detail?.revisions.find((item) => item.id === selectedRevisionId) || detail?.publishedRevision || null,
     [detail, selectedRevisionId]
   );
+
+  const isDirty = useMemo(() => {
+    if (!detail || !revision) return false;
+    return (
+      editor.description !== (detail.description || '') ||
+      editor.triggerMode !== detail.triggerMode ||
+      editor.status !== detail.status ||
+      editor.serverInstructionsMarkdown !== (revision.serverInstructionsMarkdown || '') ||
+      editor.guideReminderMarkdown !== (revision.guideReminderMarkdown || '') ||
+      editor.blockingRulesMarkdown !== (revision.blockingRulesMarkdown || '') ||
+      editor.notes !== (revision.notes || '')
+    );
+  }, [detail, revision, editor]);
 
   const catalogVisibleItems = useMemo(
     () => (catalogSummary?.items || []).filter((item) => item.visibleInMenu && item.available),
@@ -230,18 +245,20 @@ export function ConnectorGuideManagementSection({
   }, [detail, revision]);
 
   useEffect(() => {
-    if (!editorModalOpen || !detail) return undefined;
+    if (!detailDialogOpen || !detail) return undefined;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && editMode) {
         setEditor(toEditorState(detail, revision));
-        setEditorModalOpen(false);
+        setEditMode(false);
+      } else if (event.key === 'Escape' && !editMode) {
+        setDetailDialogOpen(false);
       }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [detail, editorModalOpen, revision]);
+  }, [detail, detailDialogOpen, editMode, revision]);
 
   useEffect(() => {
     onUpdatedAtChange?.(
@@ -291,7 +308,7 @@ export function ConnectorGuideManagementSection({
       onError(error instanceof Error ? error.message : '创建 connector guide policy 失败');
     } finally {
       setBusy(false);
-      setDangerAction(null);
+      setInlineConfirm(null);
     }
   };
 
@@ -326,7 +343,7 @@ export function ConnectorGuideManagementSection({
       onError(error instanceof Error ? error.message : '保存 connector guide 失败');
     } finally {
       setBusy(false);
-      setDangerAction(null);
+      setInlineConfirm(null);
     }
   };
 
@@ -343,7 +360,7 @@ export function ConnectorGuideManagementSection({
       onError(error instanceof Error ? error.message : '创建 revision 失败');
     } finally {
       setBusy(false);
-      setDangerAction(null);
+      setInlineConfirm(null);
     }
   };
 
@@ -364,11 +381,11 @@ export function ConnectorGuideManagementSection({
       onError(error instanceof Error ? error.message : '校验 connector guide 失败');
     } finally {
       setBusy(false);
-      setDangerAction(null);
+      setInlineConfirm(null);
     }
   };
 
-  const publishRevision = async (payload: ConnectorDangerAction) => {
+  const publishRevision = async (payload: InlineConfirmPayload) => {
     setBusy(true);
     try {
       await api.updateConnectorGuideRevision(payload.policyId, payload.revisionId, {
@@ -384,11 +401,11 @@ export function ConnectorGuideManagementSection({
       onError(error instanceof Error ? error.message : '发布 connector guide 失败');
     } finally {
       setBusy(false);
-      setDangerAction(null);
+      setInlineConfirm(null);
     }
   };
 
-  const rollbackRevision = async (payload: ConnectorDangerAction) => {
+  const rollbackRevision = async (payload: InlineConfirmPayload) => {
     setBusy(true);
     try {
       await api.rollbackConnectorGuideRevision(payload.policyId, payload.revisionId);
@@ -399,7 +416,7 @@ export function ConnectorGuideManagementSection({
       onError(error instanceof Error ? error.message : '回滚 connector guide 失败');
     } finally {
       setBusy(false);
-      setDangerAction(null);
+      setInlineConfirm(null);
     }
   };
 
@@ -418,17 +435,31 @@ export function ConnectorGuideManagementSection({
     setFilters(DEFAULT_FILTERS);
   }, []);
 
-  const openEditorModal = useCallback(() => {
+  const enterEditMode = useCallback(() => {
     if (!detail) return;
     setEditor(toEditorState(detail, revision));
-    setEditorModalOpen(true);
+    setEditMode(true);
   }, [detail, revision]);
 
-  const closeEditorModal = useCallback(() => {
+  const exitEditMode = useCallback(() => {
+    if (isDirty) {
+      setDiscardConfirmOpen(true);
+      return;
+    }
     if (detail) {
       setEditor(toEditorState(detail, revision));
     }
-    setEditorModalOpen(false);
+    setEditMode(false);
+    setInlineConfirm(null);
+  }, [detail, revision, isDirty]);
+
+  const confirmDiscard = useCallback(() => {
+    if (detail) {
+      setEditor(toEditorState(detail, revision));
+    }
+    setEditMode(false);
+    setInlineConfirm(null);
+    setDiscardConfirmOpen(false);
   }, [detail, revision]);
 
   return (
@@ -469,45 +500,35 @@ export function ConnectorGuideManagementSection({
           </div>
         </div>
 
-        <div className="detail-grid modal-grid" style={{ marginBottom: 20 }}>
+        <div className="detail-grid modal-grid" style={{ marginBottom: 12 }}>
           <article className="sub-panel">
-            <div className="editor-header">
-              <div>
-                <h3>MCP Catalog 快照</h3>
-                <p className="cell-subtle">页面进入后立即获取一次，后续通过“同步列表”手动同步。</p>
-              </div>
+            <div className="editor-header editor-header--compact">
+              <h3>Catalog 概览</h3>
             </div>
-            <div className="signal-list">
+            <div className="signal-list signal-list--compact">
               <p>
-                <strong>MCP 类型数量:</strong> {catalogSummary?.stats.total ?? '-'}
-              </p>
-              <p>
-                <strong>可用 / 不可用:</strong>{' '}
-                {catalogSummary ? `${catalogSummary.stats.available} / ${catalogSummary.stats.unavailable}` : '-'}
+                <strong>MCP 类型:</strong> {catalogSummary?.stats.total ?? '-'}（可用 {catalogSummary?.stats.available ?? '-'} / 不可用 {catalogSummary?.stats.unavailable ?? '-'}）
               </p>
               <p>
                 <strong>类型列表:</strong> {catalogKeySummary}
               </p>
               <p>
-                <strong>更新时间:</strong> {formatDateTime(catalogSummary?.updatedAt)}
+                <strong>同步时间:</strong> {formatDateTime(catalogSummary?.updatedAt)}
               </p>
             </div>
           </article>
 
           <article className="sub-panel">
-            <div className="editor-header">
-              <div>
-                <h3>可见 Connector</h3>
-                <p className="cell-subtle">展示当前 catalog 中可见的 connector 与可用性状态。</p>
-              </div>
+            <div className="editor-header editor-header--compact">
+              <h3>可见 Connector</h3>
             </div>
-            <div className="signal-list">
+            <div className="signal-list signal-list--compact">
               {catalogVisibleItems.length === 0 ? (
                 <p className="empty">还没有 catalog 快照。</p>
               ) : (
                 catalogVisibleItems.map((item: ConnectorCatalogItem) => (
-                  <p key={item.key}>
-                    <strong>{item.key}</strong> · {item.name} · {item.available ? '可用' : item.availabilityReason || '不可用'}
+                  <p key={item.key} className={item.available ? '' : 'text-muted'}>
+                    <strong>{item.key}</strong> · {item.name} {item.available ? '' : `· ${item.availabilityReason || '不可用'}`}
                   </p>
                 ))
               )}
@@ -579,7 +600,10 @@ export function ConnectorGuideManagementSection({
                       <button
                         type="button"
                         className="management-title-link"
-                        onClick={() => setSelectedPolicyId(item.id)}
+                        onClick={() => {
+                          setSelectedPolicyId(item.id);
+                          setDetailDialogOpen(true);
+                        }}
                       >
                         {item.connectorKey}
                       </button>
@@ -598,359 +622,528 @@ export function ConnectorGuideManagementSection({
         </div>
       </section>
 
-      {detail ? (
-        <section className="panel fade-in">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">连接器引导规则</p>
-              <h2>{detail.connectorKey}</h2>
-              <p className="subtitle">
-                当前 published: {detail.publishedRevision ? `v${detail.publishedRevision.versionNumber}` : '未发布'} ·
-                更新时间 {formatDateTime(detail.updatedAt)}
-              </p>
-            </div>
-            <div className="section-actions">
-              <button type="button" className="primary-btn" disabled={busy} onClick={openEditorModal}>
-                打开编辑器
-              </button>
-            </div>
-          </div>
 
-          <div className="detail-grid modal-grid">
-            <article className="sub-panel">
-              <div className="editor-header">
-                <div>
-                  <h3>当前配置</h3>
-                  <p className="cell-subtle">主界面只保留摘要与版本操作，编辑器收进二级窗口。</p>
-                </div>
-                <button type="button" className="ghost-btn" disabled={busy} onClick={openEditorModal}>
-                  编辑
-                </button>
-              </div>
-              <div className="connector-guide-preview-grid">
-                <div className="connector-guide-preview-fact">
-                  <span>连接器</span>
-                  <strong>{detail.connectorKey}</strong>
-                </div>
-                <div className="connector-guide-preview-fact">
-                  <span>触发模式</span>
-                  <strong>{triggerModeLabel(detail.triggerMode)}</strong>
-                </div>
-                <div className="connector-guide-preview-fact">
-                  <span>Policy 状态</span>
-                  <strong>{guideStatusLabel(detail.status)}</strong>
-                </div>
-                <div className="connector-guide-preview-fact">
-                  <span>当前版本</span>
-                  <strong>{revision ? `v${revision.versionNumber}` : '暂无版本'}</strong>
-                </div>
-              </div>
-
-              <div className="connector-guide-preview-stack">
-                <div className="connector-guide-preview-card">
-                  <span>说明</span>
-                  <p>{previewText(detail.description)}</p>
-                </div>
-                <div className="connector-guide-preview-card">
-                  <span>服务端说明</span>
-                  <p>{previewText(revision?.serverInstructionsMarkdown)}</p>
-                </div>
-                <div className="connector-guide-preview-card">
-                  <span>引导提醒</span>
-                  <p>{previewText(revision?.guideReminderMarkdown)}</p>
-                </div>
-                <div className="connector-guide-preview-card">
-                  <span>阻断规则</span>
-                  <p>{previewText(revision?.blockingRulesMarkdown)}</p>
-                </div>
-                <div className="connector-guide-preview-card">
-                  <span>Notes</span>
-                  <p>{previewText(revision?.notes)}</p>
-                </div>
-              </div>
-            </article>
-
-            <article className="sub-panel connector-guide-sidebar-panel">
-              <div className="editor-header">
-                <div>
-                  <h3>Revision 历史</h3>
-                  <p className="cell-subtle">可切换 revision 查看并回滚到历史发布版本。</p>
-                </div>
-              </div>
-              <div className="skill-list connector-guide-revision-list">
-                <table className="skill-table connector-guide-revision-table">
-                  <thead>
-                    <tr>
-                      <th>版本</th>
-                      <th>状态</th>
-                      <th>发布时间</th>
-                      <th>操作</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detail.revisions.map((item) => (
-                      <tr key={item.id} className={selectedRevisionId === item.id ? 'selected' : ''}>
-                        <td>
-                          <button
-                            type="button"
-                            className={`connector-guide-revision-select ${selectedRevisionId === item.id ? 'active' : ''}`}
-                            onClick={() => setSelectedRevisionId(item.id)}
-                            aria-pressed={selectedRevisionId === item.id}
-                            aria-label={`查看 v${item.versionNumber} 版本`}
-                          >
-                            <strong>v{item.versionNumber}</strong>
-                            <span className="cell-subtle connector-guide-revision-meta">
-                              {formatDateTime(item.createdAt)}
-                            </span>
-                            <span className="connector-guide-revision-select-label">查看版本</span>
-                          </button>
-                        </td>
-                        <td>
-                          <span className={`status-pill status-${item.status}`}>{item.status}</span>
-                        </td>
-                        <td className="connector-guide-revision-date">
-                          {formatDateTime(item.publishedAt)}
-                        </td>
-                        <td>
-                          <button
-                            type="button"
-                            className="ghost-btn"
-                            disabled={busy || item.status === 'published'}
-                            onClick={() => setDangerAction({ kind: 'rollback', policyId: detail.id, revisionId: item.id, label: detail.connectorKey, status: item.status, publishedLabel: detail.publishedRevision ? `v${detail.publishedRevision.versionNumber}` : '未发布' })}
-                          >
-                            回滚到此版本
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="editor-header" style={{ marginTop: 20 }}>
-                <div>
-                  <h3>校验结果</h3>
-                  <p className="cell-subtle">只做 connector-domain 文本校验，不触碰现有 skills 模块。</p>
-                </div>
-              </div>
-              {validationResult ? (
-                <div className="signal-list">
-                  <p>
-                    <strong>valid:</strong> {String(validationResult.valid)}
-                  </p>
-                  <p>
-                    <strong>errors:</strong> {validationResult.errors.length ? validationResult.errors.join('；') : '-'}
-                  </p>
-                  <p>
-                    <strong>warnings:</strong>{' '}
-                    {validationResult.warnings.length ? validationResult.warnings.join('；') : '-'}
-                  </p>
-                </div>
-              ) : (
-                <p className="empty">还没有校验结果。</p>
-              )}
-            </article>
-          </div>
-        </section>
-      ) : null}
-
-      {detail && editorModalOpen ? (
-        <>
+      {detail && detailDialogOpen ? (
         <AdminDetailShell
-          open={editorModalOpen}
-          onClose={closeEditorModal}
-          size="fullscreen"
-          className="connector-guide-editor-modal"
-          eyebrow="连接器编辑器"
+          open={detailDialogOpen}
+          onClose={() => setDetailDialogOpen(false)}
+          size="xl"
+          eyebrow="连接器引导规则"
           title={detail.connectorKey}
-          subtitle={`当前编辑版本：${revision ? `v${revision.versionNumber} · ${guideStatusLabel(revision.status)}` : '暂无版本'}`}
+          subtitle={`${detail.publishedRevision ? `published v${detail.publishedRevision.versionNumber}` : '未发布'} · ${guideStatusLabel(detail.status)} · ${formatDateTime(detail.updatedAt)}`}
           icon={getAdminModuleIcon('connector')}
           entityType="Connector Guide"
-          lastUpdated={`更新 ${formatDateTime(revision?.createdAt)}`}
-          risk={detail.status === 'archived' ? '风险：已归档' : revision?.status === 'published' ? '风险：发布中' : '风险：草稿编辑'}
-          metrics={[{ label: 'Revision', value: revision ? `v${revision.versionNumber}` : '-' }, { label: '状态', value: guideStatusLabel(detail.status) }, { label: '触发', value: triggerModeLabel(editor.triggerMode) }, { label: '版本数', value: detail.revisions.length }]}
-          status={<StatusBadge>{guideStatusLabel(detail.status)}</StatusBadge>}
-          moreActions={<AdminButton variant="secondary" icon={getAdminActionIcon('logs')} onClick={() => setDiffOpen(true)}>查看 Diff</AdminButton>}
-          summary={<div className="connector-guide-preview-grid"><div className="connector-guide-preview-fact"><span>连接器</span><strong>{detail.connectorKey}</strong></div><div className="connector-guide-preview-fact"><span>触发模式</span><strong>{triggerModeLabel(detail.triggerMode)}</strong></div><div className="connector-guide-preview-fact"><span>当前版本</span><strong>{revision ? `v${revision.versionNumber}` : '暂无版本'}</strong></div></div>}
-          tabs={<AdminTabs value={detailTab} onChange={setDetailTab} items={[{ key: 'configuration', label: 'Configuration' }, { key: 'raw', label: 'Raw Data' }]} />}
-          inspector={<AdminStickyInspector compact title="Actionable Inspector" sections={[{ key: 'risk', title: '当前风险', children: <div className="signal-list"><p>{detail.status === 'archived' ? 'Policy 已归档，发布前需先恢复可用状态。' : revision?.status === 'published' ? '当前 revision 已发布，编辑器变更需保存后才生效。' : '草稿编辑中，发布前需确认文本 Diff。'}</p></div> }, { key: 'impact', title: '影响范围', children: <div className="signal-list"><p>影响 {detail.connectorKey} 的连接器引导说明、提醒与阻断规则。</p><p>不修改 connector 目录对象。</p></div> }, { key: 'recent', title: '最近操作', children: <div className="signal-list"><p>暂无 revision 审计事件。</p></div> }, { key: 'blockers', title: '阻断原因', children: <div className="signal-list"><p>{revision ? '当前无前端可见阻断；发布前需保存编辑器内容。' : '暂无 revision，需先新建或保存生成 revision。'}</p></div> }, { key: 'recommend', title: '推荐动作', children: <div className="signal-list"><p>发布前查看文本 Diff，并按需执行校验。</p></div> }, { key: 'actions', title: '快捷动作', children: <AdminButton variant="secondary" size="sm" onClick={() => setDiffOpen(true)}>查看文本 Diff</AdminButton> }]} />}
-          footer={<AdminButton variant="secondary" disabled={busy} onClick={() => void savePolicy()}>保存当前内容</AdminButton>}
-        >
-
-          {detailTab === 'configuration' ? (
-          <>
-            <div className="section-actions connector-guide-editor-toolbar">
-              <AdminButton variant="secondary" icon={getAdminActionIcon('sync')} disabled={busy} onClick={() => void createRevision()}>
-                新建 revision
+          status={<StatusBadge tone={detail.status === 'active' ? 'success' : detail.status === 'archived' ? 'danger' : 'warning'}>{guideStatusLabel(detail.status)}</StatusBadge>}
+          metrics={[
+            { label: 'Revision', value: revision ? `v${revision.versionNumber}` : '-' },
+            { label: '触发', value: triggerModeLabel(detail.triggerMode) },
+            { label: '已发布', value: detail.publishedRevision ? `v${detail.publishedRevision.versionNumber}` : '未发布' },
+            { label: '校验', value: validationResult ? (validationResult.valid ? '通过' : '未通过') : '未校验' },
+          ]}
+          actions={
+            editMode ? (
+              <AdminButton variant={isDirty ? 'dangerSoft' : 'secondary'} disabled={busy} onClick={exitEditMode}>
+                {isDirty ? '退出编辑（未保存）' : '退出编辑'}
               </AdminButton>
-              <AdminButton variant="secondary" icon={getAdminActionIcon('refresh')} disabled={busy || !revision} onClick={() => void validateRevision()}>
-                校验
+            ) : (
+              <AdminButton variant="primary" disabled={busy} onClick={enterEditMode}>
+                编辑
               </AdminButton>
-              <AdminButton variant="primary" icon={getAdminActionIcon('save')} disabled={busy || !revision} onClick={() => revision && setDangerAction({ kind: 'publish', policyId: detail.id, revisionId: revision.id, label: detail.connectorKey, status: revision.status, publishedLabel: detail.publishedRevision ? `v${detail.publishedRevision.versionNumber}` : '未发布' })}>
-                发布当前 revision
-              </AdminButton>
+            )
+          }
+          summary={
+            <div className="skill-detail-summary-strip">
+              <article className="skill-detail-summary-card">
+                <span>触发模式</span>
+                <strong>{triggerModeLabel(detail.triggerMode)}</strong>
+              </article>
+              <article className="skill-detail-summary-card">
+                <span>当前 Revision</span>
+                <strong className="mono">{revision ? `v${revision.versionNumber}` : '-'}</strong>
+              </article>
+              <article className="skill-detail-summary-card">
+                <span>已发布版本</span>
+                <strong className="mono">{detail.publishedRevision ? `v${detail.publishedRevision.versionNumber}` : '未发布'}</strong>
+              </article>
+              <article className="skill-detail-summary-card">
+                <span>校验状态</span>
+                <strong>{validationResult ? (validationResult.valid ? '通过' : '未通过') : '未校验'}</strong>
+              </article>
             </div>
-
-            <div className="detail-grid modal-grid connector-guide-editor-grid">
-              <article className="sub-panel">
-                <div className="editor-header">
-                  <div>
-                    <h3>Policy 配置</h3>
-                    <p className="cell-subtle">Policy 元数据不会进入现有 skills 模块。</p>
+          }
+          inspector={
+            <AdminStickyInspector
+              compact
+              title="Inspector"
+              sections={[
+                {
+                  key: 'status',
+                  title: '状态与风险',
+                  children: (
+                    <div className="signal-list signal-list--compact">
+                      <p>
+                        {detail.status === 'archived'
+                          ? '已归档，需恢复后才能发布。'
+                          : revision?.status === 'published'
+                            ? '当前 revision 已发布，编辑后需保存才生效。'
+                            : '草稿状态，发布前需确认 Diff 并保存。'}
+                      </p>
+                      <p>
+                        {revision
+                          ? '无阻断，可正常操作。'
+                          : '无可用 revision，需先新建或保存。'}
+                      </p>
+                    </div>
+                  ),
+                },
+                {
+                  key: 'impact',
+                  title: '影响范围',
+                  children: (
+                    <div className="signal-list signal-list--compact">
+                      <p>影响 {detail.connectorKey} 的引导说明、提醒与阻断规则。不修改 connector 目录。</p>
+                    </div>
+                  ),
+                },
+                {
+                  key: 'recommend',
+                  title: '推荐动作',
+                  children: (
+                    <div className="signal-list signal-list--compact">
+                      <p>发布前查看 Diff，按需执行校验。</p>
+                    </div>
+                  ),
+                },
+              ]}
+            />
+          }
+        >
+          <div className="modal-body connector-guide-modal-body">
+            {editMode ? (
+              <>
+                <div className="connector-guide-toolbar">
+                  <div className="toolbar-group">
+                    <AdminButton variant="ghost" icon={getAdminActionIcon('refresh')} disabled={busy || !revision} onClick={() => void validateRevision()}>
+                      校验
+                    </AdminButton>
+                  </div>
+                  <div className="toolbar-group toolbar-group--primary">
+                    <AdminButton variant="secondary" disabled={busy} onClick={() => void savePolicy()}>
+                      保存
+                    </AdminButton>
+                    <AdminButton
+                      variant="danger"
+                      icon={getAdminActionIcon('save')}
+                      disabled={busy || !revision}
+                      onClick={() =>
+                        revision &&
+                        setInlineConfirm({
+                          kind: 'publish',
+                          policyId: detail.id,
+                          revisionId: revision.id,
+                          label: detail.connectorKey,
+                          status: revision.status,
+                          publishedLabel: detail.publishedRevision
+                            ? `v${detail.publishedRevision.versionNumber}`
+                            : '未发布',
+                        })
+                      }
+                    >
+                      发布
+                    </AdminButton>
                   </div>
                 </div>
-                <div className="skill-form-grid">
-                  <label className="form-field">
-                    <span>连接器标识</span>
-                    <input className="control-input" value={detail.connectorKey} disabled />
-                  </label>
-                  <label className="form-field">
-                    <span>触发模式</span>
-                    <select
-                      className="control-input"
-                      value={editor.triggerMode}
-                      onChange={(event) => setEditor((prev) => ({ ...prev, triggerMode: event.target.value }))}
-                    >
-                      <option value="on_attach">接入时</option>
-                      <option value="on_active_use">活跃使用时</option>
-                      <option value="on_attach_and_active_use">接入时和活跃使用时</option>
-                    </select>
-                  </label>
-                  <label className="form-field">
-                    <span>状态</span>
-                    <select
-                      className="control-input"
-                      value={editor.status}
-                      onChange={(event) => setEditor((prev) => ({ ...prev, status: event.target.value }))}
-                    >
-                      <option value="draft">草稿</option>
-                      <option value="active">启用</option>
-                      <option value="archived">已归档</option>
-                    </select>
-                  </label>
-                  <label className="form-field field-span-2">
-                    <span>说明</span>
-                    <input
-                      className="control-input"
-                      value={editor.description}
-                      onChange={(event) => setEditor((prev) => ({ ...prev, description: event.target.value }))}
-                    />
-                  </label>
+
+                <div className="detail-grid modal-grid connector-guide-editor-grid">
+                  <article className="sub-panel connector-guide-editor-main">
+                    <div className="skill-form-grid skill-form-grid--compact">
+                      <label className="form-field">
+                        <span>触发模式</span>
+                        <select
+                          className="control-input"
+                          value={editor.triggerMode}
+                          onChange={(event) => setEditor((prev) => ({ ...prev, triggerMode: event.target.value }))}
+                        >
+                          <option value="on_attach">接入时</option>
+                          <option value="on_active_use">活跃使用时</option>
+                          <option value="on_attach_and_active_use">接入时和活跃使用时</option>
+                        </select>
+                      </label>
+                      <label className="form-field">
+                        <span>状态</span>
+                        <select
+                          className="control-input"
+                          value={editor.status}
+                          onChange={(event) => setEditor((prev) => ({ ...prev, status: event.target.value }))}
+                        >
+                          <option value="draft">草稿</option>
+                          <option value="active">启用</option>
+                          <option value="archived">已归档</option>
+                        </select>
+                      </label>
+                      <label className="form-field field-span-2">
+                        <span>说明</span>
+                        <input
+                          className="control-input"
+                          value={editor.description}
+                          onChange={(event) => setEditor((prev) => ({ ...prev, description: event.target.value }))}
+                        />
+                      </label>
+                    </div>
+
+                    {[
+                      {
+                        key: 'serverInstructions',
+                        label: '服务端说明',
+                        rows: 6,
+                        value: editor.serverInstructionsMarkdown,
+                        onChange: (v: string) => setEditor((prev) => ({ ...prev, serverInstructionsMarkdown: v })),
+                      },
+                      {
+                        key: 'guideReminder',
+                        label: '引导提醒',
+                        rows: 5,
+                        value: editor.guideReminderMarkdown,
+                        onChange: (v: string) => setEditor((prev) => ({ ...prev, guideReminderMarkdown: v })),
+                      },
+                      {
+                        key: 'blockingRules',
+                        label: '阻断规则',
+                        rows: 2,
+                        value: editor.blockingRulesMarkdown,
+                        onChange: (v: string) => setEditor((prev) => ({ ...prev, blockingRulesMarkdown: v })),
+                      },
+                      {
+                        key: 'notes',
+                        label: '备注',
+                        rows: 2,
+                        value: editor.notes,
+                        onChange: (v: string) => setEditor((prev) => ({ ...prev, notes: v })),
+                      },
+                    ].map((block) => (
+                      <div key={block.key} className="connector-guide-textarea-block">
+                        <label className="connector-guide-textarea-label">
+                          {block.label}
+                        </label>
+                        <textarea
+                          className="control-textarea connector-guide-textarea-resize"
+                          rows={block.rows}
+                          value={block.value}
+                          onChange={(event) => block.onChange(event.target.value)}
+                        />
+                      </div>
+                    ))}
+                  </article>
+
+                  <article className="sub-panel connector-guide-sidebar-panel">
+                    <div className="connector-guide-sidebar-section">
+                      <div className="editor-header editor-header--compact">
+                        <h3>版本信息</h3>
+                      </div>
+                      <div className="signal-list signal-list--compact">
+                        <p>
+                          {revision
+                            ? <strong>v{revision.versionNumber} · {guideStatusLabel(revision.status)}</strong>
+                            : <span className="cell-subtle">保存时自动创建</span>}
+                        </p>
+                        <p className="cell-subtle">
+                          创建 {formatDateTime(revision?.createdAt)} · 发布 {formatDateTime(revision?.publishedAt)}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="connector-guide-sidebar-section">
+                      <div className="connector-guide-sidebar-actions">
+                        <AdminButton variant="secondary" size="sm" icon={getAdminActionIcon('logs')} onClick={() => setDiffOpen(true)}>
+                          查看 Diff
+                        </AdminButton>
+                        <AdminButton variant="secondary" size="sm" icon={getAdminActionIcon('sync')} disabled={busy} onClick={() => void createRevision()}>
+                          新建 revision
+                        </AdminButton>
+                        <AdminButton variant="ghost" size="sm" disabled={busy || !revision} onClick={() => void validateRevision()}>
+                          执行校验
+                        </AdminButton>
+                      </div>
+                    </div>
+
+                    <div className="connector-guide-sidebar-section">
+                      <div className="editor-header editor-header--compact">
+                        <h3>校验状态</h3>
+                      </div>
+                      {validationResult ? (
+                        <div className="connector-guide-validation-compact">
+                          <span className={`validation-badge ${validationResult.valid ? 'valid' : 'invalid'}`}>
+                            {validationResult.valid ? '通过' : '未通过'}
+                          </span>
+                          <span className="cell-subtle">
+                            {validationResult.errors.length} 错误 · {validationResult.warnings.length} 警告
+                          </span>
+                        </div>
+                      ) : (
+                        <p className="empty">尚未校验</p>
+                      )}
+                    </div>
+                  </article>
                 </div>
 
-                <div className="editor-header connector-guide-editor-block">
-                  <div>
-                    <h3>Revision 文本</h3>
-                    <p className="cell-subtle">当前编辑仅在保存、校验或发布时写入版本。</p>
-                  </div>
+              </>
+          ) : (
+            <div className="detail-grid modal-grid connector-guide-readonly-grid">
+              <article className="sub-panel connector-guide-readonly-main">
+                <div className="editor-header editor-header--compact">
+                  <h3>Guide 内容</h3>
                 </div>
-
-                <div className="skill-form-grid">
-                  <label className="form-field field-span-2">
-                    <span>服务端说明 Markdown</span>
-                    <textarea
-                      className="control-textarea"
-                      rows={10}
-                      value={editor.serverInstructionsMarkdown}
-                      onChange={(event) =>
-                        setEditor((prev) => ({ ...prev, serverInstructionsMarkdown: event.target.value }))
-                      }
-                    />
-                  </label>
-                  <label className="form-field field-span-2">
-                    <span>引导提醒 Markdown</span>
-                    <textarea
-                      className="control-textarea"
-                      rows={8}
-                      value={editor.guideReminderMarkdown}
-                      onChange={(event) =>
-                        setEditor((prev) => ({ ...prev, guideReminderMarkdown: event.target.value }))
-                      }
-                    />
-                  </label>
-                  <label className="form-field field-span-2">
-                    <span>阻断规则 Markdown</span>
-                    <textarea
-                      className="control-textarea"
-                      rows={8}
-                      value={editor.blockingRulesMarkdown}
-                      onChange={(event) =>
-                        setEditor((prev) => ({ ...prev, blockingRulesMarkdown: event.target.value }))
-                      }
-                    />
-                  </label>
-                  <label className="form-field field-span-2">
-                    <span>notes</span>
-                    <textarea
-                      className="control-textarea"
-                      rows={4}
-                      value={editor.notes}
-                      onChange={(event) => setEditor((prev) => ({ ...prev, notes: event.target.value }))}
-                    />
-                  </label>
-                </div>
+                {(() => {
+                  const guidePreviewCards = [
+                    { key: 'description', label: '说明', value: detail.description },
+                    { key: 'serverInstructions', label: '服务端说明', value: revision?.serverInstructionsMarkdown },
+                    { key: 'guideReminder', label: '引导提醒', value: revision?.guideReminderMarkdown },
+                    { key: 'blockingRules', label: '阻断规则', value: revision?.blockingRulesMarkdown },
+                    { key: 'notes', label: '备注', value: revision?.notes },
+                  ];
+                  const emptyLabels = guidePreviewCards.filter((card) => !card.value?.trim()).map((card) => card.label);
+                  return (
+                    <div className="connector-guide-preview-compact">
+                      {guidePreviewCards
+                        .filter((card) => card.value?.trim())
+                        .map((card) => {
+                          const text = previewText(card.value);
+                          const isExpanded = expandedPreviewCards.has(card.key);
+                          return (
+                            <div key={card.key} className={`preview-compact-card ${isExpanded ? 'expanded' : ''}`}>
+                              <div className="preview-compact-header">
+                                <span className="preview-compact-label">{card.label}</span>
+                                {text.length > 120 && (
+                                  <button
+                                    type="button"
+                                    className="preview-compact-toggle"
+                                    onClick={() =>
+                                      setExpandedPreviewCards((prev) => {
+                                        const next = new Set(prev);
+                                        if (next.has(card.key)) {
+                                          next.delete(card.key);
+                                        } else {
+                                          next.add(card.key);
+                                        }
+                                        return next;
+                                      })
+                                    }
+                                    aria-expanded={isExpanded}
+                                  >
+                                    {isExpanded ? '收起' : '展开'}
+                                  </button>
+                                )}
+                              </div>
+                              <p className="preview-compact-body">{text}</p>
+                            </div>
+                          );
+                        })}
+                      {emptyLabels.length > 0 && (
+                        <div className="preview-compact-card preview-compact-card--muted">
+                          <span className="preview-compact-label">{emptyLabels.join('、')} 未填写</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </article>
 
               <article className="sub-panel connector-guide-sidebar-panel">
-                <div className="editor-header">
-                  <div>
-                    <h3>当前 revision</h3>
-                    <p className="cell-subtle">
-                      {revision
-                        ? `v${revision.versionNumber} · ${guideStatusLabel(revision.status)}`
-                        : '保存时会自动创建首个 revision'}
-                    </p>
-                  </div>
+                <div className="editor-header editor-header--compact">
+                  <h3>Revision 历史</h3>
                 </div>
-                <div className="signal-list">
-                  <p>
-                    <strong>创建时间:</strong> {formatDateTime(revision?.createdAt)}
-                  </p>
-                  <p>
-                    <strong>发布时间:</strong> {formatDateTime(revision?.publishedAt)}
-                  </p>
-                  <p>
-                    <strong>校验结果:</strong> {validationResult ? String(validationResult.valid) : '尚未校验'}
-                  </p>
+                <div className="skill-list connector-guide-revision-list">
+                  <table className="skill-table connector-guide-revision-table">
+                    <thead>
+                      <tr>
+                        <th>版本</th>
+                        <th>状态</th>
+                        <th>发布时间</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {detail.revisions.map((item) => (
+                        <tr key={item.id} className={selectedRevisionId === item.id ? 'selected' : ''}>
+                          <td>
+                            <button
+                              type="button"
+                              className={`connector-guide-revision-select ${selectedRevisionId === item.id ? 'active' : ''}`}
+                              onClick={() => setSelectedRevisionId(item.id)}
+                              aria-pressed={selectedRevisionId === item.id}
+                              aria-label={`查看 v${item.versionNumber} 版本`}
+                            >
+                              <strong>v{item.versionNumber}</strong>
+                              <span className="cell-subtle connector-guide-revision-meta">
+                                {formatDateTime(item.createdAt)}
+                              </span>
+                              <span className="connector-guide-revision-select-label">查看版本</span>
+                            </button>
+                          </td>
+                          <td>
+                            <span className={`status-pill status-${item.status}`}>{item.status}</span>
+                          </td>
+                          <td className="connector-guide-revision-date">
+                            {formatDateTime(item.publishedAt)}
+                          </td>
+                          <td>
+                            <AdminButton
+                              variant="ghost"
+                              size="sm"
+                              disabled={busy || item.status === 'published'}
+                              onClick={() =>
+                                setInlineConfirm({
+                                  kind: 'rollback',
+                                  policyId: detail.id,
+                                  revisionId: item.id,
+                                  label: detail.connectorKey,
+                                  status: item.status,
+                                  publishedLabel: detail.publishedRevision
+                                    ? `v${detail.publishedRevision.versionNumber}`
+                                    : '未发布',
+                                })
+                              }
+                            >
+                              回滚
+                            </AdminButton>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
 
-                <div className="editor-header connector-guide-editor-block">
-                  <div>
-                    <h3>保存与发布</h3>
-                    <p className="cell-subtle">先保存，再按需校验或发布。</p>
+                <div className="editor-header editor-header--compact" style={{ marginTop: 12 }}>
+                  <h3>校验结果</h3>
+                </div>
+                {validationResult ? (
+                  <div className={`validation-result ${validationResult.valid ? 'valid' : 'invalid'}`}>
+                    <div className="validation-result-header">
+                      <span className="validation-result-badge">
+                        {validationResult.valid ? '通过' : '未通过'}
+                      </span>
+                      <span className="validation-result-meta">
+                        {validationResult.errors.length} 错误 · {validationResult.warnings.length} 警告
+                      </span>
+                    </div>
+                    {validationResult.errors.length > 0 && (
+                      <ul className="validation-result-list validation-result-errors">
+                        {validationResult.errors.map((error, index) => (
+                          <li key={`error-${index}`}>{error}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {validationResult.warnings.length > 0 && (
+                      <ul className="validation-result-list validation-result-warnings">
+                        {validationResult.warnings.map((warning, index) => (
+                          <li key={`warning-${index}`}>{warning}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {validationResult.valid &&
+                      validationResult.errors.length === 0 &&
+                      validationResult.warnings.length === 0 && (
+                        <p className="validation-result-empty">无问题</p>
+                      )}
                   </div>
-                </div>
-                <div className="connector-guide-editor-footer">
-                  <button type="button" className="ghost-btn" disabled={busy} onClick={() => void savePolicy()}>
-                    保存当前内容
-                  </button>
-                </div>
+                ) : (
+                  <p className="empty">尚未校验</p>
+                )}
+
               </article>
             </div>
-          </>
-          ) : (
-            <article className="sub-panel"><div className="editor-header"><div><h3>Raw Data</h3><p className="cell-subtle">当前 revision 文本与编辑器值。</p></div></div><div className="detail-grid"><pre className="code-block">{JSON.stringify({ detail, revision }, null, 2)}</pre><pre className="code-block">{JSON.stringify(editor, null, 2)}</pre></div></article>
           )}
+          </div>
+
+          <DiffDrawer
+            open={diffOpen}
+            onClose={() => setDiffOpen(false)}
+            title="Connector Guide Diff"
+            objectLabel={detail.connectorKey}
+            language="markdown"
+            beforeText={[
+              revision?.serverInstructionsMarkdown || '',
+              revision?.guideReminderMarkdown || '',
+              revision?.blockingRulesMarkdown || '',
+              revision?.notes || '',
+            ].join('\\n\\n---\\n\\n')}
+            afterText={[
+              editor.serverInstructionsMarkdown,
+              editor.guideReminderMarkdown,
+              editor.blockingRulesMarkdown,
+              editor.notes,
+            ].join('\\n\\n---\\n\\n')}
+            fields={[
+              {
+                key: 'description',
+                label: '说明',
+                before: detail.description || '-',
+                after: editor.description || '-',
+                changeType: (detail.description || '') === editor.description ? 'unchanged' : 'changed',
+              },
+              {
+                key: 'triggerMode',
+                label: '触发模式',
+                before: triggerModeLabel(detail.triggerMode),
+                after: triggerModeLabel(editor.triggerMode),
+                changeType: detail.triggerMode === editor.triggerMode ? 'unchanged' : 'changed',
+              },
+              {
+                key: 'status',
+                label: '状态',
+                before: guideStatusLabel(detail.status),
+                after: guideStatusLabel(editor.status),
+                changeType: detail.status === editor.status ? 'unchanged' : 'changed',
+              },
+            ]}
+            impactItems={[
+              `影响 ${detail.connectorKey} 的 guide 文本与触发策略`,
+              '发布前会保存当前 revision 文本',
+              '不修改 Connector Catalog',
+            ]}
+            rollbackHint="可通过 Revision 历史回滚到已有真实版本。"
+            syncHint="Before 使用当前选中 revision/detail，After 使用编辑器内容。"
+          />
         </AdminDetailShell>
-        <DiffDrawer open={diffOpen} onClose={() => setDiffOpen(false)} title="Connector Guide Diff" objectLabel={detail.connectorKey} language="markdown" beforeText={[revision?.serverInstructionsMarkdown || '', revision?.guideReminderMarkdown || '', revision?.blockingRulesMarkdown || '', revision?.notes || ''].join('\n\n---\n\n')} afterText={[editor.serverInstructionsMarkdown, editor.guideReminderMarkdown, editor.blockingRulesMarkdown, editor.notes].join('\n\n---\n\n')} fields={[{ key: 'description', label: '说明', before: detail.description || '-', after: editor.description || '-', changeType: (detail.description || '') === editor.description ? 'unchanged' : 'changed' }, { key: 'triggerMode', label: '触发模式', before: triggerModeLabel(detail.triggerMode), after: triggerModeLabel(editor.triggerMode), changeType: detail.triggerMode === editor.triggerMode ? 'unchanged' : 'changed' }, { key: 'status', label: '状态', before: guideStatusLabel(detail.status), after: guideStatusLabel(editor.status), changeType: detail.status === editor.status ? 'unchanged' : 'changed' }]} impactItems={[`影响 ${detail.connectorKey} 的 guide 文本与触发策略`, '发布前会保存当前 revision 文本', '不修改 Connector Catalog']} rollbackHint="可通过 Revision 历史回滚到已有真实版本。" syncHint="Before 使用当前选中 revision/detail，After 使用编辑器内容。" />
-        </>
       ) : null}
-      {dangerAction ? (
+      <ConfirmDialog
+        open={discardConfirmOpen}
+        title="确认退出编辑？"
+        description="当前修改尚未保存，退出后将丢弃所有更改。"
+        confirmLabel="丢弃修改"
+        cancelLabel="继续编辑"
+        onCancel={() => setDiscardConfirmOpen(false)}
+        onConfirm={confirmDiscard}
+      />
+      {inlineConfirm ? (
         <DangerConfirmDialog
-          open={Boolean(dangerAction)}
-          title={dangerAction.kind === 'publish' ? '确认发布 Connector Guide' : '确认回滚 Connector Guide'}
+          open={Boolean(inlineConfirm)}
+          title={inlineConfirm.kind === 'publish' ? '确认发布 Connector Guide' : '确认回滚 Connector Guide'}
           objectLabel="Connector Guide"
-          objectId={dangerAction.revisionId}
-          objectName={dangerAction.label}
-          objectMeta={[{ label: 'Policy', value: dangerAction.policyId }, { label: '当前 published', value: dangerAction.publishedLabel }]}
-          actionLabel={dangerAction.kind === 'publish' ? '发布当前 revision' : '回滚到此版本'}
-          impactItems={dangerAction.kind === 'publish' ? ['该 connector 的 guide 将发布为当前生效内容', '发布前会先保存编辑器中当前 revision 文本'] : ['该 connector 的 published revision 会切换到目标历史版本', '当前编辑选择会同步到回滚后的 revision']}
+          objectId={inlineConfirm.revisionId}
+          objectName={inlineConfirm.label}
+          objectMeta={[
+            { label: 'Policy', value: inlineConfirm.policyId },
+            { label: '当前 published', value: inlineConfirm.publishedLabel },
+          ]}
+          actionLabel={inlineConfirm.kind === 'publish' ? '发布当前 revision' : '回滚到此版本'}
+          impactItems={
+            inlineConfirm.kind === 'publish'
+              ? ['该 connector 的 guide 将发布为当前生效内容', '发布前会先保存编辑器中当前 revision 文本']
+              : ['该 connector 的 published revision 会切换到目标历史版本', '当前编辑选择会同步到回滚后的 revision']
+          }
           nonImpactItems={['不修改业务 API', '审计原因仅前端收集，不随当前 API 提交']}
           reversibility="partially_reversible"
-          confirmText={dangerAction.label}
+          confirmText={inlineConfirm.label}
           loading={busy}
-          onCancel={() => setDangerAction(null)}
-          onConfirm={() => dangerAction.kind === 'publish' ? void publishRevision(dangerAction) : void rollbackRevision(dangerAction)}
+          onCancel={() => setInlineConfirm(null)}
+          onConfirm={() => {
+            if (inlineConfirm.kind === 'publish') {
+              void publishRevision(inlineConfirm);
+            } else {
+              void rollbackRevision(inlineConfirm);
+            }
+          }}
         />
       ) : null}
     </main>

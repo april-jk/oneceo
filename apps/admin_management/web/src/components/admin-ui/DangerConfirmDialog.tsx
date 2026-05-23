@@ -2,7 +2,6 @@ import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import { AlertTriangle, ShieldCheck } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { AdminButton } from './AdminButton';
-import { IdToken } from './IdToken';
 import { StatusBadge } from './StatusBadge';
 
 type Reversibility = 'reversible' | 'partially_reversible' | 'irreversible';
@@ -86,70 +85,95 @@ export function DangerConfirmDialog({
       <AlertDialog.Portal>
         <AlertDialog.Overlay className="admin-danger-overlay" />
         <AlertDialog.Content className="admin-danger-dialog">
-          <div className="admin-danger-dialog-mark" aria-hidden="true"><AlertTriangle size={22} /></div>
-          <AlertDialog.Title className="admin-danger-dialog-title">{title}</AlertDialog.Title>
-          <AlertDialog.Description className="admin-danger-dialog-description">
-            这是一项需要审计的管理操作，请先核对对象、影响范围与确认词。
-          </AlertDialog.Description>
-
-          <section className="admin-danger-object-panel">
+          <div className="admin-danger-header">
+            <div className="admin-danger-mark" aria-hidden="true"><AlertTriangle size={18} /></div>
             <div>
-              <span>对象</span>
-              <strong>{objectLabel}</strong>
+              <AlertDialog.Title className="admin-danger-title">{title}</AlertDialog.Title>
+              <AlertDialog.Description className="admin-danger-subtitle">
+                核对对象与影响后，输入确认词完成操作。
+              </AlertDialog.Description>
             </div>
-            {objectName ? <p>{objectName}</p> : null}
-            {objectId ? <IdToken label="ID" value={objectId} /> : null}
-            {objectMeta?.length ? (
-              <dl className="admin-danger-meta-grid">
-                {objectMeta.map((item) => (
-                  <div key={item.label}>
-                    <dt>{item.label}</dt>
-                    <dd>{item.value}</dd>
-                  </div>
+          </div>
+
+          <div className="admin-danger-body">
+            {/* Object summary */}
+            <div className="admin-danger-summary">
+              <div className="admin-danger-summary-row">
+                <span className="admin-danger-summary-label">{objectLabel}</span>
+                <span className="admin-danger-summary-name">{objectName || objectId || '-'}</span>
+              </div>
+              {objectMeta?.length ? (
+                <dl className="admin-danger-meta">
+                  {objectMeta.map((item) => (
+                    <div key={item.label}>
+                      <dt>{item.label}</dt>
+                      <dd>{item.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              ) : null}
+            </div>
+
+            {/* Operation + reversibility */}
+            <div className="admin-danger-op-row">
+              <div className="admin-danger-op-item">
+                <span>操作</span>
+                <strong>{actionLabel}</strong>
+              </div>
+              <div className="admin-danger-op-item">
+                <span>可逆性</span>
+                <StatusBadge tone={reversibilityMeta.tone}>{reversibilityMeta.label}</StatusBadge>
+              </div>
+            </div>
+
+            {/* Impact */}
+            <div className="admin-danger-impact">
+              <h4>影响范围</h4>
+              <ul>
+                {impactItems.map((item) => (
+                  <li key={item}>{item}</li>
                 ))}
-              </dl>
-            ) : null}
-          </section>
-
-          <section className="admin-danger-impact-grid">
-            <div>
-              <h4>操作</h4>
-              <p>{actionLabel}</p>
+              </ul>
+              {nonImpactItems?.length ? (
+                <div className="admin-danger-nonimpact">
+                  <ShieldCheck size={12} aria-hidden="true" />
+                  <span>不会发生：{nonImpactItems.join('；')}</span>
+                </div>
+              ) : null}
             </div>
-            <div>
-              <h4>不可逆程度</h4>
-              <StatusBadge tone={reversibilityMeta.tone}>{reversibilityMeta.label}</StatusBadge>
-            </div>
-          </section>
 
-          <section className="admin-danger-list-section">
-            <h4>影响范围</h4>
-            <ul>{impactItems.map((item) => <li key={item}>{item}</li>)}</ul>
-          </section>
-          {nonImpactItems?.length ? (
-            <section className="admin-danger-list-section admin-danger-nonimpact">
-              <h4><ShieldCheck size={14} aria-hidden="true" /> 不会发生</h4>
-              <ul>{nonImpactItems.map((item) => <li key={item}>{item}</li>)}</ul>
-            </section>
-          ) : null}
-
-          <label className="admin-danger-field">
-            <span>审计原因{reasonRequired ? '（必填）' : ''}</span>
-            <textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="说明本次变更原因，便于后续追溯" rows={3} />
-          </label>
-          {requiredConfirmText ? (
+            {/* Inputs */}
             <label className="admin-danger-field">
-              <span>确认词：输入 <code>{requiredConfirmText}</code></span>
-              <input value={typed} onChange={(event) => setTyped(event.target.value)} placeholder={requiredConfirmText} />
+              <span>审计原因{reasonRequired ? '（必填）' : ''}</span>
+              <textarea
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                placeholder="说明本次变更原因"
+                rows={2}
+              />
             </label>
-          ) : null}
-          {error ? <p className="admin-danger-error">{error}</p> : null}
+            {requiredConfirmText ? (
+              <label className="admin-danger-field">
+                <span>
+                  确认词：输入 <code>{requiredConfirmText}</code>
+                </span>
+                <input
+                  value={typed}
+                  onChange={(event) => setTyped(event.target.value)}
+                  placeholder={requiredConfirmText}
+                />
+              </label>
+            ) : null}
+            {error ? <p className="admin-danger-error">{error}</p> : null}
+          </div>
 
           <div className="admin-danger-actions">
             <AlertDialog.Cancel asChild>
               <AdminButton variant="secondary" disabled={loading}>取消</AdminButton>
             </AlertDialog.Cancel>
-            <AdminButton variant="danger" loading={loading} disabled={!canSubmit} onClick={() => void submit()}>{actionLabel}</AdminButton>
+            <AdminButton variant="danger" loading={loading} disabled={!canSubmit} onClick={() => void submit()}>
+              {actionLabel}
+            </AdminButton>
           </div>
         </AlertDialog.Content>
       </AlertDialog.Portal>

@@ -878,6 +878,61 @@ export class OneceoApiConnector {
     });
   }
 
+  async requestBinary(
+    path: string,
+    options?: { headers?: Record<string, string>; timeoutMs?: number; retries?: number }
+  ): Promise<{ body: Buffer; contentType: string; contentLength?: string }> {
+    const timeoutMs = options?.timeoutMs ?? this.timeoutMs;
+    const retries = options?.retries ?? this.retries;
+    const maxAttempts = Math.max(1, retries + 1);
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const response = await fetchWithTimeout(
+          `${this.baseUrl}${path}`,
+          {
+            method: 'GET',
+            headers: {
+              'x-oneceo-internal-token': config.oneceoInternalToken,
+              ...(options?.headers || {}),
+            },
+          },
+          timeoutMs
+        );
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => ({}))) as OneceoEnvelope<unknown>;
+          const message =
+            typeof payload.error === 'string'
+              ? payload.error
+              : payload.error?.message || payload.message || `请求失败 (${response.status})`;
+          throw new AppError(response.status, message, payload);
+        }
+        return {
+          body: Buffer.from(await response.arrayBuffer()),
+          contentType: response.headers.get('content-type') || 'application/octet-stream',
+          contentLength: response.headers.get('content-length') || undefined,
+        };
+      } catch (error) {
+        lastError = error;
+        if (attempt >= maxAttempts || !shouldRetryError(error)) {
+          break;
+        }
+        await sleep(300);
+      }
+    }
+
+    if (lastError instanceof AppError) {
+      throw lastError;
+    }
+    if (lastError && typeof lastError === 'object' && 'name' in lastError && (lastError as any).name === 'AbortError') {
+      throw new AppError(504, '连接 oneceo api 超时');
+    }
+    throw new AppError(502, '无法连接 oneceo api', {
+      cause: lastError instanceof Error ? lastError.message : lastError,
+    });
+  }
+
   health() {
     return this.request<{ status: string; timestamp: string; version?: string }>('/health');
   }
@@ -1144,6 +1199,16 @@ export class OneceoApiConnector {
 
   getTaskCreationDebug(sessionId: string) {
     return this.request<TaskDebugInfo>(`/api/internal/task-creation/admin/sessions/${encodeURIComponent(sessionId)}/debug`);
+  }
+
+  getTaskCreationBrowserActionScreenshot(input: {
+    sessionId: string;
+    runId: string;
+    toolCallId: string;
+  }) {
+    return this.requestBinary(
+      `/api/internal/task-creation/admin/sessions/${encodeURIComponent(input.sessionId)}/runs/${encodeURIComponent(input.runId)}/tool-calls/${encodeURIComponent(input.toolCallId)}/browser-screenshot.png`
+    );
   }
 
   startTaskCreationRuntime(sessionId: string) {

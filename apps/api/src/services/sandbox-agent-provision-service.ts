@@ -493,10 +493,12 @@ function buildSandboxEnv(executor: ProvisionExecutor = 'opencode'): Record<strin
     env.DISPLAY = display;
   }
   env.PLAYWRIGHT_HEADLESS = 'false';
-  const browsersPath = (process.env.PLAYWRIGHT_BROWSERS_PATH || '').trim();
-  if (browsersPath) {
-    env.PLAYWRIGHT_BROWSERS_PATH = browsersPath;
-  }
+  env.PLAYWRIGHT_BROWSERS_PATH = (process.env.PLAYWRIGHT_BROWSERS_PATH || '').trim() || '/opt/ms-playwright';
+  env.ONECEO_PLAYWRIGHT_CDP_URL = (process.env.ONECEO_PLAYWRIGHT_CDP_URL || '').trim() || 'http://127.0.0.1:9222';
+  env.NODE_PATH = [
+    (process.env.NODE_PATH || '').trim(),
+    '/usr/local/lib/node_modules',
+  ].filter(Boolean).join(':');
   env.XDG_RUNTIME_DIR = '/tmp';
   return env;
 }

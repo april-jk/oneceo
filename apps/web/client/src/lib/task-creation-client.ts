@@ -227,6 +227,12 @@ export type TaskCreationWebsitePreviewSnapshot = {
   capturedAt?: string;
   reasonCode?: string;
   message?: string;
+  visualCheck?: {
+    status: "passed" | "failed";
+    reasonCode?: string;
+    message?: string;
+    diagnostics?: Record<string, unknown>;
+  };
   source?: {
     sandboxId?: string;
     port?: number;
@@ -1846,6 +1852,17 @@ export function getTaskCreationPreviewSnapshotUrl(sessionId: string, runId: stri
   const safeSessionId = encodeURIComponent(sessionId);
   const safeRunId = encodeURIComponent(runId);
   return `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/preview-snapshots/${safeRunId}/website.png`;
+}
+
+export function getTaskCreationBrowserActionScreenshotUrl(
+  sessionId: string,
+  runId: string,
+  toolCallId: string,
+): string {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const safeRunId = encodeURIComponent(runId);
+  const safeToolCallId = encodeURIComponent(toolCallId);
+  return `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/runs/${safeRunId}/tool-calls/${safeToolCallId}/browser-screenshot.png`;
 }
 
 export async function listTaskCreationDeliverables(

@@ -9282,6 +9282,19 @@ function extractManagedPreviewSnapshot(
     capturedAt: asText(raw.capturedAt) || undefined,
     reasonCode: asText(raw.reasonCode) || undefined,
     message: asText(raw.message) || undefined,
+    visualCheck: (() => {
+      const visualCheck = toRecord(raw.visualCheck);
+      const visualStatus = asText(visualCheck.status);
+      if (visualStatus !== "passed" && visualStatus !== "failed") {
+        return undefined;
+      }
+      return {
+        status: visualStatus as "passed" | "failed",
+        reasonCode: asText(visualCheck.reasonCode) || undefined,
+        message: asText(visualCheck.message) || undefined,
+        diagnostics: toRecord(visualCheck.diagnostics),
+      };
+    })(),
     source: {
       sandboxId: asText(source.sandboxId) || undefined,
       port: Number.isFinite(portValue) ? portValue : undefined,
@@ -9537,7 +9550,57 @@ function collectManagedReplayArtifactPaths(
   return Array.from(paths);
 }
 
-function buildManagedReplayData(messages: AgentMessage[]) {
+function readManagedBrowserScreenshot(metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const raw = toRecord(metadata.browserScreenshot);
+  const status = asText(raw.status);
+  if (
+    raw.type !== "browser_screenshot" ||
+    raw.kind !== "browser_action_screenshot" ||
+    !["captured", "capture_failed", "storage_failed"].includes(status)
+  ) {
+    return null;
+  }
+  const source = toRecord(raw.source);
+  const visualCheck = toRecord(raw.visualCheck);
+  const visualStatus = asText(visualCheck.status);
+  const toNumber = (value: unknown) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+  };
+  return {
+    type: "browser_screenshot" as const,
+    kind: "browser_action_screenshot" as const,
+    status: status as "captured" | "capture_failed" | "storage_failed",
+    storageKey: asText(raw.storageKey) || undefined,
+    mimeType: raw.mimeType === "image/png" ? "image/png" as const : undefined,
+    width: toNumber(raw.width),
+    height: toNumber(raw.height),
+    capturedAt: asText(raw.capturedAt) || undefined,
+    reasonCode: asText(raw.reasonCode) || undefined,
+    message: asText(raw.message) || undefined,
+    visualCheck:
+      visualStatus === "passed" || visualStatus === "failed"
+        ? {
+            status: visualStatus as "passed" | "failed",
+            reasonCode: asText(visualCheck.reasonCode) || undefined,
+            message: asText(visualCheck.message) || undefined,
+            diagnostics: toRecord(visualCheck.diagnostics),
+          }
+        : undefined,
+    source: {
+      sandboxId: asText(source.sandboxId) || undefined,
+      cdpPort: toNumber(source.cdpPort),
+      url: asText(source.url) || undefined,
+      title: asText(source.title) || undefined,
+      toolName: asText(source.toolName) || undefined,
+      action: asText(source.action) || undefined,
+      description: asText(source.description) || undefined,
+    },
+  };
+}
+
+export function buildManagedReplayData(messages: AgentMessage[]) {
   const actionsByRun = new Map<string, AltusReplayAction[]>();
   const filesByRun = new Map<string, AltusReplayFile[]>();
   const diffItemsByRun = new Map<string, PreviewDiffItem[]>();
@@ -9717,6 +9780,7 @@ function buildManagedReplayData(messages: AgentMessage[]) {
         internalDetail:
           formatManagedToolInternalDetail(toolName, metadata) || undefined,
         artifactPaths: collectManagedReplayArtifactPaths(toolName, metadata),
+        browserScreenshot: readManagedBrowserScreenshot(metadata),
       });
     } else {
       const action = actions[stepIndex];
@@ -9735,6 +9799,7 @@ function buildManagedReplayData(messages: AgentMessage[]) {
         internalDetail:
           formatManagedToolInternalDetail(toolName, metadata) || undefined,
         artifactPaths: collectManagedReplayArtifactPaths(toolName, metadata),
+        browserScreenshot: readManagedBrowserScreenshot(metadata) || action.browserScreenshot,
       };
     }
 
@@ -9859,7 +9924,7 @@ function buildManagedBrowserInteractPurpose(args: Record<string, unknown>) {
   if (action === "wait_for_timeout") {
     return "等待页面稳定";
   }
-  return target ? `执行 Playwright 操作：${target}` : "执行 Playwright 浏览器操作";
+  return target ? `执行 Playwright 操作：${target}` : "执行 Playwright 视觉检测";
 }
 
 export function getManagedToolPurposeSummary(
@@ -9922,6 +9987,11 @@ export function getManagedToolPurposeSummary(
     return buildManagedBrowserInteractPurpose(args);
   }
 
+  if (toolName === "debug_open_page") {
+    const url = asText(args.url) || asText(output.targetUrl) || asText(output.url);
+    return url ? `视觉检测：打开 ${url}` : "视觉检测：打开页面";
+  }
+
   if (toolName === "ask_user") {
     return "请求补充必要信息";
   }
@@ -9972,9 +10042,9 @@ function getManagedToolDisplayName(toolName: string) {
     case "ask_user":
       return i18n.t("homeWorkspace.requestClarification");
     case "debug_open_page":
-      return i18n.t("replayDrawer.tabs.debug");
+      return "视觉检测：打开页面";
     case "browser_interact":
-      return "浏览器操作";
+      return "视觉检测步骤";
     case "deploy_application":
       return i18n.t("homeWorkspace.deployApplication");
     case "redeploy_application":

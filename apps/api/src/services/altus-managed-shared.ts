@@ -380,7 +380,7 @@ export function buildManagedToolDefinitions() {
       function: {
         name: 'debug_open_page',
         description:
-          'Start website debugging behavior by opening a target http/https URL, or a file:// URL inside the workspace, in the sandbox Chromium debug session shown by n.eko. Before calling this for product/app QA, write or update a workspace test document such as docs/test-plan.md, then use this tool as the testing-phase browser entry. The tool verifies the target is reachable/readable and the CDP tab is ready before reporting success. After this, use Playwright/playwright-mcp against the same CDP 9222 browser for functional testing, record defects in the test document, repair, and retest before final delivery. Use this when users ask to 启动网站调试功能 or open a page in the debug view.',
+          'Start website debugging behavior by opening a target http/https URL, or a file:// URL inside the workspace, in the sandbox Chromium debug session shown by n.eko. Before calling this for product/app QA, write or update a workspace test document such as docs/test-plan.md, then use this tool as the testing-phase browser entry. The tool verifies the target is reachable/readable and the CDP tab is ready before reporting success, then the platform captures the Action screenshot. After this, use browser_interact for every Playwright/n.eko visual check step; do not write custom screenshot scripts, do not install or search for Playwright, and do not launch a separate browser. Use this when users ask to 启动网站调试功能 or open a page in the debug view.',
         parameters: objectSchema(
           {
             url: {
@@ -402,7 +402,7 @@ export function buildManagedToolDefinitions() {
       function: {
         name: 'browser_interact',
         description:
-          'Perform one explicit Playwright-backed browser testing action in the same n.eko Chromium debug session after debug_open_page succeeds. Supported actions are direct projections of Playwright APIs: locator.click, getByText(...).click, mouse.click, locator.fill, keyboard.type, keyboard.press, mouse.wheel, locator.waitFor, getByText(...).waitFor, page.waitForLoadState, and page.waitForTimeout. Each call should describe exactly what user-visible action is being performed.',
+          'Perform one explicit Playwright-backed browser testing action in the same n.eko Chromium debug session after debug_open_page succeeds. The platform connects to the default CDP browser at http://127.0.0.1:9222, uses the sandbox Playwright defaults, and captures an Action screenshot after each successful action. Supported actions are direct projections of Playwright APIs: locator.click, getByText(...).click, mouse.click, locator.fill, keyboard.type, keyboard.press, mouse.wheel, locator.waitFor, getByText(...).waitFor, page.waitForLoadState, and page.waitForTimeout. Each call should describe exactly what user-visible action is being performed.',
         parameters: objectSchema(
           {
             action: {

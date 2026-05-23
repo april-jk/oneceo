@@ -1690,6 +1690,564 @@ test('execute emits deliverables_ready before final assistant message when compl
   assert.equal(assistantTimeline.input.content, '已完成最终文档交付。\n\n验证:\n\n- 已输出 final.docx');
 });
 
+test('execute blocks website completion until visual detection screenshot evidence exists', async () => {
+  const state = createState(
+    'run-coordinator-visual-detection-guard',
+    'session-coordinator-visual-detection-guard',
+    '帮我做一个可交付的网站首页'
+  );
+  state.input.taskIntentProfile = {
+    mode: 'deployable_web_app',
+    reason: 'latest_web_artifact_request',
+    recentUserMessages: ['帮我做一个可交付的网站首页'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: true,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: false,
+    needsClarification: false,
+    clarificationQuestion: '',
+    clarificationType: 'none',
+    todoRequired: false,
+    todoReason: 'none',
+  };
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-visual-detection-guard',
+      workspaceRoot: '/workspace/session-coordinator-visual-detection-guard',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => undefined),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return { sequence: eventCalls.length, payload };
+    }),
+  };
+  const lifecycleService = {
+    markRunning: mock.fn(async () => lifecycleCalls.push('running')),
+    markWaitingUser: mock.fn(async () => lifecycleCalls.push('waiting_user')),
+    markCompleted: mock.fn(async () => lifecycleCalls.push('completed')),
+    markFailed: mock.fn(async () => lifecycleCalls.push('failed')),
+    markStopped: mock.fn(async () => lifecycleCalls.push('stopped')),
+    syncLoopSnapshot: mock.fn(async () => undefined),
+  };
+  const websitePreviewSnapshotService = {
+    captureManagedRunPreview: mock.fn(async () => null),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-complete-before-visual-detection',
+                    type: 'function',
+                    function: {
+                      name: 'complete_task',
+                      arguments: JSON.stringify({
+                        summary: '网站已完成。',
+                        verification: ['代码已写入'],
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (fetchCount === 2) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '正在进行视觉检测',
+                tool_calls: [
+                  {
+                    id: 'tool-debug-open-page-visual-detection',
+                    type: 'function',
+                    function: {
+                      name: 'debug_open_page',
+                      arguments: JSON.stringify({
+                        url: 'http://127.0.0.1:3000/',
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-complete-after-visual-detection',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '网站已完成，并完成视觉检测。',
+                      verification: ['已打开页面并捕获浏览器截图'],
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const browserScreenshot = {
+    type: 'browser_screenshot',
+    kind: 'browser_action_screenshot',
+    status: 'captured',
+    storageKey: 'sessions/session-coordinator-visual-detection-guard/browser-actions/step.png',
+    mimeType: 'image/png',
+    width: 1280,
+    height: 720,
+    capturedAt: '2026-05-22T14:20:00.000Z',
+    source: {
+      sandboxId: 'sandbox-visual-detection-guard',
+      cdpPort: 9222,
+      url: 'http://127.0.0.1:3000/',
+      title: '视觉检测页面',
+      toolName: 'debug_open_page',
+      action: 'open_page',
+      description: '打开首页',
+    },
+    visualCheck: {
+      status: 'passed',
+      diagnostics: {
+        visibleTextLength: 128,
+        visibleElementCount: 24,
+        uniqueColorCount: 32,
+      },
+    },
+  };
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'debug_open_page') {
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({
+          targetUrl: 'http://127.0.0.1:3000/',
+          browserScreenshot,
+        }),
+        evidence: [browserScreenshot],
+      };
+    }
+    return {
+      type: 'complete' as const,
+      summary: fetchCount === 1 ? '网站已完成。' : '网站已完成，并完成视觉检测。',
+      verification:
+        fetchCount === 1 ? ['代码已写入'] : ['已打开页面并捕获浏览器截图'],
+    };
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+    undefined as any,
+    undefined as any,
+    websitePreviewSnapshotService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(fetchCount, 3);
+  assert.equal(executeMock.mock.callCount(), 3);
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+  assert.equal(state.status, 'completed');
+
+  const blockedComplete = eventCalls.find(
+    (entry) => entry.eventType === 'tool_call_failed' && entry.payload.toolName === 'complete_task'
+  );
+  assert.ok(blockedComplete);
+  assert.equal(
+    blockedComplete.payload.error,
+    '交付前视觉检测还没完成，Altus 将继续通过 n.eko 和 Playwright 补齐截图证据。'
+  );
+  assert.equal((blockedComplete.payload.toolResultEnvelope as any)?.errorCode, 'visual_detection_completion_blocked');
+
+  const visualDetectionStep = eventCalls.find(
+    (entry) => entry.eventType === 'tool_call_completed' && entry.payload.toolName === 'debug_open_page'
+  );
+  assert.ok(visualDetectionStep);
+  assert.equal(visualDetectionStep.payload.content, '视觉检测页面已打开');
+  assert.equal((visualDetectionStep.payload.browserScreenshot as any)?.status, 'captured');
+  assert.equal((visualDetectionStep.payload.browserScreenshot as any)?.storageKey, browserScreenshot.storageKey);
+
+  const completedToolNames = eventCalls
+    .filter((entry) => entry.eventType === 'tool_call_completed')
+    .map((entry) => entry.payload.toolName);
+  assert.deepEqual(completedToolNames, ['debug_open_page', 'complete_task']);
+});
+
+test('execute keeps visual detection blocked when browser action screenshot capture fails', async () => {
+  const previousMaxRounds = process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS;
+  process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS = '3';
+  const state = createState(
+    'run-coordinator-visual-detection-capture-failed',
+    'session-coordinator-visual-detection-capture-failed',
+    '帮我做一个可交付的网站首页'
+  );
+  state.input.taskIntentProfile = {
+    mode: 'deployable_web_app',
+    reason: 'latest_web_artifact_request',
+    recentUserMessages: ['帮我做一个可交付的网站首页'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: true,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: false,
+    needsClarification: false,
+    clarificationQuestion: '',
+    clarificationType: 'none',
+    todoRequired: false,
+    todoReason: 'none',
+  };
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-visual-detection-capture-failed',
+      workspaceRoot: '/workspace/session-coordinator-visual-detection-capture-failed',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => undefined),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return { sequence: eventCalls.length, payload };
+    }),
+  };
+  const lifecycleService = {
+    markRunning: mock.fn(async () => lifecycleCalls.push('running')),
+    markWaitingUser: mock.fn(async () => lifecycleCalls.push('waiting_user')),
+    markCompleted: mock.fn(async () => lifecycleCalls.push('completed')),
+    markFailed: mock.fn(async () => lifecycleCalls.push('failed')),
+    markStopped: mock.fn(async () => lifecycleCalls.push('stopped')),
+    syncLoopSnapshot: mock.fn(async () => undefined),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '正在进行视觉检测', tool_calls: [{
+          id: 'tool-debug-open-page-capture-failed',
+          type: 'function',
+          function: {
+            name: 'debug_open_page',
+            arguments: JSON.stringify({ url: 'http://127.0.0.1:3000/' }),
+          },
+        }] } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: '', tool_calls: [{
+        id: 'tool-complete-after-capture-failed',
+        type: 'function',
+        function: {
+          name: 'complete_task',
+          arguments: JSON.stringify({
+            summary: '网站已完成。',
+            verification: ['已打开页面'],
+          }),
+        },
+      }] } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+
+  const browserScreenshot = {
+    type: 'browser_screenshot',
+    kind: 'browser_action_screenshot',
+    status: 'capture_failed',
+    reasonCode: 'browser_screenshot_capture_failed',
+    message: 'playwright_module_not_found: Cannot find module playwright',
+    source: {
+      sandboxId: 'sandbox-visual-detection-capture-failed',
+      cdpPort: 9222,
+      toolName: 'debug_open_page',
+      action: 'open_page',
+      description: '打开首页',
+    },
+  };
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'debug_open_page') {
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({ browserScreenshot }),
+        evidence: [browserScreenshot],
+      };
+    }
+    return {
+      type: 'complete' as const,
+      summary: '网站已完成。',
+      verification: ['已打开页面'],
+    };
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+    undefined as any,
+    undefined as any,
+    { captureManagedRunPreview: mock.fn(async () => null) } as any
+  );
+
+  try {
+    await coordinator.execute(state, new AbortController());
+
+    assert.equal(fetchCount, 3);
+    assert.equal(executeMock.mock.callCount(), 3);
+    assert.deepEqual(lifecycleCalls, ['running', 'failed']);
+    assert.equal(state.status, 'failed');
+    const blockedComplete = eventCalls.find(
+      (entry) => entry.eventType === 'tool_call_failed' && entry.payload.toolName === 'complete_task'
+    );
+    assert.ok(blockedComplete);
+    assert.match(
+      (blockedComplete.payload.toolResultEnvelope as any)?.errorMessage,
+      /captured_count=0/
+    );
+    assert.match(
+      (blockedComplete.payload.toolResultEnvelope as any)?.errorMessage,
+      /last_tool=debug_open_page/
+    );
+    assert.match(
+      (blockedComplete.payload.toolResultEnvelope as any)?.errorMessage,
+      /last_reason_code=browser_screenshot_capture_failed/
+    );
+    assert.match(
+      (blockedComplete.payload.toolResultEnvelope as any)?.errorMessage,
+      /last_message=playwright_module_not_found/
+    );
+  } finally {
+    if (previousMaxRounds === undefined) {
+      delete process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS;
+    } else {
+      process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS = previousMaxRounds;
+    }
+  }
+});
+
+test('execute blocks website completion when screenshot is captured but visual check fails', async () => {
+  const previousMaxRounds = process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS;
+  process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS = '3';
+  const state = createState(
+    'run-coordinator-visual-detection-failed',
+    'session-coordinator-visual-detection-failed',
+    '帮我做一个可交付的网站首页'
+  );
+  state.input.taskIntentProfile = {
+    mode: 'deployable_web_app',
+    reason: 'latest_web_artifact_request',
+    recentUserMessages: ['帮我做一个可交付的网站首页'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: true,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: false,
+    needsClarification: false,
+    clarificationQuestion: '',
+    clarificationType: 'none',
+    todoRequired: false,
+    todoReason: 'none',
+  };
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-visual-detection-failed',
+      workspaceRoot: '/workspace/session-coordinator-visual-detection-failed',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => undefined),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return { sequence: eventCalls.length, payload };
+    }),
+  };
+  const lifecycleService = {
+    markRunning: mock.fn(async () => lifecycleCalls.push('running')),
+    markWaitingUser: mock.fn(async () => lifecycleCalls.push('waiting_user')),
+    markCompleted: mock.fn(async () => lifecycleCalls.push('completed')),
+    markFailed: mock.fn(async () => lifecycleCalls.push('failed')),
+    markStopped: mock.fn(async () => lifecycleCalls.push('stopped')),
+    syncLoopSnapshot: mock.fn(async () => undefined),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '正在进行视觉检测', tool_calls: [{
+          id: 'tool-debug-open-page-visual-detection-failed',
+          type: 'function',
+          function: {
+            name: 'debug_open_page',
+            arguments: JSON.stringify({ url: 'http://127.0.0.1:3000/' }),
+          },
+        }] } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: '', tool_calls: [{
+        id: 'tool-complete-after-failed-visual-check',
+        type: 'function',
+        function: {
+          name: 'complete_task',
+          arguments: JSON.stringify({
+            summary: '网站已完成。',
+            verification: ['已截图'],
+          }),
+        },
+      }] } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+
+  const browserScreenshot = {
+    type: 'browser_screenshot',
+    kind: 'browser_action_screenshot',
+    status: 'captured',
+    storageKey: 'sessions/session-coordinator-visual-detection-failed/browser-actions/blank.png',
+    mimeType: 'image/png',
+    width: 1280,
+    height: 720,
+    capturedAt: '2026-05-22T14:20:00.000Z',
+    source: {
+      sandboxId: 'sandbox-visual-detection-failed',
+      cdpPort: 9222,
+      url: 'http://127.0.0.1:3000/',
+      title: 'Blank',
+      toolName: 'debug_open_page',
+      action: 'open_page',
+      description: '打开首页',
+    },
+    visualCheck: {
+      status: 'failed',
+      reasonCode: 'screenshot_low_entropy',
+      message: '截图几乎是单一颜色，疑似白屏或纯色空页面。',
+      diagnostics: {
+        visibleTextLength: 0,
+        uniqueColorCount: 1,
+        dominantColorRatio: 1,
+      },
+    },
+  };
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'debug_open_page') {
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({ browserScreenshot }),
+        evidence: [browserScreenshot],
+      };
+    }
+    return {
+      type: 'complete' as const,
+      summary: '网站已完成。',
+      verification: ['已截图'],
+    };
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+    undefined as any,
+    undefined as any,
+    { captureManagedRunPreview: mock.fn(async () => null) } as any
+  );
+
+  try {
+    await coordinator.execute(state, new AbortController());
+
+    assert.equal(fetchCount, 3);
+    assert.equal(executeMock.mock.callCount(), 3);
+    assert.deepEqual(lifecycleCalls, ['running', 'failed']);
+    assert.equal(state.status, 'failed');
+    assert.match(state.stopReason || '', /managed_run_tool_round_limit_exceeded/);
+    const blockedComplete = eventCalls.find(
+      (entry) => entry.eventType === 'tool_call_failed' && entry.payload.toolName === 'complete_task'
+    );
+    assert.ok(blockedComplete);
+    assert.equal(
+      blockedComplete.payload.error,
+      '页面已打开但没有通过视觉检测，Altus 将继续修复白屏、空内容或错误页问题后重新截图。'
+    );
+    assert.match(
+      (blockedComplete.payload.toolResultEnvelope as any)?.errorMessage,
+      /passed_count=0/
+    );
+    assert.match(
+      (blockedComplete.payload.toolResultEnvelope as any)?.errorMessage,
+      /last_reason_code=screenshot_low_entropy/
+    );
+  } finally {
+    if (previousMaxRounds === undefined) {
+      delete process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS;
+    } else {
+      process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS = previousMaxRounds;
+    }
+  }
+});
+
 test('execute injects skill catalog prompt before active skill body', async () => {
   const state = new AltusRunState({
     runId: 'run-coordinator-skills',

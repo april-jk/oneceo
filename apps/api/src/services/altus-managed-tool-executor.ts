@@ -199,6 +199,13 @@ export class AltusManagedToolExecutor {
           arguments: eventArgs,
           toolCallId,
           toolResultEnvelope,
+          ...(Array.isArray(result.evidence) && result.evidence.length > 0
+            ? {
+                evidence: result.evidence,
+                browserScreenshot:
+                  result.evidence.find((item: any) => item?.type === 'browser_screenshot') || undefined,
+              }
+            : {}),
           ...(disposition.eventPayload || {}),
         }
       );

@@ -1627,11 +1627,21 @@ test('debug_open_page ensures debug and opens URL via CDP', async () => {
         cdpPort: 9222,
       }) as any
   );
-  mock.method(e2bConnector, 'runCommand', async () => ({
-    stdout: '{"id":"page-1","url":"http://127.0.0.1:3000/folder1/"}\n__OPENED_BY__=PUT\n__ONECEO_DEBUG_TARGET_TAB_READY__=Folder 1\n__ONECEO_DEBUG_RESULT__=ok',
-    stderr: '',
-    exitCode: 0,
-  }) as any);
+  mock.method(e2bConnector, 'runCommand', async (_sandboxId, command) => {
+    if (String(command).includes('ONECEO_BROWSER_SCREENSHOT=')) {
+      return {
+        stdout: '{"ok":true,"url":"http://127.0.0.1:3000/folder1/","title":"Folder 1","outputPath":"/tmp/shot.png"}',
+        stderr: '',
+        exitCode: 0,
+      } as any;
+    }
+    return {
+      stdout: '{"id":"page-1","url":"http://127.0.0.1:3000/folder1/"}\n__OPENED_BY__=PUT\n__ONECEO_DEBUG_TARGET_TAB_READY__=Folder 1\n__ONECEO_DEBUG_RESULT__=ok',
+      stderr: '',
+      exitCode: 0,
+    } as any;
+  });
+  mock.method(e2bConnector, 'readFile', async () => Buffer.from('png-bytes'));
 
   const touchSandboxMock = mock.fn(async () => undefined);
   const markSandboxDirtyMock = mock.fn(async () => undefined);
@@ -1653,6 +1663,9 @@ test('debug_open_page ensures debug and opens URL via CDP', async () => {
       ensureNekoDebug: ensureDebugMock as any,
       issueIceServersForUser: mock.fn(async () => null) as any,
     },
+    {
+      uploadToR2: mock.fn(async () => undefined) as any,
+    }
   );
 
   const result = await runtime.execute('debug_open_page', {
@@ -1666,9 +1679,328 @@ test('debug_open_page ensures debug and opens URL via CDP', async () => {
   assert.equal(payload.ready, true);
   assert.equal(payload.status, 'running');
   assert.equal(payload.sandboxId, 'sandbox-1');
+  assert.equal(payload.browserScreenshot.status, 'captured');
+  assert.equal(payload.browserScreenshot.source.url, 'http://127.0.0.1:3000/folder1/');
   assert.equal(markSandboxDirtyMock.mock.callCount(), 1);
   assert.deepEqual(markSandboxDirtyMock.mock.calls[0]?.arguments, ['sandbox-1', 'managed_debug_open_page']);
   assert.equal(ensureDebugMock.mock.callCount(), 1);
+});
+
+test('debug_open_page includes visual health diagnostics with screenshot evidence', async () => {
+  const ensureDebugMock = mock.fn(
+    async () =>
+      ({
+        ready: true,
+        url: 'https://8081-sandbox-visual.e2b.app',
+        status: 'running',
+        updatedAt: new Date().toISOString(),
+        sandboxId: 'sandbox-visual',
+        port: 8081,
+        display: ':0',
+        cdpPort: 9222,
+      }) as any
+  );
+  mock.method(e2bConnector, 'runCommand', async (_sandboxId, command) => {
+    if (String(command).includes('ONECEO_BROWSER_SCREENSHOT=')) {
+      return {
+        stdout: JSON.stringify({
+          ok: true,
+          url: 'http://127.0.0.1:3000/',
+          title: 'Blank',
+          outputPath: '/tmp/shot.png',
+          visualCheck: {
+            status: 'failed',
+            reasonCode: 'screenshot_low_entropy',
+            message: '截图几乎是单一颜色，疑似白屏或纯色空页面。',
+            diagnostics: {
+              visibleTextLength: 0,
+              uniqueColorCount: 1,
+              dominantColorRatio: 1,
+            },
+          },
+        }),
+        stderr: '',
+        exitCode: 0,
+      } as any;
+    }
+    return {
+      stdout: '{"id":"page-1","url":"http://127.0.0.1:3000/"}\n__ONECEO_DEBUG_TARGET_TAB_READY__=Blank\n__ONECEO_DEBUG_RESULT__=ok',
+      stderr: '',
+      exitCode: 0,
+    } as any;
+  });
+  mock.method(e2bConnector, 'readFile', async () => Buffer.from('png-bytes'));
+
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-visual',
+      userId: 'user-visual',
+      sandboxId: 'sandbox-visual',
+      workspaceRoot: '/workspace/session-visual',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: mock.fn(async () => undefined) as any,
+      markSandboxDirty: mock.fn(async () => undefined) as any,
+    },
+    {
+      ensureNekoDebug: ensureDebugMock as any,
+      issueIceServersForUser: mock.fn(async () => null) as any,
+    },
+    {
+      uploadToR2: mock.fn(async () => undefined) as any,
+    }
+  );
+
+  const result = await runtime.execute('debug_open_page', {
+    url: 'http://127.0.0.1:3000/',
+  });
+
+  assert.equal(result.type, 'result');
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.browserScreenshot.status, 'captured');
+  assert.equal(payload.browserScreenshot.visualCheck.status, 'failed');
+  assert.equal(payload.browserScreenshot.visualCheck.reasonCode, 'screenshot_low_entropy');
+  assert.equal(result.evidence?.[0]?.visualCheck?.status, 'failed');
+});
+
+test('debug_open_page reports OneCEO app runtime errors as failed visual checks', async () => {
+  const ensureDebugMock = mock.fn(
+    async () =>
+      ({
+        ready: true,
+        url: 'https://8081-sandbox-runtime-error.e2b.app',
+        status: 'running',
+        updatedAt: new Date().toISOString(),
+        sandboxId: 'sandbox-runtime-error',
+        port: 8081,
+        display: ':0',
+        cdpPort: 9222,
+      }) as any
+  );
+  mock.method(e2bConnector, 'runCommand', async (_sandboxId, command) => {
+    if (String(command).includes('ONECEO_BROWSER_SCREENSHOT=')) {
+      return {
+        stdout: JSON.stringify({
+          ok: true,
+          url: 'http://127.0.0.1:3000/',
+          title: 'Runtime Error',
+          outputPath: '/tmp/shot-runtime-error.png',
+          visualCheck: {
+            status: 'failed',
+            reasonCode: 'app_runtime_error',
+            message: '页面浏览器运行时报错：React is not defined',
+            diagnostics: {
+              oneCeoAppStatus: 'error',
+              oneCeoRootStatus: 'error',
+              oneCeoAppErrors: ['React is not defined'],
+              visibleTextLength: 46,
+              rootElementCount: 4,
+            },
+          },
+        }),
+        stderr: '',
+        exitCode: 0,
+      } as any;
+    }
+    return {
+      stdout: '{"id":"page-1","url":"http://127.0.0.1:3000/"}\n__ONECEO_DEBUG_TARGET_TAB_READY__=Runtime Error\n__ONECEO_DEBUG_RESULT__=ok',
+      stderr: '',
+      exitCode: 0,
+    } as any;
+  });
+  mock.method(e2bConnector, 'readFile', async () => Buffer.from('png-bytes'));
+
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-runtime-error',
+      userId: 'user-runtime-error',
+      sandboxId: 'sandbox-runtime-error',
+      workspaceRoot: '/workspace/session-runtime-error',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: mock.fn(async () => undefined) as any,
+      markSandboxDirty: mock.fn(async () => undefined) as any,
+    },
+    {
+      ensureNekoDebug: ensureDebugMock as any,
+      issueIceServersForUser: mock.fn(async () => null) as any,
+    },
+    {
+      uploadToR2: mock.fn(async () => undefined) as any,
+    }
+  );
+
+  const result = await runtime.execute('debug_open_page', {
+    url: 'http://127.0.0.1:3000/',
+  });
+
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.browserScreenshot.status, 'captured');
+  assert.equal(payload.browserScreenshot.visualCheck.status, 'failed');
+  assert.equal(payload.browserScreenshot.visualCheck.reasonCode, 'app_runtime_error');
+  assert.match(payload.browserScreenshot.visualCheck.message, /React is not defined/);
+});
+
+test('debug_open_page reports structured screenshot capture failure instead of opaque exit status', async () => {
+  const ensureDebugMock = mock.fn(
+    async () =>
+      ({
+        ready: true,
+        url: 'https://8081-sandbox-screenshot-fail.e2b.app',
+        status: 'running',
+        updatedAt: new Date().toISOString(),
+        sandboxId: 'sandbox-screenshot-fail',
+        port: 8081,
+        display: ':0',
+        cdpPort: 9222,
+      }) as any
+  );
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async (_sandboxId, command) => {
+    if (String(command).includes('ONECEO_BROWSER_SCREENSHOT=')) {
+      return {
+        stdout: `__ONECEO_BROWSER_SCREENSHOT_RESULT__=${JSON.stringify({
+          ok: false,
+          reasonCode: 'playwright_module_not_found',
+          message: "Cannot find module 'playwright'",
+          diagnostics: {
+            stage: 'require_playwright',
+            cdpEndpoint: 'http://127.0.0.1:9222',
+            nodePath: '/usr/local/lib/node_modules',
+            playwrightBrowsersPath: '/opt/ms-playwright',
+          },
+        })}`,
+        stderr: '',
+        exitCode: 0,
+      } as any;
+    }
+    return {
+      stdout: '{"id":"page-1","url":"http://127.0.0.1:3000/"}\n__ONECEO_DEBUG_TARGET_TAB_READY__=Home\n__ONECEO_DEBUG_RESULT__=ok',
+      stderr: '',
+      exitCode: 0,
+    } as any;
+  });
+
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-screenshot-fail',
+      userId: 'user-screenshot-fail',
+      sandboxId: 'sandbox-screenshot-fail',
+      workspaceRoot: '/workspace/session-screenshot-fail',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: mock.fn(async () => undefined) as any,
+      markSandboxDirty: mock.fn(async () => undefined) as any,
+    },
+    {
+      ensureNekoDebug: ensureDebugMock as any,
+      issueIceServersForUser: mock.fn(async () => null) as any,
+    },
+    {
+      uploadToR2: mock.fn(async () => undefined) as any,
+    }
+  );
+
+  const result = await runtime.execute('debug_open_page', {
+    url: 'http://127.0.0.1:3000/',
+  });
+
+  assert.equal(result.type, 'result');
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.browserScreenshot.status, 'capture_failed');
+  assert.match(payload.browserScreenshot.message, /playwright_module_not_found/);
+  assert.match(payload.browserScreenshot.message, /require_playwright/);
+  assert.doesNotMatch(payload.browserScreenshot.message, /^exit status 1$/);
+  assert.equal(result.evidence?.[0]?.status, 'capture_failed');
+  const screenshotCommand = String(runCommandMock.mock.calls.find((call) =>
+    String(call.arguments[1]).includes('ONECEO_BROWSER_SCREENSHOT=')
+  )?.arguments[1] || '');
+  assert.match(screenshotCommand, /PLAYWRIGHT_BROWSERS_PATH="\$\{PLAYWRIGHT_BROWSERS_PATH:-\/opt\/ms-playwright\}"/);
+  assert.match(screenshotCommand, /ONECEO_PLAYWRIGHT_CDP_URL/);
+  assert.match(screenshotCommand, /\/usr\/local\/lib\/node_modules/);
+  assert.match(screenshotCommand, /fullPage:\s*false/);
+  assert.match(screenshotCommand, /const timeout = 10000/);
+  assert.doesNotMatch(screenshotCommand, /fullPage:\s*true/);
+  assert.ok(screenshotCommand.includes(String.raw`/chrome-error:\/\//i`));
+  assert.ok(screenshotCommand.includes(String.raw`replace(/\s+/g`));
+  assert.doesNotMatch(screenshotCommand, /replace\(\/s\+\/g/);
+});
+
+test('debug_open_page preserves structured screenshot timeout reason', async () => {
+  const ensureDebugMock = mock.fn(
+    async () =>
+      ({
+        ready: true,
+        url: 'https://8081-sandbox-screenshot-timeout.e2b.app',
+        status: 'running',
+        updatedAt: new Date().toISOString(),
+        sandboxId: 'sandbox-screenshot-timeout',
+        port: 8081,
+        display: ':0',
+        cdpPort: 9222,
+      }) as any
+  );
+  mock.method(e2bConnector, 'runCommand', async (_sandboxId, command) => {
+    if (String(command).includes('ONECEO_BROWSER_SCREENSHOT=')) {
+      return {
+        stdout: `__ONECEO_BROWSER_SCREENSHOT_RESULT__=${JSON.stringify({
+          ok: false,
+          reasonCode: 'browser_screenshot_timeout',
+          message: 'page.screenshot timed out after 10000ms',
+          diagnostics: {
+            stage: 'capture_screenshot',
+            cdpEndpoint: 'http://127.0.0.1:9222',
+            nodePath: '/usr/local/lib/node_modules',
+            playwrightPath: '/usr/local/lib/node_modules/playwright/index.js',
+          },
+        })}`,
+        stderr: '',
+        exitCode: 0,
+      } as any;
+    }
+    return {
+      stdout: '{"id":"page-1","url":"http://127.0.0.1:3000/"}\n__ONECEO_DEBUG_TARGET_TAB_READY__=Home\n__ONECEO_DEBUG_RESULT__=ok',
+      stderr: '',
+      exitCode: 0,
+    } as any;
+  });
+
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-screenshot-timeout',
+      userId: 'user-screenshot-timeout',
+      sandboxId: 'sandbox-screenshot-timeout',
+      workspaceRoot: '/workspace/session-screenshot-timeout',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: mock.fn(async () => undefined) as any,
+      markSandboxDirty: mock.fn(async () => undefined) as any,
+    },
+    {
+      ensureNekoDebug: ensureDebugMock as any,
+      issueIceServersForUser: mock.fn(async () => null) as any,
+    },
+    {
+      uploadToR2: mock.fn(async () => undefined) as any,
+    }
+  );
+
+  const result = await runtime.execute('debug_open_page', {
+    url: 'http://127.0.0.1:3000/',
+  });
+
+  assert.equal(result.type, 'result');
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.browserScreenshot.status, 'capture_failed');
+  assert.equal(payload.browserScreenshot.reasonCode, 'browser_screenshot_timeout');
+  assert.match(payload.browserScreenshot.message, /page\.screenshot timed out/);
 });
 
 test('debug_open_page normalizes local target URL without scheme', async () => {
@@ -1685,11 +2017,21 @@ test('debug_open_page normalizes local target URL without scheme', async () => {
         cdpPort: 9222,
       }) as any
   );
-  const runCommandMock = mock.method(e2bConnector, 'runCommand', async () => ({
-    stdout: '{"id":"page-1","url":"http://127.0.0.1:8080/"}\n__ONECEO_DEBUG_TARGET_TAB_READY__=Local\n__ONECEO_DEBUG_RESULT__=ok',
-    stderr: '',
-    exitCode: 0,
-  }) as any);
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async (_sandboxId, command) => {
+    if (String(command).includes('ONECEO_BROWSER_SCREENSHOT=')) {
+      return {
+        stdout: '{"ok":true,"url":"http://127.0.0.1:8080/","title":"Local","outputPath":"/tmp/shot.png"}',
+        stderr: '',
+        exitCode: 0,
+      } as any;
+    }
+    return {
+      stdout: '{"id":"page-1","url":"http://127.0.0.1:8080/"}\n__ONECEO_DEBUG_TARGET_TAB_READY__=Local\n__ONECEO_DEBUG_RESULT__=ok',
+      stderr: '',
+      exitCode: 0,
+    } as any;
+  });
+  mock.method(e2bConnector, 'readFile', async () => Buffer.from('png-bytes'));
   const runtime = new AltusManagedToolRuntime(
     {
       sessionId: 'session-1',
@@ -1707,6 +2049,9 @@ test('debug_open_page normalizes local target URL without scheme', async () => {
       ensureNekoDebug: ensureDebugMock as any,
       issueIceServersForUser: mock.fn(async () => null) as any,
     },
+    {
+      uploadToR2: mock.fn(async () => undefined) as any,
+    }
   );
 
   const result = await runtime.execute('debug_open_page', {
@@ -1716,7 +2061,7 @@ test('debug_open_page normalizes local target URL without scheme', async () => {
   assert.equal(result.type, 'result');
   const payload = JSON.parse(result.content);
   assert.equal(payload.targetUrl, 'http://127.0.0.1:8080/');
-  assert.equal(runCommandMock.mock.callCount(), 1);
+  assert.equal(runCommandMock.mock.callCount(), 3);
 });
 
 test('debug_open_page opens workspace file targets in debug browser', async () => {
@@ -1733,11 +2078,21 @@ test('debug_open_page opens workspace file targets in debug browser', async () =
         cdpPort: 9222,
       }) as any
   );
-  const runCommandMock = mock.method(e2bConnector, 'runCommand', async () => ({
-    stdout: '__ONECEO_DEBUG_TARGET_FILE_READY__=/workspace/session-1/index.html\n{\"id\":\"page-1\",\"url\":\"file:///workspace/session-1/index.html\"}\n__ONECEO_DEBUG_TARGET_TAB_READY__=2048\n__ONECEO_DEBUG_RESULT__=ok',
-    stderr: '',
-    exitCode: 0,
-  }) as any);
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async (_sandboxId, command) => {
+    if (String(command).includes('ONECEO_BROWSER_SCREENSHOT=')) {
+      return {
+        stdout: '{"ok":true,"url":"file:///workspace/session-1/index.html","title":"2048","outputPath":"/tmp/shot.png"}',
+        stderr: '',
+        exitCode: 0,
+      } as any;
+    }
+    return {
+      stdout: '__ONECEO_DEBUG_TARGET_FILE_READY__=/workspace/session-1/index.html\n{\"id\":\"page-1\",\"url\":\"file:///workspace/session-1/index.html\"}\n__ONECEO_DEBUG_TARGET_TAB_READY__=2048\n__ONECEO_DEBUG_RESULT__=ok',
+      stderr: '',
+      exitCode: 0,
+    } as any;
+  });
+  mock.method(e2bConnector, 'readFile', async () => Buffer.from('png-bytes'));
   const runtime = new AltusManagedToolRuntime(
     {
       sessionId: 'session-1',
@@ -1755,6 +2110,9 @@ test('debug_open_page opens workspace file targets in debug browser', async () =
       ensureNekoDebug: ensureDebugMock as any,
       issueIceServersForUser: mock.fn(async () => null) as any,
     },
+    {
+      uploadToR2: mock.fn(async () => undefined) as any,
+    }
   );
 
   const result = await runtime.execute('debug_open_page', {
@@ -1766,28 +2124,46 @@ test('debug_open_page opens workspace file targets in debug browser', async () =
   assert.equal(payload.targetUrl, 'file:///workspace/session-1/index.html');
   assert.equal(payload.protocol, 'file');
   assert.equal(payload.localFilePath, '/workspace/session-1/index.html');
-  assert.equal(runCommandMock.mock.callCount(), 1);
+  assert.equal(runCommandMock.mock.callCount(), 3);
 });
 
-test('browser_interact executes an explicit Playwright action against the debug browser', async () => {
-  let capturedCommand = '';
+test('browser_interact executes an explicit Playwright action against the debug browser and captures screenshot evidence', async () => {
+  const capturedCommands: string[] = [];
+  const uploaded: Array<{ key: string; body: Buffer }> = [];
   mock.method(e2bConnector, 'runCommand', async (_sandboxId, command) => {
-    capturedCommand = String(command);
+    capturedCommands.push(String(command));
+    if (String(command).includes('ONECEO_BROWSER_SCREENSHOT=')) {
+      return {
+        stdout: '{"ok":true,"url":"file:///workspace/session-1/index.html","title":"2048","outputPath":"/tmp/shot.png"}',
+        stderr: '',
+        exitCode: 0,
+      };
+    }
     return {
       stdout: '{"ok":true,"action":"keyboard_press","url":"file:///workspace/session-1/index.html","title":"2048"}',
       stderr: '',
       exitCode: 0,
     };
   });
+  mock.method(e2bConnector, 'readFile', async () => Buffer.from('png-bytes'));
 
-  const runtime = new AltusManagedToolRuntime({
-    sessionId: 'session-1',
-    userId: 'user-1',
-    sandboxId: 'sandbox-1',
-    workspaceRoot: '/workspace/session-1',
-    activeSkills: [],
-    mcpProviders: [],
-  });
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    undefined,
+    undefined,
+    {
+      uploadToR2: mock.fn(async (key: string, body: Buffer) => {
+        uploaded.push({ key, body });
+      }) as any,
+    }
+  );
 
   const result = await runtime.execute('browser_interact', {
     action: 'keyboard_press',
@@ -1800,8 +2176,13 @@ test('browser_interact executes an explicit Playwright action against the debug 
   assert.equal(payload.action, 'keyboard_press');
   assert.equal(payload.key, 'ArrowUp');
   assert.equal(payload.description, '按下 ArrowUp 键');
-  assert.match(capturedCommand, /chromium\.connectOverCDP/);
-  assert.match(capturedCommand, /ArrowUp/);
+  assert.match(capturedCommands[0] || '', /chromium\.connectOverCDP/);
+  assert.match(capturedCommands[0] || '', /ArrowUp/);
+  assert.match(capturedCommands[1] || '', /ONECEO_BROWSER_SCREENSHOT/);
+  assert.equal(uploaded.length, 1);
+  assert.equal(payload.browserScreenshot.status, 'captured');
+  assert.equal(payload.browserScreenshot.source.url, 'file:///workspace/session-1/index.html');
+  assert.equal(result.evidence?.[0]?.status, 'captured');
 });
 
 test('browser_interact rejects unknown browser actions', async () => {

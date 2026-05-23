@@ -1492,6 +1492,10 @@
       "websiteSnapshotAlt": "Website preview screenshot",
       "websiteSnapshotTitle": "Website preview",
       "websiteSnapshotUnavailable": "The website screenshot is unavailable. Use the debug page or deploy the site to inspect it interactively.",
+      "artifactGenerated": "Deliverable files generated",
+      "websiteSnapshotIssueTitle": "Delivery preview failed visual detection",
+      "websiteSnapshotIssueReason": "Diagnostic reason",
+      "websiteSnapshotIssueDescription": "The files were generated, but the current page preview did not render into a deliverable state. Inspect the source or open the artifact, then rerun visual detection after the fix.",
       "loadingFileContent": "Loading file content",
       "noContent": "No content yet"
     }

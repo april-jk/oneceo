@@ -29,11 +29,46 @@ export type WebsitePreviewSnapshot = {
     command?: string;
     logPath?: string;
   };
+  visualCheck?: BrowserVisualCheck;
 };
 
 export type WebsitePreviewSnapshotImage = {
   body: Buffer;
   mimeType: 'image/png';
+};
+
+export type BrowserActionScreenshotStatus = 'captured' | 'capture_failed' | 'storage_failed';
+
+export type BrowserActionScreenshot = {
+  type: 'browser_screenshot';
+  kind: 'browser_action_screenshot';
+  status: BrowserActionScreenshotStatus;
+  storageKey?: string;
+  mimeType?: 'image/png';
+  width?: number;
+  height?: number;
+  capturedAt?: string;
+  reasonCode?: string;
+  message?: string;
+  source?: {
+    sandboxId?: string;
+    cdpPort?: number;
+    url?: string;
+    title?: string;
+    toolName?: string;
+    action?: string;
+    description?: string;
+  };
+  visualCheck?: BrowserVisualCheck;
+};
+
+export type BrowserVisualCheckStatus = 'passed' | 'failed';
+
+export type BrowserVisualCheck = {
+  status: BrowserVisualCheckStatus;
+  reasonCode?: string;
+  message?: string;
+  diagnostics?: Record<string, unknown>;
 };
 
 type E2BLikeConnector = Pick<typeof e2bConnector, 'readFile' | 'runCommand'>;
@@ -75,6 +110,21 @@ function parseJsonRecord(value: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function readBrowserVisualCheck(value: unknown): BrowserVisualCheck | undefined {
+  const record = asRecord(value);
+  const status = asText(record.status) as BrowserVisualCheckStatus;
+  if (status !== 'passed' && status !== 'failed') {
+    return undefined;
+  }
+  const diagnostics = asRecord(record.diagnostics);
+  return {
+    status,
+    reasonCode: asText(record.reasonCode) || undefined,
+    message: asText(record.message) || undefined,
+    diagnostics: Object.keys(diagnostics).length > 0 ? diagnostics : undefined,
+  };
 }
 
 function normalizeRelativePath(value: string): string {
@@ -189,12 +239,49 @@ export function readPreviewSnapshot(value: unknown): WebsitePreviewSnapshot | nu
     capturedAt: asText(record.capturedAt) || undefined,
     reasonCode: asText(record.reasonCode) || undefined,
     message: asText(record.message) || undefined,
+    visualCheck: readBrowserVisualCheck(record.visualCheck),
     source: {
       sandboxId: asText(sourceRecord.sandboxId) || undefined,
       port: port || undefined,
       url: asText(sourceRecord.url) || undefined,
       command: asText(sourceRecord.command) || undefined,
       logPath: asText(sourceRecord.logPath) || undefined,
+    },
+  };
+}
+
+export function readBrowserActionScreenshot(value: unknown): BrowserActionScreenshot | null {
+  const record = asRecord(value);
+  const status = asText(record.status) as BrowserActionScreenshotStatus;
+  if (
+    record.type !== 'browser_screenshot' ||
+    record.kind !== 'browser_action_screenshot' ||
+    !['captured', 'capture_failed', 'storage_failed'].includes(status)
+  ) {
+    return null;
+  }
+  const sourceRecord = asRecord(record.source);
+  const cdpPort = extractNumber(sourceRecord.cdpPort);
+  return {
+    type: 'browser_screenshot',
+    kind: 'browser_action_screenshot',
+    status,
+    storageKey: asText(record.storageKey) || undefined,
+    mimeType: record.mimeType === 'image/png' ? 'image/png' : undefined,
+    width: extractNumber(record.width) || undefined,
+    height: extractNumber(record.height) || undefined,
+    capturedAt: asText(record.capturedAt) || undefined,
+    reasonCode: asText(record.reasonCode) || undefined,
+    message: asText(record.message) || undefined,
+    visualCheck: readBrowserVisualCheck(record.visualCheck),
+    source: {
+      sandboxId: asText(sourceRecord.sandboxId) || undefined,
+      cdpPort: cdpPort || undefined,
+      url: asText(sourceRecord.url) || undefined,
+      title: asText(sourceRecord.title) || undefined,
+      toolName: asText(sourceRecord.toolName) || undefined,
+      action: asText(sourceRecord.action) || undefined,
+      description: asText(sourceRecord.description) || undefined,
     },
   };
 }
@@ -214,6 +301,32 @@ function buildFailureSnapshot(input: {
     status: input.status,
     reasonCode: input.reasonCode,
     message: input.message,
+    source: {
+      sandboxId: asText(input.sandboxId) || undefined,
+      port: input.port || undefined,
+      url: asText(input.url) || undefined,
+      command: asText(input.command) || undefined,
+      logPath: asText(input.logPath) || undefined,
+    },
+  };
+}
+
+function buildVisualCheckFailureSnapshot(input: {
+  visualCheck: BrowserVisualCheck;
+  sandboxId?: string | null;
+  port?: number | null;
+  url?: string | null;
+  command?: string | null;
+  logPath?: string | null;
+}): WebsitePreviewSnapshot {
+  const reason = asText(input.visualCheck.reasonCode) || 'visual_check_failed';
+  const message = asText(input.visualCheck.message) || '页面截图未通过视觉健康诊断';
+  return {
+    kind: 'website_screenshot',
+    status: 'capture_failed',
+    reasonCode: 'preview_visual_check_failed',
+    message: `${reason}: ${message}`,
+    visualCheck: input.visualCheck,
     source: {
       sandboxId: asText(input.sandboxId) || undefined,
       port: input.port || undefined,
@@ -369,7 +482,14 @@ export class TaskSessionWebsitePreviewSnapshotService {
     outputPath: string;
     width: number;
     height: number;
-  }) {
+  }): Promise<{ captured: boolean; visualCheck?: BrowserVisualCheck; stdout?: string; stderr?: string }> {
+    const payload = {
+      url: input.url,
+      outputPath: input.outputPath,
+      domPath: `${input.outputPath}.dom.html`,
+      width: input.width,
+      height: input.height,
+    };
     const command = `
 set -euo pipefail
 PLAYWRIGHT_BROWSERS_PATH="\${PLAYWRIGHT_BROWSERS_PATH:-/opt/ms-playwright}"
@@ -402,11 +522,257 @@ rm -f ${shellEscape(input.outputPath)}
   --screenshot=${shellEscape(input.outputPath)} \
   ${shellEscape(input.url)}
 test -s ${shellEscape(input.outputPath)}
+set +e
+"$CHROME_BIN" \
+  --headless=new \
+  --no-sandbox \
+  --disable-gpu \
+  --disable-dev-shm-usage \
+  --window-size=${input.width},${input.height} \
+  --virtual-time-budget=5000 \
+  --dump-dom \
+  ${shellEscape(input.url)} > ${shellEscape(`${input.outputPath}.dom.html`)} 2>/tmp/oneceo-preview-dump-dom.err
+set -e
+ONECEO_PREVIEW_SCREENSHOT=${shellEscape(JSON.stringify(payload))} node <<'NODE'
+const fs = require('fs');
+const zlib = require('zlib');
+
+const payload = JSON.parse(process.env.ONECEO_PREVIEW_SCREENSHOT || '{}');
+
+function assessVisualHealth(diagnostics) {
+  const url = String(diagnostics.url || '');
+  const title = String(diagnostics.title || '');
+  const bodyTextLength = Number(diagnostics.bodyTextLength || 0);
+  const visibleTextLength = Number(diagnostics.visibleTextLength || 0);
+  const visibleElementCount = Number(diagnostics.visibleElementCount || 0);
+  const documentHeight = Number(diagnostics.documentHeight || 0);
+  const uniqueColorCount = Number(diagnostics.uniqueColorCount || 0);
+  const dominantColorRatio = Number(diagnostics.dominantColorRatio || 0);
+  const nearWhiteRatio = Number(diagnostics.nearWhiteRatio || 0);
+  const nearBlackRatio = Number(diagnostics.nearBlackRatio || 0);
+  const rootTextLength = Number(diagnostics.rootTextLength || 0);
+  const appStatus = String(diagnostics.oneCeoAppStatus || '');
+  const appRootStatus = String(diagnostics.oneCeoRootStatus || '');
+  const appErrors = Array.isArray(diagnostics.oneCeoAppErrors) ? diagnostics.oneCeoAppErrors : [];
+
+  if (!url || url === 'about:blank') {
+    return { status: 'failed', reasonCode: 'blank_page_url', message: '浏览器页面仍停留在空白地址。' };
+  }
+  if (/chrome-error:\\/\\//i.test(url) || /^(404|500|502|503|504)\\b/.test(title) || /ERR_[A-Z_]+/.test(title)) {
+    return { status: 'failed', reasonCode: 'chrome_error_page', message: '浏览器打开的是错误页，不是生成的网站页面。' };
+  }
+  if (appStatus === 'error' || appRootStatus === 'error') {
+    return {
+      status: 'failed',
+      reasonCode: 'app_runtime_error',
+      message: appErrors.length > 0 ? '页面浏览器运行时报错：' + String(appErrors[0]).slice(0, 240) : '页面浏览器运行时报错，疑似入口模块或 React 渲染失败。',
+    };
+  }
+  if (bodyTextLength < 8 && visibleTextLength < 8 && visibleElementCount < 3) {
+    return { status: 'failed', reasonCode: 'visible_text_too_short', message: '页面可见文本和元素过少，疑似白屏或空页面。' };
+  }
+  if (rootTextLength < 4 && visibleTextLength < 8) {
+    return { status: 'failed', reasonCode: 'app_root_empty', message: '应用根节点没有渲染出有效内容。' };
+  }
+  if (documentHeight > 0 && documentHeight < 40 && visibleTextLength < 8) {
+    return { status: 'failed', reasonCode: 'document_too_small', message: '页面文档高度过小，疑似没有完成渲染。' };
+  }
+  if (uniqueColorCount <= 4 && dominantColorRatio >= 0.97) {
+    return { status: 'failed', reasonCode: 'screenshot_low_entropy', message: '截图几乎是单一颜色，疑似白屏或纯色空页面。' };
+  }
+  if ((nearWhiteRatio >= 0.985 || nearBlackRatio >= 0.985) && visibleTextLength < 20 && uniqueColorCount <= 12) {
+    return { status: 'failed', reasonCode: 'screenshot_near_blank', message: '截图接近纯白或纯黑，且缺少可见文本。' };
+  }
+  return { status: 'passed' };
+}
+
+function paethPredictor(a, b, c) {
+  const p = a + b - c;
+  const pa = Math.abs(p - a);
+  const pb = Math.abs(p - b);
+  const pc = Math.abs(p - c);
+  if (pa <= pb && pa <= pc) return a;
+  if (pb <= pc) return b;
+  return c;
+}
+
+function readPngPixelDiagnostics(outputPath) {
+  try {
+    const buffer = fs.readFileSync(outputPath);
+    if (buffer.length < 33 || buffer.toString('hex', 0, 8) !== '89504e470d0a1a0a') {
+      return { pixelDiagnosticError: 'not_png' };
+    }
+    let offset = 8;
+    let width = 0;
+    let height = 0;
+    let bitDepth = 0;
+    let colorType = 0;
+    const idat = [];
+    while (offset + 12 <= buffer.length) {
+      const length = buffer.readUInt32BE(offset);
+      const type = buffer.toString('ascii', offset + 4, offset + 8);
+      const dataStart = offset + 8;
+      const dataEnd = dataStart + length;
+      if (dataEnd + 4 > buffer.length) break;
+      if (type === 'IHDR') {
+        width = buffer.readUInt32BE(dataStart);
+        height = buffer.readUInt32BE(dataStart + 4);
+        bitDepth = buffer[dataStart + 8];
+        colorType = buffer[dataStart + 9];
+      } else if (type === 'IDAT') {
+        idat.push(buffer.subarray(dataStart, dataEnd));
+      } else if (type === 'IEND') {
+        break;
+      }
+      offset = dataEnd + 4;
+    }
+    if (!width || !height || bitDepth !== 8 || ![0, 2, 6].includes(colorType) || idat.length === 0) {
+      return { pixelDiagnosticError: 'unsupported_png' };
+    }
+    const channels = colorType === 6 ? 4 : colorType === 2 ? 3 : 1;
+    const bytesPerPixel = channels;
+    const stride = width * bytesPerPixel;
+    const raw = zlib.inflateSync(Buffer.concat(idat));
+    const sampleXStep = Math.max(1, Math.floor(width / 160));
+    const sampleYStep = Math.max(1, Math.floor(height / 90));
+    let previous = Buffer.alloc(stride);
+    let inputOffset = 0;
+    const buckets = new Map();
+    let nearWhite = 0;
+    let nearBlack = 0;
+    let opaque = 0;
+    for (let y = 0; y < height; y += 1) {
+      const filter = raw[inputOffset];
+      inputOffset += 1;
+      const scanline = Buffer.from(raw.subarray(inputOffset, inputOffset + stride));
+      inputOffset += stride;
+      for (let x = 0; x < stride; x += 1) {
+        const left = x >= bytesPerPixel ? scanline[x - bytesPerPixel] : 0;
+        const up = previous[x] || 0;
+        const upLeft = x >= bytesPerPixel ? previous[x - bytesPerPixel] || 0 : 0;
+        if (filter === 1) {
+          scanline[x] = (scanline[x] + left) & 255;
+        } else if (filter === 2) {
+          scanline[x] = (scanline[x] + up) & 255;
+        } else if (filter === 3) {
+          scanline[x] = (scanline[x] + Math.floor((left + up) / 2)) & 255;
+        } else if (filter === 4) {
+          scanline[x] = (scanline[x] + paethPredictor(left, up, upLeft)) & 255;
+        }
+      }
+      if (y % sampleYStep === 0) {
+        for (let x = 0; x < width; x += sampleXStep) {
+          const index = x * bytesPerPixel;
+          let r;
+          let g;
+          let b;
+          let a = 255;
+          if (colorType === 0) {
+            r = g = b = scanline[index];
+          } else {
+            r = scanline[index];
+            g = scanline[index + 1];
+            b = scanline[index + 2];
+            if (colorType === 6) a = scanline[index + 3];
+          }
+          if (a < 8) continue;
+          opaque += 1;
+          if (r > 245 && g > 245 && b > 245) nearWhite += 1;
+          if (r < 10 && g < 10 && b < 10) nearBlack += 1;
+          const bucket = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
+          buckets.set(bucket, (buckets.get(bucket) || 0) + 1);
+        }
+      }
+      previous = scanline;
+    }
+    const total = Math.max(1, opaque);
+    let dominant = 0;
+    for (const count of buckets.values()) dominant = Math.max(dominant, count);
+    return {
+      screenshotPixelWidth: width,
+      screenshotPixelHeight: height,
+      sampledPixelCount: total,
+      uniqueColorCount: buckets.size,
+      dominantColorRatio: dominant / total,
+      nearWhiteRatio: nearWhite / total,
+      nearBlackRatio: nearBlack / total,
+    };
+  } catch (error) {
+    return { pixelDiagnosticError: error && error.message ? error.message : String(error || '') };
+  }
+}
+
+function textFromHtml(html) {
+  return String(html || '')
+    .replace(/<script[\\s\\S]*?<\\/script>/gi, ' ')
+    .replace(/<style[\\s\\S]*?<\\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\\s+/g, ' ')
+    .trim();
+}
+
+function readDomDiagnostics(domPath) {
+  let html = '';
+  try {
+    html = fs.readFileSync(domPath, 'utf8');
+  } catch {}
+  const title = (html.match(/<title[^>]*>([\\s\\S]*?)<\\/title>/i) || [])[1] || '';
+  const rootMatch = html.match(/<(?:div|main|section)[^>]+(?:id=["'](?:root|app)["']|data-reactroot)[^>]*>([\\s\\S]*?)<\\/(?:div|main|section)>/i);
+  const rootText = textFromHtml(rootMatch ? rootMatch[1] : '');
+  const text = textFromHtml(html);
+  const elementMatches = html.match(/<(?:div|main|section|article|header|footer|nav|h1|h2|h3|p|a|button|img|form|input|ul|ol|li)\\b/gi) || [];
+  const heightMatch = html.match(/height:\\s*(\\d{2,5})px/i);
+  const appStatusMatch = html.match(/__ONECEO_APP_STATUS__[^\\n]+status["']?\\s*[:=]\\s*["']([^"']+)["']/i);
+  const rootStatusMatch = html.match(/data-oneceo-app-status=["']([^"']+)["']/i);
+  const runtimeErrorMatch = html.match(/OneCEO browser runtime error/i);
+  return {
+    url: payload.url,
+    title: title.replace(/\\s+/g, ' ').trim(),
+    bodyTextLength: text.length,
+    visibleTextLength: text.length,
+    visibleElementCount: elementMatches.length,
+    rootTextLength: rootText.length || text.length,
+    oneCeoAppStatus: runtimeErrorMatch ? 'error' : (appStatusMatch ? appStatusMatch[1] : ''),
+    oneCeoRootStatus: runtimeErrorMatch ? 'error' : (rootStatusMatch ? rootStatusMatch[1] : ''),
+    oneCeoAppErrors: runtimeErrorMatch ? ['OneCEO browser runtime error'] : [],
+    documentHeight: heightMatch ? Number(heightMatch[1]) : 0,
+  };
+}
+
+const diagnostics = {
+  ...readDomDiagnostics(payload.domPath),
+  ...readPngPixelDiagnostics(payload.outputPath),
+};
+const visualCheck = {
+  ...assessVisualHealth(diagnostics),
+  diagnostics,
+};
+console.log(JSON.stringify({
+  ok: true,
+  url: payload.url,
+  title: diagnostics.title || '',
+  outputPath: payload.outputPath,
+  visualCheck,
+}));
+NODE
 `;
     const result = await this.deps.e2b.runCommand(input.sandboxId, command, {
       timeoutMs: 30_000,
     });
-    return Number((result as any)?.exitCode ?? 1) === 0;
+    const stdout = String((result as any)?.stdout || '');
+    const stderr = String((result as any)?.stderr || '');
+    const visualCheck = stdout
+      .split('\n')
+      .map((line) => parseJsonRecord(line)?.visualCheck)
+      .map((item) => readBrowserVisualCheck(item))
+      .find(Boolean);
+    return {
+      captured: Number((result as any)?.exitCode ?? 1) === 0 && !stdout.includes('chromium_not_found'),
+      visualCheck,
+      stdout,
+      stderr,
+    };
   }
 
   async captureManagedRunPreview(input: {
@@ -459,11 +825,18 @@ test -s ${shellEscape(input.outputPath)}
             width: 1280,
             height: 720,
           });
-          if (!captured) {
+          if (!captured.captured) {
             return buildFailureSnapshot({
               status: 'capture_failed',
               reasonCode: 'html_file_capture_failed',
-              message: 'HTML 调试页面截图失败',
+              message: truncateMessage(captured.stderr || captured.stdout || 'HTML 调试页面截图失败'),
+              sandboxId: input.sandboxId,
+              url: fileUrl,
+            });
+          }
+          if (captured.visualCheck?.status === 'failed') {
+            return buildVisualCheckFailureSnapshot({
+              visualCheck: captured.visualCheck,
               sandboxId: input.sandboxId,
               url: fileUrl,
             });
@@ -494,6 +867,7 @@ test -s ${shellEscape(input.outputPath)}
             width: 1280,
             height: 720,
             capturedAt: new Date().toISOString(),
+            visualCheck: captured.visualCheck,
             source: {
               sandboxId: input.sandboxId,
               url: fileUrl,
@@ -509,7 +883,7 @@ test -s ${shellEscape(input.outputPath)}
           });
         } finally {
           await this.deps.e2b
-            .runCommand(input.sandboxId, `rm -f ${shellEscape(screenshotPath)}`, { timeoutMs: 10_000 })
+            .runCommand(input.sandboxId, `rm -f ${shellEscape(screenshotPath)} ${shellEscape(`${screenshotPath}.dom.html`)}`, { timeoutMs: 10_000 })
             .catch(() => undefined);
         }
       }
@@ -558,11 +932,21 @@ test -s ${shellEscape(input.outputPath)}
         width: 1280,
         height: 720,
       });
-      if (!captured) {
+      if (!captured.captured) {
         return buildFailureSnapshot({
           status: 'capture_failed',
           reasonCode: 'chromium_capture_failed',
-          message: '浏览器截图失败',
+          message: truncateMessage(captured.stderr || captured.stdout || '浏览器截图失败'),
+          sandboxId: input.sandboxId,
+          port: candidate.port,
+          url,
+          command: candidate.command,
+          logPath,
+        });
+      }
+      if (captured.visualCheck?.status === 'failed') {
+        return buildVisualCheckFailureSnapshot({
+          visualCheck: captured.visualCheck,
           sandboxId: input.sandboxId,
           port: candidate.port,
           url,
@@ -597,6 +981,7 @@ test -s ${shellEscape(input.outputPath)}
         width: 1280,
         height: 720,
         capturedAt: new Date().toISOString(),
+        visualCheck: captured.visualCheck,
         source: {
           sandboxId: input.sandboxId,
           port: candidate.port,
@@ -618,7 +1003,7 @@ test -s ${shellEscape(input.outputPath)}
       });
     } finally {
       await this.deps.e2b
-        .runCommand(input.sandboxId, `rm -f ${shellEscape(screenshotPath)}`, { timeoutMs: 10_000 })
+        .runCommand(input.sandboxId, `rm -f ${shellEscape(screenshotPath)} ${shellEscape(`${screenshotPath}.dom.html`)}`, { timeoutMs: 10_000 })
         .catch(() => undefined);
     }
   }
@@ -634,6 +1019,34 @@ test -s ${shellEscape(input.outputPath)}
     let body: Buffer;
     try {
       body = await this.deps.downloadFromR2(snapshot.storageKey);
+    } catch {
+      return null;
+    }
+    return {
+      body,
+      mimeType: 'image/png',
+    };
+  }
+
+  async getBrowserActionScreenshotImage(input: {
+    runId: string;
+    toolCallId: string;
+  }): Promise<WebsitePreviewSnapshotImage | null> {
+    const events = await taskSessionRunDAO.listRunEvents(input.runId);
+    const screenshot = [...events]
+      .reverse()
+      .map((event) => {
+        const payload = asRecord((event as any).payloadJson);
+        if (asText(payload.toolCallId) !== input.toolCallId) return null;
+        return readBrowserActionScreenshot(payload.browserScreenshot);
+      })
+      .find((item): item is BrowserActionScreenshot => Boolean(item?.storageKey && item.status === 'captured'));
+    if (!screenshot?.storageKey) {
+      return null;
+    }
+    let body: Buffer;
+    try {
+      body = await this.deps.downloadFromR2(screenshot.storageKey);
     } catch {
       return null;
     }

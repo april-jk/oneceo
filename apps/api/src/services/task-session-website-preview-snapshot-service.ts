@@ -5,6 +5,10 @@ import { taskCreationSessionDAO, taskSessionRunDAO } from '../db/dao';
 import { downloadFromR2, uploadToR2 } from './r2-client';
 import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-service';
 import type { TaskSessionDeliverableArtifactRecord } from './task-session-deliverable-service';
+import {
+  extractPreviewServicePort,
+  resolvePreviewServiceCandidate,
+} from './altus-preview-service-contract';
 
 export type WebsitePreviewSnapshotStatus =
   | 'captured'
@@ -96,6 +100,7 @@ type CommandCandidate = {
   command: string;
   port: number;
   reason: string;
+  healthPath?: string;
   appendVitePortArgs?: boolean;
 };
 
@@ -203,47 +208,6 @@ function extractNumber(value: unknown): number | null {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return Math.floor(parsed);
-}
-
-function extractPortFromCommand(command: string): number | null {
-  const match =
-    command.match(/(?:--port|-p)\s+(\d{2,5})/) ||
-    command.match(/:(\d{2,5})(?:\b|["'])/) ||
-    command.match(/PORT=(\d{2,5})/);
-  if (!match) return null;
-  return extractNumber(match[1]);
-}
-
-function getDefaultPortForScript(scriptName: string, scriptCommand: string): number {
-  const normalized = `${scriptName} ${scriptCommand}`.toLowerCase();
-  if (scriptName === 'preview') return 4173;
-  if (scriptName === 'dev' && normalized.includes('vite')) return 5173;
-  return 3000;
-}
-
-function inferPackageManager(packageJson: Record<string, unknown>): 'pnpm' | 'yarn' | 'bun' | 'npm' {
-  const packageManager = asText(packageJson.packageManager).toLowerCase();
-  if (packageManager.startsWith('pnpm@')) return 'pnpm';
-  if (packageManager.startsWith('yarn@')) return 'yarn';
-  if (packageManager.startsWith('bun@')) return 'bun';
-  return 'npm';
-}
-
-function buildScriptCommand(manager: 'pnpm' | 'yarn' | 'bun' | 'npm', scriptName: string): string {
-  if (manager === 'pnpm') return `pnpm ${scriptName}`;
-  if (manager === 'yarn') return `yarn ${scriptName}`;
-  if (manager === 'bun') return `bun run ${scriptName}`;
-  return `npm run ${scriptName}`;
-}
-
-function isViteLikeScript(scriptName: string, scriptCommand: string): boolean {
-  const normalized = `${scriptName} ${scriptCommand}`.toLowerCase();
-  return (
-    normalized.includes('vite') ||
-    normalized.includes('react-scripts start') ||
-    scriptName === 'dev' ||
-    scriptName === 'preview'
-  );
 }
 
 export function shouldCaptureWebsitePreview(input: {
@@ -356,7 +320,7 @@ export function buildPreviewSnapshotFromBrowserActionScreenshot(
     return null;
   }
   const sourceUrl = asText(screenshot.source?.url);
-  const sourcePort = sourceUrl ? extractPortFromCommand(sourceUrl) : null;
+  const sourcePort = sourceUrl ? extractPreviewServicePort(sourceUrl) : null;
   return {
     kind: 'website_screenshot',
     status: 'captured',
@@ -495,32 +459,15 @@ export class TaskSessionWebsitePreviewSnapshotService {
     manifest: Record<string, unknown> | null;
     packageJson: Record<string, unknown> | null;
   }): CommandCandidate | null {
-    const manifestStart = asRecord(input.manifest?.start);
-    const manifestCommand = asText(manifestStart.command);
-    if (manifestCommand) {
-      const manifestPort = extractNumber(manifestStart.port) || extractNumber(manifestStart.defaultPort);
-      return {
-        command: manifestCommand,
-        port: extractPortFromCommand(manifestCommand) || manifestPort || 3000,
-        reason: 'manifest_start',
-        appendVitePortArgs: isViteLikeScript('start', manifestCommand),
-      };
-    }
-
-    const scripts = asRecord(input.packageJson?.scripts);
-    const manager = input.packageJson ? inferPackageManager(input.packageJson) : 'npm';
-    for (const scriptName of ['start', 'dev', 'preview']) {
-      const scriptCommand = asText(scripts[scriptName]);
-      if (!scriptCommand) continue;
-      return {
-        command: buildScriptCommand(manager, scriptName),
-        port: extractPortFromCommand(scriptCommand) || getDefaultPortForScript(scriptName, scriptCommand),
-        reason: `package_script_${scriptName}`,
-        appendVitePortArgs: isViteLikeScript(scriptName, scriptCommand),
-      };
-    }
-
-    return null;
+    const contract = resolvePreviewServiceCandidate(input);
+    if (!contract) return null;
+    return {
+      command: contract.command,
+      port: contract.port,
+      reason: contract.source === 'manifest' ? 'manifest_start' : `package_script_${contract.command.split(/\s+/).pop() || 'start'}`,
+      appendVitePortArgs: contract.appendVitePortArgs,
+      ...(contract.healthPath ? { healthPath: contract.healthPath } : {}),
+    };
   }
 
   private buildStartCommand(input: {
@@ -528,6 +475,7 @@ export class TaskSessionWebsitePreviewSnapshotService {
     port: number;
     runId: string;
     logPath: string;
+    healthPath?: string;
     appendVitePortArgs?: boolean;
   }) {
     const command =
@@ -536,7 +484,7 @@ export class TaskSessionWebsitePreviewSnapshotService {
         : input.command;
     return [
       'set -e',
-      `if curl -fsS --max-time 2 ${shellEscape(`http://127.0.0.1:${input.port}/`)} >/dev/null 2>&1; then`,
+      `if curl -fsS --max-time 2 ${shellEscape(`http://127.0.0.1:${input.port}${input.healthPath || '/'}`)} >/dev/null 2>&1; then`,
       '  echo "already_ready"',
       '  exit 0',
       'fi',
@@ -548,13 +496,13 @@ export class TaskSessionWebsitePreviewSnapshotService {
     ].join('\n');
   }
 
-  private async waitForPort(sandboxId: string, port: number) {
+  private async waitForPort(sandboxId: string, port: number, healthPath?: string) {
     const result = await this.deps.e2b.runCommand(
       sandboxId,
       [
         'set +e',
         'for i in $(seq 1 45); do',
-        `  curl -fsS --max-time 2 ${shellEscape(`http://127.0.0.1:${port}/`)} >/dev/null 2>&1 && exit 0`,
+        `  curl -fsS --max-time 2 ${shellEscape(`http://127.0.0.1:${port}${healthPath || '/'}`)} >/dev/null 2>&1 && exit 0`,
         '  sleep 1',
         'done',
         'exit 1',
@@ -997,13 +945,14 @@ NODE
         port: candidate.port,
         runId: input.runId,
         logPath,
+        healthPath: candidate.healthPath,
         appendVitePortArgs: candidate.appendVitePortArgs,
       });
       await this.deps.e2b.runCommand(input.sandboxId, startCommand, {
         cwd: input.workspaceRoot,
         timeoutMs: 20_000,
       });
-      const ready = await this.waitForPort(input.sandboxId, candidate.port);
+      const ready = await this.waitForPort(input.sandboxId, candidate.port, candidate.healthPath);
       if (!ready) {
         return buildFailureSnapshot({
           status: 'capture_failed',

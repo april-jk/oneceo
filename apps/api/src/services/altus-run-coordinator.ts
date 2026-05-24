@@ -28,6 +28,7 @@ import {
 } from './altus-managed-tool-executor';
 import {
   buildManagedToolResultEnvelope,
+  classifyManagedToolErrorCode,
   stringifyManagedToolResultEnvelope,
 } from './altus-managed-tool-result-envelope';
 import { altusManagedDynamicContextBlockService } from './altus-managed-dynamic-context-blocks';
@@ -69,6 +70,10 @@ import {
   getLlmProxyInternalOverrideToken,
 } from './llm-proxy-internal-auth';
 import { buildManagedMcpToolRejectionCompletionText } from './managed-mcp-tool-confirmation';
+import {
+  AltusRunUserVisibleStopError,
+  normalizeAltusRunFailure,
+} from './altus-run-failure-view';
 
 const DELIVERABLES_READY_TEXT = '交付文件已生成';
 const DEPLOYMENT_COMPLETION_BLOCKED_PREFIX = 'deployment_completion_blocked:';
@@ -127,6 +132,21 @@ type VisualDetectionEvidenceState = {
   lastReasonCode: string;
   lastMessage: string;
   lastPassedBrowserScreenshot: BrowserActionScreenshot | null;
+};
+
+type DebugOpenPageFailureState = {
+  lastKey: string;
+  repeatCount: number;
+  failureCounts: Record<string, number>;
+};
+
+type DebugOpenPageFailureDisposition = {
+  errorCode: string;
+  rawError: string;
+  sanitizedError: string;
+  repeatCount: number;
+  blocked: boolean;
+  userActionRequired: boolean;
 };
 
 function normalizeInlineBulletGlyphLine(line: string): string {
@@ -1456,6 +1476,12 @@ private async chargeForModelCall(state: AltusRunState, input: {
     const lowerDisplayPath = displayPath.toLowerCase();
 
     if (input.outcome === 'failed') {
+      if (input.transitionReason === 'tool_failed_user_action_required') {
+        if (toolName === 'debug_open_page') {
+          return '视觉检测无法继续重复打开同一目标，已记录阻断原因';
+        }
+        return '这一步需要外部处理，已停止继续重试';
+      }
       if (toolName === 'browser_interact') {
         return `${buildBrowserInteractionSummary(args)} 没成功，我会检查页面状态后继续`;
       }
@@ -1540,6 +1566,108 @@ private async chargeForModelCall(state: AltusRunState, input: {
     return '这一步已经完成，我继续处理下一步';
   }
 
+  private normalizeDebugOpenPageTarget(args?: Record<string, unknown>) {
+    const raw = asText(args?.url).trim();
+    if (!raw) return '';
+    const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`;
+    try {
+      const parsed = new URL(withProtocol);
+      parsed.hash = '';
+      parsed.search = '';
+      if (parsed.hostname === 'localhost' || parsed.hostname === '0.0.0.0') {
+        parsed.hostname = '127.0.0.1';
+      }
+      const normalized = parsed.toString().replace(/\/+$/, '').toLowerCase();
+      return normalized;
+    } catch {
+      return raw.replace(/[?#].*$/, '').replace(/\/+$/, '').toLowerCase();
+    }
+  }
+
+  private isDebugOpenPageCorrectiveTool(toolName: string) {
+    return toolName === 'shell_execute' || toolName === 'write_file';
+  }
+
+  private isDebugOpenPagePlatformError(errorCode: string) {
+    return errorCode === 'debug_service_not_ready' || errorCode === 'sandbox_browser_capability_unavailable';
+  }
+
+  private isDebugOpenPageRepeatBlockableError(errorCode: string) {
+    return errorCode !== 'tool_execution_failed';
+  }
+
+  private buildDebugOpenPageRepeatBlockedError(input: {
+    errorCode: string;
+    target: string;
+    repeatCount: number;
+    rawError: string;
+  }) {
+    return [
+      'debug_open_page_repeat_blocked:',
+      `same_target=${input.target || 'unknown'}`,
+      `same_reason=${input.errorCode || 'unknown'}`,
+      `repeat_count=${input.repeatCount}`,
+      'do_not_call_debug_open_page_again_until_shell_execute_or_write_file_changes_the_target',
+      `last_error=${truncate(asText(input.rawError), 1200)}`,
+    ].join(' ');
+  }
+
+  private recordDebugOpenPageFailure(input: {
+    args: Record<string, unknown>;
+    rawError: string;
+    sanitizedError: string;
+    state: DebugOpenPageFailureState;
+  }): DebugOpenPageFailureDisposition {
+    const initialErrorCode = classifyManagedToolErrorCode(input.rawError);
+    const target = this.normalizeDebugOpenPageTarget(input.args);
+    const key = `${target || '(missing-target)'}:${initialErrorCode}`;
+    const consecutiveRepeatCount = input.state.lastKey === key ? input.state.repeatCount + 1 : 1;
+    const repeatCount = (input.state.failureCounts[key] || 0) + 1;
+    input.state.failureCounts[key] = repeatCount;
+    input.state.lastKey = key;
+    input.state.repeatCount = consecutiveRepeatCount;
+    const userActionRequired =
+      this.isDebugOpenPagePlatformError(initialErrorCode) || initialErrorCode === 'debug_open_page_repeat_blocked';
+    const blocked =
+      userActionRequired || (this.isDebugOpenPageRepeatBlockableError(initialErrorCode) && repeatCount >= 2);
+    if (!blocked) {
+      return {
+        errorCode: initialErrorCode,
+        rawError: input.rawError,
+        sanitizedError: input.sanitizedError,
+        repeatCount,
+        blocked: false,
+        userActionRequired: false,
+      };
+    }
+    const rawError = this.isDebugOpenPagePlatformError(initialErrorCode)
+      ? input.rawError
+      : this.buildDebugOpenPageRepeatBlockedError({
+          errorCode: initialErrorCode,
+          target,
+          repeatCount,
+          rawError: input.rawError,
+        });
+    const errorCode = classifyManagedToolErrorCode(rawError);
+    return {
+      errorCode,
+      rawError,
+      sanitizedError: this.sanitizeToolEventError('debug_open_page', rawError),
+      repeatCount,
+      blocked: true,
+      userActionRequired: userActionRequired || errorCode === 'debug_open_page_repeat_blocked',
+    };
+  }
+
+  testRecordDebugOpenPageFailure(input: {
+    args: Record<string, unknown>;
+    rawError: string;
+    sanitizedError: string;
+    state: DebugOpenPageFailureState;
+  }): DebugOpenPageFailureDisposition {
+    return this.recordDebugOpenPageFailure(input);
+  }
+
   private sanitizeToolEventError(toolName: string, errorMessage: string) {
     if (errorMessage.startsWith(DEPLOYMENT_COMPLETION_BLOCKED_PREFIX)) {
       return '线上部署尚未完成，Altus 将继续修复并重试发布。';
@@ -1575,26 +1703,32 @@ private async chargeForModelCall(state: AltusRunState, input: {
       return '这类最终交付文件不能直接按文本写入，Altus 将改用真实文档生成链路后重新交付。';
     }
     if (toolName === 'debug_open_page') {
+      if (errorMessage.includes('debug_open_page_repeat_blocked')) {
+        return '同一个预览目标连续打开失败，平台已停止重复截图重试；Altus 需要先修复服务、端口或文件路径后再重新打开。';
+      }
+      if (errorMessage.includes('playwright_module_not_found')) {
+        return 'sandbox 浏览器依赖不可用，平台已停止重复截图重试；需要先恢复预置 Playwright / MCP 能力。';
+      }
       if (errorMessage.includes('__ONECEO_DEBUG_TARGET_UNREACHABLE__')) {
-        return '调试页面目标地址暂不可访问，Altus 将继续检查本地服务端口和启动命令。';
+        return '调试页面目标地址暂不可访问，Altus 需要先启动或修复本地预览服务，再重新打开页面。';
       }
       if (errorMessage.includes('__ONECEO_DEBUG_TARGET_FILE_MISSING__')) {
-        return '调试页面目标文件不存在，Altus 将继续检查交付文件路径。';
+        return '调试页面目标文件不存在，Altus 需要先修正交付文件路径或生成文件，再重新打开页面。';
       }
       if (errorMessage.includes('__ONECEO_DEBUG_TARGET_BAD_STATUS__')) {
-        return '调试页面目标地址返回异常状态，Altus 将继续检查页面服务错误并修复。';
+        return '调试页面目标地址返回异常状态，Altus 需要先修复页面服务错误，再重新打开页面。';
       }
       if (errorMessage.includes('__ONECEO_DEBUG_TARGET_TAB_NOT_READY__')) {
-        return '调试浏览器还没有打开正确页面，Altus 将继续检查调试浏览器连接并重试。';
+        return '调试浏览器还没有打开正确页面，Altus 需要先确认目标地址或浏览器状态变化，再重新打开。';
       }
       if (errorMessage.includes('__ONECEO_DEBUG_OPEN_PAGE_FAILED__')) {
-        return '调试浏览器打开页面失败，Altus 将继续检查远程调试服务并重试。';
+        return '调试浏览器打开页面失败，Altus 需要先检查远程调试服务状态，再重新打开。';
       }
       if (errorMessage.includes('debug_open_page_debug_not_ready')) {
-        return '远程调试服务尚未就绪，Altus 将继续恢复调试环境。';
+        return '远程调试服务尚未就绪，平台已停止重复截图重试；需要先恢复 n.eko / Chromium 调试环境。';
       }
       if (/exit status\s+\d+/i.test(errorMessage)) {
-        return '调试页面校验未返回具体状态，Altus 将重新检查目标页面和调试服务。';
+        return '调试页面校验未返回具体状态，Altus 需要先检查目标页面和调试服务，再重新打开。';
       }
     }
     if (!this.isDeploymentTool(toolName)) {
@@ -2362,6 +2496,11 @@ private async chargeForModelCall(state: AltusRunState, input: {
       lastPassedBrowserScreenshot: null,
     };
     let debugOpenPageSucceeded = false;
+    const debugOpenPageFailureState: DebugOpenPageFailureState = {
+      lastKey: '',
+      repeatCount: 0,
+      failureCounts: {},
+    };
     const maxToolRounds = this.getMaxToolRounds();
     let nextRoundStatusContent = '正在分析并执行任务';
 
@@ -2876,23 +3015,52 @@ private async chargeForModelCall(state: AltusRunState, input: {
             };
           },
           onFailure: (rawError, sanitizedError) => {
-            const failedTransitionReason: AltusRunTransitionReason = rawError.startsWith(DEPLOYMENT_COMPLETION_BLOCKED_PREFIX)
+            const debugFailure =
+              toolName === 'debug_open_page'
+                ? this.recordDebugOpenPageFailure({
+                    args,
+                    rawError,
+                    sanitizedError,
+                    state: debugOpenPageFailureState,
+                  })
+                : null;
+            const effectiveRawError = debugFailure?.rawError || rawError;
+            const effectiveSanitizedError = debugFailure?.sanitizedError || sanitizedError;
+            const failedTransitionReason: AltusRunTransitionReason = effectiveRawError.startsWith(DEPLOYMENT_COMPLETION_BLOCKED_PREFIX)
               ? 'deployment_completion_blocked'
-              : 'tool_failed_but_recoverable';
+              : debugFailure?.userActionRequired
+                ? 'tool_failed_user_action_required'
+                : 'tool_failed_but_recoverable';
             return {
               transitionReason: failedTransitionReason,
-              recoveryMode: 'tool_repair',
+              recoveryMode: debugFailure?.userActionRequired ? 'awaiting_user' : 'tool_repair',
+              errorCode: debugFailure?.errorCode,
+              retryable: debugFailure ? !debugFailure.userActionRequired : undefined,
+              sanitizedError: effectiveSanitizedError,
+              rawError: effectiveRawError,
               eventPayload: this.isDeploymentTool(toolName)
                 ? {
                     userView: {
-                      summary: sanitizedError,
-                      preview: sanitizedError,
-                      detail: sanitizedError,
+                      summary: effectiveSanitizedError,
+                      preview: effectiveSanitizedError,
+                      detail: effectiveSanitizedError,
                     },
                     internalView: {
-                      detail: [`工具: ${toolName}`, `rawError: ${rawError}`].join('\n'),
+                      detail: [`工具: ${toolName}`, `rawError: ${effectiveRawError}`].join('\n'),
                     },
                   }
+                : debugFailure
+                  ? {
+                      debugOpenPageFailure: {
+                        errorCode: debugFailure.errorCode,
+                        repeatCount: debugFailure.repeatCount,
+                        blocked: debugFailure.blocked,
+                        target: this.normalizeDebugOpenPageTarget(args),
+                      },
+                      internalView: {
+                        detail: [`工具: ${toolName}`, `rawError: ${effectiveRawError}`].join('\n'),
+                      },
+                    }
                 : undefined,
             };
           },
@@ -3365,6 +3533,10 @@ private async chargeForModelCall(state: AltusRunState, input: {
 
         if (envelope.status === 'result') {
           const result = envelope.result;
+          if (this.isDebugOpenPageCorrectiveTool(toolName)) {
+            debugOpenPageFailureState.lastKey = '';
+            debugOpenPageFailureState.repeatCount = 0;
+          }
           const confirmationRequired = this.readConfirmationRequiredPayload(result.content);
           messages.push({
             role: 'tool',
@@ -3427,6 +3599,13 @@ private async chargeForModelCall(state: AltusRunState, input: {
             content: stringifyManagedToolResultEnvelope(envelope.toolResultEnvelope),
           });
           completedToolCallIds.add(toolCall.id);
+          if (envelope.transitionReason === 'tool_failed_user_action_required') {
+            throw new AltusRunUserVisibleStopError({
+              rawMessage: envelope.rawError || envelope.error,
+              userMessage: envelope.error,
+              reasonCode: envelope.toolResultEnvelope.errorCode,
+            });
+          }
         }
       }
     }
@@ -3604,11 +3783,14 @@ private async chargeForModelCall(state: AltusRunState, input: {
         return;
       }
 
-      const message = error instanceof Error ? error.message : String(error || 'managed run failed');
-      state.markFailed(message);
+      const failure = normalizeAltusRunFailure(error);
+      state.markFailed(failure.stopReason);
       await this.flushSandboxSkillMemory(state, 'failed');
       await this.flushSandboxAltusMemory(state, 'failed');
-      await this.lifecycleService.markFailed(state, message);
+      await this.lifecycleService.markFailed(state, failure.rawMessage || failure.stopReason, {
+        userMessage: failure.userMessage,
+        reasonCode: failure.reasonCode,
+      });
     }
   }
 }

@@ -65,6 +65,10 @@ type ToolFailureDisposition = {
   recoveryMode?: AltusRunRecoveryMode;
   eventPayload?: Record<string, unknown>;
   meta?: Record<string, unknown>;
+  errorCode?: string;
+  retryable?: boolean;
+  sanitizedError?: string;
+  rawError?: string;
 };
 
 export class AltusManagedToolExecutor {
@@ -230,6 +234,8 @@ export class AltusManagedToolExecutor {
       const rawError = error instanceof Error ? error.message : String(error || 'tool_failed');
       const sanitizedError = this.input.sanitizeToolEventError(toolName, rawError);
       const disposition = input.onFailure?.(rawError, sanitizedError) || {};
+      const effectiveRawError = disposition.rawError || rawError;
+      const effectiveSanitizedError = disposition.sanitizedError || sanitizedError;
       const toolResultEnvelope = buildManagedToolResultEnvelope({
         status: 'error',
         runId: this.input.runId,
@@ -237,9 +243,11 @@ export class AltusManagedToolExecutor {
         toolName,
         modelRoundId: input.modelRoundId,
         args: eventArgs,
-        content: sanitizedError,
-        contentForUser: sanitizedError,
-        errorMessage: rawError,
+        content: effectiveSanitizedError,
+        contentForUser: effectiveSanitizedError,
+        errorCode: disposition.errorCode,
+        errorMessage: effectiveRawError,
+        retryable: disposition.retryable,
       });
 
       await this.input.eventWriter.appendRunEvent(
@@ -252,17 +260,17 @@ export class AltusManagedToolExecutor {
           content: this.input.buildToolEventContent(toolName, 'failed'),
           arguments: eventArgs,
           toolCallId,
-          error: sanitizedError,
+          error: effectiveSanitizedError,
           toolResultEnvelope,
           transitionReason: disposition.transitionReason || 'tool_failed_but_recoverable',
           ...(disposition.eventPayload || {}),
         }
       );
       traceToolCallComplete(toolTrace, {
-        responseBody: { type: 'error', error: sanitizedError },
+        responseBody: { type: 'error', error: effectiveSanitizedError },
         completedAt: new Date(),
         durationMs: Date.now() - toolStartedAt.getTime(),
-        errorMessage: sanitizedError,
+        errorMessage: effectiveSanitizedError,
       });
 
       return {
@@ -270,8 +278,8 @@ export class AltusManagedToolExecutor {
         toolName,
         toolCallId,
         args: input.args,
-        error: sanitizedError,
-        rawError,
+        error: effectiveSanitizedError,
+        rawError: effectiveRawError,
         toolResultEnvelope,
         transitionReason: disposition.transitionReason || 'tool_failed_but_recoverable',
         recoveryMode: disposition.recoveryMode || 'tool_repair',

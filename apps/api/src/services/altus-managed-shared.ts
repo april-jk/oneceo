@@ -311,17 +311,48 @@ const MANAGED_DEBUG_PAYLOAD_KEYS = new Set([
   'loop',
   'debug',
   'internalDebug',
+  'internalView',
+  'debugOpenPageFailure',
+  'rawError',
 ]);
 
-export function stripManagedDebugPayload(payload: Record<string, unknown>) {
+const MANAGED_TOOL_ENVELOPE_DEBUG_KEYS = new Set([
+  'contentForModel',
+  'errorMessage',
+]);
+
+function stripManagedDebugValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => stripManagedDebugValue(item));
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
   const sanitized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(payload || {})) {
+  for (const [key, nestedValue] of Object.entries(record)) {
     if (MANAGED_DEBUG_PAYLOAD_KEYS.has(key)) {
       continue;
     }
-    sanitized[key] = value;
+    if (key === 'toolResultEnvelope' && nestedValue && typeof nestedValue === 'object' && !Array.isArray(nestedValue)) {
+      const envelope = nestedValue as Record<string, unknown>;
+      const sanitizedEnvelope: Record<string, unknown> = {};
+      for (const [envelopeKey, envelopeValue] of Object.entries(envelope)) {
+        if (MANAGED_TOOL_ENVELOPE_DEBUG_KEYS.has(envelopeKey)) {
+          continue;
+        }
+        sanitizedEnvelope[envelopeKey] = stripManagedDebugValue(envelopeValue);
+      }
+      sanitized[key] = sanitizedEnvelope;
+      continue;
+    }
+    sanitized[key] = stripManagedDebugValue(nestedValue);
   }
   return sanitized;
+}
+
+export function stripManagedDebugPayload(payload: Record<string, unknown>) {
+  return stripManagedDebugValue(payload || {}) as Record<string, unknown>;
 }
 
 export function parseToolArguments(raw: string) {

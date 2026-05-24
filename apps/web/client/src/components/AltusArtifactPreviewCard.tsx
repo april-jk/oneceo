@@ -37,6 +37,13 @@ export type AltusArtifactFile = {
   previewType: "web" | "code";
 };
 
+export type AltusArtifactPreviewDisplayMode = "artifact-browser" | "web-preview";
+
+export type AltusArtifactOpenTarget =
+  | { kind: "remote-debug" }
+  | { kind: "file-url"; url: string }
+  | null;
+
 type AltusArtifactPreviewCardProps = {
   sessionId: string;
   runId?: string;
@@ -46,8 +53,9 @@ type AltusArtifactPreviewCardProps = {
     toolCallId: string;
     screenshot: AltusReplayBrowserScreenshot;
   } | null;
-  displayMode?: "artifact-browser" | "web-preview";
+  displayMode?: AltusArtifactPreviewDisplayMode;
   onOpenViewer?: (path: string) => void;
+  onOpenRemoteDebug?: () => void;
   onDeployRequested?: (path: string) => Promise<void> | void;
   runtimeSwitchBlocked?: boolean;
 };
@@ -82,6 +90,28 @@ function getFilename(path: string): string {
 
 function isWebArtifact(path: string): boolean {
   return /\.(html?)$/i.test(path);
+}
+
+export function shouldShowArtifactSourceControls(
+  displayMode: AltusArtifactPreviewDisplayMode,
+) {
+  return displayMode !== "web-preview";
+}
+
+export function resolveArtifactOpenTarget({
+  displayMode,
+  remoteDebugAvailable,
+  selectedFileOpenUrl,
+}: {
+  displayMode: AltusArtifactPreviewDisplayMode;
+  remoteDebugAvailable: boolean;
+  selectedFileOpenUrl: string;
+}): AltusArtifactOpenTarget {
+  if (displayMode === "web-preview") {
+    return remoteDebugAvailable ? { kind: "remote-debug" } : null;
+  }
+  const url = selectedFileOpenUrl.trim();
+  return url ? { kind: "file-url", url } : null;
 }
 
 export function resolveArtifactDeploymentPreviewUrl(
@@ -237,6 +267,7 @@ export default function AltusArtifactPreviewCard({
   browserScreenshotFallback,
   displayMode = "artifact-browser",
   onOpenViewer,
+  onOpenRemoteDebug,
   onDeployRequested,
   runtimeSwitchBlocked = false,
 }: AltusArtifactPreviewCardProps) {
@@ -338,14 +369,24 @@ export default function AltusArtifactPreviewCard({
   const selectedIsWebArtifact = Boolean(
     selectedArtifact && isWebArtifact(selectedArtifact.path),
   );
+  const webDeliveryMode = displayMode === "web-preview";
+  const showSourceControls = shouldShowArtifactSourceControls(displayMode);
   const effectiveRawPreviewUrl = appendPreviewCacheBust(rawPreviewUrl, webPreviewNonce);
   const effectiveRawSelectedUrl = appendPreviewCacheBust(rawSelectedUrl, webPreviewNonce);
   const selectedPreviewUrl = selectedIsWebArtifact
     ? deploymentPreviewUrl || effectiveRawPreviewUrl
     : "";
-  const selectedOpenUrl = selectedIsWebArtifact
-    ? deploymentPreviewUrl || effectiveRawSelectedUrl
-    : effectiveRawSelectedUrl;
+  const selectedFileOpenUrl = showSourceControls
+    ? selectedIsWebArtifact
+      ? deploymentPreviewUrl || effectiveRawSelectedUrl
+      : effectiveRawSelectedUrl
+    : "";
+  const openTarget = resolveArtifactOpenTarget({
+    displayMode,
+    remoteDebugAvailable: Boolean(onOpenRemoteDebug),
+    selectedFileOpenUrl,
+  });
+  const canOpenArtifact = Boolean(openTarget);
   const fallbackScreenshot = browserScreenshotFallback?.screenshot || null;
   const hasPassedFallbackScreenshot = Boolean(
     runId &&
@@ -516,6 +557,20 @@ export default function AltusArtifactPreviewCard({
     }
   };
 
+  const handleOpenArtifact = () => {
+    if (openTarget?.kind === "remote-debug") {
+      onOpenRemoteDebug?.();
+      return;
+    }
+    if (openTarget?.kind === "file-url") {
+      window.open(openTarget.url, "_blank", "noopener,noreferrer");
+    }
+  };
+
+  const openArtifactLabel = openTarget?.kind === "remote-debug"
+    ? i18n.t("previewPanel.artifactPreview.openRemoteDebug")
+    : i18n.t("previewPanel.artifactPreview.open");
+
   if (visibleArtifacts.length === 0 && !hasSnapshotMetadata) {
     return null;
   }
@@ -562,7 +617,7 @@ export default function AltusArtifactPreviewCard({
                         <Rocket className="h-3.5 w-3.5" />
                       )}
                     </Button>
-                  ) : selectedArtifact && onOpenViewer ? (
+                  ) : selectedArtifact && onOpenViewer && showSourceControls ? (
                     <Button
                       type="button"
                       variant="ghost"
@@ -575,7 +630,7 @@ export default function AltusArtifactPreviewCard({
                     </Button>
                   ) : (
                     <div className="text-[11px] font-medium text-muted-foreground">
-                      {selectedIsWebArtifact
+                      {selectedIsWebArtifact || webDeliveryMode
                         ? i18n.t("previewPanel.artifactPreview.webPreview")
                         : i18n.t("previewPanel.artifactPreview.sourceCode")}
                     </div>
@@ -584,37 +639,41 @@ export default function AltusArtifactPreviewCard({
 
                 <Tabs
                   value={activeTab}
-                  onValueChange={(value) => setActiveTab(value as "preview" | "code")}
+                  onValueChange={(value) => {
+                    if (value === "code" && !showSourceControls) return;
+                    setActiveTab(value as "preview" | "code");
+                  }}
                   className="h-full w-full gap-0"
                 >
                   <div className="absolute left-2 top-2 z-10 flex items-center gap-2">
-                    <TabsList className="h-8 gap-1 rounded-2xl bg-background/85 px-1 backdrop-blur-sm">
-                      {hasPreviewTab ? (
-                        <TabsTrigger
-                          value="preview"
-                          className="h-6 rounded-xl px-3 text-xs"
-                        >
-                          <Monitor className="h-3.5 w-3.5" />
-                          {i18n.t("previewPanel.previewTab")}
+                    {showSourceControls ? (
+                      <TabsList className="h-8 gap-1 rounded-2xl bg-background/85 px-1 backdrop-blur-sm">
+                        {hasPreviewTab ? (
+                          <TabsTrigger
+                            value="preview"
+                            className="h-6 rounded-xl px-3 text-xs"
+                          >
+                            <Monitor className="h-3.5 w-3.5" />
+                            {i18n.t("previewPanel.previewTab")}
+                          </TabsTrigger>
+                        ) : null}
+                        <TabsTrigger value="code" className="h-6 rounded-xl px-3 text-xs">
+                          <Code2 className="h-3.5 w-3.5" />
+                          {i18n.t("previewPanel.artifactPreview.sourceCode")}
                         </TabsTrigger>
-                      ) : null}
-                      <TabsTrigger value="code" className="h-6 rounded-xl px-3 text-xs">
-                        <Code2 className="h-3.5 w-3.5" />
-                        {i18n.t("previewPanel.artifactPreview.sourceCode")}
-                      </TabsTrigger>
-                    </TabsList>
-                    {selectedOpenUrl ? (
+                      </TabsList>
+                    ) : null}
+                    {canOpenArtifact ? (
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
                         className="h-8 rounded-2xl border-border/70 bg-background/80 text-xs backdrop-blur-sm"
-                        onClick={() =>
-                          window.open(selectedOpenUrl, "_blank", "noopener,noreferrer")
-                        }
+                        onClick={handleOpenArtifact}
+                        title={openArtifactLabel}
                       >
                         <ExternalLink className="h-3.5 w-3.5" />
-                        {i18n.t("previewPanel.artifactPreview.open")}
+                        {openArtifactLabel}
                       </Button>
                     ) : null}
                   </div>
@@ -659,25 +718,25 @@ export default function AltusArtifactPreviewCard({
                                 {i18n.t("previewPanel.artifactPreview.websiteSnapshotIssueDescription")}
                               </div>
                               <div className="flex flex-wrap items-center gap-2">
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => setActiveTab("code")}
-                                >
-                                  {i18n.t("previewPanel.viewSource")}
-                                </Button>
-                                {selectedOpenUrl ? (
+                                {showSourceControls ? (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setActiveTab("code")}
+                                  >
+                                    {i18n.t("previewPanel.viewSource")}
+                                  </Button>
+                                ) : null}
+                                {canOpenArtifact ? (
                                   <Button
                                     type="button"
                                     variant="outline"
                                     size="sm"
-                                    onClick={() =>
-                                      window.open(selectedOpenUrl, "_blank", "noopener,noreferrer")
-                                    }
+                                    onClick={handleOpenArtifact}
                                   >
                                     <ExternalLink className="mr-1 h-3.5 w-3.5" />
-                                    {i18n.t("previewPanel.artifactPreview.open")}
+                                    {openArtifactLabel}
                                   </Button>
                                 ) : null}
                               </div>
@@ -724,14 +783,27 @@ export default function AltusArtifactPreviewCard({
                                       i18n.t("previewPanel.reloadPreview")
                                     )}
                                   </Button>
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => setActiveTab("code")}
-                                  >
-                                    {i18n.t("previewPanel.viewSource")}
-                                  </Button>
+                                  {showSourceControls ? (
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => setActiveTab("code")}
+                                    >
+                                      {i18n.t("previewPanel.viewSource")}
+                                    </Button>
+                                  ) : null}
+                                  {canOpenArtifact ? (
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={handleOpenArtifact}
+                                    >
+                                      <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                                      {openArtifactLabel}
+                                    </Button>
+                                  ) : null}
                                 </div>
                               </>
                             )}

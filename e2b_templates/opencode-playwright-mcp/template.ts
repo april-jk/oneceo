@@ -1,8 +1,36 @@
 import { Template } from 'e2b';
 
 const playwrightPath = '/opt/ms-playwright';
+const globalNodeModules = '/usr/local/lib/node_modules';
 const opencodeBaseDir = '/opt/.altus/opencode';
 const sandboxUser = 'user:user';
+const playwrightMcpWrapperInstall = `node <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const childProcess = require('child_process');
+const root = childProcess.execSync('npm root -g', { encoding: 'utf8' }).trim();
+const packageDir = path.join(root, '@playwright', 'mcp');
+const packageJson = JSON.parse(fs.readFileSync(path.join(packageDir, 'package.json'), 'utf8'));
+const bin = packageJson.bin;
+const relativeBin = typeof bin === 'string'
+  ? bin
+  : bin && typeof bin === 'object'
+    ? bin['playwright-mcp'] || Object.values(bin)[0]
+    : '';
+if (!relativeBin) {
+  throw new Error('@playwright/mcp package.json does not expose a bin entry');
+}
+const binPath = path.resolve(packageDir, relativeBin);
+if (!fs.existsSync(binPath)) {
+  throw new Error('@playwright/mcp bin entry is missing: ' + binPath);
+}
+fs.writeFileSync('/usr/local/bin/playwright-mcp', [
+  '#!/usr/bin/env bash',
+  'export NODE_PATH="\${NODE_PATH:-/usr/local/lib/node_modules}"',
+  'exec node ' + JSON.stringify(binPath) + ' "$@"',
+  '',
+].join('\\n'), { mode: 0o755 });
+NODE`;
 
 export function buildTemplate(input?: {
   patchUrl?: string;
@@ -88,6 +116,7 @@ export function buildTemplate(input?: {
       `chown -R ${sandboxUser} /opt/browser-use`,
       `mkdir -p ${playwrightPath}`,
       'npm install -g playwright @playwright/mcp@latest',
+      playwrightMcpWrapperInstall,
       `PLAYWRIGHT_BROWSERS_PATH=${playwrightPath} playwright install --with-deps chromium`,
       `chmod -R 755 ${playwrightPath}`,
       `chown -R ${sandboxUser} ${playwrightPath}`,
@@ -95,6 +124,15 @@ export function buildTemplate(input?: {
     .setUser('user')
     .setEnvs({
       PLAYWRIGHT_BROWSERS_PATH: playwrightPath,
+      PLAYWRIGHT_HEADLESS: 'false',
+      ONECEO_PLAYWRIGHT_CDP_URL: 'http://127.0.0.1:9222',
+      ONECEO_NPM_GLOBAL_ROOT: globalNodeModules,
+      NODE_PATH: globalNodeModules,
+      ONECEO_PLAYWRIGHT_MCP_COMMAND: 'playwright-mcp',
+      ONECEO_BROWSER_USE_COMMAND: 'browser-use',
+      ONECEO_BROWSER_USE_VENV: '/opt/browser-use',
+      ONECEO_NEKO_BINARY: '/usr/local/bin/neko',
+      ONECEO_NEKO_STATIC_ROOT: '/opt/neko/client/dist',
       OSAC_TEMPLATE_PREBUILT_VERSION: input?.osacVersion || '',
     });
 }

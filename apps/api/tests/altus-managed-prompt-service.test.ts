@@ -107,9 +107,13 @@ test('managed prompt defaults debug and testing to Playwright on the same n.eko 
   assert.match(prompt, /use Playwright \/ playwright-mcp by default to inspect or test the same n\.eko Chromium session through CDP 9222/i);
   assert.match(prompt, /ONECEO_PLAYWRIGHT_CDP_URL=http:\/\/127\.0\.0\.1:9222/i);
   assert.match(prompt, /PLAYWRIGHT_BROWSERS_PATH=\/opt\/ms-playwright/i);
+  assert.match(prompt, /NODE_PATH=\/usr\/local\/lib\/node_modules/i);
+  assert.match(prompt, /playwright-mcp=\/usr\/local\/bin\/playwright-mcp/i);
+  assert.match(prompt, /browser-use=\/usr\/local\/bin\/browser-use/i);
+  assert.match(prompt, /neko=\/usr\/local\/bin\/neko/i);
   assert.match(prompt, /data-oneceo-app-status/i);
   assert.match(prompt, /app_runtime_error/i);
-  assert.match(prompt, /Do not search for global Playwright paths/i);
+  assert.match(prompt, /Do not search for these paths/i);
   assert.match(prompt, /do not create ad-hoc screenshot scripts such as `screenshot-test\.mjs`/i);
   assert.match(prompt, /required screenshot evidence comes from platform tool results/i);
   assert.match(prompt, /captured as a Playwright screenshot and attached to the corresponding Action/i);

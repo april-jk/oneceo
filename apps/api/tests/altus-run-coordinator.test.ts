@@ -2411,7 +2411,7 @@ test('execute blocks website completion when screenshot is captured but visual c
     assert.equal(executeMock.mock.callCount(), 3);
     assert.deepEqual(lifecycleCalls, ['running', 'failed']);
     assert.equal(state.status, 'failed');
-    assert.match(state.stopReason || '', /managed_run_tool_round_limit_exceeded/);
+    assert.match(state.stopReason || '', /我已经停止继续尝试/);
     const blockedComplete = eventCalls.find(
       (entry) => entry.eventType === 'tool_call_failed' && entry.payload.toolName === 'complete_task'
     );
@@ -3971,7 +3971,7 @@ test('execute records plain-text continuation recovery before failing the manage
   assert.equal(executeMock.mock.callCount(), 0);
   assert.deepEqual(lifecycleCalls, ['running', 'failed']);
   assert.equal(state.status, 'failed');
-  assert.match(state.stopReason || '', /managed_model_plain_text_without_tool_call/);
+  assert.match(state.stopReason || '', /这次任务没有顺利完成/);
   assert.equal(
     loopSnapshots.some((snapshot) => snapshot.lastTransitionReason === 'plain_text_continuation_prompted'),
     true
@@ -5239,4 +5239,204 @@ test('execute switches to vision model when conversation contains image blocks',
       process.env.ALTUS_MANAGED_VISION_MODEL = originalVisionModel;
     }
   }
+});
+
+test('debug_open_page failure tracking blocks repeated same-target retries', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+  const state = {
+    lastKey: '',
+    repeatCount: 0,
+    failureCounts: {},
+  };
+  const args = { url: 'http://127.0.0.1:3000/' };
+  const rawError =
+    'debug_open_page_failed:__ONECEO_DEBUG_TARGET_UNREACHABLE__\nFailed to connect to 127.0.0.1 port 3000';
+
+  const first = coordinator.testRecordDebugOpenPageFailure({
+    args,
+    rawError,
+    sanitizedError: '调试页面目标地址暂不可访问',
+    state,
+  });
+  const second = coordinator.testRecordDebugOpenPageFailure({
+    args,
+    rawError,
+    sanitizedError: '调试页面目标地址暂不可访问',
+    state,
+  });
+
+  assert.equal(first.errorCode, 'debug_target_unreachable');
+  assert.equal(first.blocked, false);
+  assert.equal(first.userActionRequired, false);
+  assert.equal(second.errorCode, 'debug_open_page_repeat_blocked');
+  assert.equal(second.blocked, true);
+  assert.equal(second.userActionRequired, true);
+  assert.match(second.sanitizedError, /连续打开失败/);
+  assert.match(second.rawError, /same_reason=debug_target_unreachable/);
+});
+
+test('debug_open_page failure tracking does not block opaque tool execution failures', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+  const state = {
+    lastKey: '',
+    repeatCount: 0,
+    failureCounts: {},
+  };
+  const args = { url: 'http://127.0.0.1:8080/' };
+  const rawError = 'debug_open_page_failed:exit status 1';
+
+  const first = coordinator.testRecordDebugOpenPageFailure({
+    args,
+    rawError,
+    sanitizedError: '调试页面校验未返回具体状态',
+    state,
+  });
+  const second = coordinator.testRecordDebugOpenPageFailure({
+    args,
+    rawError,
+    sanitizedError: '调试页面校验未返回具体状态',
+    state,
+  });
+
+  assert.equal(first.errorCode, 'tool_execution_failed');
+  assert.equal(first.blocked, false);
+  assert.equal(second.errorCode, 'tool_execution_failed');
+  assert.equal(second.blocked, false);
+  assert.equal(second.userActionRequired, false);
+});
+
+test('debug_open_page failure tracking normalizes localhost aliases and counts across corrective steps', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+  const state = {
+    lastKey: '',
+    repeatCount: 0,
+    failureCounts: {},
+  };
+  const rawError =
+    'debug_open_page_failed:__ONECEO_DEBUG_TARGET_UNREACHABLE__\nFailed to connect to 127.0.0.1 port 3000';
+
+  const first = coordinator.testRecordDebugOpenPageFailure({
+    args: { url: 'http://localhost:3000/?cache=1#top' },
+    rawError,
+    sanitizedError: '调试页面目标地址暂不可访问',
+    state,
+  });
+  state.lastKey = '';
+  state.repeatCount = 0;
+  const second = coordinator.testRecordDebugOpenPageFailure({
+    args: { url: '127.0.0.1:3000/' },
+    rawError,
+    sanitizedError: '调试页面目标地址暂不可访问',
+    state,
+  });
+
+  assert.equal(first.blocked, false);
+  assert.equal(second.errorCode, 'debug_open_page_repeat_blocked');
+  assert.equal(second.blocked, true);
+  assert.match(second.rawError, /same_target=http:\/\/127\.0\.0\.1:3000/);
+});
+
+test('execute reports repeated debug_open_page failures with sanitized terminal message', async () => {
+  const state = createState(
+    '7f0c2ad3-5a58-4d3a-b0ab-54167ae0fb31',
+    '8832652e-b9b9-485a-b82d-0a9beced815d',
+  );
+  state.input.taskIntentProfile = {
+    ...state.input.taskIntentProfile,
+    webArtifactRequested: true,
+  };
+  const lifecycleFailures: Array<{
+    message: string;
+    options?: { userMessage?: string; reasonCode?: string };
+  }> = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-debug-repeat',
+      workspaceRoot: '/workspace/8832652e-b9b9-485a-b82d-0a9beced815d',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => undefined),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+  const lifecycleService = {
+    markRunning: mock.fn(async () => undefined),
+    markWaitingUser: mock.fn(async () => undefined),
+    markCompleted: mock.fn(async () => undefined),
+    markFailed: mock.fn(async (_failedState: AltusRunState, message: string, options?: { userMessage?: string; reasonCode?: string }) => {
+      lifecycleFailures.push({ message, options });
+    }),
+    markStopped: mock.fn(async () => undefined),
+    syncLoopSnapshot: mock.fn(async () => undefined),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: `tool-debug-open-${fetchCount}`,
+                  type: 'function',
+                  function: {
+                    name: 'debug_open_page',
+                    arguments: JSON.stringify({ url: 'http://localhost:3000/?v=1' }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => {
+    throw new Error(
+      'debug_open_page_failed:__ONECEO_DEBUG_TARGET_UNREACHABLE__\nFailed to connect to 127.0.0.1 port 3000'
+    );
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(fetchCount, 2);
+  assert.equal(state.status, 'failed');
+  assert.equal(state.stopReason?.includes('debug_open_page_repeat_blocked'), false);
+  assert.equal(state.stopReason?.includes('same_target='), false);
+  assert.match(state.stopReason || '', /视觉检测暂时无法继续/);
+  assert.equal(lifecycleFailures.length, 1);
+  assert.match(lifecycleFailures[0]?.message || '', /debug_open_page_repeat_blocked/);
+  assert.match(lifecycleFailures[0]?.message || '', /same_target=http:\/\/127\.0\.0\.1:3000/);
+  assert.equal(lifecycleFailures[0]?.options?.reasonCode, 'debug_open_page_repeat_blocked');
+  assert.match(lifecycleFailures[0]?.options?.userMessage || '', /视觉检测暂时无法继续/);
+  assert.equal(lifecycleFailures[0]?.options?.userMessage?.includes('same_target='), false);
+  const failedEvents = eventCalls.filter((entry) => entry.eventType === 'tool_call_failed');
+  assert.equal(failedEvents.length, 2);
+  assert.equal(JSON.stringify(failedEvents[1]?.payload.error || '').includes('same_target='), false);
 });

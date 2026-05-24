@@ -82,8 +82,76 @@ test('appendRunEvent projects managed tool terminal events into conversation tim
   assert.equal(publishArgs[0], 'run-1');
   assert.equal(publishArgs[1]?.eventType, 'tool_call_completed');
   assert.equal(publishArgs[1]?.sequence, 7);
+  assert.equal(publishArgs[1]?.payload.transitionReason, undefined);
+  assert.equal(publishArgs[1]?.payload.currentRound, undefined);
+  assert.equal(publishArgs[1]?.payload.maxRounds, undefined);
+  assert.equal(publishArgs[1]?.payload.debug, undefined);
 
   assert.deepEqual(callOrder, ['run_event', 'timeline_projection', 'redis_event', 'sse_publish']);
+});
+
+test('appendRunEvent strips raw tool diagnostics from user-visible projections and streams', async () => {
+  mock.method(taskSessionRunDAO, 'appendRunEvent', async () => ({
+    id: 'run-event-raw-1',
+    sequence: 13,
+    createdAt: new Date('2026-05-24T06:50:00.000Z'),
+  }) as any);
+  const addMessageMock = mock.method(taskCreationSessionDAO, 'addMessage', async (input: any) => input);
+  const publishMock = mock.method(altusManagedStreamService, 'publish', () => {});
+  const writer = new AltusRunEventWriter({
+    appendRunEvent: async () => undefined,
+  } as any);
+  const rawError =
+    'debug_open_page_repeat_blocked: same_target=http://127.0.0.1:8080 same_reason=tool_execution_failed repeat_count=2 last_error=exit status 1';
+
+  await writer.appendRunEvent('run-raw-1', 'session-raw-1', 'user-raw-1', 'tool_call_failed', {
+    toolName: 'debug_open_page',
+    toolCallId: 'tool-raw-1',
+    content: '视觉检测页面打开失败',
+    error: '同一个预览目标连续打开失败，平台已停止重复截图重试；Altus 需要先修复服务、端口或文件路径后再重新打开。',
+    transitionReason: 'tool_failed_user_action_required',
+    debugOpenPageFailure: {
+      errorCode: 'debug_open_page_repeat_blocked',
+      rawError,
+    },
+    internalView: {
+      detail: `工具: debug_open_page\nrawError: ${rawError}`,
+    },
+    toolResultEnvelope: {
+      status: 'error',
+      toolUseId: 'tool-raw-1',
+      toolName: 'debug_open_page',
+      runId: 'run-raw-1',
+      modelRoundId: '1',
+      args: { url: 'http://127.0.0.1:8080/' },
+      contentForModel: JSON.stringify({ status: 'error', error: rawError }),
+      contentForUser: '同一个预览目标连续打开失败，平台已停止重复截图重试；Altus 需要先修复服务、端口或文件路径后再重新打开。',
+      retryable: false,
+      sideEffects: [],
+      activatedSkills: [],
+      errorCode: 'debug_open_page_repeat_blocked',
+      errorMessage: rawError,
+    },
+  });
+
+  const [projection] = addMessageMock.mock.calls[0]?.arguments as any[];
+  const metadataText = JSON.stringify(projection.metadata);
+  assert.equal(metadataText.includes(rawError), false);
+  assert.equal(metadataText.includes('same_target='), false);
+  assert.equal(projection.metadata?.internalView, undefined);
+  assert.equal(projection.metadata?.debugOpenPageFailure, undefined);
+  assert.equal(projection.metadata?.toolResultEnvelope?.errorMessage, undefined);
+  assert.equal(projection.metadata?.toolResultEnvelope?.contentForModel, undefined);
+  assert.equal(projection.metadata?.toolResultEnvelope?.contentForUser, '同一个预览目标连续打开失败，平台已停止重复截图重试；Altus 需要先修复服务、端口或文件路径后再重新打开。');
+
+  const publishArgs = publishMock.mock.calls[0]?.arguments as any[];
+  const streamedText = JSON.stringify(publishArgs[1]?.payload);
+  assert.equal(streamedText.includes(rawError), false);
+  assert.equal(streamedText.includes('same_target='), false);
+  assert.equal(publishArgs[1]?.payload.internalView, undefined);
+  assert.equal(publishArgs[1]?.payload.debugOpenPageFailure, undefined);
+  assert.equal(publishArgs[1]?.payload.toolResultEnvelope?.errorMessage, undefined);
+  assert.equal(publishArgs[1]?.payload.toolResultEnvelope?.contentForModel, undefined);
 });
 
 test('appendRunEvent projects browser screenshot evidence for replay actions', async () => {

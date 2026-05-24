@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   getWebsitePreviewSnapshotIssue,
   getScaledWebPreviewFrame,
+  resolveArtifactOpenTarget,
   resolveArtifactDeploymentPreviewUrl,
+  shouldShowArtifactSourceControls,
 } from "../components/AltusArtifactPreviewCard";
 
 describe("altus artifact preview card scaled web preview", () => {
@@ -19,6 +21,49 @@ describe("altus artifact preview card scaled web preview", () => {
       width: 1440,
       height: 500,
       scale: 1,
+    });
+  });
+});
+
+describe("altus artifact preview card delivery actions", () => {
+  it("hides source controls for website delivery cards", () => {
+    expect(shouldShowArtifactSourceControls("web-preview")).toBe(false);
+    expect(shouldShowArtifactSourceControls("artifact-browser")).toBe(true);
+  });
+
+  it("opens website delivery cards through remote debug instead of raw files", () => {
+    expect(
+      resolveArtifactOpenTarget({
+        displayMode: "web-preview",
+        remoteDebugAvailable: true,
+        selectedFileOpenUrl:
+          "/api/task-creation/sessions/session-1/workspace/raw/client/index.html",
+      }),
+    ).toEqual({ kind: "remote-debug" });
+  });
+
+  it("does not expose transient raw urls for website delivery cards without debug", () => {
+    expect(
+      resolveArtifactOpenTarget({
+        displayMode: "web-preview",
+        remoteDebugAvailable: false,
+        selectedFileOpenUrl:
+          "/api/task-creation/sessions/session-1/workspace/raw/client/index.html",
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps file url opening for regular artifact browsing", () => {
+    expect(
+      resolveArtifactOpenTarget({
+        displayMode: "artifact-browser",
+        remoteDebugAvailable: true,
+        selectedFileOpenUrl:
+          "/api/task-creation/sessions/session-1/workspace/raw/client/index.html",
+      }),
+    ).toEqual({
+      kind: "file-url",
+      url: "/api/task-creation/sessions/session-1/workspace/raw/client/index.html",
     });
   });
 });

@@ -216,6 +216,54 @@ test('resolveCommandCandidate prefers runnable start/dev scripts and Vite ports'
   );
 });
 
+test('resolveCommandCandidate uses fixed OneCEO shell port and healthcheck contract', () => {
+  const service = new TaskSessionWebsitePreviewSnapshotService({
+    e2b: {} as any,
+    uploadToR2: async () => undefined,
+    downloadFromR2: async () => Buffer.from(''),
+  });
+
+  assert.deepEqual(
+    (service as any).resolveCommandCandidate({
+      manifest: {
+        start: {
+          command: 'node dist/index.js',
+          portEnv: 'PORT',
+        },
+        healthcheck: {
+          path: '/api/system/health',
+        },
+      },
+      packageJson: null,
+    }),
+    {
+      command: 'node dist/index.js',
+      port: 8080,
+      healthPath: '/api/system/health',
+      reason: 'manifest_start',
+      appendVitePortArgs: false,
+    },
+  );
+
+  assert.deepEqual(
+    (service as any).resolveCommandCandidate({
+      manifest: null,
+      packageJson: {
+        scripts: {
+          start: 'node dist/index.js',
+        },
+      },
+    }),
+    {
+      command: 'npm run start',
+      port: 8080,
+      healthPath: '/api/system/health',
+      reason: 'package_script_start',
+      appendVitePortArgs: false,
+    },
+  );
+});
+
 test('captureManagedRunPreview captures debug-opened html deliverables without a start command', async () => {
   const capturedCommands: string[] = [];
   let uploadedKey = '';

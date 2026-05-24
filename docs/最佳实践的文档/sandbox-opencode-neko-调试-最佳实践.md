@@ -100,6 +100,12 @@ GET /api/task-creation/sessions/<taskSessionId>/debug
 - n.eko 端口：`NEKO_PORT`（默认 8081）
 - Chromium CDP 端口：`NEKO_CDP_PORT`（默认 9222）
 - Xvfb Display：`NEKO_DISPLAY`（默认 `:0`）
+- Playwright CDP 固定入口：`ONECEO_PLAYWRIGHT_CDP_URL=http://127.0.0.1:9222`
+- Playwright 浏览器缓存：`PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`
+- 全局 Node 模块：`NODE_PATH=/usr/local/lib/node_modules`
+- Playwright MCP 固定命令：`/usr/local/bin/playwright-mcp`
+- Browser Use 固定命令：`/usr/local/bin/browser-use`，venv 为 `/opt/browser-use`
+- n.eko 二进制：`/usr/local/bin/neko`，静态前端为 `/opt/neko/client/dist`
 - `NEKO_WEBRTC_FORCE_MUX`：默认 `true`（推荐，E2B 场景优先）。
 - `NEKO_WEBRTC_TCPMUX`：默认 `8082`。
 - `NEKO_WEBRTC_UDPMUX`：默认 `8083`。TURN 场景下浏览器常返回 `udp4 relay` candidate，必须启用 UDP mux，否则 n.eko/Pion 会忽略 UDP candidate 并导致 ICE 失败。
@@ -113,6 +119,8 @@ GET /api/task-creation/sessions/<taskSessionId>/debug
 - n.eko Web UI 必须通过 `server.static` 指向构建产物（如 `/tmp/neko-src/client/dist`），否则访问 `https://8081-<sandboxId>.e2b.app` 会返回 404。
 - 本次验证默认关闭 `desktop.input.enabled`，避免缺少 `xf86-input-neko` 驱动导致服务崩溃；如需可交互控制，需要补齐 Xorg + `xf86-input-neko` 驱动配置。
 - 当前脚本为 **单沙箱验证用途**，后续可转为模板化或自动化启动。
+- 运行期 OpenCode / Codex 配置必须直接调用 `/usr/local/bin/playwright-mcp`，禁止使用 `npx @playwright/mcp@latest`，避免 Altus 在用户任务中重复搜索或安装浏览器依赖。
+- `debug_open_page` 失败不能无限重试。同一目标同一原因连续失败时应先修复服务、端口、文件路径或 sandbox 浏览器能力，再重新打开；平台会用 `debug_open_page_repeat_blocked` 对重复失败止损。
 
 ## 后续可扩展
 - 在 sandbox 启动流程中内置 n.eko start cmd

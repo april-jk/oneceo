@@ -302,7 +302,7 @@ export async function ensureNekoDebug(
   const natConfigTag = nat1to1Manual ? `manual-${nat1to1Manual}` : autoNat ? 'auto' : 'none';
   const iceTag = requireTurn ? (turnConfigured ? 'turn-on' : 'turn-off') : 'turn-optional';
   const configVersion = [
-    'neko-noauth-v1',
+    'neko-noauth-v3-edgefill',
     `${screenWidth}x${screenHeight}`,
     `mode-${useMux ? 'mux' : 'epr'}`,
     `tcp-${tcpMuxPort}`,
@@ -388,6 +388,7 @@ export DEBIAN_FRONTEND=noninteractive
 PLAYWRIGHT_BROWSERS_PATH="\${PLAYWRIGHT_BROWSERS_PATH:-/opt/ms-playwright}"
 NEKO_STATIC="/opt/neko/client/dist"
 NEKO_CONFIG="/tmp/oneceo/neko.yml"
+EDGE_CSS_NAME="oneceo-edgefill-v3.css"
 
 if ! command -v Xvfb >/dev/null 2>&1; then
   echo "[neko] Xvfb missing"
@@ -403,6 +404,87 @@ if [ ! -d "$NEKO_STATIC" ]; then
   echo "[neko] static assets missing at $NEKO_STATIC"
   exit 33
 fi
+
+cat <<'EOF_EDGE_CSS' > "$NEKO_STATIC/$EDGE_CSS_NAME"
+html,
+body,
+#app,
+#neko,
+#neko.minimal,
+.neko-main,
+.video-container,
+.video,
+.player,
+.player-container {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  background: transparent !important;
+}
+
+html,
+body {
+  width: 100vw !important;
+  height: 100vh !important;
+  overscroll-behavior: none !important;
+}
+
+#neko,
+#neko.minimal,
+.neko-main,
+.video-container,
+.video,
+.player,
+.player-container {
+  display: flex !important;
+  flex: 1 1 auto !important;
+}
+
+#app,
+#neko,
+#neko.minimal,
+.neko-main,
+.video-container,
+.video,
+.player,
+.player-container {
+  position: absolute !important;
+  inset: 0 !important;
+}
+
+.player-container video,
+video,
+canvas {
+  position: absolute !important;
+  inset: -1px !important;
+  width: calc(100% + 2px) !important;
+  height: calc(100% + 2px) !important;
+  object-fit: fill !important;
+  background: transparent !important;
+}
+
+.player-overlay {
+  background: transparent !important;
+}
+
+.player-aspect {
+  display: none !important;
+}
+EOF_EDGE_CSS
+
+for html in "$NEKO_STATIC"/index.html "$NEKO_STATIC"/*.html; do
+  if [ -f "$html" ]; then
+    sed -i 's#<link[^>]*oneceo-edgefill[^>]*>##g' "$html" || true
+    sed -i "s#</head>#<link rel=\\"stylesheet\\" href=\\"/$EDGE_CSS_NAME\\"></head>#" "$html" || true
+  fi
+done
 
 CHROME_BIN=""
 if command -v chromium-browser >/dev/null 2>&1; then
@@ -451,6 +533,7 @@ EOF_CFG
 pkill -x Xvfb || true
 pkill -x chromium || true
 pkill -x chromium-browser || true
+pkill -x chrome || true
 sleep 1
 nohup Xvfb ${display} -screen 0 ${screenWidth}x${screenHeight}x24 -nolisten tcp > /tmp/xvfb.log 2>&1 &
 
@@ -463,7 +546,12 @@ for i in $(seq 1 10); do
 done
 
 if command -v xrandr >/dev/null 2>&1; then
+  xrandr --fb ${screenWidth}x${screenHeight} || true
   xrandr -s ${screenWidth}x${screenHeight} || xrandr --output screen --mode ${screenWidth}x${screenHeight} || true
+fi
+
+if command -v xsetroot >/dev/null 2>&1; then
+  xsetroot -solid "#f9fbfd" || true
 fi
 
 cdp_ready="false"
@@ -472,9 +560,10 @@ if curl -fsSL --max-time 2 "http://127.0.0.1:${cdpPort}/json/version" >/dev/null
 fi
 
 if [[ "$cdp_ready" != "true" ]]; then
-  if pgrep -x chromium >/dev/null 2>&1 || pgrep -x chromium-browser >/dev/null 2>&1; then
+  if pgrep -x chromium >/dev/null 2>&1 || pgrep -x chromium-browser >/dev/null 2>&1 || pgrep -x chrome >/dev/null 2>&1; then
     pkill -x chromium || true
     pkill -x chromium-browser || true
+    pkill -x chrome || true
     sleep 1
   fi
   nohup "$CHROME_BIN" \
@@ -486,8 +575,13 @@ if [[ "$cdp_ready" != "true" ]]; then
     --no-first-run \
     --no-default-browser-check \
     --disable-features=TranslateUI \
+    --force-device-scale-factor=1 \
+    --window-position=0,0 \
     --window-size=${screenWidth},${screenHeight} \
-    about:blank \
+    --start-maximized \
+    --start-fullscreen \
+    --kiosk \
+    --app=about:blank \
     > /tmp/chromium.log 2>&1 &
   for i in $(seq 1 20); do
     if curl -fsSL --max-time 2 "http://127.0.0.1:${cdpPort}/json/version" >/dev/null 2>&1; then

@@ -8,6 +8,19 @@
 - Playwright 必须连接到 n.eko 正在回传的同一个 Chromium CDP 端口（默认 `http://127.0.0.1:9222`），不要启动独立浏览器。
 - `browser-use` 仅作为外部网站探索、导航和表单交互的辅助能力；需要复用调试浏览器时必须显式连接同一个 CDP。
 
+固定依赖路径：
+
+- `ONECEO_PLAYWRIGHT_CDP_URL=http://127.0.0.1:9222`
+- `PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`
+- `NODE_PATH=/usr/local/lib/node_modules`
+- `playwright-mcp=/usr/local/bin/playwright-mcp`
+- `browser-use=/usr/local/bin/browser-use`
+- `browser-use venv=/opt/browser-use`
+- `neko=/usr/local/bin/neko`
+- `n.eko static root=/opt/neko/client/dist`
+
+运行期 OpenCode / Codex 配置必须直接调用 `playwright-mcp`，不要使用 `npx @playwright/mcp@latest`，避免用户任务中重新解析、下载或搜索依赖。
+
 ## 构建
 
 需要本机已安装并登录 `e2b` CLI：

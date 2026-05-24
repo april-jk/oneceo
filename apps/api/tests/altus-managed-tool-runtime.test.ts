@@ -1557,6 +1557,194 @@ test('shell_execute manages persistent local server commands as background servi
   ]);
 });
 
+test('shell_execute manages fixed OneCEO shell node start command as background service', async () => {
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async (_sandboxId: string, command: string) => {
+    assert.match(command, /service_health_url='http:\/\/127\.0\.0\.1:8080\/api\/system\/health'/);
+    assert.match(command, /setsid sh -lc/);
+    return {
+      stdout: [
+        '__ONECEO_SERVICE_PID__=1234',
+        '__ONECEO_SERVICE_URL__=http://127.0.0.1:8080/',
+        '__ONECEO_SERVICE_HEALTH_URL__=http://127.0.0.1:8080/api/system/health',
+        '__ONECEO_SERVICE_ID__=managed-session-1-1',
+        '__ONECEO_SERVICE_STATUS__=ready',
+        '__ONECEO_SERVICE_PORT__=8080',
+        '__ONECEO_SERVICE_LOG__=/tmp/oneceo-managed-services/session-1/managed-session-1-1.log',
+        '__ONECEO_SERVICE_PID_FILE__=/tmp/oneceo-managed-services/session-1/managed-session-1-1.pid',
+      ].join('\n'),
+      stderr: '',
+      exitCode: 0,
+    } as any;
+  });
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: mock.fn(async () => undefined) as any,
+      markSandboxDirty: mock.fn(async () => undefined) as any,
+    }
+  );
+
+  const result = await runtime.execute('shell_execute', {
+    command: 'node dist/index.js',
+    cwd: '.',
+  });
+
+  assert.equal(result.type, 'result');
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.runMode, 'background_service');
+  assert.equal(payload.service.port, 8080);
+  assert.equal(payload.service.url, 'http://127.0.0.1:8080/');
+  assert.equal(payload.service.healthUrl, 'http://127.0.0.1:8080/api/system/health');
+  assert.equal(runCommandMock.mock.callCount(), 1);
+});
+
+test('shell_execute resolves fixed OneCEO shell npm start from workspace package metadata', async () => {
+  const packageJson = Buffer.from(JSON.stringify({
+    scripts: {
+      start: 'node dist/index.js',
+    },
+  })).toString('base64');
+  const manifestJson = Buffer.from(JSON.stringify({
+    start: {
+      command: 'node dist/index.js',
+      portEnv: 'PORT',
+    },
+    healthcheck: {
+      path: '/api/system/health',
+    },
+  })).toString('base64');
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async (_sandboxId: string, command: string) => {
+    if (command.includes('__ONECEO_PACKAGE_JSON__')) {
+      return {
+        stdout: [
+          `__ONECEO_MANIFEST_JSON__=${manifestJson}`,
+          `__ONECEO_PACKAGE_JSON__=${packageJson}`,
+        ].join('\n'),
+        stderr: '',
+        exitCode: 0,
+      } as any;
+    }
+    assert.match(command, /service_command='npm run start'/);
+    assert.match(command, /service_launch_command='PORT=8080; export PORT; npm run start'/);
+    assert.match(command, /service_health_url='http:\/\/127\.0\.0\.1:8080\/api\/system\/health'/);
+    return {
+      stdout: [
+        '__ONECEO_SERVICE_URL__=http://127.0.0.1:8080/',
+        '__ONECEO_SERVICE_HEALTH_URL__=http://127.0.0.1:8080/api/system/health',
+        '__ONECEO_SERVICE_ID__=managed-session-1-2',
+        '__ONECEO_SERVICE_STATUS__=ready',
+        '__ONECEO_SERVICE_PORT__=8080',
+        '__ONECEO_SERVICE_LOG__=/tmp/oneceo-managed-services/session-1/managed-session-1-2.log',
+        '__ONECEO_SERVICE_PID_FILE__=/tmp/oneceo-managed-services/session-1/managed-session-1-2.pid',
+      ].join('\n'),
+      stderr: '',
+      exitCode: 0,
+    } as any;
+  });
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: mock.fn(async () => undefined) as any,
+      markSandboxDirty: mock.fn(async () => undefined) as any,
+    }
+  );
+
+  const result = await runtime.execute('shell_execute', {
+    command: 'npm run start',
+    cwd: '.',
+  });
+
+  assert.equal(result.type, 'result');
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.runMode, 'background_service');
+  assert.equal(payload.service.port, 8080);
+  assert.equal(payload.service.healthUrl, 'http://127.0.0.1:8080/api/system/health');
+  assert.equal(runCommandMock.mock.callCount(), 2);
+});
+
+test('shell_execute injects manifest preview port into fixed OneCEO shell package start', async () => {
+  const packageJson = Buffer.from(JSON.stringify({
+    scripts: {
+      start: 'node dist/index.js',
+    },
+  })).toString('base64');
+  const manifestJson = Buffer.from(JSON.stringify({
+    start: {
+      command: 'node dist/index.js',
+      port: 8091,
+    },
+    healthcheck: {
+      path: '/api/system/health',
+    },
+  })).toString('base64');
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async (_sandboxId: string, command: string) => {
+    if (command.includes('__ONECEO_PACKAGE_JSON__')) {
+      return {
+        stdout: [
+          `__ONECEO_MANIFEST_JSON__=${manifestJson}`,
+          `__ONECEO_PACKAGE_JSON__=${packageJson}`,
+        ].join('\n'),
+        stderr: '',
+        exitCode: 0,
+      } as any;
+    }
+    assert.match(command, /service_launch_command='PORT=8091; export PORT; npm run start'/);
+    assert.match(command, /service_health_url='http:\/\/127\.0\.0\.1:8091\/api\/system\/health'/);
+    return {
+      stdout: [
+        '__ONECEO_SERVICE_URL__=http://127.0.0.1:8091/',
+        '__ONECEO_SERVICE_HEALTH_URL__=http://127.0.0.1:8091/api/system/health',
+        '__ONECEO_SERVICE_ID__=managed-session-1-3',
+        '__ONECEO_SERVICE_STATUS__=ready',
+        '__ONECEO_SERVICE_PORT__=8091',
+        '__ONECEO_SERVICE_LOG__=/tmp/oneceo-managed-services/session-1/managed-session-1-3.log',
+        '__ONECEO_SERVICE_PID_FILE__=/tmp/oneceo-managed-services/session-1/managed-session-1-3.pid',
+      ].join('\n'),
+      stderr: '',
+      exitCode: 0,
+    } as any;
+  });
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: mock.fn(async () => undefined) as any,
+      markSandboxDirty: mock.fn(async () => undefined) as any,
+    }
+  );
+
+  const result = await runtime.execute('shell_execute', {
+    command: 'npm run start',
+    cwd: '.',
+  });
+
+  assert.equal(result.type, 'result');
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.service.port, 8091);
+  assert.equal(payload.service.healthUrl, 'http://127.0.0.1:8091/api/system/health');
+  assert.equal(runCommandMock.mock.callCount(), 2);
+});
+
 test('shell_execute rejects persistent local server commands in explicit foreground mode', async () => {
   const runtime = new AltusManagedToolRuntime({
     sessionId: 'session-1',
@@ -1570,6 +1758,26 @@ test('shell_execute rejects persistent local server commands in explicit foregro
   await assert.rejects(
     runtime.execute('shell_execute', {
       command: 'python3 -m http.server 8080',
+      cwd: '.',
+      runMode: 'foreground',
+    }),
+    /shell_execute_persistent_local_server_foreground_blocked/
+  );
+});
+
+test('shell_execute rejects fixed OneCEO shell start command in explicit foreground mode', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  await assert.rejects(
+    runtime.execute('shell_execute', {
+      command: 'PORT=8090 node dist/index.js',
       cwd: '.',
       runMode: 'foreground',
     }),
@@ -2301,6 +2509,56 @@ test('debug_open_page rejects target pages that return bad HTTP status', async (
       url: 'http://127.0.0.1:8080/',
     }),
     /debug_open_page_failed:__ONECEO_DEBUG_TARGET_BAD_STATUS__=500/
+  );
+
+  assert.equal(runCommandMock.mock.callCount(), 1);
+  assert.equal(markSandboxDirtyMock.mock.callCount(), 0);
+});
+
+test('debug_open_page preserves diagnostics when the debug command exits without stdout', async () => {
+  const ensureDebugMock = mock.fn(
+    async () =>
+      ({
+        ready: true,
+        url: 'https://8081-sandbox-1.e2b.app?pwd=oneceo&usr=oneceo',
+        status: 'running',
+        updatedAt: new Date().toISOString(),
+        sandboxId: 'sandbox-1',
+        port: 8081,
+        display: ':0',
+        cdpPort: 9222,
+      }) as any
+  );
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async () => {
+    throw new Error('exit status 1');
+  });
+  const touchSandboxMock = mock.fn(async () => undefined);
+  const markSandboxDirtyMock = mock.fn(async () => undefined);
+
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: touchSandboxMock as any,
+      markSandboxDirty: markSandboxDirtyMock as any,
+    },
+    {
+      ensureNekoDebug: ensureDebugMock as any,
+      issueIceServersForUser: mock.fn(async () => null) as any,
+    },
+  );
+
+  await assert.rejects(
+    runtime.execute('debug_open_page', {
+      url: 'http://127.0.0.1:8080/',
+    }),
+    /__ONECEO_DEBUG_COMMAND_FAILED__[\s\S]*__ONECEO_DEBUG_SCRIPT_EXIT__=1[\s\S]*exit status 1/
   );
 
   assert.equal(runCommandMock.mock.callCount(), 1);

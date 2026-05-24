@@ -152,7 +152,6 @@ import {
   buildTaskSessionDeploymentPrompt,
   type TaskSessionDeploymentPromptAction,
 } from "@/lib/task-session-deployment-prompts";
-import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
 import { resolveUserMessageReferences } from "@/lib/message-reference-parser";
 import { isManagedInternalSupportArtifact } from "@/lib/managed-artifact-visibility";
 import { readAltusMode } from "@/lib/altus-settings";
@@ -2820,14 +2819,6 @@ export default function Home() {
     setSelectedDiffId(target);
   };
 
-  const openWorkspacePreview = (path: string) => {
-    const normalizedPath = normalizeWorkspaceRelativePath(path, sessionId);
-    if (!normalizedPath) return;
-    setPreviewWorkspacePath(normalizedPath);
-    setPreviewTab("files");
-    setPreviewOpen(true);
-  };
-
   const approveGoogleWorkspaceConfirmation = useCallback(
     async (confirmation: GoogleWorkspaceConfirmationView) => {
       if (!sessionId) {
@@ -3315,7 +3306,6 @@ export default function Home() {
                   item={item}
                   onOpenDiffPreview={openDiffPreview}
                   onOpenManagedReplay={openAltusReplay}
-                  onOpenWorkspacePreview={openWorkspacePreview}
                   onDeployArtifact={deployFromArtifactCard}
                   runtimeSwitchBlocked={managedRunActive}
                   currentSessionId={sessionId}
@@ -6514,7 +6504,6 @@ function MessageBubble({
   item,
   onOpenDiffPreview,
   onOpenManagedReplay,
-  onOpenWorkspacePreview,
   onDeployArtifact,
   runtimeSwitchBlocked,
   currentSessionId,
@@ -6536,7 +6525,6 @@ function MessageBubble({
       view?: AltusDrawerView;
     },
   ) => void;
-  onOpenWorkspacePreview?: (path: string) => void;
   onDeployArtifact?: (path: string) => Promise<void> | void;
   runtimeSwitchBlocked?: boolean;
   currentSessionId?: string | null;
@@ -6814,7 +6802,10 @@ function MessageBubble({
           artifacts={item.artifacts}
           previewSnapshot={item.previewSnapshot}
           browserScreenshotFallback={item.browserScreenshotFallback}
-          onOpenViewer={onOpenWorkspacePreview}
+          displayMode="web-preview"
+          onOpenRemoteDebug={() =>
+            onOpenManagedReplay?.(item.runId, { view: "debug" })
+          }
           onDeployRequested={onDeployArtifact}
           runtimeSwitchBlocked={runtimeSwitchBlocked}
         />

@@ -22,6 +22,13 @@ import {
   type AltusManagedResourceToolName,
 } from './altus-managed-resource-tool-service';
 import {
+  extractPreviewServicePort,
+  isOneCeoFixedShellCommand,
+  isPackageStartCommand,
+  resolvePreviewServiceContract,
+  type PreviewServiceContract,
+} from './altus-preview-service-contract';
+import {
   asText,
   buildManagedMcpToolName,
   type ManagedCompletionAttachment,
@@ -1013,6 +1020,7 @@ function isPersistentLocalServerCommand(value: string) {
   const normalized = normalizeCommandForMatch(value);
   if (!normalized) return false;
   return (
+    isOneCeoFixedShellCommand(value) ||
     normalized.includes('python -m http.server') ||
     normalized.includes('python3 -m http.server') ||
     normalized.includes('npm run dev') ||
@@ -1033,6 +1041,9 @@ function sanitizeBackgroundServiceCommand(value: string) {
 
 function inferServicePort(command: string) {
   const normalized = normalizeCommandForMatch(command);
+  const previewServicePort = extractPreviewServicePort(command);
+  if (previewServicePort) return previewServicePort;
+  if (isOneCeoFixedShellCommand(command)) return 8080;
   const portEnv = command.match(/\bPORT=(\d{2,5})\b/);
   if (portEnv) return Number(portEnv[1]);
   const longPort = command.match(/(?:--port|-p)\s+(\d{2,5})\b/);
@@ -1043,6 +1054,12 @@ function inferServicePort(command: string) {
     return 5173;
   }
   return 0;
+}
+
+function inferServiceHealthPath(command: string, contract?: PreviewServiceContract | null) {
+  if (contract?.healthPath) return contract.healthPath;
+  if (isOneCeoFixedShellCommand(command)) return '/api/system/health';
+  return '';
 }
 
 function isLegacyNotionMcpShellCommand(value: string) {
@@ -1564,6 +1581,25 @@ export class AltusManagedToolRuntime {
     return result;
   }
 
+  private async runShellWithResultOnError(
+    command: string,
+    options?: { cwd?: string; timeoutMs?: number },
+    signal?: AbortSignal
+  ) {
+    try {
+      return await this.runShell(command, options, signal);
+    } catch (error) {
+      const record = error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
+      const parsedExitCode = Number(record.exitCode ?? record.code ?? 1);
+      return {
+        stdout: asText(record.stdout),
+        stderr: asText(record.stderr),
+        exitCode: Number.isFinite(parsedExitCode) ? parsedExitCode : 1,
+        errorMessage: error instanceof Error ? error.message : String(error || 'unknown error'),
+      };
+    }
+  }
+
   private parseInspectionFlags(stdout: string) {
     const flags = new Map<string, string>();
     for (const line of String(stdout || '').split(/\r?\n/)) {
@@ -1629,6 +1665,51 @@ export class AltusManagedToolRuntime {
     await this.markWorkspaceDirty('managed_frontend_build_prepare');
   }
 
+  private async readPreviewServiceWorkspaceContract(
+    command: string,
+    cwd: string,
+    signal?: AbortSignal
+  ): Promise<PreviewServiceContract | null> {
+    if (!isPackageStartCommand(command)) {
+      return resolvePreviewServiceContract({ command });
+    }
+    const commandScopedCwd = extractLeadingCdTarget(command);
+    const inspectionCwd = commandScopedCwd || cwd;
+    const inspection = await this.runShell(
+      [
+        'if [ -f oneceo.manifest.json ]; then',
+        '  printf "__ONECEO_MANIFEST_JSON__="',
+        '  base64 oneceo.manifest.json 2>/dev/null | tr -d "\\n" || true',
+        '  printf "\\n"',
+        'fi',
+        'if [ -f package.json ]; then',
+        '  printf "__ONECEO_PACKAGE_JSON__="',
+        '  base64 package.json 2>/dev/null | tr -d "\\n" || true',
+        '  printf "\\n"',
+        'fi',
+      ].join('\n'),
+      {
+        cwd: inspectionCwd,
+        timeoutMs: 10000,
+      },
+      signal
+    );
+    const flags = this.parseInspectionFlags(asText((inspection as any)?.stdout));
+    const parseBase64Json = (value: string) => {
+      if (!value) return null;
+      try {
+        return JSON.parse(Buffer.from(value, 'base64').toString('utf8')) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    };
+    return resolvePreviewServiceContract({
+      command,
+      manifest: parseBase64Json(flags.get('__ONECEO_MANIFEST_JSON__') || ''),
+      packageJson: parseBase64Json(flags.get('__ONECEO_PACKAGE_JSON__') || ''),
+    });
+  }
+
   private parseShellFlag(stdout: string, key: string) {
     const flags = this.parseInspectionFlags(stdout);
     return flags.get(key) || '';
@@ -1637,32 +1718,42 @@ export class AltusManagedToolRuntime {
   private async startControlledBackgroundService(
     command: string,
     cwd: string,
+    contract?: PreviewServiceContract | null,
     signal?: AbortSignal
   ) {
     const serviceCommand = sanitizeBackgroundServiceCommand(command);
     if (!serviceCommand) {
       throw new Error('shell_execute_background_service_missing_command');
     }
-    const port = inferServicePort(serviceCommand);
+    const port = contract?.port || inferServicePort(serviceCommand);
+    const healthPath = inferServiceHealthPath(serviceCommand, contract);
     const serviceId = `managed-${this.input.sessionId}-${Date.now()}`;
     const serviceDir = `/tmp/oneceo-managed-services/${this.input.sessionId}`;
     const logPath = `${serviceDir}/${serviceId}.log`;
     const pidPath = `${serviceDir}/${serviceId}.pid`;
     const serviceUrl = port > 0 ? `http://127.0.0.1:${port}/` : '';
+    const serviceHealthUrl = port > 0 && healthPath ? `http://127.0.0.1:${port}${healthPath}` : '';
+    const launchCommand =
+      port > 0 && !/\bPORT=\d{2,5}\b/i.test(serviceCommand)
+        ? `PORT=${port}; export PORT; ${serviceCommand}`
+        : serviceCommand;
     const script = [
       `service_id=${shellEscape(serviceId)}`,
       `service_dir=${shellEscape(serviceDir)}`,
       `log_path=${shellEscape(logPath)}`,
       `pid_path=${shellEscape(pidPath)}`,
       `service_command=${shellEscape(serviceCommand)}`,
+      `service_launch_command=${shellEscape(launchCommand)}`,
       `service_port=${port}`,
+      `service_url=${shellEscape(serviceUrl)}`,
+      `service_health_url=${shellEscape(serviceHealthUrl)}`,
       'mkdir -p "$service_dir"',
       'service_status="starting"',
       'if [ "$service_port" -gt 0 ] && (ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null || true) | grep -q ":${service_port} "; then',
       '  service_status="already_running"',
       '  echo "__ONECEO_SERVICE_ALREADY_RUNNING__=1"',
       'else',
-      '  setsid sh -lc "$service_command" > "$log_path" 2>&1 < /dev/null &',
+      '  setsid sh -lc "$service_launch_command" > "$log_path" 2>&1 < /dev/null &',
       '  service_pid=$!',
       '  echo "$service_pid" > "$pid_path"',
       '  echo "__ONECEO_SERVICE_PID__=$service_pid"',
@@ -1674,10 +1765,11 @@ export class AltusManagedToolRuntime {
       '  fi',
       'fi',
       'if [ "$service_status" != "start_failed" ] && [ "$service_port" -gt 0 ]; then',
-      '  service_url="http://127.0.0.1:${service_port}/"',
+      '  if [ -z "$service_url" ]; then service_url="http://127.0.0.1:${service_port}/"; fi',
+      '  probe_url="${service_health_url:-$service_url}"',
       '  health_ready=0',
       '  for i in 1 2 3 4 5 6 7 8; do',
-      '    if curl -k -L -sS --max-time 2 -o /tmp/oneceo_service_probe_${service_port}.html -w "%{http_code}" "$service_url" 2>/tmp/oneceo_service_probe_${service_port}.err | grep -Eq "^(2|3)[0-9][0-9]$"; then',
+      '    if curl -k -L -sS --max-time 2 -o /tmp/oneceo_service_probe_${service_port}.html -w "%{http_code}" "$probe_url" 2>/tmp/oneceo_service_probe_${service_port}.err | grep -Eq "^(2|3)[0-9][0-9]$"; then',
       '      health_ready=1',
       '      break',
       '    fi',
@@ -1686,6 +1778,7 @@ export class AltusManagedToolRuntime {
       '  if [ "$health_ready" = "1" ]; then',
       '    service_status="ready"',
       '    echo "__ONECEO_SERVICE_URL__=$service_url"',
+      '    if [ -n "$service_health_url" ]; then echo "__ONECEO_SERVICE_HEALTH_URL__=$service_health_url"; fi',
       '  else',
       '    service_status="health_pending"',
       '    echo "__ONECEO_SERVICE_HEALTH_PENDING__=$service_url"',
@@ -1715,6 +1808,7 @@ export class AltusManagedToolRuntime {
     }
     const status = this.parseShellFlag(stdout, '__ONECEO_SERVICE_STATUS__') || 'unknown';
     const pid = this.parseShellFlag(stdout, '__ONECEO_SERVICE_PID__');
+    const healthUrl = this.parseShellFlag(stdout, '__ONECEO_SERVICE_HEALTH_URL__') || serviceHealthUrl;
     const url =
       this.parseShellFlag(stdout, '__ONECEO_SERVICE_URL__') ||
       this.parseShellFlag(stdout, '__ONECEO_SERVICE_HEALTH_PENDING__') ||
@@ -1735,6 +1829,7 @@ export class AltusManagedToolRuntime {
           pid: pid ? Number(pid) : null,
           port: port || null,
           url: url || null,
+          healthUrl: healthUrl || null,
           logPath,
           pidPath,
         },
@@ -2096,7 +2191,8 @@ export class AltusManagedToolRuntime {
         );
       }
       const cwd = asText(rawArgs.cwd) || '.';
-      if (isPersistentLocalServerCommand(command)) {
+      const previewServiceContract = await this.readPreviewServiceWorkspaceContract(command, cwd, signal);
+      if (previewServiceContract?.persistent || isPersistentLocalServerCommand(command)) {
         if (runMode === 'foreground') {
           throw new Error(
             'shell_execute_persistent_local_server_foreground_blocked:检测到本地常驻服务启动命令。请使用 runMode=background_service 或保持 runMode=auto 交给平台托管。'
@@ -2104,7 +2200,7 @@ export class AltusManagedToolRuntime {
         }
         return {
           activatedSkills,
-          ...(await this.startControlledBackgroundService(command, cwd, signal)),
+          ...(await this.startControlledBackgroundService(command, cwd, previewServiceContract, signal)),
         };
       }
       await this.prepareFrontendBuildWorkspace(command, cwd, signal);
@@ -2160,6 +2256,7 @@ export class AltusManagedToolRuntime {
       const encodedUrl = encodeURIComponent(targetUrl);
       const escapedTargetUrl = shellEscape(targetUrl);
       const command = [
+        'set +e',
         `cdp_port=${cdpPort}`,
         `target_url=${escapedTargetUrl}`,
         `target_protocol=${shellEscape(normalizedTarget.protocol)}`,
@@ -2241,7 +2338,7 @@ export class AltusManagedToolRuntime {
         'exit 0',
       ].join('\n');
 
-      const result = await this.runShell(
+      const result = await this.runShellWithResultOnError(
         command,
         {
           cwd: this.input.workspaceRoot,
@@ -2249,9 +2346,11 @@ export class AltusManagedToolRuntime {
         },
         signal
       );
-      const exitCode = Number((result as any)?.exitCode ?? -1);
+      const parsedExitCode = Number((result as any)?.exitCode ?? -1);
+      const exitCode = Number.isFinite(parsedExitCode) ? parsedExitCode : -1;
       const stdout = truncate(asText((result as any)?.stdout), 4000);
       const stderr = truncate(asText((result as any)?.stderr), 2000);
+      const commandError = truncate(asText((result as any)?.errorMessage), 1200);
       if (
         exitCode !== 0 ||
         !stdout.includes('__ONECEO_DEBUG_RESULT__=ok') ||
@@ -2261,7 +2360,22 @@ export class AltusManagedToolRuntime {
         stdout.includes('__ONECEO_DEBUG_TARGET_BAD_STATUS__') ||
         stdout.includes('__ONECEO_DEBUG_TARGET_TAB_NOT_READY__')
       ) {
-        throw new Error(`debug_open_page_failed:${stderr || stdout || 'unknown error'}`);
+        const diagnostic =
+          stdout || stderr
+            ? [
+                stdout,
+                stderr ? `__ONECEO_DEBUG_STDERR__=${stderr}` : '',
+                exitCode !== 0 ? `__ONECEO_DEBUG_SCRIPT_EXIT__=${exitCode}` : '',
+                commandError ? `__ONECEO_DEBUG_COMMAND_ERROR__=${commandError}` : '',
+              ]
+                .filter(Boolean)
+                .join('\n')
+            : [
+                '__ONECEO_DEBUG_COMMAND_FAILED__',
+                `__ONECEO_DEBUG_SCRIPT_EXIT__=${Number.isFinite(exitCode) ? exitCode : -1}`,
+                `__ONECEO_DEBUG_COMMAND_ERROR__=${commandError || 'debug command returned no stdout or stderr'}`,
+              ].join('\n');
+        throw new Error(`debug_open_page_failed:${diagnostic}`);
       }
 
       await this.markWorkspaceDirty('managed_debug_open_page');

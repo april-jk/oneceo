@@ -845,6 +845,7 @@ test('deployment source normalization converts vite-style frontend into the offi
     const serverSource = await readFile(join(workspace, 'server', 'index.ts'), 'utf-8');
     const viteConfigSource = await readFile(join(workspace, 'vite.config.ts'), 'utf-8');
     const appSource = await readFile(join(workspace, 'client', 'src', 'App.jsx'), 'utf-8');
+    const clientIndexSource = await readFile(join(workspace, 'client', 'index.html'), 'utf-8');
     const packageJson = JSON.parse(await readFile(join(workspace, 'package.json'), 'utf-8'));
 
     assert.equal(normalization.adaptedOfficialFrontendShell, true);
@@ -857,8 +858,13 @@ test('deployment source normalization converts vite-style frontend into the offi
     assert.match(serverSource, /VITE_ANALYTICS_WEBSITE_ID/);
     assert.match(serverSource, /injectRuntimeAnalytics/);
     assert.match(viteConfigSource, /'@shared': path\.resolve\(__dirname, 'shared'\)/);
+    assert.match(viteConfigSource, /jsx: 'automatic'/);
     assert.doesNotMatch(viteConfigSource, /jsxInject/);
     assert.match(appSource, /^import \* as React from 'react';/);
+    assert.match(clientIndexSource, /data-oneceo-app-status="booting"/);
+    assert.match(clientIndexSource, /__ONECEO_APP_STATUS__/);
+    assert.match(clientIndexSource, /ONECEO_REPORT_APP_ERROR/);
+    assert.match(clientIndexSource, /child\.tagName\.toLowerCase\(\) !== 'noscript'/);
     assert.equal(compliance.ok, true);
     assert.equal(compliance.manifest.start.command, 'node dist/index.js');
     assert.equal(compliance.manifest.build.outputDir, 'dist/public');
@@ -1223,7 +1229,9 @@ test('deployment source normalization converts frontend projects with public/ind
     assert.equal(normalization.adaptedOfficialFrontendShell, true);
     assert.equal(normalization.injectedBuiltFrontendBaseline, false);
     assert.equal(packageJson.scripts.start, 'node dist/index.js');
-    assert.match(rootIndex, /<div id="root"><\/div>/);
+    assert.match(rootIndex, /<div id="root" data-oneceo-app-status="booting"/);
+    assert.match(rootIndex, /__ONECEO_APP_STATUS__/);
+    assert.match(rootIndex, /__ONECEO_APP_STATUS__[\s\S]*<\/script>\s*<!-- ONECEO_ANALYTICS:START -->/);
     assert.match(serverSource, /oneceo-official-web-shell/);
     assert.match(serverSource, /node:http/);
     assert.equal(compliance.ok, true);

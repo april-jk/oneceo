@@ -26,7 +26,7 @@ const OFFICIAL_WEB_SHELL_PACKAGE_JSON = {
   },
   devDependencies: {
     esbuild: '^0.25.0',
-    vite: '^7.0.0',
+    vite: '^5.4.21',
   },
 };
 
@@ -38,23 +38,104 @@ const OFFICIAL_WEB_SHELL_INDEX_HTML = `<!doctype html>
     <title>OneCEO Web App</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root" data-oneceo-app-status="booting">
+      <noscript>请启用 JavaScript 查看这个 OneCEO 网站。</noscript>
+    </div>
     <!-- ONECEO_ANALYTICS:START --><!-- ONECEO_ANALYTICS:END -->
+    <script>
+      window.__ONECEO_APP_STATUS__ = { status: 'booting', errors: [] };
+      window.__ONECEO_REPORT_APP_ERROR__ = function (error) {
+        var message = error && (error.message || error.reason || error.type) ? String(error.message || error.reason || error.type) : String(error || 'Unknown browser runtime error');
+        window.__ONECEO_APP_STATUS__.status = 'error';
+        window.__ONECEO_APP_STATUS__.errors.push(message);
+        var root = document.getElementById('root');
+        if (!root) return;
+        root.setAttribute('data-oneceo-app-status', 'error');
+        var hasRenderedContent = false;
+        for (var index = 0; index < root.children.length; index += 1) {
+          var child = root.children[index];
+          if (child.tagName && child.tagName.toLowerCase() !== 'noscript') {
+            hasRenderedContent = true;
+            break;
+          }
+        }
+        if (hasRenderedContent) return;
+        root.innerHTML = '<main style="min-height:100vh;display:grid;place-items:center;padding:32px;font-family:system-ui,sans-serif;background:#fff;color:#111"><section style="max-width:640px;border:1px solid #e5e7eb;padding:24px"><p style="margin:0 0 8px;font-size:13px;color:#991b1b">OneCEO browser runtime error</p><h1 style="margin:0 0 12px;font-size:24px">页面渲染失败</h1><p style="margin:0;line-height:1.6;color:#4b5563">' + message.replace(/[&<>"']/g, function (ch) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]; }) + '</p></section></main>';
+      };
+      window.addEventListener('error', window.__ONECEO_REPORT_APP_ERROR__);
+      window.addEventListener('unhandledrejection', function (event) { window.__ONECEO_REPORT_APP_ERROR__(event.reason || event); });
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
 `;
 
-const OFFICIAL_WEB_SHELL_MAIN_JSX = `import { StrictMode } from 'react';
+const OFFICIAL_WEB_SHELL_MAIN_JSX = `import { Component, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
 import './styles.css';
 
-createRoot(document.getElementById('root')).render(
+function reportAppStatus(status, error) {
+  const message = error && error.message ? error.message : String(error || '');
+  window.__ONECEO_APP_STATUS__ = window.__ONECEO_APP_STATUS__ || { status: 'booting', errors: [] };
+  window.__ONECEO_APP_STATUS__.status = status;
+  if (message) window.__ONECEO_APP_STATUS__.errors.push(message);
+  const root = document.getElementById('root');
+  if (root) root.setAttribute('data-oneceo-app-status', status);
+  if (status === 'error') {
+    console.error('[oneceo-app-runtime]', error);
+  }
+}
+
+class OneCeoAppErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error) {
+    reportAppStatus('error', error);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <main className="oneceo-runtime-error" role="alert">
+          <section>
+            <p>OneCEO browser runtime error</p>
+            <h1>页面渲染失败</h1>
+            <pre>{this.state.error.message || String(this.state.error)}</pre>
+          </section>
+        </main>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+const rootElement = document.getElementById('root');
+if (!rootElement) {
+  reportAppStatus('error', new Error('Missing #root element'));
+  throw new Error('Missing #root element');
+}
+
+createRoot(rootElement).render(
   <StrictMode>
-    <App />
+    <OneCeoAppErrorBoundary>
+      <App />
+    </OneCeoAppErrorBoundary>
   </StrictMode>
 );
+
+requestAnimationFrame(() => {
+  if (rootElement.childElementCount > 0 && rootElement.getAttribute('data-oneceo-app-status') !== 'error') {
+    reportAppStatus('mounted');
+  }
+});
 `;
 
 const OFFICIAL_WEB_SHELL_APP_JSX = `export default function App() {
@@ -151,6 +232,33 @@ ul {
   margin-top: 14px;
   padding-left: 20px;
   line-height: 1.8;
+}
+
+.oneceo-runtime-error {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: #ffffff;
+  color: #111111;
+}
+
+.oneceo-runtime-error section {
+  width: min(640px, 100%);
+  border: 1px solid #e5e7eb;
+  padding: 24px;
+}
+
+.oneceo-runtime-error p {
+  margin: 0 0 8px;
+  color: #991b1b;
+  font-size: 13px;
+}
+
+.oneceo-runtime-error pre {
+  white-space: pre-wrap;
+  line-height: 1.5;
+  color: #4b5563;
 }
 `;
 
@@ -322,6 +430,9 @@ export default defineConfig({
     outDir: path.resolve(__dirname, 'dist/public'),
     emptyOutDir: true,
   },
+  esbuild: {
+    jsx: 'automatic',
+  },
 });
 `;
 
@@ -438,8 +549,10 @@ export function buildOfficialWebShellMaterializationGuidance() {
     '优先修改这些文件：`client/src/App.jsx`、`client/src/styles.css`、`server/index.ts`，以及需要跨端共享时使用的 `shared/`。',
     '首页主内容、用户要求的验收标识、hero、核心区块和浏览器交互必须写入 `client/src/App.jsx`；`client/src/main.jsx` 只负责挂载。',
     '弱约束官网类任务若只是抽离页面常量，优先放在 `client/src/` 内；只有确实需要跨端共享时再放到 `shared/`，且前端统一使用 `@shared/...` 引用。',
-    '如果用户只是弱约束地要求生成官网/落地页/作品集/餐厅/工作室网站，走短路径：有限 todo，优先一次性填充 `client/src/App.jsx` 与 `client/src/styles.css`，不要额外安装依赖、启动本地服务或反复检查契约文件。',
-    '源码交付场景中，完成主要页面、样式、验收标识和一次宏观自检后即可 `complete_task`；平台部署链路会在后续验证 build/start/public runtime/analytics。',
+    '如果用户只是弱约束地要求生成官网/落地页/作品集/餐厅/工作室网站，走短路径：有限 todo，优先一次性填充 `client/src/App.jsx` 与 `client/src/styles.css`，不要额外安装依赖或反复检查契约文件；但完成前仍必须运行/构建验证并进入视觉检测。',
+    '固定模板已经启用 React automatic JSX runtime、浏览器错误兜底和 `data-oneceo-app-status` 渲染状态；不要删除这些契约，也不要通过改写 `vite.config.ts`、`client/index.html`、`client/src/main.jsx` 来绕过白屏诊断。',
+    '如果视觉检测提示 `app_runtime_error`、`app_root_empty`、`visible_text_too_short` 或控制台运行时错误，必须修复 `client/src/App.jsx` / `client/src/styles.css` 中的真实渲染问题后重新构建、重新打开页面并重新截图。',
+    '源码交付场景中，完成主要页面、样式和验收标识后，先验证应用能构建或运行，再通过 n.eko + Playwright 进行视觉检测：调用 `debug_open_page` 打开页面，对打开、点击、按键、滚动、翻页等必要步骤用 `browser_interact` 拆成 Action，并让每一步留下截图证据，之后才可以 `complete_task`。',
     '保持这些契约不变：`package.json` 的 build/start、固定 Node Web Shell、`oneceo.manifest.json`、`client/index.html` 的 analytics hook、`/api/system/health`。',
   ].join('\n');
 }

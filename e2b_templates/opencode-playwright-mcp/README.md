@@ -8,6 +8,39 @@
 - Playwright 必须连接到 n.eko 正在回传的同一个 Chromium CDP 端口（默认 `http://127.0.0.1:9222`），不要启动独立浏览器。
 - `browser-use` 仅作为外部网站探索、导航和表单交互的辅助能力；需要复用调试浏览器时必须显式连接同一个 CDP。
 
+固定依赖路径：
+
+- `ONECEO_PLAYWRIGHT_CDP_URL=http://127.0.0.1:9222`
+- `PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`
+- `NODE_PATH=/usr/local/lib/node_modules`
+- `playwright-mcp=/usr/local/bin/playwright-mcp`
+- `browser-use=/usr/local/bin/browser-use`
+- `browser-use venv=/opt/browser-use`
+- `neko=/usr/local/bin/neko`
+- `n.eko static root=/opt/neko/client/dist`
+
+`/opt/neko/client/dist` 是模板构建产物和运行时只读源目录。平台启动调试浏览器时会复制它到 `/tmp/oneceo/debug-browser/neko-static`，并且只修改这个可写副本；不要让 OpenCode、Altus、用户项目脚本或运行时补丁写入 `/opt/neko/client/dist`。
+
+运行期 OpenCode / Codex 配置必须直接调用 `playwright-mcp`，不要使用 `npx @playwright/mcp@latest`，避免用户任务中重新解析、下载或搜索依赖。
+
+## 固定版本
+
+模板构建默认固定以下浏览器工具链版本：
+
+- `n.eko=v3.1.4`
+- `playwright=1.60.0`
+- `@playwright/mcp=0.0.75`
+- `browser-use=0.12.8`
+
+这些版本会写入 sandbox 环境变量：
+
+- `ONECEO_TEMPLATE_NEKO_VERSION`
+- `ONECEO_TEMPLATE_PLAYWRIGHT_VERSION`
+- `ONECEO_TEMPLATE_PLAYWRIGHT_MCP_VERSION`
+- `ONECEO_TEMPLATE_BROWSER_USE_VERSION`
+
+升级版本时必须显式修改模板版本或通过构建环境变量覆盖，并同步记录模板名和回归结果。不要恢复 `neko@latest`、`@playwright/mcp@latest` 或未指定版本的 `browser-use` 安装方式。
+
 ## 构建
 
 需要本机已安装并登录 `e2b` CLI：
@@ -25,6 +58,10 @@ pnpm --filter api exec -- tsx ../../e2b_templates/opencode-playwright-mcp/build.
 - `NEKO_UI_PATCH_PATH`：本地补丁路径（默认 `patches/neko-client-minimal.patch`）。
 - `NEKO_UI_PATCH_KEY`：上传到 R2 的对象 Key（默认 `neko-ui/neko-client-minimal.patch`）。
 - `NEKO_UI_PATCH_EXPIRES`：补丁签名 URL 过期秒数（默认 7 天）。
+- `ONECEO_TEMPLATE_NEKO_VERSION`：覆盖默认 n.eko tag。
+- `ONECEO_TEMPLATE_PLAYWRIGHT_VERSION`：覆盖默认 Playwright npm 版本。
+- `ONECEO_TEMPLATE_PLAYWRIGHT_MCP_VERSION`：覆盖默认 `@playwright/mcp` npm 版本。
+- `ONECEO_TEMPLATE_BROWSER_USE_VERSION`：覆盖默认 Browser Use PyPI 版本。
 
 ## 使用
 

@@ -339,4 +339,58 @@ Altus 安装 Playwright
 
 不要再让 Altus 从 0 探索浏览器链路。
 
+## 11. 20260525-1847 实现补记
+
+本次在现有采用方案上继续收敛实现，不新增方案：
+
+1. `debug_open_page` 的打开页面主路径已从 `curl 127.0.0.1:9222/json/new` 改为 sandbox 内 Playwright `chromium.connectOverCDP("http://127.0.0.1:9222")` + `page.goto()`。
+2. `shell_execute` guard 补齐 Chromium / n.eko / Xvfb / X11 lock / `/tmp/oneceo/debug-browser` / CDP 9222 管理命令拦截，同时保留普通预览服务命令不被误伤。
+3. n.eko start wrapper 在 `/tmp/oneceo/debug-browser/run/ensure.lock.owner` 写入锁持有信息；锁超时时输出 owner、`fuser` / `lsof` 诊断，并在确认没有 live holder 时清理 stale lock 后重试一次。
+4. `debug_open_page` 的 Playwright CDP 打开失败会输出 `__ONECEO_DEBUG_OPEN_PAGE_RESULT__` 结构化 marker，失败原因会进入工具错误，便于 Actions 看到 `reasonCode`、阶段和 CDP 端点。
+
+验证：
+
+1. `TMPDIR=/private/tmp pnpm --filter api exec tsx --test tests/altus-managed-tool-runtime.test.ts tests/sandbox-debug-service.test.ts`：76/76 通过。
+2. `pnpm --filter api type-check`：通过。
+
 平台固定并拥有唯一 Chromium；n.eko 看它，Playwright 控它和截它；Altus 只能通过 `debug_open_page` / `browser_interact` 使用它。
+
+## 12. 20260525-逻辑复查修正
+
+按本文档重新做逻辑对照后，补了三处实现细节，避免“测试能过但链路仍不严谨”：
+
+1. 启动锁拿到后会再次检查 manifest 的 `runtimeVersion` / `configVersion`、CDP 9222、n.eko 8081；如果第一个 ensure 已经启动成功，第二个 ensure 不再重复重启浏览器链路。
+2. stale lock 恢复不再在缺少 `fuser` / `lsof` 时盲目清理 lock；无法判断持有者时只输出诊断并返回 lock timeout，避免两个启动脚本并发改同一套 Xvfb / Chromium / n.eko。
+3. Chromium 启动显式绑定 `--remote-debugging-address=127.0.0.1`，并把 Playwright `page.goto()` 失败归类为 debug browser/CDP open failure，避免 Actions 退化成泛化工具错误。
+4. 锁超时分支在 `set -e` 下读取 `lock_has_live_holder` 的返回值时必须使用 `lock_has_live_holder || holder_status=$?`，否则“无 live holder / 无法判断 holder”会提前退出脚本，绕过 stale lock 诊断与恢复重试。
+5. 无 `flock` 时的 lockdir fallback 也必须在拿锁后做同样的 ready 二次探测，避免运行时已经 ready 但 fallback 分支继续重启平台浏览器。
+
+## 13. 20260525-实时状态修正 failed metadata
+
+针对会话 `3e82c733-7a48-4328-9e44-32f8b29485f1` 的排查结论，补充一条第一性原则：
+
+> metadata 是缓存，不是事实；事实以当前 sandbox 内 CDP、n.eko 和 manifest 的实时状态为准。
+
+实现要求：
+
+1. `ensureNekoDebug()` 不再因为历史 `debug.neko.status=failed` 就无条件重启平台浏览器；如果配置版本匹配且实时 `127.0.0.1:9222/json/version`、`127.0.0.1:8081/` 都 ready，则直接把 metadata 修正为 `running`。
+2. 如果 start wrapper 返回非零，但随后实时 CDP、n.eko、manifest 都证明当前调试浏览器已 ready，则认为 wrapper 是 false negative，修正 metadata 并返回 ready。
+3. 只有实时探测仍失败，才继续返回 `start_script_failed`、`debug_browser_lock_timeout`、`cdp_not_ready`、`neko_not_ready` 等失败状态。
+
+这样可以避免“浏览器实际已经起来，但历史 failed metadata 把 `debug_open_page` 拦在入口，最终没有 `browserScreenshot`”的问题。
+
+## 14. 20260525-background_service false negative 修正
+
+会话 `b028dc2b-6350-45d1-a770-5dc3fecc0275` 证明了一类独立于调试浏览器的 false negative：
+
+1. 模型启动 `node dist/index.js & echo "Server started..."`。
+2. 平台 background service wrapper 监控的是外层 shell PID；外层 shell 很快退出，于是标记 `start_failed`。
+3. 但日志已经出现 `listening on port 8080`，后续 `curl /` 和 `/api/system/health` 都证明服务真实可用。
+
+修正原则：
+
+1. background service 的父 PID 退出不等于服务失败。
+2. 只要存在明确端口，就必须继续 probe `service_url` 或 `health_url`。
+3. 如果 health probe 成功，返回 `ready`；只有 PID 退出且 health probe 也失败时，才输出 `__ONECEO_SERVICE_START_FAILED__`。
+
+这样可以减少“用户预览服务已可用但 shell_execute 先报失败”的无效恢复步骤，让 Altus 更快进入 `debug_open_page`。

@@ -1035,9 +1035,21 @@ function isPersistentLocalServerCommand(value: string) {
 function isManagedDebugBrowserShellCommand(value: string) {
   const normalized = normalizeCommandForMatch(value);
   if (!normalized) return false;
+  const touchesDebugBrowserRuntime =
+    normalized.includes('/tmp/oneceo/debug-browser') ||
+    normalized.includes('/tmp/.x0-lock') ||
+    normalized.includes('/tmp/.x11-unix');
+  const touchesDebugCdpEndpoint =
+    normalized.includes('127.0.0.1:9222') ||
+    normalized.includes('localhost:9222') ||
+    normalized.includes('0.0.0.0:9222') ||
+    normalized.includes('[::1]:9222');
+  const touchesXvfb = /\bxvfb\b/.test(normalized);
+  const touchesManagedBrowserBinary = /\b(chrome|chromium|chromium-browser|google-chrome)\b/.test(normalized);
+  const touchesNeko = /\bneko\b/.test(normalized);
   const managesChromeProcess =
     /\b(pkill|killall|pgrep|fuser|kill)\b/.test(normalized) &&
-    /\b(chrome|chromium|remote-debugging|9222)\b/.test(normalized);
+    /\b(chrome|chromium|chromium-browser|remote-debugging|9222)\b/.test(normalized);
   const launchesDebugChrome =
     /\b(chrome|chromium|chromium-browser)\b/.test(normalized) &&
     (normalized.includes('remote-debugging-port') || normalized.includes('remote-debugging-address'));
@@ -1045,10 +1057,16 @@ function isManagedDebugBrowserShellCommand(value: string) {
     /\b(curl|wget)\b/.test(normalized) &&
     normalized.includes('127.0.0.1:9222') &&
     (normalized.includes('/json/version') || normalized.includes('/json/list') || normalized.includes('/json/new'));
-  const managesNekoProcess =
-    /\b(pkill|killall|pgrep|fuser|kill)\b/.test(normalized) &&
-    /\bneko\b/.test(normalized);
-  return managesChromeProcess || launchesDebugChrome || probesDebugCdp || managesNekoProcess;
+  return (
+    touchesDebugBrowserRuntime ||
+    touchesDebugCdpEndpoint ||
+    touchesXvfb ||
+    touchesManagedBrowserBinary ||
+    touchesNeko ||
+    managesChromeProcess ||
+    launchesDebugChrome ||
+    probesDebugCdp
+  );
 }
 
 function sanitizeBackgroundServiceCommand(value: string) {
@@ -1779,11 +1797,10 @@ export class AltusManagedToolRuntime {
       '  sleep 1',
       '  if ! kill -0 "$service_pid" 2>/dev/null; then',
       '    service_status="start_failed"',
-      '    echo "__ONECEO_SERVICE_START_FAILED__=1"',
-      '    tail -n 80 "$log_path" 2>/dev/null || true',
+      '    echo "__ONECEO_SERVICE_PID_EXITED__=1"',
       '  fi',
       'fi',
-      'if [ "$service_status" != "start_failed" ] && [ "$service_port" -gt 0 ]; then',
+      'if [ "$service_port" -gt 0 ]; then',
       '  if [ -z "$service_url" ]; then service_url="http://127.0.0.1:${service_port}/"; fi',
       '  probe_url="${service_health_url:-$service_url}"',
       '  health_ready=0',
@@ -1799,11 +1816,18 @@ export class AltusManagedToolRuntime {
       '    echo "__ONECEO_SERVICE_URL__=$service_url"',
       '    if [ -n "$service_health_url" ]; then echo "__ONECEO_SERVICE_HEALTH_URL__=$service_health_url"; fi',
       '  else',
-      '    service_status="health_pending"',
-      '    echo "__ONECEO_SERVICE_HEALTH_PENDING__=$service_url"',
+      '    if [ "$service_status" = "start_failed" ]; then',
+      '      echo "__ONECEO_SERVICE_START_FAILED__=1"',
+      '    else',
+      '      service_status="health_pending"',
+      '      echo "__ONECEO_SERVICE_HEALTH_PENDING__=$service_url"',
+      '    fi',
       '    cat /tmp/oneceo_service_probe_${service_port}.err 2>/dev/null || true',
       '    tail -n 80 "$log_path" 2>/dev/null || true',
       '  fi',
+      'elif [ "$service_status" = "start_failed" ]; then',
+      '  echo "__ONECEO_SERVICE_START_FAILED__=1"',
+      '  tail -n 80 "$log_path" 2>/dev/null || true',
       'fi',
       'echo "__ONECEO_SERVICE_ID__=$service_id"',
       'echo "__ONECEO_SERVICE_STATUS__=$service_status"',
@@ -2283,15 +2307,18 @@ export class AltusManagedToolRuntime {
       const cdpPort = asPositiveInt(process.env.NEKO_CDP_PORT, 9222, 65535);
       const debugInfo = await this.ensureManagedDebugBrowserReady('debug_open_page');
 
-      const encodedUrl = encodeURIComponent(targetUrl);
       const escapedTargetUrl = shellEscape(targetUrl);
+      const openPayload = {
+        targetUrl,
+        cdpEndpoint: `http://127.0.0.1:${cdpPort}`,
+        timeoutMs: asPositiveInt(rawArgs.timeoutMs, 20000, 60000),
+      };
       const command = [
         'set +e',
         `cdp_port=${cdpPort}`,
         `target_url=${escapedTargetUrl}`,
         `target_protocol=${shellEscape(normalizedTarget.protocol)}`,
         `target_file=${shellEscape(normalizedTarget.localFilePath || '')}`,
-        `encoded_url=${shellEscape(encodedUrl)}`,
         'debug_status="ok"',
         'probe_file="/tmp/oneceo_debug_target_probe_${cdp_port}.html"',
         'if [ "$target_protocol" = "file" ]; then',
@@ -2320,48 +2347,79 @@ export class AltusManagedToolRuntime {
         '    esac',
         '  fi',
         'fi',
-        'endpoint="http://127.0.0.1:${cdp_port}/json/new?${encoded_url}"',
         'if [ "$debug_status" = "ok" ]; then',
-        '  if curl -fsS -X PUT "$endpoint"; then',
-        '    echo "\\n__OPENED_BY__=PUT"',
-        '  elif curl -fsS "$endpoint"; then',
-        '    echo "\\n__OPENED_BY__=GET"',
-        '  else',
+        buildSandboxPlaywrightEnvPrelude({ cdpPort }),
+        `  ONECEO_DEBUG_OPEN_PAGE=${shellEscape(JSON.stringify(openPayload))} node <<'NODE'`,
+        "const payload = JSON.parse(process.env.ONECEO_DEBUG_OPEN_PAGE || '{}');",
+        "const RESULT_MARKER = '__ONECEO_DEBUG_OPEN_PAGE_RESULT__=';",
+        'function emit(result) { console.log(RESULT_MARKER + JSON.stringify(result)); }',
+        'function diagnostics(stage, extra = {}) {',
+        '  return {',
+        '    stage,',
+        "    cdpEndpoint: payload.cdpEndpoint || process.env.ONECEO_PLAYWRIGHT_CDP_URL || '',",
+        "    nodePath: process.env.NODE_PATH || '',",
+        "    playwrightBrowsersPath: process.env.PLAYWRIGHT_BROWSERS_PATH || '',",
+        '    ...extra,',
+        '  };',
+        '}',
+        'let chromium;',
+        "let playwrightPath = '';",
+        'try {',
+        "  playwrightPath = require.resolve('playwright');",
+        "  chromium = require('playwright').chromium;",
+        '} catch (error) {',
+        '  emit({',
+        '    ok: false,',
+        "    reasonCode: 'playwright_module_not_found',",
+        '    message: error && error.message ? error.message : String(error),',
+        "    diagnostics: diagnostics('require_playwright', { playwrightPath }),",
+        '  });',
+        '  process.exit(0);',
+        '}',
+        'async function pickPage(browser) {',
+        '  for (const context of browser.contexts()) {',
+        '    const pages = context.pages();',
+        '    const meaningful = pages.filter((page) => page.url() && page.url() !== "about:blank");',
+        '    if (meaningful.length > 0) return meaningful[meaningful.length - 1];',
+        '    if (pages.length > 0) return pages[pages.length - 1];',
+        '  }',
+        '  const context = await browser.newContext();',
+        '  return await context.newPage();',
+        '}',
+        'async function main() {',
+        '  const cdpEndpoint = process.env.ONECEO_PLAYWRIGHT_CDP_URL || payload.cdpEndpoint;',
+        '  const timeout = Math.max(1000, Math.min(Number(payload.timeoutMs || 20000), 60000));',
+        '  const browser = await chromium.connectOverCDP(cdpEndpoint);',
+        '  try {',
+        '    const page = await pickPage(browser);',
+        '    await page.goto(String(payload.targetUrl || ""), { waitUntil: "domcontentloaded", timeout });',
+        '    emit({',
+        '      ok: true,',
+        '      url: page.url(),',
+        '      title: await page.title().catch(() => ""),',
+        "      diagnostics: diagnostics('completed', { playwrightPath }),",
+        '    });',
+        '  } finally {',
+        '    await (typeof browser.disconnect === "function" ? browser.disconnect() : browser.close()).catch(() => undefined);',
+        '  }',
+        '}',
+        'main().catch((error) => {',
+        '  emit({',
+        '    ok: false,',
+        "    reasonCode: 'debug_open_page_playwright_failed',",
+        '    message: error && error.message ? error.message : String(error),',
+        '    diagnostics: diagnostics("page_goto", {',
+        '      stack: error && error.stack ? String(error.stack).slice(0, 2000) : "",',
+        '      playwrightPath,',
+        '    }),',
+        '  });',
+        '  process.exit(0);',
+        '});',
+        'NODE',
+        "  open_status=$?",
+        '  if [ "$open_status" != "0" ]; then',
         '    debug_status="open_failed"',
-        '    echo "__ONECEO_DEBUG_OPEN_PAGE_FAILED__"',
-        '  fi',
-        'fi',
-        'if [ "$debug_status" = "ok" ]; then',
-        '  tab_ready=0',
-        '  for i in 1 2 3 4 5; do',
-        '    curl -fsS --max-time 2 "http://127.0.0.1:${cdp_port}/json/list" > /tmp/oneceo_debug_tabs_${cdp_port}.json 2>/dev/null || true',
-        '    if python3 - "$target_url" "${probe_effective_url:-}" /tmp/oneceo_debug_tabs_${cdp_port}.json <<\'PY\'',
-        'import json, sys',
-        'target = sys.argv[1]',
-        'effective = sys.argv[2]',
-        'path = sys.argv[3]',
-        'try:',
-        '    tabs = json.load(open(path, "r", encoding="utf-8"))',
-        'except Exception:',
-        '    sys.exit(1)',
-        'for tab in tabs if isinstance(tabs, list) else []:',
-        '    url = str(tab.get("url") or "")',
-        '    title = str(tab.get("title") or "")',
-        '    if url == target or (effective and url == effective):',
-        '        print("__ONECEO_DEBUG_TARGET_TAB_READY__=" + title[:160])',
-        '        sys.exit(0)',
-        'sys.exit(1)',
-        'PY',
-        '    then',
-        '      tab_ready=1',
-        '      break',
-        '    fi',
-        '    sleep 1',
-        '  done',
-        '  if [ "$tab_ready" != "1" ]; then',
-        '    debug_status="tab_not_ready"',
-        '    echo "__ONECEO_DEBUG_TARGET_TAB_NOT_READY__"',
-        '    cat /tmp/oneceo_debug_tabs_${cdp_port}.json 2>/dev/null || true',
+        '    echo "__ONECEO_DEBUG_OPEN_PAGE_FAILED__=node_exit_${open_status}"',
         '  fi',
         'fi',
         'echo "__ONECEO_DEBUG_RESULT__=${debug_status}"',
@@ -2381,18 +2439,24 @@ export class AltusManagedToolRuntime {
       const stdout = truncate(asText((result as any)?.stdout), 4000);
       const stderr = truncate(asText((result as any)?.stderr), 2000);
       const commandError = truncate(asText((result as any)?.errorMessage), 1200);
+      const parsedOpenResult = parseMarkedJsonLine(stdout, '__ONECEO_DEBUG_OPEN_PAGE_RESULT__=');
       if (
         exitCode !== 0 ||
         !stdout.includes('__ONECEO_DEBUG_RESULT__=ok') ||
+        parsedOpenResult?.ok === false ||
+        !parsedOpenResult ||
         stdout.includes('__ONECEO_DEBUG_OPEN_PAGE_FAILED__') ||
         stdout.includes('__ONECEO_DEBUG_TARGET_UNREACHABLE__') ||
         stdout.includes('__ONECEO_DEBUG_TARGET_FILE_MISSING__') ||
-        stdout.includes('__ONECEO_DEBUG_TARGET_BAD_STATUS__') ||
-        stdout.includes('__ONECEO_DEBUG_TARGET_TAB_NOT_READY__')
+        stdout.includes('__ONECEO_DEBUG_TARGET_BAD_STATUS__')
       ) {
+        const openFailure = parsedOpenResult?.ok === false
+          ? formatBrowserToolFailure(parsedOpenResult, stdout, stderr, 'debug_open_page Playwright CDP open failed')
+          : '';
         const diagnostic =
           stdout || stderr
             ? [
+                openFailure ? `__ONECEO_DEBUG_OPEN_PAGE_STRUCTURED_FAILURE__=${openFailure}` : '',
                 stdout,
                 stderr ? `__ONECEO_DEBUG_STDERR__=${stderr}` : '',
                 exitCode !== 0 ? `__ONECEO_DEBUG_SCRIPT_EXIT__=${exitCode}` : '',

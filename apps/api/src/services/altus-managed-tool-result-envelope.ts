@@ -58,6 +58,9 @@ export function classifyManagedToolErrorCode(rawError: string) {
   if (normalized.includes('__oneceo_debug_target_tab_not_ready__') || normalized.includes('tab_not_ready')) {
     return 'debug_target_tab_not_ready';
   }
+  if (normalized.includes('debug_open_page_playwright_failed')) {
+    return 'debug_open_page_cdp_open_failed';
+  }
   if (normalized.includes('__oneceo_debug_open_page_failed__') || normalized.includes('open_failed')) {
     return 'debug_open_page_cdp_open_failed';
   }

@@ -459,6 +459,28 @@ test('tool result envelope steers binary deliverables away from write_file', () 
   assert.match(payload.instruction, /Do not use write_file/i);
 });
 
+test('tool result envelope classifies Playwright CDP open failures as debug browser failures', () => {
+  const envelope = buildManagedToolResultEnvelope({
+    status: 'error',
+    runId: 'run-1',
+    toolUseId: 'tool-debug-open',
+    toolName: 'debug_open_page',
+    modelRoundId: 'round-1',
+    args: {
+      url: 'http://127.0.0.1:8080/',
+    },
+    errorMessage:
+      'debug_open_page_failed:__ONECEO_DEBUG_OPEN_PAGE_STRUCTURED_FAILURE__=debug_open_page_playwright_failed: page.goto failed: diagnostics=page_goto | http://127.0.0.1:9222',
+  });
+
+  assert.equal(envelope.errorCode, 'debug_open_page_cdp_open_failed');
+  assert.equal(envelope.retryable, true);
+  const payload = JSON.parse(envelope.contentForModel);
+  assert.equal(payload.status, 'error');
+  assert.match(payload.error, /Chromium CDP did not open/i);
+  assert.match(payload.instruction, /debug browser state has changed/i);
+});
+
 test('complete_task accepts pptx attachment returned by ppt workflow renderer', async () => {
   mock.method(pptRenderToolService, 'render', async () => ({
     status: 'completed',
@@ -1605,6 +1627,59 @@ test('shell_execute manages fixed OneCEO shell node start command as background 
   assert.equal(runCommandMock.mock.callCount(), 1);
 });
 
+test('shell_execute treats exited wrapper pid as ready when background service health is reachable', async () => {
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async (_sandboxId: string, command: string) => {
+    assert.match(command, /__ONECEO_SERVICE_PID_EXITED__/);
+    assert.match(command, /__ONECEO_SERVICE_START_FAILED__/);
+    return {
+      stdout: [
+        '__ONECEO_SERVICE_PID__=1234',
+        '__ONECEO_SERVICE_PID_EXITED__=1',
+        'Server started with PID 1238',
+        '[oneceo-official-web-shell] listening on port 8080',
+        '__ONECEO_SERVICE_URL__=http://127.0.0.1:8080/',
+        '__ONECEO_SERVICE_HEALTH_URL__=http://127.0.0.1:8080/api/system/health',
+        '__ONECEO_SERVICE_ID__=managed-session-1-1',
+        '__ONECEO_SERVICE_STATUS__=ready',
+        '__ONECEO_SERVICE_PORT__=8080',
+        '__ONECEO_SERVICE_LOG__=/tmp/oneceo-managed-services/session-1/managed-session-1-1.log',
+        '__ONECEO_SERVICE_PID_FILE__=/tmp/oneceo-managed-services/session-1/managed-session-1-1.pid',
+      ].join('\n'),
+      stderr: '',
+      exitCode: 0,
+    } as any;
+  });
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: mock.fn(async () => undefined) as any,
+      markSandboxDirty: mock.fn(async () => undefined) as any,
+    }
+  );
+
+  const result = await runtime.execute('shell_execute', {
+    command: 'node dist/index.js &\necho "Server started with PID $!"',
+    cwd: '.',
+    runMode: 'background_service',
+  });
+
+  assert.equal(result.type, 'result');
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.runMode, 'background_service');
+  assert.equal(payload.service.status, 'ready');
+  assert.equal(payload.service.url, 'http://127.0.0.1:8080/');
+  assert.equal(payload.service.healthUrl, 'http://127.0.0.1:8080/api/system/health');
+  assert.equal(payload.nextSuggestedTool, 'debug_open_page');
+  assert.equal(runCommandMock.mock.callCount(), 1);
+});
+
 test('shell_execute resolves fixed OneCEO shell npm start from workspace package metadata', async () => {
   const packageJson = Buffer.from(JSON.stringify({
     scripts: {
@@ -1797,9 +1872,18 @@ test('shell_execute blocks managed debug browser lifecycle commands', async () =
 
   for (const command of [
     'curl -s http://127.0.0.1:9222/json/version 2>&1',
+    'curl -s http://127.0.0.1:9222/ 2>&1',
+    'curl -s http://127.0.0.1:9222/json/new?http%3A%2F%2F127.0.0.1%3A3000',
     '/opt/ms-playwright/chromium-1217/chrome-linux64/chrome --remote-debugging-port=9222 --no-sandbox',
+    'Xvfb :0 -screen 0 1280x1008x24',
+    'chromium --version',
+    'neko serve --config /tmp/oneceo/debug-browser/neko.yml',
     'pkill -9 -f chrome 2>/dev/null; sleep 2; echo done',
     'pgrep -f remote-debugging | while read pid; do kill -9 $pid; done',
+    'pkill -f neko || true',
+    'pkill -f Xvfb || true',
+    'rm -rf /tmp/.X0-lock /tmp/.X11-unix',
+    'rm -rf /tmp/oneceo/debug-browser',
   ]) {
     await assert.rejects(
       runtime.execute('shell_execute', {
@@ -1809,6 +1893,31 @@ test('shell_execute blocks managed debug browser lifecycle commands', async () =
       /shell_execute_managed_debug_browser_blocked/
     );
   }
+});
+
+test('shell_execute managed debug browser guard does not block ordinary preview commands', async () => {
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async (_sandboxId, command) => ({
+    stdout: `ran ${command}`,
+    stderr: '',
+    exitCode: 0,
+  }) as any);
+
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  const result = await runtime.execute('shell_execute', {
+    command: 'echo "preview server can use a normal high port like 9223"',
+    cwd: '.',
+  });
+
+  assert.equal(result.type, 'result');
+  assert.equal(runCommandMock.mock.callCount(), 1);
 });
 
 test('debug_open_page rejects non-http protocols', async () => {
@@ -1861,7 +1970,7 @@ test('debug_open_page ensures debug and opens URL via CDP', async () => {
         cdpPort: 9222,
       }) as any
   );
-  mock.method(e2bConnector, 'runCommand', async (_sandboxId, command) => {
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async (_sandboxId, command) => {
     if (String(command).includes('ONECEO_BROWSER_SCREENSHOT=')) {
       return {
         stdout: '{"ok":true,"url":"http://127.0.0.1:3000/folder1/","title":"Folder 1","outputPath":"/tmp/shot.png"}',
@@ -1870,7 +1979,8 @@ test('debug_open_page ensures debug and opens URL via CDP', async () => {
       } as any;
     }
     return {
-      stdout: '{"id":"page-1","url":"http://127.0.0.1:3000/folder1/"}\n__OPENED_BY__=PUT\n__ONECEO_DEBUG_TARGET_TAB_READY__=Folder 1\n__ONECEO_DEBUG_RESULT__=ok',
+      stdout:
+        '__ONECEO_DEBUG_OPEN_PAGE_RESULT__={"ok":true,"url":"http://127.0.0.1:3000/folder1/","title":"Folder 1"}\n__ONECEO_DEBUG_RESULT__=ok',
       stderr: '',
       exitCode: 0,
     } as any;
@@ -1918,6 +2028,11 @@ test('debug_open_page ensures debug and opens URL via CDP', async () => {
   assert.equal(markSandboxDirtyMock.mock.callCount(), 1);
   assert.deepEqual(markSandboxDirtyMock.mock.calls[0]?.arguments, ['sandbox-1', 'managed_debug_open_page']);
   assert.equal(ensureDebugMock.mock.callCount(), 1);
+  const openCommand = String(runCommandMock.mock.calls[0]?.arguments[1] || '');
+  assert.match(openCommand, /chromium\.connectOverCDP/);
+  assert.match(openCommand, /page\.goto/);
+  assert.doesNotMatch(openCommand, /\/json\/new/);
+  assert.doesNotMatch(openCommand, /\/json\/list/);
 });
 
 test('debug_open_page includes visual health diagnostics with screenshot evidence', async () => {
@@ -1958,7 +2073,7 @@ test('debug_open_page includes visual health diagnostics with screenshot evidenc
       } as any;
     }
     return {
-      stdout: '{"id":"page-1","url":"http://127.0.0.1:3000/"}\n__ONECEO_DEBUG_TARGET_TAB_READY__=Blank\n__ONECEO_DEBUG_RESULT__=ok',
+      stdout: '__ONECEO_DEBUG_OPEN_PAGE_RESULT__={"ok":true,"url":"http://127.0.0.1:3000/","title":"Blank"}\n__ONECEO_DEBUG_RESULT__=ok',
       stderr: '',
       exitCode: 0,
     } as any;
@@ -2039,7 +2154,8 @@ test('debug_open_page reports OneCEO app runtime errors as failed visual checks'
       } as any;
     }
     return {
-      stdout: '{"id":"page-1","url":"http://127.0.0.1:3000/"}\n__ONECEO_DEBUG_TARGET_TAB_READY__=Runtime Error\n__ONECEO_DEBUG_RESULT__=ok',
+      stdout:
+        '__ONECEO_DEBUG_OPEN_PAGE_RESULT__={"ok":true,"url":"http://127.0.0.1:3000/","title":"Runtime Error"}\n__ONECEO_DEBUG_RESULT__=ok',
       stderr: '',
       exitCode: 0,
     } as any;
@@ -2112,7 +2228,7 @@ test('debug_open_page reports structured screenshot capture failure instead of o
       } as any;
     }
     return {
-      stdout: '{"id":"page-1","url":"http://127.0.0.1:3000/"}\n__ONECEO_DEBUG_TARGET_TAB_READY__=Home\n__ONECEO_DEBUG_RESULT__=ok',
+      stdout: '__ONECEO_DEBUG_OPEN_PAGE_RESULT__={"ok":true,"url":"http://127.0.0.1:3000/","title":"Home"}\n__ONECEO_DEBUG_RESULT__=ok',
       stderr: '',
       exitCode: 0,
     } as any;
@@ -2198,7 +2314,7 @@ test('debug_open_page preserves structured screenshot timeout reason', async () 
       } as any;
     }
     return {
-      stdout: '{"id":"page-1","url":"http://127.0.0.1:3000/"}\n__ONECEO_DEBUG_TARGET_TAB_READY__=Home\n__ONECEO_DEBUG_RESULT__=ok',
+      stdout: '__ONECEO_DEBUG_OPEN_PAGE_RESULT__={"ok":true,"url":"http://127.0.0.1:3000/","title":"Home"}\n__ONECEO_DEBUG_RESULT__=ok',
       stderr: '',
       exitCode: 0,
     } as any;
@@ -2260,7 +2376,7 @@ test('debug_open_page normalizes local target URL without scheme', async () => {
       } as any;
     }
     return {
-      stdout: '{"id":"page-1","url":"http://127.0.0.1:8080/"}\n__ONECEO_DEBUG_TARGET_TAB_READY__=Local\n__ONECEO_DEBUG_RESULT__=ok',
+      stdout: '__ONECEO_DEBUG_OPEN_PAGE_RESULT__={"ok":true,"url":"http://127.0.0.1:8080/","title":"Local"}\n__ONECEO_DEBUG_RESULT__=ok',
       stderr: '',
       exitCode: 0,
     } as any;
@@ -2321,7 +2437,8 @@ test('debug_open_page opens workspace file targets in debug browser', async () =
       } as any;
     }
     return {
-      stdout: '__ONECEO_DEBUG_TARGET_FILE_READY__=/workspace/session-1/index.html\n{\"id\":\"page-1\",\"url\":\"file:///workspace/session-1/index.html\"}\n__ONECEO_DEBUG_TARGET_TAB_READY__=2048\n__ONECEO_DEBUG_RESULT__=ok',
+      stdout:
+        '__ONECEO_DEBUG_TARGET_FILE_READY__=/workspace/session-1/index.html\n__ONECEO_DEBUG_OPEN_PAGE_RESULT__={"ok":true,"url":"file:///workspace/session-1/index.html","title":"2048"}\n__ONECEO_DEBUG_RESULT__=ok',
       stderr: '',
       exitCode: 0,
     } as any;
@@ -2593,6 +2710,58 @@ test('debug_open_page rejects target pages that return bad HTTP status', async (
       url: 'http://127.0.0.1:8080/',
     }),
     /debug_open_page_failed:__ONECEO_DEBUG_TARGET_BAD_STATUS__=500/
+  );
+
+  assert.equal(runCommandMock.mock.callCount(), 1);
+  assert.equal(markSandboxDirtyMock.mock.callCount(), 0);
+});
+
+test('debug_open_page returns structured Playwright CDP open failures', async () => {
+  const ensureDebugMock = mock.fn(
+    async () =>
+      ({
+        ready: true,
+        url: 'https://8081-sandbox-1.e2b.app?pwd=oneceo&usr=oneceo',
+        status: 'running',
+        updatedAt: new Date().toISOString(),
+        sandboxId: 'sandbox-1',
+        port: 8081,
+        display: ':0',
+        cdpPort: 9222,
+      }) as any
+  );
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async () => ({
+    stdout:
+      '__ONECEO_DEBUG_OPEN_PAGE_RESULT__={"ok":false,"reasonCode":"debug_open_page_playwright_failed","message":"page.goto: net::ERR_CONNECTION_REFUSED","diagnostics":{"stage":"page_goto","cdpEndpoint":"http://127.0.0.1:9222","playwrightPath":"/usr/local/lib/node_modules/playwright/index.js"}}\n__ONECEO_DEBUG_RESULT__=ok',
+    stderr: '',
+    exitCode: 0,
+  }) as any);
+  const markSandboxDirtyMock = mock.fn(async () => undefined);
+
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: mock.fn(async () => undefined) as any,
+      markSandboxDirty: markSandboxDirtyMock as any,
+    },
+    {
+      ensureNekoDebug: ensureDebugMock as any,
+      issueIceServersForUser: mock.fn(async () => null) as any,
+    },
+  );
+
+  await assert.rejects(
+    runtime.execute('debug_open_page', {
+      url: 'http://127.0.0.1:8080/',
+    }),
+    /debug_open_page_failed:[\s\S]*debug_open_page_playwright_failed[\s\S]*page_goto[\s\S]*127\.0\.0\.1:9222/
   );
 
   assert.equal(runCommandMock.mock.callCount(), 1);

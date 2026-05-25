@@ -1,5 +1,25 @@
 # auto_report_20260525
 
+## Settings Connectors 空白页修复
+
+做了什么：
+
+1. 已将 `task-creation-agent` 分支推送到远端。
+2. 排查设置页 `Connectors` 面板，确认风险点在前端把连接器目录展示绑定到 `/api/connectors/me` 用户 profile 快照，快照异常或空返回时会让应用目录看起来像空白。
+3. 调整 `ConnectorCenterPanel`：先独立加载 `/api/connectors/catalog` 作为目录展示源，再用 `/api/connectors/me` 补齐 profile、授权状态和默认选择。
+4. 补齐连接器目录 loading、error、无目录和无搜索结果状态，避免只显示标题与搜索框的空白面板。
+5. 针对用户反馈的 Network 响应空白现象，给连接器路由增加 `no-store/no-cache` 响应头，并让前端连接器请求使用 `cache: no-store`，避免 304/空响应体导致 `response.json()` 解析失败。
+6. 更新连接器设计文档，明确目录和用户 profile 快照的前端加载边界。
+
+验证结果：
+
+1. `pnpm --filter web exec vitest run src/tests/connector-center-panel.test.ts`：24/24 通过。
+2. `pnpm --filter web check`：通过。
+3. `TMPDIR=/private/tmp pnpm --filter api exec tsx --test tests/connector-routes.test.ts`：9/9 通过。
+4. `pnpm --filter api type-check`：通过。
+5. Playwright 打开 `http://localhost:3000/home` -> 设置 -> `Connectors`，确认页面显示 GitHub、Notion、Slack、Supabase、Figma、Google Workspace、Vercel 等连接器卡片；`/api/connectors/catalog` 返回 200、响应体非空且带 `cache-control: no-store, no-cache, must-revalidate, proxy-revalidate`。
+6. `git diff --check`：通过。
+
 ## 调试浏览器共用链路继续修复
 
 做了什么：

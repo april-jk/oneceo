@@ -551,6 +551,7 @@
   },
   "connectors": {
     "comingSoon": "后续实现位",
+    "loading": "正在加载连接器",
     "featured": "推荐",
     "authorizedAccount": "授权账户",
     "authorizedRepo": "授权仓库",
@@ -680,7 +681,8 @@
       "reconnectConnector": "重新连接 {{name}}",
       "connectConnector": "连接 {{name}}",
       "reauthorize": "重新授权",
-      "startOauth": "发起 OAuth"
+      "startOauth": "发起 OAuth",
+      "retry": "重试"
     },
     "badges": {
       "new": "新",
@@ -692,6 +694,7 @@
       "intro": "本轮先统一应用连接器目录、profile 规范和会话挂载边界。",
       "customMcpDetail": " 自定义 MCP 的创建表单和运行时装配将在下一阶段补齐。",
       "createCustomMcp": "创建自定义 MCP",
+      "noCatalog": "连接器目录暂时不可用，请稍后重试",
       "noMatches": "没有找到匹配的连接器"
     },
     "targetBanner": {

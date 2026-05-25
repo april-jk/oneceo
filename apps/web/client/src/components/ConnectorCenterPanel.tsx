@@ -44,6 +44,7 @@ import {
   completeConnectorProfileOauth,
   createConnectorProfile,
   deleteConnectorProfile,
+  getConnectorCatalog,
   getMyConnectorProfiles,
   setDefaultConnectorProfile,
   startConnectorOauth,
@@ -258,6 +259,30 @@ export function cleanupConnectorQuery(
   return `${nextPath}${url.search ? `?${url.searchParams.toString()}` : ""}`;
 }
 
+export function resolveConnectorCatalogForProfiles(
+  profileCatalog: ConnectorCatalogItem[],
+  catalogFallback: ConnectorCatalogItem[]
+) {
+  return profileCatalog.length > 0 ? profileCatalog : catalogFallback;
+}
+
+export function resolveConnectorDirectoryState(input: {
+  loading: boolean;
+  loadError: string | null;
+  catalogCount: number;
+  activeTab: ConnectorCenterTab;
+  appCatalogCount: number;
+  filteredAppCatalogCount: number;
+}) {
+  if (input.loading && input.catalogCount === 0) return "loading";
+  if (input.loadError && input.catalogCount === 0) return "error";
+  if (input.activeTab === "custom_mcp") return "custom_mcp";
+  if (input.activeTab !== "app") return "empty_tab";
+  if (!input.loading && input.appCatalogCount === 0) return "no_catalog";
+  if (!input.loading && input.filteredAppCatalogCount === 0) return "no_matches";
+  return "ready";
+}
+
 function getFieldValue(
   profile: ConnectorProfile | undefined,
   fieldKey: string,
@@ -441,6 +466,7 @@ export function ConnectorCenterPanel({
   const effectiveHighlightedProfileId = params.get("profileId");
 
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [actionKey, setActionKey] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ConnectorCenterTab>("app");
   const [query, setQuery] = useState("");
@@ -455,43 +481,70 @@ export function ConnectorCenterPanel({
   >({});
   const [formState, setFormState] = useState<Record<string, ConnectorFormValues>>({});
 
+  const applyConnectorSnapshot = (
+    nextCatalog: ConnectorCatalogItem[],
+    nextProfiles: ConnectorProfile[],
+  ) => {
+    setCatalog(nextCatalog);
+    setProfiles(nextProfiles);
+
+    const profilesByConnector = groupProfilesByConnector(nextProfiles);
+    setSelectedProfileIds((prev) => {
+      const next = { ...prev };
+      for (const item of nextCatalog) {
+        next[item.key] = resolvePreferredProfileId(
+          profilesByConnector[item.key] || [],
+          prev[item.key],
+        );
+      }
+      return next;
+    });
+
+    setFormState((prev) => {
+      const next = { ...prev };
+      for (const item of nextCatalog) {
+        const connectorProfiles = profilesByConnector[item.key] || [];
+        next[editorKey(item.key, null)] = buildFormValues(
+          item,
+          undefined,
+          prev[editorKey(item.key, null)],
+        );
+        for (const profile of connectorProfiles) {
+          const key = editorKey(item.key, profile.profileId);
+          next[key] = buildFormValues(item, profile, prev[key]);
+        }
+      }
+      return next;
+    });
+  };
+
   const load = async () => {
     setLoading(true);
+    setLoadError(null);
+    let catalogFallback: ConnectorCatalogItem[] = [];
+
+    try {
+      catalogFallback = await getConnectorCatalog();
+      if (catalogFallback.length > 0) {
+        applyConnectorSnapshot(catalogFallback, profiles);
+      }
+    } catch (error) {
+      console.warn("[ConnectorCenterPanel] catalog prefetch failed:", error);
+    }
+
     try {
       const result = await getMyConnectorProfiles();
-      setCatalog(result.catalog);
-      setProfiles(result.profiles);
-
-      const profilesByConnector = groupProfilesByConnector(result.profiles);
-      setSelectedProfileIds((prev) => {
-        const next = { ...prev };
-        for (const item of result.catalog) {
-          next[item.key] = resolvePreferredProfileId(
-            profilesByConnector[item.key] || [],
-            prev[item.key]
-          );
-        }
-        return next;
-      });
-
-      setFormState((prev) => {
-        const next = { ...prev };
-        for (const item of result.catalog) {
-          const connectorProfiles = profilesByConnector[item.key] || [];
-          next[editorKey(item.key, null)] = buildFormValues(
-            item,
-            undefined,
-            prev[editorKey(item.key, null)]
-          );
-          for (const profile of connectorProfiles) {
-            const key = editorKey(item.key, profile.profileId);
-            next[key] = buildFormValues(item, profile, prev[key]);
-          }
-        }
-        return next;
-      });
+      const nextCatalog = resolveConnectorCatalogForProfiles(result.catalog, catalogFallback);
+      applyConnectorSnapshot(nextCatalog, result.profiles);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : i18n.t("connectors.errors.loadFailed"));
+      const message =
+        error instanceof Error ? error.message : i18n.t("connectors.errors.loadFailed");
+      setLoadError(message);
+      if (catalogFallback.length === 0) {
+        toast.error(message);
+      } else {
+        toast.warning(message);
+      }
     } finally {
       setLoading(false);
     }
@@ -1018,7 +1071,51 @@ export function ConnectorCenterPanel({
     ) : null;
 
   const renderDirectory = () => {
-    if (activeTab === "custom_mcp") {
+    const directoryState = resolveConnectorDirectoryState({
+      loading,
+      loadError,
+      catalogCount: catalog.length,
+      activeTab,
+      appCatalogCount: appCatalog.length,
+      filteredAppCatalogCount: filteredAppCatalog.length,
+    });
+
+    if (directoryState === "loading") {
+      return (
+        <div className="flex h-full flex-col items-center justify-center px-6 py-16 text-center">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          <p className="mt-3 text-sm text-muted-foreground">
+            {t("connectors.loading")}
+          </p>
+        </div>
+      );
+    }
+
+    if (directoryState === "error") {
+      return (
+        <div className="flex h-full flex-col items-center justify-center px-6 py-16 text-center">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full border border-destructive/30 bg-destructive/5">
+            <AlertCircle className="h-5 w-5 text-destructive" />
+          </div>
+          <h4 className="mt-4 text-lg font-semibold text-foreground">
+            {t("connectors.errors.loadFailed")}
+          </h4>
+          <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
+            {loadError}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            className="mt-5 rounded-xl"
+            onClick={() => void load()}
+          >
+            {t("connectors.actions.retry")}
+          </Button>
+        </div>
+      );
+    }
+
+    if (directoryState === "custom_mcp") {
       return (
         <CustomMcpManagementPanel
           profiles={profilesByConnector.custom_mcp || []}
@@ -1028,7 +1125,7 @@ export function ConnectorCenterPanel({
         />
       );
     }
-    if (activeTab !== "app") {
+    if (directoryState === "empty_tab") {
       return renderEmptyTab(activeTab);
     }
 
@@ -1107,7 +1204,11 @@ export function ConnectorCenterPanel({
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               {filteredAppCatalog.map((item) => renderCard(item))}
             </div>
-            {!loading && filteredAppCatalog.length === 0 ? (
+            {directoryState === "no_catalog" ? (
+              <div className="rounded-2xl border border-dashed border-border/70 px-4 py-10 text-center text-sm text-muted-foreground">
+                {t("connectors.empty.noCatalog")}
+              </div>
+            ) : directoryState === "no_matches" ? (
               <div className="rounded-2xl border border-dashed border-border/70 px-4 py-10 text-center text-sm text-muted-foreground">
                 {t("connectors.empty.noMatches")}
               </div>

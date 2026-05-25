@@ -551,6 +551,7 @@
   },
   "connectors": {
     "comingSoon": "Coming soon",
+    "loading": "Loading connectors",
     "featured": "Featured",
     "authorizedAccount": "Authorized account",
     "authorizedRepo": "Authorized repository",
@@ -680,7 +681,8 @@
       "reconnectConnector": "Reconnect {{name}}",
       "connectConnector": "Connect {{name}}",
       "reauthorize": "Reauthorize",
-      "startOauth": "Start OAuth"
+      "startOauth": "Start OAuth",
+      "retry": "Retry"
     },
     "badges": {
       "new": "New",
@@ -692,6 +694,7 @@
       "intro": "This release focuses on unifying the app connector directory, profile rules, and session attachment boundary.",
       "customMcpDetail": " Custom MCP creation forms and runtime assembly will be added in the next stage.",
       "createCustomMcp": "Create custom MCP",
+      "noCatalog": "Connector catalog is temporarily unavailable. Please try again later.",
       "noMatches": "No matching connectors found"
     },
     "targetBanner": {

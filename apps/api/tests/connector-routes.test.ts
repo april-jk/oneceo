@@ -70,6 +70,27 @@ test('GET /api/connectors/me rejects anonymous access', async () => {
   }
 });
 
+test('GET /api/connectors/catalog disables HTTP caching for settings directory data', async () => {
+  const server = await startServer();
+
+  try {
+    const response = await fetch(`${server.origin}/api/connectors/catalog`, {
+      headers: {
+        'if-none-match': '"stale-connector-catalog"',
+      },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.equal(response.headers.get('cache-control'), 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    assert.ok(Array.isArray(payload.data));
+    assert.ok(payload.data.some((item: { key?: string }) => item.key === 'github'));
+  } finally {
+    await server.close();
+  }
+});
+
 test('GET /api/connectors/me returns user-scoped catalog and profiles', async () => {
   const server = await startServer();
   connectorServiceAny.getMeSnapshot = async (userId: string) => {
@@ -91,6 +112,7 @@ test('GET /api/connectors/me returns user-scoped catalog and profiles', async ()
 
     assert.equal(response.status, 200);
     assert.equal(payload.success, true);
+    assert.equal(response.headers.get('cache-control'), 'no-store, no-cache, must-revalidate, proxy-revalidate');
     assert.equal(payload.data.userId, 'connector-user-1');
     assert.equal(payload.data.profiles.length, 1);
   } finally {

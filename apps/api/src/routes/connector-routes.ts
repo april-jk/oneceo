@@ -13,6 +13,13 @@ const router = express.Router();
 router.use('/custom-api', customApiConnectorRoutes);
 router.use('/custom-mcp', customMcpConnectorRoutes);
 
+router.use((_, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
+
 function handleError(res: express.Response, error: unknown, fallback: string, status = 400) {
   const message = error instanceof Error ? error.message : fallback;
   return res.status(status).json({

@@ -156,14 +156,23 @@ async function requestJson<T>(url: string, options: JsonOptions = {}): Promise<T
   const response = await fetch(url, {
     method: options.method || "GET",
     credentials: "include",
+    cache: "no-store",
     headers: buildClientIdentityHeaders({
       "Content-Type": "application/json",
+      "Accept": "application/json",
+      "Cache-Control": "no-cache",
     }),
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
-  const payload = (await response.json()) as T & { error?: string };
+  const rawPayload = await response.text();
+  const payload = rawPayload
+    ? (JSON.parse(rawPayload) as T & { error?: string })
+    : ({ error: `empty response: ${response.status}` } as T & { error?: string });
   if (!response.ok) {
     throw new Error(payload?.error || `request failed: ${response.status}`);
+  }
+  if (!rawPayload) {
+    throw new Error(payload?.error || "empty response");
   }
   return payload;
 }

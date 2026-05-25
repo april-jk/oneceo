@@ -114,6 +114,7 @@ import {
   type PreviewDiffItem,
 } from "@/lib/opencode-preview";
 import {
+  getTaskCreationDebugInfo,
   getWorkspaceRawFileUrl,
   listTaskCreationProjects,
   listTaskCreationSkills,
@@ -122,6 +123,7 @@ import {
   type TaskCreationDeliverableArtifact,
   type TaskCreationPlatformSkill,
   type TaskCreationUploadedAttachment as UploadedTaskAttachment,
+  type TaskCreationDebugInfo,
   type TaskCreationWebsitePreviewSnapshot,
 } from "@/lib/task-creation-client";
 import {
@@ -165,6 +167,8 @@ import { useAuth } from "@/contexts/AuthContext";
 type PageMode = "input" | "chat";
 const BILLING_TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "stopped"]);
 const HOME_NEW_TASK_TOUR_KEY = "oneceo:tour.home_new_task.completed";
+const MANAGED_AUTO_DEBUG_READY_POLL_MS = 1000;
+const MANAGED_AUTO_DEBUG_RETRY_POLL_MS = 2000;
 
 type HomeScenarioModel = "lite" | "pro" | "max";
 
@@ -1121,6 +1125,19 @@ export default function Home() {
     useState<AltusDrawerView>("actions");
   const [pendingAltusReplayToolCallId, setPendingAltusReplayToolCallId] =
     useState<string | null>(null);
+  const [pendingAutoManagedDebugAction, setPendingAutoManagedDebugAction] =
+    useState<{
+      runId: string;
+      toolCallId: string;
+      key: string;
+    } | null>(null);
+  const [autoManagedDebugInfo, setAutoManagedDebugInfo] = useState<{
+    actionKey: string;
+    info: TaskCreationDebugInfo;
+  } | null>(null);
+  const autoOpenedManagedDebugActionsRef = useRef<Set<string>>(new Set());
+  const wasAutoOpeningManagedDebugRef = useRef(false);
+  const autoManagedDebugPollRef = useRef<number | null>(null);
   const refreshCreditsRef = useRef(refreshCredits);
   const voiceInputBaseRef = useRef("");
   const lastCreditRefreshRunStatusRef = useRef<string | null>(null);
@@ -2996,7 +3013,7 @@ export default function Home() {
   const chatPanelDefaultSize = 100 - previewPanelDefaultSize;
   const chatPanelMinSize = managedAltusMode ? 30 : 42;
 
-  const openAltusReplay = (
+  const openAltusReplay = useCallback((
     runId: string,
     options?: {
       toolCallId?: string | null;
@@ -3015,7 +3032,116 @@ export default function Home() {
       setAltusReplayIndex(Math.max(0, (replay?.actions.length || 1) - 1));
       setPendingAltusReplayToolCallId(null);
     }
-  };
+  }, [managedReplayByRun]);
+
+  useEffect(() => {
+    setPendingAutoManagedDebugAction(null);
+    setAutoManagedDebugInfo(null);
+    autoOpenedManagedDebugActionsRef.current.clear();
+    wasAutoOpeningManagedDebugRef.current = false;
+    if (autoManagedDebugPollRef.current) {
+      window.clearTimeout(autoManagedDebugPollRef.current);
+      autoManagedDebugPollRef.current = null;
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!managedAltusMode) {
+      wasAutoOpeningManagedDebugRef.current = false;
+      setPendingAutoManagedDebugAction(null);
+      setAutoManagedDebugInfo(null);
+      return;
+    }
+    if (!isProcessing) {
+      seedManagedVisualDebugActionKeys(
+        autoOpenedManagedDebugActionsRef.current,
+        managedReplayByRun,
+      );
+      wasAutoOpeningManagedDebugRef.current = false;
+      setPendingAutoManagedDebugAction(null);
+      return;
+    }
+    if (!wasAutoOpeningManagedDebugRef.current) {
+      seedManagedVisualDebugActionKeys(
+        autoOpenedManagedDebugActionsRef.current,
+        managedReplayByRun,
+      );
+      wasAutoOpeningManagedDebugRef.current = true;
+      return;
+    }
+    const action = findLatestManagedVisualDebugAction(latestManagedReplay);
+    if (!action) {
+      return;
+    }
+    const autoOpenKey = getManagedVisualDebugActionKey(action);
+    if (autoOpenedManagedDebugActionsRef.current.has(autoOpenKey)) {
+      return;
+    }
+    autoOpenedManagedDebugActionsRef.current.add(autoOpenKey);
+    setPendingAutoManagedDebugAction({
+      runId: action.runId,
+      toolCallId: action.toolCallId,
+      key: autoOpenKey,
+    });
+  }, [
+    isProcessing,
+    latestManagedReplay,
+    managedAltusMode,
+    managedReplayByRun,
+  ]);
+
+  useEffect(() => {
+    if (autoManagedDebugPollRef.current) {
+      window.clearTimeout(autoManagedDebugPollRef.current);
+      autoManagedDebugPollRef.current = null;
+    }
+    if (!managedAltusMode || !isProcessing || !sessionId || !pendingAutoManagedDebugAction) {
+      return;
+    }
+    let cancelled = false;
+    const pollUntilDebugReady = async () => {
+      try {
+        const info = await getTaskCreationDebugInfo(sessionId);
+        if (cancelled) return;
+        if (info?.ready && info.url) {
+          setAutoManagedDebugInfo({
+            actionKey: pendingAutoManagedDebugAction.key,
+            info,
+          });
+          openAltusReplay(pendingAutoManagedDebugAction.runId, {
+            toolCallId: pendingAutoManagedDebugAction.toolCallId,
+            view: "debug",
+          });
+          setPendingAutoManagedDebugAction(null);
+          return;
+        }
+        autoManagedDebugPollRef.current = window.setTimeout(
+          pollUntilDebugReady,
+          MANAGED_AUTO_DEBUG_READY_POLL_MS,
+        );
+      } catch {
+        if (cancelled) return;
+        autoManagedDebugPollRef.current = window.setTimeout(
+          pollUntilDebugReady,
+          MANAGED_AUTO_DEBUG_RETRY_POLL_MS,
+        );
+      }
+    };
+    void pollUntilDebugReady();
+    return () => {
+      cancelled = true;
+      if (autoManagedDebugPollRef.current) {
+        window.clearTimeout(autoManagedDebugPollRef.current);
+        autoManagedDebugPollRef.current = null;
+      }
+    };
+  }, [
+    isProcessing,
+    managedAltusMode,
+    openAltusReplay,
+    pendingAutoManagedDebugAction,
+    sessionId,
+  ]);
 
   useEffect(() => {
     if (!activeAltusReplay) {
@@ -3158,6 +3284,7 @@ export default function Home() {
           runtimeStarting={runtime.starting}
           onEnsureRuntime={runtime.ensure}
           runtimeSwitchBlocked={managedRunActive}
+          debugInfoOverride={autoManagedDebugInfo?.info || null}
           onRequestStartDebugByMessage={() => {
             void submitPrompt(t("homeWorkspace.startDebugPrompt"));
           }}
@@ -9927,6 +10054,50 @@ export function resolveManagedToolReplayView(
     return "deployment";
   }
   return "actions";
+}
+
+export function findLatestManagedVisualDebugAction(
+  replay:
+    | {
+        actions: AltusReplayAction[];
+      }
+    | null
+    | undefined,
+): AltusReplayAction | null {
+  if (!replay) return null;
+  for (let index = replay.actions.length - 1; index >= 0; index -= 1) {
+    const action = replay.actions[index];
+    if (
+      action &&
+      action.status !== "failed" &&
+      resolveManagedToolReplayView(action.toolName) === "debug"
+    ) {
+      return action;
+    }
+  }
+  return null;
+}
+
+export function getManagedVisualDebugActionKey(action: AltusReplayAction) {
+  return `${action.runId}:${action.toolCallId}`;
+}
+
+export function seedManagedVisualDebugActionKeys(
+  target: Set<string>,
+  replayByRun: Map<
+    string,
+    {
+      actions: AltusReplayAction[];
+    }
+  >,
+) {
+  for (const replay of Array.from(replayByRun.values())) {
+    for (const action of replay.actions) {
+      if (resolveManagedToolReplayView(action.toolName) === "debug") {
+        target.add(getManagedVisualDebugActionKey(action));
+      }
+    }
+  }
 }
 
 function isManagedDeploymentTool(toolName: string) {

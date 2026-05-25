@@ -655,6 +655,73 @@ function buildNekoStartCommand(
   ].join('\n');
 }
 
+function buildNekoLateCdpRecoveryCommand(input: {
+  nekoPort: number;
+  cdpPort: number;
+  configVersion: string;
+  screenWidth: number;
+  screenHeight: number;
+  display: string;
+  tcpMuxPort: number;
+  udpMuxPort: number;
+}): string {
+  return `
+set -euo pipefail
+NEKO_CONFIG="${DEBUG_BROWSER_NEKO_CONFIG}"
+NEKO_LOG="${DEBUG_BROWSER_NEKO_LOG}"
+NEKO_RUN_DIR="${DEBUG_BROWSER_RUN_DIR}"
+NEKO_STATE_DIR="${DEBUG_BROWSER_STATE_DIR}"
+NEKO_MANIFEST="${DEBUG_BROWSER_MANIFEST}"
+mkdir -p "$NEKO_RUN_DIR" "$NEKO_STATE_DIR" "${DEBUG_BROWSER_LOG_DIR}"
+echo "[neko] recovering late-ready chromium by starting n.eko"
+curl -fsSL --max-time 2 "http://127.0.0.1:${input.cdpPort}/json/version" >/dev/null 2>&1 || exit 39
+if curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${input.nekoPort}/" | grep -q "^200"; then
+  exit 0
+fi
+command -v neko >/dev/null 2>&1 || exit 32
+test -f "$NEKO_CONFIG" || exit 40
+if [ -f "$NEKO_RUN_DIR/neko.pid" ]; then
+  old_pid="$(cat "$NEKO_RUN_DIR/neko.pid" 2>/dev/null || true)"
+  if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+    tr '\\0' ' ' < "/proc/$old_pid/cmdline" 2>/dev/null | grep -F "neko serve --config $NEKO_CONFIG" >/dev/null 2>&1 && kill "$old_pid" 2>/dev/null || true
+  fi
+fi
+nohup neko serve --config "$NEKO_CONFIG" > "$NEKO_LOG" 2>&1 &
+echo $! > "$NEKO_RUN_DIR/neko.pid"
+for _ in $(seq 1 20); do
+  if curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${input.nekoPort}/" | grep -q "^200"; then
+    cat > "$NEKO_MANIFEST" <<EOF_MANIFEST
+{
+  "schemaVersion": 1,
+  "runtimeVersion": "${DEBUG_BROWSER_RUNTIME_VERSION}",
+  "configVersion": "${input.configVersion}",
+  "status": "running",
+  "message": "debug browser ready",
+  "ports": {
+    "neko": ${input.nekoPort},
+    "cdp": ${input.cdpPort},
+    "tcpMux": ${input.tcpMuxPort},
+    "udpMux": ${input.udpMuxPort}
+  },
+  "display": "${input.display}",
+  "screen": "${input.screenWidth}x${input.screenHeight}",
+  "pidFiles": {
+    "xvfb": "${DEBUG_BROWSER_RUN_DIR}/xvfb.pid",
+    "chromium": "${DEBUG_BROWSER_RUN_DIR}/chromium.pid",
+    "neko": "${DEBUG_BROWSER_RUN_DIR}/neko.pid"
+  },
+  "startedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "lastHealthCheckAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF_MANIFEST
+    exit 0
+  fi
+  sleep 0.5
+done
+exit 40
+`;
+}
+
 function buildStartScriptFailureDiagnostics(
   diagnostics: Awaited<ReturnType<typeof collectNekoDebugDiagnostics>> | undefined,
   input: {
@@ -1248,6 +1315,7 @@ write_manifest "running" "debug browser ready"
       const reconciledNekoReady = await probeNeko(orchestratorSessionId, nekoPort);
       const reconciledCdpReady = await probeChromiumCdp(orchestratorSessionId, cdpPort);
       const reconciledDiagnostics = diagnostics;
+      const reasonCode = classifyNekoStartFailure(startFailure);
       if (
         reconciledNekoReady &&
         reconciledCdpReady &&
@@ -1300,7 +1368,88 @@ write_manifest "running" "debug browser ready"
           screenHeight,
         };
       }
-      const reasonCode = classifyNekoStartFailure(startFailure);
+      if (
+        (reasonCode === 'chromium_start_failed' || reasonCode === 'debug_browser_lock_timeout') &&
+        reconciledCdpReady &&
+        !reconciledNekoReady
+      ) {
+        try {
+          await e2bConnector.runCommand(
+            orchestratorSessionId,
+            `bash -lc ${shellEscape(
+              buildNekoLateCdpRecoveryCommand({
+                nekoPort,
+                cdpPort,
+                configVersion,
+                screenWidth,
+                screenHeight,
+                display,
+                tcpMuxPort,
+                udpMuxPort,
+              })
+            )}`,
+            {
+              timeoutMs: 30 * 1000,
+            }
+          );
+        } catch {
+          // Keep the original Chromium late-ready diagnostics if the recovery pass fails.
+        }
+        const recoveredNekoReady = await waitForNeko(orchestratorSessionId, nekoPort);
+        const recoveredCdpReady = await waitForChromiumCdp(orchestratorSessionId, cdpPort);
+        if (
+          recoveredNekoReady &&
+          recoveredCdpReady &&
+          (!strictIceCheck || !(await probeNekoIceHealth(orchestratorSessionId)).failed)
+        ) {
+          const recoveryDiagnostics = await collectNekoDebugDiagnostics(orchestratorSessionId);
+          const host = await e2bConnector.getSandboxHost(orchestratorSessionId, nekoPort);
+          const baseUrl = `https://${host}`;
+          const clientUrl = buildNekoClientUrl(baseUrl);
+          await updateMetadata({
+            baseUrl,
+            clientUrl,
+            port: nekoPort,
+            display,
+            cdpPort,
+            screenWidth,
+            screenHeight,
+            tcpMuxPort,
+            udpMuxPort,
+            nat1To1: nat1To1 || '',
+            webrtcMode: useMux ? 'mux' : 'epr',
+            webrtcEpr: webrtcEpr || '',
+            forceMux,
+            iceLite,
+            autoNat,
+            authProvider: 'noauth',
+            configVersion,
+            turnConfigured,
+            requireTurn,
+            strictIceCheck,
+            iceServers,
+            diagnostics: recoveryDiagnostics,
+            status: 'running',
+            reasonCode: undefined,
+            failureLayer: undefined,
+            nextAction: undefined,
+            message: undefined,
+            runtimeVersion: DEBUG_BROWSER_RUNTIME_VERSION,
+          });
+          return {
+            ready: true,
+            url: clientUrl,
+            status: 'running',
+            updatedAt: new Date().toISOString(),
+            sandboxId: orchestratorSessionId,
+            port: nekoPort,
+            display,
+            cdpPort,
+            screenWidth,
+            screenHeight,
+          };
+        }
+      }
       const message = buildNekoStartFailureMessage(reasonCode);
       const host = await e2bConnector.getSandboxHost(orchestratorSessionId, nekoPort).catch(() => '');
       const baseUrl = host ? `https://${host}` : previousBaseUrl;

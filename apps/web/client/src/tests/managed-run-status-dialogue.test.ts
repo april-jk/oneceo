@@ -3,10 +3,13 @@ import {
   buildChatItems,
   buildManagedReplayData,
   collapseRepeatedChatAuthors,
+  findLatestManagedVisualDebugAction,
+  getManagedVisualDebugActionKey,
   getActiveManagedStatusText,
   getManagedToolPurposeSummary,
   groupManagedActivityItems,
   resolveManagedToolReplayView,
+  seedManagedVisualDebugActionKeys,
   type ChatItem,
 } from "@/pages/Home";
 import type { AgentMessage } from "@/hooks/useTaskCreationAgent";
@@ -102,6 +105,56 @@ describe("managed run status dialogue", () => {
     expect(
       resolveManagedToolReplayView("get_application_deployment_status"),
     ).toBe("deployment");
+  });
+
+  it("picks the latest non-failed visual debug tool for automatic remote debug", () => {
+    const replayByRun = buildManagedReplayData([
+      createManagedToolMessage({
+        eventType: "tool_call_completed",
+        content: "工具 read_file 已完成",
+        toolCallId: "tool-read-1",
+        toolName: "read_file",
+      }),
+      createManagedToolMessage({
+        eventType: "tool_call_failed",
+        content: "视觉检查失败",
+        toolCallId: "browser-tool-failed",
+        toolName: "browser_interact",
+      }),
+      createManagedToolMessage({
+        eventType: "tool_call_started",
+        content: "开始打开远端浏览器页面",
+        toolCallId: "debug-open-page-1",
+        toolName: "debug_open_page",
+      }),
+    ]);
+
+    const action = findLatestManagedVisualDebugAction(
+      replayByRun.get("run-status-dialogue-1"),
+    );
+
+    expect(action?.toolCallId).toBe("debug-open-page-1");
+    expect(action?.toolName).toBe("debug_open_page");
+  });
+
+  it("seeds existing visual debug actions so history does not auto-open as new work", () => {
+    const replayByRun = buildManagedReplayData([
+      createManagedToolMessage({
+        eventType: "tool_call_completed",
+        content: "历史视觉检查已完成",
+        toolCallId: "debug-open-page-history",
+        toolName: "debug_open_page",
+      }),
+    ]);
+    const action = findLatestManagedVisualDebugAction(
+      replayByRun.get("run-status-dialogue-1"),
+    );
+    const seenKeys = new Set<string>();
+
+    seedManagedVisualDebugActionKeys(seenKeys, replayByRun);
+
+    expect(action).toBeTruthy();
+    expect(seenKeys.has(getManagedVisualDebugActionKey(action!))).toBe(true);
   });
 
   it("attaches browser screenshots to the matching replay action", () => {

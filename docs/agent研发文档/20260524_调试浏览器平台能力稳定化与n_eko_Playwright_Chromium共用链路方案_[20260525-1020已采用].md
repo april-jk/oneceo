@@ -394,3 +394,40 @@ Altus 安装 Playwright
 3. 如果 health probe 成功，返回 `ready`；只有 PID 退出且 health probe 也失败时，才输出 `__ONECEO_SERVICE_START_FAILED__`。
 
 这样可以减少“用户预览服务已可用但 shell_execute 先报失败”的无效恢复步骤，让 Altus 更快进入 `debug_open_page`。
+
+## 15. 20260525-视觉检查自动打开远端调试
+
+本次在前端回放层补齐视觉检查到远端调试的衔接：
+
+1. managed 运行中出现 `debug_open_page` / `browser_interact` 时，前端先后台轮询调试信息；只有 `debugInfo.ready && debugInfo.url` 成立后，才自动打开 Altus 回放抽屉并切到 Debug 视图。
+2. 自动打开按 `runId:toolCallId` 去重，并在非处理状态 / 新一轮处理开始时先登记已有视觉调试动作，避免 Redis / 历史消息重放或下一轮用户输入刚开始时反复抢占用户当前视图。
+3. 自动打开时把已确认 ready 的 debug info 作为回放抽屉 override，即使 workspace runtime 状态尚未同步为 ready，也优先展示 n.eko iframe，不显示“执行环境未启动”。
+4. Debug 视图继续使用 n.eko iframe 的 `autoconnect=1` 参数，因此打开后会自动连到平台托管的远端浏览器页面。
+5. “启动/启用调试”按钮只有在当前没有可用调试信息时才通过会话发送“帮我调试页面”；如果 `debugInfo.ready && debugInfo.url` 已成立，只刷新调试信息，不再重复写入用户会话消息。
+
+验证重点：
+
+1. 视觉检查工具调用后，右侧预览应在调试转发 ready 后自动切到 Debug，而不是只留下截图证据，也不能提前显示“执行环境未启动”。
+2. 已经能看到远端浏览器时，再点调试按钮不能新增“帮我调试页面”消息。
+3. 刷新历史会话不会因为旧的视觉工具事件反复弹开 Debug 视图。
+
+## 16. 20260525-Chromium late-ready 半启动恢复
+
+会话 `d7b157d7-60fd-40bb-9b72-21fa0451f254` 暴露出一类平台启动时序：
+
+1. 启动 wrapper 在限定窗口内判定 Chromium CDP 未 ready，返回 `chromium_start_failed`。
+2. wrapper 退出后 Chromium 又变为 ready，`127.0.0.1:9222/json/version` 可用。
+3. 因为 wrapper 已退出，后续 `neko serve` 没有执行，导致 `8081` 不可用。
+4. 重新走完整 wrapper 还可能遇到旧 `ensure.lock` 的 `debug_browser_lock_timeout`，但事实仍是 CDP ready、n.eko not ready。
+
+修正原则：
+
+1. 仅在 `chromium_start_failed` / `debug_browser_lock_timeout` 且实时探测满足 `cdpReady=true`、`nekoReady=false` 时触发恢复。
+2. 恢复不重跑完整 wrapper，只执行一个窄命令：确认 CDP 仍 ready，复用已有 `neko.yml` 启动 `neko serve`，写回 manifest。
+3. Xvfb 缺失、Chromium 二进制缺失、端口冲突、n.eko 二进制缺失等真实失败仍保持失败，不做泛化吞错。
+
+验证：
+
+1. `TMPDIR=/private/tmp pnpm --filter api exec tsx --test tests/sandbox-debug-service.test.ts`：17/17 通过。
+2. `pnpm --filter api type-check`：通过。
+3. 对真实 sandbox `ifejcjlfezwwlt41lrxyh` 运行修复后的 `ensureNekoDebug()`，返回 `ready=true`、`status=running`、`url=https://8081-ifejcjlfezwwlt41lrxyh.e2b.app`。

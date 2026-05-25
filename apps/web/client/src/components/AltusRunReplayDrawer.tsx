@@ -31,6 +31,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   getTaskCreationBrowserActionScreenshotUrl,
   getTaskCreationDeploymentInfo,
+  type TaskCreationDebugInfo,
   type TaskCreationDeploymentInfo,
 } from "@/lib/task-creation-client";
 import { cn } from "@/lib/utils";
@@ -158,6 +159,7 @@ type AltusRunReplayDrawerProps = {
   runtimeStarting?: boolean;
   onEnsureRuntime?: () => Promise<void>;
   runtimeSwitchBlocked?: boolean;
+  debugInfoOverride?: TaskCreationDebugInfo | null;
   onRequestStartDebugByMessage?: () => void;
   onRequestDeployByMessage?: () => void;
   onRequestRedeployByMessage?: () => void;
@@ -374,6 +376,7 @@ export default function AltusRunReplayDrawer({
   runtimeStarting,
   onEnsureRuntime,
   runtimeSwitchBlocked = false,
+  debugInfoOverride,
   onRequestStartDebugByMessage,
   onRequestDeployByMessage,
   onRequestRedeployByMessage,
@@ -431,6 +434,10 @@ export default function AltusRunReplayDrawer({
     runtimeStarting,
     onEnsureRuntime: effectiveEnsureRuntime,
   });
+  const debugInfoForPreview = debugInfoOverride || debugPreview.debugInfo;
+  const debugReadyForPreview = Boolean(
+    debugInfoForPreview?.ready && debugInfoForPreview.url,
+  );
   const selectedActionKey = `${runId}:${selectedAction?.toolCallId || "none"}`;
   const previousSelectedActionKeyRef = useRef(selectedActionKey);
   const drawerContentRef = useRef<HTMLDivElement | null>(null);
@@ -1035,13 +1042,17 @@ export default function AltusRunReplayDrawer({
           />
         ) : drawerView === "debug" ? (
           <DebugPreview
-            info={debugPreview.debugInfo}
+            info={debugInfoForPreview}
             loading={debugPreview.debugLoading}
             error={debugPreview.debugError}
-            runtimeReady={runtimeReady !== false}
+            runtimeReady={runtimeReady !== false || debugReadyForPreview}
             starting={debugPreview.debugStarting}
             onRequestStartDebugByMessage={onRequestStartDebugByMessage}
             onStart={async () => {
+              if (debugReadyForPreview) {
+                await debugPreview.refreshDebug();
+                return;
+              }
               if (runtimeReady === false) {
                 if (runtimeSwitchBlocked) {
                   debugPreview.setDebugError(

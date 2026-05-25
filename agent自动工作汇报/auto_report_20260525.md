@@ -54,3 +54,25 @@
 
 1. 已补充前端回归测试和 recent/history 设计文档记录。
 2. 继续通过 `web` 聚焦测试和类型检查验证。
+
+## 视觉检查自动打开远端调试优化
+
+做了什么：
+
+1. 梳理 Altus 视觉工具事件、回放抽屉和 Debug iframe 的衔接，确认 `debug_open_page` / `browser_interact` 已经是视觉检查对应的 Debug 视图入口。
+2. 增加 managed 运行中视觉调试工具的自动打开逻辑：出现最新非失败视觉调试动作时，自动打开右侧回放抽屉并切到 Debug 视图。
+3. 修正 Debug 启用按钮的时序判断：已有 `debugInfo.ready && debugInfo.url` 时只刷新调试信息，不再往会话里发送“帮我调试页面”。
+4. 更新调试浏览器方案文档，记录自动打开、去重和已调试状态不重复发消息的规则。
+5. 根据 review 继续修正旧视觉调试动作误触发问题：非处理状态和新一轮处理刚开始时先登记历史 action，只有后续新增 action 才自动打开 Debug。
+6. 继续优化自动打开时序：视觉调试 action 出现后先后台轮询 `getTaskCreationDebugInfo`，确认 `ready + url` 后才展示 Debug，避免自动路径提前显示“执行环境未启动 / 启动调试”。
+7. 将自动轮询拿到的 ready debug info 传给 Altus 回放抽屉作为展示 override，避免 runtime 状态尚未同步时 DebugPreview 仍误判为执行环境未启动。
+8. 排查会话 `d7b157d7-60fd-40bb-9b72-21fa0451f254` 的 sandbox `ifejcjlfezwwlt41lrxyh`，确认失败根因是 Chromium CDP 晚到 ready 后 n.eko 未启动，而不是前端自动 Debug 展示改动。
+9. 最小化修复 `ensureNekoDebug()`：当 `chromium_start_failed` / `debug_browser_lock_timeout` 后实时探测发现 CDP ready、n.eko not ready 时，执行只启动 n.eko 的 late-CDP 恢复命令并写 manifest，不重跑完整 wrapper。
+
+验证结果：
+
+1. `pnpm --filter web exec vitest run src/tests/managed-run-status-dialogue.test.ts`：15/15 通过。
+2. `pnpm --filter web check`：通过。
+3. `TMPDIR=/private/tmp pnpm --filter api exec tsx --test tests/sandbox-debug-service.test.ts`：17/17 通过。
+4. `pnpm --filter api type-check`：通过。
+5. 真实 sandbox `ifejcjlfezwwlt41lrxyh` 验证：修复后的 `ensureNekoDebug()` 返回 `ready=true`、`status=running`、`url=https://8081-ifejcjlfezwwlt41lrxyh.e2b.app`。

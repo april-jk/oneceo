@@ -1380,6 +1380,10 @@ export default function OpencodePreviewPanel({
                 }
                 return;
               }
+              if (debugPreview.debugInfo?.ready && debugPreview.debugInfo.url) {
+                await debugPreview.refreshDebug();
+                return;
+              }
               if (!onRequestStartDebugByMessage) {
                 debugPreview.setDebugError(
                   i18n.t("previewPanel.debug.missingStartEntry"),
@@ -6411,6 +6415,10 @@ export function DebugPreview({
 
   const requestStartDebug = () => {
     setStartRequested(true);
+    if (info?.ready && info.url) {
+      onStart();
+      return;
+    }
     if (onRequestStartDebugByMessage) {
       onRequestStartDebugByMessage();
       return;

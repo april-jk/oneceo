@@ -57,6 +57,21 @@ function shellEscape(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
 }
 
+const DEBUG_BROWSER_RUNTIME_VERSION = 'debug-browser-runtime-v1';
+const DEBUG_BROWSER_ROOT = '/tmp/oneceo/debug-browser';
+const DEBUG_BROWSER_LOG_DIR = `${DEBUG_BROWSER_ROOT}/logs`;
+const DEBUG_BROWSER_RUN_DIR = `${DEBUG_BROWSER_ROOT}/run`;
+const DEBUG_BROWSER_STATE_DIR = `${DEBUG_BROWSER_ROOT}/state`;
+const DEBUG_BROWSER_TMP_DIR = `${DEBUG_BROWSER_ROOT}/tmp`;
+const DEBUG_BROWSER_NEKO_STATIC = `${DEBUG_BROWSER_ROOT}/neko-static`;
+const DEBUG_BROWSER_NEKO_CONFIG = `${DEBUG_BROWSER_ROOT}/neko.yml`;
+const DEBUG_BROWSER_START_SCRIPT = `${DEBUG_BROWSER_ROOT}/neko-start.sh`;
+const DEBUG_BROWSER_MANIFEST = `${DEBUG_BROWSER_STATE_DIR}/manifest.json`;
+const DEBUG_BROWSER_NEKO_LOG = `${DEBUG_BROWSER_LOG_DIR}/neko.log`;
+const DEBUG_BROWSER_CHROMIUM_LOG = `${DEBUG_BROWSER_LOG_DIR}/chromium.log`;
+const DEBUG_BROWSER_XVFB_LOG = `${DEBUG_BROWSER_LOG_DIR}/xvfb.log`;
+const DEBUG_BROWSER_START_LOG = `${DEBUG_BROWSER_LOG_DIR}/neko-start.log`;
+
 async function resolveHostIp(host: string): Promise<string | null> {
   if (!host) return null;
   try {
@@ -124,8 +139,25 @@ export type DebugReasonCode =
   | 'xvfb_missing'
   | 'neko_binary_missing'
   | 'neko_static_missing'
+  | 'neko_static_copy_failed'
+  | 'neko_static_patch_failed'
   | 'chromium_binary_missing'
+  | 'xvfb_start_failed'
+  | 'chromium_start_failed'
+  | 'neko_start_failed'
+  | 'debug_browser_lock_timeout'
+  | 'debug_browser_resource_conflict'
+  | 'permission_denied'
   | 'start_script_failed';
+
+type DebugFailureLayer =
+  | 'template'
+  | 'runtime'
+  | 'browser'
+  | 'media_forwarding'
+  | 'target_preview'
+  | 'authz'
+  | 'unknown';
 
 type NekoIceServer = {
   urls: string[];
@@ -247,9 +279,13 @@ export async function __probeChromiumCdpForTest(sandboxId: string, port: number)
   return probeChromiumCdp(sandboxId, port);
 }
 
+export function __buildNekoStartCommandForTest(startScript: string): string {
+  return buildNekoStartCommand(startScript);
+}
+
 export async function probeNekoIceHealth(sandboxId: string): Promise<{ failed: boolean; logTail?: string }> {
   try {
-    const result = await e2bConnector.runCommand(sandboxId, 'tail -n 200 /tmp/neko.log || true', {
+    const result = await e2bConnector.runCommand(sandboxId, `tail -n 200 ${shellEscape(DEBUG_BROWSER_NEKO_LOG)} 2>/dev/null || tail -n 200 /tmp/neko.log 2>/dev/null || true`, {
       timeoutMs: 20000,
     });
     const logTail = asText(result?.stdout);
@@ -267,6 +303,9 @@ export async function collectNekoDebugDiagnostics(sandboxId: string): Promise<{
   nekoLogTail?: string;
   chromiumLogTail?: string;
   xvfbLogTail?: string;
+  startLogTail?: string;
+  manifest?: string;
+  runtimeTree?: string;
   listeningPorts?: string;
   startScriptStdout?: string;
   startScriptStderr?: string;
@@ -278,13 +317,19 @@ export async function collectNekoDebugDiagnostics(sandboxId: string): Promise<{
       sandboxId,
       [
         'echo "__CFG__"',
-        'sed -n "1,220p" /tmp/oneceo/neko.yml 2>/dev/null || true',
+        `sed -n "1,220p" ${shellEscape(DEBUG_BROWSER_NEKO_CONFIG)} 2>/dev/null || sed -n "1,220p" /tmp/oneceo/neko.yml 2>/dev/null || true`,
         'echo "__LOG__"',
-        'tail -n 200 /tmp/neko.log 2>/dev/null || true',
+        `tail -n 200 ${shellEscape(DEBUG_BROWSER_NEKO_LOG)} 2>/dev/null || tail -n 200 /tmp/neko.log 2>/dev/null || true`,
         'echo "__CHROMIUM_LOG__"',
-        'tail -n 200 /tmp/chromium.log 2>/dev/null || true',
+        `tail -n 200 ${shellEscape(DEBUG_BROWSER_CHROMIUM_LOG)} 2>/dev/null || tail -n 200 /tmp/chromium.log 2>/dev/null || true`,
         'echo "__XVFB_LOG__"',
-        'tail -n 120 /tmp/xvfb.log 2>/dev/null || true',
+        `tail -n 120 ${shellEscape(DEBUG_BROWSER_XVFB_LOG)} 2>/dev/null || tail -n 120 /tmp/xvfb.log 2>/dev/null || true`,
+        'echo "__START_LOG__"',
+        `tail -n 200 ${shellEscape(DEBUG_BROWSER_START_LOG)} 2>/dev/null || true`,
+        'echo "__MANIFEST__"',
+        `sed -n "1,220p" ${shellEscape(DEBUG_BROWSER_MANIFEST)} 2>/dev/null || true`,
+        'echo "__TREE__"',
+        `find ${shellEscape(DEBUG_BROWSER_ROOT)} -maxdepth 3 -printf "%M %u %g %s %p\\n" 2>/dev/null | sort | head -n 120 || true`,
         'echo "__PORTS__"',
         'ss -ltnup | grep -E "8081|8082|8083|9222|18080" || true',
       ].join('\n'),
@@ -295,19 +340,28 @@ export async function collectNekoDebugDiagnostics(sandboxId: string): Promise<{
     const logIdx = stdout.indexOf('__LOG__');
     const chromiumIdx = stdout.indexOf('__CHROMIUM_LOG__');
     const xvfbIdx = stdout.indexOf('__XVFB_LOG__');
+    const startLogIdx = stdout.indexOf('__START_LOG__');
+    const manifestIdx = stdout.indexOf('__MANIFEST__');
+    const treeIdx = stdout.indexOf('__TREE__');
     const portsIdx = stdout.indexOf('__PORTS__');
     const getSlice = (start: number, end: number) =>
       start >= 0 && end >= 0 && end > start ? stdout.slice(start, end).trim() : '';
     const nekoConfig = getSlice(cfgIdx + '__CFG__'.length, logIdx);
     const nekoLogTail = getSlice(logIdx + '__LOG__'.length, chromiumIdx);
     const chromiumLogTail = getSlice(chromiumIdx + '__CHROMIUM_LOG__'.length, xvfbIdx);
-    const xvfbLogTail = getSlice(xvfbIdx + '__XVFB_LOG__'.length, portsIdx);
+    const xvfbLogTail = getSlice(xvfbIdx + '__XVFB_LOG__'.length, startLogIdx);
+    const startLogTail = getSlice(startLogIdx + '__START_LOG__'.length, manifestIdx);
+    const manifest = getSlice(manifestIdx + '__MANIFEST__'.length, treeIdx);
+    const runtimeTree = getSlice(treeIdx + '__TREE__'.length, portsIdx);
     const listeningPorts = portsIdx >= 0 ? stdout.slice(portsIdx + '__PORTS__'.length).trim() : '';
     return {
       nekoConfig: nekoConfig || undefined,
       nekoLogTail: nekoLogTail || undefined,
       chromiumLogTail: chromiumLogTail || undefined,
       xvfbLogTail: xvfbLogTail || undefined,
+      startLogTail: startLogTail || undefined,
+      manifest: manifest || undefined,
+      runtimeTree: runtimeTree || undefined,
       listeningPorts: listeningPorts || undefined,
     };
   } catch {
@@ -325,7 +379,15 @@ function classifyNekoStartFailure(input: {
   if (combined.includes('[neko] xvfb missing')) return 'xvfb_missing';
   if (combined.includes('[neko] neko binary missing')) return 'neko_binary_missing';
   if (combined.includes('[neko] static assets missing')) return 'neko_static_missing';
+  if (combined.includes('[neko] static copy failed')) return 'neko_static_copy_failed';
+  if (combined.includes('[neko] static patch failed')) return 'neko_static_patch_failed';
   if (combined.includes('[neko] chromium binary missing')) return 'chromium_binary_missing';
+  if (combined.includes('[neko] xvfb start failed')) return 'xvfb_start_failed';
+  if (combined.includes('[neko] chromium start failed')) return 'chromium_start_failed';
+  if (combined.includes('[neko] neko start failed')) return 'neko_start_failed';
+  if (combined.includes('[neko] debug browser lock timeout')) return 'debug_browser_lock_timeout';
+  if (combined.includes('[neko] debug browser resource conflict')) return 'debug_browser_resource_conflict';
+  if (combined.includes('permission denied')) return 'permission_denied';
   if (combined.includes('pipefail') || combined.includes('[[: not found') || combined.includes('bad substitution')) {
     return 'start_script_failed';
   }
@@ -333,6 +395,14 @@ function classifyNekoStartFailure(input: {
   if (input.exitCode === 32) return 'neko_binary_missing';
   if (input.exitCode === 33) return 'neko_static_missing';
   if (input.exitCode === 34) return 'chromium_binary_missing';
+  if (input.exitCode === 35) return 'neko_static_copy_failed';
+  if (input.exitCode === 36) return 'neko_static_patch_failed';
+  if (input.exitCode === 37) return 'debug_browser_resource_conflict';
+  if (input.exitCode === 38) return 'xvfb_start_failed';
+  if (input.exitCode === 39) return 'chromium_start_failed';
+  if (input.exitCode === 40) return 'neko_start_failed';
+  if (input.exitCode === 41) return 'permission_denied';
+  if (input.exitCode === 42) return 'debug_browser_lock_timeout';
   return 'start_script_failed';
 }
 
@@ -344,11 +414,131 @@ function buildNekoStartFailureMessage(reasonCode: DebugReasonCode): string {
       return '调试浏览器启动失败：Sandbox 缺少 n.eko 可执行文件。';
     case 'neko_static_missing':
       return '调试浏览器启动失败：Sandbox 缺少 n.eko 前端静态资源。';
+    case 'neko_static_copy_failed':
+      return '调试浏览器启动失败：无法复制 n.eko 静态资源到运行时目录。';
+    case 'neko_static_patch_failed':
+      return '调试浏览器启动失败：无法写入 n.eko 运行时静态资源补丁。';
     case 'chromium_binary_missing':
       return '调试浏览器启动失败：Sandbox 缺少 Chromium 浏览器。';
+    case 'xvfb_start_failed':
+      return '调试浏览器启动失败：Xvfb 显示服务未就绪。';
+    case 'chromium_start_failed':
+      return '调试浏览器启动失败：Chromium CDP 未就绪。';
+    case 'neko_start_failed':
+      return '调试浏览器启动失败：n.eko 服务未就绪。';
+    case 'debug_browser_lock_timeout':
+      return '调试浏览器启动失败：已有调试浏览器启动流程仍在运行。';
+    case 'debug_browser_resource_conflict':
+      return '调试浏览器启动失败：固定端口或 Display 被非受控进程占用。';
+    case 'permission_denied':
+      return '调试浏览器启动失败：运行时目录或模板资源权限不足。';
     default:
       return '调试浏览器启动脚本失败，无法打开调试页面。';
   }
+}
+
+function failureLayerForReason(reasonCode: DebugReasonCode | undefined): DebugFailureLayer | undefined {
+  switch (reasonCode) {
+    case 'xvfb_missing':
+    case 'neko_binary_missing':
+    case 'neko_static_missing':
+    case 'chromium_binary_missing':
+      return 'template';
+    case 'cdp_not_ready':
+    case 'chromium_start_failed':
+      return 'browser';
+    case 'missing_turn':
+    case 'ice_failed':
+      return 'media_forwarding';
+    case 'neko_static_copy_failed':
+    case 'neko_static_patch_failed':
+    case 'xvfb_start_failed':
+    case 'neko_start_failed':
+    case 'neko_not_ready':
+    case 'debug_browser_lock_timeout':
+    case 'debug_browser_resource_conflict':
+    case 'permission_denied':
+    case 'preflight_failed':
+    case 'start_script_failed':
+      return 'runtime';
+    default:
+      return reasonCode ? 'unknown' : undefined;
+  }
+}
+
+function nextActionForReason(reasonCode: DebugReasonCode | undefined): string | undefined {
+  switch (reasonCode) {
+    case 'xvfb_missing':
+    case 'neko_binary_missing':
+    case 'neko_static_missing':
+    case 'chromium_binary_missing':
+      return 'sandbox_template_rebuild_required';
+    case 'missing_turn':
+    case 'ice_failed':
+      return 'refresh_turn_or_media_forwarding_configuration';
+    case 'debug_browser_lock_timeout':
+      return 'retry_after_current_debug_browser_start_finishes';
+    case 'debug_browser_resource_conflict':
+      return 'inspect_conflicting_port_or_display_owner';
+    case 'cdp_not_ready':
+    case 'chromium_start_failed':
+      return 'restart_managed_chromium_or_rebuild_profile';
+    case 'neko_not_ready':
+    case 'neko_start_failed':
+      return 'restart_managed_neko';
+    case 'neko_static_copy_failed':
+    case 'neko_static_patch_failed':
+    case 'xvfb_start_failed':
+    case 'permission_denied':
+    case 'preflight_failed':
+    case 'start_script_failed':
+      return 'inspect_debug_browser_runtime_diagnostics';
+    default:
+      return reasonCode ? 'inspect_debug_browser_diagnostics' : undefined;
+  }
+}
+
+function buildNekoStartCommand(startScript: string): string {
+  return [
+    'set -euo pipefail',
+    `mkdir -p ${shellEscape(DEBUG_BROWSER_LOG_DIR)} ${shellEscape(DEBUG_BROWSER_RUN_DIR)} ${shellEscape(DEBUG_BROWSER_STATE_DIR)} ${shellEscape(DEBUG_BROWSER_TMP_DIR)}`,
+    `cat <<'EOF_ONECEO_NEKO_START' > ${shellEscape(DEBUG_BROWSER_START_SCRIPT)}`,
+    startScript,
+    'EOF_ONECEO_NEKO_START',
+    `chmod +x ${shellEscape(DEBUG_BROWSER_START_SCRIPT)}`,
+    `if [ -f ${shellEscape(DEBUG_BROWSER_START_LOG)}.2 ]; then mv -f ${shellEscape(DEBUG_BROWSER_START_LOG)}.2 ${shellEscape(DEBUG_BROWSER_START_LOG)}.3 || true; fi`,
+    `if [ -f ${shellEscape(DEBUG_BROWSER_START_LOG)}.1 ]; then mv -f ${shellEscape(DEBUG_BROWSER_START_LOG)}.1 ${shellEscape(DEBUG_BROWSER_START_LOG)}.2 || true; fi`,
+    `if [ -f ${shellEscape(DEBUG_BROWSER_START_LOG)} ]; then mv -f ${shellEscape(DEBUG_BROWSER_START_LOG)} ${shellEscape(DEBUG_BROWSER_START_LOG)}.1 || true; fi`,
+    `LOCK_FILE=${shellEscape(`${DEBUG_BROWSER_RUN_DIR}/ensure.lock`)}`,
+    'if command -v flock >/dev/null 2>&1; then',
+    `  if flock -E 42 -w 20 "$LOCK_FILE" bash ${shellEscape(DEBUG_BROWSER_START_SCRIPT)} > ${shellEscape(DEBUG_BROWSER_START_LOG)} 2>&1; then`,
+    '    :',
+    '  else',
+    '    status=$?',
+    '    if [ "$status" = "42" ]; then',
+    '      echo "[neko] debug browser lock timeout" >&2',
+    '      exit 42',
+    '    fi',
+    '    exit "$status"',
+    '  fi',
+    'else',
+    `  LOCK_DIR=${shellEscape(`${DEBUG_BROWSER_RUN_DIR}/ensure.lockdir`)}`,
+    '  acquired="false"',
+    '  for _ in $(seq 1 40); do',
+    '    if mkdir "$LOCK_DIR" 2>/dev/null; then',
+    '      acquired="true"',
+    '      break',
+    '    fi',
+    '    sleep 0.5',
+    '  done',
+    '  if [ "$acquired" != "true" ]; then',
+    '    echo "[neko] debug browser lock timeout" >&2',
+    '    exit 42',
+    '  fi',
+    '  trap \'rmdir "$LOCK_DIR" 2>/dev/null || true\' EXIT',
+    `  bash ${shellEscape(DEBUG_BROWSER_START_SCRIPT)} > ${shellEscape(DEBUG_BROWSER_START_LOG)} 2>&1`,
+    'fi',
+  ].join('\n');
 }
 
 function buildStartScriptFailureDiagnostics(
@@ -463,8 +653,11 @@ export async function ensureNekoDebug(
     await updateMetadata({
       status: 'failed',
       reasonCode: 'missing_turn',
+      failureLayer: failureLayerForReason('missing_turn'),
+      nextAction: nextActionForReason('missing_turn'),
       message: failureMessage,
       configVersion,
+      runtimeVersion: DEBUG_BROWSER_RUNTIME_VERSION,
       turnConfigured,
       iceServers,
       diagnostics,
@@ -501,13 +694,142 @@ export async function ensureNekoDebug(
   const iceServersYaml = renderIceServersYaml(iceServers);
 
   const startCommand = `
-set -euo pipefail
+#!/usr/bin/env bash
+set -Eeuo pipefail
+trap 'status=$?; echo "[oneceo-debug-browser] failed line=$LINENO status=$status command=$BASH_COMMAND" >&2' ERR
 export DEBIAN_FRONTEND=noninteractive
 
 PLAYWRIGHT_BROWSERS_PATH="\${PLAYWRIGHT_BROWSERS_PATH:-/opt/ms-playwright}"
-NEKO_STATIC="/opt/neko/client/dist"
-NEKO_CONFIG="/tmp/oneceo/neko.yml"
+NEKO_STATIC_SOURCE="\${ONECEO_NEKO_STATIC_ROOT:-/opt/neko/client/dist}"
+NEKO_RUNTIME_ROOT="${DEBUG_BROWSER_ROOT}"
+NEKO_STATIC="${DEBUG_BROWSER_NEKO_STATIC}"
+NEKO_CONFIG="${DEBUG_BROWSER_NEKO_CONFIG}"
+NEKO_LOG_DIR="${DEBUG_BROWSER_LOG_DIR}"
+NEKO_RUN_DIR="${DEBUG_BROWSER_RUN_DIR}"
+NEKO_STATE_DIR="${DEBUG_BROWSER_STATE_DIR}"
+NEKO_TMP_DIR="${DEBUG_BROWSER_TMP_DIR}"
+NEKO_MANIFEST="${DEBUG_BROWSER_MANIFEST}"
+NEKO_LOG="${DEBUG_BROWSER_NEKO_LOG}"
+CHROMIUM_LOG="${DEBUG_BROWSER_CHROMIUM_LOG}"
+XVFB_LOG="${DEBUG_BROWSER_XVFB_LOG}"
 EDGE_CSS_NAME="oneceo-edgefill-v3.css"
+RUNTIME_VERSION="${DEBUG_BROWSER_RUNTIME_VERSION}"
+
+mkdir -p "$NEKO_LOG_DIR" "$NEKO_RUN_DIR" "$NEKO_STATE_DIR" "$NEKO_TMP_DIR"
+
+rotate_log() {
+  local path="$1"
+  if [ -f "$path.2" ]; then mv -f "$path.2" "$path.3" || true; fi
+  if [ -f "$path.1" ]; then mv -f "$path.1" "$path.2" || true; fi
+  if [ -f "$path" ]; then mv -f "$path" "$path.1" || true; fi
+}
+
+write_manifest() {
+  local status="$1"
+  local message="$2"
+  cat > "$NEKO_MANIFEST" <<EOF_MANIFEST
+{
+  "schemaVersion": 1,
+  "runtimeVersion": "$RUNTIME_VERSION",
+  "status": "$status",
+  "message": "$message",
+  "ports": {
+    "neko": ${nekoPort},
+    "cdp": ${cdpPort},
+    "tcpMux": ${tcpMuxPort},
+    "udpMux": ${udpMuxPort}
+  },
+  "display": "${display}",
+  "screen": "${screenWidth}x${screenHeight}",
+  "pidFiles": {
+    "xvfb": "$NEKO_RUN_DIR/xvfb.pid",
+    "chromium": "$NEKO_RUN_DIR/chromium.pid",
+    "neko": "$NEKO_RUN_DIR/neko.pid"
+  },
+  "logFiles": {
+    "start": "${DEBUG_BROWSER_START_LOG}",
+    "xvfb": "$XVFB_LOG",
+    "chromium": "$CHROMIUM_LOG",
+    "neko": "$NEKO_LOG"
+  },
+  "startedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "lastHealthCheckAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF_MANIFEST
+}
+
+is_pid_command_match() {
+  local pid="$1"
+  local pattern="$2"
+  if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+    return 1
+  fi
+  tr '\\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -F "$pattern" >/dev/null 2>&1
+}
+
+stop_pid_file() {
+  local pid_file="$1"
+  local pattern="$2"
+  if [ ! -f "$pid_file" ]; then
+    return 0
+  fi
+  local pid
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if is_pid_command_match "$pid" "$pattern"; then
+    kill "$pid" 2>/dev/null || true
+    for _ in $(seq 1 20); do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        break
+      fi
+      sleep 0.1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  fi
+  rm -f "$pid_file"
+}
+
+port_owned_by_pid_file() {
+  local port="$1"
+  local pid_file="$2"
+  if [ ! -f "$pid_file" ]; then
+    return 1
+  fi
+  local pid
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  [ -n "$pid" ] || return 1
+  ss -ltnp 2>/dev/null | grep -F ":$port " | grep -F "pid=$pid," >/dev/null 2>&1
+}
+
+assert_port_available_or_owned() {
+  local port="$1"
+  local pid_file="$2"
+  if ss -ltnp 2>/dev/null | grep -F ":$port " >/dev/null 2>&1; then
+    if ! port_owned_by_pid_file "$port" "$pid_file"; then
+      echo "[neko] debug browser resource conflict on port $port"
+      ss -ltnp 2>/dev/null | grep -F ":$port " || true
+      exit 37
+    fi
+  fi
+}
+
+# Upgrade cleanup for pre-runtime-v1 debug browser processes owned by oneceo.
+if pgrep -f "neko serve --config /tmp/oneceo/neko.yml" >/dev/null 2>&1; then
+  pkill -f "neko serve --config /tmp/oneceo/neko.yml" || true
+fi
+if pgrep -f -- "--user-data-dir=/tmp/chromium-profile" >/dev/null 2>&1; then
+  pkill -f -- "--user-data-dir=/tmp/chromium-profile" || true
+fi
+if [ -f /tmp/oneceo/neko.yml ] || [ -d /tmp/chromium-profile ]; then
+  if pgrep -f "Xvfb ${display} -screen 0" >/dev/null 2>&1; then
+    pkill -f "Xvfb ${display} -screen 0" || true
+  fi
+fi
+sleep 0.5
+
+assert_port_available_or_owned ${nekoPort} "$NEKO_RUN_DIR/neko.pid"
+assert_port_available_or_owned ${cdpPort} "$NEKO_RUN_DIR/chromium.pid"
 
 if ! command -v Xvfb >/dev/null 2>&1; then
   echo "[neko] Xvfb missing"
@@ -519,12 +841,23 @@ if ! command -v neko >/dev/null 2>&1; then
   exit 32
 fi
 
-if [ ! -d "$NEKO_STATIC" ]; then
-  echo "[neko] static assets missing at $NEKO_STATIC"
+if [ ! -d "$NEKO_STATIC_SOURCE" ]; then
+  echo "[neko] static assets missing at $NEKO_STATIC_SOURCE"
   exit 33
 fi
 
-cat <<'EOF_EDGE_CSS' > "$NEKO_STATIC/$EDGE_CSS_NAME"
+rotate_log "$NEKO_LOG"
+rotate_log "$CHROMIUM_LOG"
+rotate_log "$XVFB_LOG"
+
+rm -rf "$NEKO_STATIC"
+mkdir -p "$NEKO_STATIC"
+if ! cp -R "$NEKO_STATIC_SOURCE"/. "$NEKO_STATIC"/; then
+  echo "[neko] static copy failed from $NEKO_STATIC_SOURCE to $NEKO_STATIC"
+  exit 35
+fi
+
+if ! cat <<'EOF_EDGE_CSS' > "$NEKO_STATIC/$EDGE_CSS_NAME"
 html,
 body,
 #app,
@@ -597,11 +930,15 @@ canvas {
   display: none !important;
 }
 EOF_EDGE_CSS
+then
+  echo "[neko] static patch failed writing css"
+  exit 36
+fi
 
 for html in "$NEKO_STATIC"/index.html "$NEKO_STATIC"/*.html; do
   if [ -f "$html" ]; then
-    sed -i 's#<link[^>]*oneceo-edgefill[^>]*>##g' "$html" || true
-    sed -i "s#</head>#<link rel=\\"stylesheet\\" href=\\"/$EDGE_CSS_NAME\\"></head>#" "$html" || true
+    sed -i 's#<link[^>]*oneceo-edgefill[^>]*>##g' "$html" || { echo "[neko] static patch failed cleaning $html"; exit 36; }
+    sed -i "s#</head>#<link rel=\\"stylesheet\\" href=\\"/$EDGE_CSS_NAME\\"></head>#" "$html" || { echo "[neko] static patch failed injecting $html"; exit 36; }
   fi
 done
 
@@ -624,7 +961,6 @@ if [ -z "$CHROME_BIN" ]; then
   exit 34
 fi
 
-mkdir -p /tmp/oneceo
 cat <<EOF_CFG > "$NEKO_CONFIG"
 server:
   bind: "0.0.0.0:${nekoPort}"
@@ -649,20 +985,27 @@ desktop:
 ${renderNekoMemberYaml()}
 EOF_CFG
 
-pkill -x Xvfb || true
-pkill -x chromium || true
-pkill -x chromium-browser || true
-pkill -x chrome || true
+stop_pid_file "$NEKO_RUN_DIR/neko.pid" "neko serve --config $NEKO_CONFIG"
+stop_pid_file "$NEKO_RUN_DIR/chromium.pid" "--user-data-dir=$NEKO_RUNTIME_ROOT/chromium-profile"
+stop_pid_file "$NEKO_RUN_DIR/xvfb.pid" "Xvfb ${display}"
 sleep 1
-nohup Xvfb ${display} -screen 0 ${screenWidth}x${screenHeight}x24 -nolisten tcp > /tmp/xvfb.log 2>&1 &
+nohup Xvfb ${display} -screen 0 ${screenWidth}x${screenHeight}x24 -nolisten tcp > "$XVFB_LOG" 2>&1 &
+echo $! > "$NEKO_RUN_DIR/xvfb.pid"
 
 export DISPLAY=${display}
+display_ready="false"
 for i in $(seq 1 10); do
-  if [ -S /tmp/.X11-unix/X0 ]; then
+  display_socket="/tmp/.X11-unix/X\${DISPLAY#:}"
+  if [ -S "$display_socket" ]; then
+    display_ready="true"
     break
   fi
   sleep 0.5
 done
+if [ "$display_ready" != "true" ]; then
+  echo "[neko] xvfb start failed"
+  exit 38
+fi
 
 if command -v xrandr >/dev/null 2>&1; then
   xrandr --fb ${screenWidth}x${screenHeight} || true
@@ -679,18 +1022,13 @@ if curl -fsSL --max-time 2 "http://127.0.0.1:${cdpPort}/json/version" >/dev/null
 fi
 
 if [[ "$cdp_ready" != "true" ]]; then
-  if pgrep -x chromium >/dev/null 2>&1 || pgrep -x chromium-browser >/dev/null 2>&1 || pgrep -x chrome >/dev/null 2>&1; then
-    pkill -x chromium || true
-    pkill -x chromium-browser || true
-    pkill -x chrome || true
-    sleep 1
-  fi
+  stop_pid_file "$NEKO_RUN_DIR/chromium.pid" "--user-data-dir=$NEKO_RUNTIME_ROOT/chromium-profile"
   nohup "$CHROME_BIN" \
     --no-sandbox \
     --disable-gpu \
     --disable-dev-shm-usage \
     --remote-debugging-port=${cdpPort} \
-    --user-data-dir=/tmp/chromium-profile \
+    --user-data-dir="$NEKO_RUNTIME_ROOT/chromium-profile" \
     --no-first-run \
     --no-default-browser-check \
     --disable-features=TranslateUI \
@@ -701,20 +1039,39 @@ if [[ "$cdp_ready" != "true" ]]; then
     --start-fullscreen \
     --kiosk \
     --app=about:blank \
-    > /tmp/chromium.log 2>&1 &
+    > "$CHROMIUM_LOG" 2>&1 &
+  echo $! > "$NEKO_RUN_DIR/chromium.pid"
+  cdp_ready="false"
   for i in $(seq 1 20); do
     if curl -fsSL --max-time 2 "http://127.0.0.1:${cdpPort}/json/version" >/dev/null 2>&1; then
+      cdp_ready="true"
       break
     fi
     sleep 0.5
   done
 fi
-
-if pgrep -x neko >/dev/null 2>&1; then
-  pkill -x neko || true
-  sleep 1
+if [[ "$cdp_ready" != "true" ]]; then
+  echo "[neko] chromium start failed"
+  exit 39
 fi
-nohup neko serve --config "$NEKO_CONFIG" > /tmp/neko.log 2>&1 &
+
+stop_pid_file "$NEKO_RUN_DIR/neko.pid" "neko serve --config $NEKO_CONFIG"
+nohup neko serve --config "$NEKO_CONFIG" > "$NEKO_LOG" 2>&1 &
+echo $! > "$NEKO_RUN_DIR/neko.pid"
+neko_ready="false"
+for i in $(seq 1 20); do
+  if curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${nekoPort}/" | grep -q "^200"; then
+    neko_ready="true"
+    break
+  fi
+  sleep 0.5
+done
+if [[ "$neko_ready" != "true" ]]; then
+  echo "[neko] neko start failed"
+  exit 40
+fi
+
+write_manifest "running" "debug browser ready"
 `;
 
   const existingVersion = asText(nekoMeta.configVersion);
@@ -751,7 +1108,7 @@ nohup neko serve --config "$NEKO_CONFIG" > /tmp/neko.log 2>&1 &
     );
     const installed = (check?.stdout || '').trim() === 'OK';
     try {
-      await e2bConnector.runCommand(orchestratorSessionId, `bash -lc ${shellEscape(startCommand)}`, {
+      await e2bConnector.runCommand(orchestratorSessionId, `bash -lc ${shellEscape(buildNekoStartCommand(startCommand))}`, {
         timeoutMs: installed ? 2 * 60 * 1000 : 15 * 60 * 1000,
       });
     } catch (error) {
@@ -800,7 +1157,10 @@ nohup neko serve --config "$NEKO_CONFIG" > /tmp/neko.log 2>&1 &
         diagnostics,
         status: 'failed',
         reasonCode,
+        failureLayer: failureLayerForReason(reasonCode),
+        nextAction: nextActionForReason(reasonCode),
         message,
+        runtimeVersion: DEBUG_BROWSER_RUNTIME_VERSION,
       });
       return {
         ready: false,
@@ -884,7 +1244,10 @@ nohup neko serve --config "$NEKO_CONFIG" > /tmp/neko.log 2>&1 &
     diagnostics,
     status,
     reasonCode,
+    failureLayer: failureLayerForReason(reasonCode),
+    nextAction: nextActionForReason(reasonCode),
     message,
+    runtimeVersion: DEBUG_BROWSER_RUNTIME_VERSION,
   });
 
   return {

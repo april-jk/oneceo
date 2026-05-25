@@ -122,6 +122,67 @@ test('neko start wrapper writes runtime scripts under debug-browser and uses a l
   assert.doesNotMatch(command, /\/tmp\/oneceo\/neko\.yml/);
 });
 
+test('ensure neko debug refreshes ready sandboxes from older runtime versions', async () => {
+  const metadataUpdates: Array<Record<string, unknown>> = [];
+  let startWrapperCallCount = 0;
+  mock.method(sandboxExecutionEnvironmentDAO, 'getBySessionId', async () => ({
+    sessionId: 'sandbox-old-runtime',
+    status: 'ready',
+    metadata: {
+      debug: {
+        neko: {
+          status: 'running',
+          configVersion:
+            'neko-noauth-v3-edgefill-1280x1008-mode-mux-tcp-8082-udp-8083-epr-off-icelite-off-nat-none-turn-optional',
+          runtimeVersion: 'legacy-runtime',
+          port: 8081,
+          cdpPort: 9222,
+          tcpMuxPort: 8082,
+          udpMuxPort: 8083,
+          webrtcMode: 'mux',
+          webrtcEpr: '',
+          forceMux: true,
+          iceLite: false,
+          autoNat: false,
+          nat1To1: '',
+          authProvider: 'noauth',
+        },
+      },
+    },
+  }) as any);
+  mock.method(sandboxExecutionEnvironmentDAO, 'updateMetadata', async (_sessionId, metadata) => {
+    metadataUpdates.push(metadata as Record<string, unknown>);
+    return {} as any;
+  });
+  mock.method(e2bConnector, 'getSandboxHost', async (_sandboxId, port) => `${port}-sandbox-old-runtime.e2b.app`);
+  mock.method(e2bConnector, 'runCommand', async (_sandboxId, command) => {
+    const text = String(command);
+    if (text.startsWith('bash -lc ')) {
+      startWrapperCallCount += 1;
+      return { stdout: '', stderr: '', exitCode: 0 } as any;
+    }
+    if (text.includes('http://127.0.0.1:8081/')) {
+      return { stdout: '200', stderr: '', exitCode: 0 } as any;
+    }
+    if (text.includes('http://127.0.0.1:9222/json/version')) {
+      return { stdout: 'OK\n', stderr: '', exitCode: 0 } as any;
+    }
+    if (text.includes('command -v neko')) {
+      return { stdout: 'OK\n', stderr: '', exitCode: 0 } as any;
+    }
+    throw new Error(`unexpected command: ${text.slice(0, 80)}`);
+  });
+
+  const result = await ensureNekoDebug('sandbox-old-runtime', {
+    requireTurn: false,
+    strictIceCheck: false,
+  });
+
+  assert.equal(result.ready, true);
+  assert.equal(startWrapperCallCount, 1);
+  assert.equal((metadataUpdates.at(-1) as any).debug.neko.runtimeVersion, 'debug-browser-runtime-v1');
+});
+
 test('ensure neko debug returns visible diagnostics when the start script fails', async () => {
   const metadataUpdates: Array<Record<string, unknown>> = [];
   let capturedStartWrapper = '';

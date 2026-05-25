@@ -1360,7 +1360,9 @@ export function ConnectorCenterPanel({
                         ) : (
                           <Plus className="h-4 w-4" />
                         )}
-                        {t("connectors.actions.connect")}
+                        {selectedDetailProfile
+                          ? t("connectors.actions.reconnect")
+                          : t("connectors.actions.connect")}
                       </Button>
                     </>
                   )}
@@ -1369,10 +1371,7 @@ export function ConnectorCenterPanel({
                 {renderTargetBanner()}
 
                 <div className="mt-4 w-full max-w-[720px] space-y-8">
-                {/* 仅在已授权态显示必要错误，未授权态不展示错误提示 */}
                 {unifiedOauthCard &&
-                !githubConnector &&
-                selectedDetailProfile?.authStatus === "authorized" &&
                 selectedDetailProfile?.lastError ? (
                   <div className="flex items-start gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />

@@ -189,6 +189,87 @@ test('startOAuthForProfile starts GitHub Composio Connect Link authorization', a
   assert.ok(capturedUpdate?.secretCiphertext);
 });
 
+test('startOAuthForProfile marks GitHub profile reauth needed when Composio key is invalid', async () => {
+  process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
+  process.env.COMPOSIO_API_KEY = 'invalid-unit-test-composio-key';
+
+  mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
+  mock.method(connectorRedisCacheService, 'invalidateMe', async () => {});
+  mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
+    id: 'profile-github-invalid-key',
+    userId: 'user-1',
+    connectorKey: 'github',
+    profileName: 'GitHub Default',
+    authMode: 'oauth',
+    authStatus: 'authorized',
+    displayName: 'old-user',
+    configJson: {},
+    metadataJson: {
+      provider: 'composio',
+      connectionStatus: 'active',
+    },
+    secretCiphertext: null,
+    isDefault: true,
+    lastAuthAt: new Date('2026-04-30T00:00:00.000Z'),
+    updatedAt: new Date('2026-04-30T00:00:00.000Z'),
+    lastError: null,
+  }) as any);
+  let capturedState = '';
+  mock.method(connectorAuthRequestDAO, 'create', async (input: any) => {
+    capturedState = input.state;
+    return input;
+  });
+  let failedState = '';
+  mock.method(connectorAuthRequestDAO, 'markFailedByState', async (state: string) => {
+    failedState = state;
+    return { state };
+  });
+  let capturedUpdate: Record<string, unknown> | null = null;
+  mock.method(userConnectorProfileDAO, 'update', async (_profileId: string, _userId: string, input: any) => {
+    capturedUpdate = input;
+    return {
+      id: 'profile-github-invalid-key',
+      userId: 'user-1',
+      connectorKey: 'github',
+      profileName: 'GitHub Default',
+      authMode: input.authMode,
+      authStatus: input.authStatus,
+      displayName: 'old-user',
+      configJson: {},
+      metadataJson: input.metadataJson,
+      secretCiphertext: input.secretCiphertext || null,
+      isDefault: true,
+      lastAuthAt: new Date('2026-04-30T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-30T00:00:00.000Z'),
+      lastError: input.lastError,
+    } as any;
+  });
+  global.fetch = mock.fn(async () => new Response(
+    JSON.stringify({
+      error: {
+        message: 'Invalid API key: ak_test*****',
+        suggested_fix: 'Please check you are using a valid API key.',
+      },
+    }),
+    { status: 401, headers: { 'Content-Type': 'application/json' } }
+  )) as typeof fetch;
+
+  await assert.rejects(
+    userConnectorService.startOAuthForProfile('user-1', 'profile-github-invalid-key', {
+      redirectUri: 'https://unexpected.example.com/callback',
+      returnToSessionId: 'session-github-1',
+    }),
+    /COMPOSIO_API_KEY/
+  );
+
+  assert.equal(failedState, capturedState);
+  assert.equal(capturedUpdate?.authStatus, 'needs_auth');
+  assert.equal(capturedUpdate?.secretCiphertext, null);
+  assert.match(String(capturedUpdate?.lastError || ''), /COMPOSIO_API_KEY/);
+  assert.equal((capturedUpdate?.metadataJson as any)?.provider, 'composio');
+  assert.equal((capturedUpdate?.metadataJson as any)?.connectionStatus, 'start_failed');
+});
+
 test('createProfile does not authorize Supabase from a user-supplied access token', async () => {
   process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
   process.env.SUPABASE_CONNECTOR_SECRET_KEY = 'unit-test-supabase-secret';

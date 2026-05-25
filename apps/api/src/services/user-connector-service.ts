@@ -464,6 +464,19 @@ function shouldForceFigmaComposioReconnect(row: UserConnectorProfileRow): boolea
   );
 }
 
+function isComposioCredentialError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /invalid api key|valid api key|unauthorized|forbidden|401|403/i.test(message);
+}
+
+function formatComposioOAuthStartError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error || '');
+  if (isComposioCredentialError(error)) {
+    return `Composio service credential is invalid. Update COMPOSIO_API_KEY on the server, then reconnect this connector. ${raw}`;
+  }
+  return raw || 'Failed to start Composio authorization';
+}
+
 const COMPOSIO_CALLBACK_PATHS: Partial<Record<ConnectorKey, string>> = {
   github: '/github/callback',
   notion: '/notion/callback',
@@ -1148,12 +1161,37 @@ export class UserConnectorService {
       } as any);
       const callbackUrl = resolveComposioOauthCallbackUrl(connectorKey, input.redirectUri);
       callbackUrl.searchParams.set('state', state);
-      const auth = await composioConnectorService.startAuthorization({
-        connectorKey,
-        userId,
-        callbackUrl: callbackUrl.toString(),
-        catalogItem,
-      });
+      let auth: Awaited<ReturnType<typeof composioConnectorService.startAuthorization>>;
+      try {
+        auth = await composioConnectorService.startAuthorization({
+          connectorKey,
+          userId,
+          callbackUrl: callbackUrl.toString(),
+          catalogItem,
+        });
+      } catch (error) {
+        const message = formatComposioOAuthStartError(error);
+        const credentialError = isComposioCredentialError(error);
+        await connectorAuthRequestDAO.markFailedByState(state, 'failed');
+        await userConnectorProfileDAO.update(profileId, userId, {
+          authMode: 'oauth',
+          authStatus: credentialError || asText(profile.authStatus) !== 'authorized'
+            ? 'needs_auth'
+            : profile.authStatus,
+          ...(credentialError ? { secretCiphertext: null } : {}),
+          metadataJson: mergeMetadata(pickObject(profile.metadataJson), {
+            provider: 'composio',
+            composioUserId: composioConnectorService.buildComposioUserId(userId),
+            composioToolkitSlugs: catalogItem.composio?.toolkitSlugs || [],
+            connectionStatus: 'start_failed',
+            lastConnectionError: message,
+            lastConnectionCheckAt: new Date().toISOString(),
+          }),
+          lastError: message,
+        } as any);
+        await this.invalidateMeCache(userId);
+        throw new Error(message);
+      }
       const metadataJson = mergeMetadata(pickObject(profile.metadataJson), {
         provider: 'composio',
         composioUserId: auth.composioUserId,

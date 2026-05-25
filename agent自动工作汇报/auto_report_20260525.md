@@ -20,6 +20,26 @@
 5. Playwright 打开 `http://localhost:3000/home` -> 设置 -> `Connectors`，确认页面显示 GitHub、Notion、Slack、Supabase、Figma、Google Workspace、Vercel 等连接器卡片；`/api/connectors/catalog` 返回 200、响应体非空且带 `cache-control: no-store, no-cache, must-revalidate, proxy-revalidate`。
 6. `git diff --check`：通过。
 
+## GitHub 连接器重新授权连续性修复
+
+做了什么：
+
+1. 排查 GitHub 连接器重新授权失败，确认截图中的 `Invalid API key: ak_oGrDd****` 来自服务端 Composio API key 被上游拒绝，不是当前 GitHub 用户 OAuth 回调失败。
+2. 调整 Composio 授权启动失败处理：如果上游返回 API key/401/403 类错误，当前登录账号的 profile 会被写回 `needs_auth`，清理不可用 secret，并记录 `lastError` 与 `connectionStatus=start_failed`。
+3. 统一 OAuth 卡片现在会显示 GitHub profile 的 `lastError`，并且存在 profile 但未授权时按钮显示“重新连接”，避免用户看不到真实状态。
+4. 文档补充账号隔离和服务端 Composio key 失效时的状态回写要求。
+
+验证结果：
+
+1. `TMPDIR=/private/tmp pnpm --filter api exec tsx --test --test-name-pattern "Composio key is invalid" tests/user-connector-service.test.ts`：通过。
+2. `pnpm --filter web exec vitest run src/tests/connector-center-panel.test.ts`：24/24 通过。
+3. `pnpm --filter api type-check`：通过。
+4. `pnpm --filter web check`：通过。
+
+剩余风险：
+
+1. 整份 `tests/user-connector-service.test.ts` 的 25 个子测试都输出 `ok`，但测试文件存在旧的未关闭句柄导致进程不自然退出；本轮用新增聚焦用例获取了干净退出码。
+
 ## 调试浏览器共用链路继续修复
 
 做了什么：

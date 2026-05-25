@@ -30,6 +30,12 @@ function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function truncateText(value: unknown, maxLength = 4000): string {
+  const text = typeof value === 'string' ? value : value == null ? '' : String(value);
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 24))}\n...<truncated>...`;
+}
+
 function toStringArray(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value
@@ -44,6 +50,11 @@ function toStringArray(value: unknown): string[] {
 
 function escapeYamlString(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function shellEscape(value: string): string {
+  if (!value) return "''";
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
 }
 
 async function resolveHostIp(host: string): Promise<string | null> {
@@ -69,6 +80,19 @@ async function probeNeko(sandboxId: string, port: number): Promise<boolean> {
   }
 }
 
+async function probeChromiumCdp(sandboxId: string, port: number): Promise<boolean> {
+  try {
+    const probe = await e2bConnector.runCommand(
+      sandboxId,
+      `curl -fsSL --max-time 2 http://127.0.0.1:${port}/json/version >/dev/null 2>&1 && echo OK || echo MISSING`,
+      { timeoutMs: 10000 }
+    );
+    return (probe?.stdout || '').trim() === 'OK';
+  } catch {
+    return false;
+  }
+}
+
 async function waitForNeko(sandboxId: string, port: number, attempts = 8, delayMs = 1000): Promise<boolean> {
   for (let i = 0; i < attempts; i += 1) {
     // eslint-disable-next-line no-await-in-loop
@@ -80,7 +104,28 @@ async function waitForNeko(sandboxId: string, port: number, attempts = 8, delayM
   return false;
 }
 
-export type DebugReasonCode = 'missing_turn' | 'ice_failed';
+async function waitForChromiumCdp(sandboxId: string, port: number, attempts = 8, delayMs = 1000): Promise<boolean> {
+  for (let i = 0; i < attempts; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const ready = await probeChromiumCdp(sandboxId, port);
+    if (ready) return true;
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  return false;
+}
+
+export type DebugReasonCode =
+  | 'missing_turn'
+  | 'ice_failed'
+  | 'cdp_not_ready'
+  | 'neko_not_ready'
+  | 'preflight_failed'
+  | 'xvfb_missing'
+  | 'neko_binary_missing'
+  | 'neko_static_missing'
+  | 'chromium_binary_missing'
+  | 'start_script_failed';
 
 type NekoIceServer = {
   urls: string[];
@@ -198,6 +243,10 @@ export function __buildNekoClientUrlForTest(baseUrl: string): string {
   return buildNekoClientUrl(baseUrl);
 }
 
+export async function __probeChromiumCdpForTest(sandboxId: string, port: number): Promise<boolean> {
+  return probeChromiumCdp(sandboxId, port);
+}
+
 export async function probeNekoIceHealth(sandboxId: string): Promise<{ failed: boolean; logTail?: string }> {
   try {
     const result = await e2bConnector.runCommand(sandboxId, 'tail -n 200 /tmp/neko.log || true', {
@@ -216,7 +265,13 @@ export async function probeNekoIceHealth(sandboxId: string): Promise<{ failed: b
 export async function collectNekoDebugDiagnostics(sandboxId: string): Promise<{
   nekoConfig?: string;
   nekoLogTail?: string;
+  chromiumLogTail?: string;
+  xvfbLogTail?: string;
   listeningPorts?: string;
+  startScriptStdout?: string;
+  startScriptStderr?: string;
+  startScriptExitCode?: number;
+  startScriptError?: string;
 }> {
   try {
     const result = await e2bConnector.runCommand(
@@ -226,28 +281,92 @@ export async function collectNekoDebugDiagnostics(sandboxId: string): Promise<{
         'sed -n "1,220p" /tmp/oneceo/neko.yml 2>/dev/null || true',
         'echo "__LOG__"',
         'tail -n 200 /tmp/neko.log 2>/dev/null || true',
+        'echo "__CHROMIUM_LOG__"',
+        'tail -n 200 /tmp/chromium.log 2>/dev/null || true',
+        'echo "__XVFB_LOG__"',
+        'tail -n 120 /tmp/xvfb.log 2>/dev/null || true',
         'echo "__PORTS__"',
-        'ss -ltnup | grep -E "8081|8082|8083|18080" || true',
+        'ss -ltnup | grep -E "8081|8082|8083|9222|18080" || true',
       ].join('\n'),
       { timeoutMs: 30000 }
     );
     const stdout = String(result?.stdout || '');
     const cfgIdx = stdout.indexOf('__CFG__');
     const logIdx = stdout.indexOf('__LOG__');
+    const chromiumIdx = stdout.indexOf('__CHROMIUM_LOG__');
+    const xvfbIdx = stdout.indexOf('__XVFB_LOG__');
     const portsIdx = stdout.indexOf('__PORTS__');
     const getSlice = (start: number, end: number) =>
       start >= 0 && end >= 0 && end > start ? stdout.slice(start, end).trim() : '';
     const nekoConfig = getSlice(cfgIdx + '__CFG__'.length, logIdx);
-    const nekoLogTail = getSlice(logIdx + '__LOG__'.length, portsIdx);
+    const nekoLogTail = getSlice(logIdx + '__LOG__'.length, chromiumIdx);
+    const chromiumLogTail = getSlice(chromiumIdx + '__CHROMIUM_LOG__'.length, xvfbIdx);
+    const xvfbLogTail = getSlice(xvfbIdx + '__XVFB_LOG__'.length, portsIdx);
     const listeningPorts = portsIdx >= 0 ? stdout.slice(portsIdx + '__PORTS__'.length).trim() : '';
     return {
       nekoConfig: nekoConfig || undefined,
       nekoLogTail: nekoLogTail || undefined,
+      chromiumLogTail: chromiumLogTail || undefined,
+      xvfbLogTail: xvfbLogTail || undefined,
       listeningPorts: listeningPorts || undefined,
     };
   } catch {
     return {};
   }
+}
+
+function classifyNekoStartFailure(input: {
+  stdout?: string;
+  stderr?: string;
+  errorMessage?: string;
+  exitCode?: number;
+}): DebugReasonCode {
+  const combined = [input.stdout, input.stderr, input.errorMessage].map((item) => asText(item).toLowerCase()).join('\n');
+  if (combined.includes('[neko] xvfb missing')) return 'xvfb_missing';
+  if (combined.includes('[neko] neko binary missing')) return 'neko_binary_missing';
+  if (combined.includes('[neko] static assets missing')) return 'neko_static_missing';
+  if (combined.includes('[neko] chromium binary missing')) return 'chromium_binary_missing';
+  if (combined.includes('pipefail') || combined.includes('[[: not found') || combined.includes('bad substitution')) {
+    return 'start_script_failed';
+  }
+  if (input.exitCode === 31) return 'xvfb_missing';
+  if (input.exitCode === 32) return 'neko_binary_missing';
+  if (input.exitCode === 33) return 'neko_static_missing';
+  if (input.exitCode === 34) return 'chromium_binary_missing';
+  return 'start_script_failed';
+}
+
+function buildNekoStartFailureMessage(reasonCode: DebugReasonCode): string {
+  switch (reasonCode) {
+    case 'xvfb_missing':
+      return '调试浏览器启动失败：Sandbox 缺少 Xvfb。';
+    case 'neko_binary_missing':
+      return '调试浏览器启动失败：Sandbox 缺少 n.eko 可执行文件。';
+    case 'neko_static_missing':
+      return '调试浏览器启动失败：Sandbox 缺少 n.eko 前端静态资源。';
+    case 'chromium_binary_missing':
+      return '调试浏览器启动失败：Sandbox 缺少 Chromium 浏览器。';
+    default:
+      return '调试浏览器启动脚本失败，无法打开调试页面。';
+  }
+}
+
+function buildStartScriptFailureDiagnostics(
+  diagnostics: Awaited<ReturnType<typeof collectNekoDebugDiagnostics>> | undefined,
+  input: {
+    stdout?: string;
+    stderr?: string;
+    exitCode?: number;
+    errorMessage?: string;
+  }
+): Awaited<ReturnType<typeof collectNekoDebugDiagnostics>> {
+  return {
+    ...(diagnostics || {}),
+    startScriptStdout: truncateText(input.stdout, 4000) || undefined,
+    startScriptStderr: truncateText(input.stderr, 4000) || undefined,
+    startScriptExitCode: Number.isFinite(input.exitCode) ? input.exitCode : undefined,
+    startScriptError: truncateText(input.errorMessage, 2000) || undefined,
+  };
 }
 
 type EnsureDebugResult = {
@@ -622,24 +741,105 @@ nohup neko serve --config "$NEKO_CONFIG" > /tmp/neko.log 2>&1 &
     existingAuthProvider !== 'noauth' ||
     existingStatus === 'failed';
 
-  let ready = await probeNeko(orchestratorSessionId, nekoPort);
-  if (!ready || shouldRefresh) {
+  let nekoReady = await probeNeko(orchestratorSessionId, nekoPort);
+  let cdpReady = await probeChromiumCdp(orchestratorSessionId, cdpPort);
+  if (!nekoReady || !cdpReady || shouldRefresh) {
     const check = await e2bConnector.runCommand(
       orchestratorSessionId,
       `command -v neko >/dev/null 2>&1 && test -d /opt/neko/client/dist && echo "OK" || echo "MISSING"`,
       { timeoutMs: 20000 }
     );
     const installed = (check?.stdout || '').trim() === 'OK';
-    await e2bConnector.runCommand(orchestratorSessionId, startCommand, {
-      timeoutMs: installed ? 2 * 60 * 1000 : 15 * 60 * 1000,
-    });
-    ready = await waitForNeko(orchestratorSessionId, nekoPort);
+    try {
+      await e2bConnector.runCommand(orchestratorSessionId, `bash -lc ${shellEscape(startCommand)}`, {
+        timeoutMs: installed ? 2 * 60 * 1000 : 15 * 60 * 1000,
+      });
+    } catch (error) {
+      const record = error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
+      const exitCodeCandidate = Number(record.exitCode ?? record.code ?? 1);
+      const startFailure = {
+        stdout: asText(record.stdout),
+        stderr: asText(record.stderr),
+        exitCode: Number.isFinite(exitCodeCandidate) ? exitCodeCandidate : 1,
+        errorMessage: error instanceof Error ? error.message : String(error || 'debug start script failed'),
+      };
+      const diagnostics = buildStartScriptFailureDiagnostics(
+        await collectNekoDebugDiagnostics(orchestratorSessionId),
+        startFailure
+      );
+      const reasonCode = classifyNekoStartFailure(startFailure);
+      const message = buildNekoStartFailureMessage(reasonCode);
+      const host = await e2bConnector.getSandboxHost(orchestratorSessionId, nekoPort).catch(() => '');
+      const baseUrl = host ? `https://${host}` : previousBaseUrl;
+      await updateMetadata({
+        ...(baseUrl
+          ? {
+              baseUrl,
+              clientUrl: buildNekoClientUrl(baseUrl),
+            }
+          : {}),
+        port: nekoPort,
+        display,
+        cdpPort,
+        screenWidth,
+        screenHeight,
+        tcpMuxPort,
+        udpMuxPort,
+        nat1To1: nat1To1 || '',
+        webrtcMode: useMux ? 'mux' : 'epr',
+        webrtcEpr: webrtcEpr || '',
+        forceMux,
+        iceLite,
+        autoNat,
+        authProvider: 'noauth',
+        configVersion,
+        turnConfigured,
+        requireTurn,
+        strictIceCheck,
+        iceServers,
+        diagnostics,
+        status: 'failed',
+        reasonCode,
+        message,
+      });
+      return {
+        ready: false,
+        url: baseUrl ? buildNekoClientUrl(baseUrl) : previousBaseUrl || undefined,
+        status: 'failed',
+        updatedAt: new Date().toISOString(),
+        sandboxId: orchestratorSessionId,
+        port: nekoPort,
+        display,
+        cdpPort,
+        screenWidth,
+        screenHeight,
+        reasonCode,
+        message,
+      };
+    }
+    nekoReady = await waitForNeko(orchestratorSessionId, nekoPort);
+    cdpReady = await waitForChromiumCdp(orchestratorSessionId, cdpPort);
   }
 
+  let ready = nekoReady && cdpReady;
   let status = ready ? 'running' : 'starting';
   let reasonCode: DebugReasonCode | undefined;
   let message = ready ? undefined : asText(nekoMeta.message) || '调试服务启动中，请稍后重试';
   let diagnostics: Awaited<ReturnType<typeof collectNekoDebugDiagnostics>> | undefined;
+
+  if (nekoReady && !cdpReady) {
+    diagnostics = await collectNekoDebugDiagnostics(orchestratorSessionId);
+    status = 'failed';
+    reasonCode = 'cdp_not_ready';
+    message = 'Chromium CDP 调试端口未就绪，无法打开调试页面';
+    ready = false;
+  } else if (!nekoReady) {
+    diagnostics = await collectNekoDebugDiagnostics(orchestratorSessionId);
+    status = 'failed';
+    reasonCode = 'neko_not_ready';
+    message = 'n.eko 调试服务未就绪，无法打开调试页面';
+    ready = false;
+  }
 
   if (strictIceCheck) {
     const health = await probeNekoIceHealth(orchestratorSessionId);

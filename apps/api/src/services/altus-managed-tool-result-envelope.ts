@@ -97,6 +97,7 @@ export function isManagedToolErrorRetryable(errorCode: string) {
     errorCode === 'write_file_binary_deliverable_requires_generator' ||
     errorCode === 'complete_task_pptx_requires_render_pptx_from_instructions' ||
     errorCode === 'visual_detection_completion_blocked' ||
+    errorCode === 'debug_service_not_ready' ||
     errorCode === 'debug_target_unreachable' ||
     errorCode === 'debug_target_file_missing' ||
     errorCode === 'debug_target_bad_status' ||
@@ -213,7 +214,7 @@ function buildErrorInstruction(errorCode: string, toolName: string) {
     case 'debug_open_page_repeat_blocked':
       return 'Do not call debug_open_page again for the same target now. First make a concrete corrective change with shell_execute or write_file, or stop and report the exact platform-visible blocker.';
     case 'debug_service_not_ready':
-      return 'Do not retry debug_open_page in a loop. Report that the platform debug browser service is not ready so the sandbox can be recovered by the platform.';
+      return 'Do not stop immediately. Inspect the structured diagnostics for the managed n.eko / Chromium debug service, repair or refresh the debug browser state if possible, then retry debug_open_page only after a concrete state-changing step.';
     case 'sandbox_browser_capability_unavailable':
       return 'Do not install Playwright or @playwright/mcp into the user project. Report the sandbox browser capability failure with the fixed paths and stop this verification loop.';
     case 'debug_target_unreachable':

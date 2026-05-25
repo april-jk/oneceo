@@ -22,7 +22,7 @@ function hasInternalDiagnosticText(value: string) {
 function publicMessageForReason(reasonCode: string) {
   switch (reasonCode) {
     case 'debug_open_page_repeat_blocked':
-      return '视觉检测暂时无法继续：同一个预览地址连续未能打开。平台已停止重复尝试以避免继续消耗积分，并保留了已完成的检查记录；请先确认预览服务、端口或文件路径后重新运行。';
+      return '视觉检测发现同一个预览地址连续未能打开。平台已阻止继续重复截图，并保留了检查记录；Altus 将先调查并修复预览服务、端口或文件路径后再继续。';
     case 'debug_service_not_ready':
     case 'sandbox_browser_capability_unavailable':
       return '视觉检测浏览器环境暂时不可用。平台已停止本次检测并保留诊断记录，避免继续消耗积分；远程浏览器能力恢复后可以重新运行。';

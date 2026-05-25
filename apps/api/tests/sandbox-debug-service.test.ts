@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
+import { e2bConnector } from '../src/connectors/e2b-connector';
+import { sandboxExecutionEnvironmentDAO } from '../src/db/dao';
 import {
   __buildNekoClientUrlForTest,
   __hasTurnIceServerForTest,
   __parseIceServersForTest,
+  __probeChromiumCdpForTest,
   __renderNekoMemberYamlForTest,
   detectIceFailureFromLog,
+  ensureNekoDebug,
 } from '../src/services/sandbox-debug-service';
 
 test('parse ice servers supports urls string and array', () => {
@@ -80,4 +84,99 @@ test('neko debug uses anonymous access without url credentials', () => {
   assert.doesNotMatch(memberYaml, /multiuser/i);
   assert.doesNotMatch(memberYaml, /password/i);
   assert.equal(__buildNekoClientUrlForTest('https://8081-example.e2b.app'), 'https://8081-example.e2b.app');
+});
+
+test('chromium cdp probe checks the managed debugging endpoint', async () => {
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async (_sandboxId, command, options) => {
+    assert.match(String(command), /127\.0\.0\.1:9222\/json\/version/);
+    assert.equal((options as any)?.timeoutMs, 10000);
+    return {
+      stdout: 'OK\n',
+      stderr: '',
+      exitCode: 0,
+    } as any;
+  });
+
+  assert.equal(await __probeChromiumCdpForTest('sandbox-1', 9222), true);
+  assert.equal(runCommandMock.mock.callCount(), 1);
+});
+
+test('chromium cdp probe returns false when the endpoint is missing', async () => {
+  mock.method(e2bConnector, 'runCommand', async () => ({
+    stdout: 'MISSING\n',
+    stderr: '',
+    exitCode: 0,
+  }) as any);
+
+  assert.equal(await __probeChromiumCdpForTest('sandbox-1', 9222), false);
+});
+
+test('ensure neko debug returns visible diagnostics when the start script fails', async () => {
+  const metadataUpdates: Array<Record<string, unknown>> = [];
+  mock.method(sandboxExecutionEnvironmentDAO, 'getBySessionId', async () => ({
+    sessionId: 'sandbox-1',
+    status: 'ready',
+    metadata: {},
+  }) as any);
+  mock.method(sandboxExecutionEnvironmentDAO, 'updateMetadata', async (_sessionId, metadata) => {
+    metadataUpdates.push(metadata as Record<string, unknown>);
+    return {} as any;
+  });
+  mock.method(e2bConnector, 'getSandboxHost', async (_sandboxId, port) => `${port}-sandbox-1.e2b.app`);
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async (_sandboxId, command) => {
+    const text = String(command);
+    if (text.startsWith('bash -lc ')) {
+      const error = new Error('exit status 31') as any;
+      error.exitCode = 31;
+      error.stdout = '[neko] Xvfb missing\n';
+      error.stderr = '';
+      throw error;
+    }
+    if (text.includes('http://127.0.0.1:8081/')) {
+      return { stdout: '000', stderr: '', exitCode: 0 } as any;
+    }
+    if (text.includes('http://127.0.0.1:9222/json/version')) {
+      return { stdout: 'MISSING\n', stderr: '', exitCode: 0 } as any;
+    }
+    if (text.includes('command -v neko')) {
+      return { stdout: 'OK\n', stderr: '', exitCode: 0 } as any;
+    }
+    if (text.includes('__CFG__')) {
+      return {
+        stdout: [
+          '__CFG__',
+          '',
+          '__LOG__',
+          '',
+          '__CHROMIUM_LOG__',
+          '',
+          '__XVFB_LOG__',
+          'missing xvfb',
+          '__PORTS__',
+          '',
+        ].join('\n'),
+        stderr: '',
+        exitCode: 0,
+      } as any;
+    }
+    throw new Error(`unexpected command: ${text.slice(0, 80)}`);
+  });
+
+  const result = await ensureNekoDebug('sandbox-1', {
+    requireTurn: false,
+    strictIceCheck: false,
+  });
+
+  assert.equal(result.ready, false);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.reasonCode, 'xvfb_missing');
+  assert.match(result.message || '', /Xvfb/);
+  assert.ok(runCommandMock.mock.calls.some((call) => String(call.arguments[1]).startsWith('bash -lc ')));
+
+  const lastUpdate = metadataUpdates.at(-1) as any;
+  assert.equal(lastUpdate.debug.neko.status, 'failed');
+  assert.equal(lastUpdate.debug.neko.reasonCode, 'xvfb_missing');
+  assert.equal(lastUpdate.debug.neko.diagnostics.startScriptExitCode, 31);
+  assert.match(lastUpdate.debug.neko.diagnostics.startScriptStdout, /Xvfb missing/);
+  assert.match(lastUpdate.debug.neko.diagnostics.xvfbLogTail, /missing xvfb/);
 });

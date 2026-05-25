@@ -1785,6 +1785,32 @@ test('shell_execute rejects fixed OneCEO shell start command in explicit foregro
   );
 });
 
+test('shell_execute blocks managed debug browser lifecycle commands', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  for (const command of [
+    'curl -s http://127.0.0.1:9222/json/version 2>&1',
+    '/opt/ms-playwright/chromium-1217/chrome-linux64/chrome --remote-debugging-port=9222 --no-sandbox',
+    'pkill -9 -f chrome 2>/dev/null; sleep 2; echo done',
+    'pgrep -f remote-debugging | while read pid; do kill -9 $pid; done',
+  ]) {
+    await assert.rejects(
+      runtime.execute('shell_execute', {
+        command,
+        cwd: '.',
+      }),
+      /shell_execute_managed_debug_browser_blocked/
+    );
+  }
+});
+
 test('debug_open_page rejects non-http protocols', async () => {
   const runtime = new AltusManagedToolRuntime({
     sessionId: 'session-1',
@@ -2365,7 +2391,22 @@ test('browser_interact executes an explicit Playwright action against the debug 
       mcpProviders: [],
     },
     undefined,
-    undefined,
+    {
+      ensureNekoDebug: mock.fn(
+        async () =>
+          ({
+            ready: true,
+            url: 'https://8081-sandbox-1.e2b.app',
+            status: 'running',
+            updatedAt: new Date().toISOString(),
+            sandboxId: 'sandbox-1',
+            port: 8081,
+            display: ':0',
+            cdpPort: 9222,
+          }) as any
+      ) as any,
+      issueIceServersForUser: mock.fn(async () => null) as any,
+    },
     {
       uploadToR2: mock.fn(async (key: string, body: Buffer) => {
         uploaded.push({ key, body });
@@ -2391,6 +2432,49 @@ test('browser_interact executes an explicit Playwright action against the debug 
   assert.equal(payload.browserScreenshot.status, 'captured');
   assert.equal(payload.browserScreenshot.source.url, 'file:///workspace/session-1/index.html');
   assert.equal(result.evidence?.[0]?.status, 'captured');
+});
+
+test('browser_interact fails fast when managed debug browser is not ready', async () => {
+  const ensureDebugMock = mock.fn(
+    async () =>
+      ({
+        ready: false,
+        status: 'failed',
+        reasonCode: 'ice_failed',
+        message: '远程调试 ICE 连接失败，请检查 TURN 配置后重试',
+        sandboxId: 'sandbox-1',
+      }) as any
+  );
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async () => {
+    throw new Error('should_not_execute_browser_interact_command');
+  });
+
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    undefined,
+    {
+      ensureNekoDebug: ensureDebugMock as any,
+      issueIceServersForUser: mock.fn(async () => null) as any,
+    }
+  );
+
+  await assert.rejects(
+    runtime.execute('browser_interact', {
+      action: 'keyboard_press',
+      key: 'ArrowUp',
+    }),
+    /browser_interact_debug_not_ready:ice_failed/
+  );
+
+  assert.equal(ensureDebugMock.mock.callCount(), 1);
+  assert.equal(runCommandMock.mock.callCount(), 0);
 });
 
 test('browser_interact rejects unknown browser actions', async () => {
@@ -2608,6 +2692,54 @@ test('debug_open_page fails fast when debug runtime reports failed status', asyn
       url: 'http://127.0.0.1:3000/folder1/',
     }),
     /debug_open_page_debug_not_ready:ice_failed/
+  );
+
+  assert.equal(ensureDebugMock.mock.callCount(), 1);
+  assert.equal(runCommandMock.mock.callCount(), 0);
+  assert.equal(markSandboxDirtyMock.mock.callCount(), 0);
+});
+
+test('debug_open_page ignores ensureDebug false and still fails fast when CDP is not ready', async () => {
+  const ensureDebugMock = mock.fn(
+    async () =>
+      ({
+        ready: false,
+        status: 'failed',
+        reasonCode: 'cdp_not_ready',
+        message: 'Chromium CDP 调试端口未就绪，无法打开调试页面',
+        sandboxId: 'sandbox-1',
+      }) as any
+  );
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async () => {
+    throw new Error('should_not_execute_debug_open_page_command');
+  });
+  const markSandboxDirtyMock = mock.fn(async () => undefined);
+
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: mock.fn(async () => undefined) as any,
+      markSandboxDirty: markSandboxDirtyMock as any,
+    },
+    {
+      ensureNekoDebug: ensureDebugMock as any,
+      issueIceServersForUser: mock.fn(async () => null) as any,
+    },
+  );
+
+  await assert.rejects(
+    runtime.execute('debug_open_page', {
+      url: 'http://127.0.0.1:8080/',
+      ensureDebug: false,
+    }),
+    /debug_open_page_debug_not_ready:cdp_not_ready/
   );
 
   assert.equal(ensureDebugMock.mock.callCount(), 1);

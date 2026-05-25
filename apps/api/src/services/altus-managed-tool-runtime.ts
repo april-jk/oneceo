@@ -1032,6 +1032,25 @@ function isPersistentLocalServerCommand(value: string) {
   );
 }
 
+function isManagedDebugBrowserShellCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  const managesChromeProcess =
+    /\b(pkill|killall|pgrep|fuser|kill)\b/.test(normalized) &&
+    /\b(chrome|chromium|remote-debugging|9222)\b/.test(normalized);
+  const launchesDebugChrome =
+    /\b(chrome|chromium|chromium-browser)\b/.test(normalized) &&
+    (normalized.includes('remote-debugging-port') || normalized.includes('remote-debugging-address'));
+  const probesDebugCdp =
+    /\b(curl|wget)\b/.test(normalized) &&
+    normalized.includes('127.0.0.1:9222') &&
+    (normalized.includes('/json/version') || normalized.includes('/json/list') || normalized.includes('/json/new'));
+  const managesNekoProcess =
+    /\b(pkill|killall|pgrep|fuser|kill)\b/.test(normalized) &&
+    /\bneko\b/.test(normalized);
+  return managesChromeProcess || launchesDebugChrome || probesDebugCdp || managesNekoProcess;
+}
+
 function sanitizeBackgroundServiceCommand(value: string) {
   let command = asText(value).trim();
   command = command.replace(/^\s*nohup\s+/i, '');
@@ -1853,6 +1872,31 @@ export class AltusManagedToolRuntime {
     await this.sandboxActivityDeps.markSandboxDirty(this.input.sandboxId, reason).catch(() => null);
   }
 
+  private async ensureManagedDebugBrowserReady(toolName: 'debug_open_page' | 'browser_interact') {
+    let dynamicIceServers: Array<{ urls: string[]; username?: string; credential?: string }> | null = null;
+    try {
+      dynamicIceServers = await this.debugDeps.issueIceServersForUser(this.input.userId);
+    } catch (error) {
+      console.warn('[MANAGED_DEBUG_TURN_ICE_GENERATE_FAILED]', {
+        sessionId: this.input.sessionId,
+        userId: this.input.userId,
+        toolName,
+        error: error instanceof Error ? error.message : String(error || ''),
+      });
+    }
+    const debugInfo = await this.debugDeps.ensureNekoDebug(this.input.sandboxId, {
+      requireTurn: true,
+      strictIceCheck: true,
+      ...(dynamicIceServers ? { iceServers: dynamicIceServers } : {}),
+    });
+    if (!debugInfo.ready || debugInfo.status === 'failed') {
+      const reason = asText((debugInfo as any)?.reasonCode) || 'debug_not_ready';
+      const message = asText(debugInfo.message) || 'debug_not_ready';
+      throw new Error(`${toolName}_debug_not_ready:${reason}:${message}`);
+    }
+    return debugInfo;
+  }
+
   private findAutoAttachableSkillsForTool(toolName: string) {
     const normalizedToolName = asText(toolName).toLowerCase();
     if (!normalizedToolName) return [];
@@ -2183,6 +2227,15 @@ export class AltusManagedToolRuntime {
           ].join('\n')
         );
       }
+      if (isManagedDebugBrowserShellCommand(command)) {
+        throw new Error(
+          [
+            'shell_execute_managed_debug_browser_blocked:调试浏览器、n.eko 与 CDP 9222 由平台托管。',
+            '不要通过 shell_execute 手动启动、探测、清理或杀掉 Chrome/Chromium/n.eko/remote-debugging 进程。',
+            '请先确保本地预览服务已通过 background_service ready，然后调用 debug_open_page；后续点击、滚动、输入用 browser_interact。',
+          ].join('\n')
+        );
+      }
       const deploymentIntentActive =
         this.hasActiveSkill('deployment-orchestrator') || this.input.taskIntentProfile?.deploymentAllowed === true;
       if (deploymentIntentActive && isLocalPreviewOrDevCommand(command)) {
@@ -2227,31 +2280,8 @@ export class AltusManagedToolRuntime {
     if (toolName === 'debug_open_page') {
       const normalizedTarget = normalizeDebugTargetUrl(rawArgs.url, this.input.workspaceRoot);
       const targetUrl = normalizedTarget.targetUrl;
-      const ensureDebug = rawArgs.ensureDebug === undefined ? true : asBoolean(rawArgs.ensureDebug);
       const cdpPort = asPositiveInt(process.env.NEKO_CDP_PORT, 9222, 65535);
-      let debugInfo: Awaited<ReturnType<typeof ensureNekoDebug>> | null = null;
-      if (ensureDebug) {
-        let dynamicIceServers: Array<{ urls: string[]; username?: string; credential?: string }> | null = null;
-        try {
-          dynamicIceServers = await this.debugDeps.issueIceServersForUser(this.input.userId);
-        } catch (error) {
-          console.warn('[MANAGED_DEBUG_TURN_ICE_GENERATE_FAILED]', {
-            sessionId: this.input.sessionId,
-            userId: this.input.userId,
-            error: error instanceof Error ? error.message : String(error || ''),
-          });
-        }
-        debugInfo = await this.debugDeps.ensureNekoDebug(this.input.sandboxId, {
-          requireTurn: true,
-          strictIceCheck: true,
-          ...(dynamicIceServers ? { iceServers: dynamicIceServers } : {}),
-        });
-        if (!debugInfo.ready || debugInfo.status === 'failed') {
-          const reason = asText((debugInfo as any)?.reasonCode) || 'debug_not_ready';
-          const message = asText(debugInfo.message) || 'debug_not_ready';
-          throw new Error(`debug_open_page_debug_not_ready:${reason}:${message}`);
-        }
-      }
+      const debugInfo = await this.ensureManagedDebugBrowserReady('debug_open_page');
 
       const encodedUrl = encodeURIComponent(targetUrl);
       const escapedTargetUrl = shellEscape(targetUrl);
@@ -2407,6 +2437,7 @@ export class AltusManagedToolRuntime {
     if (toolName === 'browser_interact') {
       const action = normalizeBrowserInteractAction(rawArgs.action);
       const cdpPort = asPositiveInt(process.env.NEKO_CDP_PORT, 9222, 65535);
+      await this.ensureManagedDebugBrowserReady('browser_interact');
       const xRaw = Number(rawArgs.x);
       const yRaw = Number(rawArgs.y);
       const command = buildBrowserInteractCommand({

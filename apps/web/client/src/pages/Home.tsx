@@ -3395,7 +3395,7 @@ export default function Home() {
           }}
           className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
         >
-          <div className="mx-auto w-full space-y-4">
+          <div className="mx-auto w-full max-w-[52rem] space-y-4">
             {isLoadingOlderHistory && (
               <NoticeMessage
                 tone="info"
@@ -3471,11 +3471,11 @@ export default function Home() {
         >
           <div className="px-6 py-3">
             {slashSuggestionPanel ? (
-              <div className="mx-auto mb-2 w-[92%] max-w-full">
+              <div className="mx-auto mb-2 w-[92%] max-w-[52rem]">
                 {slashSuggestionPanel}
               </div>
             ) : null}
-            <div data-tour="home-composer" className="w-full rounded-[2rem] border border-border/70 bg-card shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)]">
+            <div data-tour="home-composer" className="mx-auto w-full max-w-[52rem] rounded-[2rem] border border-border/70 bg-card shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)]">
               <div className="space-y-3 p-4">
                 <Textarea
                   placeholder={

@@ -119,6 +119,17 @@ test('neko start wrapper writes runtime scripts under debug-browser and uses a l
   assert.match(command, /\/tmp\/oneceo\/debug-browser\/logs\/neko-start\.log/);
   assert.match(command, /\/tmp\/oneceo\/debug-browser\/run\/ensure\.lock/);
   assert.match(command, /flock -E 42 -w 20/);
+  assert.match(command, /ensure\.lock\.owner/);
+  assert.match(command, /"ownerPid"/);
+  assert.match(command, /"runtimeVersion"/);
+  assert.match(command, /debug_runtime_ready_after_lock/);
+  assert.match(command, /already ready after lock acquisition; skipping restart/);
+  assert.match(command, /debug browser lock diagnostic/);
+  assert.match(command, /lock_has_live_holder \|\| holder_status=\$\?/);
+  assert.match(command, /stale lock suspected/);
+  assert.match(command, /retrying once/);
+  assert.match(command, /could not be inspected; refusing stale cleanup/);
+  assert.match(command, /already ready after lockdir acquisition; skipping restart/);
   assert.doesNotMatch(command, /\/tmp\/oneceo\/neko\.yml/);
 });
 
@@ -181,6 +192,143 @@ test('ensure neko debug refreshes ready sandboxes from older runtime versions', 
   assert.equal(result.ready, true);
   assert.equal(startWrapperCallCount, 1);
   assert.equal((metadataUpdates.at(-1) as any).debug.neko.runtimeVersion, 'debug-browser-runtime-v1');
+});
+
+test('ensure neko debug reconciles stale failed metadata when runtime is already ready', async () => {
+  const metadataUpdates: Array<Record<string, unknown>> = [];
+  let startWrapperCallCount = 0;
+  mock.method(sandboxExecutionEnvironmentDAO, 'getBySessionId', async () => ({
+    sessionId: 'sandbox-stale-failed',
+    status: 'ready',
+    metadata: {
+      debug: {
+        neko: {
+          status: 'failed',
+          reasonCode: 'start_script_failed',
+          message: 'previous wrapper failure',
+          configVersion:
+            'neko-noauth-v3-edgefill-1280x1008-mode-mux-tcp-8082-udp-8083-epr-off-icelite-off-nat-none-turn-optional',
+          runtimeVersion: 'debug-browser-runtime-v1',
+          port: 8081,
+          cdpPort: 9222,
+          tcpMuxPort: 8082,
+          udpMuxPort: 8083,
+          webrtcMode: 'mux',
+          webrtcEpr: '',
+          forceMux: true,
+          iceLite: false,
+          autoNat: false,
+          nat1To1: '',
+          authProvider: 'noauth',
+        },
+      },
+    },
+  }) as any);
+  mock.method(sandboxExecutionEnvironmentDAO, 'updateMetadata', async (_sessionId, metadata) => {
+    metadataUpdates.push(metadata as Record<string, unknown>);
+    return {} as any;
+  });
+  mock.method(e2bConnector, 'getSandboxHost', async (_sandboxId, port) => `${port}-sandbox-stale-failed.e2b.app`);
+  mock.method(e2bConnector, 'runCommand', async (_sandboxId, command) => {
+    const text = String(command);
+    if (text.startsWith('bash -lc ')) {
+      startWrapperCallCount += 1;
+      return { stdout: '', stderr: '', exitCode: 0 } as any;
+    }
+    if (text.includes('http://127.0.0.1:8081/')) {
+      return { stdout: '200', stderr: '', exitCode: 0 } as any;
+    }
+    if (text.includes('http://127.0.0.1:9222/json/version')) {
+      return { stdout: 'OK\n', stderr: '', exitCode: 0 } as any;
+    }
+    throw new Error(`unexpected command: ${text.slice(0, 80)}`);
+  });
+
+  const result = await ensureNekoDebug('sandbox-stale-failed', {
+    requireTurn: false,
+    strictIceCheck: false,
+  });
+
+  assert.equal(result.ready, true);
+  assert.equal(result.status, 'running');
+  assert.equal(startWrapperCallCount, 0);
+  assert.equal((metadataUpdates.at(-1) as any).debug.neko.status, 'running');
+  assert.equal((metadataUpdates.at(-1) as any).debug.neko.reasonCode, undefined);
+});
+
+test('ensure neko debug treats wrapper failure as ready when live probes and manifest agree', async () => {
+  const metadataUpdates: Array<Record<string, unknown>> = [];
+  let startWrapperCallCount = 0;
+  let cdpProbeCount = 0;
+  let nekoProbeCount = 0;
+  mock.method(sandboxExecutionEnvironmentDAO, 'getBySessionId', async () => ({
+    sessionId: 'sandbox-wrapper-false-negative',
+    status: 'ready',
+    metadata: {},
+  }) as any);
+  mock.method(sandboxExecutionEnvironmentDAO, 'updateMetadata', async (_sessionId, metadata) => {
+    metadataUpdates.push(metadata as Record<string, unknown>);
+    return {} as any;
+  });
+  mock.method(e2bConnector, 'getSandboxHost', async (_sandboxId, port) => `${port}-sandbox-wrapper-false-negative.e2b.app`);
+  mock.method(e2bConnector, 'runCommand', async (_sandboxId, command) => {
+    const text = String(command);
+    if (text.startsWith('bash -lc ')) {
+      startWrapperCallCount += 1;
+      const error = new Error('exit status 2') as any;
+      error.exitCode = 2;
+      error.stdout = '';
+      error.stderr = '[neko] debug browser lock diagnostic\n[neko] lock owner file missing\n';
+      throw error;
+    }
+    if (text.includes('http://127.0.0.1:8081/')) {
+      nekoProbeCount += 1;
+      return { stdout: nekoProbeCount === 1 ? '000' : '200', stderr: '', exitCode: 0 } as any;
+    }
+    if (text.includes('http://127.0.0.1:9222/json/version')) {
+      cdpProbeCount += 1;
+      return { stdout: cdpProbeCount === 1 ? 'MISSING\n' : 'OK\n', stderr: '', exitCode: 0 } as any;
+    }
+    if (text.includes('command -v neko')) {
+      return { stdout: 'OK\n', stderr: '', exitCode: 0 } as any;
+    }
+    if (text.includes('__CFG__')) {
+      return {
+        stdout: [
+          '__CFG__',
+          '',
+          '__LOG__',
+          'neko ready',
+          '__CHROMIUM_LOG__',
+          'DevTools listening on ws://127.0.0.1:9222/devtools/browser/test',
+          '__XVFB_LOG__',
+          '',
+          '__START_LOG__',
+          '',
+          '__MANIFEST__',
+          '{"runtimeVersion":"debug-browser-runtime-v1","configVersion":"neko-noauth-v3-edgefill-1280x1008-mode-mux-tcp-8082-udp-8083-epr-off-icelite-off-nat-none-turn-optional","status":"running"}',
+          '__TREE__',
+          'debug browser files',
+          '__PORTS__',
+          'LISTEN 0 4096 127.0.0.1:9222\nLISTEN 0 4096 0.0.0.0:8081',
+        ].join('\n'),
+        stderr: '',
+        exitCode: 0,
+      } as any;
+    }
+    throw new Error(`unexpected command: ${text.slice(0, 80)}`);
+  });
+
+  const result = await ensureNekoDebug('sandbox-wrapper-false-negative', {
+    requireTurn: false,
+    strictIceCheck: false,
+  });
+
+  assert.equal(result.ready, true);
+  assert.equal(result.status, 'running');
+  assert.equal(startWrapperCallCount, 1);
+  assert.equal((metadataUpdates.at(-1) as any).debug.neko.status, 'running');
+  assert.equal((metadataUpdates.at(-1) as any).debug.neko.reasonCode, undefined);
 });
 
 test('ensure neko debug returns visible diagnostics when the start script fails', async () => {
@@ -255,6 +403,8 @@ test('ensure neko debug returns visible diagnostics when the start script fails'
   assert.match(capturedStartWrapper, /\/tmp\/oneceo\/debug-browser\/neko-static/);
   assert.match(capturedStartWrapper, /\/tmp\/oneceo\/debug-browser\/neko\.yml/);
   assert.match(capturedStartWrapper, /\/tmp\/oneceo\/debug-browser\/state\/manifest\.json/);
+  assert.match(capturedStartWrapper, /"configVersion"/);
+  assert.match(capturedStartWrapper, /--remote-debugging-address=127\.0\.0\.1/);
   assert.match(capturedStartWrapper, /ONECEO_NEKO_STATIC_ROOT:-\/opt\/neko\/client\/dist/);
   assert.doesNotMatch(capturedStartWrapper, /cat <<'EOF_EDGE_CSS' > "\$NEKO_STATIC_SOURCE/);
   assert.doesNotMatch(capturedStartWrapper, /pkill -x (chrome|chromium|neko|Xvfb)/);

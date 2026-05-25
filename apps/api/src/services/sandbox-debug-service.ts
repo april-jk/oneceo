@@ -267,6 +267,25 @@ function buildNekoClientUrl(baseUrl: string): string {
   return baseUrl;
 }
 
+function manifestMatchesDebugRuntime(manifest: string | undefined, configVersion: string): boolean {
+  const raw = asText(manifest);
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return (
+      asText(parsed.runtimeVersion) === DEBUG_BROWSER_RUNTIME_VERSION &&
+      asText(parsed.configVersion) === configVersion &&
+      asText(parsed.status).toLowerCase() === 'running'
+    );
+  } catch {
+    return (
+      raw.includes(`"runtimeVersion": "${DEBUG_BROWSER_RUNTIME_VERSION}"`) &&
+      raw.includes(`"configVersion": "${configVersion}"`) &&
+      raw.includes('"status": "running"')
+    );
+  }
+}
+
 export function __renderNekoMemberYamlForTest(): string {
   return renderNekoMemberYaml();
 }
@@ -498,7 +517,12 @@ function nextActionForReason(reasonCode: DebugReasonCode | undefined): string | 
   }
 }
 
-function buildNekoStartCommand(startScript: string): string {
+function buildNekoStartCommand(
+  startScript: string,
+  input: { nekoPort?: number; cdpPort?: number; configVersion?: string } = {}
+): string {
+  const nekoPort = toPositiveInt(String(input.nekoPort || ''), 8081);
+  const cdpPort = toPositiveInt(String(input.cdpPort || ''), 9222);
   return [
     'set -euo pipefail',
     `mkdir -p ${shellEscape(DEBUG_BROWSER_LOG_DIR)} ${shellEscape(DEBUG_BROWSER_RUN_DIR)} ${shellEscape(DEBUG_BROWSER_STATE_DIR)} ${shellEscape(DEBUG_BROWSER_TMP_DIR)}`,
@@ -510,14 +534,88 @@ function buildNekoStartCommand(startScript: string): string {
     `if [ -f ${shellEscape(DEBUG_BROWSER_START_LOG)}.1 ]; then mv -f ${shellEscape(DEBUG_BROWSER_START_LOG)}.1 ${shellEscape(DEBUG_BROWSER_START_LOG)}.2 || true; fi`,
     `if [ -f ${shellEscape(DEBUG_BROWSER_START_LOG)} ]; then mv -f ${shellEscape(DEBUG_BROWSER_START_LOG)} ${shellEscape(DEBUG_BROWSER_START_LOG)}.1 || true; fi`,
     `LOCK_FILE=${shellEscape(`${DEBUG_BROWSER_RUN_DIR}/ensure.lock`)}`,
+    `LOCK_OWNER=${shellEscape(`${DEBUG_BROWSER_RUN_DIR}/ensure.lock.owner`)}`,
+    'LOCK_DIAG="$(date -Is 2>/dev/null || date)"',
+    'describe_lock_owner() {',
+    '  echo "[neko] debug browser lock diagnostic at ${LOCK_DIAG}" >&2',
+    '  if [ -f "$LOCK_OWNER" ]; then',
+    '    echo "[neko] lock owner file:" >&2',
+    '    sed -n "1,20p" "$LOCK_OWNER" >&2 || true',
+    '  else',
+    '    echo "[neko] lock owner file missing" >&2',
+    '  fi',
+    '  if command -v fuser >/dev/null 2>&1; then',
+    '    echo "[neko] lock fuser: $(fuser "$LOCK_FILE" 2>/dev/null || true)" >&2',
+    '  fi',
+    '  if command -v lsof >/dev/null 2>&1; then',
+    '    lsof "$LOCK_FILE" 2>/dev/null | sed -n "1,20p" >&2 || true',
+    '  fi',
+    '}',
+    'lock_has_live_holder() {',
+    '  local inspected="false"',
+    '  if command -v fuser >/dev/null 2>&1; then',
+    '    inspected="true"',
+    '    if fuser "$LOCK_FILE" >/dev/null 2>&1; then return 0; fi',
+    '  fi',
+    '  if command -v lsof >/dev/null 2>&1; then',
+    '    inspected="true"',
+    '    if lsof "$LOCK_FILE" >/dev/null 2>&1; then return 0; fi',
+    '  fi',
+    '  if [ "$inspected" != "true" ]; then return 2; fi',
+    '  return 1',
+    '}',
+    'write_lock_owner() {',
+    '  printf \'{\\n  "ownerPid": %s,\\n  "ownerPpid": %s,\\n  "startedAt": "%s",\\n  "runtimeVersion": "%s",\\n  "script": "%s"\\n}\\n\' "$$" "$PPID" "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)" "${ONECEO_DEBUG_RUNTIME_VERSION:-unknown}" "${ONECEO_DEBUG_START_SCRIPT:-}" > "$LOCK_OWNER"',
+    '}',
+    'read_lock_owner_pid() {',
+    '  sed -n \'s/.*"ownerPid"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p\' "$LOCK_OWNER" 2>/dev/null | head -n 1 || true',
+    '}',
+    'debug_runtime_ready_after_lock() {',
+    '  if [ ! -f "$ONECEO_DEBUG_MANIFEST" ]; then return 1; fi',
+    '  grep -F "\\"runtimeVersion\\": \\"${ONECEO_DEBUG_RUNTIME_VERSION}\\"" "$ONECEO_DEBUG_MANIFEST" >/dev/null 2>&1 || return 1',
+    '  grep -F "\\"configVersion\\": \\"${ONECEO_DEBUG_CONFIG_VERSION}\\"" "$ONECEO_DEBUG_MANIFEST" >/dev/null 2>&1 || return 1',
+    '  curl -fsSL --max-time 2 "http://127.0.0.1:${ONECEO_DEBUG_CDP_PORT}/json/version" >/dev/null 2>&1 || return 1',
+    '  curl -fsSL --max-time 2 "http://127.0.0.1:${ONECEO_DEBUG_NEKO_PORT}/" >/dev/null 2>&1 || return 1',
+    '  return 0',
+    '}',
+    'run_locked_start() {',
+    '  write_lock_owner',
+    '  trap \'rm -f "$LOCK_OWNER"\' EXIT',
+    '  if debug_runtime_ready_after_lock; then',
+    '    echo "[neko] debug browser already ready after lock acquisition; skipping restart"',
+    '    exit 0',
+    '  fi',
+    `  bash ${shellEscape(DEBUG_BROWSER_START_SCRIPT)} > ${shellEscape(DEBUG_BROWSER_START_LOG)} 2>&1`,
+    '}',
+    `export ONECEO_DEBUG_START_SCRIPT=${shellEscape(DEBUG_BROWSER_START_SCRIPT)}`,
+    `export ONECEO_DEBUG_RUNTIME_VERSION=${shellEscape(DEBUG_BROWSER_RUNTIME_VERSION)}`,
+    `export ONECEO_DEBUG_CONFIG_VERSION=${shellEscape(input.configVersion || '')}`,
+    `export ONECEO_DEBUG_MANIFEST=${shellEscape(DEBUG_BROWSER_MANIFEST)}`,
+    `export ONECEO_DEBUG_NEKO_PORT=${nekoPort}`,
+    `export ONECEO_DEBUG_CDP_PORT=${cdpPort}`,
+    'export LOCK_FILE LOCK_OWNER ONECEO_DEBUG_START_SCRIPT ONECEO_DEBUG_RUNTIME_VERSION ONECEO_DEBUG_CONFIG_VERSION ONECEO_DEBUG_MANIFEST ONECEO_DEBUG_NEKO_PORT ONECEO_DEBUG_CDP_PORT',
+    'export -f run_locked_start write_lock_owner read_lock_owner_pid debug_runtime_ready_after_lock',
     'if command -v flock >/dev/null 2>&1; then',
-    `  if flock -E 42 -w 20 "$LOCK_FILE" bash ${shellEscape(DEBUG_BROWSER_START_SCRIPT)} > ${shellEscape(DEBUG_BROWSER_START_LOG)} 2>&1; then`,
+    '  if flock -E 42 -w 20 "$LOCK_FILE" bash -c \'run_locked_start\' ; then',
     '    :',
     '  else',
     '    status=$?',
     '    if [ "$status" = "42" ]; then',
+    '      describe_lock_owner',
+    '      holder_status=0',
+    '      lock_has_live_holder || holder_status=$?',
+    '      if [ "$holder_status" = "1" ]; then',
+    '        echo "[neko] debug browser stale lock suspected; clearing owner marker and retrying once" >&2',
+    '        rm -f "$LOCK_OWNER" "$LOCK_FILE" 2>/dev/null || true',
+    '        if flock -E 42 -w 5 "$LOCK_FILE" bash -c \'run_locked_start\' ; then',
+    '          exit 0',
+    '        fi',
+    '        status=$?',
+    '      elif [ "$holder_status" = "2" ]; then',
+    '        echo "[neko] debug browser lock holder could not be inspected; refusing stale cleanup" >&2',
+    '      fi',
     '      echo "[neko] debug browser lock timeout" >&2',
-    '      exit 42',
+    '      exit "$status"',
     '    fi',
     '    exit "$status"',
     '  fi',
@@ -532,10 +630,26 @@ function buildNekoStartCommand(startScript: string): string {
     '    sleep 0.5',
     '  done',
     '  if [ "$acquired" != "true" ]; then',
-    '    echo "[neko] debug browser lock timeout" >&2',
-    '    exit 42',
+    '    describe_lock_owner',
+    '    owner_pid="$(read_lock_owner_pid)"',
+    '    if [ -n "$owner_pid" ] && ! kill -0 "$owner_pid" 2>/dev/null; then',
+    '      echo "[neko] debug browser stale lockdir owner pid=$owner_pid; retrying once" >&2',
+    '      rm -rf "$LOCK_DIR" "$LOCK_OWNER" 2>/dev/null || true',
+    '      if mkdir "$LOCK_DIR" 2>/dev/null; then',
+    '        acquired="true"',
+    '      fi',
+    '    fi',
+    '    if [ "$acquired" != "true" ]; then',
+    '      echo "[neko] debug browser lock timeout" >&2',
+    '      exit 42',
+    '    fi',
     '  fi',
-    '  trap \'rmdir "$LOCK_DIR" 2>/dev/null || true\' EXIT',
+    '  write_lock_owner',
+    '  trap \'rm -f "$LOCK_OWNER"; rmdir "$LOCK_DIR" 2>/dev/null || true\' EXIT',
+    '  if debug_runtime_ready_after_lock; then',
+    '    echo "[neko] debug browser already ready after lockdir acquisition; skipping restart"',
+    '    exit 0',
+    '  fi',
     `  bash ${shellEscape(DEBUG_BROWSER_START_SCRIPT)} > ${shellEscape(DEBUG_BROWSER_START_LOG)} 2>&1`,
     'fi',
   ].join('\n');
@@ -731,6 +845,7 @@ write_manifest() {
 {
   "schemaVersion": 1,
   "runtimeVersion": "$RUNTIME_VERSION",
+  "configVersion": "${configVersion}",
   "status": "$status",
   "message": "$message",
   "ports": {
@@ -1027,6 +1142,7 @@ if [[ "$cdp_ready" != "true" ]]; then
     --no-sandbox \
     --disable-gpu \
     --disable-dev-shm-usage \
+    --remote-debugging-address=127.0.0.1 \
     --remote-debugging-port=${cdpPort} \
     --user-data-dir="$NEKO_RUNTIME_ROOT/chromium-profile" \
     --no-first-run \
@@ -1085,8 +1201,7 @@ write_manifest "running" "debug browser ready"
   const existingAutoNat = asBoolean(nekoMeta.autoNat, false);
   const existingAuthProvider = asText(nekoMeta.authProvider);
   const existingRuntimeVersion = asText(nekoMeta.runtimeVersion);
-  const existingStatus = asText(nekoMeta.status).toLowerCase();
-  const shouldRefresh =
+  const configMismatch =
     existingRuntimeVersion !== DEBUG_BROWSER_RUNTIME_VERSION ||
     existingVersion !== configVersion ||
     existingPort !== nekoPort ||
@@ -1097,11 +1212,11 @@ write_manifest "running" "debug browser ready"
     existingForceMux !== forceMux ||
     existingIceLite !== iceLite ||
     existingAutoNat !== autoNat ||
-    existingAuthProvider !== 'noauth' ||
-    existingStatus === 'failed';
+    existingAuthProvider !== 'noauth';
 
   let nekoReady = await probeNeko(orchestratorSessionId, nekoPort);
   let cdpReady = await probeChromiumCdp(orchestratorSessionId, cdpPort);
+  const shouldRefresh = configMismatch || !nekoReady || !cdpReady;
   if (!nekoReady || !cdpReady || shouldRefresh) {
     const check = await e2bConnector.runCommand(
       orchestratorSessionId,
@@ -1110,9 +1225,13 @@ write_manifest "running" "debug browser ready"
     );
     const installed = (check?.stdout || '').trim() === 'OK';
     try {
-      await e2bConnector.runCommand(orchestratorSessionId, `bash -lc ${shellEscape(buildNekoStartCommand(startCommand))}`, {
-        timeoutMs: installed ? 2 * 60 * 1000 : 15 * 60 * 1000,
-      });
+      await e2bConnector.runCommand(
+        orchestratorSessionId,
+        `bash -lc ${shellEscape(buildNekoStartCommand(startCommand, { nekoPort, cdpPort, configVersion }))}`,
+        {
+          timeoutMs: installed ? 2 * 60 * 1000 : 15 * 60 * 1000,
+        }
+      );
     } catch (error) {
       const record = error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
       const exitCodeCandidate = Number(record.exitCode ?? record.code ?? 1);
@@ -1126,6 +1245,61 @@ write_manifest "running" "debug browser ready"
         await collectNekoDebugDiagnostics(orchestratorSessionId),
         startFailure
       );
+      const reconciledNekoReady = await probeNeko(orchestratorSessionId, nekoPort);
+      const reconciledCdpReady = await probeChromiumCdp(orchestratorSessionId, cdpPort);
+      const reconciledDiagnostics = diagnostics;
+      if (
+        reconciledNekoReady &&
+        reconciledCdpReady &&
+        manifestMatchesDebugRuntime(reconciledDiagnostics.manifest, configVersion) &&
+        (!strictIceCheck || !(await probeNekoIceHealth(orchestratorSessionId)).failed)
+      ) {
+        const host = await e2bConnector.getSandboxHost(orchestratorSessionId, nekoPort);
+        const baseUrl = `https://${host}`;
+        const clientUrl = buildNekoClientUrl(baseUrl);
+        await updateMetadata({
+          baseUrl,
+          clientUrl,
+          port: nekoPort,
+          display,
+          cdpPort,
+          screenWidth,
+          screenHeight,
+          tcpMuxPort,
+          udpMuxPort,
+          nat1To1: nat1To1 || '',
+          webrtcMode: useMux ? 'mux' : 'epr',
+          webrtcEpr: webrtcEpr || '',
+          forceMux,
+          iceLite,
+          autoNat,
+          authProvider: 'noauth',
+          configVersion,
+          turnConfigured,
+          requireTurn,
+          strictIceCheck,
+          iceServers,
+          diagnostics: reconciledDiagnostics,
+          status: 'running',
+          reasonCode: undefined,
+          failureLayer: undefined,
+          nextAction: undefined,
+          message: undefined,
+          runtimeVersion: DEBUG_BROWSER_RUNTIME_VERSION,
+        });
+        return {
+          ready: true,
+          url: clientUrl,
+          status: 'running',
+          updatedAt: new Date().toISOString(),
+          sandboxId: orchestratorSessionId,
+          port: nekoPort,
+          display,
+          cdpPort,
+          screenWidth,
+          screenHeight,
+        };
+      }
       const reasonCode = classifyNekoStartFailure(startFailure);
       const message = buildNekoStartFailureMessage(reasonCode);
       const host = await e2bConnector.getSandboxHost(orchestratorSessionId, nekoPort).catch(() => '');

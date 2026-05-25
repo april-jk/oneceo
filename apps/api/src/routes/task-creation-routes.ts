@@ -3290,6 +3290,41 @@ function buildTimelinePage(messages: TimelineMessage[]) {
   };
 }
 
+function resolveTimelineMessageKey(message: any): string {
+  return asText(message?.messageKey) || asText(pickRecord(message?.metadata).messageKey);
+}
+
+function isRecentRedisPageFresh(input: {
+  redisPage: Record<string, unknown>;
+  latestDbMessages: TimelineMessage[];
+}) {
+  const redisMessages = Array.isArray(input.redisPage.messages)
+    ? (input.redisPage.messages as TimelineMessage[])
+    : [];
+  const dbMessages = Array.isArray(input.latestDbMessages) ? input.latestDbMessages : [];
+  if (dbMessages.length === 0) {
+    return redisMessages.length === 0;
+  }
+  if (redisMessages.length === 0) {
+    return false;
+  }
+
+  const redisLatest = redisMessages[redisMessages.length - 1];
+  const dbLatest = dbMessages[dbMessages.length - 1];
+  const redisNewestCursor =
+    asTimelineCursor(input.redisPage.newestCursor) ?? resolveMessageTimelineCursor(redisLatest);
+  const dbNewestCursor = resolveMessageTimelineCursor(dbLatest);
+  if (redisNewestCursor !== dbNewestCursor) {
+    return false;
+  }
+  const redisMessageKey = resolveTimelineMessageKey(redisLatest);
+  const dbMessageKey = resolveTimelineMessageKey(dbLatest);
+  if (dbMessageKey && redisMessageKey !== dbMessageKey) {
+    return false;
+  }
+  return true;
+}
+
 function hasLegacyRecentNoise(messages: TimelineMessage[]) {
   return messages.some((message) => {
     const content = asText(message?.content);
@@ -4905,7 +4940,7 @@ router.get('/sessions/:sessionId', async (req, res) => {
 
 /**
  * GET /api/task-creation/sessions/:sessionId/messages/recent
- * 首屏最近消息热缓存，仅依赖数据库
+ * 首屏最近消息热缓存；Redis 命中必须先和 DB recent 最新消息对账。
  */
 router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
   try {
@@ -4924,10 +4959,23 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
         tenantKey,
       });
       if (redisCachedPage) {
-        return res.json({
-          success: true,
-          data: redisCachedPage,
-        });
+        const latestCachedMessages = await taskCreationSessionDAO.getRecentMessages(sessionId, 1);
+        const latestRecentMessages = filterLegacyTimelineNoise(
+          injectRuntimeGenerationBoundaries(
+            annotateRuntimeGenerations(mapStoredMessagesToTimeline(latestCachedMessages), session?.runtime)
+          )
+        );
+        if (
+          isRecentRedisPageFresh({
+            redisPage: redisCachedPage,
+            latestDbMessages: latestRecentMessages,
+          })
+        ) {
+          return res.json({
+            success: true,
+            data: redisCachedPage,
+          });
+        }
       }
     }
     const cachedMessages = await taskCreationSessionDAO.getRecentMessages(sessionId, 50);

@@ -1570,6 +1570,44 @@ function normalizeAgentMessageIdentity(message: AgentMessage): AgentMessage {
   };
 }
 
+function resolveAgentMessageTimelineCursor(message: Partial<AgentMessage>): number | null {
+  const metadata = toRecord(message.metadata);
+  return (
+    asPositiveInt((message as { timelineCursor?: unknown }).timelineCursor) ??
+    asPositiveInt(metadata.timelineCursor) ??
+    asPositiveInt(metadata.sessionEventSeq) ??
+    asPositiveInt(metadata.timestamp)
+  );
+}
+
+function orderAgentMessagesByTimeline(messages: AgentMessage[]): AgentMessage[] {
+  const indexed = messages.map((message, index) => ({
+    message,
+    index,
+    cursor: resolveAgentMessageTimelineCursor(message),
+  }));
+  const hasSortablePair = indexed.some((left, leftIndex) =>
+    indexed.some(
+      (right, rightIndex) =>
+        rightIndex > leftIndex &&
+        left.cursor !== null &&
+        right.cursor !== null &&
+        left.cursor !== right.cursor
+    )
+  );
+  if (!hasSortablePair) {
+    return messages;
+  }
+  return indexed
+    .sort((left, right) => {
+      if (left.cursor !== null && right.cursor !== null && left.cursor !== right.cursor) {
+        return left.cursor - right.cursor;
+      }
+      return left.index - right.index;
+    })
+    .map((item) => item.message);
+}
+
 function isManagedAssistantMessage(message: Partial<AgentMessage>): boolean {
   if (message.type !== 'agent_message') return false;
   const metadata = toRecord(message.metadata);
@@ -2006,12 +2044,12 @@ export function mergeRealtimeMessage(
       };
       return next;
     }
-    return [...prev, message];
+    return orderAgentMessagesByTimeline([...prev, message]);
   }
   if (message.type === 'opencode_event' && isNonTextPartEvent(metadata)) {
     const streamKey = resolveStreamKeyFromMetadata(metadata);
     if (!streamKey) {
-      return [...prev, message];
+      return orderAgentMessagesByTimeline([...prev, message]);
     }
 
     const idx = prev.findIndex((item) => {
@@ -2038,12 +2076,12 @@ export function mergeRealtimeMessage(
       return next;
     }
 
-    return [...prev, message];
+    return orderAgentMessagesByTimeline([...prev, message]);
   }
   if (message.type === 'opencode_event' && isTextStreamEvent(metadata, message.content)) {
     const streamKey = resolveTextStreamKeyFromMetadata(metadata);
     if (!streamKey) {
-      return [...prev, message];
+      return orderAgentMessagesByTimeline([...prev, message]);
     }
 
     const idx = prev.findIndex((item) => {
@@ -2076,19 +2114,19 @@ export function mergeRealtimeMessage(
       return next;
     }
 
-    return [...prev, message];
+    return orderAgentMessagesByTimeline([...prev, message]);
   }
 
   if (message.type === 'opencode_event' && asText(metadata.eventType) === 'message.final') {
     const finalStreamKey = resolveTextStreamKeyFromMetadata(metadata);
     if (!finalStreamKey) {
-      return [...prev, message];
+      return orderAgentMessagesByTimeline([...prev, message]);
     }
     const filtered = prev.filter((item) => {
       if (item.type !== 'opencode_event') return true;
       return resolveAgentMessageKey(item) !== messageKey;
     });
-    return [...filtered, message];
+    return orderAgentMessagesByTimeline([...filtered, message]);
   }
 
   if (message.type === 'status_update' && isTerminalOpencodeMessage(message)) {
@@ -2105,10 +2143,10 @@ export function mergeRealtimeMessage(
     if (exists) {
       return prev;
     }
-    return [...prev, message];
+    return orderAgentMessagesByTimeline([...prev, message]);
   }
 
-  return [...prev, message];
+  return orderAgentMessagesByTimeline([...prev, message]);
 }
 
 function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreationHistoryMessage[] {
@@ -2358,7 +2396,7 @@ export function mergeHistoryAgentMessages(base: AgentMessage[], incoming: AgentM
     indexByKey.set(key, merged.length);
     merged.push(item);
   }
-  return merged;
+  return orderAgentMessagesByTimeline(merged);
 }
 
 export function reconcileHistoryWithPendingLocalMessages(
@@ -2569,7 +2607,12 @@ export function primeOptimisticHistoryViewCache(input: {
 }
 
 function mapHistoryMessageToAgentMessage(item: TaskCreationHistoryMessage, historySessionId: string): AgentMessage | null {
-  const metadata = item?.metadata || {};
+  const metadata: Record<string, unknown> = {
+    ...(item?.metadata || {}),
+    ...(asPositiveInt(item?.timelineCursor) !== null && asPositiveInt(toRecord(item?.metadata).timelineCursor) === null
+      ? { timelineCursor: asPositiveInt(item?.timelineCursor) }
+      : {}),
+  };
   const messageType = item?.messageType;
   const role = item?.role;
   const id = item?.id;
@@ -4420,6 +4463,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const normalizeHistoryMessages = useCallback(
     (historySessionId: string, list: TaskCreationHistoryMessage[]) => {
       const ordered = [...list].sort((a, b) => {
+        const ca = asPositiveInt((a as { timelineCursor?: unknown })?.timelineCursor) ?? asPositiveInt(toRecord(a?.metadata).timelineCursor);
+        const cb = asPositiveInt((b as { timelineCursor?: unknown })?.timelineCursor) ?? asPositiveInt(toRecord(b?.metadata).timelineCursor);
+        if (ca !== null && cb !== null && ca !== cb) return ca - cb;
         const sa = asPositiveInt(toRecord(a?.metadata).sessionEventSeq);
         const sb = asPositiveInt(toRecord(b?.metadata).sessionEventSeq);
         if (sa !== null && sb !== null && sa !== sb) return sa - sb;

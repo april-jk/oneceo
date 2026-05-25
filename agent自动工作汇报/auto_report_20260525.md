@@ -76,3 +76,21 @@
 3. `TMPDIR=/private/tmp pnpm --filter api exec tsx --test tests/sandbox-debug-service.test.ts`：17/17 通过。
 4. `pnpm --filter api type-check`：通过。
 5. 真实 sandbox `ifejcjlfezwwlt41lrxyh` 验证：修复后的 `ensureNekoDebug()` 返回 `ready=true`、`status=running`、`url=https://8081-ifejcjlfezwwlt41lrxyh.e2b.app`。
+
+## 会话消息乱序稳定化
+
+做了什么：
+
+1. 排查 recent/history、Redis 页面缓存、DB timeline 与前端合并逻辑，确认乱序风险来自展示层没有始终把 `timeline_cursor` 当作第一排序事实源。
+2. 后端 `messages/recent` / `messages/history` 的游标计算改为优先使用 top-level `timelineCursor` / `metadata.timelineCursor`，旧数据缺失时再退回 `sessionEventSeq`、时间戳和 `createdAt`。
+3. 后端 timeline 响应补齐 `timelineCursor` 透传，避免前端只能依赖时间戳推断顺序。
+4. 前端历史合并和实时追加增加稳定排序：双方都有可比较 timeline cursor 时按 cursor 排序；缺失 cursor 的旧消息保持原相对顺序，避免强行误排。
+5. 更新 recent/history 设计文档，明确前后端展示排序也必须以 `timeline_cursor` 为第一依据。
+
+验证结果：
+
+1. `pnpm --filter web exec vitest run src/tests/managed-mixed-timeline-render.test.ts`：4/4 通过。
+2. `pnpm --filter api type-check`：通过。
+3. `pnpm --filter web exec tsc --noEmit`：首次发现 metadata 类型收窄问题，修复后复跑通过。
+4. `pnpm --filter web check`：通过。
+5. `git diff --check`：通过。

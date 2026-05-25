@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentMessage } from '@/hooks/useTaskCreationAgent';
+import {
+  mergeHistoryAgentMessages,
+  mergeRealtimeMessage,
+  type AgentMessage,
+} from '@/hooks/useTaskCreationAgent';
 import { buildChatItems } from '@/pages/Home';
 
 describe('managed mixed timeline render', () => {
@@ -90,5 +94,60 @@ describe('managed mixed timeline render', () => {
     expect(agentItem?.markdown).toContain('这是刷新后从历史恢复的 managed 最终答复');
     expect(agentItem?.markdown).not.toContain('**Altus**');
     expect(agentItem?.markdown).not.toContain('**智能体**');
+  });
+
+  it('orders merged history by timeline cursor after refresh', () => {
+    const messages = mergeHistoryAgentMessages(
+      [
+        {
+          type: 'agent_message',
+          messageKey: 'assistant-2',
+          content: '第二条回复',
+          metadata: { timelineCursor: 30 },
+        },
+      ],
+      [
+        {
+          type: 'user_input',
+          messageKey: 'user-1',
+          content: '第一条用户消息',
+          metadata: { timelineCursor: 10 },
+        },
+        {
+          type: 'agent_message',
+          messageKey: 'assistant-1',
+          content: '第一条回复',
+          metadata: { timelineCursor: 20 },
+        },
+      ],
+    );
+
+    expect(messages.map((message) => message.messageKey)).toEqual([
+      'user-1',
+      'assistant-1',
+      'assistant-2',
+    ]);
+  });
+
+  it('inserts late realtime messages according to timeline cursor', () => {
+    const messages = mergeRealtimeMessage(
+      [
+        {
+          type: 'agent_message',
+          messageKey: 'assistant-2',
+          content: '第二条回复',
+          metadata: { timelineCursor: 30 },
+        },
+      ],
+      {
+        type: 'user_input',
+        messageKey: 'user-1',
+        content: '第一条用户消息',
+        metadata: { timelineCursor: 10 },
+      },
+      '',
+    );
+
+    expect(messages.map((message) => message.messageKey)).toEqual(['user-1', 'assistant-2']);
   });
 });

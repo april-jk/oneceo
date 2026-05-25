@@ -2541,6 +2541,12 @@ function asTimelineCursor(value: unknown): number | null {
 
 function resolveMessageTimelineCursor(message: any): number {
   const metadata = pickRecord(message?.metadata);
+  const topLevelTimelineCursor = asTimelineCursor(message?.timelineCursor);
+  if (topLevelTimelineCursor !== null) return topLevelTimelineCursor;
+
+  const metadataTimelineCursor = asTimelineCursor(metadata.timelineCursor);
+  if (metadataTimelineCursor !== null) return metadataTimelineCursor;
+
   const sessionEventSeq = asPositiveInt(metadata.sessionEventSeq);
   if (sessionEventSeq !== null) return sessionEventSeq;
 
@@ -3108,6 +3114,7 @@ type TimelineMessage = {
   messageType: string;
   content: string;
   metadata?: Record<string, unknown>;
+  timelineCursor?: number | null;
   createdAt: string;
 };
 
@@ -3118,12 +3125,17 @@ function mapStoredMessagesToTimeline(
     messageType?: string | null;
     content?: string | null;
     metadata?: unknown;
+    timelineCursor?: number | null;
     createdAt?: unknown;
   }>
 ): TimelineMessage[] {
   return Array.isArray(messages)
     ? messages.map((message, idx) => {
         const sanitizedMetadata = sanitizeTimelineMetadataForClient(message.metadata);
+        const timelineCursor = asTimelineCursor(message.timelineCursor) ?? asTimelineCursor(sanitizedMetadata.timelineCursor);
+        if (timelineCursor !== null) {
+          sanitizedMetadata.timelineCursor = timelineCursor;
+        }
         const normalizedMetadata = normalizeMessageTimelineMetadata(
           sanitizedMetadata,
           message.createdAt,
@@ -3150,6 +3162,7 @@ function mapStoredMessagesToTimeline(
             ...normalizedMetadata,
             messageKey,
           },
+          timelineCursor,
           createdAt,
         };
       })
@@ -3163,12 +3176,17 @@ function attachTimelineMessageKeys(
     messageType: string;
     content: string;
     metadata?: Record<string, unknown>;
+    timelineCursor?: number | null;
     createdAt: string;
   }>
 ): TimelineMessage[] {
   return Array.isArray(messages)
     ? messages.map((message) => {
         const sanitizedMetadata = sanitizeTimelineMetadataForClient(message.metadata);
+        const timelineCursor = asTimelineCursor(message.timelineCursor) ?? asTimelineCursor(sanitizedMetadata.timelineCursor);
+        if (timelineCursor !== null) {
+          sanitizedMetadata.timelineCursor = timelineCursor;
+        }
         const messageKey = buildTimelineMessageKey({
           id: message.id,
           messageType: message.messageType,
@@ -3182,6 +3200,7 @@ function attachTimelineMessageKeys(
             ...sanitizedMetadata,
             messageKey,
           },
+          timelineCursor,
         };
       })
     : [];

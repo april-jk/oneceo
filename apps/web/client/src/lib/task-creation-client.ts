@@ -72,6 +72,7 @@ export type TaskCreationHistoryMessage = {
   content?: string;
   messageType?: string;
   metadata?: Record<string, unknown>;
+  timelineCursor?: number | null;
   createdAt?: string;
 };
 

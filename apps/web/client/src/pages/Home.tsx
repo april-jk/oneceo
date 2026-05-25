@@ -76,7 +76,10 @@ import ConnectorDialog from "@/components/ConnectorDialog";
 import VoiceInputButton from "@/components/VoiceInputButton";
 import AttachmentChipList from "@/components/AttachmentChipList";
 import AttachmentPickerButton from "@/components/AttachmentPickerButton";
-import MessageAttachmentReference from "@/components/MessageAttachmentReference";
+import {
+  MessageAttachmentFiles,
+  MessageInlineReferences,
+} from "@/components/MessageAttachmentReference";
 import OpencodePreviewPanel from "@/components/OpencodePreviewPanel";
 import AltusArtifactPreviewCard, {
   type AltusArtifactFile,
@@ -4295,6 +4298,7 @@ export type ChatItem =
       text: string;
       skills?: TaskCreationPlatformSkill[];
       attachments?: UploadedTaskAttachment[];
+      mcpReferences?: TaskCreationMcpReference[];
       messageKey?: string;
     }
   | {
@@ -4414,6 +4418,7 @@ export type ChatItem =
       userText: string;
       skills?: TaskCreationPlatformSkill[];
       attachments?: UploadedTaskAttachment[];
+      mcpReferences?: TaskCreationMcpReference[];
       userMessageKey?: string;
       assistantParts: OpencodeTurnPart[];
       working?: boolean;
@@ -4777,13 +4782,15 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     text: string,
     skills?: TaskCreationPlatformSkill[],
     attachments?: UploadedTaskAttachment[],
+    mcpReferences?: TaskCreationMcpReference[],
     messageKey?: string,
   ) => {
     const normalized = normalizeForDedup(text);
     if (
       !normalized &&
       (!skills || skills.length === 0) &&
-      (!attachments || attachments.length === 0)
+      (!attachments || attachments.length === 0) &&
+      (!mcpReferences || mcpReferences.length === 0)
     ) {
       return;
     }
@@ -4796,7 +4803,9 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       normalizeForDedup(last.text) === normalized &&
       JSON.stringify(last.skills || []) === JSON.stringify(skills || []) &&
       JSON.stringify(last.attachments || []) ===
-        JSON.stringify(attachments || [])
+        JSON.stringify(attachments || []) &&
+      JSON.stringify(last.mcpReferences || []) ===
+        JSON.stringify(mcpReferences || [])
     ) {
       return;
     }
@@ -4805,6 +4814,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       text,
       skills,
       attachments,
+      mcpReferences,
       messageKey,
     });
   };
@@ -5017,6 +5027,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         resolvedUser.text,
         resolvedUser.skills,
         resolvedUser.attachments,
+        resolvedUser.mcpReferences,
         message.messageKey,
       );
       continue;
@@ -5942,6 +5953,7 @@ type DirectTurnDraft = {
   userText: string;
   skills?: TaskCreationPlatformSkill[];
   attachments?: UploadedTaskAttachment[];
+  mcpReferences?: TaskCreationMcpReference[];
   userMessageKey?: string;
   assistantParts: OpencodeTurnPart[];
   assistantPartIndex: Map<string, number>;
@@ -6014,12 +6026,14 @@ function createDirectTurnDraft(
   userText = "",
   skills?: TaskCreationPlatformSkill[],
   attachments?: UploadedTaskAttachment[],
+  mcpReferences?: TaskCreationMcpReference[],
   userMessageKey?: string,
 ): DirectTurnDraft {
   return {
     userText,
     skills,
     attachments,
+    mcpReferences,
     userMessageKey,
     assistantParts: [],
     assistantPartIndex: new Map<string, number>(),
@@ -6235,6 +6249,7 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
           resolvedUser.text,
           resolvedUser.skills,
           resolvedUser.attachments,
+          resolvedUser.mcpReferences,
           message.messageKey,
         ),
       );
@@ -6412,6 +6427,7 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
       userText: turn.userText,
       skills: turn.skills,
       attachments: turn.attachments,
+      mcpReferences: turn.mcpReferences,
       userMessageKey: turn.userMessageKey,
       assistantParts,
       working: turn.working,
@@ -6677,23 +6693,26 @@ function MessageBubble({
         className="w-full space-y-4"
         data-message-key={item.messageKey}
       >
-        <div
-          className="w-full flex justify-end"
-          data-message-key={item.userMessageKey}
-        >
-          <div className="max-w-[80%] space-y-2 rounded-md bg-slate-900 px-3 py-2 text-sm text-white">
-            {item.skills?.length || item.attachments?.length ? (
-              <MessageAttachmentReference
+        <div className="w-full" data-message-key={item.userMessageKey}>
+          <div className="flex justify-end">
+            <div className="max-w-[80%] space-y-1.5 rounded-md bg-slate-900 px-3 py-2 text-sm text-white">
+              <MessageInlineReferences
                 skills={item.skills}
-                attachments={item.attachments}
+                mcpReferences={item.mcpReferences}
                 tone="inverse"
               />
-            ) : null}
-            {item.userText ? (
-              <span className="whitespace-pre-wrap break-words">
-                {item.userText}
-              </span>
-            ) : null}
+              {item.userText ? (
+                <span className="whitespace-pre-wrap break-words">
+                  {item.userText}
+                </span>
+              ) : null}
+            </div>
+          </div>
+          <div className="mt-1.5 flex justify-end">
+            <MessageAttachmentFiles
+              attachments={item.attachments}
+              className="max-w-[80%]"
+            />
           </div>
         </div>
 
@@ -6842,17 +6861,20 @@ function MessageBubble({
         className="w-full flex justify-end"
         data-message-key={item.messageKey}
       >
-        <div className="max-w-[80%] space-y-2 rounded-md bg-slate-900 px-3 py-2 text-sm text-white">
-          {item.skills?.length || item.attachments?.length ? (
-            <MessageAttachmentReference
+        <div className="flex max-w-[80%] flex-col items-end">
+          <div className="space-y-1.5 rounded-md bg-slate-900 px-3 py-2 text-sm text-white">
+            <MessageInlineReferences
               skills={item.skills}
-              attachments={item.attachments}
+              mcpReferences={item.mcpReferences}
               tone="inverse"
             />
-          ) : null}
-          {item.text ? (
-            <span className="whitespace-pre-wrap break-words">{item.text}</span>
-          ) : null}
+            {item.text ? (
+              <span className="whitespace-pre-wrap break-words">
+                {item.text}
+              </span>
+            ) : null}
+          </div>
+          <MessageAttachmentFiles attachments={item.attachments} className="mt-1.5" />
         </div>
       </motion.div>
     );

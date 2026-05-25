@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ATTACHMENT_ACCEPT } from "@/lib/task-attachments";
+import { getSkillDisplayName } from "@/lib/skill-display-name";
 import {
   openSettingsDialog,
   TASK_CREATION_SKILLS_UPDATED_EVENT,
@@ -101,13 +102,13 @@ export default function AttachmentPickerButton({
     const skillKey = `${skill.skillId}:${skill.revisionId}`;
     if (selectedSkillKeys.has(skillKey)) {
       setMenuOpen(false);
-      toast.info(`已添加技能：${skill.name}`);
+      toast.info(`已添加技能：${getSkillDisplayName(skill)}`);
       return;
     }
     try {
       setMenuOpen(false);
       await Promise.resolve(onSelectSkills([skill]));
-      toast.success(t("attachmentPicker.toasts.skillAdded", { name: skill.name }));
+      toast.success(t("attachmentPicker.toasts.skillAdded", { name: getSkillDisplayName(skill) }));
     } catch (error) {
       const message = error instanceof Error ? error.message : t("attachmentPicker.toasts.skillAddFailed");
       toast.error(message);
@@ -188,7 +189,9 @@ export default function AttachmentPickerButton({
                       >
                         <Wrench className="h-4 w-4" />
                         <div className="flex min-w-0 flex-1 flex-col items-start">
-                          <span className="text-sm font-medium">{item.name}</span>
+                          <span className="text-sm font-medium" title={item.name}>
+                            {getSkillDisplayName(item)}
+                          </span>
                           <span className="text-xs text-muted-foreground">
                             {t(
                               item.sourceType === "custom"

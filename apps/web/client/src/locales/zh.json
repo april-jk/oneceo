@@ -294,6 +294,7 @@
     "attached": "已附加",
     "skillsAndAttachments": "Skills 与附件",
     "attachments": "附件",
+    "connectors": "连接器",
     "itemCount": "{{count}} 项"
   },
   "taskDocumentsDialog": {

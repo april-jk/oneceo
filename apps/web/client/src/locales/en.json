@@ -294,6 +294,7 @@
     "attached": "Attached",
     "skillsAndAttachments": "Skills and attachments",
     "attachments": "Attachments",
+    "connectors": "Connectors",
     "itemCount": "{{count}} items"
   },
   "taskDocumentsDialog": {

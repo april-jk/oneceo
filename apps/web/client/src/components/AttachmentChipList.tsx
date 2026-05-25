@@ -8,6 +8,7 @@ import type {
 } from "@/lib/task-attachments";
 import type { TaskCreationUploadedAttachment as UploadedTaskAttachment } from "@/lib/task-creation-client";
 import { formatAttachmentSize } from "@/lib/task-attachments";
+import { getSkillDisplayName } from "@/lib/skill-display-name";
 import { cn } from "@/lib/utils";
 
 type AttachmentChipListProps = {
@@ -132,7 +133,9 @@ export default function AttachmentChipList({
               ) : (
                 <FileText className="h-3.5 w-3.5 shrink-0" />
               )}
-              <span className="max-w-[160px] truncate font-medium">{attachment.name}</span>
+              <span className="max-w-[160px] truncate font-medium">
+                {isSkill ? getSkillDisplayName(skillAttachment) : attachment.name}
+              </span>
               {isSkill ? (
                 <span className={cn("shrink-0 text-[11px]", metaTone)}>
                   rev.{skillAttachment.revisionNumber}

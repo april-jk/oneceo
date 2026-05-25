@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { taskCreationSessionDAO } from '../db/dao/task-creation-session.dao';
@@ -17,6 +18,20 @@ function shellEscape(value: string): string {
 }
 
 export const SESSION_ALTUS_MEMORY_RELATIVE_PATH = '.oneceo/session-memory/altus-memory.json';
+
+export type AltusSessionLlmContext = {
+  contextId: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  lastRunId: string | null;
+  lastModel: string | null;
+  lastProvider: string | null;
+  callCount: number;
+  lastPromptTokens: number;
+  lastCachedTokens: number;
+  lastCacheCreationTokens: number;
+  lastCacheHitRatio: number;
+};
 
 export type AltusSessionMemory = {
   version: number;
@@ -42,6 +57,7 @@ export type AltusSessionMemory = {
   };
   updatedAt: string | null;
   lastWriterRunId: string | null;
+  llmContext?: AltusSessionLlmContext;
 };
 
 type SandboxAltusFileMemory = {
@@ -67,6 +83,64 @@ const LIMITS = {
   decisions: 12,
   workingNotes: 20,
 } as const;
+
+const DEFAULT_CACHE_HIT_RATIO = 0;
+
+function asNonNegativeInteger(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.floor(value));
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
+  }
+  return 0;
+}
+
+function asRatio(value: unknown, fallback = DEFAULT_CACHE_HIT_RATIO) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.min(1, Math.max(0, value));
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return Math.min(1, Math.max(0, parsed));
+    }
+  }
+  return fallback;
+}
+
+function emptyLlmContext(): AltusSessionLlmContext {
+  return {
+    contextId: null,
+    createdAt: null,
+    updatedAt: null,
+    lastRunId: null,
+    lastModel: null,
+    lastProvider: null,
+    callCount: 0,
+    lastPromptTokens: 0,
+    lastCachedTokens: 0,
+    lastCacheCreationTokens: 0,
+    lastCacheHitRatio: DEFAULT_CACHE_HIT_RATIO,
+  };
+}
+
+function readLlmContext(value: unknown): AltusSessionLlmContext {
+  const record = asRecord(value);
+  const fallback = emptyLlmContext();
+  return {
+    contextId: asText(record.contextId).slice(0, 160) || null,
+    createdAt: asText(record.createdAt) || null,
+    updatedAt: asText(record.updatedAt) || null,
+    lastRunId: asText(record.lastRunId).slice(0, 120) || null,
+    lastModel: asText(record.lastModel).slice(0, 160) || null,
+    lastProvider: asText(record.lastProvider).slice(0, 64) || null,
+    callCount: asNonNegativeInteger(record.callCount),
+    lastPromptTokens: asNonNegativeInteger(record.lastPromptTokens),
+    lastCachedTokens: asNonNegativeInteger(record.lastCachedTokens),
+    lastCacheCreationTokens: asNonNegativeInteger(record.lastCacheCreationTokens),
+    lastCacheHitRatio: asRatio(record.lastCacheHitRatio, fallback.lastCacheHitRatio),
+  };
+}
 
 function buildMemoryPath(workspaceRoot: string) {
   return path.posix.join(workspaceRoot, SESSION_ALTUS_MEMORY_RELATIVE_PATH);
@@ -106,6 +180,7 @@ function emptyState(): AltusSessionMemory {
     },
     updatedAt: null,
     lastWriterRunId: null,
+    llmContext: emptyLlmContext(),
   };
 }
 
@@ -148,6 +223,7 @@ export function readSessionAltusMemory(value: unknown): AltusSessionMemory {
     },
     updatedAt: asText(record.updatedAt) || null,
     lastWriterRunId: asText(record.lastWriterRunId) || null,
+    llmContext: readLlmContext(record.llmContext),
   };
 }
 
@@ -162,6 +238,7 @@ function serializeState(state: AltusSessionMemory): Record<string, unknown> {
     fileMemorySnapshot: state.fileMemorySnapshot,
     updatedAt: state.updatedAt,
     lastWriterRunId: state.lastWriterRunId,
+    llmContext: readLlmContext(state.llmContext),
   };
 }
 
@@ -306,6 +383,75 @@ export class TaskSessionAltusMemoryService {
     return readSessionAltusMemory(
       asRecord(patched?.metadataJson)[ALTUS_SESSION_MEMORY_KEY] ?? serializeState(normalized)
     );
+  }
+
+  async ensureLlmContextAnchor(input: {
+    sessionId: string;
+    runId?: string | null;
+    model?: string | null;
+    provider?: string | null;
+  }) {
+    const current = await this.getSessionAltusMemory(input.sessionId);
+    const now = new Date().toISOString();
+    const currentContext = readLlmContext(current.llmContext);
+    const nextContext: AltusSessionLlmContext = {
+      ...currentContext,
+      contextId: currentContext.contextId || `altus_ctx_${randomUUID()}`,
+      createdAt: currentContext.createdAt || now,
+      updatedAt: now,
+      lastRunId: asText(input.runId) || currentContext.lastRunId,
+      lastModel: asText(input.model) || currentContext.lastModel,
+      lastProvider: asText(input.provider) || currentContext.lastProvider,
+    };
+    const nextState: AltusSessionMemory = {
+      ...current,
+      llmContext: nextContext,
+      updatedAt: now,
+      lastWriterRunId: asText(input.runId) || current.lastWriterRunId,
+    };
+    return this.saveSessionAltusMemory(input.sessionId, nextState);
+  }
+
+  async recordLlmContextUsage(input: {
+    sessionId: string;
+    runId?: string | null;
+    model?: string | null;
+    provider?: string | null;
+    promptTokens?: number | null;
+    cachedTokens?: number | null;
+    cacheCreationTokens?: number | null;
+  }) {
+    const current = await this.getSessionAltusMemory(input.sessionId);
+    const now = new Date().toISOString();
+    const currentContext = readLlmContext(current.llmContext);
+    const promptTokens = asNonNegativeInteger(input.promptTokens);
+    const cachedTokens = asNonNegativeInteger(input.cachedTokens);
+    const cacheCreationTokens = asNonNegativeInteger(input.cacheCreationTokens);
+    const cacheHitRatio =
+      promptTokens > 0
+        ? Math.min(1, Math.max(0, Number((cachedTokens / promptTokens).toFixed(6))))
+        : currentContext.lastCacheHitRatio;
+    const nextContext: AltusSessionLlmContext = {
+      ...currentContext,
+      contextId: currentContext.contextId || `altus_ctx_${randomUUID()}`,
+      createdAt: currentContext.createdAt || now,
+      updatedAt: now,
+      lastRunId: asText(input.runId) || currentContext.lastRunId,
+      lastModel: asText(input.model) || currentContext.lastModel,
+      lastProvider: asText(input.provider) || currentContext.lastProvider,
+      callCount: currentContext.callCount + 1,
+      lastPromptTokens: promptTokens,
+      lastCachedTokens: cachedTokens,
+      lastCacheCreationTokens: cacheCreationTokens,
+      lastCacheHitRatio: cacheHitRatio,
+    };
+    const nextState: AltusSessionMemory = {
+      ...current,
+      llmContext: nextContext,
+      updatedAt: now,
+      lastWriterRunId: asText(input.runId) || current.lastWriterRunId,
+    };
+    return this.saveSessionAltusMemory(input.sessionId, nextState);
   }
 
   async writeSandboxFileMemory(input: {

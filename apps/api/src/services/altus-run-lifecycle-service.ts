@@ -5,18 +5,10 @@ import { AltusManagedSetupService, altusManagedSetupService } from './altus-mana
 import { AltusRunEventWriter, altusRunEventWriter } from './altus-run-event-writer';
 import { altusRunRecoveryService, AltusRunRecoveryService } from './altus-run-recovery-service';
 import { createAltusRunLoopSnapshot, type AltusRunLoopUpdate } from './altus-run-loop-state';
+import { buildAltusRunFailureDescriptor } from './altus-run-failure-view';
 
 const RUN_COMPLETED_TEXT = 'managed run 已完成';
 const RUN_STOPPED_TEXT = '已停止当前处理';
-
-function buildRunFailedUserMessage(message: string) {
-  const text = String(message || '').trim();
-  if (!text) {
-    return '本次执行失败，已停止当前任务。请检查模型与连接器配置后重试。';
-  }
-  const short = text.length > 800 ? `${text.slice(0, 800)}...` : text;
-  return `本次执行失败：${short}`;
-}
 
 export class AltusRunLifecycleService {
   constructor(
@@ -241,11 +233,15 @@ export class AltusRunLifecycleService {
     );
   }
 
-  async markFailed(state: AltusRunState, message: string) {
-    const userVisibleMessage = buildRunFailedUserMessage(message);
+  async markFailed(state: AltusRunState, message: string, options?: { userMessage?: string; reasonCode?: string }) {
+    const failure = buildAltusRunFailureDescriptor({
+      rawMessage: message,
+      userMessage: options?.userMessage,
+      reasonCode: options?.reasonCode,
+    });
     await taskSessionRunDAO.updateRunStatus(state.input.runId, 'failed', {
       completedAt: state.completedAt || new Date(),
-      stopReason: message,
+      stopReason: failure.stopReason,
     });
     await this.redisStateService.syncRunStatus({
       runId: state.input.runId,
@@ -254,7 +250,7 @@ export class AltusRunLifecycleService {
       model: state.input.model,
       status: 'failed',
       completedAt: state.completedAt || new Date(),
-      stopReason: message,
+      stopReason: failure.stopReason,
     });
     await this.redisStateService.clearStopRequest({
       runId: state.input.runId,
@@ -276,10 +272,11 @@ export class AltusRunLifecycleService {
       sessionId: state.input.sessionId,
       role: 'agent',
       messageType: 'assistant_message',
-      content: userVisibleMessage,
+      content: failure.userMessage,
       metadata: {
         runId: state.input.runId,
-        error: message,
+        error: failure.userMessage,
+        reasonCode: failure.reasonCode,
       },
       messageKey: `managed:${state.input.runId}:failed_assistant`,
     });
@@ -287,9 +284,11 @@ export class AltusRunLifecycleService {
       sessionId: state.input.sessionId,
       role: 'system',
       messageType: 'error',
-      content: `Altus managed 运行失败：${message}`,
+      content: failure.userMessage,
       metadata: {
         runId: state.input.runId,
+        error: failure.userMessage,
+        reasonCode: failure.reasonCode,
       },
       messageKey: `managed:${state.input.runId}:failed`,
     });
@@ -300,8 +299,14 @@ export class AltusRunLifecycleService {
       'run_failed',
       {
       status: 'failed',
-      content: `Altus managed 运行失败：${message}`,
-      error: message,
+      content: failure.userMessage,
+      error: failure.userMessage,
+      reasonCode: failure.reasonCode,
+      internalView: failure.rawMessage
+        ? {
+            detail: failure.rawMessage,
+          }
+        : undefined,
       }
     );
   }

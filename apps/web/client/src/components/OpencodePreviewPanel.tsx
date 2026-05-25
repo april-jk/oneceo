@@ -1380,6 +1380,10 @@ export default function OpencodePreviewPanel({
                 }
                 return;
               }
+              if (debugPreview.debugInfo?.ready && debugPreview.debugInfo.url) {
+                await debugPreview.refreshDebug();
+                return;
+              }
               if (!onRequestStartDebugByMessage) {
                 debugPreview.setDebugError(
                   i18n.t("previewPanel.debug.missingStartEntry"),
@@ -6411,6 +6415,10 @@ export function DebugPreview({
 
   const requestStartDebug = () => {
     setStartRequested(true);
+    if (info?.ready && info.url) {
+      onStart();
+      return;
+    }
     if (onRequestStartDebugByMessage) {
       onRequestStartDebugByMessage();
       return;
@@ -6620,10 +6628,21 @@ export function DebugPreview({
   }
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-border">
-        <div className="text-xs text-muted-foreground">{i18n.t("previewPanel.debug.remoteBrowserDebug")}</div>
-        <div className="flex items-center gap-2">
+    <div className="group relative h-full min-h-0 overflow-hidden bg-background">
+      <iframe
+        ref={frameRef}
+        title="remote-debug"
+        src={debugUrl}
+        className="absolute inset-0 block h-full w-full border-0 bg-background"
+        allow="autoplay; clipboard-read; clipboard-write; fullscreen; microphone; camera; display-capture"
+        onLoad={() => {
+          setFrameLoading(false);
+          if (lockControlEnabled) {
+            requestNekoLockState(debugLocked);
+          }
+        }}
+      />
+      <div className="absolute right-3 top-3 z-30 flex items-center gap-2 rounded-md border border-border/80 bg-background/92 px-2 py-1 shadow-sm backdrop-blur">
           <Button
             type="button"
             variant={debugLocked ? "default" : "outline"}
@@ -6667,63 +6686,43 @@ export function DebugPreview({
           >
             {i18n.t("previewPanel.openInNewWindow")}
           </a>
-        </div>
       </div>
-      <div className="flex-1 min-h-0 p-3">
-        {!lockControlEnabled && bridgeWaitExpired ? (
-          <div className="mb-2 rounded-md border border-amber-300/70 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
-            {i18n.t("previewPanel.debug.bridgeUnavailable")}
-          </div>
-        ) : null}
-        <div
-          className="group relative h-full w-full rounded-xl border border-border overflow-hidden bg-black/5"
-        >
-          <iframe
-            ref={frameRef}
-            title="remote-debug"
-            src={debugUrl}
-            className="h-full w-full"
-            allow="autoplay; clipboard-read; clipboard-write; fullscreen; microphone; camera; display-capture"
-            onLoad={() => {
-              setFrameLoading(false);
-              if (lockControlEnabled) {
-                requestNekoLockState(debugLocked);
-              }
-            }}
+      {!lockControlEnabled && bridgeWaitExpired ? (
+        <div className="absolute left-3 top-3 z-30 max-w-[min(420px,calc(100%-1.5rem))] rounded-md border border-amber-300/70 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800 shadow-sm">
+          {i18n.t("previewPanel.debug.bridgeUnavailable")}
+        </div>
+      ) : null}
+      {frameLoading ? (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/88 backdrop-blur-sm">
+          <DebugConnectionLoadingState
+            text={i18n.t("previewPanel.debug.loading")}
+            compact
           />
-          {frameLoading ? (
-            <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/88 backdrop-blur-sm">
-              <DebugConnectionLoadingState
-                text={i18n.t("previewPanel.debug.loading")}
-                compact
-              />
-            </div>
-          ) : null}
-          {debugLocked ? (
-            <button
-              type="button"
-              className={cn(
-                "absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/10 opacity-0 transition-opacity duration-150",
-                lockControlEnabled
-                  ? "pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100"
-                  : "pointer-events-none opacity-0",
-              )}
-              onClick={() => {
-                if (!lockControlEnabled) return;
-                requestNekoLockState(false);
-              }}
-              aria-label={i18n.t("previewPanel.debug.unlockHintAria")}
-            >
-              <span className="flex h-24 w-24 items-center justify-center rounded-full border border-white/60 bg-black/40 text-white shadow-lg backdrop-blur-[2px]">
-                <Lock className="h-10 w-10" />
-              </span>
-              <span className="mt-3 rounded-full border border-white/30 bg-black/35 px-3 py-1 text-xs text-white/90">
-                {i18n.t("previewPanel.debug.clickToUnlock")}
-              </span>
-            </button>
-          ) : null}
         </div>
-      </div>
+      ) : null}
+      {debugLocked ? (
+        <button
+          type="button"
+          className={cn(
+            "absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/10 opacity-0 transition-opacity duration-150",
+            lockControlEnabled
+              ? "pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100"
+              : "pointer-events-none opacity-0",
+          )}
+          onClick={() => {
+            if (!lockControlEnabled) return;
+            requestNekoLockState(false);
+          }}
+          aria-label={i18n.t("previewPanel.debug.unlockHintAria")}
+        >
+          <span className="flex h-24 w-24 items-center justify-center rounded-full border border-white/60 bg-black/40 text-white shadow-lg backdrop-blur-[2px]">
+            <Lock className="h-10 w-10" />
+          </span>
+          <span className="mt-3 rounded-full border border-white/30 bg-black/35 px-3 py-1 text-xs text-white/90">
+            {i18n.t("previewPanel.debug.clickToUnlock")}
+          </span>
+        </button>
+      ) : null}
     </div>
   );
 }

@@ -13,6 +13,14 @@
 - Playwright 必须连接到 n.eko 正在回传的同一个 Chromium CDP 端口（默认 `http://127.0.0.1:9222`），不要启动独立浏览器。
 - `browser-use` 仅作为外部网站探索、导航和表单交互的辅助能力；需要复用调试浏览器时必须显式连接同一个 CDP。
 
+浏览器工具链默认固定为：
+
+- `playwright=1.60.0`
+- `@playwright/mcp=0.0.75`
+- `browser-use=0.12.8`
+
+升级版本时必须显式修改模板或通过构建环境变量覆盖，并同步记录模板名和回归结果。不要恢复 `@playwright/mcp@latest` 或未指定版本的 `browser-use` 安装方式。
+
 ## 构建
 
 需要本机已安装并登录 `e2b` CLI：
@@ -32,6 +40,9 @@ codex-ws-browseruse-playwright-sandbox-v1-20260426
 - `E2B_CODEX_WS_TEMPLATE`
 - `E2B_TEMPLATE_CODEX_WS`
 - `E2B_TEMPLATE_NAME`
+- `ONECEO_TEMPLATE_PLAYWRIGHT_VERSION`
+- `ONECEO_TEMPLATE_PLAYWRIGHT_MCP_VERSION`
+- `ONECEO_TEMPLATE_BROWSER_USE_VERSION`
 
 ## 使用
 

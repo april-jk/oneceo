@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  getWebsitePreviewSnapshotIssue,
   getScaledWebPreviewFrame,
+  resolveArtifactOpenTarget,
   resolveArtifactDeploymentPreviewUrl,
+  shouldShowArtifactSourceControls,
 } from "../components/AltusArtifactPreviewCard";
 
 describe("altus artifact preview card scaled web preview", () => {
@@ -18,6 +21,103 @@ describe("altus artifact preview card scaled web preview", () => {
       width: 1440,
       height: 500,
       scale: 1,
+    });
+  });
+});
+
+describe("altus artifact preview card delivery actions", () => {
+  it("hides source controls for website delivery cards", () => {
+    expect(shouldShowArtifactSourceControls("web-preview")).toBe(false);
+    expect(shouldShowArtifactSourceControls("artifact-browser")).toBe(true);
+  });
+
+  it("opens website delivery cards through remote debug instead of raw files", () => {
+    expect(
+      resolveArtifactOpenTarget({
+        displayMode: "web-preview",
+        remoteDebugAvailable: true,
+        selectedFileOpenUrl:
+          "/api/task-creation/sessions/session-1/workspace/raw/client/index.html",
+      }),
+    ).toEqual({ kind: "remote-debug" });
+  });
+
+  it("does not expose transient raw urls for website delivery cards without debug", () => {
+    expect(
+      resolveArtifactOpenTarget({
+        displayMode: "web-preview",
+        remoteDebugAvailable: false,
+        selectedFileOpenUrl:
+          "/api/task-creation/sessions/session-1/workspace/raw/client/index.html",
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps file url opening for regular artifact browsing", () => {
+    expect(
+      resolveArtifactOpenTarget({
+        displayMode: "artifact-browser",
+        remoteDebugAvailable: true,
+        selectedFileOpenUrl:
+          "/api/task-creation/sessions/session-1/workspace/raw/client/index.html",
+      }),
+    ).toEqual({
+      kind: "file-url",
+      url: "/api/task-creation/sessions/session-1/workspace/raw/client/index.html",
+    });
+  });
+});
+
+describe("altus artifact preview card snapshot issues", () => {
+  it("summarizes failed visual checks without duplicating the reason prefix", () => {
+    expect(
+      getWebsitePreviewSnapshotIssue({
+        kind: "website_screenshot",
+        status: "capture_failed",
+        reasonCode: "preview_visual_check_failed",
+        message: "app_runtime_error: 页面浏览器运行时报错：React is not defined",
+        visualCheck: {
+          status: "failed",
+          reasonCode: "app_runtime_error",
+          message: "页面浏览器运行时报错：React is not defined",
+        },
+      }),
+    ).toEqual({
+      reasonCode: "app_runtime_error",
+      message: "页面浏览器运行时报错：React is not defined",
+      visualStatus: "failed",
+      status: "capture_failed",
+    });
+  });
+
+  it("treats a captured screenshot with failed visualCheck as an issue", () => {
+    const issue = getWebsitePreviewSnapshotIssue({
+      kind: "website_screenshot",
+      status: "captured",
+      storageKey: "sessions/session-1/previews/run-1/snapshot.png",
+      visualCheck: {
+        status: "failed",
+        reasonCode: "visible_text_too_short",
+        message: "页面可见文本和元素过少，疑似白屏或空页面。",
+      },
+    });
+
+    expect(issue?.reasonCode).toBe("visible_text_too_short");
+  });
+
+  it("marks a missing snapshot image as a delivery preview issue", () => {
+    expect(
+      getWebsitePreviewSnapshotIssue(
+        {
+          kind: "website_screenshot",
+          status: "captured",
+          storageKey: "sessions/session-1/previews/run-1/snapshot.png",
+        },
+        { imageFailed: true, hasPreviewPath: true },
+      ),
+    ).toMatchObject({
+      reasonCode: "snapshot_image_load_failed",
+      status: "captured",
     });
   });
 });

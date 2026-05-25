@@ -35,7 +35,6 @@ import {
 } from "@/components/ui/tooltip";
 import ConnectorDialog from "@/components/ConnectorDialog";
 import { mergePendingAttachments, type PendingAttachment } from "@/lib/task-attachments";
-import { GuidedTour, type GuidedTourStep } from "@/components/GuidedTour";
 
 // 模拟数据
 const mockProjects = [
@@ -91,31 +90,6 @@ const mockProjects = [
   },
 ];
 
-const CEO_VIEW_TOUR_KEY = "oneceo:tour.ceo_view.completed";
-const CEO_VIEW_STEPS: GuidedTourStep[] = [
-  {
-    id: "ceo-metrics",
-    selector: '[data-tour="ceo-metrics"]',
-    title: "跨项目指标",
-    body: "这里用于快速判断项目规模、团队负载、任务完成率和整体进度。",
-    placement: "bottom",
-  },
-  {
-    id: "ceo-context",
-    selector: '[data-tour="ceo-context-bubble"]',
-    title: "总经理上下文",
-    body: "适合问资源调度、项目优先级和团队绩效，不替代单任务执行。",
-    placement: "bottom",
-  },
-  {
-    id: "ceo-composer",
-    selector: '[data-tour="ceo-composer"]',
-    title: "发起调度问题",
-    body: "可以带附件、连接器和执行强度，让总经理视角围绕项目治理给出判断。",
-    placement: "top",
-  },
-];
-
 export default function CEOView() {
   const { t } = useTranslation();
   const [message, setMessage] = useState("");
@@ -165,11 +139,6 @@ export default function CEOView() {
   return (
     <WorkspaceLayout>
       <div className="flex flex-col h-[calc(100vh-3.5rem)] overflow-hidden">
-        <GuidedTour
-          storageKey={CEO_VIEW_TOUR_KEY}
-          steps={CEO_VIEW_STEPS}
-          autoStart
-        />
         {/* 上方：统计数据卡片 */}
         <div className="flex-shrink-0 p-6 space-y-4">
           <div>

@@ -20,7 +20,6 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import WorkspaceLayout from "@/components/WorkspaceLayout";
 import {
-  Mic,
   Send,
   Square,
   Sparkles,
@@ -74,6 +73,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import ConnectorDialog from "@/components/ConnectorDialog";
+import VoiceInputButton from "@/components/VoiceInputButton";
 import AttachmentChipList from "@/components/AttachmentChipList";
 import AttachmentPickerButton from "@/components/AttachmentPickerButton";
 import MessageAttachmentReference from "@/components/MessageAttachmentReference";
@@ -82,7 +82,11 @@ import AltusArtifactPreviewCard, {
   type AltusArtifactFile,
 } from "@/components/AltusArtifactPreviewCard";
 import TaskDeliverableCard from "@/components/TaskDeliverableCard";
-import { GuidedTour, type GuidedTourStep } from "@/components/GuidedTour";
+import {
+  GuidedTour,
+  resolveGuidedTourStorageKey,
+  type GuidedTourStep,
+} from "@/components/GuidedTour";
 import AltusRunReplayDrawer, {
   type AltusDrawerView,
   type AltusReplayAction,
@@ -110,6 +114,7 @@ import {
   type PreviewDiffItem,
 } from "@/lib/opencode-preview";
 import {
+  getTaskCreationDebugInfo,
   getWorkspaceRawFileUrl,
   listTaskCreationProjects,
   listTaskCreationSkills,
@@ -118,6 +123,7 @@ import {
   type TaskCreationDeliverableArtifact,
   type TaskCreationPlatformSkill,
   type TaskCreationUploadedAttachment as UploadedTaskAttachment,
+  type TaskCreationDebugInfo,
   type TaskCreationWebsitePreviewSnapshot,
 } from "@/lib/task-creation-client";
 import {
@@ -148,7 +154,6 @@ import {
   buildTaskSessionDeploymentPrompt,
   type TaskSessionDeploymentPromptAction,
 } from "@/lib/task-session-deployment-prompts";
-import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
 import { resolveUserMessageReferences } from "@/lib/message-reference-parser";
 import { isManagedInternalSupportArtifact } from "@/lib/managed-artifact-visibility";
 import { readAltusMode } from "@/lib/altus-settings";
@@ -161,8 +166,9 @@ import { useAuth } from "@/contexts/AuthContext";
 
 type PageMode = "input" | "chat";
 const BILLING_TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "stopped"]);
-const HOME_CORE_TOUR_KEY = "oneceo:tour.home_core.completed";
-const HOME_SCENARIO_TOUR_KEY = "oneceo:tour.home_scenario_demo.completed";
+const HOME_NEW_TASK_TOUR_KEY = "oneceo:tour.home_new_task.completed";
+const MANAGED_AUTO_DEBUG_READY_POLL_MS = 1000;
+const MANAGED_AUTO_DEBUG_RETRY_POLL_MS = 2000;
 
 type HomeScenarioModel = "lite" | "pro" | "max";
 
@@ -672,63 +678,26 @@ const HOME_MORE_CAPABILITY_GUIDE_ITEMS = HOME_CAPABILITY_GUIDE_ITEMS.filter(
 const HOME_DEFAULT_CAPABILITY =
   HOME_CAPABILITY_GUIDE_ITEMS.find((item) => item.id === "website") ??
   HOME_CAPABILITY_GUIDE_ITEMS[0]!;
-const HOME_CORE_TOUR_STEPS: GuidedTourStep[] = [
+const HOME_NEW_TASK_TOUR_STEPS: GuidedTourStep[] = [
   {
-    id: "new-task",
-    selector: '[data-tour="sidebar-new-task"]',
-    title: "新建任务",
-    body: "从这里开启一个新的 Agent 会话。每个会话都会记录上下文、产出和后续操作。",
-    placement: "right",
+    id: "scenario-entry",
+    selector: '[data-tour="home-capability-guide"]',
+    title: "从任务入口开始",
+    body: "新建任务页第一次打开时，会直接演示一次真实起手方式。这里已经替你切到了“制作幻灯片”场景，用来说明 oneceo 如何从任务类型开始。",
+    placement: "bottom",
+  },
+  {
+    id: "scenario-examples",
+    selector: '[data-tour="capability-examples"]',
+    title: "示例提示词在这里选",
+    body: "点击示例提示词后，需求才会写入输入框。演示阶段不会自动塞进一大段 prompt，避免打断你的思路。",
+    placement: "top",
   },
   {
     id: "composer",
     selector: '[data-tour="home-composer"]',
-    title: "描述你要完成的事",
-    body: "直接写目标、约束和交付物。越接近真实需求，Altus 越容易给出可复核产出。",
-    placement: "top",
-  },
-  {
-    id: "attachment",
-    selector: '[data-tour="composer-attachments"]',
-    title: "补充资料和 Skills",
-    body: "这里可以添加本地文件、云端资料，或选择已启用的 Skills 进入本次任务。",
-    placement: "top",
-  },
-  {
-    id: "connectors",
-    selector: '[data-tour="composer-connectors"]',
-    title: "连接器按任务启用",
-    body: "这里为本次任务启用 GitHub、Notion、Slack、Supabase、Figma 或 Vercel。未授权时先进入管理连接器完成配置。",
-    placement: "top",
-  },
-  {
-    id: "model",
-    selector: '[data-tour="composer-model"]',
-    title: "选择执行强度",
-    body: "Lite 更快，Pro 均衡，Max 适合复杂任务。默认 Pro 可以覆盖多数工作。",
-    placement: "top",
-  },
-  {
-    id: "send",
-    selector: '[data-tour="composer-send"]',
-    title: "开始执行",
-    body: "发送后会进入会话执行链路，产出、文件、部署和调试信息会跟随会话保存。",
-    placement: "top",
-  },
-];
-const HOME_SCENARIO_TOUR_STEPS: GuidedTourStep[] = [
-  {
-    id: "scenario-entry",
-    selector: '[data-tour="home-capability-guide"]',
-    title: "选择一个能力入口",
-    body: "这里不是罗列按钮功能，而是把 oneceo 能做的事变成具体任务入口。选择一个入口后，系统会演示如何写需求、绑定项目、启用上下文并准备发送。",
-    placement: "bottom",
-  },
-  {
-    id: "scenario-prompt",
-    selector: '[data-tour="home-composer"]',
-    title: "选择示例再写入",
-    body: "点击下方示例提示词后，系统才会把对应需求写进输入框。先选场景，再按你的真实目标改写。",
+    title: "在这里改成你的任务",
+    body: "选完示例后，就在输入框里继续补目标、约束和交付物。越接近真实需求，输出越容易复核。",
     placement: "top",
   },
   {
@@ -1088,14 +1057,21 @@ function clampProjectHintLabel(
 
 const NO_PROJECT_VALUE = "__no_project__";
 
-function hasCompletedGuidedTour(storageKey: string) {
+function hasCompletedGuidedTour(
+  storageKey: string,
+  storageScope?: string | null,
+) {
   if (typeof window === "undefined") return false;
-  return window.localStorage.getItem(storageKey) === "completed";
+  return (
+    window.localStorage.getItem(
+      resolveGuidedTourStorageKey(storageKey, storageScope),
+    ) === "completed"
+  );
 }
 
 export default function Home() {
   const { t } = useTranslation();
-  const { refreshCredits } = useAuth();
+  const { user, refreshCredits } = useAuth();
   const MESSAGE_SCROLL_CACHE_PREFIX = "task_creation_history_scroll:";
   const PREVIEW_STATE_CACHE_PREFIX = "task_creation_preview_state:";
   const [location, setLocation] = useLocation();
@@ -1149,7 +1125,21 @@ export default function Home() {
     useState<AltusDrawerView>("actions");
   const [pendingAltusReplayToolCallId, setPendingAltusReplayToolCallId] =
     useState<string | null>(null);
+  const [pendingAutoManagedDebugAction, setPendingAutoManagedDebugAction] =
+    useState<{
+      runId: string;
+      toolCallId: string;
+      key: string;
+    } | null>(null);
+  const [autoManagedDebugInfo, setAutoManagedDebugInfo] = useState<{
+    actionKey: string;
+    info: TaskCreationDebugInfo;
+  } | null>(null);
+  const autoOpenedManagedDebugActionsRef = useRef<Set<string>>(new Set());
+  const wasAutoOpeningManagedDebugRef = useRef(false);
+  const autoManagedDebugPollRef = useRef<number | null>(null);
   const refreshCreditsRef = useRef(refreshCredits);
+  const voiceInputBaseRef = useRef("");
   const lastCreditRefreshRunStatusRef = useRef<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">(
     "pro",
@@ -1175,10 +1165,8 @@ export default function Home() {
     messageKey?: string | null;
     messageIndex?: number | null;
   } | null>(null);
-  const [scenarioTourOpen, setScenarioTourOpen] = useState(false);
   const [scenarioDemo, setScenarioDemo] =
     useState<HomeCapabilityGuideItem>(HOME_DEFAULT_CAPABILITY);
-  const [scenarioPrompt, setScenarioPrompt] = useState("");
   const [selectedCapabilityId, setSelectedCapabilityId] = useState<string | null>(
     null,
   );
@@ -1389,7 +1377,6 @@ export default function Home() {
   const applyScenarioPrompt = useCallback(
     (demo: HomeCapabilityGuideItem, prompt: string, exampleId?: string | null) => {
       setScenarioDemo(demo);
-      setScenarioPrompt(prompt);
       setSelectedCapabilityId(demo.id);
       setSelectedCapabilityExampleId(exampleId ?? null);
       setSelectedModel(demo.model);
@@ -1537,23 +1524,14 @@ export default function Home() {
     }
     void applyCapabilityAutoReferences(demo);
     setScenarioDemo(demo);
-    setScenarioPrompt(prompt);
     setSelectedCapabilityId(demo.id);
     setSelectedCapabilityExampleId(exampleId);
     setSelectedCapabilityCategory(nextCategory ?? null);
     setSelectedModel(demo.model);
     setModelMenuOpen(false);
     if (hasExplicitPrompt) {
-      setMessage(prompt);
+      applyScenarioPrompt(demo, prompt, exampleId);
     }
-    setScenarioTourOpen(false);
-    if (hasCompletedGuidedTour(HOME_SCENARIO_TOUR_KEY)) {
-      if (hasExplicitPrompt) {
-        applyScenarioPrompt(demo, prompt, exampleId);
-      }
-      return;
-    }
-    window.setTimeout(() => setScenarioTourOpen(true), 80);
   }, [applyCapabilityAutoReferences, applyScenarioPrompt, mode]);
 
   const handleCapabilityExampleSelect = useCallback(
@@ -1561,18 +1539,54 @@ export default function Home() {
       setSelectedCapabilityCategory(example.category ?? null);
       setSelectedCapabilityId(demo.id);
       setSelectedCapabilityExampleId(example.id);
-      if (hasCompletedGuidedTour(HOME_SCENARIO_TOUR_KEY)) {
-        applyScenarioPrompt(demo, example.prompt, example.id);
-        return;
-      }
       startScenarioTour(demo, {
         prompt: example.prompt,
         exampleId: example.id,
         category: example.category ?? null,
       });
     },
-    [applyScenarioPrompt, startScenarioTour],
+    [startScenarioTour],
   );
+
+  const clearSelectedCapability = useCallback(() => {
+    setScenarioDemo(HOME_DEFAULT_CAPABILITY);
+    setSelectedCapabilityId(null);
+    setSelectedCapabilityExampleId(null);
+    setSelectedCapabilityCategory(null);
+    setModelMenuOpen(false);
+    setAttachments((current) =>
+      current.filter((item) => {
+        if (item.kind !== "skill") return true;
+        return !autoCapabilitySkillIds.includes(item.id);
+      }),
+    );
+    setAutoCapabilitySkillIds([]);
+    setComposerReferences((current) =>
+      current.filter(
+        (item) => !item.id.startsWith(CAPABILITY_AUTO_REFERENCE_PREFIX),
+      ),
+    );
+  }, [autoCapabilitySkillIds]);
+
+  const selectedCapabilityBadge =
+    selectedCapability && SelectedCapabilityIcon ? (
+      <div className="group relative">
+        <div className="flex h-9 items-center gap-2 rounded-2xl border border-[var(--brand-link)] bg-[var(--brand-soft)] px-3 text-sm font-medium text-[var(--brand-link)] transition-colors">
+          <span className="relative flex h-4 w-4 shrink-0 items-center justify-center">
+            <SelectedCapabilityIcon className="h-4 w-4 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0" />
+            <button
+              type="button"
+              onClick={clearSelectedCapability}
+              className="absolute inset-0 flex items-center justify-center rounded-full bg-[var(--brand-link)]/14 text-[var(--brand-link)] opacity-0 transition-opacity duration-150 hover:bg-[var(--brand-link)]/18 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-link)]/35 group-hover:opacity-100 group-focus-within:opacity-100"
+              aria-label={`关闭当前能力：${selectedCapability.label}`}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+          <span>{selectedCapability.label}</span>
+        </div>
+      </div>
+    ) : null;
 
   const injectWebsiteReference = useCallback(() => {
     setMessage((current) => {
@@ -1596,8 +1610,8 @@ export default function Home() {
     toast.success("已添加 Figma 参考模板");
   }, []);
 
-  const handleScenarioStepChange = useCallback((step: GuidedTourStep) => {
-    if (step.id === "scenario-prompt") {
+  const handleNewTaskTourStepChange = useCallback((step: GuidedTourStep) => {
+    if (step.id === "scenario-examples" || step.id === "composer") {
       setModelMenuOpen(false);
       return;
     }
@@ -1607,14 +1621,17 @@ export default function Home() {
       return;
     }
     setModelMenuOpen(false);
-  }, [scenarioDemo, scenarioPrompt]);
+  }, [scenarioDemo]);
 
-  const closeScenarioTour = useCallback((nextOpen: boolean) => {
-    setScenarioTourOpen(nextOpen);
-    if (!nextOpen) {
-      setModelMenuOpen(false);
-    }
-  }, []);
+  useEffect(() => {
+    if (mode !== "input") return;
+    if (selectedCapabilityId) return;
+    if (hasCompletedGuidedTour(HOME_NEW_TASK_TOUR_KEY, user?.id)) return;
+    startScenarioTour(
+      HOME_CAPABILITY_GUIDE_ITEMS.find((item) => item.id === "slides") ??
+        HOME_DEFAULT_CAPABILITY,
+    );
+  }, [mode, selectedCapabilityId, startScenarioTour, user?.id]);
 
   useEffect(() => {
     if (!managedRunStatus || !BILLING_TERMINAL_RUN_STATUSES.has(managedRunStatus)) {
@@ -2342,6 +2359,31 @@ export default function Home() {
     setMessage("");
   };
 
+  function handleResolvedVoiceTranscript(transcript: string) {
+    const spokenText = transcript.trim();
+    if (!spokenText) {
+      throw new Error("未识别到有效语音内容");
+    }
+
+    const mergedInput = [voiceInputBaseRef.current.trim(), spokenText]
+      .filter(Boolean)
+      .join("\n");
+    setMessage(mergedInput);
+    voiceInputBaseRef.current = "";
+  }
+
+  function handleVoiceRecordingStart() {
+    voiceInputBaseRef.current = message.trim();
+  }
+
+  function handleVoicePreviewTranscript(transcript: string) {
+    const previewText = transcript.trim();
+    const mergedInput = [voiceInputBaseRef.current.trim(), previewText]
+      .filter(Boolean)
+      .join("\n");
+    setMessage(mergedInput);
+  }
+
   const handleStop = () => {
     if (!sessionId) return;
     void interruptCurrentRun(sessionId).catch((error) => {
@@ -2794,14 +2836,6 @@ export default function Home() {
     setSelectedDiffId(target);
   };
 
-  const openWorkspacePreview = (path: string) => {
-    const normalizedPath = normalizeWorkspaceRelativePath(path, sessionId);
-    if (!normalizedPath) return;
-    setPreviewWorkspacePath(normalizedPath);
-    setPreviewTab("files");
-    setPreviewOpen(true);
-  };
-
   const approveGoogleWorkspaceConfirmation = useCallback(
     async (confirmation: GoogleWorkspaceConfirmationView) => {
       if (!sessionId) {
@@ -2979,7 +3013,7 @@ export default function Home() {
   const chatPanelDefaultSize = 100 - previewPanelDefaultSize;
   const chatPanelMinSize = managedAltusMode ? 30 : 42;
 
-  const openAltusReplay = (
+  const openAltusReplay = useCallback((
     runId: string,
     options?: {
       toolCallId?: string | null;
@@ -2998,7 +3032,116 @@ export default function Home() {
       setAltusReplayIndex(Math.max(0, (replay?.actions.length || 1) - 1));
       setPendingAltusReplayToolCallId(null);
     }
-  };
+  }, [managedReplayByRun]);
+
+  useEffect(() => {
+    setPendingAutoManagedDebugAction(null);
+    setAutoManagedDebugInfo(null);
+    autoOpenedManagedDebugActionsRef.current.clear();
+    wasAutoOpeningManagedDebugRef.current = false;
+    if (autoManagedDebugPollRef.current) {
+      window.clearTimeout(autoManagedDebugPollRef.current);
+      autoManagedDebugPollRef.current = null;
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!managedAltusMode) {
+      wasAutoOpeningManagedDebugRef.current = false;
+      setPendingAutoManagedDebugAction(null);
+      setAutoManagedDebugInfo(null);
+      return;
+    }
+    if (!isProcessing) {
+      seedManagedVisualDebugActionKeys(
+        autoOpenedManagedDebugActionsRef.current,
+        managedReplayByRun,
+      );
+      wasAutoOpeningManagedDebugRef.current = false;
+      setPendingAutoManagedDebugAction(null);
+      return;
+    }
+    if (!wasAutoOpeningManagedDebugRef.current) {
+      seedManagedVisualDebugActionKeys(
+        autoOpenedManagedDebugActionsRef.current,
+        managedReplayByRun,
+      );
+      wasAutoOpeningManagedDebugRef.current = true;
+      return;
+    }
+    const action = findLatestManagedVisualDebugAction(latestManagedReplay);
+    if (!action) {
+      return;
+    }
+    const autoOpenKey = getManagedVisualDebugActionKey(action);
+    if (autoOpenedManagedDebugActionsRef.current.has(autoOpenKey)) {
+      return;
+    }
+    autoOpenedManagedDebugActionsRef.current.add(autoOpenKey);
+    setPendingAutoManagedDebugAction({
+      runId: action.runId,
+      toolCallId: action.toolCallId,
+      key: autoOpenKey,
+    });
+  }, [
+    isProcessing,
+    latestManagedReplay,
+    managedAltusMode,
+    managedReplayByRun,
+  ]);
+
+  useEffect(() => {
+    if (autoManagedDebugPollRef.current) {
+      window.clearTimeout(autoManagedDebugPollRef.current);
+      autoManagedDebugPollRef.current = null;
+    }
+    if (!managedAltusMode || !isProcessing || !sessionId || !pendingAutoManagedDebugAction) {
+      return;
+    }
+    let cancelled = false;
+    const pollUntilDebugReady = async () => {
+      try {
+        const info = await getTaskCreationDebugInfo(sessionId);
+        if (cancelled) return;
+        if (info?.ready && info.url) {
+          setAutoManagedDebugInfo({
+            actionKey: pendingAutoManagedDebugAction.key,
+            info,
+          });
+          openAltusReplay(pendingAutoManagedDebugAction.runId, {
+            toolCallId: pendingAutoManagedDebugAction.toolCallId,
+            view: "debug",
+          });
+          setPendingAutoManagedDebugAction(null);
+          return;
+        }
+        autoManagedDebugPollRef.current = window.setTimeout(
+          pollUntilDebugReady,
+          MANAGED_AUTO_DEBUG_READY_POLL_MS,
+        );
+      } catch {
+        if (cancelled) return;
+        autoManagedDebugPollRef.current = window.setTimeout(
+          pollUntilDebugReady,
+          MANAGED_AUTO_DEBUG_RETRY_POLL_MS,
+        );
+      }
+    };
+    void pollUntilDebugReady();
+    return () => {
+      cancelled = true;
+      if (autoManagedDebugPollRef.current) {
+        window.clearTimeout(autoManagedDebugPollRef.current);
+        autoManagedDebugPollRef.current = null;
+      }
+    };
+  }, [
+    isProcessing,
+    managedAltusMode,
+    openAltusReplay,
+    pendingAutoManagedDebugAction,
+    sessionId,
+  ]);
 
   useEffect(() => {
     if (!activeAltusReplay) {
@@ -3141,6 +3284,7 @@ export default function Home() {
           runtimeStarting={runtime.starting}
           onEnsureRuntime={runtime.ensure}
           runtimeSwitchBlocked={managedRunActive}
+          debugInfoOverride={autoManagedDebugInfo?.info || null}
           onRequestStartDebugByMessage={() => {
             void submitPrompt(t("homeWorkspace.startDebugPrompt"));
           }}
@@ -3289,7 +3433,6 @@ export default function Home() {
                   item={item}
                   onOpenDiffPreview={openDiffPreview}
                   onOpenManagedReplay={openAltusReplay}
-                  onOpenWorkspacePreview={openWorkspacePreview}
                   onDeployArtifact={deployFromArtifactCard}
                   runtimeSwitchBlocked={managedRunActive}
                   currentSessionId={sessionId}
@@ -3381,18 +3524,7 @@ export default function Home() {
                         <ConnectorDialog sessionId={sessionId} />
                       </span>
 
-                      {selectedCapability && SelectedCapabilityIcon ? (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => startScenarioTour(selectedCapability)}
-                          className="h-9 gap-2 rounded-2xl border-[var(--brand-link)] bg-[var(--brand-soft)] px-3 text-sm font-medium text-[var(--brand-link)]"
-                        >
-                          <SelectedCapabilityIcon className="h-4 w-4" />
-                          {selectedCapability.label}
-                        </Button>
-                      ) : null}
+                      {selectedCapabilityBadge}
 
                       <DropdownMenu
                         open={modelMenuOpen}
@@ -3462,13 +3594,14 @@ export default function Home() {
                     <div className="flex items-center gap-1">
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-9 w-9 rounded-full transition-colors hover:bg-accent"
-                          >
-                            <Mic className="w-4 h-4 text-muted-foreground" />
-                          </Button>
+                          <span>
+                            <VoiceInputButton
+                              disabled={isInterrupting || showStopButton}
+                              onRecordingStart={handleVoiceRecordingStart}
+                              onPreviewTranscript={handleVoicePreviewTranscript}
+                              onResolvedTranscript={handleResolvedVoiceTranscript}
+                            />
+                          </span>
                         </TooltipTrigger>
                         <TooltipContent>
                           <p>{t("homePage.voiceInput")}</p>
@@ -3535,16 +3668,16 @@ export default function Home() {
       onSidebarCollapsedChange={setSidebarCollapsed}
     >
       <GuidedTour
-        storageKey={HOME_CORE_TOUR_KEY}
-        steps={HOME_CORE_TOUR_STEPS}
+        storageKey={HOME_NEW_TASK_TOUR_KEY}
+        storageScope={user?.id}
+        steps={HOME_NEW_TASK_TOUR_STEPS}
         autoStart={mode === "input"}
-      />
-      <GuidedTour
-        storageKey={HOME_SCENARIO_TOUR_KEY}
-        steps={HOME_SCENARIO_TOUR_STEPS}
-        open={scenarioTourOpen}
-        onOpenChange={closeScenarioTour}
-        onStepChange={handleScenarioStepChange}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) {
+            setModelMenuOpen(false);
+          }
+        }}
+        onStepChange={handleNewTaskTourStepChange}
         onComplete={() => setModelMenuOpen(false)}
         nextLabel="继续演示"
         finishLabel="开始修改"
@@ -3653,18 +3786,7 @@ export default function Home() {
                               <ConnectorDialog sessionId={sessionId} />
                             </span>
 
-                            {selectedCapability && SelectedCapabilityIcon ? (
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => startScenarioTour(selectedCapability)}
-                                className="h-9 gap-2 rounded-2xl border-[var(--brand-link)] bg-[var(--brand-soft)] px-3 text-sm font-medium text-[var(--brand-link)]"
-                              >
-                                <SelectedCapabilityIcon className="h-4 w-4" />
-                                {selectedCapability.label}
-                              </Button>
-                            ) : null}
+                            {selectedCapabilityBadge}
 
                             {/* Model Selection Button */}
                             <DropdownMenu
@@ -3740,13 +3862,14 @@ export default function Home() {
                             {/* Voice Input Button */}
                             <Tooltip>
                               <TooltipTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-9 w-9 rounded-full transition-colors hover:bg-accent"
-                                >
-                                  <Mic className="w-4 h-4 text-muted-foreground" />
-                                </Button>
+                                <span>
+                                  <VoiceInputButton
+                                    disabled={isInterrupting || isProcessing}
+                                    onRecordingStart={handleVoiceRecordingStart}
+                                    onPreviewTranscript={handleVoicePreviewTranscript}
+                                    onResolvedTranscript={handleResolvedVoiceTranscript}
+                                  />
+                                </span>
                               </TooltipTrigger>
                               <TooltipContent>
                                 <p>{t("homePage.voiceInput")}</p>
@@ -3785,12 +3908,14 @@ export default function Home() {
                       >
                         <DropdownMenuTrigger asChild>
                           <button
-                            data-tour="composer-project"
                             type="button"
                             className="relative z-0 -mt-5 mx-auto flex w-[94%] items-center justify-end rounded-b-[1.65rem] rounded-t-[0.9rem] border border-t-0 border-border/35 bg-muted/42 px-5 pb-3 pt-7 text-right shadow-[0_16px_28px_rgba(15,23,42,0.07)] backdrop-blur-[2px] transition-colors hover:bg-muted/54 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 dark:bg-muted/24 dark:hover:bg-muted/32 dark:shadow-[0_18px_32px_rgba(0,0,0,0.18)]"
                             aria-label={t("homePage.projectSelectorLabel")}
                           >
-                            <div className="flex min-w-0 items-center justify-end gap-2 text-right">
+                            <div
+                              data-tour="composer-project"
+                              className="flex min-w-0 items-center justify-end gap-2 text-right"
+                            >
                               <FolderSearch2 className="h-4 w-4 shrink-0 text-foreground/42" />
                               <span className="block truncate text-sm font-medium tracking-[0.01em] text-foreground/72">
                                 {inputProjectHintLabel}
@@ -3981,7 +4106,7 @@ export default function Home() {
                             </div>
                           </div>
                         ) : null}
-                        <div className="space-y-1.5">
+                        <div data-tour="capability-examples" className="space-y-1.5">
                           <div className="text-sm font-semibold text-foreground">
                             {selectedCapabilityCategories.length > 0
                               ? "探索想法"
@@ -4271,6 +4396,10 @@ export type ChatItem =
       runId: string;
       artifacts: AltusArtifactFile[];
       previewSnapshot?: TaskCreationWebsitePreviewSnapshot | null;
+      browserScreenshotFallback?: {
+        toolCallId: string;
+        screenshot: NonNullable<AltusReplayAction["browserScreenshot"]>;
+      } | null;
       messageKey?: string;
     }
   | {
@@ -4517,6 +4646,13 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
   const codexTurnFilePaths = new Map<string, string[]>();
   const lastCodexDiffIndexByTurn = new Map<string, number>();
   const managedArtifactsByRun = new Map<string, AltusArtifactFile[]>();
+  const managedBrowserScreenshotsByRun = new Map<
+    string,
+    Array<{
+      toolCallId: string;
+      screenshot: NonNullable<AltusReplayAction["browserScreenshot"]>;
+    }>
+  >();
   const emittedManagedCompletionRuns = new Set<string>();
   let managedStatusBuffer: {
     text: string;
@@ -4575,10 +4711,38 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     ]);
   };
 
+  const mergeManagedBrowserScreenshot = (
+    runId: string,
+    toolCallId: string,
+    screenshot: AltusReplayAction["browserScreenshot"],
+  ) => {
+    const normalizedRunId = runId.trim();
+    const normalizedToolCallId = toolCallId.trim();
+    if (!normalizedRunId || !normalizedToolCallId || !isPassedManagedBrowserScreenshot(screenshot)) {
+      return;
+    }
+    const existing = managedBrowserScreenshotsByRun.get(normalizedRunId) || [];
+    if (existing.some((item) => item.toolCallId === normalizedToolCallId)) return;
+    managedBrowserScreenshotsByRun.set(normalizedRunId, [
+      ...existing,
+      {
+        toolCallId: normalizedToolCallId,
+        screenshot: screenshot as NonNullable<AltusReplayAction["browserScreenshot"]>,
+      },
+    ]);
+  };
+
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     if (message.type !== "executor_event") continue;
     const metadata = toRecord(message.metadata);
+    if (isManagedExecutionEvent(metadata)) {
+      mergeManagedBrowserScreenshot(
+        asText(metadata.runId),
+        asText(metadata.toolCallId) || message.messageKey || "",
+        readManagedBrowserScreenshot(metadata),
+      );
+    }
     const event = toRecord(metadata.event);
     const item = toRecord(event.item);
     const eventType = asText(metadata.eventType).toLowerCase();
@@ -4863,6 +5027,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         message,
         managedArtifactsByRun,
         emittedManagedCompletionRuns,
+        browserScreenshotsByRun: managedBrowserScreenshotsByRun,
       });
       if (managedCompletionCard) {
         clearManagedStatus();
@@ -4930,14 +5095,17 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         message,
         managedArtifactsByRun,
         emittedManagedCompletionRuns,
+        browserScreenshotsByRun: managedBrowserScreenshotsByRun,
       });
-      if (managedCompletionCard) {
+      const pushManagedCompletionCard = () => {
+        if (!managedCompletionCard) return;
         clearManagedStatus();
         flushProgress();
         items.push(managedCompletionCard);
-      }
+      };
       const rawLabel = message.content || "状态更新";
       if (isCodexControlStatusLabel(rawLabel)) {
+        pushManagedCompletionCard();
         continue;
       }
 
@@ -4946,12 +5114,14 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         replaceManagedStatus(rawLabel, message.messageKey, {
           displayInTimeline: false,
         });
+        pushManagedCompletionCard();
         continue;
       }
 
       if (isManagedNarrationStatusMessage(message)) {
         flushProgress();
         replaceManagedStatus(rawLabel, message.messageKey);
+        pushManagedCompletionCard();
         continue;
       }
       const tone = message.tone || getCapsuleTone(rawLabel);
@@ -4968,6 +5138,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           messageKey: message.messageKey,
         });
       }
+      pushManagedCompletionCard();
       continue;
     }
 
@@ -6465,7 +6636,6 @@ function MessageBubble({
   item,
   onOpenDiffPreview,
   onOpenManagedReplay,
-  onOpenWorkspacePreview,
   onDeployArtifact,
   runtimeSwitchBlocked,
   currentSessionId,
@@ -6487,7 +6657,6 @@ function MessageBubble({
       view?: AltusDrawerView;
     },
   ) => void;
-  onOpenWorkspacePreview?: (path: string) => void;
   onDeployArtifact?: (path: string) => Promise<void> | void;
   runtimeSwitchBlocked?: boolean;
   currentSessionId?: string | null;
@@ -6764,7 +6933,11 @@ function MessageBubble({
           runId={item.runId}
           artifacts={item.artifacts}
           previewSnapshot={item.previewSnapshot}
-          onOpenViewer={onOpenWorkspacePreview}
+          browserScreenshotFallback={item.browserScreenshotFallback}
+          displayMode="web-preview"
+          onOpenRemoteDebug={() =>
+            onOpenManagedReplay?.(item.runId, { view: "debug" })
+          }
           onDeployRequested={onDeployArtifact}
           runtimeSwitchBlocked={runtimeSwitchBlocked}
         />
@@ -9274,6 +9447,19 @@ function extractManagedPreviewSnapshot(
     capturedAt: asText(raw.capturedAt) || undefined,
     reasonCode: asText(raw.reasonCode) || undefined,
     message: asText(raw.message) || undefined,
+    visualCheck: (() => {
+      const visualCheck = toRecord(raw.visualCheck);
+      const visualStatus = asText(visualCheck.status);
+      if (visualStatus !== "passed" && visualStatus !== "failed") {
+        return undefined;
+      }
+      return {
+        status: visualStatus as "passed" | "failed",
+        reasonCode: asText(visualCheck.reasonCode) || undefined,
+        message: asText(visualCheck.message) || undefined,
+        diagnostics: toRecord(visualCheck.diagnostics),
+      };
+    })(),
     source: {
       sandboxId: asText(source.sandboxId) || undefined,
       port: Number.isFinite(portValue) ? portValue : undefined,
@@ -9284,10 +9470,51 @@ function extractManagedPreviewSnapshot(
   };
 }
 
+function isPassedManagedBrowserScreenshot(
+  screenshot: AltusReplayAction["browserScreenshot"],
+) {
+  return Boolean(
+    screenshot?.status === "captured" &&
+      screenshot.storageKey &&
+      screenshot.visualCheck?.status === "passed",
+  );
+}
+
+function findPassedBrowserScreenshotFallback(input: {
+  runId: string;
+  messageMetadata: Record<string, unknown>;
+  browserScreenshotsByRun?: Map<
+    string,
+    Array<{
+      toolCallId: string;
+      screenshot: NonNullable<AltusReplayAction["browserScreenshot"]>;
+    }>
+  >;
+}) {
+  const directToolCallId = asText(input.messageMetadata.toolCallId);
+  const directScreenshot = readManagedBrowserScreenshot(input.messageMetadata);
+  if (directToolCallId && isPassedManagedBrowserScreenshot(directScreenshot)) {
+    return {
+      toolCallId: directToolCallId,
+      screenshot: directScreenshot as NonNullable<AltusReplayAction["browserScreenshot"]>,
+    };
+  }
+
+  const screenshots = input.browserScreenshotsByRun?.get(input.runId) || [];
+  return screenshots.find((item) => isPassedManagedBrowserScreenshot(item.screenshot)) || null;
+}
+
 export function buildManagedCompletionCardItem(input: {
   message: AgentMessage;
   managedArtifactsByRun: Map<string, AltusArtifactFile[]>;
   emittedManagedCompletionRuns: Set<string>;
+  browserScreenshotsByRun?: Map<
+    string,
+    Array<{
+      toolCallId: string;
+      screenshot: NonNullable<AltusReplayAction["browserScreenshot"]>;
+    }>
+  >;
 }): ChatItem | null {
   const { message, managedArtifactsByRun, emittedManagedCompletionRuns } =
     input;
@@ -9305,6 +9532,11 @@ export function buildManagedCompletionCardItem(input: {
   const eventType = asText(metadata.eventType).toLowerCase();
   const deliverables = extractManagedDeliverables(metadata);
   const previewSnapshot = extractManagedPreviewSnapshot(metadata);
+  const browserScreenshotFallback = findPassedBrowserScreenshotFallback({
+    runId,
+    messageMetadata: metadata,
+    browserScreenshotsByRun: input.browserScreenshotsByRun,
+  });
   const managedArtifacts = managedArtifactsByRun.get(runId) || [];
   const webArtifacts = collectManagedWebArtifacts({
     deliverables,
@@ -9325,6 +9557,7 @@ export function buildManagedCompletionCardItem(input: {
       runId,
       artifacts: webArtifacts,
       previewSnapshot,
+      browserScreenshotFallback,
       messageKey: `managed:${runId}:artifact_card`,
     };
   }
@@ -9355,6 +9588,7 @@ export function buildManagedCompletionCardItem(input: {
     runId,
     artifacts: webArtifacts,
     previewSnapshot,
+    browserScreenshotFallback,
     messageKey: `managed:${runId}:artifact_card`,
   };
 }
@@ -9529,7 +9763,57 @@ function collectManagedReplayArtifactPaths(
   return Array.from(paths);
 }
 
-function buildManagedReplayData(messages: AgentMessage[]) {
+function readManagedBrowserScreenshot(metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const raw = toRecord(metadata.browserScreenshot);
+  const status = asText(raw.status);
+  if (
+    raw.type !== "browser_screenshot" ||
+    raw.kind !== "browser_action_screenshot" ||
+    !["captured", "capture_failed", "storage_failed"].includes(status)
+  ) {
+    return null;
+  }
+  const source = toRecord(raw.source);
+  const visualCheck = toRecord(raw.visualCheck);
+  const visualStatus = asText(visualCheck.status);
+  const toNumber = (value: unknown) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+  };
+  return {
+    type: "browser_screenshot" as const,
+    kind: "browser_action_screenshot" as const,
+    status: status as "captured" | "capture_failed" | "storage_failed",
+    storageKey: asText(raw.storageKey) || undefined,
+    mimeType: raw.mimeType === "image/png" ? "image/png" as const : undefined,
+    width: toNumber(raw.width),
+    height: toNumber(raw.height),
+    capturedAt: asText(raw.capturedAt) || undefined,
+    reasonCode: asText(raw.reasonCode) || undefined,
+    message: asText(raw.message) || undefined,
+    visualCheck:
+      visualStatus === "passed" || visualStatus === "failed"
+        ? {
+            status: visualStatus as "passed" | "failed",
+            reasonCode: asText(visualCheck.reasonCode) || undefined,
+            message: asText(visualCheck.message) || undefined,
+            diagnostics: toRecord(visualCheck.diagnostics),
+          }
+        : undefined,
+    source: {
+      sandboxId: asText(source.sandboxId) || undefined,
+      cdpPort: toNumber(source.cdpPort),
+      url: asText(source.url) || undefined,
+      title: asText(source.title) || undefined,
+      toolName: asText(source.toolName) || undefined,
+      action: asText(source.action) || undefined,
+      description: asText(source.description) || undefined,
+    },
+  };
+}
+
+export function buildManagedReplayData(messages: AgentMessage[]) {
   const actionsByRun = new Map<string, AltusReplayAction[]>();
   const filesByRun = new Map<string, AltusReplayFile[]>();
   const diffItemsByRun = new Map<string, PreviewDiffItem[]>();
@@ -9709,6 +9993,7 @@ function buildManagedReplayData(messages: AgentMessage[]) {
         internalDetail:
           formatManagedToolInternalDetail(toolName, metadata) || undefined,
         artifactPaths: collectManagedReplayArtifactPaths(toolName, metadata),
+        browserScreenshot: readManagedBrowserScreenshot(metadata),
       });
     } else {
       const action = actions[stepIndex];
@@ -9727,6 +10012,7 @@ function buildManagedReplayData(messages: AgentMessage[]) {
         internalDetail:
           formatManagedToolInternalDetail(toolName, metadata) || undefined,
         artifactPaths: collectManagedReplayArtifactPaths(toolName, metadata),
+        browserScreenshot: readManagedBrowserScreenshot(metadata) || action.browserScreenshot,
       };
     }
 
@@ -9768,6 +10054,50 @@ export function resolveManagedToolReplayView(
     return "deployment";
   }
   return "actions";
+}
+
+export function findLatestManagedVisualDebugAction(
+  replay:
+    | {
+        actions: AltusReplayAction[];
+      }
+    | null
+    | undefined,
+): AltusReplayAction | null {
+  if (!replay) return null;
+  for (let index = replay.actions.length - 1; index >= 0; index -= 1) {
+    const action = replay.actions[index];
+    if (
+      action &&
+      action.status !== "failed" &&
+      resolveManagedToolReplayView(action.toolName) === "debug"
+    ) {
+      return action;
+    }
+  }
+  return null;
+}
+
+export function getManagedVisualDebugActionKey(action: AltusReplayAction) {
+  return `${action.runId}:${action.toolCallId}`;
+}
+
+export function seedManagedVisualDebugActionKeys(
+  target: Set<string>,
+  replayByRun: Map<
+    string,
+    {
+      actions: AltusReplayAction[];
+    }
+  >,
+) {
+  for (const replay of Array.from(replayByRun.values())) {
+    for (const action of replay.actions) {
+      if (resolveManagedToolReplayView(action.toolName) === "debug") {
+        target.add(getManagedVisualDebugActionKey(action));
+      }
+    }
+  }
 }
 
 function isManagedDeploymentTool(toolName: string) {
@@ -9851,7 +10181,7 @@ function buildManagedBrowserInteractPurpose(args: Record<string, unknown>) {
   if (action === "wait_for_timeout") {
     return "等待页面稳定";
   }
-  return target ? `执行 Playwright 操作：${target}` : "执行 Playwright 浏览器操作";
+  return target ? `执行 Playwright 操作：${target}` : "执行 Playwright 视觉检测";
 }
 
 export function getManagedToolPurposeSummary(
@@ -9914,6 +10244,11 @@ export function getManagedToolPurposeSummary(
     return buildManagedBrowserInteractPurpose(args);
   }
 
+  if (toolName === "debug_open_page") {
+    const url = asText(args.url) || asText(output.targetUrl) || asText(output.url);
+    return url ? `视觉检测：打开 ${url}` : "视觉检测：打开页面";
+  }
+
   if (toolName === "ask_user") {
     return "请求补充必要信息";
   }
@@ -9964,9 +10299,9 @@ function getManagedToolDisplayName(toolName: string) {
     case "ask_user":
       return i18n.t("homeWorkspace.requestClarification");
     case "debug_open_page":
-      return i18n.t("replayDrawer.tabs.debug");
+      return "视觉检测：打开页面";
     case "browser_interact":
-      return "浏览器操作";
+      return "视觉检测步骤";
     case "deploy_application":
       return i18n.t("homeWorkspace.deployApplication");
     case "redeploy_application":

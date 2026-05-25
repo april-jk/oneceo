@@ -5,6 +5,7 @@ export type SettingsTab =
   | "account"
   | "model"
   | "settings"
+  | "voice"
   | "skills"
   | "connectors"
   | "billing";

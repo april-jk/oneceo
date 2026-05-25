@@ -53,6 +53,66 @@ beforeEach(() => {
   mock.method(taskSessionAltusMemoryService, 'saveTimelineDerivedMemory', async () => null as any);
   mock.method(taskSessionAltusMemoryService, 'markMaterialized', async (input: any) => input.state || null);
   mock.method(taskSessionAltusMemoryService, 'saveSandboxFileMemoryToDb', async () => null as any);
+  mock.method(taskSessionAltusMemoryService, 'ensureLlmContextAnchor', async (input: any) => ({
+    version: 0,
+    summary: { goal: '', latestOutcome: '', openQuestions: [] },
+    constraints: [],
+    decisions: [],
+    workingNotes: [],
+    sandboxMaterialization: { snapshotVersion: 0, lastSandboxId: null, lastSyncedAt: null },
+    fileMemorySnapshot: {
+      snapshotVersion: 0,
+      savedAt: null,
+      sourceSandboxId: null,
+      archiveId: null,
+      workspaceMemoryPath: '.oneceo/session-memory/altus-memory.json',
+    },
+    updatedAt: null,
+    lastWriterRunId: input?.runId || null,
+    llmContext: {
+      contextId: 'altus_ctx_test',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      lastRunId: input?.runId || null,
+      lastModel: input?.model || 'altus-model',
+      lastProvider: input?.provider || 'openai',
+      callCount: 0,
+      lastPromptTokens: 0,
+      lastCachedTokens: 0,
+      lastCacheCreationTokens: 0,
+      lastCacheHitRatio: 0,
+    },
+  }) as any);
+  mock.method(taskSessionAltusMemoryService, 'recordLlmContextUsage', async () => ({
+    version: 0,
+    summary: { goal: '', latestOutcome: '', openQuestions: [] },
+    constraints: [],
+    decisions: [],
+    workingNotes: [],
+    sandboxMaterialization: { snapshotVersion: 0, lastSandboxId: null, lastSyncedAt: null },
+    fileMemorySnapshot: {
+      snapshotVersion: 0,
+      savedAt: null,
+      sourceSandboxId: null,
+      archiveId: null,
+      workspaceMemoryPath: '.oneceo/session-memory/altus-memory.json',
+    },
+    updatedAt: null,
+    lastWriterRunId: null,
+    llmContext: {
+      contextId: 'altus_ctx_test',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      lastRunId: null,
+      lastModel: 'altus-model',
+      lastProvider: 'openai',
+      callCount: 1,
+      lastPromptTokens: 0,
+      lastCachedTokens: 0,
+      lastCacheCreationTokens: 0,
+      lastCacheHitRatio: 0,
+    },
+  }) as any);
 });
 
 afterEach(() => {
@@ -228,6 +288,53 @@ test('callModel sanitizes malformed assistant tool arguments at the final reques
     capturedBodies[0]?.messages?.[0]?.tool_calls?.[1]?.function?.arguments,
     '{"path":"package.json"}'
   );
+});
+
+test('callModel attaches llm context headers for managed session reuse', async () => {
+  const capturedHeaders: Array<Record<string, string>> = [];
+  global.fetch = mock.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+    capturedHeaders.push((init?.headers || {}) as Record<string, string>);
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: 'ok',
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const coordinator = new AltusRunCoordinator(
+    {} as any,
+    {} as any,
+    {} as any,
+    {} as any,
+    {
+      projectMessagesForModel: (messages: any[]) => messages,
+    } as any
+  );
+
+  await (coordinator as any).callModel({
+    messages: [{ role: 'user', content: '继续' }],
+    signal: new AbortController().signal,
+    llmContext: {
+      contextId: 'altus_ctx_reuse_1',
+      turnIndex: 2,
+      sessionId: 'session-reuse-1',
+      runId: 'run-reuse-1',
+    },
+  });
+
+  assert.equal(capturedHeaders.length, 1);
+  assert.equal(capturedHeaders[0]?.['x-oneceo-internal-llm-context-id'], 'altus_ctx_reuse_1');
+  assert.equal(capturedHeaders[0]?.['x-oneceo-llm-context-id'], 'altus_ctx_reuse_1');
+  assert.equal(capturedHeaders[0]?.['x-oneceo-internal-llm-context-turn'], '2');
+  assert.equal(capturedHeaders[0]?.['x-oneceo-internal-llm-session-id'], 'session-reuse-1');
+  assert.equal(capturedHeaders[0]?.['x-oneceo-internal-llm-run-id'], 'run-reuse-1');
 });
 
 test('execute feeds malformed current tool arguments back to the model instead of executing the tool', async () => {
@@ -1583,6 +1690,753 @@ test('execute emits deliverables_ready before final assistant message when compl
   assert.equal(assistantTimeline.input.content, '已完成最终文档交付。\n\n验证:\n\n- 已输出 final.docx');
 });
 
+test('execute blocks website completion until visual detection screenshot evidence exists', async () => {
+  const state = createState(
+    'run-coordinator-visual-detection-guard',
+    'session-coordinator-visual-detection-guard',
+    '帮我做一个可交付的网站首页'
+  );
+  state.input.taskIntentProfile = {
+    mode: 'deployable_web_app',
+    reason: 'latest_web_artifact_request',
+    recentUserMessages: ['帮我做一个可交付的网站首页'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: true,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: false,
+    needsClarification: false,
+    clarificationQuestion: '',
+    clarificationType: 'none',
+    todoRequired: false,
+    todoReason: 'none',
+  };
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-visual-detection-guard',
+      workspaceRoot: '/workspace/session-coordinator-visual-detection-guard',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => undefined),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return { sequence: eventCalls.length, payload };
+    }),
+  };
+  const lifecycleService = {
+    markRunning: mock.fn(async () => lifecycleCalls.push('running')),
+    markWaitingUser: mock.fn(async () => lifecycleCalls.push('waiting_user')),
+    markCompleted: mock.fn(async () => lifecycleCalls.push('completed')),
+    markFailed: mock.fn(async () => lifecycleCalls.push('failed')),
+    markStopped: mock.fn(async () => lifecycleCalls.push('stopped')),
+    syncLoopSnapshot: mock.fn(async () => undefined),
+  };
+  const websitePreviewSnapshotService = {
+    captureManagedRunPreview: mock.fn(async () => null),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-complete-before-visual-detection',
+                    type: 'function',
+                    function: {
+                      name: 'complete_task',
+                      arguments: JSON.stringify({
+                        summary: '网站已完成。',
+                        verification: ['代码已写入'],
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (fetchCount === 2) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '正在进行视觉检测',
+                tool_calls: [
+                  {
+                    id: 'tool-debug-open-page-visual-detection',
+                    type: 'function',
+                    function: {
+                      name: 'debug_open_page',
+                      arguments: JSON.stringify({
+                        url: 'http://127.0.0.1:3000/',
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-complete-after-visual-detection',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '网站已完成，并完成视觉检测。',
+                      verification: ['已打开页面并捕获浏览器截图'],
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const browserScreenshot = {
+    type: 'browser_screenshot',
+    kind: 'browser_action_screenshot',
+    status: 'captured',
+    storageKey: 'sessions/session-coordinator-visual-detection-guard/browser-actions/step.png',
+    mimeType: 'image/png',
+    width: 1280,
+    height: 720,
+    capturedAt: '2026-05-22T14:20:00.000Z',
+    source: {
+      sandboxId: 'sandbox-visual-detection-guard',
+      cdpPort: 9222,
+      url: 'http://127.0.0.1:3000/',
+      title: '视觉检测页面',
+      toolName: 'debug_open_page',
+      action: 'open_page',
+      description: '打开首页',
+    },
+    visualCheck: {
+      status: 'passed',
+      diagnostics: {
+        visibleTextLength: 128,
+        visibleElementCount: 24,
+        uniqueColorCount: 32,
+      },
+    },
+  };
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'debug_open_page') {
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({
+          targetUrl: 'http://127.0.0.1:3000/',
+          browserScreenshot,
+        }),
+        evidence: [browserScreenshot],
+      };
+    }
+    return {
+      type: 'complete' as const,
+      summary: fetchCount === 1 ? '网站已完成。' : '网站已完成，并完成视觉检测。',
+      verification:
+        fetchCount === 1 ? ['代码已写入'] : ['已打开页面并捕获浏览器截图'],
+    };
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+    undefined as any,
+    undefined as any,
+    websitePreviewSnapshotService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(fetchCount, 3);
+  assert.equal(executeMock.mock.callCount(), 3);
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+  assert.equal(state.status, 'completed');
+
+  const blockedComplete = eventCalls.find(
+    (entry) => entry.eventType === 'tool_call_failed' && entry.payload.toolName === 'complete_task'
+  );
+  assert.ok(blockedComplete);
+  assert.equal(
+    blockedComplete.payload.error,
+    '交付前视觉检测还没完成，Altus 将继续通过 n.eko 和 Playwright 补齐截图证据。'
+  );
+  assert.equal((blockedComplete.payload.toolResultEnvelope as any)?.errorCode, 'visual_detection_completion_blocked');
+
+  const visualDetectionStep = eventCalls.find(
+    (entry) => entry.eventType === 'tool_call_completed' && entry.payload.toolName === 'debug_open_page'
+  );
+  assert.ok(visualDetectionStep);
+  assert.equal(visualDetectionStep.payload.content, '视觉检测页面已打开');
+  assert.equal((visualDetectionStep.payload.browserScreenshot as any)?.status, 'captured');
+  assert.equal((visualDetectionStep.payload.browserScreenshot as any)?.storageKey, browserScreenshot.storageKey);
+
+  const completedToolNames = eventCalls
+    .filter((entry) => entry.eventType === 'tool_call_completed')
+    .map((entry) => entry.payload.toolName);
+  assert.deepEqual(completedToolNames, ['debug_open_page', 'complete_task']);
+});
+
+test('execute uses passed browser visual evidence when final preview smoke fails', async () => {
+  const state = createState(
+    'run-coordinator-preview-reuse-passed-visual',
+    'session-coordinator-preview-reuse-passed-visual',
+    '帮我做一个可交付的网站首页'
+  );
+  state.input.taskIntentProfile = {
+    mode: 'deployable_web_app',
+    reason: 'latest_web_artifact_request',
+    recentUserMessages: ['帮我做一个可交付的网站首页'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: true,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: false,
+    needsClarification: false,
+    clarificationQuestion: '',
+    clarificationType: 'none',
+    todoRequired: false,
+    todoReason: 'none',
+  };
+  const setupCalls: Record<string, unknown>[] = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-preview-reuse-passed-visual',
+      workspaceRoot: '/workspace/session-coordinator-preview-reuse-passed-visual',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      setupCalls.push({ type: 'timeline', input });
+    }),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return { sequence: eventCalls.length, payload };
+    }),
+  };
+  const lifecycleService = {
+    markRunning: mock.fn(async () => undefined),
+    markWaitingUser: mock.fn(async () => undefined),
+    markCompleted: mock.fn(async () => undefined),
+    markFailed: mock.fn(async () => undefined),
+    markStopped: mock.fn(async () => undefined),
+    syncLoopSnapshot: mock.fn(async () => undefined),
+  };
+  const deliverables = [
+    {
+      id: 'deliverable-preview-reuse',
+      runId: state.input.runId,
+      path: 'dist/index.html',
+      name: 'index.html',
+      mimeType: 'text/html',
+      size: 1024,
+      downloadPath: '/api/task-creation/sessions/session-coordinator-preview-reuse-passed-visual/deliverables/deliverable-preview-reuse/download',
+    },
+  ];
+  const deliverableService = {
+    persistManagedRunDeliverables: mock.fn(async () => deliverables),
+  };
+  const failedFinalPreview = {
+    kind: 'website_screenshot' as const,
+    status: 'capture_failed' as const,
+    reasonCode: 'preview_visual_check_failed',
+    message: 'app_runtime_error: 页面浏览器运行时报错，疑似入口模块或 React 渲染失败。',
+    visualCheck: {
+      status: 'failed' as const,
+      reasonCode: 'app_runtime_error',
+      message: '页面浏览器运行时报错，疑似入口模块或 React 渲染失败。',
+    },
+    source: {
+      sandboxId: 'sandbox-preview-reuse-passed-visual',
+      port: 3000,
+      url: 'http://127.0.0.1:3000/',
+      command: 'node dist/index.js',
+    },
+  };
+  const websitePreviewSnapshotService = {
+    captureManagedRunPreview: mock.fn(async () => failedFinalPreview),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    const tool =
+      fetchCount === 1
+        ? {
+            id: 'tool-debug-open-page-preview-reuse',
+            type: 'function',
+            function: {
+              name: 'debug_open_page',
+              arguments: JSON.stringify({ url: 'http://127.0.0.1:8080/' }),
+            },
+          }
+        : {
+            id: 'tool-complete-preview-reuse',
+            type: 'function',
+            function: {
+              name: 'complete_task',
+              arguments: JSON.stringify({
+                summary: '网站已完成，并完成视觉检测。',
+                verification: ['已打开页面并捕获浏览器截图'],
+                attachments: ['dist/index.html'],
+              }),
+            },
+          };
+    return new Response(
+      JSON.stringify({ choices: [{ message: { content: '', tool_calls: [tool] } }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const browserScreenshot = {
+    type: 'browser_screenshot',
+    kind: 'browser_action_screenshot',
+    status: 'captured',
+    storageKey: 'sessions/session-coordinator-preview-reuse-passed-visual/browser-actions/passed.png',
+    mimeType: 'image/png',
+    width: 1280,
+    height: 720,
+    capturedAt: '2026-05-22T14:20:00.000Z',
+    source: {
+      sandboxId: 'sandbox-preview-reuse-passed-visual',
+      cdpPort: 9222,
+      url: 'http://127.0.0.1:8080/',
+      title: '视觉检测页面',
+      toolName: 'debug_open_page',
+      action: 'open_page',
+    },
+    visualCheck: {
+      status: 'passed',
+      diagnostics: {
+        visibleTextLength: 128,
+        uniqueColorCount: 32,
+      },
+    },
+  };
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'debug_open_page') {
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({ browserScreenshot }),
+        evidence: [browserScreenshot],
+      };
+    }
+    return {
+      type: 'complete' as const,
+      summary: '网站已完成，并完成视觉检测。',
+      verification: ['已打开页面并捕获浏览器截图'],
+      attachments: ['dist/index.html'],
+    };
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+    deliverableService as any,
+    undefined as any,
+    websitePreviewSnapshotService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(fetchCount, 2);
+  assert.equal(executeMock.mock.callCount(), 2);
+  assert.equal(websitePreviewSnapshotService.captureManagedRunPreview.mock.callCount(), 1);
+  const deliverablesReady = eventCalls.find((entry) => entry.eventType === 'deliverables_ready');
+  assert.equal((deliverablesReady?.payload.previewSnapshot as any)?.status, 'captured');
+  assert.equal((deliverablesReady?.payload.previewSnapshot as any)?.storageKey, browserScreenshot.storageKey);
+  assert.equal((deliverablesReady?.payload.previewSnapshot as any)?.source?.port, 8080);
+  assert.equal((deliverablesReady?.payload.previewSnapshot as any)?.visualCheck?.status, 'passed');
+
+  const assistantTimeline = setupCalls.find(
+    (entry) => (entry as any).input?.messageType === 'assistant_message'
+  ) as any;
+  assert.equal(assistantTimeline?.input?.metadata?.previewSnapshot?.status, 'captured');
+  assert.equal(assistantTimeline?.input?.metadata?.previewSnapshot?.storageKey, browserScreenshot.storageKey);
+});
+
+test('execute keeps visual detection blocked when browser action screenshot capture fails', async () => {
+  const previousMaxRounds = process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS;
+  process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS = '3';
+  const state = createState(
+    'run-coordinator-visual-detection-capture-failed',
+    'session-coordinator-visual-detection-capture-failed',
+    '帮我做一个可交付的网站首页'
+  );
+  state.input.taskIntentProfile = {
+    mode: 'deployable_web_app',
+    reason: 'latest_web_artifact_request',
+    recentUserMessages: ['帮我做一个可交付的网站首页'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: true,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: false,
+    needsClarification: false,
+    clarificationQuestion: '',
+    clarificationType: 'none',
+    todoRequired: false,
+    todoReason: 'none',
+  };
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-visual-detection-capture-failed',
+      workspaceRoot: '/workspace/session-coordinator-visual-detection-capture-failed',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => undefined),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return { sequence: eventCalls.length, payload };
+    }),
+  };
+  const lifecycleService = {
+    markRunning: mock.fn(async () => lifecycleCalls.push('running')),
+    markWaitingUser: mock.fn(async () => lifecycleCalls.push('waiting_user')),
+    markCompleted: mock.fn(async () => lifecycleCalls.push('completed')),
+    markFailed: mock.fn(async () => lifecycleCalls.push('failed')),
+    markStopped: mock.fn(async () => lifecycleCalls.push('stopped')),
+    syncLoopSnapshot: mock.fn(async () => undefined),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '正在进行视觉检测', tool_calls: [{
+          id: 'tool-debug-open-page-capture-failed',
+          type: 'function',
+          function: {
+            name: 'debug_open_page',
+            arguments: JSON.stringify({ url: 'http://127.0.0.1:3000/' }),
+          },
+        }] } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: '', tool_calls: [{
+        id: 'tool-complete-after-capture-failed',
+        type: 'function',
+        function: {
+          name: 'complete_task',
+          arguments: JSON.stringify({
+            summary: '网站已完成。',
+            verification: ['已打开页面'],
+          }),
+        },
+      }] } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+
+  const browserScreenshot = {
+    type: 'browser_screenshot',
+    kind: 'browser_action_screenshot',
+    status: 'capture_failed',
+    reasonCode: 'browser_screenshot_capture_failed',
+    message: 'playwright_module_not_found: Cannot find module playwright',
+    source: {
+      sandboxId: 'sandbox-visual-detection-capture-failed',
+      cdpPort: 9222,
+      toolName: 'debug_open_page',
+      action: 'open_page',
+      description: '打开首页',
+    },
+  };
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'debug_open_page') {
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({ browserScreenshot }),
+        evidence: [browserScreenshot],
+      };
+    }
+    return {
+      type: 'complete' as const,
+      summary: '网站已完成。',
+      verification: ['已打开页面'],
+    };
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+    undefined as any,
+    undefined as any,
+    { captureManagedRunPreview: mock.fn(async () => null) } as any
+  );
+
+  try {
+    await coordinator.execute(state, new AbortController());
+
+    assert.equal(fetchCount, 3);
+    assert.equal(executeMock.mock.callCount(), 3);
+    assert.deepEqual(lifecycleCalls, ['running', 'failed']);
+    assert.equal(state.status, 'failed');
+    const blockedComplete = eventCalls.find(
+      (entry) => entry.eventType === 'tool_call_failed' && entry.payload.toolName === 'complete_task'
+    );
+    assert.ok(blockedComplete);
+    assert.match(
+      (blockedComplete.payload.toolResultEnvelope as any)?.errorMessage,
+      /captured_count=0/
+    );
+    assert.match(
+      (blockedComplete.payload.toolResultEnvelope as any)?.errorMessage,
+      /last_tool=debug_open_page/
+    );
+    assert.match(
+      (blockedComplete.payload.toolResultEnvelope as any)?.errorMessage,
+      /last_reason_code=browser_screenshot_capture_failed/
+    );
+    assert.match(
+      (blockedComplete.payload.toolResultEnvelope as any)?.errorMessage,
+      /last_message=playwright_module_not_found/
+    );
+  } finally {
+    if (previousMaxRounds === undefined) {
+      delete process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS;
+    } else {
+      process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS = previousMaxRounds;
+    }
+  }
+});
+
+test('execute blocks website completion when screenshot is captured but visual check fails', async () => {
+  const previousMaxRounds = process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS;
+  process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS = '3';
+  const state = createState(
+    'run-coordinator-visual-detection-failed',
+    'session-coordinator-visual-detection-failed',
+    '帮我做一个可交付的网站首页'
+  );
+  state.input.taskIntentProfile = {
+    mode: 'deployable_web_app',
+    reason: 'latest_web_artifact_request',
+    recentUserMessages: ['帮我做一个可交付的网站首页'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: true,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: false,
+    needsClarification: false,
+    clarificationQuestion: '',
+    clarificationType: 'none',
+    todoRequired: false,
+    todoReason: 'none',
+  };
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-visual-detection-failed',
+      workspaceRoot: '/workspace/session-coordinator-visual-detection-failed',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => undefined),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return { sequence: eventCalls.length, payload };
+    }),
+  };
+  const lifecycleService = {
+    markRunning: mock.fn(async () => lifecycleCalls.push('running')),
+    markWaitingUser: mock.fn(async () => lifecycleCalls.push('waiting_user')),
+    markCompleted: mock.fn(async () => lifecycleCalls.push('completed')),
+    markFailed: mock.fn(async () => lifecycleCalls.push('failed')),
+    markStopped: mock.fn(async () => lifecycleCalls.push('stopped')),
+    syncLoopSnapshot: mock.fn(async () => undefined),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '正在进行视觉检测', tool_calls: [{
+          id: 'tool-debug-open-page-visual-detection-failed',
+          type: 'function',
+          function: {
+            name: 'debug_open_page',
+            arguments: JSON.stringify({ url: 'http://127.0.0.1:3000/' }),
+          },
+        }] } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: '', tool_calls: [{
+        id: 'tool-complete-after-failed-visual-check',
+        type: 'function',
+        function: {
+          name: 'complete_task',
+          arguments: JSON.stringify({
+            summary: '网站已完成。',
+            verification: ['已截图'],
+          }),
+        },
+      }] } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+
+  const browserScreenshot = {
+    type: 'browser_screenshot',
+    kind: 'browser_action_screenshot',
+    status: 'captured',
+    storageKey: 'sessions/session-coordinator-visual-detection-failed/browser-actions/blank.png',
+    mimeType: 'image/png',
+    width: 1280,
+    height: 720,
+    capturedAt: '2026-05-22T14:20:00.000Z',
+    source: {
+      sandboxId: 'sandbox-visual-detection-failed',
+      cdpPort: 9222,
+      url: 'http://127.0.0.1:3000/',
+      title: 'Blank',
+      toolName: 'debug_open_page',
+      action: 'open_page',
+      description: '打开首页',
+    },
+    visualCheck: {
+      status: 'failed',
+      reasonCode: 'screenshot_low_entropy',
+      message: '截图几乎是单一颜色，疑似白屏或纯色空页面。',
+      diagnostics: {
+        visibleTextLength: 0,
+        uniqueColorCount: 1,
+        dominantColorRatio: 1,
+      },
+    },
+  };
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'debug_open_page') {
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({ browserScreenshot }),
+        evidence: [browserScreenshot],
+      };
+    }
+    return {
+      type: 'complete' as const,
+      summary: '网站已完成。',
+      verification: ['已截图'],
+    };
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+    undefined as any,
+    undefined as any,
+    { captureManagedRunPreview: mock.fn(async () => null) } as any
+  );
+
+  try {
+    await coordinator.execute(state, new AbortController());
+
+    assert.equal(fetchCount, 3);
+    assert.equal(executeMock.mock.callCount(), 3);
+    assert.deepEqual(lifecycleCalls, ['running', 'failed']);
+    assert.equal(state.status, 'failed');
+    assert.match(state.stopReason || '', /我已经停止继续尝试/);
+    const blockedComplete = eventCalls.find(
+      (entry) => entry.eventType === 'tool_call_failed' && entry.payload.toolName === 'complete_task'
+    );
+    assert.ok(blockedComplete);
+    assert.equal(
+      blockedComplete.payload.error,
+      '页面已打开但没有通过视觉检测，Altus 将继续修复白屏、空内容或错误页问题后重新截图。'
+    );
+    assert.match(
+      (blockedComplete.payload.toolResultEnvelope as any)?.errorMessage,
+      /passed_count=0/
+    );
+    assert.match(
+      (blockedComplete.payload.toolResultEnvelope as any)?.errorMessage,
+      /last_reason_code=screenshot_low_entropy/
+    );
+  } finally {
+    if (previousMaxRounds === undefined) {
+      delete process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS;
+    } else {
+      process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS = previousMaxRounds;
+    }
+  }
+});
+
 test('execute injects skill catalog prompt before active skill body', async () => {
   const state = new AltusRunState({
     runId: 'run-coordinator-skills',
@@ -1660,6 +2514,7 @@ test('execute injects skill catalog prompt before active skill body', async () =
       assert.match(turnStatePrompt, /ppt-workflow: PPT 子任务编排/);
       assert.match(turnStatePrompt, /# Active skills/);
       assert.match(turnStatePrompt, /# Skill Brief/);
+      assert.equal((turnStatePrompt.match(/# Dynamic context blocks/g) || []).length, 1);
       return [
         { role: 'system', content: systemPrompt },
         { role: 'system', content: turnStatePrompt },
@@ -3116,7 +3971,7 @@ test('execute records plain-text continuation recovery before failing the manage
   assert.equal(executeMock.mock.callCount(), 0);
   assert.deepEqual(lifecycleCalls, ['running', 'failed']);
   assert.equal(state.status, 'failed');
-  assert.match(state.stopReason || '', /managed_model_plain_text_without_tool_call/);
+  assert.match(state.stopReason || '', /这次任务没有顺利完成/);
   assert.equal(
     loopSnapshots.some((snapshot) => snapshot.lastTransitionReason === 'plain_text_continuation_prompted'),
     true
@@ -4384,4 +5239,356 @@ test('execute switches to vision model when conversation contains image blocks',
       process.env.ALTUS_MANAGED_VISION_MODEL = originalVisionModel;
     }
   }
+});
+
+test('debug_open_page failure tracking blocks repeated same-target retries', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+  const state = {
+    lastKey: '',
+    repeatCount: 0,
+    failureCounts: {},
+  };
+  const args = { url: 'http://127.0.0.1:3000/' };
+  const rawError =
+    'debug_open_page_failed:__ONECEO_DEBUG_TARGET_UNREACHABLE__\nFailed to connect to 127.0.0.1 port 3000';
+
+  const first = coordinator.testRecordDebugOpenPageFailure({
+    args,
+    rawError,
+    sanitizedError: '调试页面目标地址暂不可访问',
+    state,
+  });
+  const second = coordinator.testRecordDebugOpenPageFailure({
+    args,
+    rawError,
+    sanitizedError: '调试页面目标地址暂不可访问',
+    state,
+  });
+
+  assert.equal(first.errorCode, 'debug_target_unreachable');
+  assert.equal(first.blocked, false);
+  assert.equal(first.userActionRequired, false);
+  assert.equal(second.errorCode, 'debug_open_page_repeat_blocked');
+  assert.equal(second.blocked, true);
+  assert.equal(second.userActionRequired, false);
+  assert.match(second.sanitizedError, /连续打开失败/);
+  assert.match(second.rawError, /same_reason=debug_target_unreachable/);
+});
+
+test('debug_open_page failure tracking does not block opaque tool execution failures', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+  const state = {
+    lastKey: '',
+    repeatCount: 0,
+    failureCounts: {},
+  };
+  const args = { url: 'http://127.0.0.1:8080/' };
+  const rawError = 'debug_open_page_failed:exit status 1';
+
+  const first = coordinator.testRecordDebugOpenPageFailure({
+    args,
+    rawError,
+    sanitizedError: '调试页面校验未返回具体状态',
+    state,
+  });
+  const second = coordinator.testRecordDebugOpenPageFailure({
+    args,
+    rawError,
+    sanitizedError: '调试页面校验未返回具体状态',
+    state,
+  });
+
+  assert.equal(first.errorCode, 'tool_execution_failed');
+  assert.equal(first.blocked, false);
+  assert.equal(second.errorCode, 'tool_execution_failed');
+  assert.equal(second.blocked, false);
+  assert.equal(second.userActionRequired, false);
+});
+
+test('debug_open_page failure tracking lets Altus investigate debug service readiness once before blocking repeats', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+  const state = {
+    lastKey: '',
+    repeatCount: 0,
+    failureCounts: {},
+  };
+  const args = { url: 'http://127.0.0.1:8080/' };
+  const rawError =
+    'debug_open_page_debug_not_ready:cdp_not_ready:Chromium CDP 调试端口未就绪，无法打开调试页面';
+
+  const first = coordinator.testRecordDebugOpenPageFailure({
+    args,
+    rawError,
+    sanitizedError: '远程调试服务尚未就绪',
+    state,
+  });
+  const second = coordinator.testRecordDebugOpenPageFailure({
+    args,
+    rawError,
+    sanitizedError: '远程调试服务尚未就绪',
+    state,
+  });
+
+  assert.equal(first.errorCode, 'debug_service_not_ready');
+  assert.equal(first.blocked, false);
+  assert.equal(first.userActionRequired, false);
+  assert.equal(second.errorCode, 'debug_open_page_repeat_blocked');
+  assert.equal(second.blocked, true);
+  assert.equal(second.userActionRequired, false);
+  assert.match(second.rawError, /same_reason=debug_service_not_ready/);
+});
+
+test('debug_open_page failure tracking normalizes localhost aliases and counts across corrective steps', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+  const state = {
+    lastKey: '',
+    repeatCount: 0,
+    failureCounts: {},
+  };
+  const rawError =
+    'debug_open_page_failed:__ONECEO_DEBUG_TARGET_UNREACHABLE__\nFailed to connect to 127.0.0.1 port 3000';
+
+  const first = coordinator.testRecordDebugOpenPageFailure({
+    args: { url: 'http://localhost:3000/?cache=1#top' },
+    rawError,
+    sanitizedError: '调试页面目标地址暂不可访问',
+    state,
+  });
+  state.lastKey = '';
+  state.repeatCount = 0;
+  const second = coordinator.testRecordDebugOpenPageFailure({
+    args: { url: '127.0.0.1:3000/' },
+    rawError,
+    sanitizedError: '调试页面目标地址暂不可访问',
+    state,
+  });
+
+  assert.equal(first.blocked, false);
+  assert.equal(second.errorCode, 'debug_open_page_repeat_blocked');
+  assert.equal(second.blocked, true);
+  assert.equal(second.userActionRequired, false);
+  assert.match(second.rawError, /same_target=http:\/\/127\.0\.0\.1:3000/);
+});
+
+test('execute keeps repeated debug_open_page failures recoverable so Altus can investigate and complete', async () => {
+  const state = createState(
+    '7f0c2ad3-5a58-4d3a-b0ab-54167ae0fb31',
+    '8832652e-b9b9-485a-b82d-0a9beced815d',
+  );
+  state.input.taskIntentProfile = {
+    ...state.input.taskIntentProfile,
+    webArtifactRequested: true,
+  };
+  const lifecycleFailures: Array<{
+    message: string;
+    options?: { userMessage?: string; reasonCode?: string };
+  }> = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-debug-repeat',
+      workspaceRoot: '/workspace/8832652e-b9b9-485a-b82d-0a9beced815d',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => undefined),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+  const lifecycleService = {
+    markRunning: mock.fn(async () => undefined),
+    markWaitingUser: mock.fn(async () => undefined),
+    markCompleted: mock.fn(async () => undefined),
+    markFailed: mock.fn(async (_failedState: AltusRunState, message: string, options?: { userMessage?: string; reasonCode?: string }) => {
+      lifecycleFailures.push({ message, options });
+    }),
+    markStopped: mock.fn(async () => undefined),
+    syncLoopSnapshot: mock.fn(async () => undefined),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount <= 2) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: `tool-debug-open-${fetchCount}`,
+                    type: 'function',
+                    function: {
+                      name: 'debug_open_page',
+                      arguments: JSON.stringify({ url: 'http://localhost:3000/?v=1' }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (fetchCount === 3) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-investigate-after-debug-repeat',
+                    type: 'function',
+                    function: {
+                      name: 'shell_execute',
+                      arguments: JSON.stringify({ command: 'curl -sI http://127.0.0.1:3000 || true' }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (fetchCount === 4) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '正在进行视觉检测',
+                tool_calls: [
+                  {
+                    id: 'tool-debug-open-after-investigation',
+                    type: 'function',
+                    function: {
+                      name: 'debug_open_page',
+                      arguments: JSON.stringify({ url: 'http://localhost:3000/?v=1' }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-complete-after-debug-investigation',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '已完成预览问题调查并交付。',
+                      verification: ['已确认重复视觉检测失败后继续调查'],
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  let debugOpenCount = 0;
+  const browserScreenshot = {
+    type: 'browser_screenshot',
+    kind: 'browser_action_screenshot',
+    status: 'captured',
+    storageKey: 'preview/debug-open-after-investigation.png',
+    signedUrl: 'https://example.test/debug-open-after-investigation.png',
+    capturedAt: '2026-05-24T13:00:00.000Z',
+    source: {
+      sandboxId: 'sandbox-debug-repeat',
+      toolName: 'debug_open_page',
+      action: 'open_page',
+      url: 'http://127.0.0.1:3000/',
+    },
+    visualCheck: {
+      status: 'passed',
+      reasonCode: 'ok',
+      message: '页面已打开',
+    },
+  };
+  mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'debug_open_page') {
+      debugOpenCount += 1;
+      if (debugOpenCount <= 2) {
+        throw new Error(
+          'debug_open_page_failed:__ONECEO_DEBUG_TARGET_UNREACHABLE__\nFailed to connect to 127.0.0.1 port 3000'
+        );
+      }
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({
+          targetUrl: 'http://127.0.0.1:3000/',
+          browserScreenshot,
+        }),
+        evidence: [browserScreenshot],
+      };
+    }
+    if (toolName === 'shell_execute') {
+      return {
+        type: 'result' as const,
+        content: 'curl failed: connection refused',
+      };
+    }
+    return {
+      type: 'complete' as const,
+      summary: '已完成预览问题调查并交付。',
+      verification: ['已确认重复视觉检测失败后继续调查'],
+    };
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(fetchCount, 5);
+  assert.equal(state.status, 'completed');
+  assert.equal(lifecycleFailures.length, 0);
+  const failedEvents = eventCalls.filter((entry) => entry.eventType === 'tool_call_failed');
+  assert.equal(failedEvents.length, 2);
+  assert.equal((failedEvents[1]?.payload as any)?.transitionReason, 'tool_failed_but_recoverable');
+  assert.equal((failedEvents[1]?.payload as any)?.debugOpenPageFailure?.errorCode, 'debug_open_page_repeat_blocked');
+  assert.equal((failedEvents[1]?.payload as any)?.debugOpenPageFailure?.blocked, true);
+  assert.equal(JSON.stringify(failedEvents[1]?.payload.error || '').includes('same_target='), false);
+  const completedToolNames = eventCalls
+    .filter((entry) => entry.eventType === 'tool_call_completed')
+    .map((entry) => entry.payload.toolName);
+  assert.deepEqual(completedToolNames, ['shell_execute', 'debug_open_page', 'complete_task']);
 });

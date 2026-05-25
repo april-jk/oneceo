@@ -36,6 +36,11 @@ import {
 type TaskCreationSessionRecord = typeof taskCreationSessions.$inferSelect & {
   projectId: string | null;
   projectName: string | null;
+  title?: string | null;
+  titleLocked?: boolean | null;
+  titleSource?: string | null;
+  titleState?: string | null;
+  titleResolvedAt?: string | null;
 };
 
 type TaskCreationSessionTitleSearchHit = {
@@ -120,10 +125,16 @@ export class TaskCreationSessionDAO {
   ): TaskCreationSessionRecord | null {
     if (!session) return null;
     const project = this.readSessionProject(session.metadataJson);
+    const metadata = this.asRecord(session.metadataJson);
     return {
       ...session,
       projectId: project.projectId,
       projectName: project.projectName,
+      title: this.asText(metadata.title) || null,
+      titleLocked: metadata.titleLocked === true,
+      titleSource: this.asText(metadata.titleSource) || null,
+      titleState: this.asText(metadata.titleState) || null,
+      titleResolvedAt: this.asText(metadata.titleResolvedAt) || null,
     };
   }
 

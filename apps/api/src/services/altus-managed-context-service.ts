@@ -58,9 +58,13 @@ export function buildManagedConversationEntries(
   history: AltusManagedHistoryMessage[],
   input: {
     limit?: number;
+    tokenBudget?: number;
+    minTailEntries?: number;
   } = {}
 ): AltusManagedConversationEntry[] {
   const limit = input.limit && input.limit > 0 ? input.limit : history.length;
+  const tokenBudget = input.tokenBudget && input.tokenBudget > 0 ? Math.floor(input.tokenBudget) : null;
+  const minTailEntries = input.minTailEntries && input.minTailEntries > 0 ? Math.floor(input.minTailEntries) : 10;
   const entries: AltusManagedConversationEntry[] = [];
   for (const item of history) {
     if (!isManagedHistoryMessageRelevant({ role: item.role, messageType: item.messageType })) {
@@ -76,7 +80,41 @@ export function buildManagedConversationEntries(
       source: item,
     });
   }
-  return entries.slice(-limit);
+  const recent = entries.slice(-limit);
+  if (!tokenBudget || recent.length <= minTailEntries) {
+    return recent;
+  }
+
+  const selected: AltusManagedConversationEntry[] = [];
+  let consumedTokens = 0;
+  for (let index = recent.length - 1; index >= 0; index -= 1) {
+    const entry = recent[index];
+    const estimatedTokens = estimateEntryTokenCost(entry);
+    const withinBudget = consumedTokens + estimatedTokens <= tokenBudget;
+    if (selected.length < minTailEntries || withinBudget) {
+      selected.push(entry);
+      consumedTokens += estimatedTokens;
+    }
+  }
+  return selected.reverse();
+}
+
+function estimateTextTokenCost(text: string) {
+  const normalized = asText(text);
+  if (!normalized) return 4;
+  return Math.max(4, Math.ceil(normalized.length / 4) + 6);
+}
+
+function estimateEntryTokenCost(entry: AltusManagedConversationEntry) {
+  let metadataCost = 0;
+  if (entry.metadata) {
+    try {
+      metadataCost = estimateTextTokenCost(JSON.stringify(entry.metadata));
+    } catch {
+      metadataCost = 0;
+    }
+  }
+  return estimateTextTokenCost(entry.content) + metadataCost;
 }
 
 function appendCurrentInputIfMissing(

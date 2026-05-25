@@ -630,10 +630,10 @@ export class AltusManagedPromptService {
         ? [
             '# OneCEO weak web app fast path',
             '- [ONECEO_WEAK_WEBAPP_FAST_PATH_ANCHOR] If the user broadly asks to generate a website, landing page, studio site, restaurant site, portfolio, or company homepage without custom backend/integration requirements, use the shortest fixed-shell delivery path.',
-            '- Keep the blueprint todo finite and proportional. For a weakly specified marketing website, 4-6 concrete items are usually enough: page content in `client/src/App.jsx`, visual system in `client/src/styles.css`, one optional lightweight interaction if useful, acceptance marker, macro self-check, and completion.',
-            '- Do not spend extra rounds on stack discovery, dependency installation, build/start rewrites, local preview servers, browser automation, or repeated read-only file probes when the fixed shell is already materialized and the user only asked for source code.',
+            '- Keep the blueprint todo finite and proportional. For a weakly specified marketing website, 4-6 concrete items are usually enough: page content in `client/src/App.jsx`, visual system in `client/src/styles.css`, one optional lightweight interaction if useful, acceptance marker, run/build verification, visual detection, and completion.',
+            '- Do not spend extra rounds on stack discovery, dependency installation, build/start rewrites, or repeated read-only file probes when the fixed shell is already materialized and the user only asked for source code. Run/build verification and visual detection are still required before completion.',
             '- Fill the requested site in one focused implementation pass by editing `client/src/App.jsx` and `client/src/styles.css`. Leave `server/index.ts`, `package.json`, `vite.config.ts`, and `oneceo.manifest.json` unchanged unless the user explicitly needs backend behavior.',
-            '- After writing the files, perform one macro self-check against the todo and call `complete_task`. Do not keep polishing optional copy, alternate layouts, or unused files after the requested site structure and marker exist.',
+            '- After writing the files, run the shortest verification that proves the app can build or run, then enter visual detection: start or open the app, call `debug_open_page`, perform Playwright/n.eko checks with `browser_interact` when there are visible controls, scrolling, pagination, or state changes to verify, and only then call `complete_task`.',
             '',
           ].join('\n')
         : '';
@@ -702,6 +702,7 @@ export class AltusManagedPromptService {
       '- If the user asks to 启动网站调试功能, open a debug page, or load a website in the debug view, use debug_open_page instead of free-form command text.',
       '- Treat website debugging as entry into a testing workflow, not as a visual-only action. Before the first debug_open_page call, write or update a workspace test document such as `docs/test-plan.md` with requirements, target flows, test cases, acceptance criteria, and a results section.',
       '- After the test document exists, explicitly enter the testing phase in your todo/progress: start or open the app, call debug_open_page, then run Playwright / playwright-mcp functional checks against the same n.eko Chromium session.',
+      '- For generated websites and web apps, after code implementation and run/build verification, tell progress as `正在进行视觉检测`, then use the n.eko + Playwright flow before final delivery.',
       '- During website debugging, expose concrete Playwright-backed browser actions with browser_interact instead of vague progress text: open the page with debug_open_page, then call browser_interact only for supported Playwright projections such as locator_click, text_click, coordinate_click, locator_fill, keyboard_type, keyboard_press, mouse_wheel, wait_for_locator, wait_for_text, wait_for_load_state, and wait_for_timeout. Set the browser_interact description to the exact user-visible action, for example `点击“新游戏”按钮`, `按下 ArrowUp 键`, `向下滚动页面`.',
       '- The functional test must cover the core user flows implied by the request, not only page reachability. Check visible content, navigation, key controls/forms/interactions, state changes, responsive layout when relevant, and obvious console/runtime failures.',
       '- If Playwright finds a defect, record the failure in the test document, return to repair with file/code tools, then rerun the affected tests and update the same test document with the retest result before completing.',
@@ -709,6 +710,9 @@ export class AltusManagedPromptService {
       '- For standalone HTML deliverables already present in the workspace, call debug_open_page with the workspace file:// URL instead of trying to start a persistent local HTTP server through shell_execute.',
       '- Treat debug_open_page as successful only when the tool result succeeds. If debug_open_page reports target unreachable, bad HTTP status, or tab not ready, fix the local preview service/port and call debug_open_page again before telling the user the page is open.',
       '- After opening a page for debugging or after building a website/app, use Playwright / playwright-mcp by default to inspect or test the same n.eko Chromium session through CDP 9222. Do not launch a separate browser instance for this verification.',
+      '- The sandbox browser defaults are fixed by the platform: `ONECEO_PLAYWRIGHT_CDP_URL=http://127.0.0.1:9222`, `PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`, `NODE_PATH=/usr/local/lib/node_modules`, `playwright-mcp=/usr/local/bin/playwright-mcp`, `browser-use=/usr/local/bin/browser-use`, `browser-use venv=/opt/browser-use`, `neko=/usr/local/bin/neko`, and `n.eko static root=/opt/neko/client/dist`. Do not search for these paths, do not set NODE_PATH manually, do not run `npx playwright install`, and do not create ad-hoc screenshot scripts such as `screenshot-test.mjs` for visual evidence.',
+      '- For generated website visual detection, the required screenshot evidence comes from platform tool results: call `debug_open_page`, then use `browser_interact` for load checks, clicks, keys, scrolling, pagination, forms, and responsive state checks. Each successful platform browser tool call attaches its screenshot to the corresponding Action.',
+      '- Every debug_open_page and browser_interact result is captured as a Playwright screenshot and attached to the corresponding Action. Use these screenshots as user-visible evidence for each website check step, and keep browser_interact steps granular enough that the Action screenshot explains what was verified.',
       '- Do not tell the user the page is displayed correctly until Playwright confirms the visible page is the target page, not about:blank, a Chrome error page, or an unexpected fallback route.',
       '- Do not replace debug_open_page with ad-hoc docker-compose/install shell flows when the request is about opening a website in the debug browser.',
       '- Browser Use CLI is preinstalled in the sandbox. Use Browser Use for exploratory external-site access and interaction only when that is the better browser automation surface; when it must share the debug browser, pass `--cdp-url http://127.0.0.1:9222`.',
@@ -759,6 +763,7 @@ export class AltusManagedPromptService {
       '- For the fixed OneCEO web shell, keep runtime ownership stable: browser UI and styling belong under `client/`; server routes and HTTP handling belong under `server/`; shared constants/types belong under `shared/`.',
       '- For the fixed OneCEO web shell, the homepage implementation, primary user-facing content, requested acceptance marker, hero, main sections, and interactive browser UI must live in `client/src/App.jsx` or `client/src/App.tsx`. Keep `client/src/main.*` as the React mount file only.',
       '- For React files in the fixed OneCEO web shell, avoid unresolved browser globals: if code uses `React.useState`, `React.useEffect`, `React.Fragment`, or any other `React.*` namespace, explicitly import React in that file. Prefer named imports such as `import { useState } from "react"` when only hooks are needed.',
+      '- The fixed OneCEO web shell already provides React automatic JSX runtime, an app error boundary, and `data-oneceo-app-status` browser render diagnostics. Do not remove or rewrite those shell contracts; if visual detection reports `app_runtime_error`, `app_root_empty`, or `visible_text_too_short`, fix the actual frontend code and rerun build plus browser screenshots.',
       '- [ONECEO_WEBAPP_TODO_BLUEPRINT_ANCHOR] Before the first code-editing step for a new deployable web app task, write a blueprint todo with `todowrite`.',
       '- The deployable-web-app blueprint todo must scale with task size: include every major frontend, backend, integration, verification, and completion workstream, but do not pad it with arbitrary filler items.',
       '- The deployable-web-app blueprint todo must name the target path for each implementation item, such as `client/src/App.jsx`, `client/src/styles.css`, `server/index.ts`, or a concrete file under `shared/`.',
@@ -774,8 +779,8 @@ export class AltusManagedPromptService {
       '- If you touch the frontend entry for a deployable web app, keep a stable hook for platform analytics injection. Do not hard-code tracker host, websiteId, or vendor-specific script tags.',
       '- For deployable web app tasks, include a healthcheck route path in `oneceo.manifest.json`. Prefer `/api/system/health` when you own the server route design.',
       '- Do not finish a deployable web app task while required deployment files are missing. Before completion, verify at least: `package.json`, `oneceo.manifest.json`, and the primary app entry files exist.',
-      '- [ONECEO_WEBAPP_MACRO_REVIEW_ANCHOR] Before `complete_task`, run one macro self-check against the current todo: confirm the promised paths exist, the fixed shell contract still holds, the major requested modules are present, and no unexpected runtime or start-script drift was introduced.',
-      '- The macro self-check should stay high level. Do not reread every file line-by-line just to restate the todo; use one concise consistency pass before completion.',
+      '- [ONECEO_WEBAPP_VISUAL_DETECTION_ANCHOR] Before `complete_task`, complete visual detection against the generated browser product: confirm the promised paths exist, verify the app can build or run, open it through `debug_open_page`, and capture Playwright/n.eko Action screenshots for the visible page and any requested controls, scrolling, pagination, or state changes.',
+      '- The final consistency pass should stay high level. Do not reread every file line-by-line just to restate the todo; use one concise consistency pass plus the visual detection screenshots before completion.',
       deploymentToolSection,
       resourceToolSection,
       '',
@@ -841,7 +846,7 @@ export class AltusManagedPromptService {
     turnStatePrompt?: string | null;
   }) {
     const title = asText(input.sessionTitle) || '未命名会话';
-    const now = new Date().toISOString();
+    const currentDate = new Date().toISOString().slice(0, 10);
     const profile = input.taskIntentProfile;
     const lines = [
       '# Runtime context',
@@ -852,7 +857,7 @@ export class AltusManagedPromptService {
       `- Session ID: ${input.sessionId}`,
       `- Session title: ${title}`,
       `- Sandbox workspace root: ${input.workspaceRoot}`,
-      `- Current time: ${now}`,
+      `- Current date: ${currentDate}`,
       '',
       '# Session connectors',
       formatConnectors(input.connectors),
@@ -932,14 +937,22 @@ export class AltusManagedPromptService {
     return lines.join('\n');
   }
 
-  buildSkillContextPrompt(skills: ManagedSkillContext[]) {
+  buildSkillContextPrompt(
+    skills: ManagedSkillContext[],
+    options: {
+      includeBlockIndex?: boolean;
+    } = {}
+  ) {
     if (!Array.isArray(skills) || skills.length === 0) {
       return '';
     }
     const hasPptWorkflow = skills.some((skill) => skill.slug === 'ppt-workflow');
-    const blockIndex = altusManagedDynamicContextBlockService.renderBlockIndex(
-      altusManagedDynamicContextBlockService.buildSkillBlocks({ activeSkills: skills })
-    );
+    const includeBlockIndex = options.includeBlockIndex !== false;
+    const blockIndex = includeBlockIndex
+      ? altusManagedDynamicContextBlockService.renderBlockIndex(
+          altusManagedDynamicContextBlockService.buildSkillBlocks({ activeSkills: skills })
+        )
+      : '';
 
     return [
       '# Active skills',
@@ -952,8 +965,7 @@ export class AltusManagedPromptService {
         ? '- For PPTX delivery, finish the ppt-workflow planning and preflight first, then call `render_pptx_from_instructions` with the final `PptRenderInstruction`; include the returned `.pptx` path in `complete_task.attachments`. Do not create PPTX through python-pptx, shell scripts, or manual office-generation code while ppt-workflow is active.'
         : '',
       '',
-      blockIndex,
-      '',
+      ...(includeBlockIndex ? [blockIndex, ''] : []),
       ...this.formatSkillSections(skills),
     ].filter(Boolean).join('\n');
   }
@@ -981,13 +993,21 @@ export class AltusManagedPromptService {
     ].join('\n');
   }
 
-  buildSkillCatalogPrompt(skills: ManagedSkillCatalogEntry[]) {
+  buildSkillCatalogPrompt(
+    skills: ManagedSkillCatalogEntry[],
+    options: {
+      includeBlockIndex?: boolean;
+    } = {}
+  ) {
     if (!Array.isArray(skills) || skills.length === 0) {
       return '';
     }
-    const blockIndex = altusManagedDynamicContextBlockService.renderBlockIndex(
-      altusManagedDynamicContextBlockService.buildSkillBlocks({ catalog: skills })
-    );
+    const includeBlockIndex = options.includeBlockIndex !== false;
+    const blockIndex = includeBlockIndex
+      ? altusManagedDynamicContextBlockService.renderBlockIndex(
+          altusManagedDynamicContextBlockService.buildSkillBlocks({ catalog: skills })
+        )
+      : '';
 
     const lines = skills.map((skill) => {
       const resourceSummary = skill.resourceSummary;
@@ -1005,8 +1025,7 @@ export class AltusManagedPromptService {
       '- If the user explicitly selected a skill, its full body appears in the Active skills section.',
       '- If an active skill lists extra resources and you need one, call `load_skill_resource` with the raw active `skillId`, raw `revisionId`, and `resourcePath`; do not copy display ids such as `id=skill:platform:...`.',
       '- Catalog entries are diagnostic/index context only; do not treat them as loaded skill bodies.',
-      '',
-      blockIndex,
+      ...(includeBlockIndex ? ['', blockIndex] : []),
       '',
       ...lines,
     ].join('\n');

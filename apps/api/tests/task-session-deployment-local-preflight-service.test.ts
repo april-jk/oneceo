@@ -51,6 +51,9 @@ test('local deployment preflight runs manifest build/start/browser smoke for sup
     assert.match(command, /bash -lc "\$build_command"/);
     assert.match(command, /NODE_PATH="\$playwright_node_path/);
     assert.match(command, /PLAYWRIGHT_BROWSERS_PATH="\$\{PLAYWRIGHT_BROWSERS_PATH:-\/opt\/ms-playwright\}"/);
+    assert.match(command, /__ONECEO_APP_RUNTIME_ERROR__/);
+    assert.match(command, /__ONECEO_APP_NOT_MOUNTED__/);
+    assert.match(command, /data-oneceo-app-status/);
     assert.equal(options?.cwd, '/workspace/app');
     return {
       stdout:
@@ -106,6 +109,39 @@ test('local deployment preflight skips stacks outside the current node/js/html f
     assert.equal(report.status, 'skipped');
     assert.equal(report.phase, 'unsupported');
     assert.equal(runCommandMock.mock.callCount(), 0);
+  } finally {
+    mock.restoreAll();
+  }
+});
+
+test('local deployment preflight does not let CLI screenshot hide browser runtime errors', async () => {
+  mock.method(e2bConnector, 'runCommand', async () => ({
+    stdout:
+      '__ONECEO_DEPLOYMENT_LOCAL_PREFLIGHT__' +
+      JSON.stringify({
+        status: 'failed',
+        phase: 'browser_smoke',
+        failureKind: 'workspace_code',
+        checkedAt: new Date().toISOString(),
+        message: 'Playwright smoke test found a browser runtime or render failure before Railway deployment.',
+        browserOutput: 'Error: __ONECEO_APP_RUNTIME_ERROR__:React is not defined',
+        browserMode: 'playwright_node',
+      }),
+    exitCode: 0,
+  }));
+
+  try {
+    const report = await runTaskSessionDeploymentLocalPreflight({
+      orchestratorSessionId: 'sandbox-1',
+      workspaceRoot: '/workspace/app',
+      baseline: createBaseline(),
+    });
+
+    assert.equal(report.status, 'failed');
+    assert.equal(report.phase, 'browser_smoke');
+    assert.equal(report.failureKind, 'workspace_code');
+    assert.equal(isTaskSessionDeploymentLocalPreflightPlatformFailure(report), false);
+    assert.match(report.browserOutput || '', /React is not defined/);
   } finally {
     mock.restoreAll();
   }

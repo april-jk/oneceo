@@ -5364,26 +5364,6 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       if (isProcessing) {
         await interruptCurrentRun(activeSessionId || undefined);
       }
-      let shouldBindCreatedSession = false;
-      const initialProjectId = !activeSessionId ? initialProjectIdForNewSession || undefined : undefined;
-      if (!activeSessionId) {
-        const created = await createTaskCreationDraftSession(text || "MCP 高风险操作确认");
-        const createdSessionId = (created?.id || '').trim();
-        if (!createdSessionId) {
-          throw new Error('managed draft session id missing');
-        }
-        activeSessionId = createdSessionId;
-        shouldBindCreatedSession = true;
-        if (initialProjectId) {
-          await createTaskCreationSession({
-            sessionId: createdSessionId,
-            mode: 'altus',
-            projectId: initialProjectId,
-          });
-        }
-        applyPendingConnectorDraftAsync(createdSessionId);
-      }
-
       const messageKey = generateClientMessageKey('user');
       const metadataAttachments = readUploadedAttachments(toRecord(options?.metadata).attachments);
       const combinedAttachments = mergeUploadedAttachments(
@@ -5402,10 +5382,47 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         metadata: messageMetadata,
         sessionId: activeSessionId || undefined,
       };
-
       setIsProcessing(true);
       setCurrentQuestion(null);
       activeProcessingMessageKeyRef.current = messageKey;
+      trackPendingLocalMessage(activeSessionId, optimisticUserMessage);
+      setMessages((prev) => mergeRealtimeMessage(prev, optimisticUserMessage, WELCOME_MESSAGE));
+
+      let shouldBindCreatedSession = false;
+      const initialProjectId = !activeSessionId ? initialProjectIdForNewSession || undefined : undefined;
+      if (!activeSessionId) {
+        try {
+          const created = await createTaskCreationDraftSession({
+            title: text || "MCP 高风险操作确认",
+          });
+          const createdSessionId = (created?.id || '').trim();
+          if (!createdSessionId) {
+            throw new Error('managed draft session id missing');
+          }
+          activeSessionId = createdSessionId;
+          shouldBindCreatedSession = true;
+          if (initialProjectId) {
+            await createTaskCreationSession({
+              sessionId: createdSessionId,
+              mode: 'altus',
+              projectId: initialProjectId,
+            });
+          }
+          applyPendingConnectorDraftAsync(createdSessionId);
+        } catch (error) {
+          setIsProcessing(false);
+          activeProcessingMessageKeyRef.current = null;
+          if (activeSessionId) {
+            clearManagedRunRecoveryState(activeSessionId);
+          }
+          throw error;
+        }
+      }
+      const sessionBoundOptimisticMessage: AgentMessage = {
+        ...optimisticUserMessage,
+        sessionId: activeSessionId || undefined,
+      };
+
       if (activeSessionId) {
         writeManagedRunRecoveryState({
           sessionId: activeSessionId,
@@ -5414,18 +5431,18 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           processing: true,
         });
       }
-      trackPendingLocalMessage(activeSessionId, optimisticUserMessage);
+      trackPendingLocalMessage(activeSessionId, sessionBoundOptimisticMessage);
       if (activeSessionId) {
         const nextMessages = primeOptimisticHistoryViewCache({
           sessionId: activeSessionId,
           currentMessages: messagesRef.current,
-          optimisticMessage: optimisticUserMessage,
+          optimisticMessage: sessionBoundOptimisticMessage,
           oldestCursor: oldestHistoryCursorRef.current,
           hasOlderHistory,
         });
         setMessages(nextMessages);
       } else {
-        setMessages((prev) => mergeRealtimeMessage(prev, optimisticUserMessage, WELCOME_MESSAGE));
+        setMessages((prev) => mergeRealtimeMessage(prev, sessionBoundOptimisticMessage, WELCOME_MESSAGE));
       }
       if (shouldBindCreatedSession && activeSessionId) {
         bindSessionId(activeSessionId);

@@ -140,6 +140,7 @@
     "settingsTab": "Settings",
     "accountTab": "Account",
     "modelTab": "Model Settings",
+    "voiceTab": "Voice",
     "skillsTab": "Skills",
     "connectorsTab": "Connectors",
     "personalizationTitle": "Personalization",
@@ -173,6 +174,13 @@
     "english": "English",
     "appearanceLabel": "Appearance",
     "appearanceDescription": "Choose how the page should look",
+    "voiceTabDescription": "Manage task voice input providers and prepare this area for future voice features.",
+    "voiceRecognitionProviderLabel": "Voice recognition mode",
+    "voiceRecognitionProviderDescription": "Choose whether task voice input uses the browser recognizer or online speech recognition.",
+    "voiceRecognitionProviderBrowser": "Browser speech recognition",
+    "voiceRecognitionProviderVolcengine": "Online speech recognition",
+    "voiceRecognitionProviderBrowserHint": "Default option. Uses the current browser's native speech recognition directly and is better for quick review and manual editing before send.",
+    "voiceRecognitionProviderVolcengineHint": "Uses the existing OneCEO online speech recognition path, including recording upload, streaming transcript, and final confirmation.",
     "themeLabel": "Theme",
     "themeDescription": "Select your preferred theme",
     "light": "Light",
@@ -260,14 +268,6 @@
   "attachmentPicker": {
     "triggerLabel": "Add attachment",
     "triggerAriaLabel": "Add attachment",
-    "cloud": {
-      "title": "Add from cloud",
-      "description": "Drive, OneDrive, website download",
-      "googleDriveDescription": "Import a publicly shared Drive file",
-      "oneDriveDescription": "Import a publicly shared OneDrive file",
-      "websiteLabel": "Website",
-      "websiteDescription": "Download a file directly from a web link"
-    },
     "skills": {
       "title": "Use skills",
       "description": "Select enabled skills and sync them to the sandbox",
@@ -284,31 +284,9 @@
       "title": "Add from local files",
       "description": "Choose documents, images, or code files from your computer"
     },
-    "dialog": {
-      "defaultTitle": "Add remote file",
-      "urlLabel": "File URL",
-      "hint": "Publicly accessible share links are supported. The file is downloaded in the browser first, then added to the current session like a normal attachment.",
-      "importing": "Importing...",
-      "confirm": "Add file",
-      "website": {
-        "title": "Add from website",
-        "description": "Enter a directly accessible file URL. The system downloads it first and then adds it as an attachment."
-      },
-      "googleDrive": {
-        "title": "Add from Google Drive",
-        "description": "Enter a publicly shared Google Drive file link. The system converts it to a downloadable URL."
-      },
-      "oneDrive": {
-        "title": "Add from OneDrive",
-        "description": "Enter a publicly shared OneDrive file link. The system downloads the file from the share link."
-      }
-    },
     "toasts": {
       "skillAdded": "Added skill: {{name}}",
       "skillAddFailed": "Failed to add skill",
-      "urlRequired": "Please enter a file URL",
-      "remoteAdded": "Added {{name}} from {{provider}}",
-      "remoteAddFailed": "Failed to add remote file",
       "localAddFailed": "Failed to add local attachment"
     }
   },
@@ -1510,10 +1488,15 @@
       "webPreview": "Web preview",
       "sourceCode": "Source code",
       "open": "Open",
-      "noHtmlArtifact": "There is no directly previewable HTML page in the current artifact. Switch to Code to inspect the file content.",
+      "openRemoteDebug": "Open debug page",
+      "noHtmlArtifact": "There is no directly previewable HTML page in the current artifact.",
       "websiteSnapshotAlt": "Website preview screenshot",
       "websiteSnapshotTitle": "Website preview",
       "websiteSnapshotUnavailable": "The website screenshot is unavailable. Use the debug page or deploy the site to inspect it interactively.",
+      "artifactGenerated": "Deliverable files generated",
+      "websiteSnapshotIssueTitle": "Delivery preview failed visual detection",
+      "websiteSnapshotIssueReason": "Diagnostic reason",
+      "websiteSnapshotIssueDescription": "The files were generated, but the current page preview did not render into a deliverable state. Open the debug page to inspect it, then rerun visual detection after the fix.",
       "loadingFileContent": "Loading file content",
       "noContent": "No content yet"
     }

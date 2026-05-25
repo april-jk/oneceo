@@ -1202,6 +1202,7 @@ function buildReviewFeedbackPrompt(payload: {
     '3) 如需生成/修改文件，请直接写入当前工作区并在输出中说明文件路径。',
     '4) 必须使用 playwright-mcp 进行浏览器自动化验证（headless=false），输出测试步骤与结果。',
     '5) playwright-mcp 已预置，无需安装任何 Playwright 依赖，也不要修改 package.json 或执行 npm/pnpm 安装。',
+    '5.1) sandbox 固定路径：playwright-mcp=/usr/local/bin/playwright-mcp，Playwright 浏览器=/opt/ms-playwright，NODE_PATH=/usr/local/lib/node_modules，CDP=http://127.0.0.1:9222。',
   ].join('\n');
 }
 
@@ -1223,6 +1224,7 @@ function buildPlaywrightTestPrompt(payload: {
     '要求：',
     '1) 必须使用 playwright-mcp 执行浏览器自动化测试。',
     '1.1) playwright-mcp 已预置，无需安装任何 Playwright 依赖，也不要修改 package.json 或执行 npm/pnpm 安装。',
+    '1.2) sandbox 固定路径：playwright-mcp=/usr/local/bin/playwright-mcp，Playwright 浏览器=/opt/ms-playwright，NODE_PATH=/usr/local/lib/node_modules，CDP=http://127.0.0.1:9222。',
     '2) 必须连接到与 n.eko 同一实例的 Chromium（使用 CDP 9222 端口，例如 http://127.0.0.1:9222），不要启动新的独立浏览器实例。',
     '3) 连接后复用现有浏览器上下文与首个页面（contexts[0] 与 pages[0]）；如果没有页面，只能在该上下文中创建一个新页面，确保同一个窗口可被 n.eko 捕获。',
     '4) 测试请以可视模式运行（headless=false），确保调试画面可在 n.eko 中查看。',

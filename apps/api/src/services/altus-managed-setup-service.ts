@@ -910,6 +910,27 @@ function extractMessageTextContent(content: ChatMessage['content']) {
 export class AltusManagedSetupService {
   constructor(private readonly imageObjectService: ManagedImageObjectService = managedImageObjectService) {}
 
+  private getConversationHistoryEntryLimit() {
+    const fallback = 120;
+    const parsed = Number(process.env.ALTUS_MANAGED_HISTORY_ENTRY_LIMIT || fallback);
+    if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+    return Math.min(240, Math.floor(parsed));
+  }
+
+  private getConversationHistoryTokenBudget() {
+    const fallback = 5600;
+    const parsed = Number(process.env.ALTUS_MANAGED_HISTORY_TOKEN_BUDGET || fallback);
+    if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+    return Math.min(16000, Math.floor(parsed));
+  }
+
+  private getConversationHistoryMinTailEntries() {
+    const fallback = 10;
+    const parsed = Number(process.env.ALTUS_MANAGED_HISTORY_MIN_TAIL_ENTRIES || fallback);
+    if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+    return Math.min(40, Math.floor(parsed));
+  }
+
   private async buildInlineImageBlocks(input: {
     metadata?: unknown;
     cache: Map<string, ChatMessageContentPart>;
@@ -1230,7 +1251,11 @@ export class AltusManagedSetupService {
     const attachmentContextPrompt = collectAttachmentContextPrompt(history);
     const todoContextPrompt = buildTodoContextPrompt(history);
     const inlineImageCache = new Map<string, ChatMessageContentPart>();
-    const relevantHistory = buildManagedConversationEntries(history, { limit: 24 });
+    const relevantHistory = buildManagedConversationEntries(history, {
+      limit: this.getConversationHistoryEntryLimit(),
+      tokenBudget: this.getConversationHistoryTokenBudget(),
+      minTailEntries: this.getConversationHistoryMinTailEntries(),
+    });
     const relevant: ChatMessage[] = [];
 
     for (const item of relevantHistory) {

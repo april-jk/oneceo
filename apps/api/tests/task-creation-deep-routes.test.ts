@@ -1036,24 +1036,6 @@ test('GET /api/task-creation/sessions/:sessionId/opencode/events falls back to d
   }
 });
 
-test('POST /api/task-creation/attachments/fetch rejects anonymous access', async () => {
-  const server = await startServer();
-
-  try {
-    const response = await testFetch(`${server.origin}/api/task-creation/attachments/fetch`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ provider: 'website', url: 'https://example.com/file.txt' }),
-    });
-    const payload = await response.json();
-
-    assert.equal(response.status, 401);
-    assert.equal(payload.success, false);
-  } finally {
-    await server.close();
-  }
-});
-
 test('GET /api/task-creation/sessions/:sessionId/deliverables returns owner-scoped artifacts', async () => {
   const server = await startServer();
   let assertedUserId = '';

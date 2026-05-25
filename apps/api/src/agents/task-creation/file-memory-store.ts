@@ -50,6 +50,7 @@ export interface FileSessionRecord {
   titleLocked?: boolean;
   titleSource?:
     | 'placeholder'
+    | 'first_user_input'
     | 'first_explicit_user_input'
     | 'task_description'
     | 'clarification_summary'
@@ -667,7 +668,14 @@ class TaskCreationFileMemoryStore {
           await db
             .update(taskCreationSessions)
             .set({
-              metadataJson: { ...currentMeta, title: nextTitle },
+              metadataJson: {
+                ...currentMeta,
+                title: nextTitle,
+                titleLocked: nextLock,
+                titleSource: nextSource,
+                titleState: nextState,
+                titleResolvedAt: nextResolvedAt,
+              },
               updatedAt: new Date(),
             })
             .where(eq(taskCreationSessions.id, sessionId));

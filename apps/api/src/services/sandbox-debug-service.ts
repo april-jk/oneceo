@@ -1084,8 +1084,10 @@ write_manifest "running" "debug browser ready"
   const existingIceLite = asBoolean(nekoMeta.iceLite, false);
   const existingAutoNat = asBoolean(nekoMeta.autoNat, false);
   const existingAuthProvider = asText(nekoMeta.authProvider);
+  const existingRuntimeVersion = asText(nekoMeta.runtimeVersion);
   const existingStatus = asText(nekoMeta.status).toLowerCase();
   const shouldRefresh =
+    existingRuntimeVersion !== DEBUG_BROWSER_RUNTIME_VERSION ||
     existingVersion !== configVersion ||
     existingPort !== nekoPort ||
     existingTcpMux !== tcpMuxPort ||

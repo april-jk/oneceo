@@ -15,10 +15,6 @@ function readTemplateVersion(envName: string, defaultValue: string) {
   return value;
 }
 
-const nekoVersion = readTemplateVersion('ONECEO_TEMPLATE_NEKO_VERSION', 'v3.1.4');
-const playwrightVersion = readTemplateVersion('ONECEO_TEMPLATE_PLAYWRIGHT_VERSION', '1.60.0');
-const playwrightMcpVersion = readTemplateVersion('ONECEO_TEMPLATE_PLAYWRIGHT_MCP_VERSION', '0.0.75');
-const browserUseVersion = readTemplateVersion('ONECEO_TEMPLATE_BROWSER_USE_VERSION', '0.12.8');
 const playwrightMcpWrapperInstall = `node <<'NODE'
 const fs = require('fs');
 const path = require('path');
@@ -53,6 +49,10 @@ export function buildTemplate(input?: {
   osacSha256?: string;
   osacVersion?: string;
 }) {
+  const nekoVersion = readTemplateVersion('ONECEO_TEMPLATE_NEKO_VERSION', 'v3.1.4');
+  const playwrightVersion = readTemplateVersion('ONECEO_TEMPLATE_PLAYWRIGHT_VERSION', '1.60.0');
+  const playwrightMcpVersion = readTemplateVersion('ONECEO_TEMPLATE_PLAYWRIGHT_MCP_VERSION', '0.0.75');
+  const browserUseVersion = readTemplateVersion('ONECEO_TEMPLATE_BROWSER_USE_VERSION', '0.12.8');
   const patchSteps = input?.patchUrl
     ? [
         `curl -fsSL -o /tmp/neko-ui.patch "${input.patchUrl}"`,

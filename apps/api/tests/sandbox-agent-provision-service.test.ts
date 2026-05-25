@@ -145,3 +145,30 @@ test('opencode browser templates pin n.eko source and binary versions', () => {
     assert.doesNotMatch(source, /git clone --depth 1 https:\/\/github\.com\/m1k1o\/neko\.git/);
   }
 });
+
+test('e2b browser templates read version overrides when buildTemplate is called', () => {
+  for (const relativePath of [
+    '../../../e2b_templates/opencode-playwright-mcp/template.ts',
+    '../../../e2b_templates/opencode-playwright-mcp-deploy-stable/template.ts',
+    '../../../e2b_templates/codex-ws-playwright-sandbox/template.ts',
+  ]) {
+    const source = readFileSync(new URL(relativePath, import.meta.url), 'utf8');
+    const buildTemplateIndex = source.indexOf('export function buildTemplate');
+
+    assert.ok(buildTemplateIndex >= 0, `${relativePath} must export buildTemplate`);
+    assert.ok(
+      source.indexOf('const playwrightVersion = readTemplateVersion', buildTemplateIndex) > buildTemplateIndex
+    );
+    assert.ok(
+      source.indexOf('const playwrightMcpVersion = readTemplateVersion', buildTemplateIndex) > buildTemplateIndex
+    );
+    assert.ok(
+      source.indexOf('const browserUseVersion = readTemplateVersion', buildTemplateIndex) > buildTemplateIndex
+    );
+
+    const topLevelVersionBlock = source.slice(0, buildTemplateIndex);
+    assert.doesNotMatch(topLevelVersionBlock, /const playwrightVersion = readTemplateVersion/);
+    assert.doesNotMatch(topLevelVersionBlock, /const playwrightMcpVersion = readTemplateVersion/);
+    assert.doesNotMatch(topLevelVersionBlock, /const browserUseVersion = readTemplateVersion/);
+  }
+});

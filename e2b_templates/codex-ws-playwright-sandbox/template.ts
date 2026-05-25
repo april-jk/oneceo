@@ -11,9 +11,6 @@ function readTemplateVersion(envName: string, defaultValue: string) {
   return value;
 }
 
-const playwrightVersion = readTemplateVersion('ONECEO_TEMPLATE_PLAYWRIGHT_VERSION', '1.60.0');
-const playwrightMcpVersion = readTemplateVersion('ONECEO_TEMPLATE_PLAYWRIGHT_MCP_VERSION', '0.0.75');
-const browserUseVersion = readTemplateVersion('ONECEO_TEMPLATE_BROWSER_USE_VERSION', '0.12.8');
 const playwrightMcpWrapperInstall = `node <<'NODE'
 const fs = require('fs');
 const path = require('path');
@@ -43,6 +40,10 @@ fs.writeFileSync('/usr/local/bin/playwright-mcp', [
 NODE`;
 
 export function buildTemplate() {
+  const playwrightVersion = readTemplateVersion('ONECEO_TEMPLATE_PLAYWRIGHT_VERSION', '1.60.0');
+  const playwrightMcpVersion = readTemplateVersion('ONECEO_TEMPLATE_PLAYWRIGHT_MCP_VERSION', '0.0.75');
+  const browserUseVersion = readTemplateVersion('ONECEO_TEMPLATE_BROWSER_USE_VERSION', '0.12.8');
+
   return Template()
     .fromTemplate('codex')
     .setUser('root')

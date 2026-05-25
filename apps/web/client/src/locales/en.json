@@ -295,7 +295,24 @@
     "skillsAndAttachments": "Skills and attachments",
     "attachments": "Attachments",
     "connectors": "Connectors",
-    "itemCount": "{{count}} items"
+    "itemCount": "{{count}} items",
+    "preview": {
+      "kind": {
+        "image": "Image",
+        "text": "Text",
+        "pdf": "PDF",
+        "unsupported": "File"
+      },
+      "moreFiles": "View {{count}} more files",
+      "noSession": "This file preview is not available for the current session.",
+      "loading": "Reading file",
+      "notText": "This file is not directly previewable as text.",
+      "readFailed": "Failed to read file",
+      "truncated": "[Content is too long and has been truncated]",
+      "unsupportedTitle": "This file type does not support inline preview yet",
+      "unsupportedDescription": "Open the original file in the browser or a system app.",
+      "openOriginal": "Open original"
+    }
   },
   "taskDocumentsDialog": {
     "title": "Task deliverables",

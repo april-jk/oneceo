@@ -6711,6 +6711,7 @@ function MessageBubble({
           <div className="mt-1.5 flex justify-end">
             <MessageAttachmentFiles
               attachments={item.attachments}
+              sessionId={currentSessionId}
               className="max-w-[80%]"
             />
           </div>
@@ -6874,7 +6875,11 @@ function MessageBubble({
               </span>
             ) : null}
           </div>
-          <MessageAttachmentFiles attachments={item.attachments} className="mt-1.5" />
+          <MessageAttachmentFiles
+            attachments={item.attachments}
+            sessionId={currentSessionId}
+            className="mt-1.5"
+          />
         </div>
       </motion.div>
     );

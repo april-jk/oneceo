@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import MessageAttachmentReference, {
+  classifyAttachmentPreview,
   MessageAttachmentFiles,
   MessageInlineReferences,
 } from "@/components/MessageAttachmentReference";
@@ -87,6 +88,41 @@ describe("MessageAttachmentReference", () => {
     expect(html).toContain("one.md");
     expect(html).toContain("two.md");
     expect(html).toContain("+2");
+  });
+
+  it("classifies uploaded files by preview capability", () => {
+    expect(
+      classifyAttachmentPreview({
+        name: "wireframe.png",
+        path: "attachments/wireframe.png",
+        size: 100,
+        mimeType: "image/png",
+      }),
+    ).toBe("image");
+    expect(
+      classifyAttachmentPreview({
+        name: "notes.md",
+        path: "attachments/notes.md",
+        size: 100,
+        mimeType: "text/markdown",
+      }),
+    ).toBe("text");
+    expect(
+      classifyAttachmentPreview({
+        name: "contract.pdf",
+        path: "attachments/contract.pdf",
+        size: 100,
+        mimeType: "application/pdf",
+      }),
+    ).toBe("pdf");
+    expect(
+      classifyAttachmentPreview({
+        name: "archive.zip",
+        path: "attachments/archive.zip",
+        size: 100,
+        mimeType: "application/zip",
+      }),
+    ).toBe("unsupported");
   });
 
   it("renders inline references without a surrounding attachment card", () => {

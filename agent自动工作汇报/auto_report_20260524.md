@@ -120,3 +120,26 @@
 2. 增加失败恢复状态机，将 template、runtime、browser、media forwarding、target preview、authz 分层，避免 Altus 把平台调试失败误修成用户项目问题。
 3. 增加访问控制和敏感信息边界：模型可见输出不应泄露完整 n.eko URL、TURN credential、OSAC token、cookie 或连接器密钥。
 4. 补强测试矩阵：锁竞争、资源冲突、旧 sandbox、磁盘压力、诊断脱敏、访问控制、同一浏览器断言都需要进入验证。
+
+## 调试浏览器平台能力稳定化 runtime 首阶段实现
+
+做了什么：
+
+1. 用户确认按方案进入实现，方案文档状态更新为 `[20260525-1020已采用]`。
+2. `ensureNekoDebug` 启动链路改为 `/tmp/oneceo/debug-browser` runtime 子树：
+   - `neko-static`
+   - `neko.yml`
+   - `neko-start.sh`
+   - `logs/`
+   - `run/`
+   - `state/manifest.json`
+3. n.eko 静态资源不再运行时写 `/opt/neko/client/dist`，改为复制到 runtime 副本后 patch。
+4. 启动脚本改为先写入 sandbox 文件，再通过带锁 wrapper 执行，避免并发 ensure 覆盖日志、pid 和静态目录。
+5. 增加 manifest、pid 文件、日志轮转、runtimeVersion、failureLayer、nextAction。
+6. 进程重启改为处理 pid 文件指向的受控进程；旧 runtime 的 `/tmp/oneceo/neko.yml` 和 `/tmp/chromium-profile` 进程只作为升级清理对象处理。
+
+验证结果：
+
+1. API 类型检查通过：`pnpm --filter api type-check`。
+2. 定向测试通过：`TMPDIR=/private/tmp pnpm --filter api exec tsx --test tests/sandbox-debug-service.test.ts`，12/12 通过。
+3. 相关测试通过：`TMPDIR=/private/tmp pnpm --filter api exec tsx --test tests/sandbox-debug-service.test.ts tests/altus-managed-tool-runtime.test.ts tests/altus-run-coordinator.test.ts`，121/121 通过。

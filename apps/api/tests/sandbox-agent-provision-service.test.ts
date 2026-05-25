@@ -109,3 +109,39 @@ test('e2b templates build playwright-mcp wrapper from package bin metadata', () 
     assert.doesNotMatch(source, /@playwright\/mcp\/cli\.js/);
   }
 });
+
+test('e2b browser templates pin browser toolchain package versions', () => {
+  for (const relativePath of [
+    '../../../e2b_templates/opencode-playwright-mcp/template.ts',
+    '../../../e2b_templates/opencode-playwright-mcp-deploy-stable/template.ts',
+    '../../../e2b_templates/codex-ws-playwright-sandbox/template.ts',
+  ]) {
+    const source = readFileSync(new URL(relativePath, import.meta.url), 'utf8');
+
+    assert.match(source, /const playwrightVersion = readTemplateVersion/);
+    assert.match(source, /const playwrightMcpVersion = readTemplateVersion/);
+    assert.match(source, /const browserUseVersion = readTemplateVersion/);
+    assert.match(source, /playwright@\$\{playwrightVersion\}/);
+    assert.match(source, /@playwright\/mcp@\$\{playwrightMcpVersion\}/);
+    assert.match(source, /browser-use==\$\{browserUseVersion\}/);
+    assert.doesNotMatch(source, /@playwright\/mcp@latest/);
+    assert.doesNotMatch(source, /npm install -g playwright @playwright\/mcp/);
+    assert.doesNotMatch(source, /pip install browser-use['"`]/);
+  }
+});
+
+test('opencode browser templates pin n.eko source and binary versions', () => {
+  for (const relativePath of [
+    '../../../e2b_templates/opencode-playwright-mcp/template.ts',
+    '../../../e2b_templates/opencode-playwright-mcp-deploy-stable/template.ts',
+  ]) {
+    const source = readFileSync(new URL(relativePath, import.meta.url), 'utf8');
+
+    assert.match(source, /const nekoVersion = readTemplateVersion/);
+    assert.match(source, /neko\/server\/cmd\/neko@\$\{nekoVersion\}/);
+    assert.match(source, /git clone --depth 1 --branch \$\{nekoVersion\}/);
+    assert.match(source, /ONECEO_TEMPLATE_NEKO_VERSION/);
+    assert.doesNotMatch(source, /neko\/server\/cmd\/neko@latest/);
+    assert.doesNotMatch(source, /git clone --depth 1 https:\/\/github\.com\/m1k1o\/neko\.git/);
+  }
+});

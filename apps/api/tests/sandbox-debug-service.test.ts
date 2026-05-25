@@ -3,6 +3,7 @@ import { mock, test } from 'node:test';
 import { e2bConnector } from '../src/connectors/e2b-connector';
 import { sandboxExecutionEnvironmentDAO } from '../src/db/dao';
 import {
+  __buildNekoStartCommandForTest,
   __buildNekoClientUrlForTest,
   __hasTurnIceServerForTest,
   __parseIceServersForTest,
@@ -111,8 +112,19 @@ test('chromium cdp probe returns false when the endpoint is missing', async () =
   assert.equal(await __probeChromiumCdpForTest('sandbox-1', 9222), false);
 });
 
+test('neko start wrapper writes runtime scripts under debug-browser and uses a lock', () => {
+  const command = __buildNekoStartCommandForTest('echo start');
+
+  assert.match(command, /\/tmp\/oneceo\/debug-browser\/neko-start\.sh/);
+  assert.match(command, /\/tmp\/oneceo\/debug-browser\/logs\/neko-start\.log/);
+  assert.match(command, /\/tmp\/oneceo\/debug-browser\/run\/ensure\.lock/);
+  assert.match(command, /flock -E 42 -w 20/);
+  assert.doesNotMatch(command, /\/tmp\/oneceo\/neko\.yml/);
+});
+
 test('ensure neko debug returns visible diagnostics when the start script fails', async () => {
   const metadataUpdates: Array<Record<string, unknown>> = [];
+  let capturedStartWrapper = '';
   mock.method(sandboxExecutionEnvironmentDAO, 'getBySessionId', async () => ({
     sessionId: 'sandbox-1',
     status: 'ready',
@@ -126,6 +138,7 @@ test('ensure neko debug returns visible diagnostics when the start script fails'
   const runCommandMock = mock.method(e2bConnector, 'runCommand', async (_sandboxId, command) => {
     const text = String(command);
     if (text.startsWith('bash -lc ')) {
+      capturedStartWrapper = text;
       const error = new Error('exit status 31') as any;
       error.exitCode = 31;
       error.stdout = '[neko] Xvfb missing\n';
@@ -152,6 +165,12 @@ test('ensure neko debug returns visible diagnostics when the start script fails'
           '',
           '__XVFB_LOG__',
           'missing xvfb',
+          '__START_LOG__',
+          'start log tail',
+          '__MANIFEST__',
+          '{"runtimeVersion":"debug-browser-runtime-v1"}',
+          '__TREE__',
+          'drwxr-xr-x user user 120 /tmp/oneceo/debug-browser',
           '__PORTS__',
           '',
         ].join('\n'),
@@ -172,6 +191,12 @@ test('ensure neko debug returns visible diagnostics when the start script fails'
   assert.equal(result.reasonCode, 'xvfb_missing');
   assert.match(result.message || '', /Xvfb/);
   assert.ok(runCommandMock.mock.calls.some((call) => String(call.arguments[1]).startsWith('bash -lc ')));
+  assert.match(capturedStartWrapper, /\/tmp\/oneceo\/debug-browser\/neko-static/);
+  assert.match(capturedStartWrapper, /\/tmp\/oneceo\/debug-browser\/neko\.yml/);
+  assert.match(capturedStartWrapper, /\/tmp\/oneceo\/debug-browser\/state\/manifest\.json/);
+  assert.match(capturedStartWrapper, /ONECEO_NEKO_STATIC_ROOT:-\/opt\/neko\/client\/dist/);
+  assert.doesNotMatch(capturedStartWrapper, /cat <<'EOF_EDGE_CSS' > "\$NEKO_STATIC_SOURCE/);
+  assert.doesNotMatch(capturedStartWrapper, /pkill -x (chrome|chromium|neko|Xvfb)/);
 
   const lastUpdate = metadataUpdates.at(-1) as any;
   assert.equal(lastUpdate.debug.neko.status, 'failed');
@@ -179,4 +204,7 @@ test('ensure neko debug returns visible diagnostics when the start script fails'
   assert.equal(lastUpdate.debug.neko.diagnostics.startScriptExitCode, 31);
   assert.match(lastUpdate.debug.neko.diagnostics.startScriptStdout, /Xvfb missing/);
   assert.match(lastUpdate.debug.neko.diagnostics.xvfbLogTail, /missing xvfb/);
+  assert.match(lastUpdate.debug.neko.diagnostics.startLogTail, /start log tail/);
+  assert.match(lastUpdate.debug.neko.diagnostics.manifest, /debug-browser-runtime-v1/);
+  assert.match(lastUpdate.debug.neko.diagnostics.runtimeTree, /debug-browser/);
 });

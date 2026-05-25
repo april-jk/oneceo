@@ -1,4 +1,4 @@
-# 20260524 调试浏览器平台能力稳定化与 n.eko / Playwright / Chromium 共用链路方案 [尚未采用]
+# 20260524 调试浏览器平台能力稳定化与 n.eko / Playwright / Chromium 共用链路方案 [20260525-1020已采用]
 
 ## 1. 背景与结论
 
@@ -296,7 +296,16 @@ http://127.0.0.1:9222
 
 模板目录可以保持 root 拥有和只读语义；运行时不应要求它可写。
 
-模板构建还必须固定依赖版本。当前 `template.ts` 中存在 `github.com/m1k1o/neko/server/cmd/neko@latest`、`npm install -g playwright @playwright/mcp@latest`、`pip install browser-use` 这类漂移来源；正式实现时应改成显式版本或锁文件驱动，并把版本写入 template release note。否则同一个 template 脚本在不同日期构建出的 n.eko、Playwright MCP、browser-use 行为可能不同，调试问题会变成不可复现。
+模板构建还必须固定依赖版本。`template.ts` 不允许使用 `github.com/m1k1o/neko/server/cmd/neko@latest`、`npm install -g playwright @playwright/mcp@latest`、`pip install browser-use` 这类漂移来源；正式实现应使用显式版本或锁文件驱动，并把版本写入 template release note。否则同一个 template 脚本在不同日期构建出的 n.eko、Playwright MCP、browser-use 行为可能不同，调试问题会变成不可复现。
+
+当前模板默认版本：
+
+1. `n.eko=v3.1.4`
+2. `playwright=1.60.0`
+3. `@playwright/mcp=0.0.75`
+4. `browser-use=0.12.8`
+
+这些版本通过 `ONECEO_TEMPLATE_NEKO_VERSION`、`ONECEO_TEMPLATE_PLAYWRIGHT_VERSION`、`ONECEO_TEMPLATE_PLAYWRIGHT_MCP_VERSION`、`ONECEO_TEMPLATE_BROWSER_USE_VERSION` 写入 sandbox 环境。升级必须显式修改模板或构建环境变量，并同步模板名和回归记录。
 
 ### 7.2 平台 runtime 负责
 
@@ -727,4 +736,4 @@ metadata 中建议额外增加 `failureLayer` 字段，取值为：
 
 ## 15. 当前状态
 
-本文档为待评审方案，状态为 `[尚未采用]`。用户确认采用后，才能进入代码实现，并将标题与文件名状态更新为 `[yyyymmdd-hhmm已采用]`。
+本文档已于 2026-05-25 10:20 由用户确认进入实现阶段，状态更新为 `[20260525-1020已采用]`。当前先实现平台 runtime 固定链路，template 固化与管理后台观测按实施顺序后续推进。

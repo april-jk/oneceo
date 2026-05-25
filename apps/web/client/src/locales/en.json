@@ -263,7 +263,8 @@
     "unsupportedFormat": "{{filename}} is not supported. Only text, document, and image attachments are allowed.",
     "sizeLimitExceeded": "{{name}} exceeds the 10 MB limit",
     "maxCountExceeded": "You can add at most {{count}} attachments",
-    "addedToWorkspace": "The following attachments were added and can be accessed directly in the workspace:\n{{lines}}"
+    "addedToWorkspace": "The following attachments were added and can be accessed directly in the workspace:\n{{lines}}",
+    "dropToUpload": "Release to upload files"
   },
   "attachmentPicker": {
     "triggerLabel": "Add attachment",

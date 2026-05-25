@@ -263,7 +263,8 @@
     "unsupportedFormat": "{{filename}} 格式不支持，仅允许文本、文档和图片类附件",
     "sizeLimitExceeded": "{{name}} 超过 10 MB 限制",
     "maxCountExceeded": "最多只能添加 {{count}} 个附件",
-    "addedToWorkspace": "已添加以下附件，可直接在工作区中访问：\n{{lines}}"
+    "addedToWorkspace": "已添加以下附件，可直接在工作区中访问：\n{{lines}}",
+    "dropToUpload": "松开上传文件"
   },
   "attachmentPicker": {
     "triggerLabel": "添加附件",

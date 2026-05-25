@@ -11,6 +11,8 @@ import {
   useEffect,
   useMemo,
   useCallback,
+  type ClipboardEvent,
+  type DragEvent,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
@@ -149,6 +151,10 @@ import {
   partitionPendingAttachments,
   type PendingAttachment,
 } from "@/lib/task-attachments";
+import {
+  extractFilesFromTransfer,
+  hasFileTransfer,
+} from "@/lib/task-attachment-transfer";
 import {
   buildManagedTaskInputMetadata,
   type TaskCreationMcpReference,
@@ -1112,6 +1118,8 @@ export default function Home() {
     new Map<string, Promise<UploadedTaskAttachment>>(),
   );
   const uploadSessionIdRef = useRef<string>("");
+  const [isComposerDragActive, setIsComposerDragActive] = useState(false);
+  const composerDragDepthRef = useRef(0);
   const [handledGoogleConfirmationIds, setHandledGoogleConfirmationIds] = useState<
     string[]
   >([]);
@@ -2132,10 +2140,60 @@ export default function Home() {
   };
 
   const handleAttachmentSelect = (files: File[]) => {
+    if (files.length === 0) return;
     const merged = mergePendingAttachments(attachments, files);
     setAttachments(merged.attachments);
     startPendingAttachmentUploads(merged.attachments);
     merged.rejected.forEach((item) => toast.error(item));
+  };
+
+  const resetComposerDragState = () => {
+    composerDragDepthRef.current = 0;
+    setIsComposerDragActive(false);
+  };
+
+  const handleComposerDragEnter = (event: DragEvent<HTMLElement>) => {
+    if (!hasFileTransfer(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    composerDragDepthRef.current += 1;
+    setIsComposerDragActive(true);
+  };
+
+  const handleComposerDragOver = (event: DragEvent<HTMLElement>) => {
+    if (!hasFileTransfer(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "copy";
+    setIsComposerDragActive(true);
+  };
+
+  const handleComposerDragLeave = (event: DragEvent<HTMLElement>) => {
+    if (!hasFileTransfer(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    composerDragDepthRef.current = Math.max(
+      0,
+      composerDragDepthRef.current - 1,
+    );
+    if (composerDragDepthRef.current === 0) {
+      setIsComposerDragActive(false);
+    }
+  };
+
+  const handleComposerDrop = (event: DragEvent<HTMLElement>) => {
+    if (!hasFileTransfer(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    resetComposerDragState();
+    handleAttachmentSelect(extractFilesFromTransfer(event.dataTransfer));
+  };
+
+  const handleComposerPaste = (event: ClipboardEvent<HTMLElement>) => {
+    const files = extractFilesFromTransfer(event.clipboardData);
+    if (files.length === 0) return;
+    event.preventDefault();
+    handleAttachmentSelect(files);
   };
 
   const handleSkillSelect = (skills: TaskCreationPlatformSkill[]) => {
@@ -3592,7 +3650,27 @@ export default function Home() {
                 {slashSuggestionPanel}
               </div>
             ) : null}
-            <div data-tour="home-composer" className="mx-auto w-full max-w-[52rem] rounded-[2rem] border border-border/70 bg-card shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)]">
+            <div
+              data-tour="home-composer"
+              className={`relative mx-auto w-full max-w-[52rem] rounded-[2rem] border border-border/70 bg-card shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)] ${
+                isComposerDragActive
+                  ? "border-ring shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)]"
+                  : ""
+              }`}
+              onDragEnter={handleComposerDragEnter}
+              onDragOver={handleComposerDragOver}
+              onDragLeave={handleComposerDragLeave}
+              onDrop={handleComposerDrop}
+              onPaste={handleComposerPaste}
+            >
+              {isComposerDragActive ? (
+                <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[2rem] border border-dashed border-ring bg-card/90 text-sm font-medium text-foreground">
+                  <span className="inline-flex items-center gap-2 rounded-full bg-background px-3 py-2 shadow-sm">
+                    <FilePlus className="h-4 w-4 text-primary" />
+                    {t("attachments.dropToUpload")}
+                  </span>
+                </div>
+              ) : null}
               <div className="space-y-3 p-4">
                 <AttachmentChipList
                   attachments={attachments}
@@ -3863,7 +3941,27 @@ export default function Home() {
                       </div>
                     ) : null}
                     {/* Text Area and Actions - Single Container */}
-                    <div data-tour="home-composer" className="relative z-10 space-y-3 rounded-[2rem] border border-border/70 bg-card p-4 shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)]">
+                    <div
+                      data-tour="home-composer"
+                      className={`relative z-10 space-y-3 rounded-[2rem] border border-border/70 bg-card p-4 shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)] ${
+                        isComposerDragActive
+                          ? "border-ring shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)]"
+                          : ""
+                      }`}
+                      onDragEnter={handleComposerDragEnter}
+                      onDragOver={handleComposerDragOver}
+                      onDragLeave={handleComposerDragLeave}
+                      onDrop={handleComposerDrop}
+                      onPaste={handleComposerPaste}
+                    >
+                      {isComposerDragActive ? (
+                        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[2rem] border border-dashed border-ring bg-card/90 text-sm font-medium text-foreground">
+                          <span className="inline-flex items-center gap-2 rounded-full bg-background px-3 py-2 shadow-sm">
+                            <FilePlus className="h-4 w-4 text-primary" />
+                            {t("attachments.dropToUpload")}
+                          </span>
+                        </div>
+                      ) : null}
                       <AttachmentChipList
                         attachments={attachments}
                         onRemove={removeAttachment}

@@ -5270,7 +5270,7 @@ test('debug_open_page failure tracking blocks repeated same-target retries', () 
   assert.equal(first.userActionRequired, false);
   assert.equal(second.errorCode, 'debug_open_page_repeat_blocked');
   assert.equal(second.blocked, true);
-  assert.equal(second.userActionRequired, true);
+  assert.equal(second.userActionRequired, false);
   assert.match(second.sanitizedError, /连续打开失败/);
   assert.match(second.rawError, /same_reason=debug_target_unreachable/);
 });
@@ -5305,6 +5305,39 @@ test('debug_open_page failure tracking does not block opaque tool execution fail
   assert.equal(second.userActionRequired, false);
 });
 
+test('debug_open_page failure tracking lets Altus investigate debug service readiness once before blocking repeats', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+  const state = {
+    lastKey: '',
+    repeatCount: 0,
+    failureCounts: {},
+  };
+  const args = { url: 'http://127.0.0.1:8080/' };
+  const rawError =
+    'debug_open_page_debug_not_ready:cdp_not_ready:Chromium CDP 调试端口未就绪，无法打开调试页面';
+
+  const first = coordinator.testRecordDebugOpenPageFailure({
+    args,
+    rawError,
+    sanitizedError: '远程调试服务尚未就绪',
+    state,
+  });
+  const second = coordinator.testRecordDebugOpenPageFailure({
+    args,
+    rawError,
+    sanitizedError: '远程调试服务尚未就绪',
+    state,
+  });
+
+  assert.equal(first.errorCode, 'debug_service_not_ready');
+  assert.equal(first.blocked, false);
+  assert.equal(first.userActionRequired, false);
+  assert.equal(second.errorCode, 'debug_open_page_repeat_blocked');
+  assert.equal(second.blocked, true);
+  assert.equal(second.userActionRequired, false);
+  assert.match(second.rawError, /same_reason=debug_service_not_ready/);
+});
+
 test('debug_open_page failure tracking normalizes localhost aliases and counts across corrective steps', () => {
   const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
   const state = {
@@ -5333,10 +5366,11 @@ test('debug_open_page failure tracking normalizes localhost aliases and counts a
   assert.equal(first.blocked, false);
   assert.equal(second.errorCode, 'debug_open_page_repeat_blocked');
   assert.equal(second.blocked, true);
+  assert.equal(second.userActionRequired, false);
   assert.match(second.rawError, /same_target=http:\/\/127\.0\.0\.1:3000/);
 });
 
-test('execute reports repeated debug_open_page failures with sanitized terminal message', async () => {
+test('execute keeps repeated debug_open_page failures recoverable so Altus can investigate and complete', async () => {
   const state = createState(
     '7f0c2ad3-5a58-4d3a-b0ab-54167ae0fb31',
     '8832652e-b9b9-485a-b82d-0a9beced815d',
@@ -5387,6 +5421,78 @@ test('execute reports repeated debug_open_page failures with sanitized terminal 
   let fetchCount = 0;
   global.fetch = mock.fn(async () => {
     fetchCount += 1;
+    if (fetchCount <= 2) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: `tool-debug-open-${fetchCount}`,
+                    type: 'function',
+                    function: {
+                      name: 'debug_open_page',
+                      arguments: JSON.stringify({ url: 'http://localhost:3000/?v=1' }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (fetchCount === 3) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-investigate-after-debug-repeat',
+                    type: 'function',
+                    function: {
+                      name: 'shell_execute',
+                      arguments: JSON.stringify({ command: 'curl -sI http://127.0.0.1:3000 || true' }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (fetchCount === 4) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '正在进行视觉检测',
+                tool_calls: [
+                  {
+                    id: 'tool-debug-open-after-investigation',
+                    type: 'function',
+                    function: {
+                      name: 'debug_open_page',
+                      arguments: JSON.stringify({ url: 'http://localhost:3000/?v=1' }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
     return new Response(
       JSON.stringify({
         choices: [
@@ -5395,11 +5501,14 @@ test('execute reports repeated debug_open_page failures with sanitized terminal 
               content: '',
               tool_calls: [
                 {
-                  id: `tool-debug-open-${fetchCount}`,
+                  id: 'tool-complete-after-debug-investigation',
                   type: 'function',
                   function: {
-                    name: 'debug_open_page',
-                    arguments: JSON.stringify({ url: 'http://localhost:3000/?v=1' }),
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '已完成预览问题调查并交付。',
+                      verification: ['已确认重复视觉检测失败后继续调查'],
+                    }),
                   },
                 },
               ],
@@ -5411,10 +5520,54 @@ test('execute reports repeated debug_open_page failures with sanitized terminal 
     );
   }) as typeof fetch;
 
-  mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => {
-    throw new Error(
-      'debug_open_page_failed:__ONECEO_DEBUG_TARGET_UNREACHABLE__\nFailed to connect to 127.0.0.1 port 3000'
-    );
+  let debugOpenCount = 0;
+  const browserScreenshot = {
+    type: 'browser_screenshot',
+    kind: 'browser_action_screenshot',
+    status: 'captured',
+    storageKey: 'preview/debug-open-after-investigation.png',
+    signedUrl: 'https://example.test/debug-open-after-investigation.png',
+    capturedAt: '2026-05-24T13:00:00.000Z',
+    source: {
+      sandboxId: 'sandbox-debug-repeat',
+      toolName: 'debug_open_page',
+      action: 'open_page',
+      url: 'http://127.0.0.1:3000/',
+    },
+    visualCheck: {
+      status: 'passed',
+      reasonCode: 'ok',
+      message: '页面已打开',
+    },
+  };
+  mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'debug_open_page') {
+      debugOpenCount += 1;
+      if (debugOpenCount <= 2) {
+        throw new Error(
+          'debug_open_page_failed:__ONECEO_DEBUG_TARGET_UNREACHABLE__\nFailed to connect to 127.0.0.1 port 3000'
+        );
+      }
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({
+          targetUrl: 'http://127.0.0.1:3000/',
+          browserScreenshot,
+        }),
+        evidence: [browserScreenshot],
+      };
+    }
+    if (toolName === 'shell_execute') {
+      return {
+        type: 'result' as const,
+        content: 'curl failed: connection refused',
+      };
+    }
+    return {
+      type: 'complete' as const,
+      summary: '已完成预览问题调查并交付。',
+      verification: ['已确认重复视觉检测失败后继续调查'],
+    };
   });
 
   const coordinator = new AltusRunCoordinator(
@@ -5425,18 +5578,17 @@ test('execute reports repeated debug_open_page failures with sanitized terminal 
 
   await coordinator.execute(state, new AbortController());
 
-  assert.equal(fetchCount, 2);
-  assert.equal(state.status, 'failed');
-  assert.equal(state.stopReason?.includes('debug_open_page_repeat_blocked'), false);
-  assert.equal(state.stopReason?.includes('same_target='), false);
-  assert.match(state.stopReason || '', /视觉检测暂时无法继续/);
-  assert.equal(lifecycleFailures.length, 1);
-  assert.match(lifecycleFailures[0]?.message || '', /debug_open_page_repeat_blocked/);
-  assert.match(lifecycleFailures[0]?.message || '', /same_target=http:\/\/127\.0\.0\.1:3000/);
-  assert.equal(lifecycleFailures[0]?.options?.reasonCode, 'debug_open_page_repeat_blocked');
-  assert.match(lifecycleFailures[0]?.options?.userMessage || '', /视觉检测暂时无法继续/);
-  assert.equal(lifecycleFailures[0]?.options?.userMessage?.includes('same_target='), false);
+  assert.equal(fetchCount, 5);
+  assert.equal(state.status, 'completed');
+  assert.equal(lifecycleFailures.length, 0);
   const failedEvents = eventCalls.filter((entry) => entry.eventType === 'tool_call_failed');
   assert.equal(failedEvents.length, 2);
+  assert.equal((failedEvents[1]?.payload as any)?.transitionReason, 'tool_failed_but_recoverable');
+  assert.equal((failedEvents[1]?.payload as any)?.debugOpenPageFailure?.errorCode, 'debug_open_page_repeat_blocked');
+  assert.equal((failedEvents[1]?.payload as any)?.debugOpenPageFailure?.blocked, true);
   assert.equal(JSON.stringify(failedEvents[1]?.payload.error || '').includes('same_target='), false);
+  const completedToolNames = eventCalls
+    .filter((entry) => entry.eventType === 'tool_call_completed')
+    .map((entry) => entry.payload.toolName);
+  assert.deepEqual(completedToolNames, ['shell_execute', 'debug_open_page', 'complete_task']);
 });

@@ -1589,7 +1589,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
   }
 
   private isDebugOpenPagePlatformError(errorCode: string) {
-    return errorCode === 'debug_service_not_ready' || errorCode === 'sandbox_browser_capability_unavailable';
+    return errorCode === 'sandbox_browser_capability_unavailable';
   }
 
   private isDebugOpenPageRepeatBlockableError(errorCode: string) {
@@ -1655,7 +1655,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
       sanitizedError: this.sanitizeToolEventError('debug_open_page', rawError),
       repeatCount,
       blocked: true,
-      userActionRequired: userActionRequired || errorCode === 'debug_open_page_repeat_blocked',
+      userActionRequired,
     };
   }
 
@@ -1704,10 +1704,10 @@ private async chargeForModelCall(state: AltusRunState, input: {
     }
     if (toolName === 'debug_open_page') {
       if (errorMessage.includes('debug_open_page_repeat_blocked')) {
-        return '同一个预览目标连续打开失败，平台已停止重复截图重试；Altus 需要先修复服务、端口或文件路径后再重新打开。';
+        return '同一个预览目标连续打开失败，平台已阻止继续重复截图；Altus 需要先调查并修复服务、端口或文件路径后再重新打开。';
       }
       if (errorMessage.includes('playwright_module_not_found')) {
-        return 'sandbox 浏览器依赖不可用，平台已停止重复截图重试；需要先恢复预置 Playwright / MCP 能力。';
+        return 'sandbox 浏览器依赖不可用，平台已阻止继续重复截图；需要先恢复预置 Playwright / MCP 能力。';
       }
       if (errorMessage.includes('__ONECEO_DEBUG_TARGET_UNREACHABLE__')) {
         return '调试页面目标地址暂不可访问，Altus 需要先启动或修复本地预览服务，再重新打开页面。';
@@ -1725,7 +1725,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
         return '调试浏览器打开页面失败，Altus 需要先检查远程调试服务状态，再重新打开。';
       }
       if (errorMessage.includes('debug_open_page_debug_not_ready')) {
-        return '远程调试服务尚未就绪，平台已停止重复截图重试；需要先恢复 n.eko / Chromium 调试环境。';
+        return '远程调试服务尚未就绪，平台已阻止继续重复截图；需要先恢复 n.eko / Chromium 调试环境。';
       }
       if (/exit status\s+\d+/i.test(errorMessage)) {
         return '调试页面校验未返回具体状态，Altus 需要先检查目标页面和调试服务，再重新打开。';

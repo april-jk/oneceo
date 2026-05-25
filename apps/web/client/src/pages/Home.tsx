@@ -4970,13 +4970,15 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         emittedManagedCompletionRuns,
         browserScreenshotsByRun: managedBrowserScreenshotsByRun,
       });
-      if (managedCompletionCard) {
+      const pushManagedCompletionCard = () => {
+        if (!managedCompletionCard) return;
         clearManagedStatus();
         flushProgress();
         items.push(managedCompletionCard);
-      }
+      };
       const rawLabel = message.content || "状态更新";
       if (isCodexControlStatusLabel(rawLabel)) {
+        pushManagedCompletionCard();
         continue;
       }
 
@@ -4985,12 +4987,14 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         replaceManagedStatus(rawLabel, message.messageKey, {
           displayInTimeline: false,
         });
+        pushManagedCompletionCard();
         continue;
       }
 
       if (isManagedNarrationStatusMessage(message)) {
         flushProgress();
         replaceManagedStatus(rawLabel, message.messageKey);
+        pushManagedCompletionCard();
         continue;
       }
       const tone = message.tone || getCapsuleTone(rawLabel);
@@ -5007,6 +5011,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           messageKey: message.messageKey,
         });
       }
+      pushManagedCompletionCard();
       continue;
     }
 

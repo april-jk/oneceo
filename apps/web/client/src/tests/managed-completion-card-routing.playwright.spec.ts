@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { buildManagedCompletionCardItem, type ChatItem } from '../pages/Home';
+import { buildChatItems, buildManagedCompletionCardItem, type ChatItem } from '../pages/Home';
 import type { AgentMessage } from '../hooks/useTaskCreationAgent';
 
 function createManagedMessage(input: {
@@ -110,4 +110,28 @@ test('non-web deliverable keeps managed_deliverable_card', async () => {
     'result.docx'
   );
   expect(emittedRuns.has('run-pw-docx-1')).toBeTruthy();
+});
+
+test('run completion text renders before the completion card', async () => {
+  const items = buildChatItems([
+    createManagedMessage({
+      type: 'status_update',
+      eventType: 'run_completed',
+      runId: 'run-pw-complete-order-1',
+      deliverables: [
+        {
+          id: 'artifact-pw-complete-order-1',
+          runId: 'run-pw-complete-order-1',
+          name: 'result.docx',
+          path: 'outputs/result.docx',
+          mimeType:
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          sizeBytes: 1024,
+        },
+      ],
+    }),
+  ]);
+
+  expect(items[0]?.kind).toBe('capsule');
+  expect(items[1]?.kind).toBe('managed_deliverable_card');
 });

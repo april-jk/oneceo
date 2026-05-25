@@ -643,6 +643,10 @@ export function ConnectorCenterPanel({
             redirectUri,
             teamId: asText(params.get("teamId")),
             configurationId: asText(params.get("configurationId")),
+            connectedAccountId: asText(
+              params.get("connected_account_id") || params.get("connectedAccountId")
+            ),
+            status: asText(params.get("status")),
             next: asText(params.get("next")),
             source: asText(params.get("source")),
           });
@@ -658,6 +662,10 @@ export function ConnectorCenterPanel({
             redirectUri,
             teamId: asText(params.get("teamId")),
             configurationId: asText(params.get("configurationId")),
+            connectedAccountId: asText(
+              params.get("connected_account_id") || params.get("connectedAccountId")
+            ),
+            status: asText(params.get("status")),
             next: asText(params.get("next")),
             source: asText(params.get("source")),
           });

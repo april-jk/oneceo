@@ -10,6 +10,18 @@ import customMcpConnectorRoutes from './custom-mcp-connector-routes';
 
 const router = express.Router();
 
+export const CONNECTOR_CALLBACK_PATHS: string[] = [
+  '/github/callback',
+  '/notion/callback',
+  '/supabase/callback',
+  '/slack/callback',
+  '/figma/callback',
+  '/google-super/callback',
+  '/vercel/callback',
+];
+
+const CONNECTOR_CALLBACK_PATH_SET = new Set<string>(CONNECTOR_CALLBACK_PATHS);
+
 router.use('/custom-api', customApiConnectorRoutes);
 router.use('/custom-mcp', customMcpConnectorRoutes);
 
@@ -19,6 +31,38 @@ router.use((_, res, next) => {
   res.setHeader('Expires', '0');
   next();
 });
+
+export function buildConnectorFrontendCallbackRedirectUrl(
+  requestUrl: string,
+  frontendUrl: string
+): string | null {
+  const target = new URL(requestUrl, 'http://localhost');
+  if (!CONNECTOR_CALLBACK_PATH_SET.has(target.pathname)) {
+    return null;
+  }
+  const frontend = new URL(frontendUrl || 'http://localhost:3000');
+  frontend.pathname = target.pathname;
+  frontend.search = target.search;
+  frontend.hash = target.hash;
+  return frontend.toString();
+}
+
+router.get(
+  CONNECTOR_CALLBACK_PATHS,
+  (req, res) => {
+    const redirectUrl = buildConnectorFrontendCallbackRedirectUrl(
+      req.originalUrl || req.url,
+      process.env.FRONTEND_URL || 'http://localhost:3000'
+    );
+    if (!redirectUrl) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('Unknown connector callback path'),
+      });
+    }
+    return res.redirect(302, redirectUrl);
+  }
+);
 
 function handleError(res: express.Response, error: unknown, fallback: string, status = 400) {
   const message = error instanceof Error ? error.message : fallback;
@@ -185,6 +229,8 @@ router.post('/profiles/:profileId/oauth/callback', async (req, res) => {
       redirectUri: String(req.body?.redirectUri || '').trim(),
       teamId: String(req.body?.teamId || '').trim(),
       configurationId: String(req.body?.configurationId || '').trim(),
+      connectedAccountId: String(req.body?.connectedAccountId || req.body?.connected_account_id || '').trim(),
+      status: String(req.body?.status || '').trim(),
       next: String(req.body?.next || '').trim(),
       source: String(req.body?.source || '').trim(),
     });
@@ -281,6 +327,8 @@ router.post('/:connectorKey/oauth/callback', async (req, res) => {
       redirectUri: String(req.body?.redirectUri || '').trim(),
       teamId: String(req.body?.teamId || '').trim(),
       configurationId: String(req.body?.configurationId || '').trim(),
+      connectedAccountId: String(req.body?.connectedAccountId || req.body?.connected_account_id || '').trim(),
+      status: String(req.body?.status || '').trim(),
       next: String(req.body?.next || '').trim(),
       source: String(req.body?.source || '').trim(),
     });

@@ -67,6 +67,8 @@ type CompleteOauthInput = {
   redirectUri: string;
   teamId?: string;
   configurationId?: string;
+  connectedAccountId?: string;
+  status?: string;
   next?: string;
   source?: string;
 };
@@ -1304,11 +1306,19 @@ export class UserConnectorService {
               connectorKey
             )
           : null;
+        const callbackConnectedAccountId = asText(input.connectedAccountId);
+        const callbackStatus = asText(input.status);
+        const callbackMetadata = mergeMetadata(pickObject(profile.metadataJson), {
+          ...(callbackConnectedAccountId
+            ? { composioConnectedAccountId: callbackConnectedAccountId }
+            : {}),
+          ...(callbackStatus ? { callbackStatus } : {}),
+        });
         const confirmed = await composioConnectorService.confirmAuthorization({
           connectorKey,
           userId,
           catalogItem,
-          metadata: pickObject(profile.metadataJson),
+          metadata: callbackMetadata,
           secret: currentSecret,
         });
         await connectorAuthRequestDAO.markCompleted(request.requestId, 'completed');

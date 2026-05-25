@@ -11,7 +11,10 @@ import altusManagedRoutes from './routes/altus-managed-routes';
 import sandboxRoutes from './routes/sandbox-routes';
 import osacRoutes from './routes/osac-routes';
 import llmProxyRoutes from './routes/llm-proxy-routes';
-import connectorRoutes from './routes/connector-routes';
+import connectorRoutes, {
+  CONNECTOR_CALLBACK_PATHS,
+  buildConnectorFrontendCallbackRedirectUrl,
+} from './routes/connector-routes';
 import authRoutes from './routes/auth-routes';
 import authOauthRoutes from './routes/auth-oauth-routes';
 import internalSkillRoutes from './routes/internal-skill-routes';
@@ -151,6 +154,20 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     version: '1.0.0',
   });
+});
+
+app.get(CONNECTOR_CALLBACK_PATHS, (req, res) => {
+  const redirectUrl = buildConnectorFrontendCallbackRedirectUrl(
+    req.originalUrl || req.url,
+    process.env.FRONTEND_URL || 'http://localhost:3000'
+  );
+  if (!redirectUrl) {
+    return res.status(404).json({
+      success: false,
+      error: getPublicErrorMessage('Unknown connector callback path'),
+    });
+  }
+  return res.redirect(302, redirectUrl);
 });
 
 // ============================================================================

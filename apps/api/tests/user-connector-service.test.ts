@@ -955,7 +955,7 @@ test('completeOAuthByProfile confirms Slack Composio authorization', async () =>
     metadataJson: {
       provider: 'composio',
       composioSessionId: 'trs_slack_1',
-      composioConnectedAccountId: 'ca_slack_1',
+      composioConnectedAccountId: 'ca_slack_old',
     },
     secretCiphertext: pendingSecret,
   }) as any);
@@ -1009,7 +1009,7 @@ test('completeOAuthByProfile confirms Slack Composio authorization', async () =>
               slug: 'slack',
               connection: {
                 status: 'ACTIVE',
-                connected_account: { id: 'ca_slack_1' },
+                connected_account: { id: 'ca_slack_callback' },
               },
             },
           ],
@@ -1024,6 +1024,8 @@ test('completeOAuthByProfile confirms Slack Composio authorization', async () =>
     state,
     code: '',
     redirectUri: 'https://unexpected.example.com/callback',
+    connectedAccountId: 'ca_slack_callback',
+    status: 'success',
   });
 
   assert.equal(result.returnToSessionId, 'session-slack-1');
@@ -1038,6 +1040,7 @@ test('completeOAuthByProfile confirms Slack Composio authorization', async () =>
   );
   assert.equal((capturedUpdate?.metadataJson as any)?.provider, 'composio');
   assert.equal((capturedUpdate?.metadataJson as any)?.connectionStatus, 'active');
+  assert.equal((capturedUpdate?.metadataJson as any)?.composioConnectedAccountId, 'ca_slack_callback');
 });
 
 test('completeOAuthByProfile marks Slack Composio callback failed when metadata is missing', async () => {

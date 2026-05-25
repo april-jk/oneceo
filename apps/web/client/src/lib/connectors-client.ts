@@ -347,6 +347,8 @@ export async function completeConnectorProfileOauth(
     redirectUri: string;
     teamId?: string;
     configurationId?: string;
+    connectedAccountId?: string;
+    status?: string;
     next?: string;
     source?: string;
   }
@@ -433,6 +435,8 @@ export async function completeConnectorOauth(
     redirectUri: string;
     teamId?: string;
     configurationId?: string;
+    connectedAccountId?: string;
+    status?: string;
     next?: string;
     source?: string;
   }

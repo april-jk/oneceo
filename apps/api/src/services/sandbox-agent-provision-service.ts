@@ -45,6 +45,7 @@ import {
   waitForOsacBridgeReady,
 } from './sandbox-osac-bridge-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
+import { platformRuntimeArtifactService } from './platform-runtime-artifact-service';
 
 const SANDBOX_GLOBAL_NODE_MODULES = '/usr/local/lib/node_modules';
 const SANDBOX_PLAYWRIGHT_BROWSERS_PATH = '/opt/ms-playwright';
@@ -1484,6 +1485,12 @@ export class SandboxAgentProvisionService {
         let osacHostPort: number | null = null;
         let osacConnectionMode: string | null = pickString(existingMetadata.osacConnectionMode) || null;
         let osacAuthToken: string | null = pickString(existingMetadata.osacAuthToken);
+        let osacBinaryVersion: string | null = pickString(existingMetadata.osacBinaryVersion);
+        let osacBinarySha256: string | null = pickString(existingMetadata.osacBinarySha256);
+        let osacBinaryObjectKey: string | null = pickString(existingMetadata.osacBinaryObjectKey);
+        const expectedOsacSpec = await runStep('osac_artifact_spec', () =>
+          platformRuntimeArtifactService.getPublishedOsacDownloadSpec()
+        );
 
         if (executor === 'opencode') {
           host = await runStep('sandbox_host', () => resolveE2bPublicHost(sessionId, e2bConfig.opencodePort));
@@ -1514,6 +1521,8 @@ export class SandboxAgentProvisionService {
           const reusableBridge = await canReuseOsacBridge({
             endpoint: osacEndpoint,
             authToken: osacAuthToken,
+            currentSha256: osacBinarySha256,
+            expectedSha256: expectedOsacSpec.sha256,
           });
           if (reusableBridge) {
             osacHostPort =
@@ -1532,6 +1541,9 @@ export class SandboxAgentProvisionService {
             osacHostPort = osacBootstrapConfig.osacPort;
             osacConnectionMode = 'direct';
             osacAuthToken = bridge.osacAuthToken;
+            osacBinaryVersion = bridge.osacVersion;
+            osacBinarySha256 = bridge.osacSha256;
+            osacBinaryObjectKey = bridge.osacObjectKey;
             await runStep('osac_ready', () =>
               waitForOsacBridgeReady({
                 endpoint: bridge.osacEndpoint,
@@ -1571,6 +1583,8 @@ export class SandboxAgentProvisionService {
           const reusableBridge = await canReuseOsacBridge({
             endpoint: osacEndpoint,
             authToken: osacAuthToken,
+            currentSha256: osacBinarySha256,
+            expectedSha256: expectedOsacSpec.sha256,
           });
           if (reusableBridge) {
             osacHostPort =
@@ -1590,6 +1604,9 @@ export class SandboxAgentProvisionService {
             osacHostPort = osacBootstrapConfig.osacPort;
             osacConnectionMode = 'direct';
             osacAuthToken = bridge.osacAuthToken;
+            osacBinaryVersion = bridge.osacVersion;
+            osacBinarySha256 = bridge.osacSha256;
+            osacBinaryObjectKey = bridge.osacObjectKey;
             await runStep('osac_ready', () =>
               waitForOsacBridgeReady({
                 endpoint: bridge.osacEndpoint,
@@ -1601,6 +1618,8 @@ export class SandboxAgentProvisionService {
           const reusableBridge = await canReuseOsacBridge({
             endpoint: osacEndpoint,
             authToken: osacAuthToken,
+            currentSha256: osacBinarySha256,
+            expectedSha256: expectedOsacSpec.sha256,
           });
           if (reusableBridge) {
             osacHostPort =
@@ -1619,6 +1638,9 @@ export class SandboxAgentProvisionService {
             osacHostPort = osacBootstrapConfig.osacPort;
             osacConnectionMode = 'direct';
             osacAuthToken = bridge.osacAuthToken;
+            osacBinaryVersion = bridge.osacVersion;
+            osacBinarySha256 = bridge.osacSha256;
+            osacBinaryObjectKey = bridge.osacObjectKey;
             await runStep('osac_ready', () =>
               waitForOsacBridgeReady({
                 endpoint: bridge.osacEndpoint,
@@ -1664,6 +1686,9 @@ export class SandboxAgentProvisionService {
           osacHostPort: osacHostPort || undefined,
           osacConnectionMode: osacConnectionMode || undefined,
           osacAuthToken: osacAuthToken || undefined,
+          osacBinaryVersion: osacBinaryVersion || undefined,
+          osacBinarySha256: osacBinarySha256 || undefined,
+          osacBinaryObjectKey: osacBinaryObjectKey || undefined,
           e2b: {
             ...(existingEnvironment?.metadata as any)?.e2b,
             sandboxId: sessionId,

@@ -124,6 +124,17 @@ describe("connector center panel profile id normalization", () => {
     expect(callback.shouldHandle).toBe(true);
   });
 
+  it("recognizes GitHub Composio success callbacks without OAuth code", () => {
+    const params = new URLSearchParams(
+      "settings=open&settingsTab=connectors&connector_oauth=1&connector=github&state=oauth-state&status=success&connected_account_id=ca_123"
+    );
+    const callback = resolveConnectorOauthCallbackContext("http://localhost/github/callback", params);
+
+    expect(callback.connector).toBe("github");
+    expect(callback.isFixedCallback).toBe(true);
+    expect(callback.shouldHandle).toBe(true);
+  });
+
   it("recognizes Vercel fixed callback pages as connector OAuth callbacks", () => {
     const params = new URLSearchParams("code=oauth-code&state=oauth-state");
     const callback = resolveConnectorOauthCallbackContext("http://localhost/vercel/callback", params);

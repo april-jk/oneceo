@@ -95,6 +95,9 @@ export async function ensureOsacBridge(
   osacHost: string;
   osacAuthToken: string;
   osacRemoteBinary: string;
+  osacVersion: string;
+  osacSha256: string;
+  osacObjectKey: string;
 }> {
   writeConnectorDebugLog('[OSAC_BRIDGE_ENSURE_START]', {
     orchestratorSessionId: sessionId,
@@ -277,6 +280,9 @@ fi
     osacHost,
     osacAuthToken: authToken,
     osacRemoteBinary: remoteBinary,
+    osacVersion: downloadSpec.version,
+    osacSha256: downloadSpec.sha256,
+    osacObjectKey: downloadSpec.objectKey,
   };
 }
 
@@ -326,8 +332,27 @@ export async function waitForOsacBridgeReady(input: {
 export async function canReuseOsacBridge(input: {
   endpoint?: string | null;
   authToken?: string | null;
+  currentSha256?: string | null;
+  expectedSha256?: string | null;
 }): Promise<boolean> {
   const endpoint = pickString(input.endpoint);
   const authToken = pickString(input.authToken);
-  return Boolean(endpoint && authToken);
+  const currentSha256 = pickString(input.currentSha256);
+  const expectedSha256 = pickString(input.expectedSha256);
+  if (!endpoint || !authToken) return false;
+  if (!currentSha256 || !expectedSha256 || currentSha256 !== expectedSha256) {
+    return false;
+  }
+  const statusUrl = endpoint.replace(/^ws/i, 'http').replace(/\/ws$/, '/status');
+  try {
+    const response = await fetch(statusUrl, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+      },
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }

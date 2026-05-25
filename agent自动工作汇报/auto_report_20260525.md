@@ -40,6 +40,21 @@
 
 1. 整份 `tests/user-connector-service.test.ts` 的 25 个子测试都输出 `ok`，但测试文件存在旧的未关闭句柄导致进程不自然退出；本轮用新增聚焦用例获取了干净退出码。
 
+## Composio GitHub Callback 本地端口修复
+
+做了什么：
+
+1. 排查 GitHub 授权成功后跳到 `http://localhost:4000/github/callback` 并出现 `Cannot GET /github/callback` 的问题。
+2. 确认根因是 `.env.localhost` 将 `COMPOSIO_OAUTH_CALLBACK_BASE_URL` 配到了 API 端口，而连接器 callback 由前端 SPA 处理。
+3. 将 `.env.localhost` 的 `COMPOSIO_OAUTH_CALLBACK_BASE_URL` 改为 `http://localhost:3000`。
+4. 给 API 根路径补充 `/github/callback`、`/notion/callback`、`/supabase/callback`、`/slack/callback`、`/figma/callback`、`/google-super/callback`、`/vercel/callback` 兜底 302，保留 query 原样跳回前端。
+
+验证结果：
+
+1. `TMPDIR=/private/tmp pnpm --filter api exec tsx --test tests/connector-routes.test.ts tests/composio-oauth-callback-url.test.ts`：14/14 通过。
+2. `pnpm --filter api type-check`：通过。
+3. `git diff --check`：通过。
+
 ## 调试浏览器共用链路继续修复
 
 做了什么：

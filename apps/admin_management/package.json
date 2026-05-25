@@ -28,7 +28,7 @@
     "react-dom": "^19.2.0",
     "recharts": "^2.15.4",
     "undici": "^6.24.0",
-    "zod": "^4.3.6"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",

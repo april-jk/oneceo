@@ -2611,6 +2611,8 @@ function sanitizeTimelineMetadataForClient(metadataRaw: unknown): Record<string,
     'itemText',
     'command',
     'outputPreview',
+    'browserScreenshot',
+    'previewSnapshot',
     'exitCode',
     'fileChanges',
     'filePaths',
@@ -5317,6 +5319,43 @@ router.get('/sessions/:sessionId/preview-snapshots/:runId/website.png', async (r
     return res.status(ownershipError?.status || 400).json({
       success: false,
       error: getPublicErrorMessage(ownershipError?.message || error?.message || '读取预览截图失败'),
+    });
+  }
+});
+
+router.get('/sessions/:sessionId/runs/:runId/tool-calls/:toolCallId/browser-screenshot.png', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { sessionId, runId, toolCallId } = req.params;
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const run = await taskSessionRunDAO.getRun(runId);
+    if (!run || run.sessionId !== sessionId) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('浏览器截图不存在'),
+      });
+    }
+    const screenshot = await taskSessionWebsitePreviewSnapshotService.getBrowserActionScreenshotImage({
+      runId,
+      toolCallId,
+    });
+    if (!screenshot) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('浏览器截图不存在'),
+      });
+    }
+
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.setHeader('Content-Type', screenshot.mimeType);
+    res.setHeader('Content-Length', String(screenshot.body.length));
+    return res.status(200).send(screenshot.body);
+  } catch (error: any) {
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('读取浏览器操作截图失败:', error);
+    return res.status(ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(ownershipError?.message || error?.message || '读取浏览器操作截图失败'),
     });
   }
 });

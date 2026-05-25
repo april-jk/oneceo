@@ -228,6 +228,37 @@
     .tool-status-success { background: color-mix(in srgb, var(--success) 10%, transparent); color: #1a5c3e; }
     .tool-status-failed { background: color-mix(in srgb, var(--danger) 10%, transparent); color: #9e1c23; }
     .tool-preview { font-size: 12px; color: var(--text-secondary); margin-top: 6px; padding: 8px; background: var(--bg); border-radius: 6px; font-family: var(--mono); white-space: pre-wrap; overflow-wrap: break-word; }
+    .tool-screenshot {
+      display: block;
+      margin-top: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+    }
+    .tool-screenshot img {
+      display: block;
+      width: 100%;
+      max-height: 260px;
+      object-fit: contain;
+    }
+    .tool-screenshot-meta {
+      margin-top: 6px;
+      font-size: 11px;
+      color: var(--text-faint);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .tool-screenshot-unavailable {
+      margin-top: 8px;
+      padding: 8px;
+      border-radius: 8px;
+      border: 1px solid color-mix(in srgb, var(--warning) 18%, transparent);
+      background: color-mix(in srgb, var(--warning) 6%, transparent);
+      color: #7a5100;
+      font-size: 12px;
+    }
 
     /* Clarification */
     .clarification {
@@ -794,6 +825,61 @@
       return value.replace(/\s+/g, ' ').trim().toLowerCase();
     }
 
+    function asText(value) {
+      return typeof value === 'string' ? value.trim() : '';
+    }
+
+    function toRecord(value) {
+      return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    }
+
+    function parseJsonMaybe(value) {
+      if (value && typeof value === 'object') return value;
+      if (typeof value !== 'string' || !value.trim()) return {};
+      try {
+        return JSON.parse(value);
+      } catch {
+        return {};
+      }
+    }
+
+    function displayToolName(toolName) {
+      if (toolName === 'debug_open_page') return '视觉检测：打开页面';
+      if (toolName === 'browser_interact') return '视觉检测步骤';
+      if (toolName === 'complete_task') return '完成任务';
+      if (toolName === 'shell_execute') return '命令执行';
+      if (toolName === 'write_file') return '写入文件';
+      if (toolName === 'read_file') return '读取文件';
+      if (toolName === 'list_directory') return '列出目录';
+      if (toolName === 'search_code') return '代码搜索';
+      if (toolName === 'todowrite') return '待办';
+      return toolName || '工具调用';
+    }
+
+    function summarizeBrowserAction(metadata) {
+      const args = toRecord(metadata.arguments);
+      if (asText(args.description)) return asText(args.description);
+      const output = parseJsonMaybe(metadata.outputPreview);
+      if (asText(output.description)) return asText(output.description);
+      if (asText(output.action)) return asText(output.action);
+      if (asText(args.url)) return '打开 ' + asText(args.url);
+      return asText(metadata.content) || '正在进行视觉检测';
+    }
+
+    function readBrowserScreenshot(metadata) {
+      const screenshot = toRecord(metadata.browserScreenshot);
+      if (!asText(screenshot.status)) return null;
+      return screenshot;
+    }
+
+    function browserScreenshotUrl(item) {
+      return '/api/conversations/sessions/' +
+        encodeURIComponent(sessionMeta.id || '') +
+        '/runs/' + encodeURIComponent(item.runId || '') +
+        '/tool-calls/' + encodeURIComponent(item.toolCallId || '') +
+        '/browser-screenshot.png';
+    }
+
     function extractCapsule(content) {
       const text = content.trim();
       const match = text.match(/^\{([^{}]+)\}\s*([\s\S]*)$/);
@@ -841,12 +927,20 @@
         if (eventType === 'tool_call_started' || eventType === 'tool_call_completed' || eventType === 'tool_call_failed') {
           const toolName = metadata.toolName || metadata.tool_name || 'tool';
           const status = eventType === 'tool_call_failed' ? 'failed' : eventType === 'tool_call_completed' ? 'completed' : 'running';
+          const output = parseJsonMaybe(metadata.outputPreview);
+          const screenshot = readBrowserScreenshot(metadata);
+          const isBrowserTool = toolName === 'debug_open_page' || toolName === 'browser_interact';
           items.push({
             kind: 'tool',
             id: m.id,
             toolName,
+            title: displayToolName(toolName),
             status,
-            preview: metadata.outputPreview || metadata.result || '',
+            runId: asText(metadata.runId),
+            toolCallId: asText(metadata.toolCallId) || m.id,
+            preview: isBrowserTool ? summarizeBrowserAction(metadata) : metadata.outputPreview || metadata.result || '',
+            screenshot,
+            screenshotMeta: screenshot ? [asText(toRecord(screenshot.source).title), asText(toRecord(screenshot.source).url), asText(screenshot.capturedAt)].filter(Boolean).join(' · ') : '',
             timestamp: m.createdAt,
           });
           continue;
@@ -892,7 +986,7 @@
         if (item.kind === 'agent' || item.kind === 'error') return normalizeText(item.text).includes(q) || normalizeText(item.author || '').includes(q);
         if (item.kind === 'capsule') return normalizeText(item.label + ' ' + item.text).includes(q);
         if (item.kind === 'clarification') return normalizeText(item.text).includes(q);
-        if (item.kind === 'tool') return normalizeText(item.toolName + ' ' + item.preview).includes(q);
+        if (item.kind === 'tool') return normalizeText(item.toolName + ' ' + (item.title || '') + ' ' + item.preview).includes(q);
         if (item.kind === 'api_trace') {
           const t = item.trace;
           return normalizeText(t.model || t.toolName || t.serviceName || t.endpoint || t.traceType).includes(q) ||
@@ -1287,11 +1381,30 @@
             html += '<div class="tool-block">';
             html += '<div class="tool-header">';
             html += '<span class="tool-badge">\u5de5</span>';
-            html += '<span class="tool-title">' + escapeHtml(item.toolName) + '</span>';
+            html += '<span class="tool-title">' + escapeHtml(item.title || item.toolName) + '</span>';
             html += '<span class="tool-status ' + statusClass + '" style="margin-left:auto;">' + statusText + '</span>';
             html += '</div>';
             if (item.preview) {
               html += '<div class="tool-preview">' + escapeHtml(item.preview) + '</div>';
+            }
+            if (item.screenshot && item.screenshot.status === 'captured' && item.screenshot.storageKey) {
+              const imageUrl = browserScreenshotUrl(item);
+              html += '<a class="tool-screenshot" href="' + escapeHtml(imageUrl) + '" target="_blank" rel="noreferrer">';
+              html += '<img src="' + escapeHtml(imageUrl) + '" alt="视觉检测截图" loading="lazy">';
+              html += '</a>';
+              if (item.screenshotMeta) {
+                html += '<div class="tool-screenshot-meta">' + escapeHtml(item.screenshotMeta) + '</div>';
+              }
+              const visualCheck = toRecord(item.screenshot.visualCheck);
+              if (asText(visualCheck.status)) {
+                html += '<div class="tool-screenshot-meta">' + escapeHtml([
+                  '视觉诊断: ' + asText(visualCheck.status),
+                  asText(visualCheck.reasonCode),
+                  asText(visualCheck.message)
+                ].filter(Boolean).join(' / ')) + '</div>';
+              }
+            } else if (item.screenshot && item.screenshot.status) {
+              html += '<div class="tool-screenshot-unavailable">截图不可用：' + escapeHtml(item.screenshot.message || item.screenshot.reasonCode || item.screenshot.status) + '</div>';
             }
             html += '</div>';
             html += '</div>';

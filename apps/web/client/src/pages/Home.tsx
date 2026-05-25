@@ -152,7 +152,6 @@ import {
   buildTaskSessionDeploymentPrompt,
   type TaskSessionDeploymentPromptAction,
 } from "@/lib/task-session-deployment-prompts";
-import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
 import { resolveUserMessageReferences } from "@/lib/message-reference-parser";
 import { isManagedInternalSupportArtifact } from "@/lib/managed-artifact-visibility";
 import { readAltusMode } from "@/lib/altus-settings";
@@ -2820,14 +2819,6 @@ export default function Home() {
     setSelectedDiffId(target);
   };
 
-  const openWorkspacePreview = (path: string) => {
-    const normalizedPath = normalizeWorkspaceRelativePath(path, sessionId);
-    if (!normalizedPath) return;
-    setPreviewWorkspacePath(normalizedPath);
-    setPreviewTab("files");
-    setPreviewOpen(true);
-  };
-
   const approveGoogleWorkspaceConfirmation = useCallback(
     async (confirmation: GoogleWorkspaceConfirmationView) => {
       if (!sessionId) {
@@ -3315,7 +3306,6 @@ export default function Home() {
                   item={item}
                   onOpenDiffPreview={openDiffPreview}
                   onOpenManagedReplay={openAltusReplay}
-                  onOpenWorkspacePreview={openWorkspacePreview}
                   onDeployArtifact={deployFromArtifactCard}
                   runtimeSwitchBlocked={managedRunActive}
                   currentSessionId={sessionId}
@@ -4279,6 +4269,10 @@ export type ChatItem =
       runId: string;
       artifacts: AltusArtifactFile[];
       previewSnapshot?: TaskCreationWebsitePreviewSnapshot | null;
+      browserScreenshotFallback?: {
+        toolCallId: string;
+        screenshot: NonNullable<AltusReplayAction["browserScreenshot"]>;
+      } | null;
       messageKey?: string;
     }
   | {
@@ -4525,6 +4519,13 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
   const codexTurnFilePaths = new Map<string, string[]>();
   const lastCodexDiffIndexByTurn = new Map<string, number>();
   const managedArtifactsByRun = new Map<string, AltusArtifactFile[]>();
+  const managedBrowserScreenshotsByRun = new Map<
+    string,
+    Array<{
+      toolCallId: string;
+      screenshot: NonNullable<AltusReplayAction["browserScreenshot"]>;
+    }>
+  >();
   const emittedManagedCompletionRuns = new Set<string>();
   let managedStatusBuffer: {
     text: string;
@@ -4583,10 +4584,38 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     ]);
   };
 
+  const mergeManagedBrowserScreenshot = (
+    runId: string,
+    toolCallId: string,
+    screenshot: AltusReplayAction["browserScreenshot"],
+  ) => {
+    const normalizedRunId = runId.trim();
+    const normalizedToolCallId = toolCallId.trim();
+    if (!normalizedRunId || !normalizedToolCallId || !isPassedManagedBrowserScreenshot(screenshot)) {
+      return;
+    }
+    const existing = managedBrowserScreenshotsByRun.get(normalizedRunId) || [];
+    if (existing.some((item) => item.toolCallId === normalizedToolCallId)) return;
+    managedBrowserScreenshotsByRun.set(normalizedRunId, [
+      ...existing,
+      {
+        toolCallId: normalizedToolCallId,
+        screenshot: screenshot as NonNullable<AltusReplayAction["browserScreenshot"]>,
+      },
+    ]);
+  };
+
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     if (message.type !== "executor_event") continue;
     const metadata = toRecord(message.metadata);
+    if (isManagedExecutionEvent(metadata)) {
+      mergeManagedBrowserScreenshot(
+        asText(metadata.runId),
+        asText(metadata.toolCallId) || message.messageKey || "",
+        readManagedBrowserScreenshot(metadata),
+      );
+    }
     const event = toRecord(metadata.event);
     const item = toRecord(event.item);
     const eventType = asText(metadata.eventType).toLowerCase();
@@ -4871,6 +4900,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         message,
         managedArtifactsByRun,
         emittedManagedCompletionRuns,
+        browserScreenshotsByRun: managedBrowserScreenshotsByRun,
       });
       if (managedCompletionCard) {
         clearManagedStatus();
@@ -4938,6 +4968,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         message,
         managedArtifactsByRun,
         emittedManagedCompletionRuns,
+        browserScreenshotsByRun: managedBrowserScreenshotsByRun,
       });
       if (managedCompletionCard) {
         clearManagedStatus();
@@ -6473,7 +6504,6 @@ function MessageBubble({
   item,
   onOpenDiffPreview,
   onOpenManagedReplay,
-  onOpenWorkspacePreview,
   onDeployArtifact,
   runtimeSwitchBlocked,
   currentSessionId,
@@ -6495,7 +6525,6 @@ function MessageBubble({
       view?: AltusDrawerView;
     },
   ) => void;
-  onOpenWorkspacePreview?: (path: string) => void;
   onDeployArtifact?: (path: string) => Promise<void> | void;
   runtimeSwitchBlocked?: boolean;
   currentSessionId?: string | null;
@@ -6772,7 +6801,11 @@ function MessageBubble({
           runId={item.runId}
           artifacts={item.artifacts}
           previewSnapshot={item.previewSnapshot}
-          onOpenViewer={onOpenWorkspacePreview}
+          browserScreenshotFallback={item.browserScreenshotFallback}
+          displayMode="web-preview"
+          onOpenRemoteDebug={() =>
+            onOpenManagedReplay?.(item.runId, { view: "debug" })
+          }
           onDeployRequested={onDeployArtifact}
           runtimeSwitchBlocked={runtimeSwitchBlocked}
         />
@@ -9282,6 +9315,19 @@ function extractManagedPreviewSnapshot(
     capturedAt: asText(raw.capturedAt) || undefined,
     reasonCode: asText(raw.reasonCode) || undefined,
     message: asText(raw.message) || undefined,
+    visualCheck: (() => {
+      const visualCheck = toRecord(raw.visualCheck);
+      const visualStatus = asText(visualCheck.status);
+      if (visualStatus !== "passed" && visualStatus !== "failed") {
+        return undefined;
+      }
+      return {
+        status: visualStatus as "passed" | "failed",
+        reasonCode: asText(visualCheck.reasonCode) || undefined,
+        message: asText(visualCheck.message) || undefined,
+        diagnostics: toRecord(visualCheck.diagnostics),
+      };
+    })(),
     source: {
       sandboxId: asText(source.sandboxId) || undefined,
       port: Number.isFinite(portValue) ? portValue : undefined,
@@ -9292,10 +9338,51 @@ function extractManagedPreviewSnapshot(
   };
 }
 
+function isPassedManagedBrowserScreenshot(
+  screenshot: AltusReplayAction["browserScreenshot"],
+) {
+  return Boolean(
+    screenshot?.status === "captured" &&
+      screenshot.storageKey &&
+      screenshot.visualCheck?.status === "passed",
+  );
+}
+
+function findPassedBrowserScreenshotFallback(input: {
+  runId: string;
+  messageMetadata: Record<string, unknown>;
+  browserScreenshotsByRun?: Map<
+    string,
+    Array<{
+      toolCallId: string;
+      screenshot: NonNullable<AltusReplayAction["browserScreenshot"]>;
+    }>
+  >;
+}) {
+  const directToolCallId = asText(input.messageMetadata.toolCallId);
+  const directScreenshot = readManagedBrowserScreenshot(input.messageMetadata);
+  if (directToolCallId && isPassedManagedBrowserScreenshot(directScreenshot)) {
+    return {
+      toolCallId: directToolCallId,
+      screenshot: directScreenshot as NonNullable<AltusReplayAction["browserScreenshot"]>,
+    };
+  }
+
+  const screenshots = input.browserScreenshotsByRun?.get(input.runId) || [];
+  return screenshots.find((item) => isPassedManagedBrowserScreenshot(item.screenshot)) || null;
+}
+
 export function buildManagedCompletionCardItem(input: {
   message: AgentMessage;
   managedArtifactsByRun: Map<string, AltusArtifactFile[]>;
   emittedManagedCompletionRuns: Set<string>;
+  browserScreenshotsByRun?: Map<
+    string,
+    Array<{
+      toolCallId: string;
+      screenshot: NonNullable<AltusReplayAction["browserScreenshot"]>;
+    }>
+  >;
 }): ChatItem | null {
   const { message, managedArtifactsByRun, emittedManagedCompletionRuns } =
     input;
@@ -9313,6 +9400,11 @@ export function buildManagedCompletionCardItem(input: {
   const eventType = asText(metadata.eventType).toLowerCase();
   const deliverables = extractManagedDeliverables(metadata);
   const previewSnapshot = extractManagedPreviewSnapshot(metadata);
+  const browserScreenshotFallback = findPassedBrowserScreenshotFallback({
+    runId,
+    messageMetadata: metadata,
+    browserScreenshotsByRun: input.browserScreenshotsByRun,
+  });
   const managedArtifacts = managedArtifactsByRun.get(runId) || [];
   const webArtifacts = collectManagedWebArtifacts({
     deliverables,
@@ -9333,6 +9425,7 @@ export function buildManagedCompletionCardItem(input: {
       runId,
       artifacts: webArtifacts,
       previewSnapshot,
+      browserScreenshotFallback,
       messageKey: `managed:${runId}:artifact_card`,
     };
   }
@@ -9363,6 +9456,7 @@ export function buildManagedCompletionCardItem(input: {
     runId,
     artifacts: webArtifacts,
     previewSnapshot,
+    browserScreenshotFallback,
     messageKey: `managed:${runId}:artifact_card`,
   };
 }
@@ -9537,7 +9631,57 @@ function collectManagedReplayArtifactPaths(
   return Array.from(paths);
 }
 
-function buildManagedReplayData(messages: AgentMessage[]) {
+function readManagedBrowserScreenshot(metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const raw = toRecord(metadata.browserScreenshot);
+  const status = asText(raw.status);
+  if (
+    raw.type !== "browser_screenshot" ||
+    raw.kind !== "browser_action_screenshot" ||
+    !["captured", "capture_failed", "storage_failed"].includes(status)
+  ) {
+    return null;
+  }
+  const source = toRecord(raw.source);
+  const visualCheck = toRecord(raw.visualCheck);
+  const visualStatus = asText(visualCheck.status);
+  const toNumber = (value: unknown) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+  };
+  return {
+    type: "browser_screenshot" as const,
+    kind: "browser_action_screenshot" as const,
+    status: status as "captured" | "capture_failed" | "storage_failed",
+    storageKey: asText(raw.storageKey) || undefined,
+    mimeType: raw.mimeType === "image/png" ? "image/png" as const : undefined,
+    width: toNumber(raw.width),
+    height: toNumber(raw.height),
+    capturedAt: asText(raw.capturedAt) || undefined,
+    reasonCode: asText(raw.reasonCode) || undefined,
+    message: asText(raw.message) || undefined,
+    visualCheck:
+      visualStatus === "passed" || visualStatus === "failed"
+        ? {
+            status: visualStatus as "passed" | "failed",
+            reasonCode: asText(visualCheck.reasonCode) || undefined,
+            message: asText(visualCheck.message) || undefined,
+            diagnostics: toRecord(visualCheck.diagnostics),
+          }
+        : undefined,
+    source: {
+      sandboxId: asText(source.sandboxId) || undefined,
+      cdpPort: toNumber(source.cdpPort),
+      url: asText(source.url) || undefined,
+      title: asText(source.title) || undefined,
+      toolName: asText(source.toolName) || undefined,
+      action: asText(source.action) || undefined,
+      description: asText(source.description) || undefined,
+    },
+  };
+}
+
+export function buildManagedReplayData(messages: AgentMessage[]) {
   const actionsByRun = new Map<string, AltusReplayAction[]>();
   const filesByRun = new Map<string, AltusReplayFile[]>();
   const diffItemsByRun = new Map<string, PreviewDiffItem[]>();
@@ -9717,6 +9861,7 @@ function buildManagedReplayData(messages: AgentMessage[]) {
         internalDetail:
           formatManagedToolInternalDetail(toolName, metadata) || undefined,
         artifactPaths: collectManagedReplayArtifactPaths(toolName, metadata),
+        browserScreenshot: readManagedBrowserScreenshot(metadata),
       });
     } else {
       const action = actions[stepIndex];
@@ -9735,6 +9880,7 @@ function buildManagedReplayData(messages: AgentMessage[]) {
         internalDetail:
           formatManagedToolInternalDetail(toolName, metadata) || undefined,
         artifactPaths: collectManagedReplayArtifactPaths(toolName, metadata),
+        browserScreenshot: readManagedBrowserScreenshot(metadata) || action.browserScreenshot,
       };
     }
 
@@ -9859,7 +10005,7 @@ function buildManagedBrowserInteractPurpose(args: Record<string, unknown>) {
   if (action === "wait_for_timeout") {
     return "等待页面稳定";
   }
-  return target ? `执行 Playwright 操作：${target}` : "执行 Playwright 浏览器操作";
+  return target ? `执行 Playwright 操作：${target}` : "执行 Playwright 视觉检测";
 }
 
 export function getManagedToolPurposeSummary(
@@ -9922,6 +10068,11 @@ export function getManagedToolPurposeSummary(
     return buildManagedBrowserInteractPurpose(args);
   }
 
+  if (toolName === "debug_open_page") {
+    const url = asText(args.url) || asText(output.targetUrl) || asText(output.url);
+    return url ? `视觉检测：打开 ${url}` : "视觉检测：打开页面";
+  }
+
   if (toolName === "ask_user") {
     return "请求补充必要信息";
   }
@@ -9972,9 +10123,9 @@ function getManagedToolDisplayName(toolName: string) {
     case "ask_user":
       return i18n.t("homeWorkspace.requestClarification");
     case "debug_open_page":
-      return i18n.t("replayDrawer.tabs.debug");
+      return "视觉检测：打开页面";
     case "browser_interact":
-      return "浏览器操作";
+      return "视觉检测步骤";
     case "deploy_application":
       return i18n.t("homeWorkspace.deployApplication");
     case "redeploy_application":

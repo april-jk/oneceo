@@ -1923,6 +1923,7 @@ type ConversationReplayItem =
       summary: string;
       preview: string;
       detail: string;
+      browserScreenshot?: Record<string, unknown> | null;
       artifactPaths: string[];
       expandWrite: boolean;
       messageKey?: string;
@@ -2224,6 +2225,10 @@ function getConversationManagedToolDisplayName(toolName: string): string {
       return '代码搜索';
     case 'ask_user':
       return '请求澄清';
+    case 'debug_open_page':
+      return '视觉检测：打开页面';
+    case 'browser_interact':
+      return '视觉检测步骤';
     case 'complete_task':
       return '完成任务';
     default:
@@ -2284,6 +2289,12 @@ function formatConversationManagedToolSummary(toolName: string, metadataRaw: unk
   if (toolName === 'ask_user') {
     return asText(args.question) || '请求用户澄清';
   }
+  if (toolName === 'debug_open_page') {
+    return asText(args.url) ? `打开 ${asText(args.url)}` : '打开页面并截图';
+  }
+  if (toolName === 'browser_interact') {
+    return asText(args.description) || asText(args.action) || '执行 Playwright 检查';
+  }
   if (toolName === 'complete_task') {
     return asText(args.summary) || '输出最终完成总结';
   }
@@ -2320,6 +2331,16 @@ function formatConversationManagedToolPreview(toolName: string, metadataRaw: unk
 
   if (toolName === 'search_code') {
     return asText(output.output) || asText(args.query) || '已返回搜索结果';
+  }
+
+  if (toolName === 'debug_open_page' || toolName === 'browser_interact') {
+    const screenshot = toRecord(metadata.browserScreenshot);
+    const source = toRecord(screenshot.source);
+    return [
+      toolName === 'debug_open_page' ? '正在进行视觉检测' : asText(args.description) || asText(args.action) || '视觉检测步骤已完成',
+      asText(source.url),
+      asText(screenshot.status) === 'captured' ? '已捕获截图' : asText(screenshot.status),
+    ].filter(Boolean).join('\n');
   }
 
   if (toolName === 'complete_task') {
@@ -2372,6 +2393,24 @@ function formatConversationManagedToolDetail(toolName: string, metadataRaw: unkn
       const options = (args.options as unknown[]).map((item) => asText(item)).filter(Boolean).join(' / ');
       pushLine('建议选项', options);
     }
+  } else if (toolName === 'debug_open_page' || toolName === 'browser_interact') {
+    const screenshot = toRecord(metadata.browserScreenshot);
+    const source = toRecord(screenshot.source);
+    pushLine('操作', asText(args.description) || asText(args.action) || (toolName === 'debug_open_page' ? '打开页面' : 'Playwright 检查'));
+    pushLine('页面', asText(source.url));
+    pushLine('标题', asText(source.title));
+    pushLine('截图状态', asText(screenshot.status));
+    const visualCheck = toRecord(screenshot.visualCheck);
+    const visualStatus = asText(visualCheck.status);
+    if (visualStatus) {
+      pushLine('视觉诊断', [
+        visualStatus,
+        asText(visualCheck.reasonCode),
+        asText(visualCheck.message),
+      ].filter(Boolean).join(' / '));
+    }
+    pushLine('截图时间', asText(screenshot.capturedAt));
+    pushLine('截图对象', asText(screenshot.storageKey));
   } else if (toolName === 'complete_task') {
     pushLine('完成摘要', args.summary);
     if (Array.isArray(args.verification)) {
@@ -2431,6 +2470,7 @@ function buildConversationManagedToolItem(message: ConversationMessage): Convers
     summary: formatConversationManagedToolSummary(toolName, metadata),
     preview: formatConversationManagedToolPreview(toolName, metadata),
     detail: formatConversationManagedToolDetail(toolName, metadata),
+    browserScreenshot: toRecord(metadata.browserScreenshot),
     artifactPaths: collectConversationReplayArtifactPaths(toolName, metadata),
     expandWrite: shouldExpandConversationManagedWriteFileCard(toolName, status, metadata),
     messageKey: conversationMessageKey(message),

@@ -40,6 +40,45 @@ export function classifyManagedToolErrorCode(rawError: string) {
   if (normalized.includes('complete_task_pptx_requires_render_pptx_from_instructions')) {
     return 'complete_task_pptx_requires_render_pptx_from_instructions';
   }
+  if (normalized.startsWith('visual_detection_completion_blocked:')) {
+    return 'visual_detection_completion_blocked';
+  }
+  if (normalized.includes('debug_open_page_repeat_blocked')) return 'debug_open_page_repeat_blocked';
+  if (normalized.includes('debug_open_page_debug_not_ready')) return 'debug_service_not_ready';
+  if (normalized.includes('playwright_module_not_found')) return 'sandbox_browser_capability_unavailable';
+  if (normalized.includes('__oneceo_debug_target_unreachable__') || normalized.includes('target_unreachable')) {
+    return 'debug_target_unreachable';
+  }
+  if (normalized.includes('__oneceo_debug_target_file_missing__') || normalized.includes('target_file_missing')) {
+    return 'debug_target_file_missing';
+  }
+  if (normalized.includes('__oneceo_debug_target_bad_status__') || normalized.includes('target_bad_status')) {
+    return 'debug_target_bad_status';
+  }
+  if (normalized.includes('__oneceo_debug_target_tab_not_ready__') || normalized.includes('tab_not_ready')) {
+    return 'debug_target_tab_not_ready';
+  }
+  if (normalized.includes('debug_open_page_playwright_failed')) {
+    return 'debug_open_page_cdp_open_failed';
+  }
+  if (normalized.includes('__oneceo_debug_open_page_failed__') || normalized.includes('open_failed')) {
+    return 'debug_open_page_cdp_open_failed';
+  }
+  if (
+    normalized.includes('__oneceo_debug_command_failed__') ||
+    normalized.includes('__oneceo_debug_script_exit__') ||
+    normalized.includes('script_internal_error')
+  ) {
+    return 'debug_open_page_command_failed';
+  }
+  if (
+    normalized.includes('debug_open_page_missing_url') ||
+    normalized.includes('debug_open_page_invalid_url') ||
+    normalized.includes('debug_open_page_invalid_protocol') ||
+    normalized.includes('debug_open_page_file_outside_workspace')
+  ) {
+    return 'debug_open_page_invalid_target';
+  }
   if (normalized.includes('managed_run_missing_sandbox_context') || normalized.includes('sandbox_not_ready')) {
     return 'sandbox_not_ready';
   }
@@ -60,6 +99,15 @@ export function isManagedToolErrorRetryable(errorCode: string) {
     errorCode === 'complete_task_attachment_path_invalid' ||
     errorCode === 'write_file_binary_deliverable_requires_generator' ||
     errorCode === 'complete_task_pptx_requires_render_pptx_from_instructions' ||
+    errorCode === 'visual_detection_completion_blocked' ||
+    errorCode === 'debug_service_not_ready' ||
+    errorCode === 'debug_target_unreachable' ||
+    errorCode === 'debug_target_file_missing' ||
+    errorCode === 'debug_target_bad_status' ||
+    errorCode === 'debug_target_tab_not_ready' ||
+    errorCode === 'debug_open_page_cdp_open_failed' ||
+    errorCode === 'debug_open_page_command_failed' ||
+    errorCode === 'debug_open_page_invalid_target' ||
     errorCode === 'sandbox_not_ready' ||
     errorCode === 'mcp_provider_not_found' ||
     errorCode === 'connector_guide_required' ||
@@ -121,6 +169,28 @@ function buildErrorDetail(errorCode: string, rawError?: string) {
       return 'write_file only supports UTF-8 text files. Final docx/xlsx/pptx/pdf and archive deliverables must be generated through a real document generator or renderer.';
     case 'complete_task_pptx_requires_render_pptx_from_instructions':
       return 'PPTX attachments must come from render_pptx_from_instructions before complete_task can deliver them.';
+    case 'visual_detection_completion_blocked':
+      return 'Website and web app delivery requires successful n.eko + Playwright visual detection screenshot evidence before complete_task.';
+    case 'debug_open_page_repeat_blocked':
+      return 'The same preview target failed with the same debug_open_page reason more than once without a corrective shell_execute or write_file step.';
+    case 'debug_service_not_ready':
+      return 'The n.eko / Chromium remote debugging service is not ready. This is a sandbox browser capability problem, not a user project code problem.';
+    case 'sandbox_browser_capability_unavailable':
+      return 'The sandbox browser dependency is unavailable. Playwright, its browser cache, or the fixed MCP command path is missing.';
+    case 'debug_target_unreachable':
+      return 'The preview URL is not reachable from inside the sandbox browser environment.';
+    case 'debug_target_file_missing':
+      return 'The file URL target does not exist inside the workspace.';
+    case 'debug_target_bad_status':
+      return 'The preview URL returned a non-success HTTP status.';
+    case 'debug_target_tab_not_ready':
+      return 'Chromium accepted the open request but did not expose a tab for the requested target URL.';
+    case 'debug_open_page_cdp_open_failed':
+      return 'Chromium CDP did not open the requested target page.';
+    case 'debug_open_page_command_failed':
+      return 'The debug_open_page command failed before returning normal page-open diagnostics.';
+    case 'debug_open_page_invalid_target':
+      return 'debug_open_page needs a valid http(s) URL or a file URL inside the workspace.';
     default:
       return normalizedRawError || 'Tool execution failed.';
   }
@@ -142,6 +212,28 @@ function buildErrorInstruction(errorCode: string, toolName: string) {
       return 'Generate the final downloadable file through shell/python tooling or the managed renderer, verify it can be opened, then continue. Do not use write_file for docx/xlsx/pptx/pdf or archive outputs.';
     case 'complete_task_pptx_requires_render_pptx_from_instructions':
       return 'Call render_pptx_from_instructions first, then attach the returned PPTX path in complete_task.attachments.';
+    case 'visual_detection_completion_blocked':
+      return 'Continue the website verification flow: verify the app can run or build, say 正在进行视觉检测, open the target with debug_open_page, perform Playwright/n.eko browser_interact steps for visible controls or page movement, then retry complete_task after a captured Action screenshot exists.';
+    case 'debug_open_page_repeat_blocked':
+      return 'Do not call debug_open_page again for the same target now. First make a concrete corrective change with shell_execute or write_file, or stop and report the exact platform-visible blocker.';
+    case 'debug_service_not_ready':
+      return 'Do not stop immediately. Inspect the structured diagnostics for the managed n.eko / Chromium debug service, repair or refresh the debug browser state if possible, then retry debug_open_page only after a concrete state-changing step.';
+    case 'sandbox_browser_capability_unavailable':
+      return 'Do not install Playwright or @playwright/mcp into the user project. Report the sandbox browser capability failure with the fixed paths and stop this verification loop.';
+    case 'debug_target_unreachable':
+      return 'Start or repair the local preview service with shell_execute, verify its URL/port, then call debug_open_page again only after the target is reachable.';
+    case 'debug_target_file_missing':
+      return 'Create or correct the workspace file path with write_file or shell_execute before retrying debug_open_page with a file:// URL.';
+    case 'debug_target_bad_status':
+      return 'Inspect the local server error, repair the app or server command, and retry debug_open_page only after the URL returns 2xx or 3xx.';
+    case 'debug_target_tab_not_ready':
+      return 'Check that the target URL is correct and the CDP browser is healthy. Retry only after changing the target or repairing the browser/service state.';
+    case 'debug_open_page_cdp_open_failed':
+      return 'Check the CDP endpoint and browser debug service. Retry only after the debug browser state has changed.';
+    case 'debug_open_page_command_failed':
+      return 'Report the structured __ONECEO_DEBUG_* diagnostics and inspect the platform debug command boundary before retrying the same target.';
+    case 'debug_open_page_invalid_target':
+      return 'Retry debug_open_page with a valid full URL, such as http://127.0.0.1:3000/, or a workspace file:// URL.';
     case 'sandbox_not_ready':
       return 'Sandbox is not ready. Recover or wait for the sandbox before retrying.';
     case 'mcp_provider_not_found':

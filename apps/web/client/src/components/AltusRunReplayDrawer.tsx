@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
+  getTaskCreationBrowserActionScreenshotUrl,
   getTaskCreationDeploymentInfo,
   type TaskCreationDeploymentInfo,
 } from "@/lib/task-creation-client";
@@ -55,6 +56,35 @@ export type AltusReplayAction = {
   detail: string;
   internalDetail?: string;
   artifactPaths: string[];
+  browserScreenshot?: AltusReplayBrowserScreenshot | null;
+};
+
+export type AltusReplayBrowserScreenshot = {
+  type: "browser_screenshot";
+  kind: "browser_action_screenshot";
+  status: "captured" | "capture_failed" | "storage_failed";
+  storageKey?: string;
+  mimeType?: "image/png";
+  width?: number;
+  height?: number;
+  capturedAt?: string;
+  reasonCode?: string;
+  message?: string;
+  visualCheck?: {
+    status: "passed" | "failed";
+    reasonCode?: string;
+    message?: string;
+    diagnostics?: Record<string, unknown>;
+  };
+  source?: {
+    sandboxId?: string;
+    cdpPort?: number;
+    url?: string;
+    title?: string;
+    toolName?: string;
+    action?: string;
+    description?: string;
+  };
 };
 
 export function shouldRenderReplayActionMarkdown(
@@ -225,6 +255,103 @@ function isClickInsideElement(
   element: HTMLElement | null,
 ) {
   return Boolean(target instanceof Node && element?.contains(target));
+}
+
+function formatScreenshotTimestamp(value?: string | null): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(i18n.language === "zh" ? "zh-CN" : "en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function BrowserScreenshotEvidence({
+  sessionId,
+  runId,
+  toolCallId,
+  screenshot,
+}: {
+  sessionId: string;
+  runId: string;
+  toolCallId: string;
+  screenshot?: AltusReplayBrowserScreenshot | null;
+}) {
+  const [imageFailed, setImageFailed] = useState(false);
+  useEffect(() => {
+    setImageFailed(false);
+  }, [screenshot?.storageKey, toolCallId]);
+
+  if (!screenshot) return null;
+  const captured = screenshot.status === "captured" && screenshot.storageKey && !imageFailed;
+  const visualStatus = screenshot.visualCheck?.status;
+  const visualPassed = visualStatus === "passed";
+  const visualFailed = visualStatus === "failed";
+  const imageUrl = captured
+    ? getTaskCreationBrowserActionScreenshotUrl(sessionId, runId, toolCallId)
+    : "";
+  const meta = [
+    screenshot.source?.title,
+    screenshot.source?.url,
+    formatScreenshotTimestamp(screenshot.capturedAt),
+  ].filter(Boolean);
+
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-700 dark:bg-zinc-800">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-xs font-medium text-zinc-800 dark:text-zinc-100">
+            浏览器截图
+          </div>
+          {meta.length > 0 ? (
+            <div className="mt-0.5 truncate text-[11px] text-zinc-500 dark:text-zinc-400">
+              {meta.join(" · ")}
+            </div>
+          ) : null}
+        </div>
+        <span
+          className={cn(
+            "shrink-0 rounded-full border px-2 py-0.5 text-[11px]",
+            captured && !visualFailed
+              ? "border-zinc-300 bg-white text-zinc-700 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-200"
+              : "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300",
+          )}
+        >
+          {captured ? (visualPassed ? "检测通过" : visualFailed ? "检测未通过" : "已捕获") : "不可用"}
+        </span>
+      </div>
+      {visualFailed ? (
+        <div className="mb-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+          {screenshot.visualCheck?.reasonCode
+            ? `${screenshot.visualCheck.reasonCode}: ${screenshot.visualCheck.message || "页面未渲染出有效内容。"}`
+            : screenshot.visualCheck?.message || "页面未渲染出有效内容。"}
+        </div>
+      ) : null}
+      {captured ? (
+        <a
+          href={imageUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="block overflow-hidden rounded-md border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900"
+        >
+          <img
+            src={imageUrl}
+            alt="浏览器操作截图"
+            className="max-h-72 w-full object-contain"
+            loading="lazy"
+            onError={() => setImageFailed(true)}
+          />
+        </a>
+      ) : (
+        <div className="rounded-md border border-dashed border-zinc-300 bg-white px-3 py-2 text-xs text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+          {screenshot.message || "本次浏览器操作截图未能保存。"}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function AltusRunReplayDrawer({
@@ -862,6 +989,12 @@ export default function AltusRunReplayDrawer({
                               {selectedActionDetail}
                             </pre>
                           )}
+                          <BrowserScreenshotEvidence
+                            sessionId={sessionId}
+                            runId={runId}
+                            toolCallId={selectedAction.toolCallId}
+                            screenshot={selectedAction.browserScreenshot}
+                          />
                         </div>
                       ) : (
                         <div className="text-sm text-muted-foreground">

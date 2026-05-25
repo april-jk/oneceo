@@ -331,6 +331,165 @@ test('ensure neko debug treats wrapper failure as ready when live probes and man
   assert.equal((metadataUpdates.at(-1) as any).debug.neko.reasonCode, undefined);
 });
 
+test('ensure neko debug recovers when Chromium becomes ready after wrapper timeout', async () => {
+  const metadataUpdates: Array<Record<string, unknown>> = [];
+  let startWrapperCallCount = 0;
+  let lateRecoveryCallCount = 0;
+  let cdpProbeCount = 0;
+  let nekoProbeCount = 0;
+  mock.method(sandboxExecutionEnvironmentDAO, 'getBySessionId', async () => ({
+    sessionId: 'sandbox-chromium-late-ready',
+    status: 'ready',
+    metadata: {},
+  }) as any);
+  mock.method(sandboxExecutionEnvironmentDAO, 'updateMetadata', async (_sessionId, metadata) => {
+    metadataUpdates.push(metadata as Record<string, unknown>);
+    return {} as any;
+  });
+  mock.method(e2bConnector, 'getSandboxHost', async (_sandboxId, port) => `${port}-sandbox-chromium-late-ready.e2b.app`);
+  mock.method(e2bConnector, 'runCommand', async (_sandboxId, command) => {
+    const text = String(command);
+    if (text.includes('recovering late-ready chromium')) {
+      lateRecoveryCallCount += 1;
+      return { stdout: '[neko] recovering late-ready chromium by starting n.eko\n', stderr: '', exitCode: 0 } as any;
+    }
+    if (text.startsWith('bash -lc ')) {
+      startWrapperCallCount += 1;
+      const error = new Error('exit status 39') as any;
+      error.exitCode = 39;
+      error.stdout = '[neko] chromium start failed\n';
+      error.stderr = '';
+      throw error;
+    }
+    if (text.includes('http://127.0.0.1:8081/')) {
+      nekoProbeCount += 1;
+      return { stdout: nekoProbeCount < 4 ? '000' : '200', stderr: '', exitCode: 0 } as any;
+    }
+    if (text.includes('http://127.0.0.1:9222/json/version')) {
+      cdpProbeCount += 1;
+      return { stdout: cdpProbeCount === 1 ? 'MISSING\n' : 'OK\n', stderr: '', exitCode: 0 } as any;
+    }
+    if (text.includes('command -v neko')) {
+      return { stdout: 'OK\n', stderr: '', exitCode: 0 } as any;
+    }
+    if (text.includes('__CFG__')) {
+      return {
+        stdout: [
+          '__CFG__',
+          '',
+          '__LOG__',
+          'neko ready',
+          '__CHROMIUM_LOG__',
+          'DevTools listening on ws://127.0.0.1:9222/devtools/browser/test',
+          '__XVFB_LOG__',
+          '',
+          '__START_LOG__',
+          '[neko] chromium start failed',
+          '__MANIFEST__',
+          '',
+          '__TREE__',
+          'debug browser files',
+          '__PORTS__',
+          'LISTEN 0 4096 127.0.0.1:9222',
+        ].join('\n'),
+        stderr: '',
+        exitCode: 0,
+      } as any;
+    }
+    throw new Error(`unexpected command: ${text.slice(0, 80)}`);
+  });
+
+  const result = await ensureNekoDebug('sandbox-chromium-late-ready', {
+    requireTurn: false,
+    strictIceCheck: false,
+  });
+
+  assert.equal(result.ready, true);
+  assert.equal(result.status, 'running');
+  assert.equal(startWrapperCallCount, 1);
+  assert.equal(lateRecoveryCallCount, 1);
+  assert.equal((metadataUpdates.at(-1) as any).debug.neko.status, 'running');
+  assert.equal((metadataUpdates.at(-1) as any).debug.neko.reasonCode, undefined);
+});
+
+test('ensure neko debug recovers n.eko when lock timeout leaves CDP ready', async () => {
+  const metadataUpdates: Array<Record<string, unknown>> = [];
+  let lateRecoveryCallCount = 0;
+  let cdpProbeCount = 0;
+  let nekoProbeCount = 0;
+  mock.method(sandboxExecutionEnvironmentDAO, 'getBySessionId', async () => ({
+    sessionId: 'sandbox-lock-timeout-cdp-ready',
+    status: 'ready',
+    metadata: {},
+  }) as any);
+  mock.method(sandboxExecutionEnvironmentDAO, 'updateMetadata', async (_sessionId, metadata) => {
+    metadataUpdates.push(metadata as Record<string, unknown>);
+    return {} as any;
+  });
+  mock.method(e2bConnector, 'getSandboxHost', async (_sandboxId, port) => `${port}-sandbox-lock-timeout-cdp-ready.e2b.app`);
+  mock.method(e2bConnector, 'runCommand', async (_sandboxId, command) => {
+    const text = String(command);
+    if (text.includes('recovering late-ready chromium')) {
+      lateRecoveryCallCount += 1;
+      return { stdout: '[neko] recovering late-ready chromium by starting n.eko\n', stderr: '', exitCode: 0 } as any;
+    }
+    if (text.startsWith('bash -lc ')) {
+      const error = new Error('exit status 42') as any;
+      error.exitCode = 42;
+      error.stdout = '';
+      error.stderr = '[neko] debug browser lock timeout\n';
+      throw error;
+    }
+    if (text.includes('http://127.0.0.1:8081/')) {
+      nekoProbeCount += 1;
+      return { stdout: nekoProbeCount < 4 ? '000' : '200', stderr: '', exitCode: 0 } as any;
+    }
+    if (text.includes('http://127.0.0.1:9222/json/version')) {
+      cdpProbeCount += 1;
+      return { stdout: cdpProbeCount === 1 ? 'MISSING\n' : 'OK\n', stderr: '', exitCode: 0 } as any;
+    }
+    if (text.includes('command -v neko')) {
+      return { stdout: 'OK\n', stderr: '', exitCode: 0 } as any;
+    }
+    if (text.includes('__CFG__')) {
+      return {
+        stdout: [
+          '__CFG__',
+          '',
+          '__LOG__',
+          'neko ready',
+          '__CHROMIUM_LOG__',
+          'DevTools listening on ws://127.0.0.1:9222/devtools/browser/test',
+          '__XVFB_LOG__',
+          '',
+          '__START_LOG__',
+          '[neko] debug browser lock timeout',
+          '__MANIFEST__',
+          '',
+          '__TREE__',
+          'debug browser files',
+          '__PORTS__',
+          'LISTEN 0 4096 127.0.0.1:9222',
+        ].join('\n'),
+        stderr: '',
+        exitCode: 0,
+      } as any;
+    }
+    throw new Error(`unexpected command: ${text.slice(0, 80)}`);
+  });
+
+  const result = await ensureNekoDebug('sandbox-lock-timeout-cdp-ready', {
+    requireTurn: false,
+    strictIceCheck: false,
+  });
+
+  assert.equal(result.ready, true);
+  assert.equal(result.status, 'running');
+  assert.equal(lateRecoveryCallCount, 1);
+  assert.equal((metadataUpdates.at(-1) as any).debug.neko.status, 'running');
+  assert.equal((metadataUpdates.at(-1) as any).debug.neko.reasonCode, undefined);
+});
+
 test('ensure neko debug returns visible diagnostics when the start script fails', async () => {
   const metadataUpdates: Array<Record<string, unknown>> = [];
   let capturedStartWrapper = '';

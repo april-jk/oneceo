@@ -38,7 +38,6 @@ import type {
   AdminThemeKey,
   AdminThemeMode,
   AdminThemeSettings,
-  AgentManagementOverview,
   ConversationMessage,
   ConversationSession,
   ConversationSessionDetailResponse,
@@ -426,16 +425,6 @@ const NAV_ITEMS: Array<{
     iconKey: 'kvm',
     description: '查看宿主机资源、虚拟机状态和实例操作。',
     signal: '资源占用',
-  },
-  {
-    key: 'agent',
-    group: 'platform',
-    label: '智能体管理',
-    subtitle: '智能体运行状态',
-    tag: 'AGT',
-    iconKey: 'agent',
-    description: '查看服务健康、能力分布和会话状态。',
-    signal: '服务健康',
   },
   {
     key: 'skill',
@@ -1934,6 +1923,7 @@ type ConversationReplayItem =
       summary: string;
       preview: string;
       detail: string;
+      browserScreenshot?: Record<string, unknown> | null;
       artifactPaths: string[];
       expandWrite: boolean;
       messageKey?: string;
@@ -2235,6 +2225,10 @@ function getConversationManagedToolDisplayName(toolName: string): string {
       return '代码搜索';
     case 'ask_user':
       return '请求澄清';
+    case 'debug_open_page':
+      return '视觉检测：打开页面';
+    case 'browser_interact':
+      return '视觉检测步骤';
     case 'complete_task':
       return '完成任务';
     default:
@@ -2295,6 +2289,12 @@ function formatConversationManagedToolSummary(toolName: string, metadataRaw: unk
   if (toolName === 'ask_user') {
     return asText(args.question) || '请求用户澄清';
   }
+  if (toolName === 'debug_open_page') {
+    return asText(args.url) ? `打开 ${asText(args.url)}` : '打开页面并截图';
+  }
+  if (toolName === 'browser_interact') {
+    return asText(args.description) || asText(args.action) || '执行 Playwright 检查';
+  }
   if (toolName === 'complete_task') {
     return asText(args.summary) || '输出最终完成总结';
   }
@@ -2331,6 +2331,16 @@ function formatConversationManagedToolPreview(toolName: string, metadataRaw: unk
 
   if (toolName === 'search_code') {
     return asText(output.output) || asText(args.query) || '已返回搜索结果';
+  }
+
+  if (toolName === 'debug_open_page' || toolName === 'browser_interact') {
+    const screenshot = toRecord(metadata.browserScreenshot);
+    const source = toRecord(screenshot.source);
+    return [
+      toolName === 'debug_open_page' ? '正在进行视觉检测' : asText(args.description) || asText(args.action) || '视觉检测步骤已完成',
+      asText(source.url),
+      asText(screenshot.status) === 'captured' ? '已捕获截图' : asText(screenshot.status),
+    ].filter(Boolean).join('\n');
   }
 
   if (toolName === 'complete_task') {
@@ -2383,6 +2393,24 @@ function formatConversationManagedToolDetail(toolName: string, metadataRaw: unkn
       const options = (args.options as unknown[]).map((item) => asText(item)).filter(Boolean).join(' / ');
       pushLine('建议选项', options);
     }
+  } else if (toolName === 'debug_open_page' || toolName === 'browser_interact') {
+    const screenshot = toRecord(metadata.browserScreenshot);
+    const source = toRecord(screenshot.source);
+    pushLine('操作', asText(args.description) || asText(args.action) || (toolName === 'debug_open_page' ? '打开页面' : 'Playwright 检查'));
+    pushLine('页面', asText(source.url));
+    pushLine('标题', asText(source.title));
+    pushLine('截图状态', asText(screenshot.status));
+    const visualCheck = toRecord(screenshot.visualCheck);
+    const visualStatus = asText(visualCheck.status);
+    if (visualStatus) {
+      pushLine('视觉诊断', [
+        visualStatus,
+        asText(visualCheck.reasonCode),
+        asText(visualCheck.message),
+      ].filter(Boolean).join(' / '));
+    }
+    pushLine('截图时间', asText(screenshot.capturedAt));
+    pushLine('截图对象', asText(screenshot.storageKey));
   } else if (toolName === 'complete_task') {
     pushLine('完成摘要', args.summary);
     if (Array.isArray(args.verification)) {
@@ -2442,6 +2470,7 @@ function buildConversationManagedToolItem(message: ConversationMessage): Convers
     summary: formatConversationManagedToolSummary(toolName, metadata),
     preview: formatConversationManagedToolPreview(toolName, metadata),
     detail: formatConversationManagedToolDetail(toolName, metadata),
+    browserScreenshot: toRecord(metadata.browserScreenshot),
     artifactPaths: collectConversationReplayArtifactPaths(toolName, metadata),
     expandWrite: shouldExpandConversationManagedWriteFileCard(toolName, status, metadata),
     messageKey: conversationMessageKey(message),
@@ -3434,7 +3463,6 @@ export default function App() {
   const [connectorGuideManagementViewState, setConnectorGuideManagementViewState] = useState<ConnectorGuideManagementViewState>(() => cloneConnectorGuideManagementViewState(initialUrlState.connectorGuide));
   const [osacReleaseManagementViewState, setOsacReleaseManagementViewState] = useState<OsacReleaseManagementViewState>(() => cloneOsacReleaseManagementViewState(initialUrlState.osacRelease));
 
-  const [agentOverview, setAgentOverview] = useState<AgentManagementOverview | null>(null);
   const [sandboxOverview, setSandboxOverview] = useState<SandboxManagementOverview | null>(null);
   const [sandboxLiveSummary, setSandboxLiveSummary] = useState<SandboxLiveSummary | null>(null);
   const [sandboxLiveSummaryRefreshing, setSandboxLiveSummaryRefreshing] = useState(false);
@@ -3511,7 +3539,15 @@ export default function App() {
   const [templateAliasResult, setTemplateAliasResult] = useState<unknown>(null);
   const [sandboxBusyIds, setSandboxBusyIds] = useState<Record<string, boolean>>({});
 
-  const [selectedAgentStageKey, setSelectedAgentStageKey] = useState<string | null>(null);
+  const [conversationView, setConversationView] = useState<'index' | 'overview'>(() => {
+    return (localStorage.getItem('admin-conversation-view') as 'index' | 'overview') || 'index';
+  });
+  const [overviewSelectedStageKey, setOverviewSelectedStageKey] = useState<string | null>(null);
+  const [serviceHealth, setServiceHealth] = useState({
+    oneceoApi: { online: false as boolean, timestamp: null as string | null },
+    agentApi: { online: false as boolean, message: '未知' as string, timestamp: null as string | null },
+  });
+
   const [toasts, setToasts] = useState<UiToast[]>([]);
   const [operationOverlay, setOperationOverlay] = useState<{ message: string } | null>(null);
   const [sandboxLoadProgress, setSandboxLoadProgress] = useState<SandboxLoadProgressState>({
@@ -3884,11 +3920,6 @@ export default function App() {
     },
     [archiveColumnWidths]
   );
-
-  const loadAgentSection = useCallback(async () => {
-    const result = await api.getAgentManagementOverview();
-    setAgentOverview(result);
-  }, []);
 
   const loadSandboxOverview = useCallback(async () => {
     if (sandboxOverviewRequestRef.current) {
@@ -5109,8 +5140,6 @@ export default function App() {
           await loadConversationSessions();
         } else if (section === 'user') {
           setError(null);
-        } else if (section === 'agent') {
-          await loadAgentSection();
         } else if (section === 'skill') {
           setError(null);
         } else if (section === 'connectorGuide') {
@@ -5136,7 +5165,6 @@ export default function App() {
       }
     },
     [
-      loadAgentSection,
       loadConversationSessions,
       loadKvmSection,
       loadSandboxSection,
@@ -5282,18 +5310,28 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    const firstStageKey = agentOverview?.stageDistribution?.[0]?.stageKey || null;
-    if (!selectedAgentStageKey || !(agentOverview?.stageDistribution || []).some((item) => item.stageKey === selectedAgentStageKey)) {
-      setSelectedAgentStageKey(firstStageKey);
-    }
-  }, [agentOverview, selectedAgentStageKey]);
-
-  useEffect(() => {
     if (authStatus !== 'authenticated') {
       return;
     }
     loadSection(activeSection, true);
   }, [activeSection, authStatus, loadSection]);
+
+  useEffect(() => {
+    if (conversationView !== 'overview' || authStatus !== 'authenticated') return;
+    Promise.allSettled([api.health(), api.getAgentHealth()]).then(([apiHealth, agentHealth]) => {
+      setServiceHealth({
+        oneceoApi: {
+          online: apiHealth.status === 'fulfilled' && apiHealth.value.status === 'ok',
+          timestamp: apiHealth.status === 'fulfilled' ? apiHealth.value.timestamp : null,
+        },
+        agentApi: {
+          online: agentHealth.status === 'fulfilled',
+          message: agentHealth.status === 'fulfilled' ? agentHealth.value.message : '智能体接口不可用',
+          timestamp: agentHealth.status === 'fulfilled' ? agentHealth.value.timestamp : null,
+        },
+      });
+    });
+  }, [conversationView, authStatus]);
 
   useEffect(() => {
     if (!sandboxLiveSummary?.countedAt) {
@@ -5902,18 +5940,59 @@ export default function App() {
       failedToolNames,
     };
   })();
-  const agentCapabilitySummary = (() => {
-    const capabilities = agentOverview?.capabilities || [];
-    return {
-      total: capabilities.length,
-      available: capabilities.filter((item) => item.status === 'available').length,
-      planned: capabilities.filter((item) => item.status === 'planned').length,
-    };
+
+  // 阶段分布：从会话列表前端计算
+  const stageDistribution = (() => {
+    const map = new Map<
+      string,
+      {
+        stageKey: string;
+        label: string;
+        value: number;
+        statuses: Map<string, number>;
+        recentSessions: ConversationSession[];
+      }
+    >();
+    for (const session of conversationSessions) {
+      const key = session.stage || 'unknown';
+      const bucket = map.get(key) || {
+        stageKey: key,
+        label: conversationStageLabel(key),
+        value: 0,
+        statuses: new Map<string, number>(),
+        recentSessions: [],
+      };
+      bucket.value += 1;
+      bucket.statuses.set(session.status, (bucket.statuses.get(session.status) || 0) + 1);
+      bucket.recentSessions.push(session);
+      map.set(key, bucket);
+    }
+    return Array.from(map.values())
+      .map((item) => ({
+        stageKey: item.stageKey,
+        label: item.label,
+        value: item.value,
+        statusSummary: Array.from(item.statuses.entries())
+          .map(([label, value]) => ({ label: statusLabel(label), value }))
+          .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label)),
+        recentSessions: [...item.recentSessions]
+          .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+          .slice(0, 6),
+      }))
+      .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
   })();
-  const selectedAgentStage =
-    agentOverview?.stageDistribution.find((item) => item.stageKey === selectedAgentStageKey) ||
-    agentOverview?.stageDistribution[0] ||
+
+  const selectedOverviewStage =
+    stageDistribution.find((item) => item.stageKey === overviewSelectedStageKey) ||
+    stageDistribution[0] ||
     null;
+
+  const capabilities = [
+    { key: 'task-creation', name: 'Task Creation Agent', transport: 'WebSocket', endpoint: '/ws/task-creation', status: 'available' },
+    { key: 'ceo-view', name: 'CEO View Agent', transport: 'HTTP', endpoint: '/api/agents/ceo-view/*', status: 'planned' },
+    { key: 'task-detail', name: 'Task Detail Agent', transport: 'HTTP', endpoint: '/api/agents/task-detail/*', status: 'planned' },
+  ];
+
   const stateTransitions = conversationDetail?.trace?.stateTransitions || [];
   const llmItems = conversationDetail?.trace?.llm || [];
   const conversationDetailedLogs = (() => {
@@ -6853,10 +6932,8 @@ export default function App() {
     riskTags: asArray(item?.riskTags),
   }));
   const activeServiceOnline =
-    activeSection === 'agent'
-      ? agentOverview?.agentApi.online
-      : activeSection === 'operations'
-        ? true
+    activeSection === 'operations'
+      ? true
       : activeSection === 'deployment'
         ? true
       : activeSection === 'conversation'
@@ -6875,10 +6952,8 @@ export default function App() {
         ? sandboxApi?.online
         : kvmOverview?.orchestrator.online;
   const activeServiceLabel =
-    activeSection === 'agent'
-      ? '智能体服务'
-      : activeSection === 'operations'
-        ? '运营分析'
+    activeSection === 'operations'
+      ? '运营分析'
       : activeSection === 'deployment'
         ? '平台接口'
       : activeSection === 'conversation'
@@ -6913,8 +6988,6 @@ export default function App() {
             ? connectorGuideUpdatedAt
             : activeSection === 'osacRelease'
               ? osacReleaseUpdatedAt
-        : activeSection === 'agent'
-          ? agentOverview?.agentApi.timestamp || agentOverview?.oneceoApi.timestamp
             : kvmOverview?.updatedAt;
   const lockMainAreaScroll =
     activeSection === 'operations' ||
@@ -8343,30 +8416,68 @@ export default function App() {
           <article className="panel conversation-index-panel">
             <div className="panel-header conversation-index-panel-header">
               <div>
-                <p className="section-tag">会话索引</p>
-                <h2>会话索引</h2>
+                <p className="section-tag">对话管理</p>
+                <h2>{conversationView === 'overview' ? '运营概览' : '会话列表'}</h2>
               </div>
-              <div className="sandbox-list-header-actions conversation-index-header-actions">
-                <div className="conversation-live-summary-strip session-status sandbox-live-count" aria-label="会话索引摘要">
-                  <span className="sandbox-live-metric sandbox-live-metric-total">
-                    <span>全部</span>
-                    <strong>{conversationSummary.total}</strong>
-                  </span>
-                  <span className="sandbox-live-metric sandbox-live-metric-running">
-                    <span>进行中</span>
-                    <strong>{conversationSummary.inProgress}</strong>
-                  </span>
-                  <span className="sandbox-live-metric conversation-live-metric-waiting">
-                    <span>待确认</span>
-                    <strong>{conversationSummary.waitingUser}</strong>
-                  </span>
-                  <span className="sandbox-live-metric conversation-live-metric-failed">
-                    <span>失败</span>
-                    <strong>{conversationSummary.failed}</strong>
-                  </span>
-                  <span className="sandbox-live-age" title={formatDateTime(conversationSummaryFetchedAt)}>
-                    {conversationSummaryAge}
-                  </span>
+              <div className="sandbox-list-header-actions conversation-index-header-actions" style={{ gap: '12px' }}>
+                <div className="view-switcher" role="tablist" aria-label="视图切换">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={conversationView === 'index'}
+                    className={`view-switcher-tab ${conversationView === 'index' ? 'active' : ''}`}
+                    onClick={() => {
+                      setConversationView('index');
+                      localStorage.setItem('admin-conversation-view', 'index');
+                    }}
+                  >
+                    会话列表
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={conversationView === 'overview'}
+                    className={`view-switcher-tab ${conversationView === 'overview' ? 'active' : ''}`}
+                    onClick={() => {
+                      setConversationView('overview');
+                      localStorage.setItem('admin-conversation-view', 'overview');
+                    }}
+                  >
+                    运营概览
+                  </button>
+                </div>
+                {conversationView === 'overview' ? (
+                  <div className="conversation-live-summary-strip session-status sandbox-live-count" aria-label="会话索引摘要">
+                    <span className="sandbox-live-metric sandbox-live-metric-total">
+                      <span>全部</span>
+                      <strong>{conversationSummary.total}</strong>
+                    </span>
+                    <span className="sandbox-live-metric sandbox-live-metric-running">
+                      <span>进行中</span>
+                      <strong>{conversationSummary.inProgress}</strong>
+                    </span>
+                    <span className="sandbox-live-metric conversation-live-metric-waiting">
+                      <span>待确认</span>
+                      <strong>{conversationSummary.waitingUser}</strong>
+                    </span>
+                    <span className="sandbox-live-metric conversation-live-metric-failed">
+                      <span>失败</span>
+                      <strong>{conversationSummary.failed}</strong>
+                    </span>
+                    <span className="sandbox-live-age" title={formatDateTime(conversationSummaryFetchedAt)}>
+                      {conversationSummaryAge}
+                    </span>
+                    <button
+                      type="button"
+                      className={`sandbox-live-refresh-btn ${conversationSummaryRefreshing ? 'is-refreshing' : ''}`}
+                      onClick={() => void refreshConversationSummary()}
+                      disabled={conversationSummaryRefreshing}
+                      aria-label="刷新会话列表"
+                    >
+                      ↻
+                    </button>
+                  </div>
+                ) : (
                   <button
                     type="button"
                     className={`sandbox-live-refresh-btn ${conversationSummaryRefreshing ? 'is-refreshing' : ''}`}
@@ -8376,9 +8487,11 @@ export default function App() {
                   >
                     ↻
                   </button>
-                </div>
+                )}
               </div>
             </div>
+            {conversationView === 'index' ? (
+              <>
             <div className="conversation-index-toolbar">
               <div className="runtime-filter-grid conversation-index-filter-grid conversation-index-filter-grid-compact">
                 <label className="state-filter-field">
@@ -8629,6 +8742,156 @@ export default function App() {
                 </tbody>
               </table>
             </div>
+              </>
+            ) : (
+              <div className="conversation-overview-content">
+                {/* 服务健康卡片 */}
+                <div className="agent-overview-status-row" style={{ marginBottom: '16px', padding: '12px 16px', background: 'var(--panel-bg)', borderRadius: '8px' }}>
+                  <span className={`service-state ${serviceHealth.oneceoApi.online ? 'ok' : 'down'}`}>
+                    {serviceHealth.oneceoApi.online ? '平台接口在线' : '平台接口离线'}
+                  </span>
+                  <span className={`service-state ${serviceHealth.agentApi.online ? 'ok' : 'down'}`}>
+                    {serviceHealth.agentApi.online ? '智能体服务在线' : '智能体服务离线'}
+                  </span>
+                  <span className="panel-caption" style={{ marginLeft: 'auto' }}>
+                    最近检查 {formatDateTime(serviceHealth.agentApi.timestamp || serviceHealth.oneceoApi.timestamp)}
+                  </span>
+                </div>
+
+                {/* 会话统计卡片 */}
+                <div className="agent-overview-strip">
+                  <article className="agent-overview-card">
+                    <span>总会话</span>
+                    <strong>{conversationSummary.total}</strong>
+                    <small>当前任务创建记录</small>
+                  </article>
+                  <article className="agent-overview-card">
+                    <span>待确认</span>
+                    <strong>{conversationSummary.waitingUser}</strong>
+                    <small>等用户补充信息</small>
+                  </article>
+                  <article className="agent-overview-card">
+                    <span>进行中</span>
+                    <strong>{conversationSummary.inProgress}</strong>
+                    <small>仍在持续推进</small>
+                  </article>
+                  <article className="agent-overview-card">
+                    <span>失败</span>
+                    <strong>{conversationSummary.failed}</strong>
+                    <small>优先排查异常链路</small>
+                  </article>
+                  <article className="agent-overview-card">
+                    <span>可用能力</span>
+                    <strong>{capabilities.filter((c) => c.status === 'available').length}/{capabilities.length}</strong>
+                    <small>
+                      {capabilities.filter((c) => c.status === 'planned').length > 0
+                        ? `${capabilities.filter((c) => c.status === 'planned').length} 个规划中`
+                        : '当前都已落地'}
+                    </small>
+                  </article>
+                </div>
+
+                {/* 阶段分布 */}
+                <section className="panel fade-in agent-stage-workbench">
+                  <div className="panel-header panel-header-stack">
+                    <div>
+                      <h2>任务阶段</h2>
+                      <span className="panel-caption">按阶段切换，只看当前最需要处理的会话。</span>
+                    </div>
+                  </div>
+
+                  {stageDistribution.length > 0 ? (
+                    <>
+                      <div className="agent-stage-tabs" role="tablist" aria-label="任务阶段">
+                        {stageDistribution.map((item) => (
+                          <button
+                            key={item.stageKey}
+                            type="button"
+                            role="tab"
+                            aria-selected={selectedOverviewStage?.stageKey === item.stageKey}
+                            className={`agent-stage-tab ${selectedOverviewStage?.stageKey === item.stageKey ? 'active' : ''}`}
+                            onClick={() => setOverviewSelectedStageKey(item.stageKey)}
+                          >
+                            <span>{item.label}</span>
+                            <strong>{item.value}</strong>
+                          </button>
+                        ))}
+                      </div>
+
+                      {selectedOverviewStage ? (
+                        <div id="agent-stage-detail-panel" className="agent-stage-detail-surface" role="tabpanel">
+                          <div className="agent-stage-detail-head">
+                            <div>
+                              <p className="section-tag">当前阶段</p>
+                              <h3>{selectedOverviewStage.label}</h3>
+                              <p className="panel-caption">
+                                {selectedOverviewStage.statusSummary
+                                  .filter((item) => item.value > 0)
+                                  .map((item) => `${item.label} ${item.value}`)
+                                  .join(' · ') || '当前没有状态构成'}
+                              </p>
+                            </div>
+                            <span className="status-pill">{selectedOverviewStage.value} 个会话</span>
+                          </div>
+
+                          <div className="agent-status-pills">
+                            {selectedOverviewStage.statusSummary
+                              .filter((summary) => summary.value > 0)
+                              .map((summary) => (
+                                <span key={`${selectedOverviewStage.stageKey}-${summary.label}`} className="session-status">
+                                  {summary.label} · {summary.value}
+                                </span>
+                              ))}
+                          </div>
+
+                          <div className="agent-session-compact-list">
+                            {selectedOverviewStage.recentSessions.map((session) => (
+                              <article key={session.id} className="agent-session-compact-item">
+                                <div className="agent-session-compact-main">
+                                  <strong title={session.title || session.id}>{session.title || '未命名会话'}</strong>
+                                  <span className="session-status">{statusLabel(session.status)}</span>
+                                </div>
+                                <p className="agent-session-compact-meta">更新时间 {formatDateTime(session.updatedAt)}</p>
+                                {session.pendingQuestion ? (
+                                  <p className="agent-session-pending">待补充: {summarizeText(session.pendingQuestion, 120)}</p>
+                                ) : null}
+                              </article>
+                            ))}
+                            {selectedOverviewStage.recentSessions.length === 0 ? <p className="empty">当前阶段暂无最近会话。</p> : null}
+                          </div>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
+                    <p className="empty">当前没有阶段数据。</p>
+                  )}
+                </section>
+
+                {/* 智能体能力 */}
+                <section className="panel fade-in agent-capability-compact-panel">
+                  <div className="panel-header">
+                    <h2>智能体能力</h2>
+                    <span className="panel-caption">保留能力名称、接入方式和可用状态。</span>
+                  </div>
+                  <div className="agent-capability-summary">
+                    <span className="session-status">可用 {capabilities.filter((c) => c.status === 'available').length}</span>
+                    <span className="session-status">规划中 {capabilities.filter((c) => c.status === 'planned').length}</span>
+                    <span className="session-status">总数 {capabilities.length}</span>
+                  </div>
+                  <div className="agent-capability-list">
+                    {capabilities.map((item) => (
+                      <article key={item.key} className="agent-capability-row" title={item.endpoint}>
+                        <div className="agent-capability-main">
+                          <strong>{capabilityNameLabel(item.name)}</strong>
+                          <span className="agent-capability-transport mono">{item.transport}</span>
+                        </div>
+                        <span className={`capability-status ${item.status}`}>{capabilityStatusLabel(item.status)}</span>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              </div>
+            )}
           </article>
         </section>
       </main>
@@ -8685,167 +8948,6 @@ export default function App() {
         </AdminDetailShell>
       ) : null}
       </>
-    );
-  };
-
-  const renderAgentSection = () => {
-    const taskSessions = agentOverview?.taskCreationSessions;
-    const overviewTimestamp = formatDateTime(agentOverview?.agentApi.timestamp || agentOverview?.oneceoApi.timestamp);
-    const selectedStageStatusText =
-      selectedAgentStage?.statusSummary
-        .filter((item) => item.value > 0)
-        .map((item) => `${item.label} ${item.value}`)
-        .join(' · ') || '当前没有状态构成';
-
-    return (
-      <main className="content-stack agent-command-center">
-        <section className="panel fade-in agent-overview-panel">
-          <div className="agent-overview-head">
-            <div>
-              <p className="section-tag">智能体总览</p>
-              <h2>服务、会话与能力</h2>
-              <p className="panel-caption">
-                {agentApiMessageLabel(agentOverview?.agentApi.message)} · 最近检查 {overviewTimestamp}
-              </p>
-            </div>
-            <div className="agent-overview-status-row">
-              <span className={`service-state ${agentOverview?.oneceoApi.online ? 'ok' : 'down'}`}>
-                {agentOverview?.oneceoApi.online ? '平台接口在线' : '平台接口离线'}
-              </span>
-              <span className={`service-state ${agentOverview?.agentApi.online ? 'ok' : 'down'}`}>
-                {agentOverview?.agentApi.online ? '智能体服务在线' : '智能体服务离线'}
-              </span>
-            </div>
-          </div>
-
-          <div className="agent-overview-strip">
-            <article className="agent-overview-card">
-              <span>总会话</span>
-              <strong>{taskSessions?.total ?? 0}</strong>
-              <small>当前任务创建记录</small>
-            </article>
-            <article className="agent-overview-card">
-              <span>待确认</span>
-              <strong>{taskSessions?.waitingUser ?? 0}</strong>
-              <small>等用户补充信息</small>
-            </article>
-            <article className="agent-overview-card">
-              <span>进行中</span>
-              <strong>{taskSessions?.inProgress ?? 0}</strong>
-              <small>仍在持续推进</small>
-            </article>
-            <article className="agent-overview-card">
-              <span>失败</span>
-              <strong>{taskSessions?.failed ?? 0}</strong>
-              <small>优先排查异常链路</small>
-            </article>
-            <article className="agent-overview-card">
-              <span>可用能力</span>
-              <strong>
-                {agentCapabilitySummary.available}/{agentCapabilitySummary.total}
-              </strong>
-              <small>
-                {agentCapabilitySummary.planned > 0 ? `${agentCapabilitySummary.planned} 个规划中` : '当前都已落地'}
-              </small>
-            </article>
-          </div>
-        </section>
-
-        <section className="panel fade-in agent-stage-workbench">
-          <div className="panel-header panel-header-stack">
-            <div>
-              <h2>任务阶段</h2>
-              <span className="panel-caption">按阶段切换，只看当前最需要处理的会话。</span>
-            </div>
-          </div>
-
-          {(agentOverview?.stageDistribution || []).length > 0 ? (
-            <>
-              <div className="agent-stage-tabs" role="tablist" aria-label="任务阶段">
-                {(agentOverview?.stageDistribution || []).map((item) => (
-                  <button
-                    key={item.stageKey}
-                    type="button"
-                    role="tab"
-                    aria-selected={selectedAgentStage?.stageKey === item.stageKey}
-                    aria-controls="agent-stage-detail-panel"
-                    className={`agent-stage-tab ${selectedAgentStage?.stageKey === item.stageKey ? 'active' : ''}`}
-                    onClick={() => setSelectedAgentStageKey(item.stageKey)}
-                  >
-                    <span>{item.label}</span>
-                    <strong>{item.value}</strong>
-                  </button>
-                ))}
-              </div>
-
-              {selectedAgentStage ? (
-                <div id="agent-stage-detail-panel" className="agent-stage-detail-surface" role="tabpanel">
-                  <div className="agent-stage-detail-head">
-                    <div>
-                      <p className="section-tag">当前阶段</p>
-                      <h3>{selectedAgentStage.label}</h3>
-                      <p className="panel-caption">{selectedStageStatusText}</p>
-                    </div>
-                    <span className="status-pill">{selectedAgentStage.value} 个会话</span>
-                  </div>
-
-                  <div className="agent-status-pills">
-                    {selectedAgentStage.statusSummary
-                      .filter((summary) => summary.value > 0)
-                      .map((summary) => (
-                        <span key={`${selectedAgentStage.stageKey}-${summary.label}`} className="session-status">
-                          {summary.label} · {summary.value}
-                        </span>
-                      ))}
-                  </div>
-
-                  <div className="agent-session-compact-list">
-                    {selectedAgentStage.recentSessions.map((session) => (
-                      <article key={session.id} className="agent-session-compact-item">
-                        <div className="agent-session-compact-main">
-                          <strong title={session.title || session.id}>{session.title || '未命名会话'}</strong>
-                          <span className="session-status">{statusLabel(session.status)}</span>
-                        </div>
-                        <p className="agent-session-compact-meta">更新时间 {formatDateTime(session.updatedAt)}</p>
-                        {session.pendingQuestion ? (
-                          <p className="agent-session-pending">待补充: {summarizeText(session.pendingQuestion, 120)}</p>
-                        ) : null}
-                      </article>
-                    ))}
-                    {selectedAgentStage.recentSessions.length === 0 ? <p className="empty">当前阶段暂无最近会话。</p> : null}
-                  </div>
-                </div>
-              ) : null}
-            </>
-          ) : (
-            <p className="empty">当前没有阶段数据。</p>
-          )}
-        </section>
-
-        <section className="panel fade-in agent-capability-compact-panel">
-          <div className="panel-header">
-            <h2>智能体能力</h2>
-            <span className="panel-caption">保留能力名称、接入方式和可用状态。</span>
-          </div>
-          <div className="agent-capability-summary">
-            <span className="session-status">可用 {agentCapabilitySummary.available}</span>
-            <span className="session-status">规划中 {agentCapabilitySummary.planned}</span>
-            <span className="session-status">总数 {agentCapabilitySummary.total}</span>
-          </div>
-          <div className="agent-capability-list">
-            {(agentOverview?.capabilities || []).map((item) => (
-              <article key={item.key} className="agent-capability-row" title={item.endpoint || undefined}>
-                <div className="agent-capability-main">
-                  <strong>{capabilityNameLabel(item.name)}</strong>
-                  <span className="agent-capability-transport mono">{item.transport}</span>
-                </div>
-                <span className={`capability-status ${item.status}`}>{capabilityStatusLabel(item.status)}</span>
-              </article>
-            ))}
-            {(agentOverview?.capabilities || []).length === 0 ? <p className="empty">当前没有可展示的能力信息。</p> : null}
-          </div>
-        </section>
-      </main>
     );
   };
 
@@ -10974,7 +11076,6 @@ export default function App() {
         />
       );
     }
-    if (activeSection === 'agent') return renderAgentSection();
     if (activeSection === 'skill') {
       return (
         <SkillManagementSection

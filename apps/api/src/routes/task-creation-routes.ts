@@ -60,11 +60,6 @@ import { connectorGuideService } from '../services/connector-guide-service';
 import { sessionMcpRecoveryService } from '../services/session-mcp-recovery-service';
 import { taskSessionCacheFacade } from '../services/task-session-cache-facade';
 import {
-  inferFilenameFromResponse,
-  resolveRemoteAttachmentTarget,
-  type RemoteAttachmentProvider,
-} from '../services/remote-attachment-service';
-import {
   TASK_ATTACHMENT_MAX_BYTES,
   isAllowedAttachmentFile,
   sanitizeAttachmentName,
@@ -2150,25 +2145,6 @@ function shellEscape(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
 }
 
-function parseRemoteAttachmentProvider(value: unknown): RemoteAttachmentProvider {
-  const normalized = asText(value);
-  if (
-    normalized === 'website' ||
-    normalized === 'google-drive' ||
-    normalized === 'onedrive'
-  ) {
-    return normalized;
-  }
-  throw new Error('不支持的远程来源');
-}
-
-function shouldAllowPrivateRemoteAttachmentHosts() {
-  if (process.env.ALLOW_PRIVATE_REMOTE_ATTACHMENTS === '1') {
-    return true;
-  }
-  return process.env.NODE_ENV !== 'production';
-}
-
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -2635,6 +2611,8 @@ function sanitizeTimelineMetadataForClient(metadataRaw: unknown): Record<string,
     'itemText',
     'command',
     'outputPreview',
+    'browserScreenshot',
+    'previewSnapshot',
     'exitCode',
     'fileChanges',
     'filePaths',
@@ -3310,6 +3288,41 @@ function buildTimelinePage(messages: TimelineMessage[]) {
     oldestCursor: resolveMessageTimelineCursor(messages[0]) || null,
     newestCursor: resolveMessageTimelineCursor(messages[messages.length - 1]) || null,
   };
+}
+
+function resolveTimelineMessageKey(message: any): string {
+  return asText(message?.messageKey) || asText(pickRecord(message?.metadata).messageKey);
+}
+
+function isRecentRedisPageFresh(input: {
+  redisPage: Record<string, unknown>;
+  latestDbMessages: TimelineMessage[];
+}) {
+  const redisMessages = Array.isArray(input.redisPage.messages)
+    ? (input.redisPage.messages as TimelineMessage[])
+    : [];
+  const dbMessages = Array.isArray(input.latestDbMessages) ? input.latestDbMessages : [];
+  if (dbMessages.length === 0) {
+    return redisMessages.length === 0;
+  }
+  if (redisMessages.length === 0) {
+    return false;
+  }
+
+  const redisLatest = redisMessages[redisMessages.length - 1];
+  const dbLatest = dbMessages[dbMessages.length - 1];
+  const redisNewestCursor =
+    asTimelineCursor(input.redisPage.newestCursor) ?? resolveMessageTimelineCursor(redisLatest);
+  const dbNewestCursor = resolveMessageTimelineCursor(dbLatest);
+  if (redisNewestCursor !== dbNewestCursor) {
+    return false;
+  }
+  const redisMessageKey = resolveTimelineMessageKey(redisLatest);
+  const dbMessageKey = resolveTimelineMessageKey(dbLatest);
+  if (dbMessageKey && redisMessageKey !== dbMessageKey) {
+    return false;
+  }
+  return true;
 }
 
 function hasLegacyRecentNoise(messages: TimelineMessage[]) {
@@ -4927,7 +4940,7 @@ router.get('/sessions/:sessionId', async (req, res) => {
 
 /**
  * GET /api/task-creation/sessions/:sessionId/messages/recent
- * 首屏最近消息热缓存，仅依赖数据库
+ * 首屏最近消息热缓存；Redis 命中必须先和 DB recent 最新消息对账。
  */
 router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
   try {
@@ -4946,10 +4959,23 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
         tenantKey,
       });
       if (redisCachedPage) {
-        return res.json({
-          success: true,
-          data: redisCachedPage,
-        });
+        const latestCachedMessages = await taskCreationSessionDAO.getRecentMessages(sessionId, 1);
+        const latestRecentMessages = filterLegacyTimelineNoise(
+          injectRuntimeGenerationBoundaries(
+            annotateRuntimeGenerations(mapStoredMessagesToTimeline(latestCachedMessages), session?.runtime)
+          )
+        );
+        if (
+          isRecentRedisPageFresh({
+            redisPage: redisCachedPage,
+            latestDbMessages: latestRecentMessages,
+          })
+        ) {
+          return res.json({
+            success: true,
+            data: redisCachedPage,
+          });
+        }
       }
     }
     const cachedMessages = await taskCreationSessionDAO.getRecentMessages(sessionId, 50);
@@ -5171,69 +5197,6 @@ router.get('/sessions/:sessionId/messages', async (req, res) => {
   }
 });
 
-router.post('/attachments/fetch', async (req, res) => {
-  try {
-    currentUserResolver.require(req);
-    const provider = parseRemoteAttachmentProvider(req.body?.provider);
-    const sourceUrl = asText(req.body?.url);
-    const target = resolveRemoteAttachmentTarget(provider, sourceUrl, {
-      allowPrivateHosts: shouldAllowPrivateRemoteAttachmentHosts(),
-    });
-
-    const upstream = await fetch(target.fetchUrl, {
-      redirect: 'follow',
-      headers: {
-        'user-agent': 'oneceo-remote-attachment/1.0',
-      },
-    });
-    if (!upstream.ok) {
-      throw new Error(`远程文件获取失败 (${upstream.status})`);
-    }
-
-    const declaredSize = asPositiveInt(upstream.headers.get('content-length'));
-    if (declaredSize !== null && declaredSize > TASK_ATTACHMENT_MAX_BYTES) {
-      throw new Error('单个附件不能超过 10 MB');
-    }
-
-    const rawBody = Buffer.from(await upstream.arrayBuffer());
-    if (!rawBody.length) {
-      throw new Error('远程文件内容为空');
-    }
-    if (rawBody.length > TASK_ATTACHMENT_MAX_BYTES) {
-      throw new Error('单个附件不能超过 10 MB');
-    }
-
-    const mimeType = asText(upstream.headers.get('content-type')).split(';')[0] || 'application/octet-stream';
-    const filename = inferFilenameFromResponse({
-      contentDisposition: upstream.headers.get('content-disposition'),
-      responseUrl: upstream.url || target.fetchUrl,
-      fallbackName: target.suggestedName,
-      mimeType,
-    });
-    if (!isAllowedAttachmentFile({ name: filename, mimeType })) {
-      throw new Error('仅支持文本、文档和图片类附件');
-    }
-
-    res.setHeader('Content-Type', mimeType);
-    res.setHeader('Content-Length', String(rawBody.length));
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader(
-      'Access-Control-Expose-Headers',
-      'Content-Type, Content-Length, X-Attachment-Name, X-Attachment-Provider'
-    );
-    res.setHeader('X-Attachment-Name', encodeURIComponent(filename));
-    res.setHeader('X-Attachment-Provider', provider);
-    return res.status(200).send(rawBody);
-  } catch (error: any) {
-    console.error('远程附件获取失败:', error);
-    const authError = resolveSessionConnectorOwnershipError(error);
-    return res.status(authError?.status || 400).json({
-      success: false,
-      error: getPublicErrorMessage(authError?.message || error?.message || '远程附件获取失败'),
-    });
-  }
-});
-
 router.post(
   '/sessions/:sessionId/attachments',
   express.raw({ type: '*/*', limit: `${TASK_ATTACHMENT_MAX_BYTES}b` }),
@@ -5404,6 +5367,43 @@ router.get('/sessions/:sessionId/preview-snapshots/:runId/website.png', async (r
     return res.status(ownershipError?.status || 400).json({
       success: false,
       error: getPublicErrorMessage(ownershipError?.message || error?.message || '读取预览截图失败'),
+    });
+  }
+});
+
+router.get('/sessions/:sessionId/runs/:runId/tool-calls/:toolCallId/browser-screenshot.png', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { sessionId, runId, toolCallId } = req.params;
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const run = await taskSessionRunDAO.getRun(runId);
+    if (!run || run.sessionId !== sessionId) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('浏览器截图不存在'),
+      });
+    }
+    const screenshot = await taskSessionWebsitePreviewSnapshotService.getBrowserActionScreenshotImage({
+      runId,
+      toolCallId,
+    });
+    if (!screenshot) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('浏览器截图不存在'),
+      });
+    }
+
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.setHeader('Content-Type', screenshot.mimeType);
+    res.setHeader('Content-Length', String(screenshot.body.length));
+    return res.status(200).send(screenshot.body);
+  } catch (error: any) {
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('读取浏览器操作截图失败:', error);
+    return res.status(ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(ownershipError?.message || error?.message || '读取浏览器操作截图失败'),
     });
   }
 });

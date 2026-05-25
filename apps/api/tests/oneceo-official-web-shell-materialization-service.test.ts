@@ -61,8 +61,20 @@ test('materializeOfficialWebShellInSandbox writes the official scaffold into an 
       writes.some(
         (item) =>
           item.path.endsWith('/client/src/main.jsx') &&
-          item.content.includes("import { StrictMode } from 'react';") &&
-          item.content.includes("import { createRoot } from 'react-dom/client';")
+          item.content.includes("import { Component, StrictMode } from 'react';") &&
+          item.content.includes("import { createRoot } from 'react-dom/client';") &&
+          item.content.includes('OneCeoAppErrorBoundary') &&
+          item.content.includes('data-oneceo-app-status')
+      )
+    );
+    assert.ok(
+      writes.some(
+        (item) =>
+          item.path.endsWith('/client/index.html') &&
+          item.content.includes('__ONECEO_APP_STATUS__') &&
+          item.content.includes('data-oneceo-app-status="booting"') &&
+          item.content.includes('ONECEO_REPORT_APP_ERROR') &&
+          item.content.includes("child.tagName.toLowerCase() !== 'noscript'")
       )
     );
     assert.ok(
@@ -70,6 +82,7 @@ test('materializeOfficialWebShellInSandbox writes the official scaffold into an 
         (item) =>
           item.path.endsWith('/vite.config.ts') &&
           item.content.includes("'@shared': path.resolve(__dirname, 'shared')") &&
+          item.content.includes("jsx: 'automatic'") &&
           !item.content.includes('jsxInject')
       )
     );
@@ -178,7 +191,13 @@ test('buildOfficialWebShellMaterializationGuidance tells Altus to edit within th
   assert.match(guidance, /client\/src\/App\.jsx/);
   assert.match(guidance, /验收标识/);
   assert.match(guidance, /弱约束地要求生成官网\/落地页\/作品集\/餐厅\/工作室网站/);
-  assert.match(guidance, /不要额外安装依赖、启动本地服务或反复检查契约文件/);
+  assert.match(guidance, /运行\/构建验证并进入视觉检测/);
+  assert.match(guidance, /automatic JSX runtime/);
+  assert.match(guidance, /data-oneceo-app-status/);
+  assert.match(guidance, /app_runtime_error/);
+  assert.match(guidance, /n\.eko \+ Playwright/);
+  assert.match(guidance, /每一步留下截图证据/);
+  assert.doesNotMatch(guidance, /宏观自检/);
   assert.match(guidance, /@shared/);
   assert.match(guidance, /build\/start\/healthcheck\/analytics/);
 });

@@ -16,9 +16,10 @@ import { osacAgentService } from '../src/services/osac-agent-service';
 import { opencodeEventStreamService } from '../src/services/opencode-event-stream-service';
 import { opencodeRemoteService } from '../src/services/opencode-remote-service';
 import { taskSessionRedisCacheService } from '../src/services/task-session-redis-cache-service';
+import { resolveOpencodeWorkspacePath } from '../src/utils/opencode-workspace';
 
 process.env.ONECEO_REDIS_ENABLED = 'true';
-process.env.REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379/15';
+process.env.REDIS_URL = 'redis://127.0.0.1:6379/12';
 
 type TestServer = {
   origin: string;
@@ -404,7 +405,7 @@ test('live route: workspace dir route writes redis dir cache', async () => {
 test('live route: workspace dir route normalizes workspace-absolute root path input', async () => {
   const server = await startServer();
   const scope = buildScope('live-dir-absolute-root');
-  const absoluteStyleRoot = `home/user/opencode/workspaces/${scope.sessionId}`;
+  const absoluteStyleRoot = resolveOpencodeWorkspacePath(scope.sessionId).replace(/^\/+/, '');
 
   try {
     const response = await testFetch(
@@ -484,8 +485,8 @@ test('live route: workspace file route writes redis file cache', async () => {
 test('live route: workspace file route normalizes workspace-absolute path input', async () => {
   const server = await startServer();
   const scope = buildScope('live-file-absolute');
-  const workspaceRoot = `/home/user/opencode/workspaces/${scope.sessionId}`;
-  const absoluteStylePath = `home/user/opencode/workspaces/${scope.sessionId}/src/index.ts`;
+  const workspaceRoot = resolveOpencodeWorkspacePath(scope.sessionId);
+  const absoluteStylePath = `${workspaceRoot.replace(/^\/+/, '')}/src/index.ts`;
   let resolvedReadPath = '';
   e2bConnectorAny.readFile = async (_sandboxId: string, filePath: string) => {
     resolvedReadPath = filePath;
@@ -527,7 +528,7 @@ test('live route: workspace dir fallback normalizes absolute paths from message 
       content: '',
       messageType: 'executor_event',
       metadata: {
-        filePaths: [`/home/user/opencode/workspaces/${scope.sessionId}/index.html`],
+        filePaths: [`${resolveOpencodeWorkspacePath(scope.sessionId)}/index.html`],
       },
       createdAt: new Date().toISOString(),
     },

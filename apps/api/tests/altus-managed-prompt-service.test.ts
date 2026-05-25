@@ -72,6 +72,20 @@ test('managed prompt explicitly skips pre-execution todo for simple tasks when t
   assert.match(prompt, /do not call `todowrite` just because the request sounds non-trivial/i);
 });
 
+test('runtime context uses stable current date instead of per-turn timestamp', () => {
+  const prompt = altusManagedPromptService.buildRuntimeContextPrompt({
+    sessionId: 'session-runtime-context-date',
+    sessionTitle: 'runtime date',
+    workspaceRoot: '/workspace/runtime-date',
+    connectors: [],
+    turnStatePrompt: '# Current turn state\n- latest_user_message_type: user_input',
+  });
+
+  assert.match(prompt, /# Runtime context/);
+  assert.match(prompt, /Current date: \d{4}-\d{2}-\d{2}/);
+  assert.doesNotMatch(prompt, /Current time:/);
+});
+
 test('managed prompt defaults debug and testing to Playwright on the same n.eko browser', () => {
   const prompt = altusManagedPromptService.buildSystemPrompt({
     sessionId: 'session-debug-tool-choice',
@@ -91,6 +105,18 @@ test('managed prompt defaults debug and testing to Playwright on the same n.eko 
   assert.match(prompt, /cover the core user flows implied by the request/i);
   assert.match(prompt, /record the failure in the test document, return to repair/i);
   assert.match(prompt, /use Playwright \/ playwright-mcp by default to inspect or test the same n\.eko Chromium session through CDP 9222/i);
+  assert.match(prompt, /ONECEO_PLAYWRIGHT_CDP_URL=http:\/\/127\.0\.0\.1:9222/i);
+  assert.match(prompt, /PLAYWRIGHT_BROWSERS_PATH=\/opt\/ms-playwright/i);
+  assert.match(prompt, /NODE_PATH=\/usr\/local\/lib\/node_modules/i);
+  assert.match(prompt, /playwright-mcp=\/usr\/local\/bin\/playwright-mcp/i);
+  assert.match(prompt, /browser-use=\/usr\/local\/bin\/browser-use/i);
+  assert.match(prompt, /neko=\/usr\/local\/bin\/neko/i);
+  assert.match(prompt, /data-oneceo-app-status/i);
+  assert.match(prompt, /app_runtime_error/i);
+  assert.match(prompt, /Do not search for these paths/i);
+  assert.match(prompt, /do not create ad-hoc screenshot scripts such as `screenshot-test\.mjs`/i);
+  assert.match(prompt, /required screenshot evidence comes from platform tool results/i);
+  assert.match(prompt, /captured as a Playwright screenshot and attached to the corresponding Action/i);
   assert.match(prompt, /Do not launch a separate browser instance/i);
   assert.match(prompt, /not about:blank, a Chrome error page, or an unexpected fallback route/i);
   assert.match(prompt, /Use Browser Use for exploratory external-site access and interaction only/i);
@@ -274,7 +300,7 @@ test('managed prompt fixes deployable web apps to the official vite-node shell',
 
   assert.match(prompt, /ONECEO_FIXED_SHELL_ANCHOR/i);
   assert.match(prompt, /ONECEO_WEBAPP_TODO_BLUEPRINT_ANCHOR/i);
-  assert.match(prompt, /ONECEO_WEBAPP_MACRO_REVIEW_ANCHOR/i);
+  assert.match(prompt, /ONECEO_WEBAPP_VISUAL_DETECTION_ANCHOR/i);
   assert.match(prompt, /keep todo updates sparse/i);
   assert.match(prompt, /Do not call `todowrite` after every small file edit/i);
   assert.match(prompt, /without an existing workspace stack to preserve, default to the fixed OneCEO web shell/i);
@@ -290,13 +316,15 @@ test('managed prompt fixes deployable web apps to the official vite-node shell',
   assert.match(prompt, /Before the first code-editing step for a new deployable web app task, write a blueprint todo/i);
   assert.match(prompt, /ONECEO_WEAK_WEBAPP_FAST_PATH_ANCHOR/i);
   assert.match(prompt, /4-6 concrete items are usually enough/i);
-  assert.match(prompt, /Do not spend extra rounds on stack discovery, dependency installation, build\/start rewrites/i);
+  assert.match(prompt, /Run\/build verification and visual detection are still required before completion/i);
   assert.match(prompt, /one focused implementation pass by editing `client\/src\/App\.jsx` and `client\/src\/styles\.css`/i);
   assert.match(prompt, /must name the target path for each implementation item/i);
   assert.match(prompt, /default the blueprint to a compact but complete site structure: hero, primary value or service section, proof\/case\/portfolio section, and CTA\/contact section/i);
   assert.match(prompt, /bind that default structure to `client\/src\/App\.jsx` or `client\/src\/App\.tsx`/i);
-  assert.match(prompt, /run one macro self-check against the current todo/i);
-  assert.match(prompt, /Do not reread every file line-by-line/i);
+  assert.match(prompt, /正在进行视觉检测/i);
+  assert.match(prompt, /open it through `debug_open_page`/i);
+  assert.match(prompt, /capture Playwright\/n\.eko Action screenshots/i);
+  assert.doesNotMatch(prompt, /macro self-check/i);
   assert.match(prompt, /creating a new deployable site from scratch, not as permission to switch the deployable runtime/i);
 });
 
@@ -440,6 +468,35 @@ test('managed prompt builds minimal skill catalog index without full body', () =
   assert.doesNotMatch(prompt, /compatibility:\s*opencode/i);
 });
 
+test('managed prompt can suppress skill catalog dynamic block index when already provided elsewhere', () => {
+  const prompt = altusManagedPromptService.buildSkillCatalogPrompt(
+    [
+      {
+        sourceType: 'platform',
+        skillId: 'skill-1',
+        revisionId: 'rev-1',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: '按子任务编排准备 PPT 渲染指令草稿',
+        category: 'office',
+        revisionNumber: 3,
+        resourceSummary: {
+          totalCount: 1,
+          referenceCount: 1,
+          templateCount: 0,
+          paths: ['references/subtask-contracts.md'],
+        },
+      },
+    ],
+    { includeBlockIndex: false }
+  );
+
+  assert.match(prompt, /# Available skills catalog/);
+  assert.match(prompt, /ppt-workflow: 按子任务编排准备 PPT 渲染指令草稿/);
+  assert.doesNotMatch(prompt, /# Dynamic context blocks/);
+  assert.doesNotMatch(prompt, /id=skill-catalog:platform:skill-1:rev-1/);
+});
+
 test('managed prompt exposes ppt workflow as catalog-only pre-render skill', () => {
   const prompt = altusManagedPromptService.buildSkillCatalogPrompt([
     {
@@ -498,6 +555,36 @@ test('managed prompt shows active skill resource summary alongside full body', (
   assert.match(prompt, /id=skill:platform:skill-1:rev-1/);
   assert.match(prompt, /resources: 1 references, 1 templates/);
   assert.match(prompt, /# Skill Brief/);
+});
+
+test('managed prompt can suppress active skill block index when turn-level index already exists', () => {
+  const prompt = altusManagedPromptService.buildSkillContextPrompt(
+    [
+      {
+        sourceType: 'platform',
+        skillId: 'skill-1',
+        revisionId: 'rev-1',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: '按子任务编排准备 PPT 渲染指令草稿',
+        category: 'office',
+        renderedMarkdown: '# Skill Brief\n\nDo the work.',
+        revisionNumber: 3,
+        resourceSummary: {
+          totalCount: 2,
+          referenceCount: 1,
+          templateCount: 1,
+          paths: ['references/subtask-contracts.md', 'templates/render-instruction-draft.md'],
+        },
+      },
+    ],
+    { includeBlockIndex: false }
+  );
+
+  assert.match(prompt, /# Active skills/);
+  assert.match(prompt, /# Skill Brief/);
+  assert.doesNotMatch(prompt, /# Dynamic context blocks/);
+  assert.doesNotMatch(prompt, /id=skill:platform:skill-1:rev-1/);
 });
 
 test('managed prompt includes full ppt workflow instructions when skill is active', () => {

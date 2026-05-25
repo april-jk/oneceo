@@ -4,6 +4,7 @@
  * 负责 WebSocket 连接管理和消息推送
  */
 
+import type { IncomingMessage } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 import { TaskCreationService } from './task-creation-service';
 import type { WebSocketMessage } from './types/intent';
@@ -26,6 +27,11 @@ import { getDirectModeDeploymentErrorMessage } from '../../services/direct-mode-
 import { appAuthService } from '../../services/app-auth-service';
 import { APP_SESSION_COOKIE_NAMES } from '../../utils/auth-session';
 import { readCookieValuesFromHeaderByNames } from '../../utils/http-cookie';
+import {
+  DEFAULT_SESSION_TITLE,
+  deriveAutoSessionTitle,
+  isPlaceholderSessionTitle,
+} from '../../services/task-session-title-service';
 
 function normalizeDirectOpencodeErrorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error || '');
@@ -94,8 +100,11 @@ export class TaskCreationWebSocketService {
   /**
    * 初始化 WebSocket 服务器
    */
-  initialize(server: any): void {
-    this.wss = new WebSocketServer({ server, path: '/ws/task-creation' });
+  initialize(): void {
+    if (this.wss) {
+      return;
+    }
+    this.wss = new WebSocketServer({ noServer: true });
     this.wss.on('error', (error) => {
       console.error('[WebSocket] 服务异常:', error);
     });
@@ -629,7 +638,7 @@ export class TaskCreationWebSocketService {
       : incomingSessionId || this.sessionByClient.get(clientId);
     if (!sessionId) {
       sessionId = randomUUID();
-      await taskCreationFileMemoryStore.createSession(message.content || '新建任务', sessionId);
+      await taskCreationFileMemoryStore.createSession(DEFAULT_SESSION_TITLE, sessionId);
       await taskCreationFileMemoryStore.addMessage(
         sessionId,
         'system',
@@ -907,7 +916,7 @@ export class TaskCreationWebSocketService {
 
     try {
       if (createdSession) {
-        await taskCreationFileMemoryStore.createSession(message.content || '新建任务', taskSessionId);
+        await taskCreationFileMemoryStore.createSession(DEFAULT_SESSION_TITLE, taskSessionId);
         await taskCreationFileMemoryStore.addMessage(
           taskSessionId,
           'system',
@@ -999,6 +1008,22 @@ export class TaskCreationWebSocketService {
         } catch (error) {
           console.warn('[OPENCODE_INPUT_MESSAGE_DB_FAILED]', error);
         }
+      }
+
+      const currentSession = await taskCreationFileMemoryStore.getSession(taskSessionId);
+      const immediateTitle = deriveAutoSessionTitle(message.content || '');
+      if (
+        currentSession &&
+        immediateTitle &&
+        !currentSession.titleLocked &&
+        isPlaceholderSessionTitle(currentSession.title)
+      ) {
+        await taskCreationFileMemoryStore.updateSessionTitle(taskSessionId, immediateTitle, {
+          lock: true,
+          source: 'first_user_input',
+          state: 'provisional',
+          force: true,
+        });
       }
 
       const entryDecision = await directModeEntryService.decide({
@@ -1248,6 +1273,27 @@ export class TaskCreationWebSocketService {
       (timer as any).unref();
     }
     this.sessionCleanupTimers.set(clientId, timer);
+  }
+
+  handleUpgrade(
+    req: IncomingMessage,
+    socket: Parameters<WebSocketServer['handleUpgrade']>[1],
+    head: Parameters<WebSocketServer['handleUpgrade']>[2],
+  ): boolean {
+    const pathname = new URL(req.url || '', 'http://localhost').pathname;
+    if (pathname !== '/ws/task-creation') {
+      return false;
+    }
+
+    if (!this.wss) {
+      socket.destroy();
+      return true;
+    }
+
+    this.wss.handleUpgrade(req, socket, head, (ws) => {
+      this.wss?.emit('connection', ws, req);
+    });
+    return true;
   }
 
   /**

@@ -1,6 +1,6 @@
 {
   "name": "oneceo",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "AI Agent 项目管理平台 - 支持项目-经理-员工三层级智能调度",
   "scripts": {

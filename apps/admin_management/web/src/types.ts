@@ -312,20 +312,6 @@ export interface MembershipDailyRestoreHistoryItem {
     name: string;
   };
 }
-export interface AgentStageDistributionItem {
-  stageKey: string;
-  label: string;
-  value: number;
-  statusSummary: Array<{ label: string; value: number }>;
-  recentSessions: Array<{
-    id: string;
-    title: string;
-    status: string;
-    updatedAt: string;
-    pendingQuestion?: string;
-  }>;
-}
-
 export interface ConversationSession {
   id: string;
   title: string;
@@ -776,33 +762,6 @@ export interface ConversationLlmTrace {
   request: Record<string, unknown>;
   response: Record<string, unknown>;
   createdAt?: string;
-}
-
-export interface AgentManagementOverview {
-  oneceoApi: {
-    online: boolean;
-    timestamp: string | null;
-  };
-  agentApi: {
-    online: boolean;
-    message: string;
-    timestamp: string | null;
-  };
-  capabilities: Array<{
-    key: string;
-    name: string;
-    transport: string;
-    endpoint: string;
-    status: 'available' | 'planned' | string;
-  }>;
-  taskCreationSessions: {
-    total: number;
-    inProgress: number;
-    waitingUser: number;
-    completed: number;
-    failed: number;
-  };
-  stageDistribution: AgentStageDistributionItem[];
 }
 
 export interface AppUserSessionSummary {

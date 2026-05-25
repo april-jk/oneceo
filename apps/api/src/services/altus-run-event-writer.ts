@@ -170,7 +170,7 @@ export class AltusRunEventWriter {
     altusManagedStreamService.publish(runId, {
       sequence,
       eventType: normalizedEventType,
-      payload: envelopePayload,
+      payload: userVisiblePayload,
     });
     return { sequence, payload: envelopePayload };
   }

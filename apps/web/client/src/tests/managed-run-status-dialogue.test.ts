@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   buildChatItems,
+  buildManagedReplayData,
   collapseRepeatedChatAuthors,
+  findLatestManagedVisualDebugAction,
+  getManagedVisualDebugActionKey,
   getActiveManagedStatusText,
   getManagedToolPurposeSummary,
   groupManagedActivityItems,
   resolveManagedToolReplayView,
+  seedManagedVisualDebugActionKeys,
   type ChatItem,
 } from "@/pages/Home";
 import type { AgentMessage } from "@/hooks/useTaskCreationAgent";
@@ -101,6 +105,104 @@ describe("managed run status dialogue", () => {
     expect(
       resolveManagedToolReplayView("get_application_deployment_status"),
     ).toBe("deployment");
+  });
+
+  it("picks the latest non-failed visual debug tool for automatic remote debug", () => {
+    const replayByRun = buildManagedReplayData([
+      createManagedToolMessage({
+        eventType: "tool_call_completed",
+        content: "工具 read_file 已完成",
+        toolCallId: "tool-read-1",
+        toolName: "read_file",
+      }),
+      createManagedToolMessage({
+        eventType: "tool_call_failed",
+        content: "视觉检查失败",
+        toolCallId: "browser-tool-failed",
+        toolName: "browser_interact",
+      }),
+      createManagedToolMessage({
+        eventType: "tool_call_started",
+        content: "开始打开远端浏览器页面",
+        toolCallId: "debug-open-page-1",
+        toolName: "debug_open_page",
+      }),
+    ]);
+
+    const action = findLatestManagedVisualDebugAction(
+      replayByRun.get("run-status-dialogue-1"),
+    );
+
+    expect(action?.toolCallId).toBe("debug-open-page-1");
+    expect(action?.toolName).toBe("debug_open_page");
+  });
+
+  it("seeds existing visual debug actions so history does not auto-open as new work", () => {
+    const replayByRun = buildManagedReplayData([
+      createManagedToolMessage({
+        eventType: "tool_call_completed",
+        content: "历史视觉检查已完成",
+        toolCallId: "debug-open-page-history",
+        toolName: "debug_open_page",
+      }),
+    ]);
+    const action = findLatestManagedVisualDebugAction(
+      replayByRun.get("run-status-dialogue-1"),
+    );
+    const seenKeys = new Set<string>();
+
+    seedManagedVisualDebugActionKeys(seenKeys, replayByRun);
+
+    expect(action).toBeTruthy();
+    expect(seenKeys.has(getManagedVisualDebugActionKey(action!))).toBe(true);
+  });
+
+  it("attaches browser screenshots to the matching replay action", () => {
+    const replayByRun = buildManagedReplayData([
+      createManagedToolMessage({
+        eventType: "tool_call_completed",
+        content: "视觉检测步骤已完成",
+        toolCallId: "browser-tool-1",
+        toolName: "browser_interact",
+        metadata: {
+          browserScreenshot: {
+            type: "browser_screenshot",
+            kind: "browser_action_screenshot",
+            status: "captured",
+            storageKey: "sessions/session-1/browser-actions/step.png",
+            mimeType: "image/png",
+            width: 1280,
+            height: 720,
+            capturedAt: "2026-05-22T06:00:00.000Z",
+            visualCheck: {
+              status: "failed",
+              reasonCode: "visible_text_too_short",
+              message: "页面可见文本和元素过少，疑似白屏或空页面。",
+              diagnostics: {
+                visibleTextLength: 0,
+              },
+            },
+            source: {
+              sandboxId: "sandbox-1",
+              cdpPort: 9222,
+              url: "http://127.0.0.1:3000/",
+              title: "Demo",
+              action: "keyboard_press",
+              description: "按下 ArrowUp 键",
+            },
+          },
+        },
+      }),
+    ]);
+
+    const action = replayByRun.get("run-status-dialogue-1")?.actions[0];
+    expect(action?.browserScreenshot?.status).toBe("captured");
+    expect(action?.browserScreenshot?.visualCheck?.status).toBe("failed");
+    expect(action?.browserScreenshot?.visualCheck?.reasonCode).toBe(
+      "visible_text_too_short",
+    );
+    expect(action?.browserScreenshot?.source?.url).toBe("http://127.0.0.1:3000/");
+    expect(action?.browserScreenshot?.source?.description).toBe("按下 ArrowUp 键");
   });
 
   it("keeps managed run_status between two tool cards", () => {
@@ -355,6 +457,14 @@ describe("managed run status dialogue", () => {
   });
 
   it("shows concrete browser interaction actions in managed activity rows", () => {
+    expect(
+      getManagedToolPurposeSummary("debug_open_page", {
+        arguments: {
+          url: "http://127.0.0.1:3000/",
+        },
+      }),
+    ).toBe("视觉检测：打开 http://127.0.0.1:3000/");
+
     expect(
       getManagedToolPurposeSummary("browser_interact", {
         arguments: {

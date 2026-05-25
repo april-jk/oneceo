@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  getTaskCreationBrowserActionScreenshotUrl,
   getWorkspaceFile,
   getTaskCreationDeploymentInfo,
   getTaskCreationPreviewSnapshotUrl,
@@ -21,6 +22,7 @@ import {
 } from "@/lib/workspace-preview";
 import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
 import {
+  AlertTriangle,
   Code2,
   ExternalLink,
   Loader2,
@@ -28,19 +30,32 @@ import {
   Rocket,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import type { AltusReplayBrowserScreenshot } from "./AltusRunReplayDrawer";
 
 export type AltusArtifactFile = {
   path: string;
   previewType: "web" | "code";
 };
 
+export type AltusArtifactPreviewDisplayMode = "artifact-browser" | "web-preview";
+
+export type AltusArtifactOpenTarget =
+  | { kind: "remote-debug" }
+  | { kind: "file-url"; url: string }
+  | null;
+
 type AltusArtifactPreviewCardProps = {
   sessionId: string;
   runId?: string;
   artifacts: AltusArtifactFile[];
   previewSnapshot?: TaskCreationWebsitePreviewSnapshot | null;
-  displayMode?: "artifact-browser" | "web-preview";
+  browserScreenshotFallback?: {
+    toolCallId: string;
+    screenshot: AltusReplayBrowserScreenshot;
+  } | null;
+  displayMode?: AltusArtifactPreviewDisplayMode;
   onOpenViewer?: (path: string) => void;
+  onOpenRemoteDebug?: () => void;
   onDeployRequested?: (path: string) => Promise<void> | void;
   runtimeSwitchBlocked?: boolean;
 };
@@ -77,6 +92,28 @@ function isWebArtifact(path: string): boolean {
   return /\.(html?)$/i.test(path);
 }
 
+export function shouldShowArtifactSourceControls(
+  displayMode: AltusArtifactPreviewDisplayMode,
+) {
+  return displayMode !== "web-preview";
+}
+
+export function resolveArtifactOpenTarget({
+  displayMode,
+  remoteDebugAvailable,
+  selectedFileOpenUrl,
+}: {
+  displayMode: AltusArtifactPreviewDisplayMode;
+  remoteDebugAvailable: boolean;
+  selectedFileOpenUrl: string;
+}): AltusArtifactOpenTarget {
+  if (displayMode === "web-preview") {
+    return remoteDebugAvailable ? { kind: "remote-debug" } : null;
+  }
+  const url = selectedFileOpenUrl.trim();
+  return url ? { kind: "file-url", url } : null;
+}
+
 export function resolveArtifactDeploymentPreviewUrl(
   info: TaskCreationDeploymentInfo | null | undefined,
 ): string {
@@ -98,6 +135,55 @@ export function resolveArtifactDeploymentPreviewUrl(
     info.domains[0] ||
     ""
   );
+}
+
+export type WebsitePreviewSnapshotIssue = {
+  reasonCode?: string;
+  message: string;
+  visualStatus?: "failed";
+  status?: string;
+};
+
+function stripReasonPrefix(message: string, reasonCode?: string) {
+  if (!message || !reasonCode) return message;
+  const prefix = `${reasonCode}:`;
+  return message.startsWith(prefix) ? message.slice(prefix.length).trim() : message;
+}
+
+export function getWebsitePreviewSnapshotIssue(
+  snapshot: TaskCreationWebsitePreviewSnapshot | null | undefined,
+  options: { imageFailed?: boolean; hasPreviewPath?: boolean } = {},
+): WebsitePreviewSnapshotIssue | null {
+  if (snapshot?.kind !== "website_screenshot") return null;
+  const visualFailed = snapshot.visualCheck?.status === "failed";
+  const capturedWithoutImage =
+    snapshot.status === "captured" && (!snapshot.storageKey || options.imageFailed);
+  const unavailableWithoutFallback =
+    snapshot.status === "capture_unavailable" && !options.hasPreviewPath;
+  const failed =
+    snapshot.status === "capture_failed" ||
+    snapshot.status === "storage_failed" ||
+    visualFailed ||
+    capturedWithoutImage ||
+    unavailableWithoutFallback;
+  if (!failed) return null;
+
+  const reasonCode =
+    snapshot.visualCheck?.reasonCode ||
+    snapshot.reasonCode ||
+    (options.imageFailed ? "snapshot_image_load_failed" : undefined);
+  const message = stripReasonPrefix(
+    snapshot.visualCheck?.message ||
+      snapshot.message ||
+      i18n.t("previewPanel.artifactPreview.websiteSnapshotUnavailable"),
+    reasonCode,
+  );
+  return {
+    reasonCode,
+    message,
+    visualStatus: visualFailed ? "failed" : undefined,
+    status: snapshot.status,
+  };
 }
 
 function ScaledWebPreviewFrame({
@@ -178,8 +264,10 @@ export default function AltusArtifactPreviewCard({
   runId,
   artifacts,
   previewSnapshot,
+  browserScreenshotFallback,
   displayMode = "artifact-browser",
   onOpenViewer,
+  onOpenRemoteDebug,
   onDeployRequested,
   runtimeSwitchBlocked = false,
 }: AltusArtifactPreviewCardProps) {
@@ -208,7 +296,9 @@ export default function AltusArtifactPreviewCard({
     }
     return normalizedArtifacts;
   }, [displayMode, normalizedArtifacts]);
-  const hasSnapshotMetadata = Boolean(previewSnapshot?.kind === "website_screenshot");
+  const hasSnapshotMetadata = Boolean(
+    previewSnapshot?.kind === "website_screenshot" || browserScreenshotFallback?.screenshot,
+  );
 
   const defaultPath =
     visibleArtifacts.find((artifact) => isWebArtifact(artifact.path))?.path ||
@@ -279,34 +369,62 @@ export default function AltusArtifactPreviewCard({
   const selectedIsWebArtifact = Boolean(
     selectedArtifact && isWebArtifact(selectedArtifact.path),
   );
+  const webDeliveryMode = displayMode === "web-preview";
+  const showSourceControls = shouldShowArtifactSourceControls(displayMode);
   const effectiveRawPreviewUrl = appendPreviewCacheBust(rawPreviewUrl, webPreviewNonce);
   const effectiveRawSelectedUrl = appendPreviewCacheBust(rawSelectedUrl, webPreviewNonce);
   const selectedPreviewUrl = selectedIsWebArtifact
     ? deploymentPreviewUrl || effectiveRawPreviewUrl
     : "";
-  const selectedOpenUrl = selectedIsWebArtifact
-    ? deploymentPreviewUrl || effectiveRawSelectedUrl
-    : effectiveRawSelectedUrl;
+  const selectedFileOpenUrl = showSourceControls
+    ? selectedIsWebArtifact
+      ? deploymentPreviewUrl || effectiveRawSelectedUrl
+      : effectiveRawSelectedUrl
+    : "";
+  const openTarget = resolveArtifactOpenTarget({
+    displayMode,
+    remoteDebugAvailable: Boolean(onOpenRemoteDebug),
+    selectedFileOpenUrl,
+  });
+  const canOpenArtifact = Boolean(openTarget);
+  const fallbackScreenshot = browserScreenshotFallback?.screenshot || null;
+  const hasPassedFallbackScreenshot = Boolean(
+    runId &&
+      browserScreenshotFallback?.toolCallId &&
+      fallbackScreenshot?.status === "captured" &&
+      fallbackScreenshot?.storageKey &&
+      fallbackScreenshot?.visualCheck?.status === "passed",
+  );
+  const fallbackSnapshotUrl =
+    hasPassedFallbackScreenshot && runId && browserScreenshotFallback?.toolCallId
+      ? getTaskCreationBrowserActionScreenshotUrl(
+          sessionId,
+          runId,
+          browserScreenshotFallback.toolCallId,
+        )
+      : "";
   const snapshotHasCapturedMetadata = Boolean(
     runId &&
       previewSnapshot?.kind === "website_screenshot" &&
-      previewSnapshot.status === "captured",
+      previewSnapshot.status === "captured" &&
+      previewSnapshot.visualCheck?.status !== "failed",
   );
-  const snapshotCaptured = Boolean(
-    snapshotHasCapturedMetadata && previewSnapshot?.storageKey && !snapshotImageFailed,
+  const baseSnapshotCaptured = Boolean(snapshotHasCapturedMetadata && previewSnapshot?.storageKey);
+  const snapshotIssue = getWebsitePreviewSnapshotIssue(previewSnapshot, {
+    imageFailed: snapshotImageFailed && baseSnapshotCaptured,
+    hasPreviewPath: Boolean(previewPath),
+  });
+  const snapshotCaptured = Boolean(!snapshotIssue && baseSnapshotCaptured && !snapshotImageFailed);
+  const fallbackScreenshotCaptured = Boolean(
+    !snapshotCaptured && hasPassedFallbackScreenshot && fallbackSnapshotUrl && !snapshotImageFailed,
   );
-  const snapshotUnavailableForComplexWeb = Boolean(
-    previewSnapshot?.kind === "website_screenshot" &&
-      (previewSnapshot.status === "capture_failed" ||
-        previewSnapshot.status === "storage_failed" ||
-        (previewSnapshot.status === "capture_unavailable" && !previewPath) ||
-        (previewSnapshot.status === "captured" &&
-          (!previewSnapshot.storageKey || snapshotImageFailed))),
-  );
+  const snapshotUnavailableForComplexWeb = Boolean(snapshotIssue && !fallbackScreenshotCaptured);
   const snapshotUrl =
     snapshotCaptured && runId
       ? getTaskCreationPreviewSnapshotUrl(sessionId, runId)
-      : "";
+      : fallbackScreenshotCaptured
+        ? fallbackSnapshotUrl
+        : "";
   const hasPreviewTab = Boolean(previewPath || hasSnapshotMetadata);
   const previewCheckEnabled = Boolean(
     activeTab === "preview" &&
@@ -315,9 +433,19 @@ export default function AltusArtifactPreviewCard({
       !snapshotCaptured &&
       !snapshotUnavailableForComplexWeb,
   );
-  const frameClass = selectedIsWebArtifact || hasSnapshotMetadata
-    ? "group relative w-full overflow-hidden rounded-xl border bg-card pt-10 min-h-[240px] sm:h-[400px] max-h-[640px]"
-    : "group relative w-full overflow-hidden rounded-xl border bg-card pt-10 min-h-[320px]";
+  const frameClass = cn(
+    "group relative w-full overflow-hidden rounded-xl border bg-card pt-10",
+    snapshotUnavailableForComplexWeb && activeTab === "preview"
+      ? "min-h-[230px]"
+      : selectedIsWebArtifact || hasSnapshotMetadata
+        ? "min-h-[240px] sm:h-[400px] max-h-[640px]"
+        : "min-h-[320px]",
+  );
+  const headerLabel = snapshotIssue
+    ? visibleArtifacts.length > 0
+      ? i18n.t("previewPanel.artifactPreview.artifactGenerated")
+      : i18n.t("previewPanel.artifactPreview.websiteSnapshotIssueTitle")
+    : i18n.t("previewPanel.artifactPreview.taskComplete");
 
   useEffect(() => {
     setSnapshotImageFailed(false);
@@ -348,7 +476,7 @@ export default function AltusArtifactPreviewCard({
   }, [runtimeSwitchBlocked, sessionId, visibleArtifacts]);
 
   useEffect(() => {
-    if (snapshotCaptured || snapshotUnavailableForComplexWeb) {
+    if (snapshotCaptured || fallbackScreenshotCaptured || snapshotUnavailableForComplexWeb) {
       setWebPreviewState("ready");
       setWebPreviewMessage("");
       return;
@@ -361,7 +489,13 @@ export default function AltusArtifactPreviewCard({
     setWebPreviewState("checking");
     setWebPreviewMessage("");
     setWebPreviewNonce(Date.now());
-  }, [deploymentPreviewUrl, previewPath, snapshotCaptured, snapshotUnavailableForComplexWeb]);
+  }, [
+    deploymentPreviewUrl,
+    previewPath,
+    fallbackScreenshotCaptured,
+    snapshotCaptured,
+    snapshotUnavailableForComplexWeb,
+  ]);
 
   useEffect(() => {
     if (!previewCheckEnabled || !previewPath) {
@@ -423,6 +557,20 @@ export default function AltusArtifactPreviewCard({
     }
   };
 
+  const handleOpenArtifact = () => {
+    if (openTarget?.kind === "remote-debug") {
+      onOpenRemoteDebug?.();
+      return;
+    }
+    if (openTarget?.kind === "file-url") {
+      window.open(openTarget.url, "_blank", "noopener,noreferrer");
+    }
+  };
+
+  const openArtifactLabel = openTarget?.kind === "remote-debug"
+    ? i18n.t("previewPanel.artifactPreview.openRemoteDebug")
+    : i18n.t("previewPanel.artifactPreview.open");
+
   if (visibleArtifacts.length === 0 && !hasSnapshotMetadata) {
     return null;
   }
@@ -431,12 +579,14 @@ export default function AltusArtifactPreviewCard({
     <div className="w-full">
       <div className="mt-4 space-y-3">
         <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-          <span>{i18n.t("previewPanel.artifactPreview.taskComplete")}</span>
-          <span className="text-xs">
-            ({i18n.t("previewPanel.artifactPreview.fileCount", {
-              count: visibleArtifacts.length,
-            })})
-          </span>
+          <span>{headerLabel}</span>
+          {visibleArtifacts.length > 0 ? (
+            <span className="text-xs">
+              ({i18n.t("previewPanel.artifactPreview.fileCount", {
+                count: visibleArtifacts.length,
+              })})
+            </span>
+          ) : null}
         </div>
 
         <div className="space-y-4">
@@ -467,7 +617,7 @@ export default function AltusArtifactPreviewCard({
                         <Rocket className="h-3.5 w-3.5" />
                       )}
                     </Button>
-                  ) : selectedArtifact && onOpenViewer ? (
+                  ) : selectedArtifact && onOpenViewer && showSourceControls ? (
                     <Button
                       type="button"
                       variant="ghost"
@@ -480,7 +630,7 @@ export default function AltusArtifactPreviewCard({
                     </Button>
                   ) : (
                     <div className="text-[11px] font-medium text-muted-foreground">
-                      {selectedIsWebArtifact
+                      {selectedIsWebArtifact || webDeliveryMode
                         ? i18n.t("previewPanel.artifactPreview.webPreview")
                         : i18n.t("previewPanel.artifactPreview.sourceCode")}
                     </div>
@@ -489,37 +639,41 @@ export default function AltusArtifactPreviewCard({
 
                 <Tabs
                   value={activeTab}
-                  onValueChange={(value) => setActiveTab(value as "preview" | "code")}
+                  onValueChange={(value) => {
+                    if (value === "code" && !showSourceControls) return;
+                    setActiveTab(value as "preview" | "code");
+                  }}
                   className="h-full w-full gap-0"
                 >
                   <div className="absolute left-2 top-2 z-10 flex items-center gap-2">
-                    <TabsList className="h-8 gap-1 rounded-2xl bg-background/85 px-1 backdrop-blur-sm">
-                      {hasPreviewTab ? (
-                        <TabsTrigger
-                          value="preview"
-                          className="h-6 rounded-xl px-3 text-xs"
-                        >
-                          <Monitor className="h-3.5 w-3.5" />
-                          {i18n.t("previewPanel.previewTab")}
+                    {showSourceControls ? (
+                      <TabsList className="h-8 gap-1 rounded-2xl bg-background/85 px-1 backdrop-blur-sm">
+                        {hasPreviewTab ? (
+                          <TabsTrigger
+                            value="preview"
+                            className="h-6 rounded-xl px-3 text-xs"
+                          >
+                            <Monitor className="h-3.5 w-3.5" />
+                            {i18n.t("previewPanel.previewTab")}
+                          </TabsTrigger>
+                        ) : null}
+                        <TabsTrigger value="code" className="h-6 rounded-xl px-3 text-xs">
+                          <Code2 className="h-3.5 w-3.5" />
+                          {i18n.t("previewPanel.artifactPreview.sourceCode")}
                         </TabsTrigger>
-                      ) : null}
-                      <TabsTrigger value="code" className="h-6 rounded-xl px-3 text-xs">
-                        <Code2 className="h-3.5 w-3.5" />
-                        {i18n.t("previewPanel.artifactPreview.sourceCode")}
-                      </TabsTrigger>
-                    </TabsList>
-                    {selectedOpenUrl ? (
+                      </TabsList>
+                    ) : null}
+                    {canOpenArtifact ? (
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
                         className="h-8 rounded-2xl border-border/70 bg-background/80 text-xs backdrop-blur-sm"
-                        onClick={() =>
-                          window.open(selectedOpenUrl, "_blank", "noopener,noreferrer")
-                        }
+                        onClick={handleOpenArtifact}
+                        title={openArtifactLabel}
                       >
                         <ExternalLink className="h-3.5 w-3.5" />
-                        {i18n.t("previewPanel.artifactPreview.open")}
+                        {openArtifactLabel}
                       </Button>
                     ) : null}
                   </div>
@@ -527,7 +681,7 @@ export default function AltusArtifactPreviewCard({
                   <TabsContent value="preview" className="relative h-full data-[state=inactive]:hidden">
                     {previewPath || hasSnapshotMetadata ? (
                       <div className="absolute inset-0">
-                        {snapshotCaptured && snapshotUrl ? (
+                        {(snapshotCaptured || fallbackScreenshotCaptured) && snapshotUrl ? (
                           <div className="absolute inset-0 flex items-center justify-center bg-muted/20">
                             <img
                               src={snapshotUrl}
@@ -538,33 +692,54 @@ export default function AltusArtifactPreviewCard({
                             />
                           </div>
                         ) : snapshotUnavailableForComplexWeb ? (
-                          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-muted/20 px-6 text-center">
-                            <div className="max-w-md text-sm text-muted-foreground">
-                              {previewSnapshot?.message ||
-                                i18n.t("previewPanel.artifactPreview.websiteSnapshotUnavailable")}
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setActiveTab("code")}
-                              >
-                                {i18n.t("previewPanel.viewSource")}
-                              </Button>
-                              {selectedOpenUrl ? (
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() =>
-                                    window.open(selectedOpenUrl, "_blank", "noopener,noreferrer")
-                                  }
-                                >
-                                  <ExternalLink className="mr-1 h-3.5 w-3.5" />
-                                  {i18n.t("previewPanel.artifactPreview.open")}
-                                </Button>
+                          <div className="absolute inset-0 overflow-auto bg-muted/20 px-4 py-12 sm:px-6">
+                            <div className="mx-auto flex w-full max-w-2xl flex-col gap-3 rounded-lg border border-amber-200 bg-background/95 p-4 text-left dark:border-amber-900/60 dark:bg-background/90">
+                              <div className="flex items-start gap-3">
+                                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
+                                  <AlertTriangle className="h-4 w-4" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <div className="text-sm font-semibold text-foreground">
+                                    {i18n.t("previewPanel.artifactPreview.websiteSnapshotIssueTitle")}
+                                  </div>
+                                  <div className="mt-1 text-sm leading-6 text-muted-foreground">
+                                    {snapshotIssue?.message ||
+                                      i18n.t("previewPanel.artifactPreview.websiteSnapshotUnavailable")}
+                                  </div>
+                                </div>
+                              </div>
+                              {snapshotIssue?.reasonCode ? (
+                                <div className="rounded-md bg-muted px-3 py-2 font-mono text-xs text-muted-foreground">
+                                  {i18n.t("previewPanel.artifactPreview.websiteSnapshotIssueReason")}:{" "}
+                                  {snapshotIssue.reasonCode}
+                                </div>
                               ) : null}
+                              <div className="text-xs leading-5 text-muted-foreground">
+                                {i18n.t("previewPanel.artifactPreview.websiteSnapshotIssueDescription")}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                {showSourceControls ? (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setActiveTab("code")}
+                                  >
+                                    {i18n.t("previewPanel.viewSource")}
+                                  </Button>
+                                ) : null}
+                                {canOpenArtifact ? (
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={handleOpenArtifact}
+                                  >
+                                    <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                                    {openArtifactLabel}
+                                  </Button>
+                                ) : null}
+                              </div>
                             </div>
                           </div>
                         ) : webPreviewState === "ready" ? (
@@ -608,14 +783,27 @@ export default function AltusArtifactPreviewCard({
                                       i18n.t("previewPanel.reloadPreview")
                                     )}
                                   </Button>
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => setActiveTab("code")}
-                                  >
-                                    {i18n.t("previewPanel.viewSource")}
-                                  </Button>
+                                  {showSourceControls ? (
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => setActiveTab("code")}
+                                    >
+                                      {i18n.t("previewPanel.viewSource")}
+                                    </Button>
+                                  ) : null}
+                                  {canOpenArtifact ? (
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={handleOpenArtifact}
+                                    >
+                                      <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                                      {openArtifactLabel}
+                                    </Button>
+                                  ) : null}
                                 </div>
                               </>
                             )}

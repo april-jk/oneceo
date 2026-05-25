@@ -1102,6 +1102,16 @@ export default function Home() {
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [mode, setMode] = useState<PageMode>("input");
   const [message, setMessage] = useState("");
+  const [uploadingAttachmentIds, setUploadingAttachmentIds] = useState<
+    string[]
+  >([]);
+  const uploadedAttachmentRecordsRef = useRef<
+    Record<string, UploadedTaskAttachment>
+  >({});
+  const uploadPromisesRef = useRef(
+    new Map<string, Promise<UploadedTaskAttachment>>(),
+  );
+  const uploadSessionIdRef = useRef<string>("");
   const [handledGoogleConfirmationIds, setHandledGoogleConfirmationIds] = useState<
     string[]
   >([]);
@@ -1980,6 +1990,7 @@ export default function Home() {
     const pendingAttachments = consumePendingDraftAttachments();
     if (!pendingAttachments.length) return;
     setAttachments(pendingAttachments);
+    startPendingAttachmentUploads(pendingAttachments);
   }, []);
 
   useEffect(() => {
@@ -2032,9 +2043,98 @@ export default function Home() {
     window.history.replaceState(null, "", base);
   };
 
+  const setAttachmentUploading = (id: string, uploading: boolean) => {
+    setUploadingAttachmentIds((current) => {
+      if (uploading) {
+        return current.includes(id) ? current : [...current, id];
+      }
+      return current.filter((item) => item !== id);
+    });
+  };
+
+  const ensureAttachmentUploadSession = async (fallbackTitle: string) => {
+    const existing = (sessionId || uploadSessionIdRef.current || "").trim();
+    if (existing) return existing;
+    const created = await ensureSession(
+      fallbackTitle || t("homeWorkspace.newTaskSession"),
+    );
+    uploadSessionIdRef.current = created;
+    return created;
+  };
+
+  const ensurePendingAttachmentUploaded = (
+    attachment: Extract<PendingAttachment, { kind: "file" }>,
+    forcedSessionId?: string,
+  ) => {
+    const uploaded = uploadedAttachmentRecordsRef.current[attachment.id];
+    if (uploaded) return Promise.resolve(uploaded);
+
+    const running = uploadPromisesRef.current.get(attachment.id);
+    if (running) return running;
+
+    setAttachmentUploading(attachment.id, true);
+    const promise = (async () => {
+      const activeSessionId =
+        forcedSessionId ||
+        (await ensureAttachmentUploadSession(attachment.name));
+      uploadSessionIdRef.current = activeSessionId;
+      const result = await uploadTaskCreationAttachment(
+        activeSessionId,
+        attachment.file,
+      );
+      uploadedAttachmentRecordsRef.current = {
+        ...uploadedAttachmentRecordsRef.current,
+        [attachment.id]: result,
+      };
+      return result;
+    })();
+
+    uploadPromisesRef.current.set(attachment.id, promise);
+    promise
+      .catch((error) => {
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : t("homeWorkspace.attachmentSendFailed"),
+        );
+      })
+      .finally(() => {
+        uploadPromisesRef.current.delete(attachment.id);
+        setAttachmentUploading(attachment.id, false);
+      });
+
+    return promise;
+  };
+
+  const startPendingAttachmentUploads = (items: PendingAttachment[]) => {
+    if (readAltusMode() === "managed") return;
+    items
+      .filter(
+        (item): item is Extract<PendingAttachment, { kind: "file" }> =>
+          item.kind === "file",
+      )
+      .forEach((item) => {
+        void ensurePendingAttachmentUploaded(item);
+      });
+  };
+
+  const clearAttachmentUploadState = (ids: string[]) => {
+    if (!ids.length) return;
+    uploadedAttachmentRecordsRef.current = Object.fromEntries(
+      Object.entries(uploadedAttachmentRecordsRef.current).filter(
+        ([id]) => !ids.includes(id),
+      ),
+    );
+    ids.forEach((id) => uploadPromisesRef.current.delete(id));
+    setUploadingAttachmentIds((current) =>
+      current.filter((id) => !ids.includes(id)),
+    );
+  };
+
   const handleAttachmentSelect = (files: File[]) => {
     const merged = mergePendingAttachments(attachments, files);
     setAttachments(merged.attachments);
+    startPendingAttachmentUploads(merged.attachments);
     merged.rejected.forEach((item) => toast.error(item));
   };
 
@@ -2053,6 +2153,7 @@ export default function Home() {
   );
 
   const removeAttachment = (id: string) => {
+    clearAttachmentUploadState([id]);
     setAttachments((prev) => prev.filter((item) => item.id !== id));
   };
 
@@ -2227,9 +2328,6 @@ export default function Home() {
     if (!baseText) return;
     const altusMode = readAltusMode();
 
-    if (hasAttachments) {
-      setAttachments([]);
-    }
     if (hasReferences) {
       setComposerReferences([]);
     }
@@ -2261,7 +2359,11 @@ export default function Home() {
           ) === index,
       );
       const selectedMcp = normalizeComposerSelectedMcp(referenceDrafts);
-      let activeSessionId = (sessionId || "").trim();
+      let activeSessionId = (
+        sessionId ||
+        uploadSessionIdRef.current ||
+        ""
+      ).trim();
       if (
         altusMode !== "managed" &&
         uploadableAttachments.length > 0 &&
@@ -2276,9 +2378,14 @@ export default function Home() {
       if (altusMode !== "managed" && uploadableAttachments.length > 0) {
         uploadedAttachments = await Promise.all(
           uploadableAttachments.map((item) =>
-            uploadTaskCreationAttachment(activeSessionId, item.file),
+            ensurePendingAttachmentUploaded(item, activeSessionId),
           ),
         );
+        activeSessionId = (
+          sessionId ||
+          uploadSessionIdRef.current ||
+          activeSessionId
+        ).trim();
       }
 
       exitHistoryView();
@@ -2319,6 +2426,10 @@ export default function Home() {
                   : undefined,
           },
         );
+      }
+      if (hasAttachments) {
+        clearAttachmentUploadState(uploadableAttachments.map((item) => item.id));
+        setAttachments([]);
       }
     } catch (error) {
       if (hasAttachments) {
@@ -2427,9 +2538,6 @@ export default function Home() {
     const altusMode = readAltusMode();
     const activeSessionId = (sessionId || "").trim() || undefined;
 
-    if (hasAttachments) {
-      setAttachments([]);
-    }
     if (hasReferences) {
       setComposerReferences([]);
     }
@@ -2461,15 +2569,17 @@ export default function Home() {
           ) === index,
       );
       const selectedMcp = normalizeComposerSelectedMcp(referenceDrafts);
+      const resolvedSessionId =
+        activeSessionId || uploadSessionIdRef.current || "";
       let uploadedAttachments: UploadedTaskAttachment[] = [];
       if (
         altusMode !== "managed" &&
         uploadableAttachments.length > 0 &&
-        activeSessionId
+        resolvedSessionId
       ) {
         uploadedAttachments = await Promise.all(
           uploadableAttachments.map((item) =>
-            uploadTaskCreationAttachment(activeSessionId, item.file),
+            ensurePendingAttachmentUploaded(item, resolvedSessionId),
           ),
         );
       }
@@ -2493,7 +2603,7 @@ export default function Home() {
         await answerQuestion(
           appendAttachmentsToPrompt(baseText, uploadedAttachments),
           {
-            sessionId: activeSessionId,
+            sessionId: resolvedSessionId || activeSessionId,
             metadata:
               uploadedAttachments.length || mergedSkills.length
                 ? {
@@ -2514,6 +2624,10 @@ export default function Home() {
                   : undefined,
           },
         );
+      }
+      if (hasAttachments) {
+        clearAttachmentUploadState(uploadableAttachments.map((item) => item.id));
+        setAttachments([]);
       }
     } catch (error) {
       if (hasAttachments) {
@@ -3480,6 +3594,11 @@ export default function Home() {
             ) : null}
             <div data-tour="home-composer" className="mx-auto w-full max-w-[52rem] rounded-[2rem] border border-border/70 bg-card shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)]">
               <div className="space-y-3 p-4">
+                <AttachmentChipList
+                  attachments={attachments}
+                  onRemove={removeAttachment}
+                  uploadingIds={uploadingAttachmentIds}
+                />
                 <Textarea
                   placeholder={
                     currentQuestion
@@ -3506,11 +3625,6 @@ export default function Home() {
                   rows={2}
                 />
                 {composerReferenceTokens}
-
-                <AttachmentChipList
-                  attachments={attachments}
-                  onRemove={removeAttachment}
-                />
 
                 <TooltipProvider>
                   <div className="flex items-center justify-between pt-2">
@@ -3750,6 +3864,11 @@ export default function Home() {
                     ) : null}
                     {/* Text Area and Actions - Single Container */}
                     <div data-tour="home-composer" className="relative z-10 space-y-3 rounded-[2rem] border border-border/70 bg-card p-4 shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)]">
+                      <AttachmentChipList
+                        attachments={attachments}
+                        onRemove={removeAttachment}
+                        uploadingIds={uploadingAttachmentIds}
+                      />
                       {/* Textarea */}
                       <Textarea
                         placeholder={t("homePage.textareaPlaceholder")}
@@ -3766,11 +3885,6 @@ export default function Home() {
                         rows={4}
                       />
                       {composerReferenceTokens}
-
-                      <AttachmentChipList
-                        attachments={attachments}
-                        onRemove={removeAttachment}
-                      />
 
                       {/* Bottom Action Bar */}
                       <TooltipProvider>

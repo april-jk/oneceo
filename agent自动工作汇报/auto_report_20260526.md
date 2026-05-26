@@ -155,3 +155,8 @@
 - 问题：`task_session_recent_messages` 与 Redis recent 可能同时保留旧澄清快照；旧快照缺少 `structuredClarification` 时，单纯比较 Redis 与 recent 快照仍会把旧数据当作新鲜数据返回，导致刷新/重开后卡片闪现后消失。
 - 处理：`/messages/recent` 对澄清型最新消息增加 canonical `conversation_messages` 对账；发现 recent/Redis 缺少结构化卡片协议时，直接用 canonical timeline 生成响应，并回写 recent/Redis。
 - 验证：补充 stale redis clarification metadata 路由测试覆盖 Redis 与 recent 双旧快照场景；API 类型检查和 `git diff --check` 通过。
+
+## PPT 澄清卡片非尾部消息覆盖修复
+- 问题：真实等待用户链路里，澄清卡片后面可能继续追加 `run_status` 等等待态消息；上一版只检查 latest message，导致卡片不是最后一条时跳过 canonical 对账，旧 recent/Redis 仍可覆盖前端卡片。
+- 处理：recent freshness 从 latest-only 改为扫描 recent 页中的澄清消息，并按 `messageKey` 与 canonical `conversation_messages` 对账；只要 canonical 卡片有 `structuredClarification` 而缓存缺失，就判定缓存过期并重建。
+- 验证：已把 stale redis clarification metadata 回归扩展为“卡片后跟 waiting_user 状态”的场景，目标 API 路由测试、API 类型检查和 `git diff --check` 通过。

@@ -500,10 +500,22 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent rejects stale r
           clarificationType: 'presentation_brief',
         },
       },
+      {
+        id: 'message-status-after-clarification',
+        messageKey: 'managed:run-ppt:run_status:waiting_user',
+        role: 'system',
+        messageType: 'status_update',
+        content: '正在等待用户补充信息',
+        metadata: {
+          timelineCursor: 11,
+          messageKey: 'managed:run-ppt:run_status:waiting_user',
+          eventType: 'run_status',
+        },
+      },
     ],
     source: 'redis_recent_stale',
     oldestCursor: 10,
-    newestCursor: 10,
+    newestCursor: 11,
     hasOlderHistory: false,
   });
   redisCacheAny.setRecentMessagesPage = async (input: { payload: Record<string, unknown> }) => {
@@ -526,6 +538,19 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent rejects stale r
       timelineCursor: 10,
       createdAt: new Date(1712100000000).toISOString(),
     },
+    {
+      id: 'message-status-after-clarification',
+      role: 'system',
+      messageType: 'status_update',
+      content: '正在等待用户补充信息',
+      metadata: {
+        timelineCursor: 11,
+        messageKey: 'managed:run-ppt:run_status:waiting_user',
+        eventType: 'run_status',
+      },
+      timelineCursor: 11,
+      createdAt: new Date(1712100001000).toISOString(),
+    },
   ];
   sessionDaoAny.getMessages = async () => [
     {
@@ -544,6 +569,19 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent rejects stale r
       timelineCursor: 10,
       createdAt: new Date(1712100000000).toISOString(),
     },
+    {
+      id: 'message-status-after-clarification',
+      role: 'system',
+      messageType: 'status_update',
+      content: '正在等待用户补充信息',
+      metadata: {
+        timelineCursor: 11,
+        messageKey: 'managed:run-ppt:run_status:waiting_user',
+        eventType: 'run_status',
+      },
+      timelineCursor: 11,
+      createdAt: new Date(1712100001000).toISOString(),
+    },
   ];
 
   try {
@@ -554,12 +592,18 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent rejects stale r
 
     assert.equal(response.status, 200);
     assert.notEqual(payload.data.source, 'redis_recent_stale');
+    const clarificationMessage = (payload.data.messages as any[]).find(
+      (message) => message?.messageType === 'clarification_request'
+    );
+    const cachedClarificationMessage = (cachedPayload?.messages as any[])?.find(
+      (message) => message?.messageType === 'clarification_request'
+    );
     assert.equal(
-      payload.data.messages[0]?.metadata?.structuredClarification?.kind,
+      clarificationMessage?.metadata?.structuredClarification?.kind,
       'structured_clarification'
     );
     assert.equal(
-      (cachedPayload?.messages as any[])?.[0]?.metadata?.structuredClarification?.kind,
+      cachedClarificationMessage?.metadata?.structuredClarification?.kind,
       'structured_clarification'
     );
   } finally {

@@ -3443,23 +3443,33 @@ function hasMatchingClarificationMetadata(input: {
   return true;
 }
 
+function isClarificationMetadataMessage(message: TimelineMessage | undefined) {
+  if (!message) return false;
+  const metadata = pickRecord(message.metadata);
+  return message.messageType === 'clarification_request' || Boolean(asText(metadata.clarificationType));
+}
+
 function needsCanonicalClarificationMetadata(input: {
   candidateMessages: TimelineMessage[];
   canonicalMessages: TimelineMessage[];
 }) {
-  const candidateLatest = input.candidateMessages[input.candidateMessages.length - 1];
-  const canonicalLatest = input.canonicalMessages[input.canonicalMessages.length - 1];
-  return !hasMatchingClarificationMetadata({
-    redisMessage: candidateLatest,
-    dbMessage: canonicalLatest,
-  });
+  const candidateByKey = new Map(
+    input.candidateMessages.map((message) => [resolveTimelineMessageKey(message), message])
+  );
+  return input.canonicalMessages
+    .filter(isClarificationMetadataMessage)
+    .some((canonicalMessage) => {
+      const messageKey = resolveTimelineMessageKey(canonicalMessage);
+      const candidateMessage = messageKey ? candidateByKey.get(messageKey) : undefined;
+      return !hasMatchingClarificationMetadata({
+        redisMessage: candidateMessage,
+        dbMessage: canonicalMessage,
+      });
+    });
 }
 
 function shouldCheckCanonicalClarificationMetadata(messages: TimelineMessage[]) {
-  const latest = messages[messages.length - 1];
-  if (!latest) return false;
-  const metadata = pickRecord(latest.metadata);
-  return latest.messageType === 'clarification_request' || Boolean(asText(metadata.clarificationType));
+  return messages.some(isClarificationMetadataMessage);
 }
 
 function isRecentRedisPageFresh(input: {
@@ -3496,6 +3506,9 @@ function isRecentRedisPageFresh(input: {
       dbMessage: dbLatest,
     })
   ) {
+    return false;
+  }
+  if (needsCanonicalClarificationMetadata({ candidateMessages: redisMessages, canonicalMessages: dbMessages })) {
     return false;
   }
   return true;
@@ -5180,7 +5193,7 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
           shouldCheckCanonicalClarificationMetadata(latestRecentMessages) ||
           shouldCheckCanonicalClarificationMetadata(redisCachedMessages)
         ) {
-          const latestCanonicalMessages = await loadCanonicalRecentTimelineMessages(sessionId, session, 1);
+          const latestCanonicalMessages = await loadCanonicalRecentTimelineMessages(sessionId, session, 50);
           if (
             needsCanonicalClarificationMetadata({
               candidateMessages: latestRecentMessages,

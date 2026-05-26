@@ -981,7 +981,10 @@ export class AltusManagedPromptService {
     }
 
     if (profile && !profile.needsClarification) {
-      const pptGenerationContext = derivePptGenerationContext(profile.recentUserMessages || []);
+      const latestUserMessage = profile.recentUserMessages[profile.recentUserMessages.length - 1];
+      const pptGenerationContext = latestUserMessage
+        ? derivePptGenerationContext([latestUserMessage])
+        : null;
       if (pptGenerationContext) {
         lines.push('', renderPptGenerationContext(pptGenerationContext));
       }

@@ -183,6 +183,23 @@ test('runtime context injects PPT generation contract only for PPT tasks', () =>
   assert.doesNotMatch(nonPptPrompt, /# PPT generation contract/);
 });
 
+test('runtime context does not leak old PPT contract into a later website turn', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '帮我分析一下沐曦股份，做个 ppt',
+    '请帮我做一个企业官网',
+  ]);
+  const prompt = altusManagedPromptService.buildRuntimeContextPrompt({
+    sessionId: 'session-ppt-then-web',
+    sessionTitle: 'ppt then web',
+    workspaceRoot: '/workspace/session-ppt-then-web',
+    connectors: [],
+    taskIntentProfile: profile,
+  });
+
+  assert.doesNotMatch(prompt, /# PPT generation contract/);
+  assert.match(prompt, /# Todo gate/);
+});
+
 test('managed prompt defaults debug and testing to Playwright on the same n.eko browser', () => {
   const prompt = altusManagedPromptService.buildSystemPrompt({
     sessionId: 'session-debug-tool-choice',

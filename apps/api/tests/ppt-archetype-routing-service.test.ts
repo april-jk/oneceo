@@ -41,3 +41,17 @@ test('PPT archetype routing ignores non-PPT tasks', () => {
 
   assert.equal(context, null);
 });
+
+test('PPT archetype routing accepts current confirmed brief without scanning old turns', () => {
+  const context = derivePptGenerationContext([
+    [
+      '已确认需求（结构化澄清选择）',
+      '- 演示目的与受众：内部高管战略汇报',
+      '- 内容来源与可信度：官网、公告、权威媒体优先',
+      '- 深度与页数：12-15 页标准版',
+      '- 视觉与叙事风格：科技投研风',
+    ].join('\n'),
+  ]);
+
+  assert.equal(context?.archetype, 'internal_strategy_review');
+});

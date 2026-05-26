@@ -173,6 +173,16 @@ function includesAny(text: string, keywords: readonly string[]) {
   return keywords.some((keyword) => text.includes(keyword));
 }
 
+function isPresentationBriefConfirmation(text: string) {
+  return (
+    text.includes('结构化澄清选择') ||
+    text.includes('confirmed brief') ||
+    text.includes('confirmed task brief') ||
+    text.includes('已确认ppt需求') ||
+    text.includes('已确认 ppt 需求')
+  );
+}
+
 function selectArchetype(text: string): { archetype: PptDeckArchetype; reason: string } {
   if (includesAny(text, ['投资人', '融资', '路演', '募资', '上市', 'ipo', 'investor', 'pitch', 'fundraising'])) {
     return { archetype: 'investor_pitch', reason: 'matched investor / fundraising / pitch audience' };
@@ -201,7 +211,7 @@ function selectArchetype(text: string): { archetype: PptDeckArchetype; reason: s
 export function derivePptGenerationContext(texts: string[]): PptGenerationContext | null {
   const normalizedTexts = texts.map(normalize).filter(Boolean);
   const combined = normalizedTexts.join('\n');
-  if (!combined || !isPresentationRequest(combined)) {
+  if (!combined || (!isPresentationRequest(combined) && !isPresentationBriefConfirmation(combined))) {
     return null;
   }
 

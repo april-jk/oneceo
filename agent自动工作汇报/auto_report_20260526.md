@@ -180,3 +180,8 @@
 - 做了什么：新增 `ppt-archetype-routing-service`，在 PPT confirmed brief 后生成 Deck Archetype、推荐页面原型、证据问题和 style kit 要求，并只通过 runtime context 注入当前 PPT run。
 - 边界控制：非 PPT 任务不会出现 `# PPT generation contract`；内部战略汇报不会套用投资路演的 `ask_or_use_of_funds` 页面。
 - 验证：`ppt-archetype-routing-service.test.ts` 与 `altus-managed-prompt-service.test.ts` 定向测试通过，API 类型检查与 `git diff --check` 通过。
+
+## PPT contract 多轮泄漏 review 修复
+- 问题：review 指出 PPT contract 注入使用 `recentUserMessages` 全量扫描，可能在同一会话“先 PPT、后官网”时把旧 PPT 上下文泄漏到后续非 PPT 任务。
+- 处理：runtime context 注入改为只基于 latest user message；同时让当前 `结构化澄清选择 / confirmed brief` 本身可作为 PPT brief 信号，不依赖旧历史。
+- 验证：新增“旧 PPT 后接官网不泄漏”和“当前 confirmed brief 可注入”的回归测试，目标测试、API 类型检查和 `git diff --check` 通过。

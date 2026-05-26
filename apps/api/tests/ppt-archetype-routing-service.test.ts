@@ -17,6 +17,8 @@ test('PPT archetype routing follows confirmed investor pitch purpose', () => {
   assert.equal(context?.archetype, 'investor_pitch');
   assert.ok(context?.slideArchetypes.includes('moat_stack'));
   assert.ok(context?.slideArchetypes.includes('ask_or_use_of_funds'));
+  assert.ok(context?.sourceCoverageRules.some((rule) => rule.includes('web_extract')));
+  assert.ok(context?.sourceCoverageRules.some((rule) => rule.includes('at least 6 distinct cited sources')));
 });
 
 test('PPT archetype routing keeps internal strategy separate from investor pitch', () => {

@@ -170,6 +170,10 @@ test('runtime context injects PPT generation contract only for PPT tasks', () =>
   assert.match(pptPrompt, /# PPT generation contract/);
   assert.match(pptPrompt, /Deck archetype: internal_strategy_review/);
   assert.match(pptPrompt, /decision_options/);
+  assert.match(pptPrompt, /Source coverage gate/);
+  assert.match(pptPrompt, /web_extract/);
+  assert.match(pptPrompt, /Search result snippets are discovery signals/);
+  assert.match(pptPrompt, /Do not call render_pptx_from_instructions until the source coverage gate is satisfied/);
   assert.doesNotMatch(pptPrompt, /ask_or_use_of_funds/);
 
   const nonPptPrompt = altusManagedPromptService.buildRuntimeContextPrompt({

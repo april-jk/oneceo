@@ -3443,6 +3443,25 @@ function hasMatchingClarificationMetadata(input: {
   return true;
 }
 
+function needsCanonicalClarificationMetadata(input: {
+  candidateMessages: TimelineMessage[];
+  canonicalMessages: TimelineMessage[];
+}) {
+  const candidateLatest = input.candidateMessages[input.candidateMessages.length - 1];
+  const canonicalLatest = input.canonicalMessages[input.canonicalMessages.length - 1];
+  return !hasMatchingClarificationMetadata({
+    redisMessage: candidateLatest,
+    dbMessage: canonicalLatest,
+  });
+}
+
+function shouldCheckCanonicalClarificationMetadata(messages: TimelineMessage[]) {
+  const latest = messages[messages.length - 1];
+  if (!latest) return false;
+  const metadata = pickRecord(latest.metadata);
+  return latest.messageType === 'clarification_request' || Boolean(asText(metadata.clarificationType));
+}
+
 function isRecentRedisPageFresh(input: {
   redisPage: Record<string, unknown>;
   latestDbMessages: TimelineMessage[];
@@ -3480,6 +3499,38 @@ function isRecentRedisPageFresh(input: {
     return false;
   }
   return true;
+}
+
+async function loadCanonicalRecentTimelineMessages(
+  sessionId: string,
+  session: any,
+  limit = 50
+) {
+  const canonicalMessages = await taskCreationSessionDAO.getMessages(sessionId);
+  const timeline = filterLegacyTimelineNoise(
+    injectRuntimeGenerationBoundaries(
+      annotateRuntimeGenerations(mapStoredMessagesToTimeline(canonicalMessages), session?.runtime)
+    )
+  );
+  return timeline.slice(Math.max(timeline.length - limit, 0));
+}
+
+async function replaceRecentMessagesSnapshotFromTimeline(
+  sessionId: string,
+  messages: TimelineMessage[]
+) {
+  if (!Array.isArray(messages) || messages.length === 0) return;
+  await taskCreationSessionDAO.replaceRecentMessagesSnapshot(
+    sessionId,
+    messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      messageType: message.messageType,
+      metadata: message.metadata,
+      createdAt: message.createdAt,
+    }))
+  );
 }
 
 function hasLegacyRecentNoise(messages: TimelineMessage[]) {
@@ -5117,11 +5168,28 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
       });
       if (redisCachedPage) {
         const latestCachedMessages = await taskCreationSessionDAO.getRecentMessages(sessionId, 1);
-        const latestRecentMessages = filterLegacyTimelineNoise(
+        let latestRecentMessages = filterLegacyTimelineNoise(
           injectRuntimeGenerationBoundaries(
             annotateRuntimeGenerations(mapStoredMessagesToTimeline(latestCachedMessages), session?.runtime)
           )
         );
+        const redisCachedMessages = Array.isArray(redisCachedPage.messages)
+          ? (redisCachedPage.messages as TimelineMessage[])
+          : [];
+        if (
+          shouldCheckCanonicalClarificationMetadata(latestRecentMessages) ||
+          shouldCheckCanonicalClarificationMetadata(redisCachedMessages)
+        ) {
+          const latestCanonicalMessages = await loadCanonicalRecentTimelineMessages(sessionId, session, 1);
+          if (
+            needsCanonicalClarificationMetadata({
+              candidateMessages: latestRecentMessages,
+              canonicalMessages: latestCanonicalMessages,
+            })
+          ) {
+            latestRecentMessages = latestCanonicalMessages;
+          }
+        }
         if (
           isRecentRedisPageFresh({
             redisPage: redisCachedPage,
@@ -5147,6 +5215,21 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
         annotateRuntimeGenerations(mapStoredMessagesToTimeline(cachedMessages), session?.runtime)
       )
     );
+    const canonicalRecentMessages = shouldCheckCanonicalClarificationMetadata(recentMessages)
+      ? await loadCanonicalRecentTimelineMessages(sessionId, session, 50)
+      : [];
+    const shouldUseCanonicalRecent =
+      canonicalRecentMessages.length > 0 &&
+      needsCanonicalClarificationMetadata({
+        candidateMessages: recentMessages,
+        canonicalMessages: canonicalRecentMessages,
+      });
+    if (shouldUseCanonicalRecent) {
+      recentMessages = canonicalRecentMessages;
+      void replaceRecentMessagesSnapshotFromTimeline(sessionId, canonicalRecentMessages).catch((error) => {
+        console.warn('[RECENT_MESSAGES_SYNC_FAILED]', { sessionId, error });
+      });
+    }
     recentMessages = await enrichTimelineMessagesWithMcpConfirmationStatuses(recentMessages);
     const shouldHydrateFromNativeHistory =
       shouldPreferOpencodeNativeHistory &&
@@ -5164,18 +5247,7 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
           (resolvedRecentMessages[resolvedRecentMessages.length - 1]?.messageKey || '');
 
       if (cacheOutOfSync && resolvedRecentMessages.length > 0) {
-        void taskCreationSessionDAO
-          .replaceRecentMessagesSnapshot(
-            sessionId,
-            resolvedRecentMessages.map((message) => ({
-              id: message.id,
-              role: message.role,
-              content: message.content,
-              messageType: message.messageType,
-              metadata: message.metadata,
-              createdAt: message.createdAt,
-            }))
-          )
+        void replaceRecentMessagesSnapshotFromTimeline(sessionId, resolvedRecentMessages)
           .catch((error) => {
             console.warn('[RECENT_MESSAGES_SYNC_FAILED]', { sessionId, error });
           });

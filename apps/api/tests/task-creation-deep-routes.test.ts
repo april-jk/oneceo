@@ -46,6 +46,7 @@ const originalResolveAppUserIdByLegacyUserId = legacyMappingDaoAny.resolveAppUse
 const originalGetTaskDescription = sessionDaoAny.getTaskDescription;
 const originalGetRecentMessages = sessionDaoAny.getRecentMessages;
 const originalGetMessages = sessionDaoAny.getMessages;
+const originalReplaceRecentMessagesSnapshot = sessionDaoAny.replaceRecentMessagesSnapshot;
 const originalGetRun = runDaoAny.getRun;
 const originalFindActiveRun = runDaoAny.findActiveRun;
 const originalGetSessionFile = fileStoreAny.getSession;
@@ -79,6 +80,7 @@ after(async () => {
   sessionDaoAny.getTaskDescription = originalGetTaskDescription;
   sessionDaoAny.getRecentMessages = originalGetRecentMessages;
   sessionDaoAny.getMessages = originalGetMessages;
+  sessionDaoAny.replaceRecentMessagesSnapshot = originalReplaceRecentMessagesSnapshot;
   runDaoAny.getRun = originalGetRun;
   runDaoAny.findActiveRun = originalFindActiveRun;
   fileStoreAny.getSession = originalGetSessionFile;
@@ -452,6 +454,7 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent prefers redis c
 
 test('GET /api/task-creation/sessions/:sessionId/messages/recent rejects stale redis clarification metadata', async () => {
   const server = await startServer();
+  const sessionId = '5f9e1c2a-2e35-4b8d-99f1-2a9f724c67e1';
   const structuredClarification = {
     kind: 'structured_clarification',
     taskType: 'ppt',
@@ -506,7 +509,25 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent rejects stale r
   redisCacheAny.setRecentMessagesPage = async (input: { payload: Record<string, unknown> }) => {
     cachedPayload = input.payload;
   };
+  sessionDaoAny.replaceRecentMessagesSnapshot = async () => undefined;
   sessionDaoAny.getRecentMessages = async () => [
+    {
+      id: 'message-clarification',
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+      metadata: {
+        timelineCursor: 10,
+        messageKey: 'managed:run-ppt:clarification',
+        question: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+        clarificationType: 'presentation_brief',
+        eventType: 'clarification_requested',
+      },
+      timelineCursor: 10,
+      createdAt: new Date(1712100000000).toISOString(),
+    },
+  ];
+  sessionDaoAny.getMessages = async () => [
     {
       id: 'message-clarification',
       role: 'agent',
@@ -526,7 +547,7 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent rejects stale r
   ];
 
   try {
-    const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-redis-stale-ppt/messages/recent`, {
+    const response = await testFetch(`${server.origin}/api/task-creation/sessions/${sessionId}/messages/recent`, {
       headers: { 'x-test-user-id': 'owner-user' },
     });
     const payload = await response.json();
@@ -542,6 +563,7 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent rejects stale r
       'structured_clarification'
     );
   } finally {
+    sessionDaoAny.replaceRecentMessagesSnapshot = originalReplaceRecentMessagesSnapshot;
     await server.close();
   }
 });

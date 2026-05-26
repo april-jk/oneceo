@@ -150,3 +150,8 @@
 - 问题：页面刷新后本地缓存会短暂显示卡片，但 `/messages/recent` 可能命中旧 Redis recent 页；旧页缺少 `structuredClarification`，却因 cursor/messageKey 相同被误判新鲜，覆盖掉可交互卡片。
 - 处理：recent cache freshness 增加澄清 metadata 校验；当 DB 最新消息有 `presentation_brief`/`structuredClarification` 而 Redis 页缺失时，强制从 DB 重建 recent 响应并回写缓存。
 - 验证：新增 stale redis clarification metadata 路由测试，前端卡片渲染/processing 规则测试、API/Web 类型检查和 `git diff --check` 通过。
+
+## PPT 澄清卡片 canonical recent 对账修复
+- 问题：`task_session_recent_messages` 与 Redis recent 可能同时保留旧澄清快照；旧快照缺少 `structuredClarification` 时，单纯比较 Redis 与 recent 快照仍会把旧数据当作新鲜数据返回，导致刷新/重开后卡片闪现后消失。
+- 处理：`/messages/recent` 对澄清型最新消息增加 canonical `conversation_messages` 对账；发现 recent/Redis 缺少结构化卡片协议时，直接用 canonical timeline 生成响应，并回写 recent/Redis。
+- 验证：补充 stale redis clarification metadata 路由测试覆盖 Redis 与 recent 双旧快照场景；API 类型检查和 `git diff --check` 通过。

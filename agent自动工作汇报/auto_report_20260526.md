@@ -79,3 +79,20 @@
 2. `pnpm --filter web check`：通过。
 3. `git diff --check`：通过。
 4. Playwright 真实浏览器复测侧边栏“新建任务”入口，首轮发送后跳到 `/session/d23d3e4f-9a57-4e12-8400-55865688412b`，上方消息区立即显示用户消息、`managed run 已创建` 与处理中状态，底部输入框正常，右侧 `Altus Actions` 自动打开。
+
+## 历史回放重复出现 MCP 高风险确认卡修复
+
+做了什么：
+
+1. 排查“历史会话中已经点过同意的 Google 工作区高风险确认卡，重新查看历史时又显示待确认”的问题。
+2. 定位根因：历史消息中保留的是当时的 `confirmation_required` 工具输出；确认后的真实状态在 `task_session_mcp_tool_confirmations` 表中，前端仅靠当前消息数组里的 follow-up/approved/rejected 消息隐藏确认卡，历史窗口缺少后续消息时会误判为仍待确认。
+3. 后端 recent/history/messages 返回 timeline 前统一扫描消息中的 `confirmationId`，查询 `task_session_mcp_tool_confirmations` 并注入 `mcpToolConfirmationStatuses`。
+4. 前端渲染 Google Workspace 确认卡时使用该状态：`approved/rejected/consumed/expired` 都不再显示确认按钮；仅实时新事件未补状态或明确 `pending` 时继续显示。
+5. 补充前端回归测试，覆盖 consumed 状态隐藏、实时 pending 可见、历史 enriched status 批量隐藏。
+
+验证结果：
+
+1. `pnpm --filter web exec vitest run src/tests/home-managed-workspace.test.ts src/tests/mcp-tool-confirmation.test.ts`：10/10 通过。
+2. `pnpm --filter web check`：通过。
+3. `pnpm --filter api type-check`：通过。
+4. 额外运行 `src/tests/managed-clarification-rendering.test.ts` 时发现 2 个既有断言与当前语言/渲染规则不一致，和本次确认卡修复无关，本次未混入处理。

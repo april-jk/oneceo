@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  resolveHandledGoogleConfirmationIds,
   resolveHomeSubmitActiveSessionId,
+  shouldRenderGoogleWorkspaceConfirmation,
   shouldAutoOpenManagedWorkspaceOnFirstSubmit,
 } from "@/pages/Home";
 
@@ -50,5 +52,46 @@ describe("home managed workspace opening", () => {
         activeSessionId,
       }),
     ).toBe(true);
+  });
+});
+
+describe("home managed mcp confirmation rendering", () => {
+  it("hides confirmation cards once backend marks them consumed", () => {
+    expect(
+      shouldRenderGoogleWorkspaceConfirmation({
+        confirmation: {
+          confirmationId: "confirmation-1",
+          status: "consumed",
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps realtime pending confirmation cards visible before status enrichment arrives", () => {
+    expect(
+      shouldRenderGoogleWorkspaceConfirmation({
+        confirmation: {
+          confirmationId: "confirmation-1",
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("resolves handled confirmation ids from enriched history message statuses", () => {
+    expect(
+      resolveHandledGoogleConfirmationIds([
+        {
+          type: "executor_event",
+          content: "",
+          metadata: {
+            mcpToolConfirmationStatuses: {
+              "confirmation-1": "approved",
+              "confirmation-2": "pending",
+              "confirmation-3": "consumed",
+            },
+          },
+        },
+      ]),
+    ).toEqual(["confirmation-1", "confirmation-3"]);
   });
 });

@@ -11,6 +11,7 @@ import {
   appUserLegacyIdMappingDAO,
   sandboxExecutionEnvironmentDAO,
   taskCreationSessionDAO,
+  taskSessionMcpToolConfirmationDAO,
   taskSessionRunDAO,
   taskSessionWorkspaceCacheDAO,
 } from '../db/dao';
@@ -3206,6 +3207,102 @@ function attachTimelineMessageKeys(
     : [];
 }
 
+function tryParseJsonObject(value: string): unknown {
+  const text = asText(value);
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function collectMcpConfirmationIdsFromValue(
+  value: unknown,
+  ids: Set<string>,
+  depth = 0
+) {
+  if (depth > 8 || value == null) return;
+  if (typeof value === 'string') {
+    collectMcpConfirmationIdsFromValue(tryParseJsonObject(value), ids, depth + 1);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectMcpConfirmationIdsFromValue(item, ids, depth + 1);
+    }
+    return;
+  }
+  if (typeof value !== 'object') return;
+
+  const record = pickRecord(value);
+  const confirmationId = asText(record.confirmationId);
+  if (confirmationId) {
+    ids.add(confirmationId);
+  }
+
+  for (const key of [
+    'mcpToolConfirmation',
+    'structuredContent',
+    'result',
+    'outputPreview',
+    'output',
+    'content',
+    'rawPayload',
+    'event',
+    'properties',
+    'part',
+    'state',
+    'data',
+    'payload',
+  ]) {
+    collectMcpConfirmationIdsFromValue(record[key], ids, depth + 1);
+  }
+}
+
+async function enrichTimelineMessagesWithMcpConfirmationStatuses(
+  messages: TimelineMessage[]
+): Promise<TimelineMessage[]> {
+  const confirmationIds = new Set<string>();
+  for (const message of messages) {
+    collectMcpConfirmationIdsFromValue(message.metadata, confirmationIds);
+    collectMcpConfirmationIdsFromValue(message.content, confirmationIds);
+  }
+  if (confirmationIds.size === 0) return messages;
+
+  const rows = await taskSessionMcpToolConfirmationDAO.listByIds(Array.from(confirmationIds));
+  const statusById = new Map(
+    rows.map((row) => [asText(row.id), asText(row.status).toLowerCase()])
+  );
+  if (statusById.size === 0) return messages;
+
+  return messages.map((message) => {
+    const messageConfirmationIds = new Set<string>();
+    collectMcpConfirmationIdsFromValue(message.metadata, messageConfirmationIds);
+    collectMcpConfirmationIdsFromValue(message.content, messageConfirmationIds);
+
+    const statuses: Record<string, string> = {};
+    for (const confirmationId of messageConfirmationIds) {
+      const status = statusById.get(confirmationId);
+      if (status) {
+        statuses[confirmationId] = status;
+      }
+    }
+    if (Object.keys(statuses).length === 0) return message;
+
+    return {
+      ...message,
+      metadata: {
+        ...(message.metadata || {}),
+        mcpToolConfirmationStatuses: {
+          ...pickRecord(message.metadata?.mcpToolConfirmationStatuses),
+          ...statuses,
+        },
+      },
+    };
+  });
+}
+
 async function resolveRenderableTimelineMessages(
   sessionId: string,
   session?: any
@@ -3290,6 +3387,8 @@ async function resolveRenderableTimelineMessages(
     if (ca !== cb) return ca - cb;
     return 0;
   });
+
+  messages = await enrichTimelineMessagesWithMcpConfirmationStatuses(messages);
 
   return messages;
 }
@@ -4990,19 +5089,26 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
             latestDbMessages: latestRecentMessages,
           })
         ) {
+          const enrichedMessages = await enrichTimelineMessagesWithMcpConfirmationStatuses(
+            Array.isArray(redisCachedPage.messages) ? redisCachedPage.messages : []
+          );
           return res.json({
             success: true,
-            data: redisCachedPage,
+            data: {
+              ...redisCachedPage,
+              messages: enrichedMessages,
+            },
           });
         }
       }
     }
     const cachedMessages = await taskCreationSessionDAO.getRecentMessages(sessionId, 50);
-    const recentMessages = filterLegacyTimelineNoise(
+    let recentMessages = filterLegacyTimelineNoise(
       injectRuntimeGenerationBoundaries(
         annotateRuntimeGenerations(mapStoredMessagesToTimeline(cachedMessages), session?.runtime)
       )
     );
+    recentMessages = await enrichTimelineMessagesWithMcpConfirmationStatuses(recentMessages);
     const shouldHydrateFromNativeHistory =
       shouldPreferOpencodeNativeHistory &&
       (!hasRenderableAssistantReply(recentMessages) || hasLegacyRecentNoise(recentMessages));

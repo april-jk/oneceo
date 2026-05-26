@@ -788,7 +788,63 @@ type GoogleWorkspaceConfirmationView = {
   target: string;
   impact: string;
   parameterSummary: Record<string, unknown>;
+  status?: string;
 };
+
+function normalizeMcpConfirmationStatus(value: unknown): string {
+  return asText(value).toLowerCase();
+}
+
+function isResolvedMcpConfirmationStatus(value: unknown): boolean {
+  const status = normalizeMcpConfirmationStatus(value);
+  return (
+    status === "approved" ||
+    status === "rejected" ||
+    status === "consumed" ||
+    status === "expired"
+  );
+}
+
+export function shouldRenderGoogleWorkspaceConfirmation(input: {
+  confirmation?: Pick<GoogleWorkspaceConfirmationView, "confirmationId" | "status"> | null;
+  hiddenConfirmationIds?: string[];
+}): boolean {
+  const confirmationId = asText(input.confirmation?.confirmationId);
+  if (!confirmationId) return false;
+  if (isResolvedMcpConfirmationStatus(input.confirmation?.status)) return false;
+  return !input.hiddenConfirmationIds?.includes(confirmationId);
+}
+
+export function resolveHandledGoogleConfirmationIds(
+  messages: AgentMessage[],
+  handledIds: string[] = [],
+): string[] {
+  const ids = new Set(handledIds);
+  for (const item of messages) {
+    const metadata = toRecord(item.metadata);
+    const confirmationId =
+      asText(toRecord(metadata.mcpToolConfirmation).confirmationId) ||
+      asText(metadata.confirmationId);
+    if (confirmationId) {
+      const source = asText(metadata.source);
+      if (
+        source === "mcp_tool_confirmation_approved" ||
+        source === "mcp_tool_confirmation_rejected" ||
+        source === "mcp_tool_confirmation_followup"
+      ) {
+        ids.add(confirmationId);
+      }
+    }
+
+    const confirmationStatuses = toRecord(metadata.mcpToolConfirmationStatuses);
+    for (const [statusConfirmationId, status] of Object.entries(confirmationStatuses)) {
+      if (isResolvedMcpConfirmationStatus(status)) {
+        ids.add(statusConfirmationId);
+      }
+    }
+  }
+  return Array.from(ids);
+}
 
 function getMcpConfirmationConnectorLabel(connectorKeyRaw: string) {
   const connectorKey = asText(connectorKeyRaw);
@@ -1357,23 +1413,10 @@ export default function Home() {
     },
   });
   const resolvedGoogleConfirmationIds = useMemo(() => {
-    const ids = new Set(handledGoogleConfirmationIds);
-    for (const item of messages) {
-      const metadata = toRecord(item.metadata);
-      const confirmationId =
-        asText(toRecord(metadata.mcpToolConfirmation).confirmationId) ||
-        asText(metadata.confirmationId);
-      if (!confirmationId) continue;
-      const source = asText(metadata.source);
-      if (
-        source === "mcp_tool_confirmation_approved" ||
-        source === "mcp_tool_confirmation_rejected" ||
-        source === "mcp_tool_confirmation_followup"
-      ) {
-        ids.add(confirmationId);
-      }
-    }
-    return Array.from(ids);
+    return resolveHandledGoogleConfirmationIds(
+      messages,
+      handledGoogleConfirmationIds,
+    );
   }, [handledGoogleConfirmationIds, messages]);
 
   useEffect(() => {
@@ -8347,12 +8390,14 @@ function OpencodeToolCard({
   );
 
   if (
-    googleConfirmation &&
-    !hiddenGoogleConfirmationIds?.includes(googleConfirmation.confirmationId)
+    shouldRenderGoogleWorkspaceConfirmation({
+      confirmation: googleConfirmation,
+      hiddenConfirmationIds: hiddenGoogleConfirmationIds,
+    })
   ) {
     return (
       <GoogleWorkspaceConfirmationPanel
-        confirmation={googleConfirmation}
+        confirmation={googleConfirmation!}
         currentSessionId={currentSessionId}
         compact
         onApprove={onApproveGoogleWorkspaceConfirmation}
@@ -9124,12 +9169,14 @@ function ManagedActivityToolRow({
   const statusUi = getManagedToolStatusPresentation(item.status);
 
   if (
-    googleConfirmation &&
-    !hiddenGoogleConfirmationIds?.includes(googleConfirmation.confirmationId)
+    shouldRenderGoogleWorkspaceConfirmation({
+      confirmation: googleConfirmation,
+      hiddenConfirmationIds: hiddenGoogleConfirmationIds,
+    })
   ) {
     return (
       <GoogleWorkspaceConfirmationPanel
-        confirmation={{ ...googleConfirmation, agentRunId: item.runId }}
+        confirmation={{ ...googleConfirmation!, agentRunId: item.runId }}
         currentSessionId={currentSessionId}
         compact
         onApprove={onApproveGoogleWorkspaceConfirmation}
@@ -9394,12 +9441,14 @@ function ManagedToolCard({
   }, [isWriteFileExpanded, writeFilePreview]);
 
   if (
-    googleConfirmation &&
-    !hiddenGoogleConfirmationIds?.includes(googleConfirmation.confirmationId)
+    shouldRenderGoogleWorkspaceConfirmation({
+      confirmation: googleConfirmation,
+      hiddenConfirmationIds: hiddenGoogleConfirmationIds,
+    })
   ) {
     return (
       <GoogleWorkspaceConfirmationPanel
-        confirmation={{ ...googleConfirmation, agentRunId: item.runId }}
+        confirmation={{ ...googleConfirmation!, agentRunId: item.runId }}
         currentSessionId={currentSessionId}
         onApprove={onApproveGoogleWorkspaceConfirmation}
         onReject={onRejectGoogleWorkspaceConfirmation}
@@ -9946,11 +9995,17 @@ function readManagedToolViewProjection(metadataRaw: unknown) {
 
 function readGoogleWorkspaceConfirmation(metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
-  return toGoogleWorkspaceConfirmationView(
+  const confirmation = toGoogleWorkspaceConfirmationView(
     extractGoogleWorkspaceConfirmationPayload(
       parseManagedToolOutputPreview(metadata.outputPreview),
     ),
   );
+  if (!confirmation) return null;
+  const statuses = toRecord(metadata.mcpToolConfirmationStatuses);
+  return {
+    ...confirmation,
+    status: normalizeMcpConfirmationStatus(statuses[confirmation.confirmationId]),
+  };
 }
 
 function readGoogleWorkspaceConfirmationFromOpencodeEvent(input: {
@@ -9969,7 +10024,15 @@ function readGoogleWorkspaceConfirmationFromOpencodeEvent(input: {
     input.output,
     input.content,
   ]);
-  return toGoogleWorkspaceConfirmationView(payload);
+  const confirmation = toGoogleWorkspaceConfirmationView(payload);
+  if (!confirmation) return null;
+  const statuses = toRecord(input.metadata?.mcpToolConfirmationStatuses);
+  return {
+    ...confirmation,
+    status:
+      normalizeMcpConfirmationStatus(statuses[confirmation.confirmationId]) ||
+      normalizeMcpConfirmationStatus(toRecord(payload).status),
+  };
 }
 
 function extractGoogleWorkspaceConfirmationPayload(
@@ -10048,6 +10111,7 @@ function toGoogleWorkspaceConfirmationView(
     target: asText(summary.target),
     impact: asText(summary.impact),
     parameterSummary: toRecord(summary.parameterSummary),
+    status: normalizeMcpConfirmationStatus(direct.status),
   };
 }
 

@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull } from 'drizzle-orm';
 import { db } from '../../config/database';
 import {
   taskSessionMcpToolConfirmations,
@@ -20,6 +20,17 @@ export class TaskSessionMcpToolConfirmationDAO {
       .where(eq(taskSessionMcpToolConfirmations.id, id))
       .limit(1);
     return row;
+  }
+
+  async listByIds(ids: string[]) {
+    const normalizedIds = Array.from(
+      new Set(ids.map((id) => id.trim()).filter(Boolean))
+    );
+    if (normalizedIds.length === 0) return [];
+    return db
+      .select()
+      .from(taskSessionMcpToolConfirmations)
+      .where(inArray(taskSessionMcpToolConfirmations.id, normalizedIds));
   }
 
   async getByTokenHash(tokenHash: string) {

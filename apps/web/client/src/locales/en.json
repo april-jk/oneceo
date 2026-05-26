@@ -923,7 +923,8 @@
     "title": "Task complete",
     "generatedCount": "{{count}} final deliverables generated",
     "downloadFailed": "Failed to download deliverable",
-    "download": "Download"
+    "download": "Download",
+    "viewAllFiles": "View all files in this task"
   },
   "deploymentPrompts": {
     "deploy": "Help me deploy the current project",

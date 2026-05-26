@@ -7270,6 +7270,9 @@ function MessageBubble({
         <TaskDeliverableCard
           sessionId={item.sessionId}
           deliverables={item.deliverables}
+          onOpenFiles={() =>
+            onOpenManagedReplay?.(item.runId, { view: "files" })
+          }
         />
       </div>
     );

@@ -143,6 +143,46 @@ test('runtime context uses stable current date instead of per-turn timestamp', (
   assert.doesNotMatch(prompt, /Current time:/);
 });
 
+test('runtime context injects PPT generation contract only for PPT tasks', () => {
+  const pptProfile = deriveManagedTaskIntentProfile([
+    '帮我分析一下沐曦股份，做个 ppt',
+    [
+      '已确认需求（结构化澄清选择）',
+      '- 演示目的与受众：内部高管战略汇报',
+      '- 内容来源与可信度：官网、公告、权威媒体优先',
+      '- 深度与页数：12-15 页标准版',
+      '- 视觉与叙事风格：科技投研风',
+    ].join('\n'),
+  ]);
+  const pptPrompt = altusManagedPromptService.buildRuntimeContextPrompt({
+    sessionId: 'session-ppt-context',
+    sessionTitle: 'ppt context',
+    workspaceRoot: '/workspace/session-ppt-context',
+    connectors: [],
+    taskIntentProfile: {
+      ...pptProfile,
+      needsClarification: false,
+      clarificationType: 'none',
+      clarificationQuestion: '',
+    },
+  });
+
+  assert.match(pptPrompt, /# PPT generation contract/);
+  assert.match(pptPrompt, /Deck archetype: internal_strategy_review/);
+  assert.match(pptPrompt, /decision_options/);
+  assert.doesNotMatch(pptPrompt, /ask_or_use_of_funds/);
+
+  const nonPptPrompt = altusManagedPromptService.buildRuntimeContextPrompt({
+    sessionId: 'session-web-context',
+    sessionTitle: 'web context',
+    workspaceRoot: '/workspace/session-web-context',
+    connectors: [],
+    taskIntentProfile: deriveManagedTaskIntentProfile(['请帮我做一个企业官网']),
+  });
+
+  assert.doesNotMatch(nonPptPrompt, /# PPT generation contract/);
+});
+
 test('managed prompt defaults debug and testing to Playwright on the same n.eko browser', () => {
   const prompt = altusManagedPromptService.buildSystemPrompt({
     sessionId: 'session-debug-tool-choice',

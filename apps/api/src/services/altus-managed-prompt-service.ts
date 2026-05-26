@@ -3,6 +3,7 @@ import type { SessionConnectorStatus } from './session-connector-service';
 import { classifyTaskIntentShape, type TaskClarificationType } from './task-intent-shape-service';
 import { altusManagedDynamicContextBlockService } from './altus-managed-dynamic-context-blocks';
 import type { StructuredClarificationCardPlan } from './altus-structured-clarification-service';
+import { derivePptGenerationContext, renderPptGenerationContext } from './ppt-archetype-routing-service';
 import {
   classifyPlatformCapabilityIntent,
   type PlatformCapabilityIntentDecision,
@@ -977,6 +978,13 @@ export class AltusManagedPromptService {
           ? [`- Accepted assumptions: ${profile.clarificationTransition.assumptions.join(' | ')}`]
           : [])
       );
+    }
+
+    if (profile && !profile.needsClarification) {
+      const pptGenerationContext = derivePptGenerationContext(profile.recentUserMessages || []);
+      if (pptGenerationContext) {
+        lines.push('', renderPptGenerationContext(pptGenerationContext));
+      }
     }
 
     if (profile && !profile.needsClarification) {

@@ -175,3 +175,8 @@
 - 做了什么：根据竞品对比反馈，新增 `20260527_PPT任务作用域Archetype路由与质量增强方案_[20260527-0015已采用].md`，明确 PPT 质量提升应采用 task-scoped module，而不是污染 Altus 全局 Agent。
 - 关键决策：不默认投资路演；先路由 Deck Archetype，再组合通用 Slide Archetype Library、Evidence-First Research Plan、Style Kit 与 PPT 专用 QA。
 - 后续计划：文档提交后进入代码实现，优先落第一阶段低风险 prompt/context 增强，并用测试确保非 PPT 任务不可见。
+
+## PPT Archetype 路由第一阶段实现
+- 做了什么：新增 `ppt-archetype-routing-service`，在 PPT confirmed brief 后生成 Deck Archetype、推荐页面原型、证据问题和 style kit 要求，并只通过 runtime context 注入当前 PPT run。
+- 边界控制：非 PPT 任务不会出现 `# PPT generation contract`；内部战略汇报不会套用投资路演的 `ask_or_use_of_funds` 页面。
+- 验证：`ppt-archetype-routing-service.test.ts` 与 `altus-managed-prompt-service.test.ts` 定向测试通过，API 类型检查与 `git diff --check` 通过。

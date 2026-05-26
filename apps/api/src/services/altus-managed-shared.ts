@@ -859,8 +859,53 @@ export function buildManagedToolDefinitions() {
             clarificationType: {
               type: 'string',
               description:
-                'Optional structured missing-requirement field: artifact_type, tech_stack, scope_boundary, integration_target, or acceptance_requirement.',
+                'Optional structured missing-requirement field: artifact_type, tech_stack, scope_boundary, integration_target, acceptance_requirement, or presentation_brief.',
             },
+            structuredClarification: objectSchema(
+              {
+                kind: { type: 'string', description: 'Must be structured_clarification.' },
+                taskType: { type: 'string', description: 'ppt, report, website, or generic.' },
+                title: { type: 'string', description: 'Short title for the choice-card flow.' },
+                summary: { type: 'string', description: 'Short reason for this clarification.' },
+                maxCards: { type: 'integer', description: 'Maximum card count. Must be 4 or less.' },
+                cards: {
+                  type: 'array',
+                  description: 'At most 4 cards, each asking one decision.',
+                  items: objectSchema(
+                    {
+                      id: { type: 'string' },
+                      title: { type: 'string' },
+                      question: { type: 'string' },
+                      why: { type: 'string' },
+                      selectionMode: { type: 'string', enum: ['single', 'multiple'] },
+                      required: { type: 'boolean' },
+                      allowOther: { type: 'boolean' },
+                      allowNote: { type: 'boolean' },
+                      notePlaceholder: { type: 'string' },
+                      options: {
+                        type: 'array',
+                        items: objectSchema(
+                          {
+                            id: { type: 'string' },
+                            label: { type: 'string' },
+                            description: { type: 'string' },
+                            impact: { type: 'string' },
+                            recommended: { type: 'boolean' },
+                          },
+                          ['id', 'label']
+                        ),
+                      },
+                    },
+                    ['id', 'title', 'question', 'selectionMode', 'options']
+                  ),
+                },
+                briefFields: {
+                  type: 'array',
+                  items: { type: 'string' },
+                },
+              },
+              ['kind', 'taskType', 'title', 'cards']
+            ),
           },
           ['question']
         ),

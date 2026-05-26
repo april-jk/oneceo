@@ -43,6 +43,63 @@ test('managed prompt treats task grading as descriptive language and uses taskIn
   assert.match(prompt, /After a clarification answer arrives, reassess the request from scratch/i);
 });
 
+test('managed prompt requires structured ask_user cards for presentation brief clarification', () => {
+  const profile = deriveManagedTaskIntentProfile(['帮我分析一下沐曦股份，做个 ppt']);
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-ppt-structured-clarification',
+    sessionTitle: 'ppt clarification',
+    workspaceRoot: '/workspace/session-ppt-structured-clarification',
+    connectors: [],
+    taskIntentProfile: {
+      ...profile,
+      needsClarification: true,
+      clarificationType: 'presentation_brief',
+      clarificationQuestion: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+      structuredClarification: {
+        kind: 'structured_clarification',
+        taskType: 'ppt',
+        title: '生成 PPT 前确认 4 个关键决策',
+        summary: '先确认关键 brief。',
+        maxCards: 4,
+        briefFields: ['purpose_audience'],
+        cards: [
+          {
+            id: 'purpose_audience',
+            title: '演示目的与受众',
+            question: '这份 PPT 主要给谁看？',
+            why: '决定叙事角度',
+            selectionMode: 'single',
+            required: true,
+            allowOther: true,
+            allowNote: true,
+            options: [
+              {
+                id: 'investor_pitch',
+                label: '投资人融资路演',
+                description: '强调投资价值',
+                impact: '突出市场和融资用途。',
+                recommended: true,
+              },
+              {
+                id: 'executive_strategy',
+                label: '内部高管战略汇报',
+                description: '强调战略判断',
+                impact: '突出风险和资源投入。',
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  assert.match(prompt, /Structured clarification card contract/);
+  assert.match(prompt, /Your next action must be `ask_user`/);
+  assert.match(prompt, /at most 4 cards/);
+  assert.match(prompt, /structuredClarification/);
+  assert.match(prompt, /演示目的与受众/);
+});
+
 test('managed prompt explicitly skips pre-execution todo for simple tasks when taskIntentProfile says no', () => {
   const prompt = altusManagedPromptService.buildSystemPrompt({
     sessionId: 'session-simple-task-test',

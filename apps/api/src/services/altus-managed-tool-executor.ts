@@ -131,10 +131,17 @@ export class AltusManagedToolExecutor {
           args: eventArgs,
           content: result.question,
           contentForUser: result.question,
+          result: result.structuredClarification
+            ? { structuredClarification: result.structuredClarification }
+            : undefined,
           activatedSkills: result.activatedSkills as any,
         });
         traceToolCallComplete(toolTrace, {
-          responseBody: { type: 'ask_user', question: result.question },
+          responseBody: {
+            type: 'ask_user',
+            question: result.question,
+            structuredClarification: result.structuredClarification,
+          },
           completedAt: new Date(),
           durationMs: Date.now() - toolStartedAt.getTime(),
         });

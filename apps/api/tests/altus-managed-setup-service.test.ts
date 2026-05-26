@@ -341,6 +341,55 @@ test('buildTaskIntentProfile keeps trivial single-point tasks off the todo path'
   assert.equal(profile.clarificationType, 'none');
 });
 
+test('buildTaskIntentProfile requests structured presentation brief for vague PPT tasks', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我分析一下沐曦股份，做个 ppt',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => null as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-ppt-brief',
+    '帮我分析一下沐曦股份，做个 ppt',
+    'user_input'
+  );
+
+  assert.equal(profile.needsClarification, true);
+  assert.equal(profile.clarificationType, 'presentation_brief');
+  assert.equal(profile.structuredClarification?.kind, 'structured_clarification');
+  assert.equal(profile.structuredClarification?.cards.length, 4);
+  for (const card of profile.structuredClarification?.cards || []) {
+    assert.ok(card.options.length >= 2 && card.options.length <= 4);
+    assert.equal(card.options.filter((option) => option.recommended).length, 1);
+  }
+});
+
+test('buildTaskIntentProfile does not request presentation cards when user asks to use defaults', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我分析一下沐曦股份，直接按默认做一个 12 页 ppt，不要问',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => null as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-ppt-defaults',
+    '帮我分析一下沐曦股份，直接按默认做一个 12 页 ppt，不要问',
+    'user_input'
+  );
+
+  assert.notEqual(profile.clarificationType, 'presentation_brief');
+});
+
 test('buildTaskIntentProfile requires blueprint todo for new deployable web app tasks', async () => {
   mock.method(taskCreationSessionDAO, 'getMessages', async () => [
     {

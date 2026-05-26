@@ -3677,6 +3677,7 @@ export default function Home() {
                   onRejectGoogleWorkspaceConfirmation={
                     rejectGoogleWorkspaceConfirmation
                   }
+                  onSubmitStructuredClarification={handleAnswerQuestion}
                 />
               ))}
             </AnimatePresence>
@@ -4563,6 +4564,37 @@ function NoticeMessage({
   );
 }
 
+type StructuredClarificationOption = {
+  id: string;
+  label: string;
+  description?: string;
+  impact?: string;
+  recommended?: boolean;
+};
+
+type StructuredClarificationCard = {
+  id: string;
+  title: string;
+  question: string;
+  why?: string;
+  selectionMode: "single" | "multiple";
+  required?: boolean;
+  options: StructuredClarificationOption[];
+  allowOther?: boolean;
+  allowNote?: boolean;
+  notePlaceholder?: string;
+};
+
+type StructuredClarificationCardPlan = {
+  kind: "structured_clarification";
+  taskType: "ppt" | "report" | "website" | "generic";
+  title: string;
+  summary?: string;
+  maxCards: 4;
+  cards: StructuredClarificationCard[];
+  briefFields?: string[];
+};
+
 export type ChatItem =
   | {
       kind: "user";
@@ -4582,6 +4614,12 @@ export type ChatItem =
   | {
       kind: "clarification_notice";
       text: string;
+      messageKey?: string;
+    }
+  | {
+      kind: "structured_clarification";
+      question: string;
+      plan: StructuredClarificationCardPlan;
       messageKey?: string;
     }
   | {
@@ -5956,6 +5994,18 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       flushProgress();
       const question =
         message.question || i18n.t("homeWorkspace.provideMoreInfo");
+      const structuredClarification = readStructuredClarificationPlan(
+        message.metadata,
+      );
+      if (structuredClarification) {
+        items.push({
+          kind: "structured_clarification",
+          question,
+          plan: structuredClarification,
+          messageKey: message.messageKey,
+        });
+        continue;
+      }
       const previousMessage = index > 0 ? messages[index - 1] : null;
       const previousContent =
         previousMessage?.type === "agent_message"
@@ -6919,6 +6969,218 @@ function CodexExplanationMessage({
   );
 }
 
+function StructuredClarificationCardFlow({
+  item,
+  onSubmit,
+}: {
+  item: Extract<ChatItem, { kind: "structured_clarification" }>;
+  onSubmit?: (answer: string) => void;
+}) {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [answers, setAnswers] = useState<
+    Record<string, { selected: string[]; other: string; note: string; skipped?: boolean }>
+  >({});
+  const cards = item.plan.cards.slice(0, 4);
+  const activeCard = cards[Math.min(activeIndex, Math.max(0, cards.length - 1))];
+  const progress = cards.length > 0 ? Math.round(((activeIndex + 1) / cards.length) * 100) : 0;
+
+  if (!activeCard) return null;
+
+  const currentAnswer = answers[activeCard.id] || {
+    selected: activeCard.options.find((option) => option.recommended)?.id
+      ? [activeCard.options.find((option) => option.recommended)!.id]
+      : [],
+    other: "",
+    note: "",
+  };
+
+  const updateAnswer = (patch: Partial<typeof currentAnswer>) => {
+    setAnswers((current) => ({
+      ...current,
+      [activeCard.id]: {
+        ...currentAnswer,
+        ...patch,
+      },
+    }));
+  };
+
+  const toggleOption = (optionId: string) => {
+    if (activeCard.selectionMode === "multiple") {
+      const selected = currentAnswer.selected.includes(optionId)
+        ? currentAnswer.selected.filter((id) => id !== optionId)
+        : [...currentAnswer.selected, optionId];
+      updateAnswer({ selected, skipped: false });
+      return;
+    }
+    updateAnswer({ selected: [optionId], skipped: false });
+  };
+
+  const buildSubmittedBrief = (finalAnswers: typeof answers) => {
+    const lines = [
+      "已确认 PPT 需求（结构化澄清选择）",
+      `来源：${item.plan.title}`,
+      "",
+    ];
+    for (const card of cards) {
+      const answer = finalAnswers[card.id];
+      if (!answer || answer.skipped) {
+        lines.push(`- ${card.title}：跳过，按推荐默认处理`);
+        continue;
+      }
+      const selectedLabels = answer.selected
+        .map((id) => card.options.find((option) => option.id === id)?.label)
+        .filter(Boolean);
+      const extra = [answer.other, answer.note].map((value) => value.trim()).filter(Boolean);
+      lines.push(
+        `- ${card.title}：${[...selectedLabels, ...extra].join("；") || "按推荐默认处理"}`,
+      );
+    }
+    lines.push("");
+    lines.push("请基于以上 confirmed brief 先规划，再执行 PPT 工作流。");
+    return lines.join("\n");
+  };
+
+  const goNext = (skip = false) => {
+    const nextAnswers = {
+      ...answers,
+      [activeCard.id]: {
+        ...currentAnswer,
+        skipped: skip,
+        selected: skip ? [] : currentAnswer.selected,
+      },
+    };
+    setAnswers(nextAnswers);
+    if (activeIndex < cards.length - 1) {
+      setActiveIndex((value) => value + 1);
+      return;
+    }
+    onSubmit?.(buildSubmittedBrief(nextAnswers));
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2 }}
+      className="w-full"
+      data-message-key={item.messageKey}
+    >
+      <div className="overflow-hidden rounded-xl border border-border/80 bg-card/95">
+        <div className="flex items-start justify-between gap-3 border-b border-border/70 px-4 py-3">
+          <div className="min-w-0">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+              需求确认
+            </div>
+            <div className="mt-1 text-sm font-semibold text-foreground">
+              {activeCard.title}
+            </div>
+            {activeCard.why ? (
+              <div className="mt-1 text-xs leading-5 text-muted-foreground">
+                {activeCard.why}
+              </div>
+            ) : null}
+          </div>
+          <div className="shrink-0 text-right">
+            <div className="text-[11px] font-semibold text-muted-foreground">
+              第 {activeIndex + 1} / {cards.length} 项
+            </div>
+            <div className="mt-1 text-[11px] font-semibold text-muted-foreground">
+              {progress}%
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-3 px-4 py-4">
+          <div className="text-sm font-medium leading-6 text-foreground">
+            {activeCard.question}
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            {activeCard.options.map((option) => {
+              const selected = currentAnswer.selected.includes(option.id);
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => toggleOption(option.id)}
+                  className={`min-h-[64px] rounded-lg border px-3 py-2 text-left transition ${
+                    selected
+                      ? "border-ring bg-primary/5 shadow-[0_0_0_2px_rgba(9,105,218,0.10)]"
+                      : "border-border/70 bg-background/80 hover:bg-muted/40"
+                  }`}
+                >
+                  <div className="flex items-start gap-2">
+                    <span
+                      className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
+                        selected ? "border-primary bg-primary text-primary-foreground" : "border-border"
+                      }`}
+                    >
+                      {selected ? <Check className="h-3 w-3" /> : null}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-2 text-[13px] font-semibold text-foreground">
+                        {option.label}
+                        {option.recommended ? (
+                          <span className="rounded-full border border-border/70 bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                            推荐
+                          </span>
+                        ) : null}
+                      </span>
+                      {option.description ? (
+                        <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                          {option.description}
+                        </span>
+                      ) : null}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="grid gap-2 md:grid-cols-2">
+            {activeCard.allowOther !== false ? (
+              <input
+                value={currentAnswer.other}
+                onChange={(event) => updateAnswer({ other: event.target.value, skipped: false })}
+                placeholder="其他选择或约束"
+                className="h-9 rounded-lg border border-border/70 bg-background/85 px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/15"
+              />
+            ) : null}
+            {activeCard.allowNote !== false ? (
+              <input
+                value={currentAnswer.note}
+                onChange={(event) => updateAnswer({ note: event.target.value, skipped: false })}
+                placeholder={activeCard.notePlaceholder || "补充说明（可选）"}
+                className="h-9 rounded-lg border border-border/70 bg-background/85 px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/15"
+              />
+            ) : null}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-border/70 px-4 py-3">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 rounded-lg px-3 text-xs font-semibold"
+            onClick={() => goNext(true)}
+          >
+            跳过
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            className="h-8 rounded-lg px-4 text-xs font-semibold"
+            onClick={() => goNext(false)}
+          >
+            {activeIndex < cards.length - 1 ? "下一项" : "完成确认"}
+          </Button>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 function MessageBubble({
   item,
   onOpenDiffPreview,
@@ -6929,6 +7191,7 @@ function MessageBubble({
   hiddenGoogleConfirmationIds,
   onApproveGoogleWorkspaceConfirmation,
   onRejectGoogleWorkspaceConfirmation,
+  onSubmitStructuredClarification,
 }: {
   item: ChatItem;
   onOpenDiffPreview?: (options?: {
@@ -6954,6 +7217,7 @@ function MessageBubble({
   onRejectGoogleWorkspaceConfirmation?: (
     confirmation: GoogleWorkspaceConfirmationView,
   ) => Promise<void> | void;
+  onSubmitStructuredClarification?: (answer: string) => void;
 }) {
   if (item.kind === "opencode_turn") {
     return (
@@ -7121,6 +7385,15 @@ function MessageBubble({
           <span>{item.text}</span>
         </div>
       </motion.div>
+    );
+  }
+
+  if (item.kind === "structured_clarification") {
+    return (
+      <StructuredClarificationCardFlow
+        item={item}
+        onSubmit={onSubmitStructuredClarification}
+      />
     );
   }
 
@@ -7478,6 +7751,76 @@ function toRecord(value: unknown): Record<string, unknown> {
 
 function asText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function readStructuredClarificationPlan(
+  metadataRaw: unknown,
+): StructuredClarificationCardPlan | null {
+  const metadata = toRecord(metadataRaw);
+  const rawPlan =
+    toRecord(metadata.structuredClarification).kind === "structured_clarification"
+      ? metadata.structuredClarification
+      : toRecord(toRecord(metadata.result).structuredClarification).kind ===
+          "structured_clarification"
+        ? toRecord(metadata.result).structuredClarification
+        : null;
+  const plan = toRecord(rawPlan);
+  if (plan.kind !== "structured_clarification") return null;
+  const cards = (Array.isArray(plan.cards) ? plan.cards : [])
+    .map((rawCard) => {
+      const card = toRecord(rawCard);
+      const options = (Array.isArray(card.options) ? card.options : [])
+        .map((rawOption) => {
+          const option = toRecord(rawOption);
+          const id = asText(option.id);
+          const label = asText(option.label);
+          if (!id || !label) return null;
+          return {
+            id,
+            label,
+            description: asText(option.description),
+            impact: asText(option.impact),
+            recommended: Boolean(option.recommended),
+          } satisfies StructuredClarificationOption;
+        })
+        .filter((item) => Boolean(item)) as StructuredClarificationOption[];
+      const limitedOptions = options.slice(0, 4);
+      const id = asText(card.id);
+      const title = asText(card.title);
+      const question = asText(card.question);
+      if (!id || !title || !question || limitedOptions.length < 2) return null;
+      return {
+        id,
+        title,
+        question,
+        why: asText(card.why),
+        selectionMode: asText(card.selectionMode) === "multiple" ? "multiple" : "single",
+        required: card.required !== false,
+        options: limitedOptions,
+        allowOther: card.allowOther !== false,
+        allowNote: card.allowNote !== false,
+        notePlaceholder: asText(card.notePlaceholder),
+      } satisfies StructuredClarificationCard;
+    })
+    .filter((item) => Boolean(item)) as StructuredClarificationCard[];
+  const limitedCards = cards.slice(0, 4);
+  if (limitedCards.length === 0) return null;
+  return {
+    kind: "structured_clarification",
+    taskType:
+      plan.taskType === "report" ||
+      plan.taskType === "website" ||
+      plan.taskType === "generic"
+        ? plan.taskType
+        : "ppt",
+    title: asText(plan.title) || "补充关键需求",
+    summary: asText(plan.summary),
+    maxCards: 4,
+    cards: limitedCards,
+    briefFields: Array.isArray(plan.briefFields)
+      ? plan.briefFields.map((item) => asText(item)).filter(Boolean)
+      : limitedCards.map((card) => card.id),
+  };
 }
 
 function isHiddenMcpConfirmationUserMessage(

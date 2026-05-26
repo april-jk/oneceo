@@ -18,6 +18,7 @@ export type TaskClarificationType =
   | 'scope_boundary'
   | 'integration_target'
   | 'acceptance_requirement'
+  | 'presentation_brief'
   | 'none';
 
 export type TaskTodoSignalSummary = {

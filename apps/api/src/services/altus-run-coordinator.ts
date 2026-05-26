@@ -1020,6 +1020,9 @@ private async chargeForModelCall(state: AltusRunState, input: {
   private resolvePreExecutionClarificationQuestion(state: AltusRunState) {
     const profile = state.input.taskIntentProfile;
     const question = asText(profile?.clarificationQuestion);
+    if (profile?.structuredClarification) {
+      return '';
+    }
     if (!profile?.needsClarification || !question) {
       return '';
     }
@@ -1040,6 +1043,11 @@ private async chargeForModelCall(state: AltusRunState, input: {
     return profile?.needsClarification && profile.clarificationType !== 'none'
       ? profile.clarificationType
       : undefined;
+  }
+
+  private resolvePreExecutionStructuredClarification(state: AltusRunState) {
+    const profile = state.input.taskIntentProfile;
+    return profile?.needsClarification ? profile.structuredClarification : undefined;
   }
 
   private async finalizePlainTextConversationCompletion(
@@ -1749,6 +1757,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
       question: string;
       options?: string[];
       clarificationType?: Exclude<AltusManagedTaskIntentProfile['clarificationType'], 'none'>;
+      structuredClarification?: AltusManagedTaskIntentProfile['structuredClarification'];
       toolCallId?: string;
     }
   ) {
@@ -1775,6 +1784,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
         question: input.question,
         options: input.options,
         clarificationType: input.clarificationType,
+        structuredClarification: input.structuredClarification,
         runId: state.input.runId,
         toolCallId: input.toolCallId,
       },
@@ -1789,6 +1799,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
       question: input.question,
       options: input.options,
       clarificationType: input.clarificationType,
+      structuredClarification: input.structuredClarification,
       content: input.question,
       messageKey: clarificationMessageKey,
       toolName: input.toolCallId ? 'ask_user' : undefined,
@@ -3140,6 +3151,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
               question: result.question,
               options: result.options,
               clarificationType: result.clarificationType,
+              structuredClarification: result.structuredClarification,
               toolCallId: toolCall.id,
             });
         }
@@ -3626,6 +3638,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
       if (preExecutionClarificationQuestion) {
         const preExecutionClarificationOptions = this.resolvePreExecutionClarificationOptions(state);
         const preExecutionClarificationType = this.resolvePreExecutionClarificationType(state);
+        const preExecutionStructuredClarification = this.resolvePreExecutionStructuredClarification(state);
         state.markWaitingUser();
         await this.syncLoopSnapshot(state, {
           lastTransitionReason: 'clarification_requested',
@@ -3638,6 +3651,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
           question: preExecutionClarificationQuestion,
           options: preExecutionClarificationOptions,
           clarificationType: preExecutionClarificationType,
+          structuredClarification: preExecutionStructuredClarification,
         });
         await this.lifecycleService.markWaitingUser(state);
         return;

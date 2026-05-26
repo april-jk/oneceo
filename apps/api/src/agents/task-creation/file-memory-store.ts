@@ -92,7 +92,8 @@ export interface FileSessionRecord {
     | 'tech_stack'
     | 'scope_boundary'
     | 'integration_target'
-    | 'acceptance_requirement';
+    | 'acceptance_requirement'
+    | 'presentation_brief';
   pendingAskUser?: {
     runId: string;
     toolCallId: string;

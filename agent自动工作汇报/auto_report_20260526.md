@@ -132,3 +132,9 @@
 - 做了什么：优化前端 managed 工具时间线展示，`web_search` 改为显示“正在联网搜索：{query} / 已联网搜索：{query}”，`web_extract` 改为显示“正在解析网页内容 / 已解析网页内容”，并在运行中使用旋转图标、完成后恢复静态工具图标。
 - 遇到什么：历史消息可能只保留 `rawArguments`，实时消息则优先有 `arguments`，因此展示函数需要同时兼容两类元数据来源。
 - 计划如何解决：已补充 `getManagedToolTimelineTitle` 回归测试，覆盖搜索 query、多 URL 解析、运行态与完成态文案；后续若新增联网工具，应复用同一展示入口，避免再次暴露内部 tool id。
+
+## Altus PPT 结构化澄清卡片实现
+
+- 做了什么：先提交结构化澄清卡片方案文档，再实现 PPT 模糊请求的 `presentation_brief` 澄清类型、最多 4 张选择卡 schema、Altus prompt 约束和前端对话卡片渲染。
+- 遇到什么：普通 clarification 由后端可直接发起，但 PPT 卡片需要由 Altus 模型按任务动态生成，因此实现时保留后端基线 card plan，同时让模型通过增强版 `ask_user.structuredClarification` 输出最终卡片。
+- 计划如何解决：已补充 API 与前端测试，验证模糊 PPT 请求触发结构化 brief、默认直做请求不触发、prompt 强制结构化卡片、前端能识别并渲染结构化澄清消息。

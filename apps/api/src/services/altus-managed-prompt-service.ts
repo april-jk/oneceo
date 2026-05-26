@@ -2,6 +2,7 @@ import type { ManagedSkillCatalogEntry, ManagedSkillContext } from './altus-mana
 import type { SessionConnectorStatus } from './session-connector-service';
 import { classifyTaskIntentShape, type TaskClarificationType } from './task-intent-shape-service';
 import { altusManagedDynamicContextBlockService } from './altus-managed-dynamic-context-blocks';
+import type { StructuredClarificationCardPlan } from './altus-structured-clarification-service';
 import {
   classifyPlatformCapabilityIntent,
   type PlatformCapabilityIntentDecision,
@@ -264,6 +265,7 @@ export type AltusManagedTaskIntentProfile = {
   clarificationQuestion: string;
   clarificationType: TaskClarificationType;
   clarificationOptions?: string[];
+  structuredClarification?: StructuredClarificationCardPlan;
   clarificationTransition?: {
     nextState: 'advisory' | 'ready_to_execute' | 'new_turn' | 'clarifying' | 'risk_confirmation';
     reason?: string;
@@ -566,6 +568,25 @@ export class AltusManagedPromptService {
             '',
           ].join('\n')
         : '';
+    const structuredClarificationSection =
+      includeRuntimeState &&
+      taskIntentProfile?.needsClarification &&
+      taskIntentProfile.clarificationType === 'presentation_brief' &&
+      taskIntentProfile.structuredClarification
+        ? [
+            '# Structured clarification card contract',
+            '- The current request is a PPT / presentation task that lacks enough decision-complete brief information.',
+            '- Your next action must be `ask_user`; do not call search, todowrite, render_pptx_from_instructions, shell_execute, or any execution tool first.',
+            '- Ask the user with structured choice cards, not a long free-text question.',
+            '- The card plan must contain at most 4 cards. Do not add a fifth question.',
+            '- If you adapt the cards, keep one decision per card, 2-4 options per card, and exactly one recommended option per card.',
+            '- Each option label and description must use user-facing business language, not tool names or implementation details.',
+            '- Pass the card plan in `structuredClarification` when calling `ask_user`.',
+            '- Baseline card plan you may adapt:',
+            JSON.stringify(taskIntentProfile.structuredClarification),
+            '',
+          ].join('\n')
+        : '';
     const clarificationTransitionSection =
       includeRuntimeState && taskIntentProfile?.clarificationTransition && !taskIntentProfile.needsClarification
         ? [
@@ -742,6 +763,7 @@ export class AltusManagedPromptService {
       platformCapabilityAdvisorySection,
       clarificationGateSection,
       clarificationFocusSection,
+      structuredClarificationSection,
       clarificationTransitionSection,
       todoGateSection,
       webAppFastPathSection,

@@ -38,6 +38,7 @@ import {
 } from './altus-managed-shared';
 import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-service';
 import type { TaskClarificationType } from './task-intent-shape-service';
+import type { StructuredClarificationCardPlan } from './altus-structured-clarification-service';
 import { uploadToR2 } from './r2-client';
 
 export type ManagedToolResult =
@@ -52,6 +53,7 @@ export type ManagedToolResult =
       question: string;
       options?: string[];
       clarificationType?: Exclude<TaskClarificationType, 'none'>;
+      structuredClarification?: StructuredClarificationCardPlan;
       activatedSkills?: ManagedSkillContext[];
     }
   | {
@@ -136,6 +138,71 @@ function asBoolean(value: unknown) {
   const text = asText(value).toLowerCase();
   if (!text) return false;
   return ['1', 'true', 'yes', 'on'].includes(text);
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function normalizeStructuredClarificationPlan(value: unknown): StructuredClarificationCardPlan | undefined {
+  const plan = toRecord(value);
+  if (plan.kind !== 'structured_clarification') return undefined;
+  const rawCards = Array.isArray(plan.cards) ? plan.cards : [];
+  const cards = rawCards
+    .map((rawCard) => {
+      const card = toRecord(rawCard);
+      const rawOptions = Array.isArray(card.options) ? card.options : [];
+      const options = rawOptions
+        .map((rawOption) => {
+          const option = toRecord(rawOption);
+          const id = asText(option.id);
+          const label = asText(option.label);
+          if (!id || !label) return null;
+          return {
+            id,
+            label,
+            description: asText(option.description),
+            impact: asText(option.impact),
+            recommended: Boolean(option.recommended),
+          };
+        })
+        .filter((item) => Boolean(item)) as StructuredClarificationCardPlan['cards'][number]['options'];
+      const limitedOptions = options.slice(0, 4);
+      const id = asText(card.id);
+      const title = asText(card.title);
+      const question = asText(card.question);
+      if (!id || !title || !question || limitedOptions.length < 2) return null;
+      const selectionMode: StructuredClarificationCardPlan['cards'][number]['selectionMode'] =
+        card.selectionMode === 'multiple' ? 'multiple' : 'single';
+      return {
+        id,
+        title,
+        question,
+        why: asText(card.why),
+        selectionMode,
+        required: card.required !== false,
+        options: limitedOptions,
+        allowOther: card.allowOther !== false,
+        allowNote: card.allowNote !== false,
+        notePlaceholder: asText(card.notePlaceholder),
+      } satisfies StructuredClarificationCardPlan['cards'][number];
+    })
+    .filter((item) => Boolean(item)) as StructuredClarificationCardPlan['cards'];
+  const limitedCards = cards.slice(0, 4);
+  if (limitedCards.length === 0) return undefined;
+  return {
+    kind: 'structured_clarification',
+    taskType: plan.taskType === 'report' || plan.taskType === 'website' || plan.taskType === 'generic' ? plan.taskType : 'ppt',
+    title: asText(plan.title) || '补充关键需求',
+    summary: asText(plan.summary),
+    maxCards: 4,
+    cards: limitedCards,
+    briefFields: Array.isArray(plan.briefFields)
+      ? plan.briefFields.map((item) => asText(item)).filter(Boolean).slice(0, 8)
+      : limitedCards.map((card) => card.id),
+  };
 }
 
 function asStringArray(value: unknown, maxItems: number) {
@@ -2833,15 +2900,18 @@ export class AltusManagedToolRuntime {
         clarificationType === 'tech_stack' ||
         clarificationType === 'scope_boundary' ||
         clarificationType === 'integration_target' ||
-        clarificationType === 'acceptance_requirement'
+        clarificationType === 'acceptance_requirement' ||
+        clarificationType === 'presentation_brief'
           ? clarificationType
           : undefined;
+      const structuredClarification = normalizeStructuredClarificationPlan(rawArgs.structuredClarification);
       return {
         type: 'ask_user',
         activatedSkills,
         question,
         options: options.length > 0 ? options : undefined,
         clarificationType: normalizedClarificationType,
+        structuredClarification,
       };
     }
 

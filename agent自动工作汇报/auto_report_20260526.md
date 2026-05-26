@@ -138,3 +138,7 @@
 - 做了什么：先提交结构化澄清卡片方案文档，再实现 PPT 模糊请求的 `presentation_brief` 澄清类型、最多 4 张选择卡 schema、Altus prompt 约束和前端对话卡片渲染。
 - 遇到什么：普通 clarification 由后端可直接发起，但 PPT 卡片需要由 Altus 模型按任务动态生成，因此实现时保留后端基线 card plan，同时让模型通过增强版 `ask_user.structuredClarification` 输出最终卡片。
 - 计划如何解决：已补充 API 与前端测试，验证模糊 PPT 请求触发结构化 brief、默认直做请求不触发、prompt 强制结构化卡片、前端能识别并渲染结构化澄清消息。
+## PPT 结构化澄清卡片历史消息修复
+- 问题：PPT 预执行澄清已经写入 `structuredClarification`，但 `/sessions/:id/messages` 返回前的 metadata 白名单没有放行该字段，刷新/历史恢复后前端只能渲染普通“需要补充信息”文本。
+- 处理：在 `apps/api/src/routes/task-creation-routes.ts` 放行 `question`、`options`、`clarificationType`、`structuredClarification`，并补充路由回归测试验证 PPT 卡片 metadata 不被裁掉。
+- 验证：新增路由单测、现有前端澄清渲染测试、API/Web 类型检查、`git diff --check` 均通过。

@@ -6072,7 +6072,7 @@ function getManagedActivityTitle(
     if (item.kind === "managed_status" && item.text.trim()) return item.text;
     if (item.kind === "managed_tool" && item.toolName !== "complete_task") {
       return (
-        getManagedToolPurposeSummary(item.toolName, item.metadata) ||
+        getManagedToolTimelineTitle(item.toolName, item.metadata, item.status) ||
         item.summary?.trim() ||
         getManagedToolDisplayName(item.toolName) ||
         i18n.t("homeWorkspace.toolCall")
@@ -8955,9 +8955,15 @@ function getManagedToolIcon(toolName: string): LucideIcon {
   if (toolName === "write_file") return FilePenLine;
   if (toolName === "read_file") return FileText;
   if (toolName === "search_code") return Search;
+  if (toolName === "web_search") return Search;
+  if (toolName === "web_extract") return FileSearch;
   if (toolName === "list_directory") return FolderSearch2;
   if (toolName === "ask_user") return Sparkles;
   return FileSearch;
+}
+
+function isManagedWebResearchTool(toolName: string) {
+  return toolName === "web_search" || toolName === "web_extract";
 }
 
 function ManagedActivityGroup({
@@ -9097,9 +9103,12 @@ function ManagedActivityToolRow({
   ) => Promise<void> | void;
 }) {
   const Icon = getManagedToolIcon(item.toolName);
+  const isWebToolRunning =
+    item.status === "running" && isManagedWebResearchTool(item.toolName);
+  const RowIcon = isWebToolRunning ? Loader2 : Icon;
   const googleConfirmation = readGoogleWorkspaceConfirmation(item.metadata);
   const title =
-    getManagedToolPurposeSummary(item.toolName, item.metadata) ||
+    getManagedToolTimelineTitle(item.toolName, item.metadata, item.status) ||
     item.summary?.trim() ||
     getManagedToolDisplayName(item.toolName);
   const statusUi = getManagedToolStatusPresentation(item.status);
@@ -9136,7 +9145,9 @@ function ManagedActivityToolRow({
           <span
             className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md ${statusUi.iconClass}`}
           >
-            <Icon className="h-3.5 w-3.5" />
+            <RowIcon
+              className={`h-3.5 w-3.5 ${isWebToolRunning ? "animate-spin" : ""}`}
+            />
           </span>
           <span className="truncate text-[13px] text-muted-foreground" title={title}>
             {title}
@@ -9327,6 +9338,12 @@ function ManagedToolCard({
 }) {
   const displayName = getManagedToolDisplayName(item.toolName);
   const Icon = getManagedToolIcon(item.toolName);
+  const isWebToolRunning =
+    item.status === "running" && isManagedWebResearchTool(item.toolName);
+  const ToolIcon = isWebToolRunning ? Loader2 : Icon;
+  const timelineTitle =
+    getManagedToolTimelineTitle(item.toolName, item.metadata, item.status) ||
+    displayName;
   const googleConfirmation = readGoogleWorkspaceConfirmation(item.metadata);
   const statusLabel =
     item.status === "failed"
@@ -9486,7 +9503,9 @@ function ManagedToolCard({
                       <span
                         className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full shadow-sm ${statusUi.iconClass}`}
                       >
-                        <Icon className="h-3.5 w-3.5" />
+                        <ToolIcon
+                          className={`h-3.5 w-3.5 ${isWebToolRunning ? "animate-spin" : ""}`}
+                        />
                       </span>
                       <div className="min-w-0">
                         <div className="text-[12px] font-medium leading-5">
@@ -9523,11 +9542,13 @@ function ManagedToolCard({
                 <span
                   className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full shadow-sm ${statusUi.iconClass}`}
                 >
-                  <Icon className="h-3.5 w-3.5" />
+                  <ToolIcon
+                    className={`h-3.5 w-3.5 ${isWebToolRunning ? "animate-spin" : ""}`}
+                  />
                 </span>
                 <span className="min-w-0 flex items-center gap-2 overflow-hidden">
                   <span className="shrink-0 text-[11px] font-medium leading-5">
-                    {displayName}
+                    {timelineTitle}
                   </span>
                   <span
                     className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusUi.badgeClass}`}
@@ -9554,7 +9575,9 @@ function ManagedToolCard({
               <div
                 className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl shadow-sm ${statusUi.iconClass}`}
               >
-                <Icon className="h-4 w-4" />
+                <ToolIcon
+                  className={`h-4 w-4 ${isWebToolRunning ? "animate-spin" : ""}`}
+                />
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
@@ -10511,7 +10534,7 @@ export function getManagedToolPurposeSummary(
   metadataRaw: unknown,
 ) {
   const metadata = toRecord(metadataRaw);
-  const args = toRecord(metadata.arguments);
+  const args = readManagedToolArguments(metadata);
   const output = parseManagedToolOutputPreview(metadata.outputPreview);
   const progress = readManagedWriteFileProgress(metadata);
   const path = asText(args.path) || asText(output.path) || progress.path;
@@ -10555,6 +10578,14 @@ export function getManagedToolPurposeSummary(
     return "搜索项目代码";
   }
 
+  if (toolName === "web_search") {
+    return formatManagedWebSearchTitle(metadata, "idle");
+  }
+
+  if (toolName === "web_extract") {
+    return formatManagedWebExtractTitle(metadata, "idle");
+  }
+
   if (toolName === "todowrite") {
     const todos = readManagedTodoItems(metadataRaw);
     const activeTodo = todos.find((todo) => todo.status === "in_progress");
@@ -10593,6 +10624,119 @@ export function getManagedToolPurposeSummary(
   return getManagedToolDisplayName(toolName);
 }
 
+export function getManagedToolTimelineTitle(
+  toolName: string,
+  metadataRaw: unknown,
+  status?: string,
+) {
+  const phase =
+    status === "running"
+      ? "running"
+      : status === "completed"
+        ? "completed"
+        : "idle";
+  const metadata = toRecord(metadataRaw);
+  if (toolName === "web_search") {
+    return formatManagedWebSearchTitle(metadata, phase);
+  }
+  if (toolName === "web_extract") {
+    return formatManagedWebExtractTitle(metadata, phase);
+  }
+  return getManagedToolPurposeSummary(toolName, metadataRaw);
+}
+
+function readManagedToolArguments(metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const args = toRecord(metadata.arguments);
+  if (Object.keys(args).length > 0) return args;
+  const rawArguments = parseManagedToolOutputPreview(metadata.rawArguments);
+  if (Object.keys(rawArguments).length > 0) return rawArguments;
+  return {};
+}
+
+function readStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => asText(item)).filter(Boolean);
+  }
+  const text = asText(value);
+  if (!text) return [];
+  if (text.startsWith("[") && text.endsWith("]")) {
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => asText(item)).filter(Boolean);
+      }
+    } catch {
+      return [text];
+    }
+  }
+  return [text];
+}
+
+function compactManagedToolSubject(value: string, maxLength = 58) {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function formatManagedUrlSubject(url: string) {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname.replace(/^www\./, "") || url;
+  } catch {
+    return compactManagedToolSubject(url, 44);
+  }
+}
+
+function readManagedWebToolContext(metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const args = readManagedToolArguments(metadata);
+  const output = parseManagedToolOutputPreview(metadata.outputPreview);
+  const query = asText(args.query) || asText(output.query);
+  const urls = Array.from(
+    new Set([
+      ...readStringList(args.urls),
+      ...readStringList(output.urls),
+    ].filter(Boolean)),
+  );
+  return {
+    query: compactManagedToolSubject(query),
+    urls,
+    firstUrlLabel: urls[0] ? formatManagedUrlSubject(urls[0]) : "",
+  };
+}
+
+function formatManagedWebSearchTitle(
+  metadataRaw: unknown,
+  phase: "running" | "completed" | "idle",
+) {
+  const { query } = readManagedWebToolContext(metadataRaw);
+  const prefix =
+    phase === "running"
+      ? "正在联网搜索"
+      : phase === "completed"
+        ? "已联网搜索"
+        : "联网搜索";
+  return query ? `${prefix}：${query}` : `${prefix}内容`;
+}
+
+function formatManagedWebExtractTitle(
+  metadataRaw: unknown,
+  phase: "running" | "completed" | "idle",
+) {
+  const { urls, firstUrlLabel } = readManagedWebToolContext(metadataRaw);
+  const prefix =
+    phase === "running"
+      ? "正在解析网页内容"
+      : phase === "completed"
+        ? "已解析网页内容"
+        : "解析网页内容";
+  if (firstUrlLabel && urls.length > 1) {
+    return `${prefix}：${firstUrlLabel} 等 ${urls.length} 个页面`;
+  }
+  return firstUrlLabel ? `${prefix}：${firstUrlLabel}` : prefix;
+}
+
 function extractManagedArtifactPath(
   toolName: string,
   metadataRaw: unknown,
@@ -10618,6 +10762,10 @@ function getManagedToolDisplayName(toolName: string) {
       return i18n.t("homeWorkspace.listDirectory");
     case "search_code":
       return i18n.t("homeWorkspace.codeSearch");
+    case "web_search":
+      return "联网搜索";
+    case "web_extract":
+      return "解析网页内容";
     case "ask_user":
       return i18n.t("homeWorkspace.requestClarification");
     case "debug_open_page":
@@ -10732,7 +10880,7 @@ function getTodoStatusTone(status: string) {
 
 function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
-  const args = toRecord(metadata.arguments);
+  const args = readManagedToolArguments(metadata);
   const writeFileProgress = readManagedWriteFileProgress(metadata);
   const deploymentOutput = readManagedDeploymentToolOutput(metadata);
   const projectedView = readManagedToolViewProjection(metadata);
@@ -10770,6 +10918,12 @@ function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
     const query = asText(args.query);
     const target = asText(args.path);
     return [query, target ? `@ ${target}` : ""].filter(Boolean).join(" ");
+  }
+  if (toolName === "web_search") {
+    return formatManagedWebSearchTitle(metadata, "idle");
+  }
+  if (toolName === "web_extract") {
+    return formatManagedWebExtractTitle(metadata, "idle");
   }
   if (toolName === "todowrite") {
     const todos = readManagedTodoItems(metadataRaw);
@@ -10821,7 +10975,7 @@ function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
 
 function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
-  const args = toRecord(metadata.arguments);
+  const args = readManagedToolArguments(metadata);
   const output = parseManagedToolOutputPreview(metadata.outputPreview);
   const writeFileProgress = readManagedWriteFileProgress(metadata);
   const error = asText(metadata.error);
@@ -10897,6 +11051,26 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
       i18n.t("homeWorkspace.returnedSearchResults")
     );
   }
+  if (toolName === "web_search") {
+    const results = Array.isArray(output.results) ? output.results : [];
+    const titles = results
+      .map((item) => asText(toRecord(item).title) || asText(toRecord(item).url))
+      .filter(Boolean)
+      .slice(0, 4);
+    return titles.length > 0
+      ? titles.map((item) => `- ${item}`).join("\n")
+      : formatManagedWebSearchTitle(metadata, "idle");
+  }
+  if (toolName === "web_extract") {
+    const results = Array.isArray(output.results) ? output.results : [];
+    const urls = results
+      .map((item) => asText(toRecord(item).url))
+      .filter(Boolean)
+      .slice(0, 4);
+    return urls.length > 0
+      ? urls.map((item) => `- ${item}`).join("\n")
+      : formatManagedWebExtractTitle(metadata, "idle");
+  }
   if (toolName === "todowrite") {
     const todos = readManagedTodoItems(metadataRaw);
     if (todos.length === 0) {
@@ -10944,7 +11118,7 @@ function formatManagedToolInternalDetail(
 
 function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
-  const args = toRecord(metadata.arguments);
+  const args = readManagedToolArguments(metadata);
   const output = parseManagedToolOutputPreview(metadata.outputPreview);
   const writeFileProgress = readManagedWriteFileProgress(metadata);
   const error = asText(metadata.error);
@@ -11051,6 +11225,27 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
       args.path || output.path,
     );
     pushLine(i18n.t("homeWorkspace.resultPreviewLabel"), output.output);
+  } else if (toolName === "web_search") {
+    const results = Array.isArray(output.results) ? output.results : [];
+    pushLine("搜索内容", args.query || output.query);
+    pushLine("搜索深度", args.searchDepth || output.searchDepth);
+    pushLine("结果数量", results.length > 0 ? String(results.length) : "");
+    pushLine(
+      i18n.t("homeWorkspace.resultPreviewLabel"),
+      formatManagedToolPreview(toolName, metadata),
+    );
+  } else if (toolName === "web_extract") {
+    const urls = readManagedWebToolContext(metadata).urls;
+    const failedResults = Array.isArray(output.failedResults)
+      ? output.failedResults.length
+      : 0;
+    pushLine("解析网页", urls.join("\n"));
+    pushLine("解析深度", args.extractDepth || output.extractDepth);
+    pushLine("失败数量", failedResults > 0 ? String(failedResults) : "");
+    pushLine(
+      i18n.t("homeWorkspace.resultPreviewLabel"),
+      formatManagedToolPreview(toolName, metadata),
+    );
   } else if (toolName === "todowrite") {
     const todos = readManagedTodoItems(metadataRaw);
     pushLine(

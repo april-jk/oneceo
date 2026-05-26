@@ -126,3 +126,9 @@
 1. 已用真实 sandbox `i11rc53p7evpvkfxysd95` 验证命令通道可执行。
 2. 已补充 `sandbox-agent-provision-service.test.ts` 控制面瞬断分类回归。
 3. 已补充 `sandbox-debug-service.test.ts` debug host 解析瞬断复用旧 URL 回归。
+
+## Altus 联网工具时间线展示优化
+
+- 做了什么：优化前端 managed 工具时间线展示，`web_search` 改为显示“正在联网搜索：{query} / 已联网搜索：{query}”，`web_extract` 改为显示“正在解析网页内容 / 已解析网页内容”，并在运行中使用旋转图标、完成后恢复静态工具图标。
+- 遇到什么：历史消息可能只保留 `rawArguments`，实时消息则优先有 `arguments`，因此展示函数需要同时兼容两类元数据来源。
+- 计划如何解决：已补充 `getManagedToolTimelineTitle` 回归测试，覆盖搜索 query、多 URL 解析、运行态与完成态文案；后续若新增联网工具，应复用同一展示入口，避免再次暴露内部 tool id。

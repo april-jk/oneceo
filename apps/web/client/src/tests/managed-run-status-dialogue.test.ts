@@ -7,6 +7,7 @@ import {
   getManagedVisualDebugActionKey,
   getActiveManagedStatusText,
   getManagedToolPurposeSummary,
+  getManagedToolTimelineTitle,
   groupManagedActivityItems,
   resolveManagedToolReplayView,
   seedManagedVisualDebugActionKeys,
@@ -105,6 +106,32 @@ describe("managed run status dialogue", () => {
     expect(
       resolveManagedToolReplayView("get_application_deployment_status"),
     ).toBe("deployment");
+  });
+
+  it("renders web research tools with user-readable running labels", () => {
+    const searchMetadata = {
+      rawArguments: JSON.stringify({
+        query: "沐曦股份 IPO 募资用途",
+      }),
+    };
+    const extractMetadata = {
+      arguments: {
+        urls: [
+          "https://www.metax-tech.com/news/example",
+          "https://example.com/report",
+        ],
+      },
+    };
+
+    expect(
+      getManagedToolTimelineTitle("web_search", searchMetadata, "running"),
+    ).toBe("正在联网搜索：沐曦股份 IPO 募资用途");
+    expect(
+      getManagedToolTimelineTitle("web_search", searchMetadata, "completed"),
+    ).toBe("已联网搜索：沐曦股份 IPO 募资用途");
+    expect(
+      getManagedToolTimelineTitle("web_extract", extractMetadata, "running"),
+    ).toBe("正在解析网页内容：metax-tech.com 等 2 个页面");
   });
 
   it("picks the latest non-failed visual debug tool for automatic remote debug", () => {

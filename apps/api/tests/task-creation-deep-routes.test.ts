@@ -455,29 +455,6 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent prefers redis c
 test('GET /api/task-creation/sessions/:sessionId/messages/recent rejects stale redis clarification metadata', async () => {
   const server = await startServer();
   const sessionId = '5f9e1c2a-2e35-4b8d-99f1-2a9f724c67e1';
-  const structuredClarification = {
-    kind: 'structured_clarification',
-    taskType: 'ppt',
-    title: '沐曦股份 PPT 制作前确认关键决策',
-    maxCards: 4,
-    cards: [
-      {
-        id: 'purpose_audience',
-        title: '演示目的与受众',
-        question: '沐曦股份 PPT 主要给谁看？',
-        selectionMode: 'single',
-        required: true,
-        allowOther: true,
-        allowNote: false,
-        options: [
-          { id: 'investor_pitch', label: '投资人融资路演' },
-          { id: 'executive_strategy', label: '内部高管战略汇报' },
-          { id: 'brand_business_intro', label: '企业品牌与业务推介' },
-        ],
-      },
-    ],
-    briefFields: ['purpose_audience'],
-  };
   let cachedPayload: Record<string, unknown> | null = null;
   sessionDaoAny.getSession = async (sessionId: string) => ({ id: sessionId, userId: 'owner-user' });
   fileStoreAny.getSession = async (sessionId: string) => ({
@@ -524,6 +501,18 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent rejects stale r
   sessionDaoAny.replaceRecentMessagesSnapshot = async () => undefined;
   sessionDaoAny.getRecentMessages = async () => [
     {
+      id: 'message-user',
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我分析一下 沐曦股份，做个 ppt',
+      metadata: {
+        timelineCursor: 9,
+        messageKey: 'user:ppt-request',
+      },
+      timelineCursor: 9,
+      createdAt: new Date(1712099999000).toISOString(),
+    },
+    {
       id: 'message-clarification',
       role: 'agent',
       messageType: 'clarification_request',
@@ -532,7 +521,6 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent rejects stale r
         timelineCursor: 10,
         messageKey: 'managed:run-ppt:clarification',
         question: '这份 PPT 开始制作前，先确认 4 个关键决策。',
-        clarificationType: 'presentation_brief',
         eventType: 'clarification_requested',
       },
       timelineCursor: 10,
@@ -554,6 +542,18 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent rejects stale r
   ];
   sessionDaoAny.getMessages = async () => [
     {
+      id: 'message-user',
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我分析一下 沐曦股份，做个 ppt',
+      metadata: {
+        timelineCursor: 9,
+        messageKey: 'user:ppt-request',
+      },
+      timelineCursor: 9,
+      createdAt: new Date(1712099999000).toISOString(),
+    },
+    {
       id: 'message-clarification',
       role: 'agent',
       messageType: 'clarification_request',
@@ -562,8 +562,6 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent rejects stale r
         timelineCursor: 10,
         messageKey: 'managed:run-ppt:clarification',
         question: '这份 PPT 开始制作前，先确认 4 个关键决策。',
-        clarificationType: 'presentation_brief',
-        structuredClarification,
         eventType: 'clarification_requested',
       },
       timelineCursor: 10,

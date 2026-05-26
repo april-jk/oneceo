@@ -260,6 +260,8 @@ export class TaskCreationSessionDAO {
       'originalInput',
       'question',
       'options',
+      'clarificationType',
+      'structuredClarification',
       'codexRestoreStatus',
       'codexRestoreAt',
       'codexRestoreSourceKey',
@@ -659,6 +661,8 @@ export class TaskCreationSessionDAO {
           'originalInput', metadata->>'originalInput',
           'question', metadata->>'question',
           'options', metadata->'options',
+          'clarificationType', metadata->>'clarificationType',
+          'structuredClarification', metadata->'structuredClarification',
           'partId', coalesce(
             metadata->>'partId',
             metadata#>>'{event,properties,part,id}',

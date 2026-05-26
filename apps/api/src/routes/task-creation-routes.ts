@@ -76,6 +76,7 @@ import { taskCreationProjectRedisCacheService } from '../services/task-creation-
 import { taskSessionDeploymentRedisCacheService } from '../services/task-session-deployment-redis-cache-service';
 import { altusManagedRunService } from '../services/altus-managed-run-service';
 import { buildManagedMcpToolConfirmationMetadata } from '../services/managed-mcp-tool-confirmation';
+import { buildPresentationStructuredClarificationPlan } from '../services/altus-structured-clarification-service';
 import { isLegacyClientUserId, isSameUserId, normalizeUserId } from '../utils/user-id';
 
 const router = express.Router();
@@ -3123,6 +3124,39 @@ type TimelineMessage = {
   createdAt: string;
 };
 
+function isLegacyPresentationBriefClarification(input: {
+  messageType?: string | null;
+  content?: string | null;
+  metadata: Record<string, unknown>;
+}) {
+  if (input.messageType !== 'clarification_request') return false;
+  if (
+    asText(input.metadata.clarificationType) ||
+    hasStructuredClarificationMetadata({ metadata: input.metadata } as TimelineMessage)
+  ) {
+    return false;
+  }
+  const question = asText(input.metadata.question) || asText(input.content);
+  return /ppt/i.test(question) && question.includes('开始制作前') && question.includes('关键决策');
+}
+
+function hydrateLegacyPresentationBriefMetadata(input: {
+  messageType?: string | null;
+  content?: string | null;
+  metadata: Record<string, unknown>;
+  latestUserRequest?: string;
+}) {
+  if (!isLegacyPresentationBriefClarification(input)) {
+    return input.metadata;
+  }
+  const userRequest = asText(input.latestUserRequest) || asText(input.content) || asText(input.metadata.question);
+  return {
+    ...input.metadata,
+    clarificationType: 'presentation_brief',
+    structuredClarification: buildPresentationStructuredClarificationPlan({ userRequest }),
+  };
+}
+
 function mapStoredMessagesToTimeline(
   messages: Array<{
     id: string | number;
@@ -3134,44 +3168,55 @@ function mapStoredMessagesToTimeline(
     createdAt?: unknown;
   }>
 ): TimelineMessage[] {
-  return Array.isArray(messages)
-    ? messages.map((message, idx) => {
-        const sanitizedMetadata = sanitizeTimelineMetadataForClient(message.metadata);
-        const timelineCursor = asTimelineCursor(message.timelineCursor) ?? asTimelineCursor(sanitizedMetadata.timelineCursor);
-        if (timelineCursor !== null) {
-          sanitizedMetadata.timelineCursor = timelineCursor;
-        }
-        const normalizedMetadata = normalizeMessageTimelineMetadata(
-          sanitizedMetadata,
-          message.createdAt,
-          idx
-        );
-        const messageKey = buildTimelineMessageKey({
-          id: message.id,
-          messageType: message.messageType,
-          metadata: sanitizedMetadata,
-          createdAt: message.createdAt,
-        });
-        const timestamp = asTimelineCursor(normalizedMetadata.timestamp);
-        const createdAt =
-          timestamp !== null
-            ? new Date(timestamp).toISOString()
-            : toIso(message.createdAt as any);
-        return {
-          id: String(message.id),
-          messageKey,
-          role: (message.role as any) || 'agent',
-          messageType: message.messageType || 'message',
-          content: message.content || '',
-          metadata: {
-            ...normalizedMetadata,
-            messageKey,
-          },
-          timelineCursor,
-          createdAt,
-        };
-      })
-    : [];
+  if (!Array.isArray(messages)) return [];
+  let latestUserRequest = '';
+  return messages.map((message, idx) => {
+    let sanitizedMetadata = sanitizeTimelineMetadataForClient(message.metadata);
+    sanitizedMetadata = hydrateLegacyPresentationBriefMetadata({
+      messageType: message.messageType,
+      content: message.content,
+      metadata: sanitizedMetadata,
+      latestUserRequest,
+    });
+    const timelineCursor =
+      asTimelineCursor(message.timelineCursor) ?? asTimelineCursor(sanitizedMetadata.timelineCursor);
+    if (timelineCursor !== null) {
+      sanitizedMetadata.timelineCursor = timelineCursor;
+    }
+    const normalizedMetadata = normalizeMessageTimelineMetadata(
+      sanitizedMetadata,
+      message.createdAt,
+      idx
+    );
+    const messageKey = buildTimelineMessageKey({
+      id: message.id,
+      messageType: message.messageType,
+      metadata: sanitizedMetadata,
+      createdAt: message.createdAt,
+    });
+    const timestamp = asTimelineCursor(normalizedMetadata.timestamp);
+    const createdAt =
+      timestamp !== null
+        ? new Date(timestamp).toISOString()
+        : toIso(message.createdAt as any);
+    const timelineMessage = {
+      id: String(message.id),
+      messageKey,
+      role: (message.role as any) || 'agent',
+      messageType: message.messageType || 'message',
+      content: message.content || '',
+      metadata: {
+        ...normalizedMetadata,
+        messageKey,
+      },
+      timelineCursor,
+      createdAt,
+    };
+    if (timelineMessage.role === 'user' && asText(timelineMessage.content)) {
+      latestUserRequest = timelineMessage.content;
+    }
+    return timelineMessage;
+  });
 }
 
 function attachTimelineMessageKeys(

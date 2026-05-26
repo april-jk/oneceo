@@ -160,3 +160,8 @@
 - 问题：真实等待用户链路里，澄清卡片后面可能继续追加 `run_status` 等等待态消息；上一版只检查 latest message，导致卡片不是最后一条时跳过 canonical 对账，旧 recent/Redis 仍可覆盖前端卡片。
 - 处理：recent freshness 从 latest-only 改为扫描 recent 页中的澄清消息，并按 `messageKey` 与 canonical `conversation_messages` 对账；只要 canonical 卡片有 `structuredClarification` 而缓存缺失，就判定缓存过期并重建。
 - 验证：已把 stale redis clarification metadata 回归扩展为“卡片后跟 waiting_user 状态”的场景，目标 API 路由测试、API 类型检查和 `git diff --check` 通过。
+
+## PPT 澄清卡片持久化白名单修复
+- 问题：`requestClarification` 虽然传入了 `clarificationType` 与 `structuredClarification`，但 DAO 写入白名单没有保留这两个字段，导致 `conversation_messages` 事实源只剩普通问题文本；刷新时实时卡片/本地缓存会被事实源普通文本覆盖。
+- 处理：补齐 `conversation_messages` 与 recent metadata compact 白名单；同时对历史已丢字段的“PPT 开始制作前确认关键决策”澄清消息，在读取 timeline 时按上一条用户请求重建 `presentation_brief` 卡片协议。
+- 验证：补充 DAO 白名单测试、历史 PPT 澄清恢复路由测试，并扩展 recent stale 测试为 canonical 本身缺字段的场景；目标 API 测试、API 类型检查和 `git diff --check` 通过。

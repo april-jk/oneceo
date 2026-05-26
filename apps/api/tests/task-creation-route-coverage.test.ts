@@ -414,6 +414,82 @@ test('session messages preserve structured clarification metadata for PPT cards'
   }
 });
 
+test('session messages hydrate legacy PPT clarification cards from stored question', async () => {
+  const server = await startServer();
+  const sessionId = 'session-ppt-legacy-clarification-cards';
+
+  sessionDaoAny.getSession = async (id: string) => ({
+    id,
+    userId: 'owner-user',
+    title: 'PPT legacy cards',
+    status: 'waiting_user',
+    mode: 'altus',
+    executor: 'altus',
+    runtime: { executionMode: 'managed', executor: 'altus' },
+    metadataJson: {},
+  });
+  sessionDaoAny.getMessages = async () => [
+    {
+      id: 'message-user',
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我分析一下 沐曦股份，做个 ppt',
+      messageKey: 'user:ppt-request',
+      metadata: {
+        messageKey: 'user:ppt-request',
+      },
+      timelineCursor: 1,
+      createdAt: '2026-05-26T00:00:00.000Z',
+    },
+    {
+      id: 'message-clarification',
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这份 PPT 开始制作前，先确认 4 个关键决策。你可以直接选择，也可以跳过由 Altus 按推荐项处理。',
+      messageKey: 'managed:run-ppt:clarification',
+      metadata: {
+        question: '这份 PPT 开始制作前，先确认 4 个关键决策。你可以直接选择，也可以跳过由 Altus 按推荐项处理。',
+        runId: 'run-ppt',
+        eventType: 'clarification_requested',
+      },
+      timelineCursor: 2,
+      createdAt: '2026-05-26T00:00:01.000Z',
+    },
+  ];
+  fileStoreAny.getSession = async () => ({
+    id: sessionId,
+    title: 'PPT legacy cards',
+    status: 'waiting_user',
+    mode: 'altus',
+    executor: 'altus',
+    runtime: { executionMode: 'managed', executor: 'altus' },
+    messages: [],
+  });
+  fileStoreAny.getMessages = async () => [];
+  sessionDaoAny.getTaskDescription = async () => null;
+  sessionDaoAny.getRecentMessages = async () => [];
+
+  try {
+    const response = await fetch(`${server.origin}/api/task-creation/sessions/${sessionId}/messages`, {
+      headers: { 'x-test-user-id': 'owner-user' },
+    });
+    const payload = await response.json();
+    const clarification = payload.data?.find(
+      (message: any) => message?.messageType === 'clarification_request'
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(clarification?.metadata?.clarificationType, 'presentation_brief');
+    assert.equal(
+      clarification?.metadata?.structuredClarification?.kind,
+      'structured_clarification'
+    );
+    assert.match(clarification?.metadata?.structuredClarification?.title || '', /沐曦股份/);
+  } finally {
+    await server.close();
+  }
+});
+
 test('project update and delete routes persist pinned state and sync project naming', async () => {
   const server = await startServer();
   const received: string[] = [];

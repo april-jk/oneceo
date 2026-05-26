@@ -29,6 +29,12 @@ test('sanitizeTimelineMetadataForStorage preserves attachment metadata needed fo
     originalInput: '这是个什么图片',
     question: '请补充信息',
     options: ['A', 'B'],
+    clarificationType: 'presentation_brief',
+    structuredClarification: {
+      kind: 'structured_clarification',
+      taskType: 'ppt',
+      cards: [],
+    },
     unsafeField: 'drop-me',
   });
 
@@ -54,6 +60,12 @@ test('sanitizeTimelineMetadataForStorage preserves attachment metadata needed fo
     originalInput: '这是个什么图片',
     question: '请补充信息',
     options: ['A', 'B'],
+    clarificationType: 'presentation_brief',
+    structuredClarification: {
+      kind: 'structured_clarification',
+      taskType: 'ppt',
+      cards: [],
+    },
   });
 });
 

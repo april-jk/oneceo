@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { afterEach, mock, test } from 'node:test';
 import { e2bConnector } from '../src/connectors/e2b-connector';
-import { AltusManagedToolRuntime } from '../src/services/altus-managed-tool-runtime';
+import {
+  AltusManagedToolRuntime,
+  __altusManagedToolRuntimeTestHooks,
+} from '../src/services/altus-managed-tool-runtime';
 import { sandboxSkillSyncService } from '../src/services/sandbox-skill-sync-service';
 import { connectorGuideService } from '../src/services/connector-guide-service';
 import { osacAgentService } from '../src/services/osac-agent-service';
@@ -3074,4 +3077,37 @@ test('ask_user preserves structured clarification type for pending state', async
     throw new Error('expected ask_user result');
   }
   assert.equal(result.clarificationType, 'artifact_type');
+});
+
+test('ask_user attaches presentation structured clarification fallback when model omits cards', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-ask-user-presentation-brief',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-ask-user-presentation-brief',
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  const result = await runtime.execute('ask_user', {
+    question: '这份 PPT 开始制作前，先确认 4 个关键决策。你可以直接选择，也可以跳过由 Altus 按推荐项处理。',
+    clarificationType: 'presentation_brief',
+  });
+
+  assert.equal(result.type, 'ask_user');
+  if (result.type !== 'ask_user') {
+    throw new Error('expected ask_user result');
+  }
+  assert.equal(result.structuredClarification?.kind, 'structured_clarification');
+  assert.equal(result.structuredClarification?.taskType, 'ppt');
+  assert.equal(result.structuredClarification?.cards.length, 4);
+});
+
+test('ask_user detects presentation structured clarification fallback from question text', () => {
+  const plan = __altusManagedToolRuntimeTestHooks.resolveAskUserStructuredClarification({
+    question: '这份 PPT 开始制作前，先确认 4 个关键决策。你可以直接选择，也可以跳过由 Altus 按推荐项处理。',
+  });
+
+  assert.equal(plan?.kind, 'structured_clarification');
+  assert.equal(plan?.cards.length, 4);
 });

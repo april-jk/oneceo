@@ -38,7 +38,10 @@ import {
 } from './altus-managed-shared';
 import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-service';
 import type { TaskClarificationType } from './task-intent-shape-service';
-import type { StructuredClarificationCardPlan } from './altus-structured-clarification-service';
+import {
+  buildPresentationStructuredClarificationPlan,
+  type StructuredClarificationCardPlan,
+} from './altus-structured-clarification-service';
 import { uploadToR2 } from './r2-client';
 
 export type ManagedToolResult =
@@ -204,6 +207,31 @@ function normalizeStructuredClarificationPlan(value: unknown): StructuredClarifi
       : limitedCards.map((card) => card.id),
   };
 }
+
+function shouldUsePresentationStructuredClarificationFallback(input: {
+  question: string;
+  clarificationType?: Exclude<TaskClarificationType, 'none'>;
+}) {
+  if (input.clarificationType === 'presentation_brief') return true;
+  return /(?:ppt|powerpoint|slides|演示文稿)/i.test(input.question) && /4\s*个关键决策/.test(input.question);
+}
+
+function resolveAskUserStructuredClarification(input: {
+  question: string;
+  clarificationType?: Exclude<TaskClarificationType, 'none'>;
+  structuredClarification?: unknown;
+}) {
+  return (
+    normalizeStructuredClarificationPlan(input.structuredClarification) ||
+    (shouldUsePresentationStructuredClarificationFallback(input)
+      ? buildPresentationStructuredClarificationPlan()
+      : undefined)
+  );
+}
+
+export const __altusManagedToolRuntimeTestHooks = {
+  resolveAskUserStructuredClarification,
+};
 
 function asStringArray(value: unknown, maxItems: number) {
   if (!Array.isArray(value)) return [];
@@ -2904,7 +2932,11 @@ export class AltusManagedToolRuntime {
         clarificationType === 'presentation_brief'
           ? clarificationType
           : undefined;
-      const structuredClarification = normalizeStructuredClarificationPlan(rawArgs.structuredClarification);
+      const structuredClarification = resolveAskUserStructuredClarification({
+        question,
+        clarificationType: normalizedClarificationType,
+        structuredClarification: rawArgs.structuredClarification,
+      });
       return {
         type: 'ask_user',
         activatedSkills,

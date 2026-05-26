@@ -63,6 +63,20 @@
 2. `pnpm --filter web check`：通过。
 3. Playwright 真实浏览器复测 `/new-task?new=codex-fix-20260526h` 首轮发送后跳到 `/session/345687a7-6a04-4291-99af-81f9387561bc`，右侧 `Altus Actions` 自动打开。
 
+## 新建 managed 会话 Actions 默认折叠修正
+
+做了什么：
+
+1. 用户确认新建任务发送内容后进入对话记录时，右侧 Altus Actions 不应自动打开，默认必须折叠。
+2. 删除首轮发送前后设置 `previewOpen` 的自动展开意图，并移除 managed run processing/active 后对每个 session 自动打开一次的 effect。
+3. 保留 debug ready 自动切换逻辑：可视化调试页面 ready 后仍自动打开 Altus Actions 并切到 debug 视图。
+4. 更新相关设计说明：新建 managed 首轮只保证消息与 session 绑定，不再把普通 run 状态变化当成打开 Actions 的理由。
+
+验证结果：
+
+1. `pnpm --filter web exec vitest run src/tests/home-managed-workspace.test.ts`：通过。
+2. `pnpm --filter web check`：通过。
+
 ## 新建 managed 会话首轮消息区空白修复
 
 做了什么：

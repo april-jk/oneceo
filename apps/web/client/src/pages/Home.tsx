@@ -4570,6 +4570,7 @@ type StructuredClarificationOption = {
   description?: string;
   impact?: string;
   recommended?: boolean;
+  isCustom?: boolean;
 };
 
 type StructuredClarificationCard = {
@@ -6043,14 +6044,15 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         });
         continue;
       }
-      const optionLines =
-        message.options && message.options.length > 0
-          ? `\n\n${message.options.map((opt) => `- ${opt}`).join("\n")}`
-          : "";
-      pushAgentMarkdown(
-        `**${i18n.t("homeWorkspace.clarificationNeeded")}**\n\n${question}${optionLines}`,
-        message.messageKey,
-      );
+      items.push({
+        kind: "structured_clarification",
+        question,
+        plan: buildStructuredClarificationPlanFromQuestion({
+          question,
+          options: message.options,
+        }),
+        messageKey: message.messageKey,
+      });
       continue;
     }
 
@@ -7017,7 +7019,7 @@ function StructuredClarificationCardFlow({
 
   const buildSubmittedBrief = (finalAnswers: typeof answers) => {
     const lines = [
-      "已确认 PPT 需求（结构化澄清选择）",
+      "已确认需求（结构化澄清选择）",
       `来源：${item.plan.title}`,
       "",
     ];
@@ -7028,7 +7030,7 @@ function StructuredClarificationCardFlow({
         continue;
       }
       const selectedLabels = answer.selected
-        .map((id) => card.options.find((option) => option.id === id)?.label)
+        .map((id) => card.options.find((option) => option.id === id && !option.isCustom)?.label)
         .filter(Boolean);
       const extra = [answer.other, answer.note].map((value) => value.trim()).filter(Boolean);
       lines.push(
@@ -7036,11 +7038,16 @@ function StructuredClarificationCardFlow({
       );
     }
     lines.push("");
-    lines.push("请基于以上 confirmed brief 先规划，再执行 PPT 工作流。");
+    lines.push("请基于以上 confirmed brief 先规划，再执行任务。");
     return lines.join("\n");
   };
 
+  const customOption = activeCard.options.find((option) => option.isCustom);
+  const customSelected = Boolean(customOption && currentAnswer.selected.includes(customOption.id));
+  const customMissing = customSelected && !currentAnswer.other.trim();
+
   const goNext = (skip = false) => {
+    if (!skip && customMissing) return;
     const nextAnswers = {
       ...answers,
       [activeCard.id]: {
@@ -7130,6 +7137,11 @@ function StructuredClarificationCardFlow({
                           {option.description}
                         </span>
                       ) : null}
+                      {option.isCustom && selected ? (
+                        <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                          选择后填写你的答案
+                        </span>
+                      ) : null}
                     </span>
                   </div>
                 </button>
@@ -7137,24 +7149,14 @@ function StructuredClarificationCardFlow({
             })}
           </div>
 
-          <div className="grid gap-2 md:grid-cols-2">
-            {activeCard.allowOther !== false ? (
-              <input
-                value={currentAnswer.other}
-                onChange={(event) => updateAnswer({ other: event.target.value, skipped: false })}
-                placeholder="其他选择或约束"
-                className="h-9 rounded-lg border border-border/70 bg-background/85 px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/15"
-              />
-            ) : null}
-            {activeCard.allowNote !== false ? (
-              <input
-                value={currentAnswer.note}
-                onChange={(event) => updateAnswer({ note: event.target.value, skipped: false })}
-                placeholder={activeCard.notePlaceholder || "补充说明（可选）"}
-                className="h-9 rounded-lg border border-border/70 bg-background/85 px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/15"
-              />
-            ) : null}
-          </div>
+          {customSelected ? (
+            <input
+              value={currentAnswer.other}
+              onChange={(event) => updateAnswer({ other: event.target.value, skipped: false })}
+              placeholder={activeCard.notePlaceholder || "输入你的自定义答案"}
+              className="h-9 w-full rounded-lg border border-border/70 bg-background/85 px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/15"
+            />
+          ) : null}
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-border/70 px-4 py-3">
@@ -7172,6 +7174,7 @@ function StructuredClarificationCardFlow({
             size="sm"
             className="h-8 rounded-lg px-4 text-xs font-semibold"
             onClick={() => goNext(false)}
+            disabled={customMissing}
           >
             {activeIndex < cards.length - 1 ? "下一项" : "完成确认"}
           </Button>
@@ -7784,11 +7787,14 @@ function readStructuredClarificationPlan(
           } satisfies StructuredClarificationOption;
         })
         .filter((item) => Boolean(item)) as StructuredClarificationOption[];
-      const limitedOptions = options.slice(0, 4);
+      const limitedOptions = ensureStructuredClarificationCardOptions(
+        options,
+        asText(card.notePlaceholder),
+      );
       const id = asText(card.id);
       const title = asText(card.title);
       const question = asText(card.question);
-      if (!id || !title || !question || limitedOptions.length < 2) return null;
+      if (!id || !title || !question || limitedOptions.length < 4) return null;
       return {
         id,
         title,
@@ -7797,8 +7803,8 @@ function readStructuredClarificationPlan(
         selectionMode: asText(card.selectionMode) === "multiple" ? "multiple" : "single",
         required: card.required !== false,
         options: limitedOptions,
-        allowOther: card.allowOther !== false,
-        allowNote: card.allowNote !== false,
+        allowOther: true,
+        allowNote: false,
         notePlaceholder: asText(card.notePlaceholder),
       } satisfies StructuredClarificationCard;
     })
@@ -7820,6 +7826,82 @@ function readStructuredClarificationPlan(
     briefFields: Array.isArray(plan.briefFields)
       ? plan.briefFields.map((item) => asText(item)).filter(Boolean)
       : limitedCards.map((card) => card.id),
+  };
+}
+
+function ensureStructuredClarificationCardOptions(
+  options: StructuredClarificationOption[],
+  customPlaceholder?: string,
+) {
+  const generated = options
+    .filter((option) => !option.isCustom)
+    .slice(0, 3)
+    .map((option, index) => ({
+      ...option,
+      recommended: index === 0,
+      isCustom: false,
+    }));
+  while (generated.length < 3) {
+    const index = generated.length;
+    generated.push({
+      id: `generated_default_${index + 1}`,
+      label: ["按推荐方案", "先快速推进", "先保证质量"][index] || "按推荐方案",
+      description: ["质量和速度均衡", "尽快得到初版", "增加规划和验证"][index] || "按常规路径处理",
+      impact: "Altus 会按该方向继续执行。",
+      recommended: index === 0,
+      isCustom: false,
+    });
+  }
+  return [
+    ...generated,
+    {
+      id: "custom_answer",
+      label: "自定义补充",
+      description: customPlaceholder || "填写自己的答案",
+      impact: "Altus 会按你的自定义内容调整执行。",
+      recommended: false,
+      isCustom: true,
+    },
+  ];
+}
+
+function buildStructuredClarificationPlanFromQuestion(input: {
+  question: string;
+  options?: string[];
+}): StructuredClarificationCardPlan {
+  const question = asText(input.question) || "请先确认一个关键选择。";
+  const generatedOptions = (Array.isArray(input.options) ? input.options : [])
+    .map((item) => asText(item))
+    .filter(Boolean)
+    .slice(0, 3)
+    .map((label, index) => ({
+      id: `option_${index + 1}`,
+      label,
+      description: index === 0 ? "按常见路径推进" : "按该方向收敛需求",
+      impact: "Altus 会按这个选择调整执行范围。",
+      recommended: index === 0,
+    }));
+  return {
+    kind: "structured_clarification",
+    taskType: "generic",
+    title: "请确认关键需求",
+    summary: "选择最接近的方向；第四项可填写你的自定义答案。",
+    maxCards: 4,
+    cards: [
+      {
+        id: "key_decision",
+        title: "关键选择",
+        question,
+        why: "避免自由文本不清楚",
+        selectionMode: "single",
+        required: true,
+        options: ensureStructuredClarificationCardOptions(generatedOptions),
+        allowOther: true,
+        allowNote: false,
+        notePlaceholder: "输入你的自定义答案",
+      },
+    ],
+    briefFields: ["key_decision"],
   };
 }
 

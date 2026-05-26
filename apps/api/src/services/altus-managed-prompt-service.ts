@@ -2,7 +2,10 @@ import type { ManagedSkillCatalogEntry, ManagedSkillContext } from './altus-mana
 import type { SessionConnectorStatus } from './session-connector-service';
 import { classifyTaskIntentShape, type TaskClarificationType } from './task-intent-shape-service';
 import { altusManagedDynamicContextBlockService } from './altus-managed-dynamic-context-blocks';
-import type { StructuredClarificationCardPlan } from './altus-structured-clarification-service';
+import {
+  buildStructuredClarificationPlanFromQuestion,
+  type StructuredClarificationCardPlan,
+} from './altus-structured-clarification-service';
 import {
   classifyPlatformCapabilityIntent,
   type PlatformCapabilityIntentDecision,
@@ -337,6 +340,20 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
 
   const needsClarification =
     intentShape.needsClarification || intentShape.candidateClarificationType !== 'none';
+  const clarificationQuestion =
+    intentShape.clarificationQuestion || intentShape.candidateClarificationQuestion;
+  const clarificationOptions =
+    intentShape.candidateClarificationOptions.length > 0
+      ? intentShape.candidateClarificationOptions
+      : undefined;
+  const structuredClarification =
+    needsClarification && intentShape.candidateClarificationType !== 'none'
+      ? buildStructuredClarificationPlanFromQuestion({
+          question: clarificationQuestion,
+          options: clarificationOptions,
+          clarificationType: intentShape.candidateClarificationType,
+        })
+      : undefined;
   const deployableWebAppBlueprintRequired =
     mode === 'deployable_web_app' &&
     !needsClarification &&
@@ -357,13 +374,10 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
     emailTemplateRequested,
     deploymentAllowed,
     needsClarification,
-    clarificationQuestion:
-      intentShape.clarificationQuestion || intentShape.candidateClarificationQuestion,
+    clarificationQuestion,
     clarificationType: intentShape.candidateClarificationType,
-    clarificationOptions:
-      intentShape.candidateClarificationOptions.length > 0
-        ? intentShape.candidateClarificationOptions
-        : undefined,
+    clarificationOptions,
+    structuredClarification,
     todoRequired:
       intentShape.candidateTodoSignals.explicitTodoRequest ||
       intentShape.candidateTodoSignals.hasMultipleSubtasks ||
@@ -571,15 +585,17 @@ export class AltusManagedPromptService {
     const structuredClarificationSection =
       includeRuntimeState &&
       taskIntentProfile?.needsClarification &&
-      taskIntentProfile.clarificationType === 'presentation_brief' &&
       taskIntentProfile.structuredClarification
         ? [
             '# Structured clarification card contract',
-            '- The current request is a PPT / presentation task that lacks enough decision-complete brief information.',
+            '- The current request lacks decision-complete information and must be clarified through choice cards.',
             '- Your next action must be `ask_user`; do not call search, todowrite, render_pptx_from_instructions, shell_execute, or any execution tool first.',
-            '- Ask the user with structured choice cards, not a long free-text question.',
+            '- Ask the user with structured choice cards, not a long free-text question or plain "需要补充信息" block.',
             '- The card plan must contain at most 4 cards. Do not add a fifth question.',
-            '- If you adapt the cards, keep one decision per card, 2-4 options per card, and exactly one recommended option per card.',
+            '- If you adapt the cards, keep one decision per card.',
+            '- Each card must provide exactly 3 generated business options; the UI will render the fourth option as user-custom input.',
+            '- Set `allowOther=true` and `allowNote=false` on every card.',
+            '- Exactly one generated option per card should be recommended.',
             '- Each option label and description must use user-facing business language, not tool names or implementation details.',
             '- Pass the card plan in `structuredClarification` when calling `ask_user`.',
             '- Baseline card plan you may adapt:',
@@ -835,8 +851,9 @@ export class AltusManagedPromptService {
       '- Do not deliver a single flat worksheet as a finished workbook when the task clearly calls for structure, formulas, source sheets, or summaries.',
       '',
       '# Clarification rules',
-      '- If critical requirements are missing, call ask_user with one precise question.',
-      '- When calling ask_user for a missing requirement, include `clarificationType` when the question is about artifact type, tech stack, scope boundary, integration target, or acceptance requirement.',
+      '- If critical requirements are missing, call ask_user with `structuredClarification`; do not ask the user to answer only in free text.',
+      '- Every ask_user clarification must be rendered as at most 4 cards. Each card has 3 generated options plus a fourth user-custom option handled by the UI.',
+      '- When calling ask_user for a missing requirement, include `clarificationType` when the question is about artifact type, tech stack, scope boundary, integration target, acceptance requirement, or presentation brief.',
       '- Do not ask unnecessary questions when a reasonable next step is clear.',
       '- For requests like "generate a PPT/docx/xlsx on topic X", you already have enough information to start. Use reasonable defaults and proceed instead of asking a generic meta-question.',
       '- Do not ask generic office-flow questions such as "Do you want to create or modify a PPT?" when the user request already clearly asks to create one.',
@@ -926,10 +943,11 @@ export class AltusManagedPromptService {
         '',
         '# Clarification gate',
         '- The current request is under-specified and requires clarification before execution.',
-        `- Ask exactly this focused question: ${profile.clarificationQuestion}`,
+        `- Use this focused question as the primary card question: ${profile.clarificationQuestion}`,
         ...(Array.isArray(profile.clarificationOptions) && profile.clarificationOptions.length > 0
           ? [`- Suggested options: ${profile.clarificationOptions.join(' | ')}`]
           : []),
+        '- Present the clarification through structured choice cards, not as a plain text prompt.',
         '- Do not start execution before the user answers.'
       );
     }

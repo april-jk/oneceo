@@ -40,7 +40,9 @@ import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-servi
 import type { TaskClarificationType } from './task-intent-shape-service';
 import {
   buildPresentationStructuredClarificationPlan,
+  buildStructuredClarificationPlanFromQuestion,
   type StructuredClarificationCardPlan,
+  type StructuredClarificationFallbackType,
 } from './altus-structured-clarification-service';
 import { uploadToR2 } from './r2-client';
 
@@ -172,7 +174,10 @@ function normalizeStructuredClarificationPlan(value: unknown): StructuredClarifi
           };
         })
         .filter((item) => Boolean(item)) as StructuredClarificationCardPlan['cards'][number]['options'];
-      const limitedOptions = options.slice(0, 4);
+      const limitedOptions = options.slice(0, 3).map((option, index) => ({
+        ...option,
+        recommended: index === 0,
+      }));
       const id = asText(card.id);
       const title = asText(card.title);
       const question = asText(card.question);
@@ -193,7 +198,11 @@ function normalizeStructuredClarificationPlan(value: unknown): StructuredClarifi
       } satisfies StructuredClarificationCardPlan['cards'][number];
     })
     .filter((item) => Boolean(item)) as StructuredClarificationCardPlan['cards'];
-  const limitedCards = cards.slice(0, 4);
+  const limitedCards = cards.slice(0, 4).map((card) => ({
+    ...card,
+    allowOther: true,
+    allowNote: false,
+  }));
   if (limitedCards.length === 0) return undefined;
   return {
     kind: 'structured_clarification',
@@ -219,13 +228,18 @@ function shouldUsePresentationStructuredClarificationFallback(input: {
 function resolveAskUserStructuredClarification(input: {
   question: string;
   clarificationType?: Exclude<TaskClarificationType, 'none'>;
+  options?: string[];
   structuredClarification?: unknown;
 }) {
   return (
     normalizeStructuredClarificationPlan(input.structuredClarification) ||
     (shouldUsePresentationStructuredClarificationFallback(input)
       ? buildPresentationStructuredClarificationPlan()
-      : undefined)
+      : buildStructuredClarificationPlanFromQuestion({
+          question: input.question,
+          options: input.options,
+          clarificationType: (input.clarificationType || 'none') as StructuredClarificationFallbackType,
+        }))
   );
 }
 
@@ -2935,6 +2949,7 @@ export class AltusManagedToolRuntime {
       const structuredClarification = resolveAskUserStructuredClarification({
         question,
         clarificationType: normalizedClarificationType,
+        options,
         structuredClarification: rawArgs.structuredClarification,
       });
       return {

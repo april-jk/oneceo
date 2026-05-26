@@ -847,7 +847,8 @@ export function buildManagedToolDefinitions() {
       type: 'function',
       function: {
         name: 'ask_user',
-        description: 'Ask the user one precise clarification question when blocked by missing requirements.',
+        description:
+          'Ask the user for missing requirements through structured choice cards when blocked by clarification.',
         parameters: objectSchema(
           {
             question: { type: 'string', description: 'The clarification question.' },
@@ -870,7 +871,8 @@ export function buildManagedToolDefinitions() {
                 maxCards: { type: 'integer', description: 'Maximum card count. Must be 4 or less.' },
                 cards: {
                   type: 'array',
-                  description: 'At most 4 cards, each asking one decision.',
+                  description:
+                    'At most 4 cards, each asking one decision. Each card should include 3 generated options; the fourth option is user-custom input rendered by the UI.',
                   items: objectSchema(
                     {
                       id: { type: 'string' },
@@ -880,7 +882,7 @@ export function buildManagedToolDefinitions() {
                       selectionMode: { type: 'string', enum: ['single', 'multiple'] },
                       required: { type: 'boolean' },
                       allowOther: { type: 'boolean' },
-                      allowNote: { type: 'boolean' },
+                      allowNote: { type: 'boolean', description: 'Use false; custom input is handled as the fourth option.' },
                       notePlaceholder: { type: 'string' },
                       options: {
                         type: 'array',

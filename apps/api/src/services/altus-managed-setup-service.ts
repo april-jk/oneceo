@@ -31,6 +31,7 @@ import { altusClarificationTransitionAgent } from './altus-clarification-transit
 import {
   buildPresentationBriefClarificationQuestion,
   buildPresentationStructuredClarificationPlan,
+  buildStructuredClarificationPlanFromQuestion,
   coversPresentationBrief,
   shouldRequestPresentationBrief,
   type StructuredClarificationCardPlan,
@@ -361,6 +362,22 @@ function buildClarificationQuestion(
   }
 }
 
+function buildStructuredClarificationFallback(input: {
+  clarificationType: TaskClarificationType;
+  question: string;
+  options?: string[];
+}): StructuredClarificationCardPlan | undefined {
+  if (input.clarificationType === 'none') return undefined;
+  if (input.clarificationType === 'presentation_brief') {
+    return buildPresentationStructuredClarificationPlan();
+  }
+  return buildStructuredClarificationPlanFromQuestion({
+    question: input.question,
+    options: input.options,
+    clarificationType: input.clarificationType,
+  });
+}
+
 async function pathExists(targetPath: string) {
   try {
     await fs.access(targetPath);
@@ -567,10 +584,11 @@ function resolveClarificationDecision(input: {
       clarificationType: pendingType,
       clarificationQuestion: followUp.question,
       clarificationOptions: followUp.options,
-      structuredClarification:
-        pendingType === 'presentation_brief'
-          ? buildPresentationStructuredClarificationPlan()
-          : undefined,
+      structuredClarification: buildStructuredClarificationFallback({
+        clarificationType: pendingType,
+        question: followUp.question,
+        options: followUp.options,
+      }),
     };
   }
 
@@ -649,10 +667,11 @@ function resolveClarificationDecision(input: {
       clarificationType,
       clarificationQuestion: question.question,
       clarificationOptions: question.options,
-      structuredClarification:
-        clarificationType === 'presentation_brief'
-          ? buildPresentationStructuredClarificationPlan()
-          : undefined,
+      structuredClarification: buildStructuredClarificationFallback({
+        clarificationType,
+        question: question.question,
+        options: question.options,
+      }),
     };
   }
 
@@ -745,17 +764,19 @@ function buildProfileFromTransition(input: TransitionResolvedProfileInput): Altu
     ? ''
     : input.reduced.question;
   if (!input.reduced.accepted) {
+    const clarificationType = input.reduced.clarificationType || input.shape.candidateClarificationType || 'none';
     return {
       ...input.baseProfile,
       ...input.todoDecision,
       needsClarification: true,
-      clarificationType: input.reduced.clarificationType || input.shape.candidateClarificationType || 'none',
+      clarificationType,
       clarificationQuestion: fallbackQuestion,
       clarificationOptions: input.reduced.options,
-      structuredClarification:
-        (input.reduced.clarificationType || input.shape.candidateClarificationType) === 'presentation_brief'
-          ? buildPresentationStructuredClarificationPlan()
-          : undefined,
+      structuredClarification: buildStructuredClarificationFallback({
+        clarificationType,
+        question: fallbackQuestion,
+        options: input.reduced.options,
+      }),
       clarificationTransition: {
         nextState: input.reduced.nextState,
         reason: input.reduced.reason,
@@ -764,17 +785,20 @@ function buildProfileFromTransition(input: TransitionResolvedProfileInput): Altu
   }
 
   if (input.reduced.nextState === 'clarifying') {
+    const clarificationType = input.reduced.clarificationType || input.shape.candidateClarificationType || 'none';
+    const clarificationQuestion = input.reduced.question || input.shape.candidateClarificationQuestion;
     return {
       ...input.baseProfile,
       ...input.todoDecision,
       needsClarification: true,
-      clarificationType: input.reduced.clarificationType || input.shape.candidateClarificationType || 'none',
-      clarificationQuestion: input.reduced.question || input.shape.candidateClarificationQuestion,
+      clarificationType,
+      clarificationQuestion,
       clarificationOptions: input.reduced.options,
-      structuredClarification:
-        (input.reduced.clarificationType || input.shape.candidateClarificationType) === 'presentation_brief'
-          ? buildPresentationStructuredClarificationPlan()
-          : undefined,
+      structuredClarification: buildStructuredClarificationFallback({
+        clarificationType,
+        question: clarificationQuestion,
+        options: input.reduced.options,
+      }),
       clarificationTransition: {
         nextState: 'clarifying',
         reason: input.reduced.reason,

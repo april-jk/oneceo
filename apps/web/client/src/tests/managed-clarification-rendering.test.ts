@@ -105,7 +105,7 @@ describe('managed clarification rendering', () => {
     expect(clarificationBlocks).toHaveLength(0);
   });
 
-  it('keeps full clarification content when previous message is different', () => {
+  it('renders non-duplicate clarification requests as fallback choice cards', () => {
     const messages: AgentMessage[] = [
       {
         type: 'agent_message',
@@ -130,13 +130,15 @@ describe('managed clarification rendering', () => {
     ];
 
     const items = buildChatItems(messages);
-    const clarificationBlocks = items.filter(
-      (item): item is Extract<ChatItem, { kind: 'agent' }> =>
-        item.kind === 'agent' && item.markdown.includes('请确认要部署到美东还是亚太区域。')
+    const clarificationCards = items.filter(
+      (item): item is Extract<ChatItem, { kind: 'structured_clarification' }> =>
+        item.kind === 'structured_clarification'
     );
 
-    expect(clarificationBlocks).toHaveLength(1);
-    expect(clarificationBlocks[0]?.markdown).toContain('请确认要部署到美东还是亚太区域。');
+    expect(clarificationCards).toHaveLength(1);
+    expect(clarificationCards[0]?.plan.cards[0]?.question).toBe('请确认要部署到美东还是亚太区域。');
+    expect(clarificationCards[0]?.plan.cards[0]?.options).toHaveLength(4);
+    expect(clarificationCards[0]?.plan.cards[0]?.options[3]?.isCustom).toBe(true);
   });
 
   it('hides mcp confirmation approval markers from rendered user messages', () => {

@@ -185,6 +185,20 @@ export function shouldDeferPendingSessionRouteSync(input: {
   return false;
 }
 
+export function buildBoundSessionRoute(input: {
+  sessionId?: string | null;
+  search?: string | null;
+}): string {
+  const sessionId = asText(input.sessionId);
+  if (!sessionId) return '';
+  const params = new URLSearchParams(typeof input.search === 'string' ? input.search : '');
+  params.delete('new');
+  params.delete('sessionId');
+  const query = params.toString();
+  const base = `/session/${encodeURIComponent(sessionId)}`;
+  return query ? `${base}?${query}` : base;
+}
+
 function extractOrchestratorSessionId(message: AgentMessage): string | null {
   const candidate = message?.metadata?.orchestratorSessionId;
   return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
@@ -2888,7 +2902,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   }, [initialProjectIdForNewSession, sessionId]);
   const [isInterrupting, setIsInterrupting] = useState(false);
   const [pendingSandboxPromptVersion, setPendingSandboxPromptVersion] = useState(0);
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   const search = useSearch();
   const { user } = useAuth();
 
@@ -3147,13 +3161,15 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     const currentMatch = currentPath.match(/^\/session\/([^/?#]+)/);
     const currentInPath = currentMatch ? decodeURIComponent(currentMatch[1]) : '';
     if (currentInPath !== nextSessionId || params.get('new') || params.get('sessionId')) {
-      params.delete('new');
-      params.delete('sessionId');
-      const query = params.toString();
-      const base = `/session/${encodeURIComponent(nextSessionId)}`;
-      window.history.replaceState(null, '', query ? `${base}?${query}` : base);
+      setLocation(
+        buildBoundSessionRoute({
+          sessionId: nextSessionId,
+          search: window.location.search,
+        }),
+        { replace: true }
+      );
     }
-  }, []);
+  }, [setLocation]);
 
   useEffect(() => {
     const routeState = resolveSessionRouteState({

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildBoundSessionRoute,
   resolveChatInputSessionId,
   resolveSessionRouteState,
   shouldDeferPendingSessionRouteSync,
@@ -85,5 +86,14 @@ describe('managed chat session resolution', () => {
         search: '',
       })
     ).toBe(false);
+  });
+
+  it('builds canonical bound session route and strips creation-only query params', () => {
+    expect(
+      buildBoundSessionRoute({
+        sessionId: 'session 1',
+        search: '?new=123&sessionId=old-session&projectId=project-1',
+      })
+    ).toBe('/session/session%201?projectId=project-1');
   });
 });

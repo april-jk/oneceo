@@ -47,3 +47,35 @@
 2. `TMPDIR=/private/tmp pnpm --filter api exec tsx --test tests/sandbox-osac-bridge-service.test.ts`：2/2 通过。
 3. `pnpm --filter api type-check`：通过。
 4. `git diff --check`：通过。
+
+## 新建 managed 会话右侧工作区首屏空白修复
+
+做了什么：
+
+1. 复现 `/new-task` 首轮发送后已跳转 `/session/:id`、消息和 run recovery 均存在，但右侧 Altus Actions 工作区仍未自动打开的问题。
+2. 定位根因：首轮 managed 创建链路只绑定 session 和 run 状态，没有在新 session 创建成功后恢复右侧工作区打开态；同时 SPA route state 可能落后于浏览器真实 URL，导致 `/new-task?new=...` 被误判为旧 session 续聊。
+3. 发送瞬间改用 `window.location` 判断真实新建路由，并在 managed processing/active 后对每个 session 自动打开一次右侧工作区；用户手动关闭后同一 session 不反复重开。
+4. 更新相关研发文档并补充前端判定单测。
+
+验证结果：
+
+1. `pnpm --filter web exec vitest run src/tests/home-managed-workspace.test.ts`：通过。
+2. `pnpm --filter web check`：通过。
+3. Playwright 真实浏览器复测 `/new-task?new=codex-fix-20260526h` 首轮发送后跳到 `/session/345687a7-6a04-4291-99af-81f9387561bc`，右侧 `Altus Actions` 自动打开。
+
+## 新建 managed 会话首轮消息区空白修复
+
+做了什么：
+
+1. 重新检查“新建会话输入后跳转新页面，底部输入框出现，但上方消息区空白，刷新后才显示”的完整链路。
+2. 复测真实新建入口，确认后端 session、recent/history 与 managed run 都能创建；问题集中在前端首轮 session 绑定后的路由状态同步。
+3. 定位根因：`bindSessionId` 使用 `window.history.replaceState` 直接改地址栏，绕过 `wouter` route state。首轮创建后浏览器 URL 已是 `/session/:id`，但 React 路由状态仍可能停在 `/new-task?new=...` 或旧 session，导致首屏消息加载/本地 pending message 合并被旧路由状态干扰；刷新后 router 重新从地址栏初始化，因此消息恢复。
+4. 改为通过 `wouter` 的 `setLocation(nextUrl, { replace: true })` 绑定新 session，并抽出 `buildBoundSessionRoute` 统一删除创建期 query `new` / `sessionId`，只保留业务 query。
+5. 保留并补强新建 managed 首轮本地消息和右侧工作区自动打开逻辑。
+
+验证结果：
+
+1. `pnpm --filter web exec vitest run src/tests/managed-session-resolution.test.ts src/tests/home-managed-workspace.test.ts`：13/13 通过。
+2. `pnpm --filter web check`：通过。
+3. `git diff --check`：通过。
+4. Playwright 真实浏览器复测侧边栏“新建任务”入口，首轮发送后跳到 `/session/d23d3e4f-9a57-4e12-8400-55865688412b`，上方消息区立即显示用户消息、`managed run 已创建` 与处理中状态，底部输入框正常，右侧 `Altus Actions` 自动打开。

@@ -179,6 +179,27 @@ const HOME_NEW_TASK_TOUR_KEY = "oneceo:tour.home_new_task.completed";
 const MANAGED_AUTO_DEBUG_READY_POLL_MS = 1000;
 const MANAGED_AUTO_DEBUG_RETRY_POLL_MS = 2000;
 
+export function shouldAutoOpenManagedWorkspaceOnFirstSubmit(input: {
+  altusMode: string;
+  pageMode: PageMode;
+  activeSessionId?: string | null;
+}): boolean {
+  return (
+    input.altusMode === "managed" &&
+    input.pageMode === "input" &&
+    !(input.activeSessionId || "").trim()
+  );
+}
+
+export function resolveHomeSubmitActiveSessionId(input: {
+  routeForcesNewSession: boolean;
+  sessionId?: string | null;
+  uploadSessionId?: string | null;
+}): string {
+  if (input.routeForcesNewSession) return "";
+  return (input.sessionId || input.uploadSessionId || "").trim();
+}
+
 type HomeScenarioModel = "lite" | "pro" | "max";
 
 type HomeCapabilityExample = {
@@ -1214,6 +1235,8 @@ export default function Home() {
   const stickToBottomRef = useRef(true);
   const olderHistoryIntentRef = useRef(false);
   const previewStateRestoredSessionRef = useRef<string | null>(null);
+  const pendingManagedWorkspaceAutoOpenRef = useRef(false);
+  const managedWorkspaceAutoOpenedSessionRef = useRef<string | null>(null);
   const sessionIdFromPath = useMemo(() => {
     const match = location.match(/^\/session\/([^/?#]+)/);
     return match ? decodeURIComponent(match[1]) : null;
@@ -1886,6 +1909,9 @@ export default function Home() {
     if (previewStateRestoredSessionRef.current === sessionId) {
       return;
     }
+    const shouldAutoOpenManagedWorkspace =
+      pendingManagedWorkspaceAutoOpenRef.current &&
+      readAltusMode() === "managed";
     setPendingDiffTarget(null);
     try {
       const raw = window.sessionStorage.getItem(
@@ -1893,23 +1919,28 @@ export default function Home() {
       );
       const persisted = readPersistedPreviewState(raw);
       if (!persisted) {
-        setPreviewOpen(false);
+        setPreviewOpen(shouldAutoOpenManagedWorkspace);
         setPreviewTab("files");
         setSelectedDiffId(null);
         setSelectedDiffMessageKey(null);
       } else {
-        setPreviewOpen(Boolean(persisted.previewOpen));
+        setPreviewOpen(
+          shouldAutoOpenManagedWorkspace || Boolean(persisted.previewOpen),
+        );
         setPreviewTab(persisted.previewTab);
         setSelectedDiffId(persisted.selectedDiffId);
         setSelectedDiffMessageKey(persisted.selectedDiffMessageKey);
       }
     } catch {
-      setPreviewOpen(false);
+      setPreviewOpen(shouldAutoOpenManagedWorkspace);
       setPreviewTab("files");
       setSelectedDiffId(null);
       setSelectedDiffMessageKey(null);
     } finally {
       previewStateRestoredSessionRef.current = sessionId;
+      if (shouldAutoOpenManagedWorkspace) {
+        pendingManagedWorkspaceAutoOpenRef.current = false;
+      }
     }
   }, [sessionId]);
 
@@ -2417,11 +2448,24 @@ export default function Home() {
           ) === index,
       );
       const selectedMcp = normalizeComposerSelectedMcp(referenceDrafts);
-      let activeSessionId = (
-        sessionId ||
-        uploadSessionIdRef.current ||
-        ""
-      ).trim();
+      const currentPath =
+        typeof window !== "undefined" ? window.location.pathname : location;
+      const currentSearch =
+        typeof window !== "undefined" ? window.location.search : search;
+      const routeForcesNewSession =
+        currentPath.startsWith("/new-task") &&
+        Boolean(new URLSearchParams(currentSearch).get("new")?.trim());
+      let activeSessionId = resolveHomeSubmitActiveSessionId({
+        routeForcesNewSession,
+        sessionId,
+        uploadSessionId: uploadSessionIdRef.current,
+      });
+      const shouldOpenManagedWorkspace =
+        shouldAutoOpenManagedWorkspaceOnFirstSubmit({
+          altusMode,
+          pageMode: mode,
+          activeSessionId,
+        });
       if (
         altusMode !== "managed" &&
         uploadableAttachments.length > 0 &&
@@ -2448,6 +2492,12 @@ export default function Home() {
 
       exitHistoryView();
       if (altusMode === "managed") {
+        if (shouldOpenManagedWorkspace) {
+          pendingManagedWorkspaceAutoOpenRef.current = true;
+          setPreviewTab("files");
+          setPreviewOpen(true);
+          setPreviewMaximized(false);
+        }
         await sendChatInput(baseText, {
           sessionId: activeSessionId || undefined,
           metadata: buildManagedTaskInputMetadata({
@@ -2459,6 +2509,11 @@ export default function Home() {
           }),
           files: uploadableAttachments.map((item) => item.file),
         });
+        if (shouldOpenManagedWorkspace) {
+          setPreviewTab("files");
+          setPreviewOpen(true);
+          setPreviewMaximized(false);
+        }
       } else {
         await sendChatInput(
           appendAttachmentsToPrompt(baseText, uploadedAttachments),
@@ -2490,6 +2545,7 @@ export default function Home() {
         setAttachments([]);
       }
     } catch (error) {
+      pendingManagedWorkspaceAutoOpenRef.current = false;
       if (hasAttachments) {
         const draftFiles = attachmentDrafts
           .filter((item) => item.kind === "file")
@@ -2526,6 +2582,20 @@ export default function Home() {
       composerReferences.length === 0
     )
       return;
+    const currentPath =
+      typeof window !== "undefined" ? window.location.pathname : location;
+    if (
+      shouldAutoOpenManagedWorkspaceOnFirstSubmit({
+        altusMode: readAltusMode(),
+        pageMode: mode,
+        activeSessionId: currentPath.startsWith("/new-task") ? "" : sessionId,
+      })
+    ) {
+      pendingManagedWorkspaceAutoOpenRef.current = true;
+      setPreviewTab("files");
+      setPreviewOpen(true);
+      setPreviewMaximized(false);
+    }
     setMode("chat");
     void submitPrompt(message);
     setMessage("");
@@ -3187,6 +3257,16 @@ export default function Home() {
   const previewPanelDefaultSize = managedAltusMode ? 50 : 34;
   const chatPanelDefaultSize = 100 - previewPanelDefaultSize;
   const chatPanelMinSize = managedAltusMode ? 30 : 42;
+
+  useEffect(() => {
+    if (!managedAltusMode || !sessionId || previewOpen) return;
+    if (!isProcessing && !managedRunActive) return;
+    if (managedWorkspaceAutoOpenedSessionRef.current === sessionId) return;
+    managedWorkspaceAutoOpenedSessionRef.current = sessionId;
+    setPreviewTab("files");
+    setPreviewOpen(true);
+    setPreviewMaximized(false);
+  }, [isProcessing, managedAltusMode, managedRunActive, previewOpen, sessionId]);
 
   const openAltusReplay = useCallback((
     runId: string,

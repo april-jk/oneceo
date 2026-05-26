@@ -3652,9 +3652,9 @@ export default function Home() {
             ) : null}
             <div
               data-tour="home-composer"
-              className={`relative mx-auto w-full max-w-[52rem] rounded-[2rem] border border-border/70 bg-card shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)] ${
+              className={`relative mx-auto w-full max-w-[52rem] rounded-[1.15rem] border border-border/80 bg-card/96 shadow-[0_16px_34px_rgba(15,35,65,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_3px_rgba(9,105,218,0.16),0_16px_34px_rgba(15,35,65,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)] ${
                 isComposerDragActive
-                  ? "border-ring shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)]"
+                  ? "border-ring shadow-[0_0_0_3px_rgba(9,105,218,0.16),0_16px_34px_rgba(15,35,65,0.08)]"
                   : ""
               }`}
               onDragEnter={handleComposerDragEnter}
@@ -3664,7 +3664,7 @@ export default function Home() {
               onPaste={handleComposerPaste}
             >
               {isComposerDragActive ? (
-                <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[2rem] border border-dashed border-ring bg-card/90 text-sm font-medium text-foreground">
+                <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[1.15rem] border border-dashed border-ring bg-card/90 text-sm font-medium text-foreground">
                   <span className="inline-flex items-center gap-2 rounded-full bg-background px-3 py-2 shadow-sm">
                     <FilePlus className="h-4 w-4 text-primary" />
                     {t("attachments.dropToUpload")}
@@ -3699,7 +3699,7 @@ export default function Home() {
                       },
                     })
                   }
-                  className="min-h-[56px] resize-none border-0 bg-transparent px-0 py-0 text-base text-foreground placeholder:text-muted-foreground focus-visible:ring-0"
+                  className="min-h-[56px] resize-none border-0 bg-transparent px-0 py-0 text-[15px] leading-6 text-foreground placeholder:text-muted-foreground focus-visible:ring-0 md:text-[15px]"
                   rows={2}
                 />
                 {composerReferenceTokens}
@@ -3943,9 +3943,9 @@ export default function Home() {
                     {/* Text Area and Actions - Single Container */}
                     <div
                       data-tour="home-composer"
-                      className={`relative z-10 space-y-3 rounded-[2rem] border border-border/70 bg-card p-4 shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)] ${
+                      className={`relative z-10 space-y-3 rounded-[1.15rem] border border-border/80 bg-card/96 p-4 shadow-[0_16px_34px_rgba(15,35,65,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_3px_rgba(9,105,218,0.16),0_16px_34px_rgba(15,35,65,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)] ${
                         isComposerDragActive
-                          ? "border-ring shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)]"
+                          ? "border-ring shadow-[0_0_0_3px_rgba(9,105,218,0.16),0_16px_34px_rgba(15,35,65,0.08)]"
                           : ""
                       }`}
                       onDragEnter={handleComposerDragEnter}
@@ -3955,7 +3955,7 @@ export default function Home() {
                       onPaste={handleComposerPaste}
                     >
                       {isComposerDragActive ? (
-                        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[2rem] border border-dashed border-ring bg-card/90 text-sm font-medium text-foreground">
+                        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[1.15rem] border border-dashed border-ring bg-card/90 text-sm font-medium text-foreground">
                           <span className="inline-flex items-center gap-2 rounded-full bg-background px-3 py-2 shadow-sm">
                             <FilePlus className="h-4 w-4 text-primary" />
                             {t("attachments.dropToUpload")}
@@ -3979,7 +3979,7 @@ export default function Home() {
                             submit: () => handleSend(),
                           })
                         }
-                        className="min-h-[100px] resize-none border-0 bg-transparent px-0 py-0 text-base text-foreground placeholder:text-muted-foreground focus-visible:ring-0"
+                        className="min-h-[100px] resize-none border-0 bg-transparent px-0 py-0 text-[15px] leading-6 text-foreground placeholder:text-muted-foreground focus-visible:ring-0 md:text-[15px]"
                         rows={4}
                       />
                       {composerReferenceTokens}
@@ -4124,7 +4124,7 @@ export default function Home() {
                         <DropdownMenuTrigger asChild>
                           <button
                             type="button"
-                            className="relative z-0 -mt-5 mx-auto flex w-[94%] items-center justify-end rounded-b-[1.65rem] rounded-t-[0.9rem] border border-t-0 border-border/35 bg-muted/42 px-5 pb-3 pt-7 text-right shadow-[0_16px_28px_rgba(15,23,42,0.07)] backdrop-blur-[2px] transition-colors hover:bg-muted/54 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 dark:bg-muted/24 dark:hover:bg-muted/32 dark:shadow-[0_18px_32px_rgba(0,0,0,0.18)]"
+                            className="relative z-0 -mt-4 mx-auto flex w-[94%] items-center justify-end rounded-b-[1rem] rounded-t-[0.55rem] border border-t-0 border-border/45 bg-muted/48 px-5 pb-3 pt-6 text-right shadow-[0_12px_24px_rgba(15,35,65,0.06)] transition-colors hover:bg-muted/58 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 dark:bg-muted/24 dark:hover:bg-muted/32 dark:shadow-[0_18px_32px_rgba(0,0,0,0.18)]"
                             aria-label={t("homePage.projectSelectorLabel")}
                           >
                             <div

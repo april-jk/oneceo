@@ -174,6 +174,8 @@ test('managed prompt defaults debug and testing to Playwright on the same n.eko 
   assert.match(prompt, /do not create ad-hoc screenshot scripts such as `screenshot-test\.mjs`/i);
   assert.match(prompt, /required screenshot evidence comes from platform tool results/i);
   assert.match(prompt, /captured as a Playwright screenshot and attached to the corresponding Action/i);
+  assert.match(prompt, /never open a `\.render-report\.json` path with debug_open_page/i);
+  assert.match(prompt, /words like `官网` inside source instructions as research-source hints/i);
   assert.match(prompt, /Do not launch a separate browser instance/i);
   assert.match(prompt, /not about:blank, a Chrome error page, or an unexpected fallback route/i);
   assert.match(prompt, /Use Browser Use for exploratory external-site access and interaction only/i);
@@ -210,6 +212,25 @@ test('managed task intent keeps website source-only no-deploy requests on the we
   assert.equal(profile.explicitNoDeploy, true);
   assert.equal(profile.todoRequired, true);
   assert.equal(profile.todoReason, 'deployable_web_app_blueprint');
+});
+
+test('managed task intent keeps PPT official-site source hints out of web app path', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '帮我分析一下 沐熙股份，做个 ppt',
+    [
+      '已确认需求（结构化澄清选择）',
+      '来源：沐熙股份 PPT 制作前确认关键决策',
+      '- 演示目的与受众：企业品牌与业务推介',
+      '- 内容来源与可信度：官网、公告、权威媒体优先',
+      '- 深度与页数：12-15 页标准版',
+      '- 视觉与叙事风格：科技投研风',
+      '请基于以上 confirmed brief 先规划，再执行任务。',
+    ].join('\n'),
+  ]);
+
+  assert.notEqual(profile.mode, 'deployable_web_app');
+  assert.equal(profile.webArtifactRequested, false);
+  assert.equal(profile.todoReason, 'none');
 });
 
 test('managed task intent profile carries a hard clarification gate for broad business-system requests', () => {

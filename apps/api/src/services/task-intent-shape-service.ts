@@ -120,6 +120,17 @@ const WEB_ARTIFACT_KEYWORDS = [
   'admin panel',
   'browser product',
 ] as const;
+const PRESENTATION_ARTIFACT_KEYWORDS = [
+  'ppt',
+  'pptx',
+  'powerpoint',
+  '演示文稿',
+  '幻灯片',
+  'slide deck',
+  'slides',
+  'presentation',
+] as const;
+const WEB_SOURCE_REFERENCE_ONLY_KEYWORDS = ['官网', '企业官网'] as const;
 
 const SCRIPT_ARTIFACT_KEYWORDS = [
   '脚本',
@@ -435,7 +446,15 @@ export function classifyTaskIntentShape(input: string | string[]): TaskIntentSha
   const sourceCodeOnly = includesAny(combinedText, SOURCE_CODE_ONLY_KEYWORDS);
   const explicitNoExternalAuth = includesAny(combinedText, NO_EXTERNAL_AUTH_KEYWORDS);
   const deployRequested = classifyPlatformCapabilityIntent(texts).mode === 'execute';
-  const webArtifactRequested = includesAny(combinedText, WEB_ARTIFACT_KEYWORDS);
+  const rawWebArtifactRequested = includesAny(combinedText, WEB_ARTIFACT_KEYWORDS);
+  const presentationArtifactRequested = includesAny(combinedText, PRESENTATION_ARTIFACT_KEYWORDS);
+  const webArtifactRequested =
+    rawWebArtifactRequested &&
+    !(
+      presentationArtifactRequested &&
+      countHits(combinedText, WEB_ARTIFACT_KEYWORDS) ===
+        countHits(combinedText, WEB_SOURCE_REFERENCE_ONLY_KEYWORDS)
+    );
   const scriptArtifactRequested = includesAny(combinedText, SCRIPT_ARTIFACT_KEYWORDS);
   const broadSoftwareRequested = includesAny(combinedText, BUSINESS_SYSTEM_KEYWORDS);
   const softwareBoundaryRequested =

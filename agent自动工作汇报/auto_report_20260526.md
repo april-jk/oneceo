@@ -165,3 +165,8 @@
 - 问题：`requestClarification` 虽然传入了 `clarificationType` 与 `structuredClarification`，但 DAO 写入白名单没有保留这两个字段，导致 `conversation_messages` 事实源只剩普通问题文本；刷新时实时卡片/本地缓存会被事实源普通文本覆盖。
 - 处理：补齐 `conversation_messages` 与 recent metadata compact 白名单；同时对历史已丢字段的“PPT 开始制作前确认关键决策”澄清消息，在读取 timeline 时按上一条用户请求重建 `presentation_brief` 卡片协议。
 - 验证：补充 DAO 白名单测试、历史 PPT 澄清恢复路由测试，并扩展 recent stale 测试为 canonical 本身缺字段的场景；目标 API 测试、API 类型检查和 `git diff --check` 通过。
+
+## PPT confirmed brief 误入网页视觉检测链路修复
+- 问题：会话 `14a2c535-159c-4aec-8107-f774db2c1f01` 的 PPT confirmed brief 写了“官网、公告、权威媒体优先”，旧 intent 规则把 `官网` 当成网页交付信号，误判为 `deployable_web_app`，继而触发 web shell、视觉检测和 `debug_open_page` 打开 render report。
+- 处理：PPT/演示文稿上下文中将 `官网/企业官网` 解释为资料来源，不再单独触发 web app；prompt 明确 PPTX/DOCX/XLSX/PDF/downloadable office 交付物不走网站调试/视觉检测，PPT render report 不能用 `debug_open_page` 打开。
+- 验证：补充 task intent、managed prompt、managed setup 回归测试，继续保留真实网站/HTML 任务的 web app 路径和视觉检测要求。

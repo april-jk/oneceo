@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildChatItems, type ChatItem } from '@/pages/Home';
+import { buildChatItems, getActiveManagedStatusText, type ChatItem } from '@/pages/Home';
 import type { AgentMessage } from '@/hooks/useTaskCreationAgent';
 
 describe('managed clarification rendering', () => {
@@ -138,6 +138,39 @@ describe('managed clarification rendering', () => {
     expect(clarificationBlocks).toHaveLength(1);
     expect(clarificationBlocks[0]?.markdown).toContain('请确认要部署到美东还是亚太区域。');
     expect(items.some((item) => item.kind === 'structured_clarification')).toBe(false);
+  });
+
+  it('keeps a loading status while PPT clarification cards are not yet available', () => {
+    const messages: AgentMessage[] = [
+      {
+        type: 'clarification_request',
+        content: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+        question: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+        messageKey: 'managed:run-ppt-pending:clarification',
+        metadata: {
+          runId: 'run-ppt-pending',
+          eventType: 'clarification_requested',
+          clarificationType: 'presentation_brief',
+        },
+      },
+    ];
+
+    const items = buildChatItems(messages);
+    const managedStatusItems = items.filter(
+      (item): item is Extract<ChatItem, { kind: 'managed_status' }> =>
+        item.kind === 'managed_status'
+    );
+
+    expect(managedStatusItems).toHaveLength(1);
+    expect(managedStatusItems[0]?.displayInTimeline).toBe(false);
+    expect(getActiveManagedStatusText(items)).toBe('正在生成澄清选项...');
+    expect(items.some((item) => item.kind === 'structured_clarification')).toBe(false);
+    expect(
+      items.some(
+        (item): item is Extract<ChatItem, { kind: 'agent' }> =>
+          item.kind === 'agent' && item.markdown.includes('**需要补充信息**')
+      )
+    ).toBe(false);
   });
 
   it('hides mcp confirmation approval markers from rendered user messages', () => {

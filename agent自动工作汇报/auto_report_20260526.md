@@ -142,3 +142,7 @@
 - 问题：PPT 预执行澄清已经写入 `structuredClarification`，但 `/sessions/:id/messages` 返回前的 metadata 白名单没有放行该字段，刷新/历史恢复后前端只能渲染普通“需要补充信息”文本。
 - 处理：在 `apps/api/src/routes/task-creation-routes.ts` 放行 `question`、`options`、`clarificationType`、`structuredClarification`，并补充路由回归测试验证 PPT 卡片 metadata 不被裁掉。
 - 验证：新增路由单测、现有前端澄清渲染测试、API/Web 类型检查、`git diff --check` 均通过。
+## PPT 澄清卡片生成空档期优化
+- 问题：PPT 澄清请求到达但卡片结构尚未可渲染时，前端会立即停止 processing 并设置 currentQuestion，导致底部旋转提示消失，用户看到空白等待。
+- 处理：将缺少 `structuredClarification` 的 `presentation_brief` 视为“卡片生成中”中间态，不进入可回答问题状态，并在对话项中保留隐藏 managed status，底部显示“正在生成澄清选项...”。
+- 验证：补充前端渲染与处理态规则测试，Web 类型检查和 `git diff --check` 通过。

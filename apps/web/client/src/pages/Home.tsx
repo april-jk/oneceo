@@ -3682,7 +3682,7 @@ export default function Home() {
               ))}
             </AnimatePresence>
 
-            {isProcessing && !currentQuestion && (
+            {(isProcessing || Boolean(managedProcessingText)) && !currentQuestion && (
               <NoticeMessage
                 tone="info"
                 icon={<Loader2 className="w-4 h-4 animate-spin" />}
@@ -4595,6 +4595,8 @@ type StructuredClarificationCardPlan = {
   cards: StructuredClarificationCard[];
   briefFields?: string[];
 };
+
+const STRUCTURED_CLARIFICATION_PENDING_TEXT = "正在生成澄清选项...";
 
 export type ChatItem =
   | {
@@ -6005,6 +6007,15 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           plan: structuredClarification,
           messageKey: message.messageKey,
         });
+        continue;
+      }
+      if (isPresentationBriefClarificationAwaitingCards(message)) {
+        flushProgress();
+        replaceManagedStatus(
+          STRUCTURED_CLARIFICATION_PENDING_TEXT,
+          message.messageKey,
+          { displayInTimeline: false },
+        );
         continue;
       }
       const previousMessage = index > 0 ? messages[index - 1] : null;
@@ -7826,6 +7837,15 @@ function readStructuredClarificationPlan(
       ? plan.briefFields.map((item) => asText(item)).filter(Boolean)
       : limitedCards.map((card) => card.id),
   };
+}
+
+function isPresentationBriefClarificationAwaitingCards(message: AgentMessage): boolean {
+  if (message.type !== "clarification_request") return false;
+  const metadata = toRecord(message.metadata);
+  return (
+    asText(metadata.clarificationType) === "presentation_brief" &&
+    !readStructuredClarificationPlan(metadata)
+  );
 }
 
 function ensureStructuredClarificationCardOptions(

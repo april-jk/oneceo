@@ -285,6 +285,23 @@ function toRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
+function hasStructuredClarificationPlan(metadataRaw: unknown): boolean {
+  const metadata = toRecord(metadataRaw);
+  if (toRecord(metadata.structuredClarification).kind === 'structured_clarification') {
+    return true;
+  }
+  return toRecord(toRecord(metadata.result).structuredClarification).kind === 'structured_clarification';
+}
+
+function isPresentationBriefClarificationAwaitingCards(message: AgentMessage): boolean {
+  if (message.type !== 'clarification_request') return false;
+  const metadata = toRecord(message.metadata);
+  return (
+    asText(metadata.clarificationType) === 'presentation_brief' &&
+    !hasStructuredClarificationPlan(metadata)
+  );
+}
+
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -1239,6 +1256,13 @@ export function deriveSessionStateFromMessages(messages: AgentMessage[]): {
   }
 
   const clarification = relevantMessages[lastClarificationIndex];
+  if (clarification && isPresentationBriefClarificationAwaitingCards(clarification)) {
+    return {
+      stopProcessing: Boolean(lastStopMessage),
+      runtimeStatus: lastTerminalMessage ? resolveTerminalMessageOutcome(lastTerminalMessage) : null,
+      currentQuestion: null,
+    };
+  }
   const hasUserResponseAfter = relevantMessages
     .slice(lastClarificationIndex + 1)
     .some((message) => message.type === 'user_response');
@@ -1257,7 +1281,10 @@ export function deriveSessionStateFromMessages(messages: AgentMessage[]): {
 }
 
 export function shouldStopProcessingForMessage(message: AgentMessage): boolean {
-  if (message.type === 'clarification_request' || message.type === 'plan_generated') {
+  if (message.type === 'clarification_request') {
+    return !isPresentationBriefClarificationAwaitingCards(message);
+  }
+  if (message.type === 'plan_generated') {
     return true;
   }
 
@@ -3626,17 +3653,20 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         const options = Array.isArray(rawOptions)
           ? rawOptions.map((item) => asText(item)).filter(Boolean)
           : [];
+        const awaitingPresentationCards =
+          asText(baseMetadata.clarificationType) === 'presentation_brief' &&
+          !hasStructuredClarificationPlan(baseMetadata);
         setCurrentQuestion(
-          question
+          !awaitingPresentationCards && question
             ? {
                 question,
                 options: options.length > 0 ? options : undefined,
               }
             : null
         );
-        setIsProcessing(false);
-        setManagedRunStreaming(false);
-        setManagedRunStatus('waiting_user');
+        setIsProcessing(awaitingPresentationCards);
+        setManagedRunStreaming(awaitingPresentationCards);
+        setManagedRunStatus(awaitingPresentationCards ? 'in_progress' : 'waiting_user');
         if (sessionKey) {
           void loadHistoryRef.current(sessionKey, { reason: 'managed_recovery' });
         }

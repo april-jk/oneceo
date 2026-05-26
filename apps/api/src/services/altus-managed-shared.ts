@@ -848,7 +848,7 @@ export function buildManagedToolDefinitions() {
       function: {
         name: 'ask_user',
         description:
-          'Ask the user for missing requirements through structured choice cards when blocked by clarification.',
+          'Ask the user one precise clarification question when blocked by missing requirements. Use structuredClarification only for PPT / presentation brief cards.',
         parameters: objectSchema(
           {
             question: { type: 'string', description: 'The clarification question.' },

@@ -363,8 +363,10 @@ test('buildTaskIntentProfile requests structured presentation brief for vague PP
   assert.equal(profile.clarificationType, 'presentation_brief');
   assert.equal(profile.structuredClarification?.kind, 'structured_clarification');
   assert.equal(profile.structuredClarification?.cards.length, 4);
+  assert.match(profile.structuredClarification?.title || '', /沐曦股份/);
+  assert.match(profile.structuredClarification?.cards[0]?.question || '', /沐曦股份/);
   for (const card of profile.structuredClarification?.cards || []) {
-    assert.ok(card.options.length >= 2 && card.options.length <= 4);
+    assert.equal(card.options.length, 3);
     assert.equal(card.options.filter((option) => option.recommended).length, 1);
   }
 });
@@ -484,10 +486,7 @@ test('buildTaskIntentProfile keeps clarifying the same field when a user respons
   assert.equal(profile.needsClarification, true);
   assert.equal(profile.clarificationType, 'artifact_type');
   assert.match(profile.clarificationQuestion, /我还需要先确认这一点/);
-  assert.equal(profile.structuredClarification?.kind, 'structured_clarification');
-  assert.equal(profile.structuredClarification?.cards[0]?.options.length, 3);
-  assert.equal(profile.structuredClarification?.cards[0]?.allowOther, true);
-  assert.equal(profile.structuredClarification?.cards[0]?.allowNote, false);
+  assert.equal(profile.structuredClarification, undefined);
 });
 
 test('buildTaskIntentProfile accepts a direct answer to pending artifact clarification without chaining another question', async () => {

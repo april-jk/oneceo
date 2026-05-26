@@ -6044,15 +6044,14 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         });
         continue;
       }
-      items.push({
-        kind: "structured_clarification",
-        question,
-        plan: buildStructuredClarificationPlanFromQuestion({
-          question,
-          options: message.options,
-        }),
-        messageKey: message.messageKey,
-      });
+      const optionLines =
+        message.options && message.options.length > 0
+          ? `\n\n${message.options.map((opt) => `- ${opt}`).join("\n")}`
+          : "";
+      pushAgentMarkdown(
+        `**${i18n.t("homeWorkspace.clarificationNeeded")}**\n\n${question}${optionLines}`,
+        message.messageKey,
+      );
       continue;
     }
 
@@ -7863,46 +7862,6 @@ function ensureStructuredClarificationCardOptions(
       isCustom: true,
     },
   ];
-}
-
-function buildStructuredClarificationPlanFromQuestion(input: {
-  question: string;
-  options?: string[];
-}): StructuredClarificationCardPlan {
-  const question = asText(input.question) || "请先确认一个关键选择。";
-  const generatedOptions = (Array.isArray(input.options) ? input.options : [])
-    .map((item) => asText(item))
-    .filter(Boolean)
-    .slice(0, 3)
-    .map((label, index) => ({
-      id: `option_${index + 1}`,
-      label,
-      description: index === 0 ? "按常见路径推进" : "按该方向收敛需求",
-      impact: "Altus 会按这个选择调整执行范围。",
-      recommended: index === 0,
-    }));
-  return {
-    kind: "structured_clarification",
-    taskType: "generic",
-    title: "请确认关键需求",
-    summary: "选择最接近的方向；第四项可填写你的自定义答案。",
-    maxCards: 4,
-    cards: [
-      {
-        id: "key_decision",
-        title: "关键选择",
-        question,
-        why: "避免自由文本不清楚",
-        selectionMode: "single",
-        required: true,
-        options: ensureStructuredClarificationCardOptions(generatedOptions),
-        allowOther: true,
-        allowNote: false,
-        notePlaceholder: "输入你的自定义答案",
-      },
-    ],
-    briefFields: ["key_decision"],
-  };
 }
 
 function isHiddenMcpConfirmationUserMessage(

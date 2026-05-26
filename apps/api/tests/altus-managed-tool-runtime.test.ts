@@ -3077,11 +3077,7 @@ test('ask_user preserves structured clarification type for pending state', async
     throw new Error('expected ask_user result');
   }
   assert.equal(result.clarificationType, 'artifact_type');
-  assert.equal(result.structuredClarification?.kind, 'structured_clarification');
-  assert.equal(result.structuredClarification?.cards.length, 1);
-  assert.equal(result.structuredClarification?.cards[0]?.options.length, 3);
-  assert.equal(result.structuredClarification?.cards[0]?.allowOther, true);
-  assert.equal(result.structuredClarification?.cards[0]?.allowNote, false);
+  assert.equal(result.structuredClarification, undefined);
 });
 
 test('ask_user attaches presentation structured clarification fallback when model omits cards', async () => {

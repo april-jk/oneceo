@@ -222,9 +222,7 @@ test('managed task intent profile carries a hard clarification gate for broad bu
   assert.match(profile.clarificationQuestion, /核心模块/);
   assert.match(profile.clarificationQuestion, /源码/);
   assert.match(profile.clarificationQuestion, /部署/);
-  assert.equal(profile.structuredClarification?.kind, 'structured_clarification');
-  assert.equal(profile.structuredClarification?.cards[0]?.options.length, 3);
-  assert.equal(profile.structuredClarification?.cards[0]?.allowOther, true);
+  assert.equal(profile.structuredClarification, undefined);
   assert.equal(profile.todoRequired, false);
   assert.equal(profile.todoReason, 'none');
 
@@ -240,8 +238,7 @@ test('managed task intent profile carries a hard clarification gate for broad bu
   assert.match(prompt, /Your next step must be `ask_user`/i);
   assert.match(prompt, /Do not call `todowrite`/i);
   assert.match(prompt, /Active clarification type/i);
-  assert.match(prompt, /Structured clarification card contract/i);
-  assert.match(prompt, /3 generated business options/i);
+  assert.doesNotMatch(prompt, /Structured clarification card contract/i);
 });
 
 test('managed prompt does not expose legacy direct PPT workflow globally', () => {

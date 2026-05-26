@@ -40,9 +40,7 @@ import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-servi
 import type { TaskClarificationType } from './task-intent-shape-service';
 import {
   buildPresentationStructuredClarificationPlan,
-  buildStructuredClarificationPlanFromQuestion,
   type StructuredClarificationCardPlan,
-  type StructuredClarificationFallbackType,
 } from './altus-structured-clarification-service';
 import { uploadToR2 } from './r2-client';
 
@@ -228,18 +226,13 @@ function shouldUsePresentationStructuredClarificationFallback(input: {
 function resolveAskUserStructuredClarification(input: {
   question: string;
   clarificationType?: Exclude<TaskClarificationType, 'none'>;
-  options?: string[];
   structuredClarification?: unknown;
 }) {
   return (
     normalizeStructuredClarificationPlan(input.structuredClarification) ||
     (shouldUsePresentationStructuredClarificationFallback(input)
-      ? buildPresentationStructuredClarificationPlan()
-      : buildStructuredClarificationPlanFromQuestion({
-          question: input.question,
-          options: input.options,
-          clarificationType: (input.clarificationType || 'none') as StructuredClarificationFallbackType,
-        }))
+      ? buildPresentationStructuredClarificationPlan({ userRequest: input.question })
+      : undefined)
   );
 }
 
@@ -2949,7 +2942,6 @@ export class AltusManagedToolRuntime {
       const structuredClarification = resolveAskUserStructuredClarification({
         question,
         clarificationType: normalizedClarificationType,
-        options,
         structuredClarification: rawArgs.structuredClarification,
       });
       return {

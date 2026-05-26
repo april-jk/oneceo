@@ -2,10 +2,7 @@ import type { ManagedSkillCatalogEntry, ManagedSkillContext } from './altus-mana
 import type { SessionConnectorStatus } from './session-connector-service';
 import { classifyTaskIntentShape, type TaskClarificationType } from './task-intent-shape-service';
 import { altusManagedDynamicContextBlockService } from './altus-managed-dynamic-context-blocks';
-import {
-  buildStructuredClarificationPlanFromQuestion,
-  type StructuredClarificationCardPlan,
-} from './altus-structured-clarification-service';
+import type { StructuredClarificationCardPlan } from './altus-structured-clarification-service';
 import {
   classifyPlatformCapabilityIntent,
   type PlatformCapabilityIntentDecision,
@@ -346,14 +343,6 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
     intentShape.candidateClarificationOptions.length > 0
       ? intentShape.candidateClarificationOptions
       : undefined;
-  const structuredClarification =
-    needsClarification && intentShape.candidateClarificationType !== 'none'
-      ? buildStructuredClarificationPlanFromQuestion({
-          question: clarificationQuestion,
-          options: clarificationOptions,
-          clarificationType: intentShape.candidateClarificationType,
-        })
-      : undefined;
   const deployableWebAppBlueprintRequired =
     mode === 'deployable_web_app' &&
     !needsClarification &&
@@ -377,7 +366,6 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
     clarificationQuestion,
     clarificationType: intentShape.candidateClarificationType,
     clarificationOptions,
-    structuredClarification,
     todoRequired:
       intentShape.candidateTodoSignals.explicitTodoRequest ||
       intentShape.candidateTodoSignals.hasMultipleSubtasks ||
@@ -588,10 +576,12 @@ export class AltusManagedPromptService {
       taskIntentProfile.structuredClarification
         ? [
             '# Structured clarification card contract',
-            '- The current request lacks decision-complete information and must be clarified through choice cards.',
+            '- The current request is a PPT / presentation task that lacks enough decision-complete brief information.',
             '- Your next action must be `ask_user`; do not call search, todowrite, render_pptx_from_instructions, shell_execute, or any execution tool first.',
             '- Ask the user with structured choice cards, not a long free-text question or plain "需要补充信息" block.',
             '- The card plan must contain at most 4 cards. Do not add a fifth question.',
+            '- Every card must be directly related to the user requested PPT topic, audience, source, depth, visual style, or content boundary.',
+            '- Do not ask abstract execution-preference questions such as "按推荐方案 / 快速推进 / 保证质量" unless the user request itself is about execution preference.',
             '- If you adapt the cards, keep one decision per card.',
             '- Each card must provide exactly 3 generated business options; the UI will render the fourth option as user-custom input.',
             '- Set `allowOther=true` and `allowNote=false` on every card.',
@@ -851,8 +841,8 @@ export class AltusManagedPromptService {
       '- Do not deliver a single flat worksheet as a finished workbook when the task clearly calls for structure, formulas, source sheets, or summaries.',
       '',
       '# Clarification rules',
-      '- If critical requirements are missing, call ask_user with `structuredClarification`; do not ask the user to answer only in free text.',
-      '- Every ask_user clarification must be rendered as at most 4 cards. Each card has 3 generated options plus a fourth user-custom option handled by the UI.',
+      '- If critical non-PPT requirements are missing, call ask_user with one precise question.',
+      '- For PPT / presentation brief clarification only, call ask_user with `structuredClarification` cards.',
       '- When calling ask_user for a missing requirement, include `clarificationType` when the question is about artifact type, tech stack, scope boundary, integration target, acceptance requirement, or presentation brief.',
       '- Do not ask unnecessary questions when a reasonable next step is clear.',
       '- For requests like "generate a PPT/docx/xlsx on topic X", you already have enough information to start. Use reasonable defaults and proceed instead of asking a generic meta-question.',

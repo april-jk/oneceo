@@ -31,7 +31,6 @@ import { altusClarificationTransitionAgent } from './altus-clarification-transit
 import {
   buildPresentationBriefClarificationQuestion,
   buildPresentationStructuredClarificationPlan,
-  buildStructuredClarificationPlanFromQuestion,
   coversPresentationBrief,
   shouldRequestPresentationBrief,
   type StructuredClarificationCardPlan,
@@ -366,16 +365,12 @@ function buildStructuredClarificationFallback(input: {
   clarificationType: TaskClarificationType;
   question: string;
   options?: string[];
+  userRequest?: string;
 }): StructuredClarificationCardPlan | undefined {
-  if (input.clarificationType === 'none') return undefined;
   if (input.clarificationType === 'presentation_brief') {
-    return buildPresentationStructuredClarificationPlan();
+    return buildPresentationStructuredClarificationPlan({ userRequest: input.userRequest || input.question });
   }
-  return buildStructuredClarificationPlanFromQuestion({
-    question: input.question,
-    options: input.options,
-    clarificationType: input.clarificationType,
-  });
+  return undefined;
 }
 
 async function pathExists(targetPath: string) {
@@ -588,6 +583,7 @@ function resolveClarificationDecision(input: {
         clarificationType: pendingType,
         question: followUp.question,
         options: followUp.options,
+        userRequest: combinedText,
       }),
     };
   }
@@ -602,7 +598,7 @@ function resolveClarificationDecision(input: {
       clarificationType: 'presentation_brief',
       clarificationQuestion: question.question,
       clarificationOptions: question.options,
-      structuredClarification: buildPresentationStructuredClarificationPlan(),
+      structuredClarification: buildPresentationStructuredClarificationPlan({ userRequest: combinedText }),
     };
   }
 
@@ -671,6 +667,7 @@ function resolveClarificationDecision(input: {
         clarificationType,
         question: question.question,
         options: question.options,
+        userRequest: combinedText,
       }),
     };
   }
@@ -776,6 +773,7 @@ function buildProfileFromTransition(input: TransitionResolvedProfileInput): Altu
         clarificationType,
         question: fallbackQuestion,
         options: input.reduced.options,
+        userRequest: input.texts.join('\n'),
       }),
       clarificationTransition: {
         nextState: input.reduced.nextState,
@@ -798,6 +796,7 @@ function buildProfileFromTransition(input: TransitionResolvedProfileInput): Altu
         clarificationType,
         question: clarificationQuestion,
         options: input.reduced.options,
+        userRequest: input.texts.join('\n'),
       }),
       clarificationTransition: {
         nextState: 'clarifying',

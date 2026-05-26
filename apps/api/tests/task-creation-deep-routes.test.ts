@@ -409,15 +409,32 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent prefers redis c
     executor: 'codex',
   });
   redisCacheAny.getRecentMessagesPage = async () => ({
-    messages: [{ id: 'redis-message-1', role: 'user', content: 'from redis recent' }],
+    messages: [
+      {
+        id: 'redis-message-1',
+        messageKey: 'db:redis-message-1',
+        role: 'user',
+        messageType: 'user_input',
+        content: 'from redis recent',
+        metadata: { timelineCursor: 1, messageKey: 'db:redis-message-1' },
+      },
+    ],
     source: 'redis_recent',
     oldestCursor: 1,
     newestCursor: 1,
     hasOlderHistory: false,
   });
-  sessionDaoAny.getRecentMessages = async () => {
-    throw new Error('db recent should not be reached when redis cache hits');
-  };
+  sessionDaoAny.getRecentMessages = async () => [
+    {
+      id: 'redis-message-1',
+      role: 'user',
+      content: 'from redis recent',
+      messageType: 'user_input',
+      metadata: { timelineCursor: 1, messageKey: 'db:redis-message-1' },
+      timelineCursor: 1,
+      createdAt: new Date(1712100000000).toISOString(),
+    },
+  ];
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-redis-recent/messages/recent`, {
@@ -428,6 +445,102 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent prefers redis c
     assert.equal(response.status, 200);
     assert.equal(payload.data.source, 'redis_recent');
     assert.equal(payload.data.messages[0].content, 'from redis recent');
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/task-creation/sessions/:sessionId/messages/recent rejects stale redis clarification metadata', async () => {
+  const server = await startServer();
+  const structuredClarification = {
+    kind: 'structured_clarification',
+    taskType: 'ppt',
+    title: '沐曦股份 PPT 制作前确认关键决策',
+    maxCards: 4,
+    cards: [
+      {
+        id: 'purpose_audience',
+        title: '演示目的与受众',
+        question: '沐曦股份 PPT 主要给谁看？',
+        selectionMode: 'single',
+        required: true,
+        allowOther: true,
+        allowNote: false,
+        options: [
+          { id: 'investor_pitch', label: '投资人融资路演' },
+          { id: 'executive_strategy', label: '内部高管战略汇报' },
+          { id: 'brand_business_intro', label: '企业品牌与业务推介' },
+        ],
+      },
+    ],
+    briefFields: ['purpose_audience'],
+  };
+  let cachedPayload: Record<string, unknown> | null = null;
+  sessionDaoAny.getSession = async (sessionId: string) => ({ id: sessionId, userId: 'owner-user' });
+  fileStoreAny.getSession = async (sessionId: string) => ({
+    ...ownerSession(sessionId),
+    mode: 'altus',
+    executor: 'altus',
+    runtime: { executionMode: 'managed', executor: 'altus' },
+  });
+  redisCacheAny.getRecentMessagesPage = async () => ({
+    messages: [
+      {
+        id: 'message-clarification',
+        messageKey: 'managed:run-ppt:clarification',
+        role: 'agent',
+        messageType: 'clarification_request',
+        content: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+        metadata: {
+          timelineCursor: 10,
+          messageKey: 'managed:run-ppt:clarification',
+          clarificationType: 'presentation_brief',
+        },
+      },
+    ],
+    source: 'redis_recent_stale',
+    oldestCursor: 10,
+    newestCursor: 10,
+    hasOlderHistory: false,
+  });
+  redisCacheAny.setRecentMessagesPage = async (input: { payload: Record<string, unknown> }) => {
+    cachedPayload = input.payload;
+  };
+  sessionDaoAny.getRecentMessages = async () => [
+    {
+      id: 'message-clarification',
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+      metadata: {
+        timelineCursor: 10,
+        messageKey: 'managed:run-ppt:clarification',
+        question: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+        clarificationType: 'presentation_brief',
+        structuredClarification,
+        eventType: 'clarification_requested',
+      },
+      timelineCursor: 10,
+      createdAt: new Date(1712100000000).toISOString(),
+    },
+  ];
+
+  try {
+    const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-redis-stale-ppt/messages/recent`, {
+      headers: { 'x-test-user-id': 'owner-user' },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.notEqual(payload.data.source, 'redis_recent_stale');
+    assert.equal(
+      payload.data.messages[0]?.metadata?.structuredClarification?.kind,
+      'structured_clarification'
+    );
+    assert.equal(
+      (cachedPayload?.messages as any[])?.[0]?.metadata?.structuredClarification?.kind,
+      'structured_clarification'
+    );
   } finally {
     await server.close();
   }

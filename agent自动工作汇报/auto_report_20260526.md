@@ -146,3 +146,7 @@
 - 问题：PPT 澄清请求到达但卡片结构尚未可渲染时，前端会立即停止 processing 并设置 currentQuestion，导致底部旋转提示消失，用户看到空白等待。
 - 处理：将缺少 `structuredClarification` 的 `presentation_brief` 视为“卡片生成中”中间态，不进入可回答问题状态，并在对话项中保留隐藏 managed status，底部显示“正在生成澄清选项...”。
 - 验证：补充前端渲染与处理态规则测试，Web 类型检查和 `git diff --check` 通过。
+## PPT 澄清卡片刷新持久化修复
+- 问题：页面刷新后本地缓存会短暂显示卡片，但 `/messages/recent` 可能命中旧 Redis recent 页；旧页缺少 `structuredClarification`，却因 cursor/messageKey 相同被误判新鲜，覆盖掉可交互卡片。
+- 处理：recent cache freshness 增加澄清 metadata 校验；当 DB 最新消息有 `presentation_brief`/`structuredClarification` 而 Redis 页缺失时，强制从 DB 重建 recent 响应并回写缓存。
+- 验证：新增 stale redis clarification metadata 路由测试，前端卡片渲染/processing 规则测试、API/Web 类型检查和 `git diff --check` 通过。

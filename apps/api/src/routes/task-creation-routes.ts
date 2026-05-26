@@ -3416,6 +3416,33 @@ function resolveTimelineMessageKey(message: any): string {
   return asText(message?.messageKey) || asText(pickRecord(message?.metadata).messageKey);
 }
 
+function hasStructuredClarificationMetadata(message: TimelineMessage | undefined): boolean {
+  const metadata = pickRecord(message?.metadata);
+  if (asText(pickRecord(metadata.structuredClarification).kind) === 'structured_clarification') {
+    return true;
+  }
+  return asText(pickRecord(pickRecord(metadata.result).structuredClarification).kind) === 'structured_clarification';
+}
+
+function hasMatchingClarificationMetadata(input: {
+  redisMessage: TimelineMessage | undefined;
+  dbMessage: TimelineMessage | undefined;
+}) {
+  const dbMetadata = pickRecord(input.dbMessage?.metadata);
+  const redisMetadata = pickRecord(input.redisMessage?.metadata);
+  const dbClarificationType = asText(dbMetadata.clarificationType);
+  if (!dbClarificationType) {
+    return true;
+  }
+  if (asText(redisMetadata.clarificationType) !== dbClarificationType) {
+    return false;
+  }
+  if (hasStructuredClarificationMetadata(input.dbMessage)) {
+    return hasStructuredClarificationMetadata(input.redisMessage);
+  }
+  return true;
+}
+
 function isRecentRedisPageFresh(input: {
   redisPage: Record<string, unknown>;
   latestDbMessages: TimelineMessage[];
@@ -3442,6 +3469,14 @@ function isRecentRedisPageFresh(input: {
   const redisMessageKey = resolveTimelineMessageKey(redisLatest);
   const dbMessageKey = resolveTimelineMessageKey(dbLatest);
   if (dbMessageKey && redisMessageKey !== dbMessageKey) {
+    return false;
+  }
+  if (
+    !hasMatchingClarificationMetadata({
+      redisMessage: redisLatest,
+      dbMessage: dbLatest,
+    })
+  ) {
     return false;
   }
   return true;

@@ -1020,9 +1020,6 @@ private async chargeForModelCall(state: AltusRunState, input: {
   private resolvePreExecutionClarificationQuestion(state: AltusRunState) {
     const profile = state.input.taskIntentProfile;
     const question = asText(profile?.clarificationQuestion);
-    if (profile?.structuredClarification) {
-      return '';
-    }
     if (!profile?.needsClarification || !question) {
       return '';
     }

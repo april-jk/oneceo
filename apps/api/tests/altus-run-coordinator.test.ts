@@ -3238,6 +3238,111 @@ test('execute requests clarification and transitions to waiting_user', async () 
   assert.equal(eventCalls[3]?.payload.messageKey, 'managed:run-coordinator-clarify:clarification');
 });
 
+test('execute persists pre-execution structured clarification cards without model roundtrip', async () => {
+  const state = createState(
+    'run-coordinator-structured-clarify',
+    'session-coordinator-structured-clarify',
+    '帮我分析一下沐曦股份，做个 ppt'
+  );
+  const structuredClarification = {
+    kind: 'structured_clarification' as const,
+    taskType: 'ppt' as const,
+    title: '沐曦股份 PPT 制作前确认关键决策',
+    summary: '先确认与当前 PPT 直接相关的关键决策。',
+    maxCards: 4 as const,
+    briefFields: ['purpose_audience'],
+    cards: [
+      {
+        id: 'purpose_audience',
+        title: '演示目的与受众',
+        question: '沐曦股份 PPT 主要给谁看？',
+        why: '决定叙事角度和信息密度',
+        selectionMode: 'single' as const,
+        required: true,
+        allowOther: true,
+        allowNote: false,
+        options: [
+          {
+            id: 'investor_pitch',
+            label: '投资人融资路演',
+            description: '强调投资价值',
+            impact: '突出市场和融资用途。',
+            recommended: true,
+          },
+          {
+            id: 'executive_strategy',
+            label: '内部高管战略汇报',
+            description: '强调战略判断',
+            impact: '突出风险和资源投入。',
+          },
+          {
+            id: 'brand_business_intro',
+            label: '企业品牌与业务推介',
+            description: '强调业务亮点',
+            impact: '突出业务叙事。',
+          },
+        ],
+      },
+    ],
+  };
+  state.input.taskIntentProfile = {
+    ...state.input.taskIntentProfile,
+    needsClarification: true,
+    clarificationType: 'presentation_brief',
+    clarificationQuestion: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+    structuredClarification,
+  };
+  const setupCalls: Record<string, unknown>[] = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      setupCalls.push({ type: 'timeline', input });
+    }),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return { sequence: eventCalls.length, payload };
+    }),
+  };
+  const lifecycleService = {
+    markWaitingUser: mock.fn(async () => lifecycleCalls.push('waiting_user')),
+  };
+  const setPendingClarificationMock = mock.method(
+    taskCreationFileMemoryStore,
+    'setPendingClarification',
+    async () => {}
+  );
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => {
+    throw new Error('model tool execution should not run for pre-execution structured clarification');
+  });
+  global.fetch = mock.fn(async () => {
+    throw new Error('model fetch should not run for pre-execution structured clarification');
+  }) as typeof fetch;
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeMock.mock.callCount(), 0);
+  assert.equal((global.fetch as any).mock.callCount(), 0);
+  assert.equal(setPendingClarificationMock.mock.callCount(), 1);
+  assert.deepEqual(lifecycleCalls, ['waiting_user']);
+  assert.equal(state.status, 'waiting_user');
+
+  const timelineCall = setupCalls.find((entry) => entry.type === 'timeline') as any;
+  assert.equal(timelineCall.input.messageType, 'clarification_request');
+  assert.equal(timelineCall.input.metadata.structuredClarification, structuredClarification);
+  assert.equal(eventCalls[0]?.eventType, 'clarification_requested');
+  assert.equal(eventCalls[0]?.payload.structuredClarification, structuredClarification);
+});
+
 test('execute stops the turn when google workspace confirmation is required', async () => {
   const state = createState('run-coordinator-google-confirmation', 'session-coordinator-google-confirmation');
   const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];

@@ -170,3 +170,8 @@
 - 问题：会话 `14a2c535-159c-4aec-8107-f774db2c1f01` 的 PPT confirmed brief 写了“官网、公告、权威媒体优先”，旧 intent 规则把 `官网` 当成网页交付信号，误判为 `deployable_web_app`，继而触发 web shell、视觉检测和 `debug_open_page` 打开 render report。
 - 处理：PPT/演示文稿上下文中将 `官网/企业官网` 解释为资料来源，不再单独触发 web app；prompt 明确 PPTX/DOCX/XLSX/PDF/downloadable office 交付物不走网站调试/视觉检测，PPT render report 不能用 `debug_open_page` 打开。
 - 验证：补充 task intent、managed prompt、managed setup 回归测试，继续保留真实网站/HTML 任务的 web app 路径和视觉检测要求。
+
+## PPT Archetype 路由与质量增强方案文档
+- 做了什么：根据竞品对比反馈，新增 `20260527_PPT任务作用域Archetype路由与质量增强方案_[20260527-0015已采用].md`，明确 PPT 质量提升应采用 task-scoped module，而不是污染 Altus 全局 Agent。
+- 关键决策：不默认投资路演；先路由 Deck Archetype，再组合通用 Slide Archetype Library、Evidence-First Research Plan、Style Kit 与 PPT 专用 QA。
+- 后续计划：文档提交后进入代码实现，优先落第一阶段低风险 prompt/context 增强，并用测试确保非 PPT 任务不可见。

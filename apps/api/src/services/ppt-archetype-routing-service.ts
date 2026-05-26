@@ -161,37 +161,37 @@ const EVIDENCE_QUESTIONS: Record<PptDeckArchetype, string[]> = {
 
 const SOURCE_COVERAGE_RULES: Record<PptDeckArchetype, string[]> = {
   investor_pitch: [
-    'Cover at least these evidence buckets before rendering: company filing or official disclosure, financials/IPO, product and technical validation, market size, competition, risk factors, team/funding.',
+    'During research and drafting, try to cover these evidence buckets: company filing or official disclosure, financials/IPO, product and technical validation, market size, competition, risk factors, team/funding.',
     'Do not use high-impact numbers from web_search snippets alone; call web_extract on the source page or downgrade the claim to a qualitative statement.',
     'Prefer at least 6 distinct cited sources for a 12-15 slide investor pitch; if fewer are available, explicitly record openQuestions instead of filling gaps with unsupported figures.',
     'Use the user-selected visual/story style from the confirmed brief in the deck name, final summary, and style kit; archetype defaults must not overwrite that choice.',
   ],
   internal_strategy_review: [
-    'Cover at least these evidence buckets before rendering: current-state facts, operating or financial metrics, strategic options, constraints/risks, and recommended action evidence.',
+    'During research and drafting, try to cover these evidence buckets: current-state facts, operating or financial metrics, strategic options, constraints/risks, and recommended action evidence.',
     'Do not use high-impact numbers from web_search snippets alone; call web_extract on the source page or downgrade the claim to a qualitative statement.',
   ],
   brand_business_intro: [
-    'Cover at least these evidence buckets before rendering: official positioning, product/service capabilities, customer value proof, cases or partnerships, and cooperation model.',
+    'During research and drafting, try to cover these evidence buckets: official positioning, product/service capabilities, customer value proof, cases or partnerships, and cooperation model.',
     'Prefer official and customer-facing sources; avoid investor-only valuation claims unless the user asks for them.',
   ],
   industry_research_report: [
-    'Cover at least these evidence buckets before rendering: market size, demand drivers, competitive landscape, trend evidence, opportunity/risk evidence, and source methodology.',
+    'During research and drafting, try to cover these evidence buckets: market size, demand drivers, competitive landscape, trend evidence, opportunity/risk evidence, and source methodology.',
     'Do not use high-impact market numbers from web_search snippets alone; call web_extract on the report/article or downgrade the claim.',
   ],
   technical_seminar: [
-    'Cover at least these evidence buckets before rendering: technical principle, architecture, benchmark or metric definition, implementation case, limitation, and future trend.',
+    'During research and drafting, try to cover these evidence buckets: technical principle, architecture, benchmark or metric definition, implementation case, limitation, and future trend.',
     'Prefer primary technical documents, papers, official docs, or benchmark pages over generic media summaries.',
   ],
   product_solution_deck: [
-    'Cover at least these evidence buckets before rendering: pain evidence, solution capability, architecture feasibility, feature value, implementation path, and operational constraints.',
+    'During research and drafting, try to cover these evidence buckets: pain evidence, solution capability, architecture feasibility, feature value, implementation path, and operational constraints.',
     'Claims about integration or implementation feasibility need extracted source detail or must be framed as assumptions.',
   ],
   consulting_recommendation: [
-    'Cover at least these evidence buckets before rendering: diagnosis facts, option evidence, tradeoffs, recommendation rationale, implementation roadmap, and risk evidence.',
+    'During research and drafting, try to cover these evidence buckets: diagnosis facts, option evidence, tradeoffs, recommendation rationale, implementation roadmap, and risk evidence.',
     'Do not hide weak evidence; put unresolved assumptions into openQuestions or a caveat slide.',
   ],
   periodic_review: [
-    'Cover at least these evidence buckets before rendering: goals, progress metrics, issue/risk facts, changes since last period, and next action evidence.',
+    'During research and drafting, try to cover these evidence buckets: goals, progress metrics, issue/risk facts, changes since last period, and next action evidence.',
     'Treat numbers as status tracking and preserve date, unit, and owner when available.',
   ],
 };
@@ -276,10 +276,10 @@ export function renderPptGenerationContext(context: PptGenerationContext): strin
     `- Recommended slide archetypes: ${context.slideArchetypes.join(', ')}.`,
     '- Evidence questions:',
     ...context.evidenceQuestions.map((item) => `  - ${item}`),
-    '- Source coverage gate:',
+    '- Source coverage guidance (quality preference, not a blocking gate):',
     ...context.sourceCoverageRules.map((item) => `  - ${item}`),
-    '- Retrieval workflow: use web_search to find candidate sources, then use web_extract on the strongest primary or high-authority sources before writing render instructions. Search result snippets are discovery signals, not sufficient evidence for final slide facts.',
-    '- Do not call render_pptx_from_instructions until the source coverage gate is satisfied, or the remaining gaps are explicitly recorded in openQuestions and unsupported claims are downgraded.',
+    '- Retrieval workflow: use web_search to find candidate sources, then try to use web_extract on the strongest primary or high-authority sources before writing render instructions. Search result snippets are discovery signals, not sufficient evidence for final slide facts.',
+    '- Source coverage is not allowed to block final delivery. If extraction or coverage is incomplete after reasonable attempts, continue to render, record the remaining gaps in openQuestions/source notes, and downgrade unsupported claims.',
     '- Style kit requirements:',
     ...context.styleKitDirectives.map((item) => `  - ${item}`),
     '- Use PPT-specific preflight and render verification. Do not use website debug_open_page / browser_interact / web visual detection for PPTX deliverables.',

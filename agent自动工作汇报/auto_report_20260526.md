@@ -110,3 +110,19 @@
 2. `pnpm --filter web check`：通过。
 3. `pnpm --filter api type-check`：通过。
 4. 额外运行 `src/tests/managed-clarification-rendering.test.ts` 时发现 2 个既有断言与当前语言/渲染规则不一致，和本次确认卡修复无关，本次未混入处理。
+
+## Altus 续聊复用 sandbox 的 sandbox_info 瞬断修复
+
+做了什么：
+
+1. 排查会话 `a4b8d017-d746-4434-bc23-be539d8fce79` 后续 managed run 失败，确认首轮已在 sandbox `i11rc53p7evpvkfxysd95` 成功生成 PPT，后续三次失败均停在 provision 的 `sandbox_info`。
+2. 直接探测同一 sandbox：`getSandboxInfo()` 返回 `fetch failed / ECONNRESET`，但 `runCommand("printf ...")` 成功，说明 sandbox 仍可执行，失败是控制面信息查询瞬断。
+3. 修正 `sandbox-agent-provision-service`：已判定复用的 Altus sandbox 遇到 `sandbox_info` 控制面瞬断时降级为 warning，复用 DB 中已有 metadata，并继续用 `commands_ready` 作为真实执行能力门禁。
+4. 继续做闭环检查后，补齐 `ensureNekoDebug()` 的同类风险：debug runtime 已有历史 URL 时，`getSandboxHost()` 控制面瞬断复用旧 URL，避免失败从 `sandbox_info` 挪到 debug host 解析。
+5. 同步更新 Altus Sandbox 恢复设计文档，记录本次边界：真实 sandbox 不可用错误仍走恢复链路，控制面瞬断不提前终止短时间续聊。
+
+验证结果：
+
+1. 已用真实 sandbox `i11rc53p7evpvkfxysd95` 验证命令通道可执行。
+2. 已补充 `sandbox-agent-provision-service.test.ts` 控制面瞬断分类回归。
+3. 已补充 `sandbox-debug-service.test.ts` debug host 解析瞬断复用旧 URL 回归。

@@ -344,6 +344,19 @@ function isSandboxUnavailableError(error: unknown): boolean {
   );
 }
 
+function isSandboxControlPlaneTransientError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('fetch failed') ||
+    normalized.includes('econnreset') ||
+    normalized.includes('connect timeout') ||
+    normalized.includes('und_err_connect_timeout') ||
+    normalized.includes('socket hang up') ||
+    normalized.includes('tls connection')
+  );
+}
+
 async function markSandboxClosedBestEffort(sessionId: string, reason: string) {
   try {
     await sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, {
@@ -1424,11 +1437,29 @@ export class SandboxAgentProvisionService {
       const isReused = Boolean(reusable);
 
       try {
-        const info = await runStep('sandbox_info', () => e2bConnector.getSandboxInfo(sessionId));
-        const trafficAccessToken =
-          (info as any)?.trafficAccessToken || (info as any)?.traffic_access_token || null;
         const existingEnvironment = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
         const existingMetadata = ((existingEnvironment?.metadata || {}) as Record<string, unknown>) || {};
+        let info: any = null;
+        try {
+          info = await runStep('sandbox_info', () => e2bConnector.getSandboxInfo(sessionId));
+        } catch (error) {
+          if (!isReused || executor !== 'altus' || !isSandboxControlPlaneTransientError(error)) {
+            throw error;
+          }
+          writeConnectorDebugLog('[PROVISION_REUSED_SANDBOX_INFO_SKIPPED]', {
+            taskSessionId: taskSessionId || null,
+            executor,
+            orchestratorSessionId: sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          }, 'warn');
+        }
+        const existingE2bMetadata = (existingMetadata.e2b as Record<string, unknown> | undefined) || {};
+        const trafficAccessToken =
+          (info as any)?.trafficAccessToken ||
+          (info as any)?.traffic_access_token ||
+          pickString(existingE2bMetadata.trafficAccessToken) ||
+          pickString(existingE2bMetadata.traffic_access_token) ||
+          null;
 
         await runStep('commands_ready', () => waitForSandboxCommands(sessionId));
 
@@ -1661,19 +1692,19 @@ export class SandboxAgentProvisionService {
           executor,
           codexExecutionMode: codexExecutionMode || undefined,
           codexMode: codexExecutionMode || undefined,
-          sandboxBaseUrl: baseUrl,
-          sandboxPort: baseUrl ? e2bConfig.opencodePort : undefined,
-          sandboxHost: host,
+          sandboxBaseUrl: baseUrl || existingMetadata.sandboxBaseUrl,
+          sandboxPort: baseUrl ? e2bConfig.opencodePort : existingMetadata.sandboxPort,
+          sandboxHost: host || existingMetadata.sandboxHost,
           workspaceRoot: workspaceRoot || undefined,
           stateRoot: stateRoot || undefined,
-          altusBaseUrl: executor === 'altus' ? baseUrl : undefined,
-          altusPort: executor === 'altus' && baseUrl ? e2bConfig.opencodePort : undefined,
-          altusHost: executor === 'altus' ? host : undefined,
+          altusBaseUrl: executor === 'altus' ? baseUrl || existingMetadata.altusBaseUrl : undefined,
+          altusPort: executor === 'altus' ? (baseUrl ? e2bConfig.opencodePort : existingMetadata.altusPort) : undefined,
+          altusHost: executor === 'altus' ? host || existingMetadata.altusHost : undefined,
           altusWorkspaceRoot: executor === 'altus' ? workspaceRoot || undefined : undefined,
           altusStateRoot: executor === 'altus' ? stateRoot || undefined : undefined,
-          opencodeBaseUrl: baseUrl,
-          opencodePort: baseUrl ? e2bConfig.opencodePort : undefined,
-          opencodeHost: host,
+          opencodeBaseUrl: baseUrl || existingMetadata.opencodeBaseUrl,
+          opencodePort: baseUrl ? e2bConfig.opencodePort : existingMetadata.opencodePort,
+          opencodeHost: host || existingMetadata.opencodeHost,
           opencodeWorkspaceRoot: workspaceRoot || undefined,
           opencodeStateRoot: stateRoot || undefined,
           codexArchiveHome: codexArchiveHome || undefined,
@@ -1795,4 +1826,5 @@ export const sandboxAgentProvisionService = new SandboxAgentProvisionService();
 export const __sandboxAgentProvisionInternalsForTest = {
   buildOpencodeConfig,
   buildSandboxVerifyScript,
+  isSandboxControlPlaneTransientError,
 };

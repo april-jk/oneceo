@@ -51,6 +51,27 @@ test('provisionWithLock shares in-flight work only for the same executor surface
   assert.equal(thirdResult.sessionId, 'sandbox-opencode');
 });
 
+test('sandbox info transient control-plane errors are classified separately from sandbox death', () => {
+  assert.equal(
+    __sandboxAgentProvisionInternalsForTest.isSandboxControlPlaneTransientError(
+      new TypeError('fetch failed')
+    ),
+    true
+  );
+  assert.equal(
+    __sandboxAgentProvisionInternalsForTest.isSandboxControlPlaneTransientError(
+      new Error('Client network socket disconnected before secure TLS connection was established')
+    ),
+    true
+  );
+  assert.equal(
+    __sandboxAgentProvisionInternalsForTest.isSandboxControlPlaneTransientError(
+      new Error('sandbox was not found')
+    ),
+    false
+  );
+});
+
 test('opencode config uses fixed sandbox browser dependency paths', () => {
   const config = JSON.parse(
     __sandboxAgentProvisionInternalsForTest.buildOpencodeConfig({

@@ -2,6 +2,7 @@ import path from 'node:path';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { touchSandbox } from './sandbox-activity-service';
 import { sanitizePptFileName, validatePptRenderInstruction } from './ppt-render-instruction-validator';
+import { validateHtmlDeckSpec } from './ppt-html-deck-validator';
 
 function asText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -10,6 +11,12 @@ function asText(value: unknown) {
 function shellEscape(value: string) {
   if (!value) return "''";
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function htmlDeckGeometry(aspectRatio: '16:9' | '4:3') {
+  return aspectRatio === '4:3'
+    ? { widthPx: 1024, heightPx: 768, widthIn: 10, heightIn: 7.5, layout: 'LAYOUT_4X3' }
+    : { widthPx: 1280, heightPx: 720, widthIn: 13.333333, heightIn: 7.5, layout: 'LAYOUT_WIDE' };
 }
 
 function toWorkspaceRelative(workspaceRoot: string, absolutePath: string) {
@@ -21,7 +28,9 @@ function toWorkspaceRelative(workspaceRoot: string, absolutePath: string) {
 }
 
 export function buildRendererScript() {
-  return String.raw`import fs from 'node:fs/promises';
+  return String.raw`import { lookup } from 'node:dns/promises';
+import fs from 'node:fs/promises';
+import net from 'node:net';
 import pptxgen from 'pptxgenjs';
 
 const [inputPath, outputPath, reportPath] = process.argv.slice(2);
@@ -37,6 +46,7 @@ const slides = Array.isArray(instructions.slides) ? instructions.slides : [];
 const colorTokens = theme.colorTokens || {};
 const warnings = [];
 const assetRoot = outputPath.replace(/\/[^/]+$/, '') + '/assets';
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 function color(value, fallback) {
   const rawValue = String(value || fallback || '').trim().replace(/^#/, '');
@@ -166,24 +176,179 @@ function imageExtension(contentType, url) {
   return 'jpg';
 }
 
+function cleanIpHost(value) {
+  return String(value || '').replace(/^\[|\]$/g, '').toLowerCase();
+}
+
+function isBlockedIpv4Address(address) {
+  const parts = cleanIpHost(address).split('.').map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  return (
+    parts[0] === 0 ||
+    parts[0] === 10 ||
+    parts[0] === 127 ||
+    (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) ||
+    (parts[0] === 169 && parts[1] === 254) ||
+    (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+    (parts[0] === 192 && (parts[1] === 0 || parts[1] === 168)) ||
+    (parts[0] === 198 && (parts[1] === 18 || parts[1] === 19)) ||
+    parts[0] >= 224
+  );
+}
+
+function isBlockedIpv6Address(address) {
+  const normalized = cleanIpHost(address);
+  if (!normalized || normalized === '::' || normalized === '::1') return true;
+  if (/^(?:0+:){2,7}0*1$/.test(normalized) || /^(?:0+:){2,7}0*$/.test(normalized)) return true;
+  const mappedIpv4 = normalized.match(/(?:^|:)ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mappedIpv4) return isBlockedIpv4Address(mappedIpv4[1]);
+  const mappedIpv4Hex = normalized.match(/(?:^|:)ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mappedIpv4Hex) {
+    const high = Number.parseInt(mappedIpv4Hex[1], 16);
+    const low = Number.parseInt(mappedIpv4Hex[2], 16);
+    if (Number.isInteger(high) && Number.isInteger(low)) {
+      const mappedAddress = [
+        (high >> 8) & 255,
+        high & 255,
+        (low >> 8) & 255,
+        low & 255,
+      ].join('.');
+      return isBlockedIpv4Address(mappedAddress);
+    }
+  }
+  const first = Number.parseInt(normalized.split(':')[0] || '0', 16);
+  if (!Number.isFinite(first)) return false;
+  return (
+    (first & 0xfe00) === 0xfc00 ||
+    (first & 0xffc0) === 0xfe80 ||
+    (first & 0xff00) === 0xff00
+  );
+}
+
+function isBlockedIpAddress(address) {
+  const normalized = cleanIpHost(address);
+  const family = net.isIP(normalized);
+  if (family === 4) return isBlockedIpv4Address(normalized);
+  if (family === 6) return isBlockedIpv6Address(normalized);
+  return false;
+}
+
+function isBlockedHost(host) {
+  const normalized = cleanIpHost(host);
+  if (
+    normalized === 'localhost' ||
+    normalized === '0.0.0.0' ||
+    normalized.endsWith('.localhost') ||
+    normalized.endsWith('.local')
+  ) {
+    return true;
+  }
+  return isBlockedIpAddress(normalized);
+}
+
+async function assertImageUrlAllowed(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { ok: false, code: 'image_download_invalid_url' };
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { ok: false, code: 'image_download_invalid_url' };
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (isBlockedHost(host)) {
+    return { ok: false, code: 'image_download_blocked_host', host };
+  }
+  if (net.isIP(cleanIpHost(host))) {
+    return { ok: true };
+  }
+  let records;
+  try {
+    records = await lookup(host, { all: true, verbatim: true });
+  } catch (error) {
+    return { ok: false, code: 'image_download_dns_failed', host, message: String(error?.message || error) };
+  }
+  const blockedRecord = records.find((record) => isBlockedIpAddress(record.address));
+  if (blockedRecord) {
+    return { ok: false, code: 'image_download_blocked_resolved_address', host, address: blockedRecord.address };
+  }
+  return { ok: true };
+}
+
+async function fetchImageResponse(url, signal, slideIndex) {
+  let currentUrl = url;
+  for (let redirectCount = 0; redirectCount < 4; redirectCount += 1) {
+    const allowance = await assertImageUrlAllowed(currentUrl);
+    if (!allowance.ok) {
+      warnings.push({ slide: slideIndex, url: currentUrl, ...allowance });
+      return null;
+    }
+    const response = await fetch(currentUrl, {
+      headers: { 'user-agent': 'OneCEO PPT Renderer' },
+      signal,
+      redirect: 'manual',
+    });
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get('location');
+      if (!location) return { response, url: currentUrl };
+      currentUrl = new URL(location, currentUrl).href;
+      continue;
+    }
+    return { response, url: currentUrl };
+  }
+  warnings.push({ slide: slideIndex, code: 'image_download_too_many_redirects', url });
+  return null;
+}
+
+function layoutExpectsProvidedImage(pageType, layoutFamily) {
+  return (
+    pageType === 'cover' ||
+    layoutFamily.includes('image-grid') ||
+    layoutFamily.includes('quote-image') ||
+    layoutFamily.includes('lead-image-side-text') ||
+    layoutFamily.includes('gallery')
+  );
+}
+
 async function downloadImage(slot, slideIndex) {
   const url = imageUrl(slot);
   if (!/^https?:\/\//i.test(url)) return null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
   try {
-    const response = await fetch(url, { headers: { 'user-agent': 'OneCEO PPT Renderer' } });
+    const fetched = await fetchImageResponse(url, controller.signal, slideIndex);
+    if (!fetched) return null;
+    const { response, url: finalUrl } = fetched;
     if (!response.ok) {
-      warnings.push({ slide: slideIndex, code: 'image_download_failed', url, status: response.status });
+      warnings.push({ slide: slideIndex, code: 'image_download_failed', url: finalUrl, status: response.status });
+      return null;
+    }
+    const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+    if (!contentType.startsWith('image/')) {
+      warnings.push({ slide: slideIndex, code: 'image_download_non_image_content_type', url: finalUrl, contentType });
+      return null;
+    }
+    const contentLength = Number(response.headers.get('content-length') || 0);
+    if (contentLength > MAX_IMAGE_BYTES) {
+      warnings.push({ slide: slideIndex, code: 'image_download_too_large', url: finalUrl, contentLength });
       return null;
     }
     const bytes = Buffer.from(await response.arrayBuffer());
     if (!bytes.length) return null;
-    const ext = imageExtension(response.headers.get('content-type'), url);
+    if (bytes.length > MAX_IMAGE_BYTES) {
+      warnings.push({ slide: slideIndex, code: 'image_download_too_large', url: finalUrl, byteLength: bytes.length });
+      return null;
+    }
+    const ext = imageExtension(contentType, finalUrl);
     const filePath = assetRoot + '/slide-' + String(slideIndex || 'x') + '-' + Math.random().toString(36).slice(2) + '.' + ext;
     await fs.writeFile(filePath, bytes);
-    return { path: filePath, url, alt: text(slot?.alt || slot?.title) };
+    return { path: filePath, url: finalUrl, alt: text(slot?.alt || slot?.title) };
   } catch (error) {
     warnings.push({ slide: slideIndex, code: 'image_download_failed', url, message: String(error?.message || error) });
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -287,6 +452,49 @@ const presetKey = looksFestive() && !/(festival|lantern|temple|heritage|lunar)/i
   : requestedPresetKey || 'ink-classic';
 const preset = aestheticPresets[presetKey] || aestheticPresets['ink-classic'];
 const primary = color(colorTokens.primary || colorTokens.primaryColor || colorTokens.accent, preset.accent);
+function hexToRgb(hex) {
+  const value = color(hex, '');
+  if (!value) return null;
+  return {
+    r: Number.parseInt(value.slice(0, 2), 16),
+    g: Number.parseInt(value.slice(2, 4), 16),
+    b: Number.parseInt(value.slice(4, 6), 16),
+  };
+}
+function linearizeChannel(value) {
+  const normalized = value / 255;
+  return normalized <= 0.03928 ? normalized / 12.92 : Math.pow((normalized + 0.055) / 1.055, 2.4);
+}
+function relativeLuminance(hex) {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return 0;
+  return 0.2126 * linearizeChannel(rgb.r) + 0.7152 * linearizeChannel(rgb.g) + 0.0722 * linearizeChannel(rgb.b);
+}
+function contrastRatio(left, right) {
+  const a = relativeLuminance(left);
+  const b = relativeLuminance(right);
+  const lighter = Math.max(a, b);
+  const darker = Math.min(a, b);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+function pickReadableColor(candidates, background, minimumRatio) {
+  const normalizedCandidates = candidates
+    .map((candidate) => color(candidate, ''))
+    .filter(Boolean);
+  let best = normalizedCandidates[0] || '111827';
+  let bestRatio = contrastRatio(best, background);
+  for (const candidate of normalizedCandidates.slice(1)) {
+    const ratio = contrastRatio(candidate, background);
+    if (ratio > bestRatio) {
+      best = candidate;
+      bestRatio = ratio;
+    }
+  }
+  if (bestRatio >= minimumRatio) return best;
+  const blackRatio = contrastRatio('111827', background);
+  const whiteRatio = contrastRatio('FFFFFF', background);
+  return blackRatio >= whiteRatio ? '111827' : 'FFFFFF';
+}
 const serifFont = theme.fontSystem?.serifHeading || theme.fontSystem?.heading || 'Noto Serif SC';
 const sansFont = theme.fontSystem?.body || theme.fontSystem?.cjk || 'Noto Sans SC';
 const monoFont = theme.fontSystem?.mono || 'IBM Plex Mono';
@@ -424,12 +632,24 @@ function layoutFamilyFor(item, pageType) {
 
 function colorsForRole(role) {
   const isDark = role.includes('dark') || role === 'dark';
+  const bg = isDark ? preset.ink : preset.paper;
+  const softBg = isDark ? preset.inkTint : preset.paperTint;
+  const fg = pickReadableColor(
+    [isDark ? preset.paper : preset.ink, colorTokens.text, colorTokens.textColor, colorTokens.foreground],
+    bg,
+    4.5,
+  );
+  const muted = pickReadableColor(
+    [isDark ? preset.paperTint : preset.inkTint, fg, isDark ? preset.paper : preset.ink],
+    bg,
+    3,
+  );
   return {
-    bg: isDark ? preset.ink : preset.paper,
-    softBg: isDark ? preset.inkTint : preset.paperTint,
-    fg: isDark ? preset.paper : preset.ink,
-    muted: isDark ? preset.paperTint : preset.inkTint,
-    line: isDark ? preset.paperTint : preset.inkTint,
+    bg,
+    softBg,
+    fg,
+    muted,
+    line: muted,
     isDark,
   };
 }
@@ -479,8 +699,12 @@ for (const [ordinal, item] of slides.entries()) {
   const layoutFamily = semanticLayoutFamily(layoutFamilyFor(item, pageType), item, pageType, title, showCoreMessage || coreMessage, blocks);
   const colors = colorsForRole(role);
   const imageSlots = Array.isArray(item.imageSlots) ? item.imageSlots : [];
+  const requestedImageCount = imageSlotsForSlide(imageSlots).length;
   const heroImages = await downloadImages(imageSlots, item.index, layoutFamily.includes('image-grid') ? 6 : 2, usedImageUrls);
   const heroImage = heroImages[0] || null;
+  if (requestedImageCount > 0 && heroImages.length === 0 && layoutExpectsProvidedImage(pageType, layoutFamily)) {
+    warnings.push({ slide: item.index, code: 'required_image_missing', layoutFamily, requestedImageCount });
+  }
   if (slideLooksLowDensity(pageType, layoutFamily, blocks, showCoreMessage, Boolean(heroImage))) {
     warnings.push({ slide: item.index, code: 'low_density_slide', layoutFamily, contentBlockCount: blocks.length });
   }
@@ -667,6 +891,335 @@ console.log('ONECEO_PPT_RENDER_RESULT ' + JSON.stringify(report));
 `;
 }
 
+export function buildHtmlDeckRendererScript() {
+  return String.raw`import { createRequire } from 'node:module';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+const require = createRequire(import.meta.url);
+const pptxgen = require('pptxgenjs');
+
+function requireFromNodePathFirst(packageName) {
+  const searchRoots = String(process.env.NODE_PATH || '')
+    .split(path.delimiter)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  for (const root of searchRoots) {
+    try {
+      return require(path.join(root, packageName));
+    } catch {
+      // Try the next platform-managed module root before falling back to local node_modules.
+    }
+  }
+  return require(packageName);
+}
+
+const { chromium } = requireFromNodePathFirst('playwright');
+
+const [specPath, projectRoot, outputPath, reportPath, visualQaReportPath, screenshotRoot] = process.argv.slice(2);
+if (!specPath || !projectRoot || !outputPath || !reportPath || !visualQaReportPath || !screenshotRoot) {
+  throw new Error('missing html deck renderer arguments');
+}
+
+const spec = JSON.parse(await fs.readFile(specPath, 'utf8'));
+const deck = spec.deck || {};
+const slides = Array.isArray(spec.slides) ? spec.slides : [];
+const aspectRatio = String(deck.aspectRatio || '').replace(/\s+/g, '') === '4:3' ? '4:3' : '16:9';
+const slideGeometry = aspectRatio === '4:3'
+  ? { widthPx: 1024, heightPx: 768, widthIn: 10, heightIn: 7.5, layout: 'LAYOUT_4X3' }
+  : { widthPx: 1280, heightPx: 720, widthIn: 13.333333, heightIn: 7.5, layout: 'LAYOUT_WIDE' };
+const warnings = [];
+const renderSlideRoot = path.posix.join(projectRoot, '.oneceo-rendered-slides');
+
+function text(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function escapeHtmlAttr(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function resolveSlidePath(htmlFile) {
+  const absolute = path.posix.normalize(path.posix.join(projectRoot, htmlFile));
+  const normalizedRoot = projectRoot.replace(/\/+$/, '');
+  if (!absolute.startsWith(normalizedRoot + '/')) {
+    throw new Error('ppt_html_slide_path_outside_project');
+  }
+  return absolute;
+}
+
+function pptxError(message) {
+  return message && typeof message === 'object' ? message.message || String(message) : String(message || '');
+}
+
+async function readOptionalFile(filePath) {
+  try {
+    return await fs.readFile(filePath, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+function extractHead(rawHtml) {
+  const match = String(rawHtml || '').match(/<head\b[^>]*>([\s\S]*?)<\/head>/i);
+  return match ? match[1] : '';
+}
+
+function extractBody(rawHtml) {
+  const match = String(rawHtml || '').match(/<body\b[^>]*>([\s\S]*?)<\/body>/i);
+  return match ? match[1] : String(rawHtml || '');
+}
+
+function absolutizeStylesheetLink(tag, baseDir) {
+  const hrefMatch = String(tag || '').match(/\bhref\s*=\s*(["'])(.*?)\1/i) || String(tag || '').match(/\bhref\s*=\s*([^\s>]+)/i);
+  if (!hrefMatch) return tag;
+  const rawHref = hrefMatch[2] || hrefMatch[1] || '';
+  if (!rawHref || /^(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i.test(rawHref)) return tag;
+  const absoluteHref = pathToFileURL(path.posix.normalize(path.posix.join(baseDir, rawHref))).href;
+  return String(tag).replace(hrefMatch[0], 'href="' + escapeHtmlAttr(absoluteHref) + '"');
+}
+
+function absolutizeCssUrls(css, baseDir) {
+  return String(css || '').replace(/url\(\s*(["']?)([^"')]+)\1\s*\)/gi, (match, quote, rawUrl) => {
+    const value = String(rawUrl || '').trim();
+    if (!value || /^(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i.test(value)) return match;
+    const absoluteUrl = pathToFileURL(path.posix.normalize(path.posix.join(baseDir, value))).href;
+    const q = quote || '';
+    return 'url(' + q + absoluteUrl + q + ')';
+  });
+}
+
+function absolutizeStyleTag(tag, baseDir) {
+  return String(tag || '').replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style>)/i, (_match, openTag, css, closeTag) => {
+    return openTag + absolutizeCssUrls(css, baseDir) + closeTag;
+  });
+}
+
+function collectStyleFragments(rawHtml, baseDir) {
+  const head = extractHead(rawHtml) || String(rawHtml || '');
+  const styles = (head.match(/<style\b[^>]*>[\s\S]*?<\/style>/gi) || []).map((tag) => absolutizeStyleTag(tag, baseDir));
+  const links = (head.match(/<link\b[^>]*>/gi) || [])
+    .filter((tag) => /\brel\s*=\s*(["'][^"']*\bstylesheet\b[^"']*["']|[^\s>]*stylesheet[^\s>]*)/i.test(tag))
+    .map((tag) => absolutizeStylesheetLink(tag, baseDir));
+  return {
+    fragments: [...links, ...styles],
+    hasCss: links.length + styles.length > 0,
+  };
+}
+
+async function buildRenderableSlide(slideSpec, index, htmlFile, slidePath) {
+  const indexPath = path.posix.join(projectRoot, 'index.html');
+  const indexHtml = await readOptionalFile(indexPath);
+  const slideHtml = await fs.readFile(slidePath, 'utf8');
+  const sharedHead = collectStyleFragments(indexHtml, projectRoot);
+  const slideHead = collectStyleFragments(slideHtml, path.posix.dirname(slidePath));
+  const sourceCssApplied = sharedHead.hasCss || slideHead.hasCss;
+  const body = extractBody(slideHtml);
+  const baseHref = pathToFileURL(path.posix.dirname(slidePath).replace(/\/+$/, '') + '/').href;
+  const renderedHtmlPath = path.posix.join(renderSlideRoot, htmlFile);
+  const rendererCss = [
+    '<style data-oneceo-renderer="slide-frame">',
+    'html,body{width:' + slideGeometry.widthPx + 'px;height:' + slideGeometry.heightPx + 'px;margin:0;overflow:hidden;background:#fff;}',
+    'body{display:flex;align-items:stretch;justify-content:center;}',
+    '.slide,body>[data-slide-id]:first-child{width:' + slideGeometry.widthPx + 'px!important;height:' + slideGeometry.heightPx + 'px!important;margin:0!important;box-sizing:border-box;}',
+    '.slide{border-radius:0!important;box-shadow:none!important;}',
+    'img,svg,video,canvas{max-width:100%;}',
+    '</style>',
+  ].join('');
+  const normalized = [
+    '<!doctype html>',
+    '<html lang="' + escapeHtmlAttr(text(deck.language) || 'zh-CN') + '">',
+    '<head>',
+    '<meta charset="UTF-8">',
+    '<meta name="viewport" content="width=' + slideGeometry.widthPx + ', initial-scale=1.0">',
+    '<base href="' + escapeHtmlAttr(baseHref) + '">',
+    ...sharedHead.fragments,
+    ...slideHead.fragments,
+    rendererCss,
+    '</head>',
+    '<body>',
+    body,
+    '</body>',
+    '</html>',
+  ].join('\n');
+  await fs.mkdir(path.posix.dirname(renderedHtmlPath), { recursive: true });
+  await fs.writeFile(renderedHtmlPath, normalized, 'utf8');
+  return {
+    renderedHtmlPath,
+    sourceCssApplied,
+    sourceMode: /<html\b/i.test(slideHtml) ? 'full_html' : 'fragment',
+    sharedCssApplied: sharedHead.hasCss,
+    slideCssApplied: slideHead.hasCss,
+  };
+}
+
+await fs.mkdir(path.posix.dirname(outputPath), { recursive: true });
+await fs.mkdir(screenshotRoot, { recursive: true });
+await fs.mkdir(renderSlideRoot, { recursive: true });
+
+let browser;
+const qaSlides = [];
+try {
+  browser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-dev-shm-usage'],
+  });
+  const context = await browser.newContext({
+    viewport: { width: slideGeometry.widthPx, height: slideGeometry.heightPx },
+    deviceScaleFactor: 1,
+  });
+
+  for (const slideSpec of slides) {
+    const index = Number(slideSpec.index || qaSlides.length + 1);
+    const htmlFile = text(slideSpec.htmlFile);
+    const slidePath = resolveSlidePath(htmlFile);
+    const screenshotPath = path.posix.join(screenshotRoot, String(index).padStart(3, '0') + '.png');
+    const page = await context.newPage();
+    try {
+      await fs.access(slidePath);
+      const renderable = await buildRenderableSlide(slideSpec, index, htmlFile, slidePath);
+      await page.goto(pathToFileURL(renderable.renderedHtmlPath).href, { waitUntil: 'networkidle', timeout: 30000 });
+      await page.waitForTimeout(250);
+      const metrics = await page.evaluate(({ fallbackWidth, fallbackHeight, renderedHtmlPath, sourceCssApplied, sourceMode, sharedCssApplied, slideCssApplied }) => {
+        const body = document.body;
+        const root = document.documentElement;
+        const textContent = String(body?.innerText || '').trim();
+        const slide = document.querySelector('[data-slide-id]') || document.querySelector('.slide') || body;
+        const style = window.getComputedStyle(slide);
+        return {
+          textLength: textContent.length,
+          scrollWidth: Math.max(body?.scrollWidth || 0, root?.scrollWidth || 0),
+          scrollHeight: Math.max(body?.scrollHeight || 0, root?.scrollHeight || 0),
+          clientWidth: root?.clientWidth || fallbackWidth,
+          clientHeight: root?.clientHeight || fallbackHeight,
+          bodyChildren: body?.children?.length || 0,
+          slideId: slide?.getAttribute?.('data-slide-id') || '',
+          slideIndex: slide?.getAttribute?.('data-slide-index') || '',
+          backgroundColor: style.backgroundColor,
+          fontFamily: style.fontFamily,
+          styleTagCount: document.querySelectorAll('style').length,
+          stylesheetLinkCount: document.querySelectorAll('link[rel~="stylesheet" i]').length,
+          renderedHtmlPath,
+          sourceCssApplied,
+          sourceMode,
+          sharedCssApplied,
+          slideCssApplied,
+        };
+      }, {
+        fallbackWidth: slideGeometry.widthPx,
+        fallbackHeight: slideGeometry.heightPx,
+        renderedHtmlPath: renderable.renderedHtmlPath,
+        sourceCssApplied: renderable.sourceCssApplied,
+        sourceMode: renderable.sourceMode,
+        sharedCssApplied: renderable.sharedCssApplied,
+        slideCssApplied: renderable.slideCssApplied,
+      });
+      const slideWarnings = [];
+      if (!metrics.textLength && metrics.bodyChildren === 0) {
+        slideWarnings.push({ code: 'empty_slide_dom' });
+      }
+      if (!metrics.sourceCssApplied) {
+        slideWarnings.push({ code: 'slide_stylesheet_missing', renderedHtmlPath: metrics.renderedHtmlPath });
+      }
+      if (metrics.scrollWidth > metrics.clientWidth + 2 || metrics.scrollHeight > metrics.clientHeight + 2) {
+        slideWarnings.push({ code: 'slide_has_scroll_overflow', metrics });
+      }
+      if (!metrics.slideId) {
+        slideWarnings.push({ code: 'missing_data_slide_id' });
+      }
+      if (!metrics.slideIndex) {
+        slideWarnings.push({ code: 'missing_data_slide_index' });
+      }
+      const badText = await page.evaluate(() => document.body.innerText || '');
+      if (/undefined|NaN|\[object Object\]/.test(badText)) {
+        slideWarnings.push({ code: 'invalid_placeholder_text' });
+      }
+      await page.screenshot({ path: screenshotPath, fullPage: false, type: 'png' });
+      qaSlides.push({
+        index,
+        id: text(slideSpec.id),
+        htmlFile,
+        renderedHtmlPath: metrics.renderedHtmlPath,
+        screenshotPath,
+        metrics,
+        warnings: slideWarnings,
+      });
+    } catch (error) {
+      throw new Error('slide_render_failed:' + htmlFile + ':' + pptxError(error));
+    } finally {
+      await page.close().catch(() => undefined);
+    }
+  }
+  await context.close();
+} catch (error) {
+  const failedReport = {
+    status: 'failed',
+    stage: 'render',
+    pptxPath: null,
+    reportPath,
+    htmlManifestPath: path.posix.join(projectRoot, 'manifest.json'),
+    visualQaReportPath,
+    slideCount: slides.length,
+    warnings,
+    repairHints: ['Fix the HTML deck so it can be opened by Chromium and rerun render_pptx_from_html_deck.'],
+    errors: [pptxError(error)],
+  };
+  await fs.writeFile(reportPath, JSON.stringify(failedReport, null, 2), 'utf8');
+  console.log('ONECEO_PPT_HTML_RENDER_RESULT ' + JSON.stringify(failedReport));
+  process.exit(0);
+} finally {
+  if (browser) await browser.close().catch(() => undefined);
+}
+
+const visualQaReport = {
+  status: 'completed',
+  slideCount: slides.length,
+  screenshots: qaSlides.map((slide) => ({ index: slide.index, path: slide.screenshotPath, renderedHtmlPath: slide.renderedHtmlPath })),
+  warnings,
+  fatalErrors: [],
+  slides: qaSlides,
+};
+await fs.writeFile(visualQaReportPath, JSON.stringify(visualQaReport, null, 2), 'utf8');
+
+const pptx = new pptxgen();
+pptx.layout = slideGeometry.layout;
+pptx.author = 'OneCEO';
+pptx.company = 'OneCEO';
+pptx.subject = text(deck.purpose);
+pptx.title = text(deck.title);
+pptx.lang = text(deck.language) || 'zh-CN';
+
+for (const slideImage of qaSlides) {
+  const slide = pptx.addSlide();
+  slide.background = { color: 'FFFFFF' };
+  slide.addImage({ path: slideImage.screenshotPath, x: 0, y: 0, w: slideGeometry.widthIn, h: slideGeometry.heightIn });
+}
+
+await pptx.writeFile({ fileName: outputPath });
+const report = {
+  status: 'completed',
+  pptxPath: outputPath,
+  htmlManifestPath: path.posix.join(projectRoot, 'manifest.json'),
+  visualQaReportPath,
+  exportReportPath: reportPath,
+  reportPath,
+  exportMode: 'rasterized_html_screenshots',
+  editablePptx: false,
+  aspectRatio,
+  slideCount: slides.length,
+  warnings,
+  repairHints: [],
+};
+await fs.writeFile(reportPath, JSON.stringify(report, null, 2), 'utf8');
+console.log('ONECEO_PPT_HTML_RENDER_RESULT ' + JSON.stringify(report));
+`;
+}
+
 export type PptRenderToolResult = {
   status: 'completed' | 'failed';
   pptxPath?: string;
@@ -676,6 +1229,11 @@ export type PptRenderToolResult = {
   repairHints: unknown[];
   stage?: string;
   errors?: string[];
+  exportMode?: string;
+  editablePptx?: boolean;
+  aspectRatio?: string;
+  slideWidthIn?: number;
+  slideHeightIn?: number;
 };
 
 export class PptRenderToolService {
@@ -750,6 +1308,17 @@ export class PptRenderToolService {
       .split('\n')
       .find((line) => line.startsWith('ONECEO_PPT_RENDER_RESULT '));
     const parsed = marker ? JSON.parse(marker.slice('ONECEO_PPT_RENDER_RESULT '.length)) : {};
+    if (asText(parsed.status) === 'failed') {
+      return {
+        status: 'failed',
+        stage: asText(parsed.stage) || 'render',
+        warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
+        repairHints: Array.isArray(parsed.repairHints) ? parsed.repairHints : ['Repair PptRenderInstruction before retrying.'],
+        errors: Array.isArray(parsed.errors) ? parsed.errors.map((item: unknown) => JSON.stringify(item)) : ['ppt_render_failed'],
+        reportPath: toWorkspaceRelative(workspaceRoot, asText(parsed.reportPath) || reportPath),
+        slideCount: Number(parsed.slideCount) || validated.slideCount,
+      };
+    }
     await touchSandbox(input.sandboxId, 'ppt_render');
 
     return {
@@ -757,6 +1326,126 @@ export class PptRenderToolService {
       pptxPath: toWorkspaceRelative(workspaceRoot, asText(parsed.pptxPath) || outputPath),
       reportPath: toWorkspaceRelative(workspaceRoot, asText(parsed.reportPath) || reportPath),
       slideCount: Number(parsed.slideCount) || validated.slideCount,
+      warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
+      repairHints: Array.isArray(parsed.repairHints) ? parsed.repairHints : [],
+    };
+  }
+
+  async renderHtmlDeck(input: {
+    sessionId: string;
+    sandboxId: string;
+    workspaceRoot: string;
+    htmlDeckSpec: unknown;
+    projectRoot?: string | null;
+    outputFileName?: string | null;
+  }): Promise<PptRenderToolResult & { htmlManifestPath?: string; visualQaReportPath?: string; exportReportPath?: string }> {
+    const validated = validateHtmlDeckSpec(input.htmlDeckSpec);
+    const fileName = asText(input.outputFileName) ? sanitizePptFileName(input.outputFileName) : validated.fileName;
+    const workspaceRoot = input.workspaceRoot.replace(/\/+$/, '');
+    const rawProjectRoot = asText(input.projectRoot) || 'ppt-html-deck';
+    const projectRoot = rawProjectRoot.startsWith('/')
+      ? path.posix.normalize(rawProjectRoot)
+      : path.posix.normalize(path.posix.join(workspaceRoot, rawProjectRoot));
+    if (!projectRoot.startsWith(`${workspaceRoot}/`)) {
+      throw new Error('ppt_html_deck_project_root_outside_workspace');
+    }
+
+    const rendererRoot = path.posix.join(workspaceRoot, '.oneceo', 'ppt-html-renderer');
+    const exportRoot = path.posix.join(projectRoot, 'export');
+    const screenshotRoot = path.posix.join(projectRoot, 'screenshots');
+    const geometry = htmlDeckGeometry(validated.aspectRatio);
+    const specPath = path.posix.join(rendererRoot, 'html-deck-spec.json');
+    const scriptPath = path.posix.join(rendererRoot, 'render-html-deck.mjs');
+    const packagePath = path.posix.join(rendererRoot, 'package.json');
+    const outputPath = path.posix.join(exportRoot, fileName);
+    const reportPath = path.posix.join(exportRoot, 'export-report.json');
+    const visualQaReportPath = path.posix.join(exportRoot, 'visual-qa-report.json');
+
+    await e2bConnector.runCommand(input.sandboxId, `mkdir -p ${shellEscape(rendererRoot)} ${shellEscape(exportRoot)} ${shellEscape(screenshotRoot)}`, {
+      timeoutMs: 15_000,
+    });
+    await e2bConnector.writeFile(input.sandboxId, specPath, Buffer.from(JSON.stringify(validated.spec, null, 2), 'utf8'));
+    await e2bConnector.writeFile(input.sandboxId, scriptPath, Buffer.from(buildHtmlDeckRendererScript(), 'utf8'));
+    await e2bConnector.writeFile(
+      input.sandboxId,
+      packagePath,
+      Buffer.from(JSON.stringify({ type: 'module', dependencies: { pptxgenjs: '^3.12.0' } }, null, 2), 'utf8')
+    );
+
+    const stdoutPath = path.posix.join(rendererRoot, 'render.stdout.log');
+    const stderrPath = path.posix.join(rendererRoot, 'render.stderr.log');
+    const command = [
+      'set +e',
+      'export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/opt/ms-playwright}"',
+      'ONECEO_NPM_GLOBAL_ROOT="$(npm root -g 2>/dev/null || true)"',
+      'ONECEO_NODE_PATH="/usr/local/lib/node_modules"',
+      'if [ -n "$ONECEO_NPM_GLOBAL_ROOT" ]; then ONECEO_NODE_PATH="${ONECEO_NODE_PATH}:${ONECEO_NPM_GLOBAL_ROOT}"; fi',
+      'if [ -n "${NODE_PATH:-}" ]; then ONECEO_NODE_PATH="${ONECEO_NODE_PATH}:${NODE_PATH}"; fi',
+      'export NODE_PATH="$ONECEO_NODE_PATH"',
+      `: > ${shellEscape(stdoutPath)}`,
+      `: > ${shellEscape(stderrPath)}`,
+      `(test -d node_modules/pptxgenjs || npm install --silent --no-audit --no-fund pptxgenjs@^3.12.0) >> ${shellEscape(stdoutPath)} 2>> ${shellEscape(stderrPath)}`,
+      'install_code=$?',
+      'if [ "$install_code" -eq 0 ]; then',
+      `  node ${shellEscape(scriptPath)} ${shellEscape(specPath)} ${shellEscape(projectRoot)} ${shellEscape(outputPath)} ${shellEscape(reportPath)} ${shellEscape(visualQaReportPath)} ${shellEscape(screenshotRoot)} >> ${shellEscape(stdoutPath)} 2>> ${shellEscape(stderrPath)}`,
+      '  render_code=$?',
+      'else',
+      '  render_code=$install_code',
+      'fi',
+      `cat ${shellEscape(stdoutPath)}`,
+      `cat ${shellEscape(stderrPath)} >&2`,
+      'printf "\\nONECEO_PPT_HTML_COMMAND_EXIT %s\\n" "$render_code"',
+      'exit 0',
+    ].join('\n');
+    const result = await e2bConnector.runCommand(input.sandboxId, command, {
+      cwd: rendererRoot,
+      timeoutMs: 240_000,
+    });
+
+    const commandExitMarker = asText(result.stdout)
+      .split('\n')
+      .find((line) => line.startsWith('ONECEO_PPT_HTML_COMMAND_EXIT '));
+    const commandExitCode = commandExitMarker ? Number(commandExitMarker.slice('ONECEO_PPT_HTML_COMMAND_EXIT '.length)) : result.exitCode;
+    if (result.exitCode !== 0 || commandExitCode !== 0) {
+      return {
+        status: 'failed',
+        stage: 'render',
+        warnings: [],
+        repairHints: ['Inspect HTML deck renderer stderr and repair ppt-html-deck before retrying.'],
+        errors: [asText(result.stderr) || asText(result.stdout) || 'ppt_html_deck_render_failed'],
+      };
+    }
+
+    const marker = asText(result.stdout)
+      .split('\n')
+      .find((line) => line.startsWith('ONECEO_PPT_HTML_RENDER_RESULT '));
+    const parsed = marker ? JSON.parse(marker.slice('ONECEO_PPT_HTML_RENDER_RESULT '.length)) : {};
+    if (asText(parsed.status) !== 'completed') {
+      return {
+        status: 'failed',
+        stage: asText(parsed.stage) || 'visual_qa',
+        warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
+        repairHints: Array.isArray(parsed.repairHints) ? parsed.repairHints : ['Fix the HTML deck project and retry.'],
+        errors: Array.isArray(parsed.errors) ? parsed.errors.map((item: unknown) => JSON.stringify(item)) : ['ppt_html_deck_visual_qa_failed'],
+        reportPath: toWorkspaceRelative(workspaceRoot, asText(parsed.reportPath) || reportPath),
+        visualQaReportPath: toWorkspaceRelative(workspaceRoot, asText(parsed.visualQaReportPath) || visualQaReportPath),
+      };
+    }
+    await touchSandbox(input.sandboxId, 'ppt_html_render');
+
+    return {
+      status: 'completed',
+      pptxPath: toWorkspaceRelative(workspaceRoot, asText(parsed.pptxPath) || outputPath),
+      reportPath: toWorkspaceRelative(workspaceRoot, asText(parsed.reportPath || parsed.exportReportPath) || reportPath),
+      htmlManifestPath: toWorkspaceRelative(workspaceRoot, asText(parsed.htmlManifestPath) || path.posix.join(projectRoot, 'manifest.json')),
+      visualQaReportPath: toWorkspaceRelative(workspaceRoot, asText(parsed.visualQaReportPath) || visualQaReportPath),
+      exportReportPath: toWorkspaceRelative(workspaceRoot, asText(parsed.exportReportPath || parsed.reportPath) || reportPath),
+      slideCount: Number(parsed.slideCount) || validated.slideCount,
+      exportMode: asText(parsed.exportMode) || 'rasterized_html_screenshots',
+      editablePptx: false,
+      aspectRatio: asText(parsed.aspectRatio) || validated.aspectRatio,
+      slideWidthIn: geometry.widthIn,
+      slideHeightIn: geometry.heightIn,
       warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
       repairHints: Array.isArray(parsed.repairHints) ? parsed.repairHints : [],
     };

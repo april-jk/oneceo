@@ -3034,16 +3034,20 @@ private async chargeForModelCall(state: AltusRunState, input: {
                 : null;
             const effectiveRawError = debugFailure?.rawError || rawError;
             const effectiveSanitizedError = debugFailure?.sanitizedError || sanitizedError;
+            const errorCode = classifyManagedToolErrorCode(effectiveRawError);
+            const pptCompletionRequired =
+              errorCode === 'ppt_workflow_render_completed_complete_task_required' ||
+              errorCode === 'render_pptx_from_instructions_blocked_after_html_deck_source';
             const failedTransitionReason: AltusRunTransitionReason = effectiveRawError.startsWith(DEPLOYMENT_COMPLETION_BLOCKED_PREFIX)
               ? 'deployment_completion_blocked'
-              : debugFailure?.userActionRequired
+              : debugFailure?.userActionRequired || pptCompletionRequired
                 ? 'tool_failed_user_action_required'
                 : 'tool_failed_but_recoverable';
             return {
               transitionReason: failedTransitionReason,
-              recoveryMode: debugFailure?.userActionRequired ? 'awaiting_user' : 'tool_repair',
-              errorCode: debugFailure?.errorCode,
-              retryable: debugFailure ? !debugFailure.userActionRequired : undefined,
+              recoveryMode: debugFailure?.userActionRequired || pptCompletionRequired ? 'awaiting_user' : 'tool_repair',
+              errorCode: debugFailure?.errorCode || (pptCompletionRequired ? errorCode : undefined),
+              retryable: debugFailure ? !debugFailure.userActionRequired : pptCompletionRequired ? false : undefined,
               sanitizedError: effectiveSanitizedError,
               rawError: effectiveRawError,
               eventPayload: this.isDeploymentTool(toolName)

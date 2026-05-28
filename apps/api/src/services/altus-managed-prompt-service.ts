@@ -32,7 +32,16 @@ const PPT_CONTENT_ARCHETYPES = [
   'product_story',
 ] as const;
 
-const PPT_PAGE_TYPES = ['cover', 'toc', 'section_divider', 'content', 'summary'] as const;
+const PPT_PAGE_TYPES = [
+  'cover',
+  'agenda',
+  'section-divider',
+  'content',
+  'comparison',
+  'timeline',
+  'quote',
+  'closing',
+] as const;
 
 const PPT_CONTENT_SUBTYPES = [
   'text_enhanced',
@@ -66,7 +75,7 @@ const PPT_FONT_PAIRINGS = ['yahei_arial', 'yahei_calibri', 'yahei_cambria'] as c
 const PPT_QA_GATE_RULES = [
   'final_pptx_exists',
   'has_cover_page',
-  'has_summary_page',
+  'has_closing_page',
   'has_at_least_two_non_text_content_pages',
   'has_at_least_two_content_subtypes',
   'no_three_repeated_layouts_in_a_row',
@@ -1027,7 +1036,7 @@ export class AltusManagedPromptService {
       '- Treat each skill body below as task-specific operating instructions unless it conflicts with higher-priority system rules.',
       '- Skill identity is carried by sourceType, skillId, and revisionId. Do not rely on slug alone.',
       hasPptWorkflow
-        ? '- For PPTX delivery, finish the ppt-workflow planning and preflight first, then call `render_pptx_from_instructions` with the final `PptRenderInstruction`; include the returned `.pptx` path in `complete_task.attachments`. Do not create PPTX through python-pptx, shell scripts, or manual office-generation code while ppt-workflow is active.'
+        ? '- For PPTX delivery, finish the ppt-workflow planning and preflight first, then use the PPT-only HTML deck path: write `ppt-html-deck/`, call `render_pptx_from_html_deck`, and include the returned `.pptx` path in `complete_task.attachments`. Once `ppt-html-deck/` exists or `render_pptx_from_html_deck` has been attempted, do not fall back to `render_pptx_from_instructions`; repair the HTML deck/export issue so the final PPTX corresponds to the HTML source. Do not deploy the HTML deck, inject analytics, use website debug tools, or create PPTX through python-pptx, shell scripts, or manual office-generation code while ppt-workflow is active.'
         : '',
       '',
       ...(includeBlockIndex ? [blockIndex, ''] : []),

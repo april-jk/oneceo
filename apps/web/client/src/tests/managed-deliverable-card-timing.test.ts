@@ -244,6 +244,46 @@ describe('managed deliverable card timing', () => {
     expect(emittedRuns.has('run-docx-1')).toBe(true);
   });
 
+  it('keeps PPTX delivery card when ppt-html-deck source files were generated', () => {
+    const emittedRuns = new Set<string>();
+    const artifactsByRun = new Map([
+      [
+        'run-ppt-html-1',
+        [
+          { path: 'ppt-html-deck/index.html', previewType: 'web' },
+          { path: 'ppt-html-deck/slides/001-cover.html', previewType: 'web' },
+          { path: 'ppt-html-deck/slides/002-summary.html', previewType: 'web' },
+          { path: 'ppt-html-deck/export/visual-qa-report.json', previewType: 'code' },
+        ],
+      ],
+    ]);
+    const item = buildManagedCompletionCardItem({
+      message: createManagedMessage({
+        type: 'status_update',
+        eventType: 'deliverables_ready',
+        runId: 'run-ppt-html-1',
+        deliverables: [
+          {
+            id: 'artifact-pptx-1',
+            runId: 'run-ppt-html-1',
+            name: '战略复盘.pptx',
+            path: 'ppt-html-deck/export/strategy-review.pptx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            sizeBytes: 4096,
+          },
+        ],
+      }),
+      managedArtifactsByRun: artifactsByRun,
+      emittedManagedCompletionRuns: emittedRuns,
+    });
+
+    expect(item?.kind).toBe('managed_deliverable_card');
+    const card = item as Extract<ChatItem, { kind: 'managed_deliverable_card' }>;
+    expect(card.deliverables).toHaveLength(1);
+    expect(card.deliverables[0]?.path).toBe('ppt-html-deck/export/strategy-review.pptx');
+    expect(emittedRuns.has('run-ppt-html-1')).toBe(true);
+  });
+
   it('emits deliverable card as soon as assistant message contains deliverables', () => {
     const emittedRuns = new Set<string>();
     const artifactsByRun = new Map();

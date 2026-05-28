@@ -771,7 +771,7 @@ export function buildManagedToolDefinitions() {
       function: {
         name: 'render_pptx_from_instructions',
         description:
-          'Render a PPTX file in the sandbox from a validated PptRenderInstruction after ppt-workflow has produced and reviewed the deck plan. Use only when the user wants a final PowerPoint file.',
+          'Render a PPTX file in the sandbox from a validated PptRenderInstruction after ppt-workflow has produced and reviewed the deck plan. Use only when the user wants a final PowerPoint file and no ppt-html-deck source has been created for this run.',
         parameters: objectSchema(
           {
             instructions: {
@@ -788,6 +788,35 @@ export function buildManagedToolDefinitions() {
             },
           },
           ['instructions']
+        ),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'render_pptx_from_html_deck',
+        description:
+          'Render a final PPTX from a PPT-only HtmlDeckSpec plus a sandbox ppt-html-deck source project. The renderer wraps slide fragments with shared CSS from ppt-html-deck/index.html before exporting so the PPTX corresponds to the HTML source. This is not a website deployment or debug-browser workflow; use only when ppt-workflow is active and the user wants a PowerPoint file.',
+        parameters: objectSchema(
+          {
+            htmlDeckSpec: {
+              type: 'object',
+              description:
+                'HtmlDeckSpec object with taskType=ppt_html_deck, deck metadata, slides with safe htmlFile paths, sources, and openQuestions.',
+              properties: {},
+              required: [],
+              additionalProperties: true,
+            },
+            projectRoot: {
+              type: 'string',
+              description: 'Workspace-relative HTML deck project root. Defaults to ppt-html-deck.',
+            },
+            outputFileName: {
+              type: 'string',
+              description: 'Optional final .pptx filename, for example strategy-review.pptx.',
+            },
+          },
+          ['htmlDeckSpec']
         ),
       },
     },

@@ -767,6 +767,8 @@ test('managed prompt includes full ppt workflow instructions when skill is activ
   assert.match(prompt, /# Skill Brief: PPT 子任务编排工作流/);
   assert.match(prompt, /ppt_intent_analyzer/);
   assert.match(prompt, /PptRenderInstructionDraft/);
+  assert.match(prompt, /render_pptx_from_html_deck/);
+  assert.match(prompt, /Do not deploy the HTML deck/);
 });
 
 test('managed prompt can append auto-attached skill instructions after a governed tool call', () => {

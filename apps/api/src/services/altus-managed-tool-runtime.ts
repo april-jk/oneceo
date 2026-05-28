@@ -50,6 +50,7 @@ export type ManagedToolResult =
       content: string;
       activatedSkills?: ManagedSkillContext[];
       evidence?: ManagedToolEvidence[];
+      terminalInstruction?: string;
     }
   | {
       type: 'ask_user';
@@ -1299,6 +1300,11 @@ export class AltusManagedToolRuntime {
   private readonly posix = path.posix;
   private readonly loadedConnectorGuides = new Set<string>();
   private readonly renderedPptxAttachmentPaths = new Set<string>();
+  private readonly htmlDeckRenderedPptxAttachmentPaths = new Set<string>();
+  private htmlDeckSourceTouched = false;
+  private htmlDeckRenderAttempted = false;
+  private htmlDeckRenderSucceeded = false;
+  private latestRenderedPptxAttachmentPath: string | null = null;
 
   private hasActiveSkill(slug: string) {
     return this.input.activeSkills.some((item) => asText(item.slug) === slug);
@@ -1646,13 +1652,28 @@ export class AltusManagedToolRuntime {
     if (!this.hasActiveSkill('ppt-workflow')) {
       return;
     }
+    for (const attachment of attachments) {
+      const normalizedPath = attachment.path.toLowerCase().replace(/\\/g, '/');
+      if (
+        (normalizedPath === 'ppt-html-deck' || normalizedPath.startsWith('ppt-html-deck/')) &&
+        !/^ppt-html-deck\/export\/[^/]+\.pptx$/i.test(normalizedPath)
+      ) {
+        throw new Error('complete_task_pptx_requires_render_pptx_from_html_deck');
+      }
+    }
     const pptxAttachments = attachments.filter((item) => item.path.toLowerCase().endsWith('.pptx'));
     if (pptxAttachments.length === 0) {
-      return;
+      throw new Error('complete_task_pptx_requires_render_pptx_from_instructions');
     }
     const missing = pptxAttachments.filter((item) => !this.renderedPptxAttachmentPaths.has(item.path));
     if (missing.length > 0) {
       throw new Error('complete_task_pptx_requires_render_pptx_from_instructions');
+    }
+    if (this.htmlDeckSourceTouched || this.htmlDeckRenderAttempted) {
+      const nonHtmlDeck = pptxAttachments.filter((item) => !this.htmlDeckRenderedPptxAttachmentPaths.has(item.path));
+      if (nonHtmlDeck.length > 0 || !this.htmlDeckRenderSucceeded) {
+        throw new Error('complete_task_pptx_requires_render_pptx_from_html_deck');
+      }
     }
   }
 
@@ -1661,6 +1682,16 @@ export class AltusManagedToolRuntime {
       return;
     }
     throw new Error('write_file_binary_deliverable_requires_generator');
+  }
+
+  private notePptHtmlDeckSourcePath(relativePath: string) {
+    if (!this.hasActiveSkill('ppt-workflow')) {
+      return;
+    }
+    const normalized = relativePath.replace(/^\/+/, '');
+    if (normalized === 'ppt-html-deck' || normalized.startsWith('ppt-html-deck/')) {
+      this.htmlDeckSourceTouched = true;
+    }
   }
 
   private parseTodos(raw: unknown) {
@@ -2162,6 +2193,13 @@ export class AltusManagedToolRuntime {
 
   async execute(toolName: string, rawArgs: Record<string, unknown>, signal?: AbortSignal): Promise<ManagedToolResult> {
     this.ensureNotAborted(signal);
+    if (
+      this.hasActiveSkill('ppt-workflow') &&
+      this.latestRenderedPptxAttachmentPath &&
+      toolName !== 'complete_task'
+    ) {
+      throw new Error(`ppt_workflow_render_completed_complete_task_required:${this.latestRenderedPptxAttachmentPath}`);
+    }
     await this.sandboxActivityDeps.touchSandbox(this.input.sandboxId, `managed_tool:${toolName}`).catch(() => null);
     this.enforceDeploymentIntent(toolName);
     const activatedSkills = await this.autoAttachSkillsForTool(toolName, signal);
@@ -2720,6 +2758,7 @@ export class AltusManagedToolRuntime {
       }, signal);
       await e2bConnector.writeFile(this.input.sandboxId, absolutePath, Buffer.from(content, 'utf-8'));
       this.ensureNotAborted(signal);
+      this.notePptHtmlDeckSourcePath(relativePath);
       await this.markWorkspaceDirty('managed_write_file');
       return {
         type: 'result',
@@ -2901,6 +2940,9 @@ export class AltusManagedToolRuntime {
       if (!this.hasActiveSkill('ppt-workflow')) {
         throw new Error('render_pptx_from_instructions_ppt_workflow_not_active');
       }
+      if (this.htmlDeckSourceTouched || this.htmlDeckRenderAttempted) {
+        throw new Error('render_pptx_from_instructions_blocked_after_html_deck_source');
+      }
       const result = await pptRenderToolService.render({
         sessionId: this.input.sessionId,
         sandboxId: this.input.sandboxId,
@@ -2911,6 +2953,7 @@ export class AltusManagedToolRuntime {
       if (result.status === 'completed') {
         if (result.pptxPath) {
           this.renderedPptxAttachmentPaths.add(result.pptxPath);
+          this.latestRenderedPptxAttachmentPath = result.pptxPath;
         }
         await this.sandboxActivityDeps.markSandboxDirty(this.input.sandboxId, 'ppt_render');
       }
@@ -2918,6 +2961,45 @@ export class AltusManagedToolRuntime {
         type: 'result',
         activatedSkills,
         content: JSON.stringify(result),
+        ...(result.status === 'completed' && result.pptxPath
+          ? {
+              terminalInstruction: `PPTX_RENDER_COMPLETED. Call complete_task now with attachments=[{"path":"${result.pptxPath}"}]. Do not run shell_execute, read_file, debug_open_page, browser_interact, or another PPT renderer.`,
+            }
+          : {}),
+      };
+    }
+
+    if (toolName === 'render_pptx_from_html_deck') {
+      if (!this.hasActiveSkill('ppt-workflow')) {
+        throw new Error('render_pptx_from_html_deck_ppt_workflow_not_active');
+      }
+      this.htmlDeckRenderAttempted = true;
+      const result = await pptRenderToolService.renderHtmlDeck({
+        sessionId: this.input.sessionId,
+        sandboxId: this.input.sandboxId,
+        workspaceRoot: this.input.workspaceRoot,
+        htmlDeckSpec: rawArgs.htmlDeckSpec,
+        projectRoot: asText(rawArgs.projectRoot) || null,
+        outputFileName: asText(rawArgs.outputFileName) || null,
+      });
+      if (result.status === 'completed') {
+        if (result.pptxPath) {
+          this.renderedPptxAttachmentPaths.add(result.pptxPath);
+          this.htmlDeckRenderedPptxAttachmentPaths.add(result.pptxPath);
+          this.latestRenderedPptxAttachmentPath = result.pptxPath;
+        }
+        this.htmlDeckRenderSucceeded = true;
+        await this.sandboxActivityDeps.markSandboxDirty(this.input.sandboxId, 'ppt_html_render');
+      }
+      return {
+        type: 'result',
+        activatedSkills,
+        content: JSON.stringify(result),
+        ...(result.status === 'completed' && result.pptxPath
+          ? {
+              terminalInstruction: `PPTX_RENDER_COMPLETED. Call complete_task now with attachments=[{"path":"${result.pptxPath}"}]. Do not run shell_execute, read_file, debug_open_page, browser_interact, or another PPT renderer.`,
+            }
+          : {}),
       };
     }
 

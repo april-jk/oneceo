@@ -40,6 +40,15 @@ export function classifyManagedToolErrorCode(rawError: string) {
   if (normalized.includes('complete_task_pptx_requires_render_pptx_from_instructions')) {
     return 'complete_task_pptx_requires_render_pptx_from_instructions';
   }
+  if (normalized.includes('complete_task_pptx_requires_render_pptx_from_html_deck')) {
+    return 'complete_task_pptx_requires_render_pptx_from_html_deck';
+  }
+  if (normalized.includes('render_pptx_from_instructions_blocked_after_html_deck_source')) {
+    return 'render_pptx_from_instructions_blocked_after_html_deck_source';
+  }
+  if (normalized.includes('ppt_workflow_render_completed_complete_task_required')) {
+    return 'ppt_workflow_render_completed_complete_task_required';
+  }
   if (normalized.startsWith('visual_detection_completion_blocked:')) {
     return 'visual_detection_completion_blocked';
   }
@@ -99,6 +108,7 @@ export function isManagedToolErrorRetryable(errorCode: string) {
     errorCode === 'complete_task_attachment_path_invalid' ||
     errorCode === 'write_file_binary_deliverable_requires_generator' ||
     errorCode === 'complete_task_pptx_requires_render_pptx_from_instructions' ||
+    errorCode === 'complete_task_pptx_requires_render_pptx_from_html_deck' ||
     errorCode === 'visual_detection_completion_blocked' ||
     errorCode === 'debug_service_not_ready' ||
     errorCode === 'debug_target_unreachable' ||
@@ -168,7 +178,13 @@ function buildErrorDetail(errorCode: string, rawError?: string) {
     case 'write_file_binary_deliverable_requires_generator':
       return 'write_file only supports UTF-8 text files. Final docx/xlsx/pptx/pdf and archive deliverables must be generated through a real document generator or renderer.';
     case 'complete_task_pptx_requires_render_pptx_from_instructions':
-      return 'PPTX attachments must come from render_pptx_from_instructions before complete_task can deliver them.';
+      return 'PPTX attachments must come from a managed PPT renderer before complete_task can deliver them.';
+    case 'complete_task_pptx_requires_render_pptx_from_html_deck':
+      return 'This run created or attempted an HTML Deck, so the final PPTX must come from render_pptx_from_html_deck and remain tied to that HTML source.';
+    case 'render_pptx_from_instructions_blocked_after_html_deck_source':
+      return 'This run already created or attempted a ppt-html-deck source. Do not switch to the instruction renderer because it would produce a PPTX that no longer corresponds to the HTML deck.';
+    case 'ppt_workflow_render_completed_complete_task_required':
+      return 'The PPT renderer has already produced the final PPTX for this run. Further inspection or rendering would create a loop.';
     case 'visual_detection_completion_blocked':
       return 'Website and web app delivery requires successful n.eko + Playwright visual detection screenshot evidence before complete_task.';
     case 'debug_open_page_repeat_blocked':
@@ -211,7 +227,13 @@ function buildErrorInstruction(errorCode: string, toolName: string) {
     case 'write_file_binary_deliverable_requires_generator':
       return 'Generate the final downloadable file through shell/python tooling or the managed renderer, verify it can be opened, then continue. Do not use write_file for docx/xlsx/pptx/pdf or archive outputs.';
     case 'complete_task_pptx_requires_render_pptx_from_instructions':
-      return 'Call render_pptx_from_instructions first, then attach the returned PPTX path in complete_task.attachments.';
+      return 'Call render_pptx_from_html_deck or render_pptx_from_instructions first, then attach the returned PPTX path in complete_task.attachments.';
+    case 'complete_task_pptx_requires_render_pptx_from_html_deck':
+      return 'Call render_pptx_from_html_deck successfully, then attach the returned PPTX path from ppt-html-deck/export in complete_task.attachments.';
+    case 'render_pptx_from_instructions_blocked_after_html_deck_source':
+      return 'Do not call the instruction renderer. Use the PPTX already returned by render_pptx_from_html_deck in complete_task.attachments.';
+    case 'ppt_workflow_render_completed_complete_task_required':
+      return 'Call complete_task now with the PPTX path returned by the renderer. Do not call shell_execute, read_file, debug_open_page, browser_interact, or another PPT renderer.';
     case 'visual_detection_completion_blocked':
       return 'Continue the website verification flow: verify the app can run or build, say 正在进行视觉检测, open the target with debug_open_page, perform Playwright/n.eko browser_interact steps for visible controls or page movement, then retry complete_task after a captured Action screenshot exists.';
     case 'debug_open_page_repeat_blocked':

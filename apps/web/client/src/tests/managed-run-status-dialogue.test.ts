@@ -483,6 +483,39 @@ describe("managed run status dialogue", () => {
     expect(managedTools).toHaveLength(0);
   });
 
+  it("hides ppt html deck source artifacts from managed activity rows", () => {
+    const visibleItems = groupManagedActivityItems(
+      buildChatItems([
+        createManagedToolMessage({
+          eventType: "tool_call_completed",
+          content: "写入 PPT HTML 源",
+          toolCallId: "tool-ppt-html",
+          toolName: "write_file",
+          metadata: {
+            arguments: {
+              path: "ppt-html-deck/slides/001-cover.html",
+              content: "<section class=\"slide\">Cover</section>",
+            },
+            outputPreview: {
+              path: "ppt-html-deck/slides/001-cover.html",
+            },
+          },
+        }),
+      ]),
+    );
+
+    const managedTools = visibleItems.flatMap((item) =>
+      item.kind === "managed_activity_group"
+        ? item.items.filter(
+            (child): child is Extract<ChatItem, { kind: "managed_tool" }> =>
+              child.kind === "managed_tool",
+          )
+        : [],
+    );
+
+    expect(managedTools).toHaveLength(0);
+  });
+
   it("shows concrete browser interaction actions in managed activity rows", () => {
     expect(
       getManagedToolPurposeSummary("debug_open_page", {

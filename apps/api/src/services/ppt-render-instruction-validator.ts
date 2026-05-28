@@ -51,6 +51,8 @@ const PAGE_TYPE_ALIASES: Record<string, string> = {
   workflow: 'timeline',
   process: 'timeline',
   roadmap: 'timeline',
+  toc: 'agenda',
+  table_of_contents: 'agenda',
   agenda_slide: 'agenda',
   divider: 'section-divider',
   section: 'section-divider',
@@ -89,10 +91,11 @@ function parseInstructionInput(value: unknown) {
 function normalizePageType(value: unknown) {
   const raw = asText(value).toLowerCase();
   if (!raw) return '';
-  const normalized = raw.replace(/[\s-]+/g, '_');
+  const normalized = raw.replace(/[\s_-]+/g, '-');
+  const aliasKey = raw.replace(/[\s-]+/g, '_');
   if (SUPPORTED_PAGE_TYPES.has(raw)) return raw;
   if (SUPPORTED_PAGE_TYPES.has(normalized)) return normalized;
-  return PAGE_TYPE_ALIASES[raw] || PAGE_TYPE_ALIASES[normalized] || 'content';
+  return PAGE_TYPE_ALIASES[raw] || PAGE_TYPE_ALIASES[normalized] || PAGE_TYPE_ALIASES[aliasKey] || 'content';
 }
 
 export type PptRenderInstructionValidationResult = {

@@ -10097,6 +10097,8 @@ function extractManagedDeliverables(
     const id = asText(record.id);
     const name = asText(record.name);
     if (!id || !name || unique.has(id)) continue;
+    const deliverablePath = asText(record.path);
+    if (isManagedInternalSupportArtifact(deliverablePath)) continue;
     const sizeValue =
       typeof record.size === "number"
         ? record.size
@@ -10106,7 +10108,7 @@ function extractManagedDeliverables(
     unique.set(id, {
       id,
       runId: asText(record.runId) || asText(metadata.runId),
-      path: asText(record.path),
+      path: deliverablePath,
       name,
       mimeType: asText(record.mimeType) || "application/octet-stream",
       size: Number.isFinite(sizeValue) ? sizeValue : 0,
@@ -10130,6 +10132,7 @@ function collectManagedWebArtifacts(input: {
       .trim()
       .replace(/\\/g, "/");
     if (!path) return;
+    if (isManagedInternalSupportArtifact(path)) return;
     const resolvedPreviewType =
       previewType || inferManagedArtifactPreviewType(path);
     if (resolvedPreviewType !== "web") return;
@@ -10148,6 +10151,14 @@ function collectManagedWebArtifacts(input: {
   }
 
   return Array.from(unique.values());
+}
+
+function hasDownloadableManagedDeliverables(
+  deliverables: TaskCreationDeliverableArtifact[],
+) {
+  return deliverables.some(
+    (deliverable) => inferManagedArtifactPreviewType(deliverable.path) !== "web",
+  );
 }
 
 function extractManagedPreviewSnapshot(
@@ -10277,9 +10288,21 @@ export function buildManagedCompletionCardItem(input: {
     managedArtifacts,
   });
   const shouldEmitFromDeliverablesContext = deliverables.length > 0;
+  const hasDownloadableDeliverables = hasDownloadableManagedDeliverables(deliverables);
   const hasPreviewSnapshot = Boolean(previewSnapshot);
   const isRunCompletedContext =
     message.type === "status_update" && eventType === "run_completed";
+  if (hasDownloadableDeliverables) {
+    emittedManagedCompletionRuns.add(runId);
+    return {
+      kind: "managed_deliverable_card",
+      sessionId,
+      runId,
+      deliverables,
+      messageKey: `managed:${runId}:deliverable_card`,
+    };
+  }
+
   if (
     (shouldEmitFromDeliverablesContext || isRunCompletedContext || hasPreviewSnapshot) &&
     (webArtifacts.length > 0 || hasPreviewSnapshot)

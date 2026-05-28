@@ -187,6 +187,9 @@ export class AltusManagedToolExecutor {
       }
 
       const disposition = input.onResult?.(result) || {};
+      const contentForModel = result.terminalInstruction
+        ? `${result.content}\n\n${result.terminalInstruction}`
+        : result.content;
       const toolResultEnvelope = buildManagedToolResultEnvelope({
         status: 'ok',
         runId: this.input.runId,
@@ -194,7 +197,7 @@ export class AltusManagedToolExecutor {
         toolName,
         modelRoundId: input.modelRoundId,
         args: eventArgs,
-        content: result.content,
+        content: contentForModel,
         contentForUser: this.input.buildToolEventContent(toolName, 'completed'),
         activatedSkills: result.activatedSkills as any,
         result: result.content,

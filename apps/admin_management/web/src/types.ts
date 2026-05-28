@@ -219,47 +219,99 @@ export interface HostListResponse {
   hosts: HostRuntime[];
 }
 
-export interface AuditLogEntry {
+export interface MembershipPlan {
   id: string;
-  timestamp: string;
-  operator: string;
-  action: string;
-  targetVmId: string;
-  sessionId?: string;
-  result: 'success' | 'failed';
-  detail?: string;
+  code: string;
+  name: string;
+  status: string;
+  defaultCredits: number;
+  isDefault: boolean;
+  allowedAgentLevelsJson: string[] | unknown[];
+  benefitsJson: unknown[];
+  dailyAutoRestoreEnabled: boolean;
+  dailyAutoRestoreCredits: number;
+  description: string;
+  sortOrder: number;
+  effectiveFrom?: string | null;
+  effectiveUntil?: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
-export interface AuditResponse {
-  total: number;
-  filteredTotal: number;
-  limit: number;
-  offset: number;
-  entries: AuditLogEntry[];
-  availableOperators?: string[];
-  availableActions?: string[];
-  availableTargets?: string[];
+export interface NewMembershipPlanPayload {
+  name: string;
+  status: string;
+  defaultCredits: number;
+  isDefault: boolean;
+  allowedAgentLevels: string[];
+  benefits: string[];
+  dailyAutoRestoreEnabled: boolean;
+  dailyAutoRestoreCredits: number;
+  description: string;
+  sortOrder: number;
+  effectiveFrom?: string | null;
+  effectiveUntil?: string | null;
 }
 
-export interface AuditDetailResponse {
-  entry: AuditLogEntry;
-  relatedEntries: AuditLogEntry[];
+export interface UserMembership {
+  id: string;
+  userId: string;
+  membershipPlanId: string;
+  status: string;
+  startedAt: string;
+  expiresAt?: string | null;
+  sourceType: string;
+  sourceId?: string | null;
+  assignedBy?: string | null;
+  assignedReason: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
-export interface AgentStageDistributionItem {
-  stageKey: string;
-  label: string;
-  value: number;
-  statusSummary: Array<{ label: string; value: number }>;
-  recentSessions: Array<{
+export interface MembershipUserListItem {
+  membership: UserMembership;
+  user: {
     id: string;
-    title: string;
+    email: string;
+    displayName: string;
     status: string;
-    updatedAt: string;
-    pendingQuestion?: string;
-  }>;
+  };
+  plan: {
+    id: string;
+    code: string;
+    name: string;
+    status: string;
+  };
 }
 
+export interface MembershipPagedResponse<T> {
+  page: number;
+  pageSize: number;
+  total: number;
+  items: T[];
+}
+
+export interface MembershipDailyRestoreHistoryItem {
+  restore: {
+    id: string;
+    userId: string;
+    membershipPlanId: string;
+    restoreDate: string;
+    restoreCredits: number;
+    creditTransactionId?: string | null;
+    createdAt: string;
+  };
+  user: {
+    id: string;
+    email: string;
+    displayName: string;
+  };
+  plan: {
+    id: string;
+    code: string;
+    name: string;
+  };
+}
 export interface ConversationSession {
   id: string;
   title: string;
@@ -344,7 +396,7 @@ export interface ConversationSessionDetailResponse {
       vmMetrics?: Record<string, unknown> | null;
       vmLogs?: Record<string, unknown> | null;
       quota?: Record<string, unknown> | null;
-      auditEntries?: AuditLogEntry[];
+
       errors?: string[];
     };
     osac: {
@@ -710,33 +762,6 @@ export interface ConversationLlmTrace {
   request: Record<string, unknown>;
   response: Record<string, unknown>;
   createdAt?: string;
-}
-
-export interface AgentManagementOverview {
-  oneceoApi: {
-    online: boolean;
-    timestamp: string | null;
-  };
-  agentApi: {
-    online: boolean;
-    message: string;
-    timestamp: string | null;
-  };
-  capabilities: Array<{
-    key: string;
-    name: string;
-    transport: string;
-    endpoint: string;
-    status: 'available' | 'planned' | string;
-  }>;
-  taskCreationSessions: {
-    total: number;
-    inProgress: number;
-    waitingUser: number;
-    completed: number;
-    failed: number;
-  };
-  stageDistribution: AgentStageDistributionItem[];
 }
 
 export interface AppUserSessionSummary {
@@ -1359,4 +1384,36 @@ export interface OsacReleaseDetailResponse {
   release: OsacRelease;
   currentPublishedReleaseId: string | null;
   currentPublishedVersion: string | null;
+}
+
+export interface ApiTraceItem {
+  id: string;
+  sessionId: string;
+  runId?: string | null;
+  traceType: 'llm_request' | 'tool_call' | 'service_api' | 'connector_api';
+  sequence: number;
+  model?: string | null;
+  provider?: string | null;
+  toolName?: string | null;
+  serviceName?: string | null;
+  endpoint?: string | null;
+  requestMethod?: string | null;
+  requestHeaders?: Record<string, unknown> | null;
+  requestBody?: Record<string, unknown> | null;
+  requestBodyText?: string | null;
+  responseStatus?: number | null;
+  responseHeaders?: Record<string, unknown> | null;
+  responseBody?: Record<string, unknown> | null;
+  responseBodyText?: string | null;
+  durationMs?: number | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  promptTokens?: number;
+  completionTokens?: number;
+  cachedPromptTokens?: number;
+  cacheCreationTokens?: number;
+  totalTokens?: number;
+  errorMessage?: string | null;
+  metadataJson?: Record<string, unknown>;
+  createdAt: string;
 }

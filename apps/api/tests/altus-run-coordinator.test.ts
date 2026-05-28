@@ -53,6 +53,66 @@ beforeEach(() => {
   mock.method(taskSessionAltusMemoryService, 'saveTimelineDerivedMemory', async () => null as any);
   mock.method(taskSessionAltusMemoryService, 'markMaterialized', async (input: any) => input.state || null);
   mock.method(taskSessionAltusMemoryService, 'saveSandboxFileMemoryToDb', async () => null as any);
+  mock.method(taskSessionAltusMemoryService, 'ensureLlmContextAnchor', async (input: any) => ({
+    version: 0,
+    summary: { goal: '', latestOutcome: '', openQuestions: [] },
+    constraints: [],
+    decisions: [],
+    workingNotes: [],
+    sandboxMaterialization: { snapshotVersion: 0, lastSandboxId: null, lastSyncedAt: null },
+    fileMemorySnapshot: {
+      snapshotVersion: 0,
+      savedAt: null,
+      sourceSandboxId: null,
+      archiveId: null,
+      workspaceMemoryPath: '.oneceo/session-memory/altus-memory.json',
+    },
+    updatedAt: null,
+    lastWriterRunId: input?.runId || null,
+    llmContext: {
+      contextId: 'altus_ctx_test',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      lastRunId: input?.runId || null,
+      lastModel: input?.model || 'altus-model',
+      lastProvider: input?.provider || 'openai',
+      callCount: 0,
+      lastPromptTokens: 0,
+      lastCachedTokens: 0,
+      lastCacheCreationTokens: 0,
+      lastCacheHitRatio: 0,
+    },
+  }) as any);
+  mock.method(taskSessionAltusMemoryService, 'recordLlmContextUsage', async () => ({
+    version: 0,
+    summary: { goal: '', latestOutcome: '', openQuestions: [] },
+    constraints: [],
+    decisions: [],
+    workingNotes: [],
+    sandboxMaterialization: { snapshotVersion: 0, lastSandboxId: null, lastSyncedAt: null },
+    fileMemorySnapshot: {
+      snapshotVersion: 0,
+      savedAt: null,
+      sourceSandboxId: null,
+      archiveId: null,
+      workspaceMemoryPath: '.oneceo/session-memory/altus-memory.json',
+    },
+    updatedAt: null,
+    lastWriterRunId: null,
+    llmContext: {
+      contextId: 'altus_ctx_test',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      lastRunId: null,
+      lastModel: 'altus-model',
+      lastProvider: 'openai',
+      callCount: 1,
+      lastPromptTokens: 0,
+      lastCachedTokens: 0,
+      lastCacheCreationTokens: 0,
+      lastCacheHitRatio: 0,
+    },
+  }) as any);
 });
 
 afterEach(() => {
@@ -228,6 +288,53 @@ test('callModel sanitizes malformed assistant tool arguments at the final reques
     capturedBodies[0]?.messages?.[0]?.tool_calls?.[1]?.function?.arguments,
     '{"path":"package.json"}'
   );
+});
+
+test('callModel attaches llm context headers for managed session reuse', async () => {
+  const capturedHeaders: Array<Record<string, string>> = [];
+  global.fetch = mock.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+    capturedHeaders.push((init?.headers || {}) as Record<string, string>);
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: 'ok',
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const coordinator = new AltusRunCoordinator(
+    {} as any,
+    {} as any,
+    {} as any,
+    {} as any,
+    {
+      projectMessagesForModel: (messages: any[]) => messages,
+    } as any
+  );
+
+  await (coordinator as any).callModel({
+    messages: [{ role: 'user', content: '继续' }],
+    signal: new AbortController().signal,
+    llmContext: {
+      contextId: 'altus_ctx_reuse_1',
+      turnIndex: 2,
+      sessionId: 'session-reuse-1',
+      runId: 'run-reuse-1',
+    },
+  });
+
+  assert.equal(capturedHeaders.length, 1);
+  assert.equal(capturedHeaders[0]?.['x-oneceo-internal-llm-context-id'], 'altus_ctx_reuse_1');
+  assert.equal(capturedHeaders[0]?.['x-oneceo-llm-context-id'], 'altus_ctx_reuse_1');
+  assert.equal(capturedHeaders[0]?.['x-oneceo-internal-llm-context-turn'], '2');
+  assert.equal(capturedHeaders[0]?.['x-oneceo-internal-llm-session-id'], 'session-reuse-1');
+  assert.equal(capturedHeaders[0]?.['x-oneceo-internal-llm-run-id'], 'run-reuse-1');
 });
 
 test('execute feeds malformed current tool arguments back to the model instead of executing the tool', async () => {
@@ -452,6 +559,15 @@ test('buildPostToolRunStatusContent uses user-friendly wording instead of comman
       outcome: 'completed',
     }),
     '这一步已经跑完了，我继续处理后面的内容'
+  );
+
+  assert.equal(
+    (coordinator as any).buildPostToolRunStatusContent({
+      toolName: 'shell_execute',
+      args: { command: 'ls -la /workspace/outputs' },
+      outcome: 'completed',
+    }),
+    '文件我已经核对过了；如果交付文件已就绪，我会直接提交最终交付'
   );
 
   assert.equal(
@@ -1574,6 +1690,753 @@ test('execute emits deliverables_ready before final assistant message when compl
   assert.equal(assistantTimeline.input.content, '已完成最终文档交付。\n\n验证:\n\n- 已输出 final.docx');
 });
 
+test('execute blocks website completion until visual detection screenshot evidence exists', async () => {
+  const state = createState(
+    'run-coordinator-visual-detection-guard',
+    'session-coordinator-visual-detection-guard',
+    '帮我做一个可交付的网站首页'
+  );
+  state.input.taskIntentProfile = {
+    mode: 'deployable_web_app',
+    reason: 'latest_web_artifact_request',
+    recentUserMessages: ['帮我做一个可交付的网站首页'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: true,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: false,
+    needsClarification: false,
+    clarificationQuestion: '',
+    clarificationType: 'none',
+    todoRequired: false,
+    todoReason: 'none',
+  };
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-visual-detection-guard',
+      workspaceRoot: '/workspace/session-coordinator-visual-detection-guard',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => undefined),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return { sequence: eventCalls.length, payload };
+    }),
+  };
+  const lifecycleService = {
+    markRunning: mock.fn(async () => lifecycleCalls.push('running')),
+    markWaitingUser: mock.fn(async () => lifecycleCalls.push('waiting_user')),
+    markCompleted: mock.fn(async () => lifecycleCalls.push('completed')),
+    markFailed: mock.fn(async () => lifecycleCalls.push('failed')),
+    markStopped: mock.fn(async () => lifecycleCalls.push('stopped')),
+    syncLoopSnapshot: mock.fn(async () => undefined),
+  };
+  const websitePreviewSnapshotService = {
+    captureManagedRunPreview: mock.fn(async () => null),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-complete-before-visual-detection',
+                    type: 'function',
+                    function: {
+                      name: 'complete_task',
+                      arguments: JSON.stringify({
+                        summary: '网站已完成。',
+                        verification: ['代码已写入'],
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (fetchCount === 2) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '正在进行视觉检测',
+                tool_calls: [
+                  {
+                    id: 'tool-debug-open-page-visual-detection',
+                    type: 'function',
+                    function: {
+                      name: 'debug_open_page',
+                      arguments: JSON.stringify({
+                        url: 'http://127.0.0.1:3000/',
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-complete-after-visual-detection',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '网站已完成，并完成视觉检测。',
+                      verification: ['已打开页面并捕获浏览器截图'],
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const browserScreenshot = {
+    type: 'browser_screenshot',
+    kind: 'browser_action_screenshot',
+    status: 'captured',
+    storageKey: 'sessions/session-coordinator-visual-detection-guard/browser-actions/step.png',
+    mimeType: 'image/png',
+    width: 1280,
+    height: 720,
+    capturedAt: '2026-05-22T14:20:00.000Z',
+    source: {
+      sandboxId: 'sandbox-visual-detection-guard',
+      cdpPort: 9222,
+      url: 'http://127.0.0.1:3000/',
+      title: '视觉检测页面',
+      toolName: 'debug_open_page',
+      action: 'open_page',
+      description: '打开首页',
+    },
+    visualCheck: {
+      status: 'passed',
+      diagnostics: {
+        visibleTextLength: 128,
+        visibleElementCount: 24,
+        uniqueColorCount: 32,
+      },
+    },
+  };
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'debug_open_page') {
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({
+          targetUrl: 'http://127.0.0.1:3000/',
+          browserScreenshot,
+        }),
+        evidence: [browserScreenshot],
+      };
+    }
+    return {
+      type: 'complete' as const,
+      summary: fetchCount === 1 ? '网站已完成。' : '网站已完成，并完成视觉检测。',
+      verification:
+        fetchCount === 1 ? ['代码已写入'] : ['已打开页面并捕获浏览器截图'],
+    };
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+    undefined as any,
+    undefined as any,
+    websitePreviewSnapshotService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(fetchCount, 3);
+  assert.equal(executeMock.mock.callCount(), 3);
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+  assert.equal(state.status, 'completed');
+
+  const blockedComplete = eventCalls.find(
+    (entry) => entry.eventType === 'tool_call_failed' && entry.payload.toolName === 'complete_task'
+  );
+  assert.ok(blockedComplete);
+  assert.equal(
+    blockedComplete.payload.error,
+    '交付前视觉检测还没完成，Altus 将继续通过 n.eko 和 Playwright 补齐截图证据。'
+  );
+  assert.equal((blockedComplete.payload.toolResultEnvelope as any)?.errorCode, 'visual_detection_completion_blocked');
+
+  const visualDetectionStep = eventCalls.find(
+    (entry) => entry.eventType === 'tool_call_completed' && entry.payload.toolName === 'debug_open_page'
+  );
+  assert.ok(visualDetectionStep);
+  assert.equal(visualDetectionStep.payload.content, '视觉检测页面已打开');
+  assert.equal((visualDetectionStep.payload.browserScreenshot as any)?.status, 'captured');
+  assert.equal((visualDetectionStep.payload.browserScreenshot as any)?.storageKey, browserScreenshot.storageKey);
+
+  const completedToolNames = eventCalls
+    .filter((entry) => entry.eventType === 'tool_call_completed')
+    .map((entry) => entry.payload.toolName);
+  assert.deepEqual(completedToolNames, ['debug_open_page', 'complete_task']);
+});
+
+test('execute uses passed browser visual evidence when final preview smoke fails', async () => {
+  const state = createState(
+    'run-coordinator-preview-reuse-passed-visual',
+    'session-coordinator-preview-reuse-passed-visual',
+    '帮我做一个可交付的网站首页'
+  );
+  state.input.taskIntentProfile = {
+    mode: 'deployable_web_app',
+    reason: 'latest_web_artifact_request',
+    recentUserMessages: ['帮我做一个可交付的网站首页'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: true,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: false,
+    needsClarification: false,
+    clarificationQuestion: '',
+    clarificationType: 'none',
+    todoRequired: false,
+    todoReason: 'none',
+  };
+  const setupCalls: Record<string, unknown>[] = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-preview-reuse-passed-visual',
+      workspaceRoot: '/workspace/session-coordinator-preview-reuse-passed-visual',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      setupCalls.push({ type: 'timeline', input });
+    }),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return { sequence: eventCalls.length, payload };
+    }),
+  };
+  const lifecycleService = {
+    markRunning: mock.fn(async () => undefined),
+    markWaitingUser: mock.fn(async () => undefined),
+    markCompleted: mock.fn(async () => undefined),
+    markFailed: mock.fn(async () => undefined),
+    markStopped: mock.fn(async () => undefined),
+    syncLoopSnapshot: mock.fn(async () => undefined),
+  };
+  const deliverables = [
+    {
+      id: 'deliverable-preview-reuse',
+      runId: state.input.runId,
+      path: 'dist/index.html',
+      name: 'index.html',
+      mimeType: 'text/html',
+      size: 1024,
+      downloadPath: '/api/task-creation/sessions/session-coordinator-preview-reuse-passed-visual/deliverables/deliverable-preview-reuse/download',
+    },
+  ];
+  const deliverableService = {
+    persistManagedRunDeliverables: mock.fn(async () => deliverables),
+  };
+  const failedFinalPreview = {
+    kind: 'website_screenshot' as const,
+    status: 'capture_failed' as const,
+    reasonCode: 'preview_visual_check_failed',
+    message: 'app_runtime_error: 页面浏览器运行时报错，疑似入口模块或 React 渲染失败。',
+    visualCheck: {
+      status: 'failed' as const,
+      reasonCode: 'app_runtime_error',
+      message: '页面浏览器运行时报错，疑似入口模块或 React 渲染失败。',
+    },
+    source: {
+      sandboxId: 'sandbox-preview-reuse-passed-visual',
+      port: 3000,
+      url: 'http://127.0.0.1:3000/',
+      command: 'node dist/index.js',
+    },
+  };
+  const websitePreviewSnapshotService = {
+    captureManagedRunPreview: mock.fn(async () => failedFinalPreview),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    const tool =
+      fetchCount === 1
+        ? {
+            id: 'tool-debug-open-page-preview-reuse',
+            type: 'function',
+            function: {
+              name: 'debug_open_page',
+              arguments: JSON.stringify({ url: 'http://127.0.0.1:8080/' }),
+            },
+          }
+        : {
+            id: 'tool-complete-preview-reuse',
+            type: 'function',
+            function: {
+              name: 'complete_task',
+              arguments: JSON.stringify({
+                summary: '网站已完成，并完成视觉检测。',
+                verification: ['已打开页面并捕获浏览器截图'],
+                attachments: ['dist/index.html'],
+              }),
+            },
+          };
+    return new Response(
+      JSON.stringify({ choices: [{ message: { content: '', tool_calls: [tool] } }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const browserScreenshot = {
+    type: 'browser_screenshot',
+    kind: 'browser_action_screenshot',
+    status: 'captured',
+    storageKey: 'sessions/session-coordinator-preview-reuse-passed-visual/browser-actions/passed.png',
+    mimeType: 'image/png',
+    width: 1280,
+    height: 720,
+    capturedAt: '2026-05-22T14:20:00.000Z',
+    source: {
+      sandboxId: 'sandbox-preview-reuse-passed-visual',
+      cdpPort: 9222,
+      url: 'http://127.0.0.1:8080/',
+      title: '视觉检测页面',
+      toolName: 'debug_open_page',
+      action: 'open_page',
+    },
+    visualCheck: {
+      status: 'passed',
+      diagnostics: {
+        visibleTextLength: 128,
+        uniqueColorCount: 32,
+      },
+    },
+  };
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'debug_open_page') {
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({ browserScreenshot }),
+        evidence: [browserScreenshot],
+      };
+    }
+    return {
+      type: 'complete' as const,
+      summary: '网站已完成，并完成视觉检测。',
+      verification: ['已打开页面并捕获浏览器截图'],
+      attachments: ['dist/index.html'],
+    };
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+    deliverableService as any,
+    undefined as any,
+    websitePreviewSnapshotService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(fetchCount, 2);
+  assert.equal(executeMock.mock.callCount(), 2);
+  assert.equal(websitePreviewSnapshotService.captureManagedRunPreview.mock.callCount(), 1);
+  const deliverablesReady = eventCalls.find((entry) => entry.eventType === 'deliverables_ready');
+  assert.equal((deliverablesReady?.payload.previewSnapshot as any)?.status, 'captured');
+  assert.equal((deliverablesReady?.payload.previewSnapshot as any)?.storageKey, browserScreenshot.storageKey);
+  assert.equal((deliverablesReady?.payload.previewSnapshot as any)?.source?.port, 8080);
+  assert.equal((deliverablesReady?.payload.previewSnapshot as any)?.visualCheck?.status, 'passed');
+
+  const assistantTimeline = setupCalls.find(
+    (entry) => (entry as any).input?.messageType === 'assistant_message'
+  ) as any;
+  assert.equal(assistantTimeline?.input?.metadata?.previewSnapshot?.status, 'captured');
+  assert.equal(assistantTimeline?.input?.metadata?.previewSnapshot?.storageKey, browserScreenshot.storageKey);
+});
+
+test('execute keeps visual detection blocked when browser action screenshot capture fails', async () => {
+  const previousMaxRounds = process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS;
+  process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS = '3';
+  const state = createState(
+    'run-coordinator-visual-detection-capture-failed',
+    'session-coordinator-visual-detection-capture-failed',
+    '帮我做一个可交付的网站首页'
+  );
+  state.input.taskIntentProfile = {
+    mode: 'deployable_web_app',
+    reason: 'latest_web_artifact_request',
+    recentUserMessages: ['帮我做一个可交付的网站首页'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: true,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: false,
+    needsClarification: false,
+    clarificationQuestion: '',
+    clarificationType: 'none',
+    todoRequired: false,
+    todoReason: 'none',
+  };
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-visual-detection-capture-failed',
+      workspaceRoot: '/workspace/session-coordinator-visual-detection-capture-failed',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => undefined),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return { sequence: eventCalls.length, payload };
+    }),
+  };
+  const lifecycleService = {
+    markRunning: mock.fn(async () => lifecycleCalls.push('running')),
+    markWaitingUser: mock.fn(async () => lifecycleCalls.push('waiting_user')),
+    markCompleted: mock.fn(async () => lifecycleCalls.push('completed')),
+    markFailed: mock.fn(async () => lifecycleCalls.push('failed')),
+    markStopped: mock.fn(async () => lifecycleCalls.push('stopped')),
+    syncLoopSnapshot: mock.fn(async () => undefined),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '正在进行视觉检测', tool_calls: [{
+          id: 'tool-debug-open-page-capture-failed',
+          type: 'function',
+          function: {
+            name: 'debug_open_page',
+            arguments: JSON.stringify({ url: 'http://127.0.0.1:3000/' }),
+          },
+        }] } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: '', tool_calls: [{
+        id: 'tool-complete-after-capture-failed',
+        type: 'function',
+        function: {
+          name: 'complete_task',
+          arguments: JSON.stringify({
+            summary: '网站已完成。',
+            verification: ['已打开页面'],
+          }),
+        },
+      }] } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+
+  const browserScreenshot = {
+    type: 'browser_screenshot',
+    kind: 'browser_action_screenshot',
+    status: 'capture_failed',
+    reasonCode: 'browser_screenshot_capture_failed',
+    message: 'playwright_module_not_found: Cannot find module playwright',
+    source: {
+      sandboxId: 'sandbox-visual-detection-capture-failed',
+      cdpPort: 9222,
+      toolName: 'debug_open_page',
+      action: 'open_page',
+      description: '打开首页',
+    },
+  };
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'debug_open_page') {
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({ browserScreenshot }),
+        evidence: [browserScreenshot],
+      };
+    }
+    return {
+      type: 'complete' as const,
+      summary: '网站已完成。',
+      verification: ['已打开页面'],
+    };
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+    undefined as any,
+    undefined as any,
+    { captureManagedRunPreview: mock.fn(async () => null) } as any
+  );
+
+  try {
+    await coordinator.execute(state, new AbortController());
+
+    assert.equal(fetchCount, 3);
+    assert.equal(executeMock.mock.callCount(), 3);
+    assert.deepEqual(lifecycleCalls, ['running', 'failed']);
+    assert.equal(state.status, 'failed');
+    const blockedComplete = eventCalls.find(
+      (entry) => entry.eventType === 'tool_call_failed' && entry.payload.toolName === 'complete_task'
+    );
+    assert.ok(blockedComplete);
+    assert.match(
+      (blockedComplete.payload.toolResultEnvelope as any)?.errorMessage,
+      /captured_count=0/
+    );
+    assert.match(
+      (blockedComplete.payload.toolResultEnvelope as any)?.errorMessage,
+      /last_tool=debug_open_page/
+    );
+    assert.match(
+      (blockedComplete.payload.toolResultEnvelope as any)?.errorMessage,
+      /last_reason_code=browser_screenshot_capture_failed/
+    );
+    assert.match(
+      (blockedComplete.payload.toolResultEnvelope as any)?.errorMessage,
+      /last_message=playwright_module_not_found/
+    );
+  } finally {
+    if (previousMaxRounds === undefined) {
+      delete process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS;
+    } else {
+      process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS = previousMaxRounds;
+    }
+  }
+});
+
+test('execute blocks website completion when screenshot is captured but visual check fails', async () => {
+  const previousMaxRounds = process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS;
+  process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS = '3';
+  const state = createState(
+    'run-coordinator-visual-detection-failed',
+    'session-coordinator-visual-detection-failed',
+    '帮我做一个可交付的网站首页'
+  );
+  state.input.taskIntentProfile = {
+    mode: 'deployable_web_app',
+    reason: 'latest_web_artifact_request',
+    recentUserMessages: ['帮我做一个可交付的网站首页'],
+    explicitNoDeploy: false,
+    explicitNoWeb: false,
+    webArtifactRequested: true,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: false,
+    deploymentAllowed: false,
+    needsClarification: false,
+    clarificationQuestion: '',
+    clarificationType: 'none',
+    todoRequired: false,
+    todoReason: 'none',
+  };
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-visual-detection-failed',
+      workspaceRoot: '/workspace/session-coordinator-visual-detection-failed',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => undefined),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return { sequence: eventCalls.length, payload };
+    }),
+  };
+  const lifecycleService = {
+    markRunning: mock.fn(async () => lifecycleCalls.push('running')),
+    markWaitingUser: mock.fn(async () => lifecycleCalls.push('waiting_user')),
+    markCompleted: mock.fn(async () => lifecycleCalls.push('completed')),
+    markFailed: mock.fn(async () => lifecycleCalls.push('failed')),
+    markStopped: mock.fn(async () => lifecycleCalls.push('stopped')),
+    syncLoopSnapshot: mock.fn(async () => undefined),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '正在进行视觉检测', tool_calls: [{
+          id: 'tool-debug-open-page-visual-detection-failed',
+          type: 'function',
+          function: {
+            name: 'debug_open_page',
+            arguments: JSON.stringify({ url: 'http://127.0.0.1:3000/' }),
+          },
+        }] } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: '', tool_calls: [{
+        id: 'tool-complete-after-failed-visual-check',
+        type: 'function',
+        function: {
+          name: 'complete_task',
+          arguments: JSON.stringify({
+            summary: '网站已完成。',
+            verification: ['已截图'],
+          }),
+        },
+      }] } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+
+  const browserScreenshot = {
+    type: 'browser_screenshot',
+    kind: 'browser_action_screenshot',
+    status: 'captured',
+    storageKey: 'sessions/session-coordinator-visual-detection-failed/browser-actions/blank.png',
+    mimeType: 'image/png',
+    width: 1280,
+    height: 720,
+    capturedAt: '2026-05-22T14:20:00.000Z',
+    source: {
+      sandboxId: 'sandbox-visual-detection-failed',
+      cdpPort: 9222,
+      url: 'http://127.0.0.1:3000/',
+      title: 'Blank',
+      toolName: 'debug_open_page',
+      action: 'open_page',
+      description: '打开首页',
+    },
+    visualCheck: {
+      status: 'failed',
+      reasonCode: 'screenshot_low_entropy',
+      message: '截图几乎是单一颜色，疑似白屏或纯色空页面。',
+      diagnostics: {
+        visibleTextLength: 0,
+        uniqueColorCount: 1,
+        dominantColorRatio: 1,
+      },
+    },
+  };
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'debug_open_page') {
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({ browserScreenshot }),
+        evidence: [browserScreenshot],
+      };
+    }
+    return {
+      type: 'complete' as const,
+      summary: '网站已完成。',
+      verification: ['已截图'],
+    };
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+    undefined as any,
+    undefined as any,
+    { captureManagedRunPreview: mock.fn(async () => null) } as any
+  );
+
+  try {
+    await coordinator.execute(state, new AbortController());
+
+    assert.equal(fetchCount, 3);
+    assert.equal(executeMock.mock.callCount(), 3);
+    assert.deepEqual(lifecycleCalls, ['running', 'failed']);
+    assert.equal(state.status, 'failed');
+    assert.match(state.stopReason || '', /我已经停止继续尝试/);
+    const blockedComplete = eventCalls.find(
+      (entry) => entry.eventType === 'tool_call_failed' && entry.payload.toolName === 'complete_task'
+    );
+    assert.ok(blockedComplete);
+    assert.equal(
+      blockedComplete.payload.error,
+      '页面已打开但没有通过视觉检测，Altus 将继续修复白屏、空内容或错误页问题后重新截图。'
+    );
+    assert.match(
+      (blockedComplete.payload.toolResultEnvelope as any)?.errorMessage,
+      /passed_count=0/
+    );
+    assert.match(
+      (blockedComplete.payload.toolResultEnvelope as any)?.errorMessage,
+      /last_reason_code=screenshot_low_entropy/
+    );
+  } finally {
+    if (previousMaxRounds === undefined) {
+      delete process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS;
+    } else {
+      process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS = previousMaxRounds;
+    }
+  }
+});
+
 test('execute injects skill catalog prompt before active skill body', async () => {
   const state = new AltusRunState({
     runId: 'run-coordinator-skills',
@@ -1588,16 +2451,16 @@ test('execute injects skill catalog prompt before active skill body', async () =
         sourceType: 'platform',
         skillId: 'skill-1',
         revisionId: 'rev-1',
-        slug: 'office-ppt',
-        name: 'PPT 办公',
-        description: '创建专业演示文稿',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: 'PPT 子任务编排',
         category: 'office',
         revisionNumber: 3,
         resourceSummary: {
           totalCount: 2,
           referenceCount: 1,
           templateCount: 1,
-          paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+          paths: ['references/subtask-contracts.md', 'templates/render-instruction-draft.md'],
         },
       },
     ],
@@ -1606,9 +2469,9 @@ test('execute injects skill catalog prompt before active skill body', async () =
         sourceType: 'platform',
         skillId: 'skill-1',
         revisionId: 'rev-1',
-        slug: 'office-ppt',
-        name: 'PPT 办公',
-        description: '创建专业演示文稿',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: 'PPT 子任务编排',
         category: 'office',
         renderedMarkdown: '# Skill Brief\n\nDo the work.',
         revisionNumber: 3,
@@ -1616,7 +2479,7 @@ test('execute injects skill catalog prompt before active skill body', async () =
           totalCount: 2,
           referenceCount: 1,
           templateCount: 1,
-          paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+          paths: ['references/subtask-contracts.md', 'templates/render-instruction-draft.md'],
         },
       },
     ],
@@ -1648,9 +2511,10 @@ test('execute injects skill catalog prompt before active skill body', async () =
     buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string, options?: any) => {
       const turnStatePrompt = String(options?.turnStatePrompt || '');
       assert.match(turnStatePrompt, /# Available skills catalog/);
-      assert.match(turnStatePrompt, /office-ppt: 创建专业演示文稿/);
+      assert.match(turnStatePrompt, /ppt-workflow: PPT 子任务编排/);
       assert.match(turnStatePrompt, /# Active skills/);
       assert.match(turnStatePrompt, /# Skill Brief/);
+      assert.equal((turnStatePrompt.match(/# Dynamic context blocks/g) || []).length, 1);
       return [
         { role: 'system', content: systemPrompt },
         { role: 'system', content: turnStatePrompt },
@@ -1734,17 +2598,17 @@ test('execute syncs resolved skills after sandbox becomes ready', async () => {
         sourceType: 'platform',
         skillId: 'skill-1',
         revisionId: 'rev-1',
-        slug: 'office-ppt',
-        name: 'PPT 办公',
-        description: '创建专业演示文稿',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: 'PPT 子任务编排',
         category: 'office',
-        renderedMarkdown: '# office-ppt',
+        renderedMarkdown: '# ppt-workflow',
         revisionNumber: 3,
         resourceSummary: {
           totalCount: 1,
           referenceCount: 1,
           templateCount: 0,
-          paths: ['references/slide-structure-guide.md'],
+          paths: ['references/subtask-contracts.md'],
         },
       },
     ],
@@ -2374,6 +3238,412 @@ test('execute requests clarification and transitions to waiting_user', async () 
   assert.equal(eventCalls[3]?.payload.messageKey, 'managed:run-coordinator-clarify:clarification');
 });
 
+test('execute persists pre-execution structured clarification cards without model roundtrip', async () => {
+  const state = createState(
+    'run-coordinator-structured-clarify',
+    'session-coordinator-structured-clarify',
+    '帮我分析一下沐曦股份，做个 ppt'
+  );
+  const structuredClarification = {
+    kind: 'structured_clarification' as const,
+    taskType: 'ppt' as const,
+    title: '沐曦股份 PPT 制作前确认关键决策',
+    summary: '先确认与当前 PPT 直接相关的关键决策。',
+    maxCards: 4 as const,
+    briefFields: ['purpose_audience'],
+    cards: [
+      {
+        id: 'purpose_audience',
+        title: '演示目的与受众',
+        question: '沐曦股份 PPT 主要给谁看？',
+        why: '决定叙事角度和信息密度',
+        selectionMode: 'single' as const,
+        required: true,
+        allowOther: true,
+        allowNote: false,
+        options: [
+          {
+            id: 'investor_pitch',
+            label: '投资人融资路演',
+            description: '强调投资价值',
+            impact: '突出市场和融资用途。',
+            recommended: true,
+          },
+          {
+            id: 'executive_strategy',
+            label: '内部高管战略汇报',
+            description: '强调战略判断',
+            impact: '突出风险和资源投入。',
+          },
+          {
+            id: 'brand_business_intro',
+            label: '企业品牌与业务推介',
+            description: '强调业务亮点',
+            impact: '突出业务叙事。',
+          },
+        ],
+      },
+    ],
+  };
+  state.input.taskIntentProfile = {
+    ...state.input.taskIntentProfile,
+    needsClarification: true,
+    clarificationType: 'presentation_brief',
+    clarificationQuestion: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+    structuredClarification,
+  };
+  const setupCalls: Record<string, unknown>[] = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      setupCalls.push({ type: 'timeline', input });
+    }),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return { sequence: eventCalls.length, payload };
+    }),
+  };
+  const lifecycleService = {
+    markWaitingUser: mock.fn(async () => lifecycleCalls.push('waiting_user')),
+  };
+  const setPendingClarificationMock = mock.method(
+    taskCreationFileMemoryStore,
+    'setPendingClarification',
+    async () => {}
+  );
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => {
+    throw new Error('model tool execution should not run for pre-execution structured clarification');
+  });
+  global.fetch = mock.fn(async () => {
+    throw new Error('model fetch should not run for pre-execution structured clarification');
+  }) as typeof fetch;
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeMock.mock.callCount(), 0);
+  assert.equal((global.fetch as any).mock.callCount(), 0);
+  assert.equal(setPendingClarificationMock.mock.callCount(), 1);
+  assert.deepEqual(lifecycleCalls, ['waiting_user']);
+  assert.equal(state.status, 'waiting_user');
+
+  const timelineCall = setupCalls.find((entry) => entry.type === 'timeline') as any;
+  assert.equal(timelineCall.input.messageType, 'clarification_request');
+  assert.equal(timelineCall.input.metadata.structuredClarification, structuredClarification);
+  assert.equal(eventCalls[0]?.eventType, 'clarification_requested');
+  assert.equal(eventCalls[0]?.payload.structuredClarification, structuredClarification);
+});
+
+test('execute stops the turn when google workspace confirmation is required', async () => {
+  const state = createState('run-coordinator-google-confirmation', 'session-coordinator-google-confirmation');
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-google-confirmation',
+      workspaceRoot: '/workspace/session-coordinator-google-confirmation',
+      reused: true,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => {}),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  global.fetch = mock.fn(async () =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-google-confirm-1',
+                  type: 'function',
+                  function: {
+                    name: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+                    arguments: JSON.stringify({
+                      tool_slug: 'GOOGLESUPER_CREATE_DOCUMENT_MARKDOWN',
+                      arguments: {
+                        title: 'oneceo confirmation e2e test',
+                      },
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    )
+  ) as typeof fetch;
+
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => ({
+    type: 'result' as const,
+    content: JSON.stringify({
+      type: 'confirmation_required',
+      connectorKey: 'google_super',
+      toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+      confirmationId: 'confirmation-1',
+      summary: {
+        action: 'google_workspace_write',
+        target: 'oneceo confirmation e2e test',
+        impact: 'Execute one Google Workspace write operation.',
+        parameterSummary: {
+          title: 'oneceo confirmation e2e test',
+        },
+      },
+    }),
+  }));
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeMock.mock.callCount(), 1);
+  assert.deepEqual(lifecycleCalls, ['running', 'waiting_user']);
+  assert.equal(state.status, 'waiting_user');
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'tool_call_started' &&
+        entry.payload.toolName === 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL'
+    ),
+    true
+  );
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'clarification_requested' || entry.eventType === 'assistant_message'
+    ),
+    false
+  );
+});
+
+test('execute stops the turn when google workspace confirmation is wrapped in provider envelope', async () => {
+  const state = createState('run-coordinator-google-confirmation-envelope', 'session-coordinator-google-confirmation-envelope');
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-google-confirm-envelope',
+      workspaceRoot: '/workspace/session-coordinator-google-confirmation-envelope',
+      reused: true,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => {}),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-google-confirm-envelope-1',
+                    type: 'function',
+                    function: {
+                      name: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+                      arguments: JSON.stringify({
+                        tool_slug: 'GOOGLESUPER_SEND_EMAIL',
+                        arguments: {
+                          recipient_email: '3065025109@qq.com',
+                          subject: '测试',
+                        },
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '已成功发送邮件！',
+              tool_calls: [
+                {
+                  id: 'tool-google-confirm-envelope-complete',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '已使用 Google Workspace 成功发送邮件。',
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL') {
+      const structuredContent = {
+        type: 'confirmation_required',
+        connectorKey: 'google_super',
+        toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+        confirmationId: 'confirmation-envelope-1',
+        summary: {
+          action: 'google_workspace_write',
+          target: '3065025109@qq.com',
+          impact: 'Execute one Google Workspace write operation.',
+          parameterSummary: {
+            subject: '测试',
+          },
+        },
+      };
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({
+          providerId: 'provider-google-super',
+          toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+          result: {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(structuredContent),
+              },
+            ],
+            structuredContent,
+          },
+        }),
+      };
+    }
+    if (toolName === 'complete_task') {
+      return {
+        type: 'complete' as const,
+        summary: '已使用 Google Workspace 成功发送邮件。',
+      };
+    }
+    throw new Error(`unexpected tool: ${toolName}`);
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeMock.mock.callCount(), 1);
+  assert.equal(fetchCount, 1);
+  assert.deepEqual(lifecycleCalls, ['running', 'waiting_user']);
+  assert.equal(state.status, 'waiting_user');
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'tool_call_started' &&
+        entry.payload.toolName === 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL'
+    ),
+    true
+  );
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'assistant_message' ||
+        entry.eventType === 'tool_call_started' && entry.payload.toolName === 'complete_task'
+    ),
+    false
+  );
+});
+
 test('execute defers sibling tool calls when ask_user appears in same tool batch', async () => {
   const state = createState('run-coordinator-clarify-sibling', 'session-coordinator-clarify-sibling');
   const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
@@ -2806,7 +4076,7 @@ test('execute records plain-text continuation recovery before failing the manage
   assert.equal(executeMock.mock.callCount(), 0);
   assert.deepEqual(lifecycleCalls, ['running', 'failed']);
   assert.equal(state.status, 'failed');
-  assert.match(state.stopReason || '', /managed_model_plain_text_without_tool_call/);
+  assert.match(state.stopReason || '', /这次任务没有顺利完成/);
   assert.equal(
     loopSnapshots.some((snapshot) => snapshot.lastTransitionReason === 'plain_text_continuation_prompted'),
     true
@@ -2828,6 +4098,467 @@ test('execute records plain-text continuation recovery before failing the manage
         entry.eventType === 'run_status' && entry.payload.transitionReason === 'plain_text_continuation_failed'
     ),
     true
+  );
+});
+
+test('execute completes rejected mcp confirmation without model retry failure', async () => {
+  const state = createState(
+    'run-coordinator-mcp-confirmation-reject',
+    'session-coordinator-mcp-confirmation-reject',
+    '',
+    'user_response'
+  );
+  state.input.rejectedMcpToolConfirmation = {
+    action: 'reject',
+    connectorKey: 'google_super',
+    confirmationId: 'confirmation-reject-1',
+    toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+    summary: {
+      action: 'send_email',
+      target: 'user@example.com',
+      impact: 'Send one email.',
+      parameterSummary: {
+        recipient_email: 'user@example.com',
+      },
+    },
+  };
+
+  const lifecycleCalls: string[] = [];
+  const loopSnapshots: Array<Record<string, unknown>> = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const timelineCalls: Array<Record<string, unknown>> = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-mcp-confirmation-reject',
+      workspaceRoot: '/workspace/session-coordinator-mcp-confirmation-reject',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async () => {
+      throw new Error('conversation messages should not be built for rejected MCP confirmation');
+    }),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      timelineCalls.push(input);
+    }),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(
+      async (
+        _runId: string,
+        _sessionId: string,
+        _userId: string,
+        eventType: string,
+        payload: Record<string, unknown>
+      ) => {
+        eventCalls.push({ eventType, payload });
+        return {
+          sequence: eventCalls.length,
+          payload,
+        };
+      }
+    ),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+    syncLoopSnapshot: mock.fn(async (_state: any, loop: Record<string, unknown>) => {
+      loopSnapshots.push(loop);
+    }),
+  };
+
+  global.fetch = mock.fn(async () => {
+    throw new Error('model should not be called for rejected MCP confirmation');
+  }) as typeof fetch;
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => {
+    throw new Error('tool runtime should not execute rejected MCP confirmation');
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(setupService.buildConversationMessages.mock.callCount(), 0);
+  assert.equal((global.fetch as any).mock.callCount(), 0);
+  assert.equal(executeMock.mock.callCount(), 0);
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+  assert.equal(state.status, 'completed');
+  assert.equal(timelineCalls[0]?.messageType, 'assistant_message');
+  assert.match(String(timelineCalls[0]?.content || ''), /已取消本次 Google Workspace 高风险操作/);
+  assert.doesNotMatch(
+    String(timelineCalls[0]?.content || ''),
+    /失败|错误|managed_model_plain_text_without_tool_call/
+  );
+  assert.equal(
+    loopSnapshots.some(
+      (snapshot) => snapshot.lastTransitionReason === 'plain_text_conversation_completed'
+    ),
+    true
+  );
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'run_status' &&
+        entry.payload.content === 'MCP 高风险操作已按用户拒绝结果取消'
+    ),
+    true
+  );
+});
+
+test('execute replays approved mcp tool calls before the next model round without exposing confirmation prompt text', async () => {
+  const state = createState(
+    'run-coordinator-mcp-confirmation-replay',
+    'session-coordinator-mcp-confirmation-replay',
+    '[mcp_tool_confirmation:approve]',
+    'user_response'
+  );
+  state.input.confirmedMcpToolReplay = {
+    confirmationId: 'confirmation-1',
+    confirmationToken: 'token-1',
+    confirmationAgentRunId: 'run-origin-1',
+    toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+    argumentsJson: {
+      tool_slug: 'GOOGLEDOCS_CREATE_DOCUMENT',
+      arguments: {
+        title: '项目周报',
+      },
+    },
+  };
+
+  const lifecycleCalls: string[] = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const capturedBodies: any[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-mcp-confirmation-replay',
+      workspaceRoot: '/workspace/session-coordinator-mcp-confirmation-replay',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, _input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: '帮我创建一个 Google Docs 文档' },
+      { role: 'user', content: '[mcp_tool_confirmation:approve]' },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => {}),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(
+      async (
+        _runId: string,
+        _sessionId: string,
+        _userId: string,
+        eventType: string,
+        payload: Record<string, unknown>
+      ) => {
+        eventCalls.push({ eventType, payload });
+        return {
+          sequence: eventCalls.length,
+          payload,
+        };
+      }
+    ),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  global.fetch = mock.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+    capturedBodies.push(JSON.parse(String(init?.body || '{}')));
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: 'Google Docs 文档已创建完成。',
+              tool_calls: [
+                {
+                  id: 'call-complete-1',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '已创建 Google Docs 文档《项目周报》。',
+                      verification: ['已获得文档 ID doc-1'],
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName, args) => {
+    if (toolName === 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL') {
+      return {
+        type: 'result',
+        content: JSON.stringify({
+          providerId: 'provider-google-super',
+          toolName: 'COMPOSIO_MULTI_EXECUTE_TOOL',
+          result: {
+            documentId: 'doc-1',
+            title: (args as any)?.arguments?.title || '项目周报',
+          },
+        }),
+      };
+    }
+    if (toolName === 'complete_task') {
+      return {
+        type: 'complete',
+        summary: '已创建 Google Docs 文档《项目周报》。',
+        verification: ['已获得文档 ID doc-1'],
+      };
+    }
+    throw new Error(`unexpected tool: ${toolName}`);
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeMock.mock.callCount(), 2);
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+  assert.equal(
+    String((setupService.buildConversationMessages.mock.calls[0]?.arguments[3] as any)?.turnStatePrompt || '').includes(
+      'confirmationToken: token-1'
+    ),
+    false
+  );
+  assert.equal(
+    capturedBodies[0]?.messages?.some((item: Record<string, unknown>) => Array.isArray(item?.tool_calls)),
+    true
+  );
+  assert.equal(
+    capturedBodies[0]?.messages?.some(
+      (item: Record<string, unknown>) =>
+        String(item?.content || '').includes('GOOGLEDOCS_CREATE_DOCUMENT')
+    ),
+    true
+  );
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'tool_call_started' &&
+        entry.payload.toolName === 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL' &&
+        String(JSON.stringify(entry.payload.arguments || {})).includes('token-1')
+    ),
+    false
+  );
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'tool_call_completed' &&
+        entry.payload.toolName === 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL'
+    ),
+    true
+  );
+});
+
+test('execute does not continue normal planning when approved mcp replay fails on the first attempt', async () => {
+  const state = createState(
+    'run-coordinator-mcp-confirmation-replay-failed',
+    'session-coordinator-mcp-confirmation-replay-failed',
+    '[mcp_tool_confirmation:approve]',
+    'user_response'
+  );
+  state.input.confirmedMcpToolReplay = {
+    confirmationId: 'confirmation-replay-failed-1',
+    confirmationToken: 'token-replay-failed-1',
+    confirmationAgentRunId: 'run-origin-replay-failed-1',
+    toolName: 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL',
+    argumentsJson: {
+      tools: [
+        {
+          tool_slug: 'GOOGLESUPER_SEND_EMAIL',
+          arguments: {
+            recipient_email: '3065025109@qq.com',
+            subject: '测试',
+            body: '当前时间：2026-05-05T03:29:34.273Z',
+          },
+        },
+      ],
+      thought: 'Sending email with current UTC time as requested',
+      session_id: 'rock',
+      current_step: 'SENDING_EMAIL',
+      sync_response_to_workbench: false,
+    },
+  };
+
+  const lifecycleCalls: string[] = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  let fetchCount = 0;
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-mcp-confirmation-replay-failed',
+      workspaceRoot: '/workspace/session-coordinator-mcp-confirmation-replay-failed',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, _input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: '帮我发送邮件' },
+      { role: 'user', content: '[mcp_tool_confirmation:approve]' },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => {}),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(
+      async (
+        _runId: string,
+        _sessionId: string,
+        _userId: string,
+        eventType: string,
+        payload: Record<string, unknown>
+      ) => {
+        eventCalls.push({ eventType, payload });
+        return {
+          sequence: eventCalls.length,
+          payload,
+        };
+      }
+    ),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '我先加载 Google guide 再继续发送。',
+              tool_calls: [
+                {
+                  id: 'call-load-guide-after-replay-failure',
+                  type: 'function',
+                  function: {
+                    name: 'load_connector_guide',
+                    arguments: JSON.stringify({
+                      connectorKey: 'google_super',
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'google_super__COMPOSIO_MULTI_EXECUTE_TOOL') {
+      throw new Error(
+        [
+          'connector_guide_blocked:google_super',
+          'Call load_connector_guide with connectorKey=google_super before using Multi Execute Composio Tools.',
+        ].join('\n')
+      );
+    }
+    if (toolName === 'load_connector_guide') {
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({
+          connectorKey: 'google_super',
+          revisionId: 'rev-google-1',
+        }),
+      };
+    }
+    throw new Error(`unexpected tool: ${toolName}`);
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeMock.mock.callCount(), 1);
+  assert.equal(fetchCount, 0);
+  assert.deepEqual(lifecycleCalls, ['running', 'failed']);
+  assert.equal(state.status, 'failed');
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'tool_call_failed' &&
+        entry.payload.toolCallId === 'confirmed:confirmation-replay-failed-1'
+    ),
+    true
+  );
+  assert.equal(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'tool_call_started' &&
+        entry.payload.toolName === 'load_connector_guide'
+    ),
+    false
   );
 });
 
@@ -3613,4 +5344,539 @@ test('execute switches to vision model when conversation contains image blocks',
       process.env.ALTUS_MANAGED_VISION_MODEL = originalVisionModel;
     }
   }
+});
+
+test('debug_open_page failure tracking blocks repeated same-target retries', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+  const state = {
+    lastKey: '',
+    repeatCount: 0,
+    failureCounts: {},
+  };
+  const args = { url: 'http://127.0.0.1:3000/' };
+  const rawError =
+    'debug_open_page_failed:__ONECEO_DEBUG_TARGET_UNREACHABLE__\nFailed to connect to 127.0.0.1 port 3000';
+
+  const first = coordinator.testRecordDebugOpenPageFailure({
+    args,
+    rawError,
+    sanitizedError: '调试页面目标地址暂不可访问',
+    state,
+  });
+  const second = coordinator.testRecordDebugOpenPageFailure({
+    args,
+    rawError,
+    sanitizedError: '调试页面目标地址暂不可访问',
+    state,
+  });
+
+  assert.equal(first.errorCode, 'debug_target_unreachable');
+  assert.equal(first.blocked, false);
+  assert.equal(first.userActionRequired, false);
+  assert.equal(second.errorCode, 'debug_open_page_repeat_blocked');
+  assert.equal(second.blocked, true);
+  assert.equal(second.userActionRequired, false);
+  assert.match(second.sanitizedError, /连续打开失败/);
+  assert.match(second.rawError, /same_reason=debug_target_unreachable/);
+});
+
+test('debug_open_page failure tracking does not block opaque tool execution failures', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+  const state = {
+    lastKey: '',
+    repeatCount: 0,
+    failureCounts: {},
+  };
+  const args = { url: 'http://127.0.0.1:8080/' };
+  const rawError = 'debug_open_page_failed:exit status 1';
+
+  const first = coordinator.testRecordDebugOpenPageFailure({
+    args,
+    rawError,
+    sanitizedError: '调试页面校验未返回具体状态',
+    state,
+  });
+  const second = coordinator.testRecordDebugOpenPageFailure({
+    args,
+    rawError,
+    sanitizedError: '调试页面校验未返回具体状态',
+    state,
+  });
+
+  assert.equal(first.errorCode, 'tool_execution_failed');
+  assert.equal(first.blocked, false);
+  assert.equal(second.errorCode, 'tool_execution_failed');
+  assert.equal(second.blocked, false);
+  assert.equal(second.userActionRequired, false);
+});
+
+test('debug_open_page failure tracking lets Altus investigate debug service readiness once before blocking repeats', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+  const state = {
+    lastKey: '',
+    repeatCount: 0,
+    failureCounts: {},
+  };
+  const args = { url: 'http://127.0.0.1:8080/' };
+  const rawError =
+    'debug_open_page_debug_not_ready:cdp_not_ready:Chromium CDP 调试端口未就绪，无法打开调试页面';
+
+  const first = coordinator.testRecordDebugOpenPageFailure({
+    args,
+    rawError,
+    sanitizedError: '远程调试服务尚未就绪',
+    state,
+  });
+  const second = coordinator.testRecordDebugOpenPageFailure({
+    args,
+    rawError,
+    sanitizedError: '远程调试服务尚未就绪',
+    state,
+  });
+
+  assert.equal(first.errorCode, 'debug_service_not_ready');
+  assert.equal(first.blocked, false);
+  assert.equal(first.userActionRequired, false);
+  assert.equal(second.errorCode, 'debug_open_page_repeat_blocked');
+  assert.equal(second.blocked, true);
+  assert.equal(second.userActionRequired, false);
+  assert.match(second.rawError, /same_reason=debug_service_not_ready/);
+});
+
+test('debug_open_page failure tracking normalizes localhost aliases and counts across corrective steps', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+  const state = {
+    lastKey: '',
+    repeatCount: 0,
+    failureCounts: {},
+  };
+  const rawError =
+    'debug_open_page_failed:__ONECEO_DEBUG_TARGET_UNREACHABLE__\nFailed to connect to 127.0.0.1 port 3000';
+
+  const first = coordinator.testRecordDebugOpenPageFailure({
+    args: { url: 'http://localhost:3000/?cache=1#top' },
+    rawError,
+    sanitizedError: '调试页面目标地址暂不可访问',
+    state,
+  });
+  state.lastKey = '';
+  state.repeatCount = 0;
+  const second = coordinator.testRecordDebugOpenPageFailure({
+    args: { url: '127.0.0.1:3000/' },
+    rawError,
+    sanitizedError: '调试页面目标地址暂不可访问',
+    state,
+  });
+
+  assert.equal(first.blocked, false);
+  assert.equal(second.errorCode, 'debug_open_page_repeat_blocked');
+  assert.equal(second.blocked, true);
+  assert.equal(second.userActionRequired, false);
+  assert.match(second.rawError, /same_target=http:\/\/127\.0\.0\.1:3000/);
+});
+
+test('execute keeps repeated debug_open_page failures recoverable so Altus can investigate and complete', async () => {
+  const state = createState(
+    '7f0c2ad3-5a58-4d3a-b0ab-54167ae0fb31',
+    '8832652e-b9b9-485a-b82d-0a9beced815d',
+  );
+  state.input.taskIntentProfile = {
+    ...state.input.taskIntentProfile,
+    webArtifactRequested: true,
+  };
+  const lifecycleFailures: Array<{
+    message: string;
+    options?: { userMessage?: string; reasonCode?: string };
+  }> = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-debug-repeat',
+      workspaceRoot: '/workspace/8832652e-b9b9-485a-b82d-0a9beced815d',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => undefined),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+  const lifecycleService = {
+    markRunning: mock.fn(async () => undefined),
+    markWaitingUser: mock.fn(async () => undefined),
+    markCompleted: mock.fn(async () => undefined),
+    markFailed: mock.fn(async (_failedState: AltusRunState, message: string, options?: { userMessage?: string; reasonCode?: string }) => {
+      lifecycleFailures.push({ message, options });
+    }),
+    markStopped: mock.fn(async () => undefined),
+    syncLoopSnapshot: mock.fn(async () => undefined),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount <= 2) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: `tool-debug-open-${fetchCount}`,
+                    type: 'function',
+                    function: {
+                      name: 'debug_open_page',
+                      arguments: JSON.stringify({ url: 'http://localhost:3000/?v=1' }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (fetchCount === 3) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-investigate-after-debug-repeat',
+                    type: 'function',
+                    function: {
+                      name: 'shell_execute',
+                      arguments: JSON.stringify({ command: 'curl -sI http://127.0.0.1:3000 || true' }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (fetchCount === 4) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '正在进行视觉检测',
+                tool_calls: [
+                  {
+                    id: 'tool-debug-open-after-investigation',
+                    type: 'function',
+                    function: {
+                      name: 'debug_open_page',
+                      arguments: JSON.stringify({ url: 'http://localhost:3000/?v=1' }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-complete-after-debug-investigation',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '已完成预览问题调查并交付。',
+                      verification: ['已确认重复视觉检测失败后继续调查'],
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  let debugOpenCount = 0;
+  const browserScreenshot = {
+    type: 'browser_screenshot',
+    kind: 'browser_action_screenshot',
+    status: 'captured',
+    storageKey: 'preview/debug-open-after-investigation.png',
+    signedUrl: 'https://example.test/debug-open-after-investigation.png',
+    capturedAt: '2026-05-24T13:00:00.000Z',
+    source: {
+      sandboxId: 'sandbox-debug-repeat',
+      toolName: 'debug_open_page',
+      action: 'open_page',
+      url: 'http://127.0.0.1:3000/',
+    },
+    visualCheck: {
+      status: 'passed',
+      reasonCode: 'ok',
+      message: '页面已打开',
+    },
+  };
+  mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    if (toolName === 'debug_open_page') {
+      debugOpenCount += 1;
+      if (debugOpenCount <= 2) {
+        throw new Error(
+          'debug_open_page_failed:__ONECEO_DEBUG_TARGET_UNREACHABLE__\nFailed to connect to 127.0.0.1 port 3000'
+        );
+      }
+      return {
+        type: 'result' as const,
+        content: JSON.stringify({
+          targetUrl: 'http://127.0.0.1:3000/',
+          browserScreenshot,
+        }),
+        evidence: [browserScreenshot],
+      };
+    }
+    if (toolName === 'shell_execute') {
+      return {
+        type: 'result' as const,
+        content: 'curl failed: connection refused',
+      };
+    }
+    return {
+      type: 'complete' as const,
+      summary: '已完成预览问题调查并交付。',
+      verification: ['已确认重复视觉检测失败后继续调查'],
+    };
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(fetchCount, 5);
+  assert.equal(state.status, 'completed');
+  assert.equal(lifecycleFailures.length, 0);
+  const failedEvents = eventCalls.filter((entry) => entry.eventType === 'tool_call_failed');
+  assert.equal(failedEvents.length, 2);
+  assert.equal((failedEvents[1]?.payload as any)?.transitionReason, 'tool_failed_but_recoverable');
+  assert.equal((failedEvents[1]?.payload as any)?.debugOpenPageFailure?.errorCode, 'debug_open_page_repeat_blocked');
+  assert.equal((failedEvents[1]?.payload as any)?.debugOpenPageFailure?.blocked, true);
+  assert.equal(JSON.stringify(failedEvents[1]?.payload.error || '').includes('same_target='), false);
+  const completedToolNames = eventCalls
+    .filter((entry) => entry.eventType === 'tool_call_completed')
+    .map((entry) => entry.payload.toolName);
+  assert.deepEqual(completedToolNames, ['shell_execute', 'debug_open_page', 'complete_task']);
+});
+
+test('execute recovers from post-render ppt completion guard and still completes delivery', async () => {
+  const state = createState(
+    'run-ppt-post-render-guard',
+    'session-ppt-post-render-guard',
+    '请生成沐曦股份的 PPT'
+  );
+  const eventCalls: Array<{ eventType: string; payload: any }> = [];
+  const lifecycleCalls: string[] = [];
+  const lifecycleFailures: any[] = [];
+  let fetchCount = 0;
+
+  const setupService = {
+    ensurePreparedRunEnvironment: mock.fn(async () => ({
+      runtimeSnapshot: {
+        tier: 'pro',
+        model: 'altus-model',
+        apiType: 'openai',
+        baseUrl: 'https://example.test/v1',
+        tokenState: 'configured',
+        baseUrlHost: 'example.test',
+        billingTargetKey: 'agent.pro',
+        billingTargetType: 'agent_tier',
+        runtimeSnapshotVersion: 'agent-runtime-v1',
+      },
+      provider: {
+        model: 'altus-model',
+        apiType: 'openai',
+        baseUrl: 'https://example.test/v1',
+        apiKey: 'test-key',
+      },
+      sandbox: {
+        sandboxId: 'sandbox-ppt-post-render',
+        workspaceRoot: '/workspace/session-ppt-post-render',
+        reused: false,
+      },
+      managedContext: {
+        connectors: [],
+        mcpProviders: [],
+        skillCatalog: [],
+        skills: [
+          {
+            sourceType: 'platform',
+            skillId: 'skill-ppt-workflow',
+            revisionId: 'rev-ppt-workflow',
+            slug: 'ppt-workflow',
+            name: 'PPT 工作流',
+            description: 'PPT 子任务编排',
+            category: 'office',
+            renderedMarkdown: '# Skill Brief',
+            revisionNumber: 1,
+            resourceSummary: null,
+          },
+        ],
+        taskIntentProfile: {
+          shouldUseTodoWorkflow: true,
+        },
+      },
+    })),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, eventType: string, payload: any) => {
+      eventCalls.push({ eventType, payload });
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async (_runId: string, payload: any) => {
+      lifecycleCalls.push('failed');
+      lifecycleFailures.push(payload);
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '渲染已经成功，我先更新 todo 再收尾。',
+                tool_calls: [
+                  {
+                    id: 'tool-post-render-todo',
+                    type: 'function',
+                    function: {
+                      name: 'todowrite',
+                      arguments: JSON.stringify({
+                        todos: [
+                          { content: '1. 渲染 PPT', status: 'completed', activeForm: '已完成' },
+                          { content: '2. 完成交付', status: 'in_progress', activeForm: '完成交付' },
+                        ],
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-complete-after-render-guard',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: 'PPT 已生成并完成交付。',
+                      verification: ['render_pptx_from_html_deck 已成功生成最终 PPTX'],
+                      attachments: [{ path: 'ppt-html-deck/export/沐曦股份深度战略分析.pptx' }],
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  let executeCount = 0;
+  mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    executeCount += 1;
+    if (toolName === 'todowrite') {
+      throw new Error(
+        'ppt_workflow_render_completed_complete_task_required:ppt-html-deck/export/沐曦股份深度战略分析.pptx'
+      );
+    }
+    if (toolName === 'complete_task') {
+      return {
+        type: 'complete' as const,
+        summary: 'PPT 已生成并完成交付。',
+        verification: ['render_pptx_from_html_deck 已成功生成最终 PPTX'],
+        attachments: [{ path: 'ppt-html-deck/export/沐曦股份深度战略分析.pptx' }],
+      };
+    }
+    throw new Error(`unexpected tool: ${toolName}`);
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeCount, 2);
+  assert.equal(fetchCount, 2);
+  assert.equal(state.status, 'completed');
+  assert.equal(lifecycleFailures.length, 0);
+  const failedEvent = eventCalls.find((entry) => entry.eventType === 'tool_call_failed' && entry.payload.toolName === 'todowrite');
+  assert.equal((failedEvent?.payload as any)?.transitionReason, 'tool_failed_but_recoverable');
+  const completedToolNames = eventCalls
+    .filter((entry) => entry.eventType === 'tool_call_completed')
+    .map((entry) => entry.payload.toolName);
+  assert.deepEqual(completedToolNames, ['complete_task']);
 });

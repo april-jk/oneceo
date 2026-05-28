@@ -1,6 +1,6 @@
 {
   "name": "api",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "tsx scripts/dev-preflight.ts && tsx watch src/index.ts",
@@ -13,6 +13,7 @@
     "altus-eval:init": "tsx scripts/altus-eval/init-run.ts",
     "altus-eval:finalize": "tsx scripts/altus-eval/finalize-run.ts",
     "test:deployment-main-chain:e2e": "tsx tests/e2e/deployment-main-chain.e2e.ts",
+    "test:deployment-matrix:e2e:local": "bash ./scripts/run-deployment-matrix-local.sh",
     "test:archive-flow": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:5432/oneceo_test?sslmode=disable} tsx --test tests/sandbox-activity.service.test.ts tests/sandbox-archive.service.test.ts tests/sandbox-archive-job.service.test.ts",
     "test:archive-flow:run": "bash ./scripts/run-archive-persistence-unit-tests.sh",
     "clean": "rm -rf dist",
@@ -22,7 +23,7 @@
     "@aws-sdk/client-s3": "^3.888.0",
     "@aws-sdk/lib-storage": "^3.888.0",
     "@aws-sdk/s3-request-presigner": "^3.1000.0",
-    "@langchain/community": "^1.1.10",
+    "@langchain/community": "^1.1.27",
     "@langchain/core": "^1.1.18",
     "@langchain/openai": "^1.2.4",
     "@oneceo/shared": "workspace:*",
@@ -33,7 +34,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "drizzle-kit": "^0.31.8",
-    "drizzle-orm": "^0.45.1",
+    "drizzle-orm": "^0.45.2",
     "e2b": "^2.8.4",
     "express": "^4.21.2",
     "ioredis": "^5.4.2",
@@ -41,7 +42,7 @@
     "multer": "^2.1.1",
     "pg": "^8.18.0",
     "socket.io": "^4.8.1",
-    "undici": "^6.19.4",
+    "undici": "^6.24.0",
     "ws": "^8.19.0",
     "zod": "^4.3.6"
   },

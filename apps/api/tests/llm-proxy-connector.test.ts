@@ -120,6 +120,31 @@ test('toAnthropicRequest maps OpenAI tools and tool results into Anthropic messa
   ]);
 });
 
+test('toAnthropicRequest keeps multi-system blocks and only caches stable prefix block', () => {
+  const payload = toAnthropicRequest({
+    model: 'claude-sonnet-4-6',
+    messages: [
+      {
+        role: 'system',
+        content: 'Stable policy block',
+      },
+      {
+        role: 'system',
+        content: '# Runtime context\n- Current time: 2026-05-13T20:00:00.000Z',
+      },
+      {
+        role: 'user',
+        content: '继续部署',
+      },
+    ],
+  });
+
+  assert.deepEqual(payload.system, [
+    { type: 'text', text: 'Stable policy block', cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: '# Runtime context\n- Current time: 2026-05-13T20:00:00.000Z' },
+  ]);
+});
+
 test('sanitizeOpenAiChatCompletionProxyBody normalizes malformed OpenAI tool arguments before upstream passthrough', () => {
   const body = Buffer.from(
     JSON.stringify({

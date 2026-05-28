@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   cleanupConnectorQuery,
+  FIGMA_FIXED_CALLBACK_PATH,
   GITHUB_FIXED_CALLBACK_PATH,
+  GOOGLE_SUPER_FIXED_CALLBACK_PATH,
   normalizeEditableProfileId,
+  resolveConnectorCatalogForProfiles,
+  resolveConnectorDirectoryState,
   resolveAuthorizedRepositoryLabel,
   resolveConnectorOauthCallbackContext,
   SLACK_FIXED_CALLBACK_PATH,
@@ -21,10 +25,53 @@ describe("connector center panel profile id normalization", () => {
     expect(normalizeEditableProfileId("profile-123")).toBe("profile-123");
   });
 
+  it("uses the standalone catalog when the profile snapshot has no catalog", () => {
+    const fallbackCatalog = [
+      {
+        key: "github",
+        category: "app",
+        name: "GitHub",
+        description: "GitHub connector",
+        icon: "github",
+        authModes: ["oauth"],
+        available: true,
+      },
+    ] as const;
+
+    expect(resolveConnectorCatalogForProfiles([], [...fallbackCatalog])).toEqual(fallbackCatalog);
+  });
+
+  it("keeps the directory out of a blank state while initial catalog is loading", () => {
+    expect(
+      resolveConnectorDirectoryState({
+        loading: true,
+        loadError: null,
+        catalogCount: 0,
+        activeTab: "app",
+        appCatalogCount: 0,
+        filteredAppCatalogCount: 0,
+      })
+    ).toBe("loading");
+  });
+
+  it("shows an explicit connector catalog empty state after loading completes", () => {
+    expect(
+      resolveConnectorDirectoryState({
+        loading: false,
+        loadError: null,
+        catalogCount: 0,
+        activeTab: "app",
+        appCatalogCount: 0,
+        filteredAppCatalogCount: 0,
+      })
+    ).toBe("no_catalog");
+  });
+
   it("uses connector-level OAuth for GitHub, Notion, Figma, Slack, and Vercel", () => {
     expect(shouldUseConnectorLevelOauth("github")).toBe(true);
     expect(shouldUseConnectorLevelOauth("notion")).toBe(true);
     expect(shouldUseConnectorLevelOauth("figma")).toBe(true);
+    expect(shouldUseConnectorLevelOauth("google_super")).toBe(true);
     expect(shouldUseConnectorLevelOauth("slack")).toBe(true);
     expect(shouldUseConnectorLevelOauth("vercel")).toBe(true);
   });
@@ -34,6 +81,7 @@ describe("connector center panel profile id normalization", () => {
     expect(shouldUseUnifiedConnectorCard("slack")).toBe(true);
     expect(shouldUseUnifiedConnectorCard("notion")).toBe(true);
     expect(shouldUseUnifiedConnectorCard("figma")).toBe(true);
+    expect(shouldUseUnifiedConnectorCard("google_super")).toBe(true);
     expect(shouldUseUnifiedConnectorCard("vercel")).toBe(true);
     expect(shouldUseUnifiedConnectorCard("supabase")).toBe(true);
   });
@@ -48,6 +96,14 @@ describe("connector center panel profile id normalization", () => {
 
   it("uses the fixed Vercel callback path", () => {
     expect(VERCEL_FIXED_CALLBACK_PATH).toBe("/vercel/callback");
+  });
+
+  it("uses the fixed Figma callback path", () => {
+    expect(FIGMA_FIXED_CALLBACK_PATH).toBe("/figma/callback");
+  });
+
+  it("uses the fixed Google Super callback path", () => {
+    expect(GOOGLE_SUPER_FIXED_CALLBACK_PATH).toBe("/google-super/callback");
   });
 
   it("recognizes Slack fixed callback pages as connector OAuth callbacks", () => {
@@ -68,11 +124,40 @@ describe("connector center panel profile id normalization", () => {
     expect(callback.shouldHandle).toBe(true);
   });
 
+  it("recognizes GitHub Composio success callbacks without OAuth code", () => {
+    const params = new URLSearchParams(
+      "settings=open&settingsTab=connectors&connector_oauth=1&connector=github&state=oauth-state&status=success&connected_account_id=ca_123"
+    );
+    const callback = resolveConnectorOauthCallbackContext("http://localhost/github/callback", params);
+
+    expect(callback.connector).toBe("github");
+    expect(callback.isFixedCallback).toBe(true);
+    expect(callback.shouldHandle).toBe(true);
+  });
+
   it("recognizes Vercel fixed callback pages as connector OAuth callbacks", () => {
     const params = new URLSearchParams("code=oauth-code&state=oauth-state");
     const callback = resolveConnectorOauthCallbackContext("http://localhost/vercel/callback", params);
 
     expect(callback.connector).toBe("vercel");
+    expect(callback.isFixedCallback).toBe(true);
+    expect(callback.shouldHandle).toBe(true);
+  });
+
+  it("recognizes Figma fixed callback pages as connector OAuth callbacks", () => {
+    const params = new URLSearchParams("code=oauth-code&state=oauth-state");
+    const callback = resolveConnectorOauthCallbackContext("http://localhost/figma/callback", params);
+
+    expect(callback.connector).toBe("figma");
+    expect(callback.isFixedCallback).toBe(true);
+    expect(callback.shouldHandle).toBe(true);
+  });
+
+  it("recognizes Google Super fixed callback pages as connector OAuth callbacks", () => {
+    const params = new URLSearchParams("code=oauth-code&state=oauth-state");
+    const callback = resolveConnectorOauthCallbackContext("http://localhost/google-super/callback", params);
+
+    expect(callback.connector).toBe("google_super");
     expect(callback.isFixedCallback).toBe(true);
     expect(callback.shouldHandle).toBe(true);
   });
@@ -103,6 +188,22 @@ describe("connector center panel profile id normalization", () => {
         targetSessionId: "session-vercel-1",
       })
     ).toBe("/session/session-vercel-1");
+  });
+
+  it("redirects Figma callback pages back to the target session after cleanup", () => {
+    expect(
+      cleanupConnectorQuery("/figma/callback", "?code=oauth-code&state=oauth-state", {
+        targetSessionId: "session-figma-1",
+      })
+    ).toBe("/session/session-figma-1");
+  });
+
+  it("redirects Google Super callback pages back to the target session after cleanup", () => {
+    expect(
+      cleanupConnectorQuery("/google-super/callback", "?code=oauth-code&state=oauth-state", {
+        targetSessionId: "session-google-1",
+      })
+    ).toBe("/session/session-google-1");
   });
 
   it("shows the selected GitHub repository name when profile config has repositories", () => {

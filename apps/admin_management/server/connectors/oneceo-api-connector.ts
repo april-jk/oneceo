@@ -878,6 +878,61 @@ export class OneceoApiConnector {
     });
   }
 
+  async requestBinary(
+    path: string,
+    options?: { headers?: Record<string, string>; timeoutMs?: number; retries?: number }
+  ): Promise<{ body: Buffer; contentType: string; contentLength?: string }> {
+    const timeoutMs = options?.timeoutMs ?? this.timeoutMs;
+    const retries = options?.retries ?? this.retries;
+    const maxAttempts = Math.max(1, retries + 1);
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const response = await fetchWithTimeout(
+          `${this.baseUrl}${path}`,
+          {
+            method: 'GET',
+            headers: {
+              'x-oneceo-internal-token': config.oneceoInternalToken,
+              ...(options?.headers || {}),
+            },
+          },
+          timeoutMs
+        );
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => ({}))) as OneceoEnvelope<unknown>;
+          const message =
+            typeof payload.error === 'string'
+              ? payload.error
+              : payload.error?.message || payload.message || `请求失败 (${response.status})`;
+          throw new AppError(response.status, message, payload);
+        }
+        return {
+          body: Buffer.from(await response.arrayBuffer()),
+          contentType: response.headers.get('content-type') || 'application/octet-stream',
+          contentLength: response.headers.get('content-length') || undefined,
+        };
+      } catch (error) {
+        lastError = error;
+        if (attempt >= maxAttempts || !shouldRetryError(error)) {
+          break;
+        }
+        await sleep(300);
+      }
+    }
+
+    if (lastError instanceof AppError) {
+      throw lastError;
+    }
+    if (lastError && typeof lastError === 'object' && 'name' in lastError && (lastError as any).name === 'AbortError') {
+      throw new AppError(504, '连接 oneceo api 超时');
+    }
+    throw new AppError(502, '无法连接 oneceo api', {
+      cause: lastError instanceof Error ? lastError.message : lastError,
+    });
+  }
+
   health() {
     return this.request<{ status: string; timestamp: string; version?: string }>('/health');
   }
@@ -1144,6 +1199,16 @@ export class OneceoApiConnector {
 
   getTaskCreationDebug(sessionId: string) {
     return this.request<TaskDebugInfo>(`/api/internal/task-creation/admin/sessions/${encodeURIComponent(sessionId)}/debug`);
+  }
+
+  getTaskCreationBrowserActionScreenshot(input: {
+    sessionId: string;
+    runId: string;
+    toolCallId: string;
+  }) {
+    return this.requestBinary(
+      `/api/internal/task-creation/admin/sessions/${encodeURIComponent(input.sessionId)}/runs/${encodeURIComponent(input.runId)}/tool-calls/${encodeURIComponent(input.toolCallId)}/browser-screenshot.png`
+    );
   }
 
   startTaskCreationRuntime(sessionId: string) {
@@ -1560,6 +1625,129 @@ export class OneceoApiConnector {
       }
     );
   }
+
+  getSessionApiTraces(sessionId: string, options?: {
+    type?: string;
+    toolName?: string;
+    model?: string;
+    limit?: number;
+    offset?: number;
+  }) {
+    const params = new URLSearchParams();
+    params.set('sessionId', sessionId);
+    if (options?.type) params.set('type', options.type);
+    if (options?.toolName) params.set('toolName', options.toolName);
+    if (options?.model) params.set('model', options.model);
+    if (options?.limit !== undefined) params.set('limit', String(options.limit));
+    if (options?.offset !== undefined) params.set('offset', String(options.offset));
+    return this.request<{
+      total: number;
+      limit: number;
+      offset: number;
+      traces: Array<{
+        id: string;
+        sessionId: string;
+        runId?: string | null;
+        traceType: string;
+        sequence: number;
+        model?: string | null;
+        provider?: string | null;
+        toolName?: string | null;
+        serviceName?: string | null;
+        endpoint?: string | null;
+        requestMethod?: string | null;
+        requestHeaders?: Record<string, unknown> | null;
+        requestBody?: Record<string, unknown> | null;
+        requestBodyText?: string | null;
+        responseStatus?: number | null;
+        responseHeaders?: Record<string, unknown> | null;
+        responseBody?: Record<string, unknown> | null;
+        responseBodyText?: string | null;
+        durationMs?: number | null;
+        startedAt?: string | null;
+        completedAt?: string | null;
+        promptTokens?: number;
+        completionTokens?: number;
+        cachedPromptTokens?: number;
+        cacheCreationTokens?: number;
+        totalTokens?: number;
+        errorMessage?: string | null;
+        metadataJson?: Record<string, unknown>;
+        createdAt: string;
+      }>;
+    }>(`/api/internal/traces?${params.toString()}`);
+  }
+
+  getApiTraceAggregate(options?: {
+    type?: string;
+    toolName?: string;
+    model?: string;
+    sessionId?: string;
+    from?: string;
+    to?: string;
+    groupBy?: string;
+    limit?: number;
+    offset?: number;
+  }) {
+    const params = new URLSearchParams();
+    if (options?.type) params.set('type', options.type);
+    if (options?.toolName) params.set('toolName', options.toolName);
+    if (options?.model) params.set('model', options.model);
+    if (options?.sessionId) params.set('sessionId', options.sessionId);
+    if (options?.from) params.set('from', options.from);
+    if (options?.to) params.set('to', options.to);
+    if (options?.groupBy) params.set('groupBy', options.groupBy);
+    if (options?.limit !== undefined) params.set('limit', String(options.limit));
+    if (options?.offset !== undefined) params.set('offset', String(options.offset));
+    return this.request<Array<{
+      dimension: string | null;
+      count: number;
+      avgDurationMs: number;
+      totalTokens: number;
+      errorCount: number;
+    }>>(`/api/internal/traces/aggregate?${params.toString()}`);
+  }
+
+  getApiTraceStats(options?: {
+    type?: string;
+    from?: string;
+    to?: string;
+  }) {
+    const params = new URLSearchParams();
+    if (options?.type) params.set('type', options.type);
+    if (options?.from) params.set('from', options.from);
+    if (options?.to) params.set('to', options.to);
+    return this.request<{
+      totalCalls: number;
+      avgDurationMs: number;
+      errorCount: number;
+      totalTokens: number;
+      byType: Array<{ type: string; count: number }>;
+      byTool: Array<{ toolName: string | null; count: number; avgDurationMs: number }>;
+      byModel: Array<{ model: string | null; count: number; totalTokens: number }>;
+    }>(`/api/internal/traces/stats?${params.toString()}`);
+  }
+
+  getApiTraceTrend(options?: {
+    type?: string;
+    from?: string;
+    to?: string;
+    interval?: string;
+  }) {
+    const params = new URLSearchParams();
+    if (options?.type) params.set('type', options.type);
+    if (options?.from) params.set('from', options.from);
+    if (options?.to) params.set('to', options.to);
+    if (options?.interval) params.set('interval', options.interval);
+    return this.request<Array<{
+      bucket: string;
+      count: number;
+      avgDurationMs: number;
+      totalTokens: number;
+      errorCount: number;
+    }>>(`/api/internal/traces/trend?${params.toString()}`);
+  }
+
 }
 
 export const oneceoApiConnector = new OneceoApiConnector();

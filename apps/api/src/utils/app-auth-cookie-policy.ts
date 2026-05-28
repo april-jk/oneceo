@@ -65,6 +65,14 @@ export function buildAppSessionStateCookieOptions(req: express.Request) {
   };
 }
 
+export function buildAppOauthStateCookieOptions(req: express.Request) {
+  return {
+    ...buildBaseCookieOptions(req, 1000 * 60 * 10),
+    httpOnly: true,
+    priority: 'High' as const,
+  };
+}
+
 export function buildAppSessionClearCookieOptions(req: express.Request) {
   return {
     path: '/',

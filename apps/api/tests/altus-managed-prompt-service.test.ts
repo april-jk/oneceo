@@ -43,6 +43,63 @@ test('managed prompt treats task grading as descriptive language and uses taskIn
   assert.match(prompt, /After a clarification answer arrives, reassess the request from scratch/i);
 });
 
+test('managed prompt requires structured ask_user cards for presentation brief clarification', () => {
+  const profile = deriveManagedTaskIntentProfile(['帮我分析一下沐曦股份，做个 ppt']);
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-ppt-structured-clarification',
+    sessionTitle: 'ppt clarification',
+    workspaceRoot: '/workspace/session-ppt-structured-clarification',
+    connectors: [],
+    taskIntentProfile: {
+      ...profile,
+      needsClarification: true,
+      clarificationType: 'presentation_brief',
+      clarificationQuestion: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+      structuredClarification: {
+        kind: 'structured_clarification',
+        taskType: 'ppt',
+        title: '生成 PPT 前确认 4 个关键决策',
+        summary: '先确认关键 brief。',
+        maxCards: 4,
+        briefFields: ['purpose_audience'],
+        cards: [
+          {
+            id: 'purpose_audience',
+            title: '演示目的与受众',
+            question: '这份 PPT 主要给谁看？',
+            why: '决定叙事角度',
+            selectionMode: 'single',
+            required: true,
+            allowOther: true,
+            allowNote: true,
+            options: [
+              {
+                id: 'investor_pitch',
+                label: '投资人融资路演',
+                description: '强调投资价值',
+                impact: '突出市场和融资用途。',
+                recommended: true,
+              },
+              {
+                id: 'executive_strategy',
+                label: '内部高管战略汇报',
+                description: '强调战略判断',
+                impact: '突出风险和资源投入。',
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  assert.match(prompt, /Structured clarification card contract/);
+  assert.match(prompt, /Your next action must be `ask_user`/);
+  assert.match(prompt, /at most 4 cards/);
+  assert.match(prompt, /structuredClarification/);
+  assert.match(prompt, /演示目的与受众/);
+});
+
 test('managed prompt explicitly skips pre-execution todo for simple tasks when taskIntentProfile says no', () => {
   const prompt = altusManagedPromptService.buildSystemPrompt({
     sessionId: 'session-simple-task-test',
@@ -72,6 +129,81 @@ test('managed prompt explicitly skips pre-execution todo for simple tasks when t
   assert.match(prompt, /do not call `todowrite` just because the request sounds non-trivial/i);
 });
 
+test('runtime context uses stable current date instead of per-turn timestamp', () => {
+  const prompt = altusManagedPromptService.buildRuntimeContextPrompt({
+    sessionId: 'session-runtime-context-date',
+    sessionTitle: 'runtime date',
+    workspaceRoot: '/workspace/runtime-date',
+    connectors: [],
+    turnStatePrompt: '# Current turn state\n- latest_user_message_type: user_input',
+  });
+
+  assert.match(prompt, /# Runtime context/);
+  assert.match(prompt, /Current date: \d{4}-\d{2}-\d{2}/);
+  assert.doesNotMatch(prompt, /Current time:/);
+});
+
+test('runtime context injects PPT generation contract only for PPT tasks', () => {
+  const pptProfile = deriveManagedTaskIntentProfile([
+    '帮我分析一下沐曦股份，做个 ppt',
+    [
+      '已确认需求（结构化澄清选择）',
+      '- 演示目的与受众：内部高管战略汇报',
+      '- 内容来源与可信度：官网、公告、权威媒体优先',
+      '- 深度与页数：12-15 页标准版',
+      '- 视觉与叙事风格：科技投研风',
+    ].join('\n'),
+  ]);
+  const pptPrompt = altusManagedPromptService.buildRuntimeContextPrompt({
+    sessionId: 'session-ppt-context',
+    sessionTitle: 'ppt context',
+    workspaceRoot: '/workspace/session-ppt-context',
+    connectors: [],
+    taskIntentProfile: {
+      ...pptProfile,
+      needsClarification: false,
+      clarificationType: 'none',
+      clarificationQuestion: '',
+    },
+  });
+
+  assert.match(pptPrompt, /# PPT generation contract/);
+  assert.match(pptPrompt, /Deck archetype: internal_strategy_review/);
+  assert.match(pptPrompt, /decision_options/);
+  assert.match(pptPrompt, /Source coverage guidance \(quality preference, not a blocking gate\)/);
+  assert.match(pptPrompt, /web_extract/);
+  assert.match(pptPrompt, /Search result snippets are discovery signals/);
+  assert.match(pptPrompt, /Source coverage is not allowed to block final delivery/);
+  assert.doesNotMatch(pptPrompt, /ask_or_use_of_funds/);
+
+  const nonPptPrompt = altusManagedPromptService.buildRuntimeContextPrompt({
+    sessionId: 'session-web-context',
+    sessionTitle: 'web context',
+    workspaceRoot: '/workspace/session-web-context',
+    connectors: [],
+    taskIntentProfile: deriveManagedTaskIntentProfile(['请帮我做一个企业官网']),
+  });
+
+  assert.doesNotMatch(nonPptPrompt, /# PPT generation contract/);
+});
+
+test('runtime context does not leak old PPT contract into a later website turn', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '帮我分析一下沐曦股份，做个 ppt',
+    '请帮我做一个企业官网',
+  ]);
+  const prompt = altusManagedPromptService.buildRuntimeContextPrompt({
+    sessionId: 'session-ppt-then-web',
+    sessionTitle: 'ppt then web',
+    workspaceRoot: '/workspace/session-ppt-then-web',
+    connectors: [],
+    taskIntentProfile: profile,
+  });
+
+  assert.doesNotMatch(prompt, /# PPT generation contract/);
+  assert.match(prompt, /# Todo gate/);
+});
+
 test('managed prompt defaults debug and testing to Playwright on the same n.eko browser', () => {
   const prompt = altusManagedPromptService.buildSystemPrompt({
     sessionId: 'session-debug-tool-choice',
@@ -91,6 +223,20 @@ test('managed prompt defaults debug and testing to Playwright on the same n.eko 
   assert.match(prompt, /cover the core user flows implied by the request/i);
   assert.match(prompt, /record the failure in the test document, return to repair/i);
   assert.match(prompt, /use Playwright \/ playwright-mcp by default to inspect or test the same n\.eko Chromium session through CDP 9222/i);
+  assert.match(prompt, /ONECEO_PLAYWRIGHT_CDP_URL=http:\/\/127\.0\.0\.1:9222/i);
+  assert.match(prompt, /PLAYWRIGHT_BROWSERS_PATH=\/opt\/ms-playwright/i);
+  assert.match(prompt, /NODE_PATH=\/usr\/local\/lib\/node_modules/i);
+  assert.match(prompt, /playwright-mcp=\/usr\/local\/bin\/playwright-mcp/i);
+  assert.match(prompt, /browser-use=\/usr\/local\/bin\/browser-use/i);
+  assert.match(prompt, /neko=\/usr\/local\/bin\/neko/i);
+  assert.match(prompt, /data-oneceo-app-status/i);
+  assert.match(prompt, /app_runtime_error/i);
+  assert.match(prompt, /Do not search for these paths/i);
+  assert.match(prompt, /do not create ad-hoc screenshot scripts such as `screenshot-test\.mjs`/i);
+  assert.match(prompt, /required screenshot evidence comes from platform tool results/i);
+  assert.match(prompt, /captured as a Playwright screenshot and attached to the corresponding Action/i);
+  assert.match(prompt, /never open a `\.render-report\.json` path with debug_open_page/i);
+  assert.match(prompt, /words like `官网` inside source instructions as research-source hints/i);
   assert.match(prompt, /Do not launch a separate browser instance/i);
   assert.match(prompt, /not about:blank, a Chrome error page, or an unexpected fallback route/i);
   assert.match(prompt, /Use Browser Use for exploratory external-site access and interaction only/i);
@@ -105,6 +251,49 @@ test('managed task intent requires todo workflow for explicit debug trigger', ()
   assert.equal(profile.todoReason, 'debug_chain');
 });
 
+test('managed task intent requires blueprint todo for new deployable web app tasks', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '请在当前工作区用 Vite + React + Node Web Shell 固定模板直接实现一个可部署的企业官网源码，不要提问。页面包含 hero、服务介绍、案例、联系区；后端只保留 /api/system/health 和一个 contact 接口，不需要数据库、登录或外部集成。'
+  ]);
+
+  assert.equal(profile.mode, 'deployable_web_app');
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.todoRequired, true);
+  assert.equal(profile.todoReason, 'deployable_web_app_blueprint');
+});
+
+test('managed task intent keeps website source-only no-deploy requests on the web app path', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '请在当前工作区用 Vite + React + Node Web Shell 固定模板直接创建一个可部署的网站，不要提问，不要部署，只完成源码。页面主体必须显示 ONECEO_E2E_MARKER_test。',
+  ]);
+
+  assert.equal(profile.mode, 'deployable_web_app');
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.deploymentAllowed, false);
+  assert.equal(profile.explicitNoDeploy, true);
+  assert.equal(profile.todoRequired, true);
+  assert.equal(profile.todoReason, 'deployable_web_app_blueprint');
+});
+
+test('managed task intent keeps PPT official-site source hints out of web app path', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '帮我分析一下 沐熙股份，做个 ppt',
+    [
+      '已确认需求（结构化澄清选择）',
+      '来源：沐熙股份 PPT 制作前确认关键决策',
+      '- 演示目的与受众：企业品牌与业务推介',
+      '- 内容来源与可信度：官网、公告、权威媒体优先',
+      '- 深度与页数：12-15 页标准版',
+      '- 视觉与叙事风格：科技投研风',
+      '请基于以上 confirmed brief 先规划，再执行任务。',
+    ].join('\n'),
+  ]);
+
+  assert.notEqual(profile.mode, 'deployable_web_app');
+  assert.equal(profile.webArtifactRequested, false);
+  assert.equal(profile.todoReason, 'none');
+});
+
 test('managed task intent profile carries a hard clarification gate for broad business-system requests', () => {
   const profile = deriveManagedTaskIntentProfile([
     '帮我做一个企业管理系统。',
@@ -115,6 +304,7 @@ test('managed task intent profile carries a hard clarification gate for broad bu
   assert.match(profile.clarificationQuestion, /核心模块/);
   assert.match(profile.clarificationQuestion, /源码/);
   assert.match(profile.clarificationQuestion, /部署/);
+  assert.equal(profile.structuredClarification, undefined);
   assert.equal(profile.todoRequired, false);
   assert.equal(profile.todoReason, 'none');
 
@@ -130,9 +320,10 @@ test('managed task intent profile carries a hard clarification gate for broad bu
   assert.match(prompt, /Your next step must be `ask_user`/i);
   assert.match(prompt, /Do not call `todowrite`/i);
   assert.match(prompt, /Active clarification type/i);
+  assert.doesNotMatch(prompt, /Structured clarification card contract/i);
 });
 
-test('managed prompt enforces multi-phase PPT collaboration and QA gate', () => {
+test('managed prompt does not expose legacy direct PPT workflow globally', () => {
   const prompt = altusManagedPromptService.buildSystemPrompt({
     sessionId: 'session-ppt-test',
     sessionTitle: 'ppt phase contract',
@@ -140,15 +331,10 @@ test('managed prompt enforces multi-phase PPT collaboration and QA gate', () => 
     connectors: [],
   });
 
-  assert.match(prompt, /execute the internal multi-phase workflow in this fixed order/i);
-  assert.match(prompt, /ppt_task_router/i);
-  assert.match(prompt, /ppt_storyboard_designer/i);
-  assert.match(prompt, /ppt_visual_system_designer/i);
-  assert.match(prompt, /presentation_manifest\.json/i);
-  assert.match(prompt, /choose pageType from/i);
-  assert.match(prompt, /choose exactly one paletteKey from/i);
-  assert.match(prompt, /enforce this PPT QA gate before complete_task/i);
-  assert.match(prompt, /do not allow three consecutive slides with the same layout/i);
+  assert.doesNotMatch(prompt, /ppt_task_router/i);
+  assert.doesNotMatch(prompt, /ppt_storyboard_designer/i);
+  assert.doesNotMatch(prompt, /presentation_manifest\.json/i);
+  assert.doesNotMatch(prompt, /enforce this PPT QA gate before complete_task/i);
 });
 
 test('managed prompt enforces multi-phase DOCX collaboration and QA gate', () => {
@@ -162,10 +348,10 @@ test('managed prompt enforces multi-phase DOCX collaboration and QA gate', () =>
   assert.match(prompt, /docx_task_router/i);
   assert.match(prompt, /docx_outline_architect/i);
   assert.match(prompt, /docx_style_system_designer/i);
-  assert.match(prompt, /document_manifest\.json/i);
   assert.match(prompt, /choose exactly one taskMode from/i);
   assert.match(prompt, /choose exactly one taskMode from .* and one contentArchetype from/i);
   assert.match(prompt, /build the outline using bounded section types/i);
+  assert.match(prompt, /Do not use `write_file` to create `\.docx` directly/i);
   assert.match(prompt, /enforce this DOCX QA gate before complete_task/i);
 });
 
@@ -180,10 +366,10 @@ test('managed prompt enforces multi-phase XLSX collaboration and formula-first Q
   assert.match(prompt, /xlsx_task_router/i);
   assert.match(prompt, /xlsx_workbook_designer/i);
   assert.match(prompt, /xlsx_formula_planner/i);
-  assert.match(prompt, /workbook_manifest\.json/i);
   assert.match(prompt, /choose exactly one taskMode from/i);
   assert.match(prompt, /Formula-First rule/i);
   assert.match(prompt, /plan the workbook before writing cells/i);
+  assert.match(prompt, /Do not use `write_file` to create `\.xlsx` directly/i);
   assert.match(prompt, /enforce this XLSX QA gate before complete_task/i);
 });
 
@@ -223,8 +409,64 @@ test('managed prompt requires deployment tools and auto-repair loop for publish 
 
   assert.match(prompt, /use the managed deployment tools instead of replying with plain text/i);
   assert.match(prompt, /use `deploy_application` for first publish or publishing the latest workspace changes/i);
+  assert.match(prompt, /If the workspace already contains the fixed OneCEO web shell, treat it as the canonical scaffold/i);
   assert.match(prompt, /returns `status=retryable_repair_required`, inspect `repair\.category` first/i);
   assert.match(prompt, /keep deployment debug details internal/i);
+});
+
+test('managed prompt fixes deployable web apps to the official vite-node shell', () => {
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-fixed-shell-test',
+    sessionTitle: 'fixed shell contract',
+    workspaceRoot: '/workspace/session-fixed-shell-test',
+    connectors: [],
+    taskIntentProfile: {
+      mode: 'deployable_web_app',
+      reason: 'latest_deployable_request',
+      recentUserMessages: ['帮我做一个企业官网'],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: true,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: true,
+      needsClarification: false,
+      clarificationQuestion: '',
+      clarificationType: 'none',
+      todoRequired: true,
+      todoReason: 'deployable_web_app_blueprint',
+    },
+  });
+
+  assert.match(prompt, /ONECEO_FIXED_SHELL_ANCHOR/i);
+  assert.match(prompt, /ONECEO_WEBAPP_TODO_BLUEPRINT_ANCHOR/i);
+  assert.match(prompt, /ONECEO_WEBAPP_VISUAL_DETECTION_ANCHOR/i);
+  assert.match(prompt, /keep todo updates sparse/i);
+  assert.match(prompt, /Do not call `todowrite` after every small file edit/i);
+  assert.match(prompt, /without an existing workspace stack to preserve, default to the fixed OneCEO web shell/i);
+  assert.match(prompt, /default stable delivery lane for new deployable websites, not as a global migration rule/i);
+  assert.match(prompt, /If the workspace already exists in another stack, or the user is debugging, repairing, or extending an existing project, preserve the existing stack/i);
+  assert.match(prompt, /root `client\/`, root `server\/`, optional root `shared\/`/i);
+  assert.match(prompt, /fixed Node web shell/i);
+  assert.match(prompt, /produce browser assets under `dist\/public` and a server entry at `dist\/index\.js`/i);
+  assert.match(prompt, /production start command should resolve to `node dist\/index\.js`/i);
+  assert.match(prompt, /do not introduce Express, Koa, Fastify/i);
+  assert.match(prompt, /homepage implementation, primary user-facing content, requested acceptance marker/i);
+  assert.match(prompt, /client\/src\/main\.\*` as the React mount file only/i);
+  assert.match(prompt, /Before the first code-editing step for a new deployable web app task, write a blueprint todo/i);
+  assert.match(prompt, /ONECEO_WEAK_WEBAPP_FAST_PATH_ANCHOR/i);
+  assert.match(prompt, /4-6 concrete items are usually enough/i);
+  assert.match(prompt, /Run\/build verification and visual detection are still required before completion/i);
+  assert.match(prompt, /one focused implementation pass by editing `client\/src\/App\.jsx` and `client\/src\/styles\.css`/i);
+  assert.match(prompt, /must name the target path for each implementation item/i);
+  assert.match(prompt, /default the blueprint to a compact but complete site structure: hero, primary value or service section, proof\/case\/portfolio section, and CTA\/contact section/i);
+  assert.match(prompt, /bind that default structure to `client\/src\/App\.jsx` or `client\/src\/App\.tsx`/i);
+  assert.match(prompt, /正在进行视觉检测/i);
+  assert.match(prompt, /open it through `debug_open_page`/i);
+  assert.match(prompt, /capture Playwright\/n\.eko Action screenshots/i);
+  assert.doesNotMatch(prompt, /macro self-check/i);
+  assert.match(prompt, /creating a new deployable site from scratch, not as permission to switch the deployable runtime/i);
 });
 
 test('managed prompt fixes managed database engine to Railway Postgres', () => {
@@ -340,25 +582,92 @@ test('managed prompt builds minimal skill catalog index without full body', () =
       sourceType: 'platform',
       skillId: 'skill-1',
       revisionId: 'rev-1',
-      slug: 'office-ppt',
-      name: 'PPT 办公',
-      description: '创建、改写或重组专业演示文稿',
+      slug: 'ppt-workflow',
+      name: 'PPT 工作流',
+      description: '按子任务编排准备 PPT 渲染指令草稿',
       category: 'office',
       revisionNumber: 3,
       resourceSummary: {
-        totalCount: 2,
-        referenceCount: 1,
+        totalCount: 4,
+        referenceCount: 3,
         templateCount: 1,
-        paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+        paths: [
+          'references/subtask-contracts.md',
+          'references/visual-plan-guide.md',
+          'references/preflight-checklist.md',
+          'templates/render-instruction-draft.md',
+        ],
       },
     },
   ]);
 
   assert.match(prompt, /available skills catalog/i);
-  assert.match(prompt, /office-ppt: 创建、改写或重组专业演示文稿/);
-  assert.match(prompt, /resources=1 references, 1 templates/);
+  assert.match(prompt, /ppt-workflow: 按子任务编排准备 PPT 渲染指令草稿/);
+  assert.match(prompt, /id=skill-catalog:platform:skill-1:rev-1/);
+  assert.match(prompt, /resources=3 references, 1 templates/);
   assert.match(prompt, /call `load_skill_resource`/i);
   assert.doesNotMatch(prompt, /compatibility:\s*opencode/i);
+});
+
+test('managed prompt can suppress skill catalog dynamic block index when already provided elsewhere', () => {
+  const prompt = altusManagedPromptService.buildSkillCatalogPrompt(
+    [
+      {
+        sourceType: 'platform',
+        skillId: 'skill-1',
+        revisionId: 'rev-1',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: '按子任务编排准备 PPT 渲染指令草稿',
+        category: 'office',
+        revisionNumber: 3,
+        resourceSummary: {
+          totalCount: 1,
+          referenceCount: 1,
+          templateCount: 0,
+          paths: ['references/subtask-contracts.md'],
+        },
+      },
+    ],
+    { includeBlockIndex: false }
+  );
+
+  assert.match(prompt, /# Available skills catalog/);
+  assert.match(prompt, /ppt-workflow: 按子任务编排准备 PPT 渲染指令草稿/);
+  assert.doesNotMatch(prompt, /# Dynamic context blocks/);
+  assert.doesNotMatch(prompt, /id=skill-catalog:platform:skill-1:rev-1/);
+});
+
+test('managed prompt exposes ppt workflow as catalog-only pre-render skill', () => {
+  const prompt = altusManagedPromptService.buildSkillCatalogPrompt([
+    {
+      sourceType: 'platform',
+      skillId: 'skill-ppt-workflow',
+      revisionId: 'rev-ppt-workflow',
+      slug: 'ppt-workflow',
+      name: 'PPT 工作流',
+      description: '按竞品式子任务编排完成 PPT 生成前工作流',
+      category: 'office',
+      revisionNumber: 1,
+      resourceSummary: {
+        totalCount: 4,
+        referenceCount: 3,
+        templateCount: 1,
+        paths: [
+          'references/subtask-contracts.md',
+          'references/visual-plan-guide.md',
+          'references/preflight-checklist.md',
+          'templates/render-instruction-draft.md',
+        ],
+      },
+    },
+  ]);
+
+  assert.match(prompt, /ppt-workflow: 按竞品式子任务编排完成 PPT 生成前工作流/);
+  assert.match(prompt, /id=skill-catalog:platform:skill-ppt-workflow:rev-ppt-workflow/);
+  assert.match(prompt, /resources=3 references, 1 templates/);
+  assert.match(prompt, /call `load_skill_resource`/i);
+  assert.doesNotMatch(prompt, /# Skill Brief: PPT 子任务编排工作流/);
 });
 
 test('managed prompt shows active skill resource summary alongside full body', () => {
@@ -367,9 +676,9 @@ test('managed prompt shows active skill resource summary alongside full body', (
       sourceType: 'platform',
       skillId: 'skill-1',
       revisionId: 'rev-1',
-      slug: 'office-ppt',
-      name: 'PPT 办公',
-      description: '创建、改写或重组专业演示文稿',
+      slug: 'ppt-workflow',
+      name: 'PPT 工作流',
+      description: '按子任务编排准备 PPT 渲染指令草稿',
       category: 'office',
       renderedMarkdown: '# Skill Brief\n\nDo the work.',
       revisionNumber: 3,
@@ -377,15 +686,89 @@ test('managed prompt shows active skill resource summary alongside full body', (
         totalCount: 2,
         referenceCount: 1,
         templateCount: 1,
-        paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+        paths: ['references/subtask-contracts.md', 'templates/render-instruction-draft.md'],
       },
     },
   ]);
 
   assert.match(prompt, /# Active skills/);
   assert.match(prompt, /currently active for the run/i);
+  assert.match(prompt, /id=skill:platform:skill-1:rev-1/);
   assert.match(prompt, /resources: 1 references, 1 templates/);
   assert.match(prompt, /# Skill Brief/);
+});
+
+test('managed prompt can suppress active skill block index when turn-level index already exists', () => {
+  const prompt = altusManagedPromptService.buildSkillContextPrompt(
+    [
+      {
+        sourceType: 'platform',
+        skillId: 'skill-1',
+        revisionId: 'rev-1',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: '按子任务编排准备 PPT 渲染指令草稿',
+        category: 'office',
+        renderedMarkdown: '# Skill Brief\n\nDo the work.',
+        revisionNumber: 3,
+        resourceSummary: {
+          totalCount: 2,
+          referenceCount: 1,
+          templateCount: 1,
+          paths: ['references/subtask-contracts.md', 'templates/render-instruction-draft.md'],
+        },
+      },
+    ],
+    { includeBlockIndex: false }
+  );
+
+  assert.match(prompt, /# Active skills/);
+  assert.match(prompt, /# Skill Brief/);
+  assert.doesNotMatch(prompt, /# Dynamic context blocks/);
+  assert.doesNotMatch(prompt, /id=skill:platform:skill-1:rev-1/);
+});
+
+test('managed prompt includes full ppt workflow instructions when skill is active', () => {
+  const prompt = altusManagedPromptService.buildSkillContextPrompt([
+    {
+      sourceType: 'platform',
+      skillId: 'skill-ppt-workflow',
+      revisionId: 'rev-ppt-workflow',
+      slug: 'ppt-workflow',
+      name: 'PPT 工作流',
+      description: '按竞品式子任务编排完成 PPT 生成前工作流',
+      category: 'office',
+      renderedMarkdown: [
+        '# Skill Brief: PPT 子任务编排工作流',
+        '',
+        '当前阶段不调用 PPT 专用渲染器。',
+        '固定顺序：`ppt_intent_analyzer -> ppt_research_planner -> ppt_material_collector -> ppt_visual_planner -> ppt_outline_planner -> ppt_render_instruction_planner -> ppt_preflight_reviewer`。',
+        '最终产物是 `PptRenderInstructionDraft`。',
+      ].join('\n'),
+      revisionNumber: 1,
+      resourceSummary: {
+        totalCount: 4,
+        referenceCount: 3,
+        templateCount: 1,
+        paths: [
+          'references/subtask-contracts.md',
+          'references/visual-plan-guide.md',
+          'references/preflight-checklist.md',
+          'templates/render-instruction-draft.md',
+        ],
+      },
+    },
+  ]);
+
+  assert.match(prompt, /# Active skills/);
+  assert.match(prompt, /slug: ppt-workflow/);
+  assert.match(prompt, /id=skill:platform:skill-ppt-workflow:rev-ppt-workflow/);
+  assert.match(prompt, /resources: 3 references, 1 templates/);
+  assert.match(prompt, /# Skill Brief: PPT 子任务编排工作流/);
+  assert.match(prompt, /ppt_intent_analyzer/);
+  assert.match(prompt, /PptRenderInstructionDraft/);
+  assert.match(prompt, /render_pptx_from_html_deck/);
+  assert.match(prompt, /Do not deploy the HTML deck/);
 });
 
 test('managed prompt can append auto-attached skill instructions after a governed tool call', () => {
@@ -468,4 +851,25 @@ test('managed prompt labels attached connectors by runtime status instead of tre
   assert.match(prompt, /notion \| runtime_status=pending_recover \| tool_access=blocked_until_runtime_recovers/i);
   assert.match(prompt, /github \| runtime_status=connected \| tool_access=available/i);
   assert.match(prompt, /slack \| runtime_status=failed \| tool_access=blocked_attach_failed/i);
+});
+
+test('managed prompt requires connector guide loading before composio search', () => {
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-connector-guide-first-test',
+    sessionTitle: 'connector guide first',
+    workspaceRoot: '/workspace/session-connector-guide-first-test',
+    connectors: [],
+    connectorGuideSections: {
+      instructionsSection:
+        '# Connector MCP Instructions\n\n## notion\n- notion: Active connector guide exists. Before using any notion MCP tool, call load_connector_guide with connectorKey=notion.',
+      reminderSection:
+        '# Relevant Connector Guides\n\n## notion\n- notion: Full connector guide content is available only after load_connector_guide returns.',
+    },
+  });
+
+  assert.match(prompt, /load_connector_guide` is the first connector tool call/);
+  assert.match(prompt, /including `\*_COMPOSIO_SEARCH_TOOLS`/);
+  assert.match(prompt, /COMPOSIO_SEARCH_TOOLS` is optional connector discovery, not a fixed first step/);
+  assert.match(prompt, /Do not guess the search schema before loading the guide/);
+  assert.match(prompt, /except connector MCP tools must first satisfy `load_connector_guide` ordering/);
 });

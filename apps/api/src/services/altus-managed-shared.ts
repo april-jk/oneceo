@@ -149,7 +149,7 @@ type JsonSchema =
       description?: string;
       properties: Record<string, JsonSchema>;
       required: string[];
-      additionalProperties: false;
+      additionalProperties: boolean;
     };
 
 export function asText(value: unknown): string {
@@ -311,17 +311,48 @@ const MANAGED_DEBUG_PAYLOAD_KEYS = new Set([
   'loop',
   'debug',
   'internalDebug',
+  'internalView',
+  'debugOpenPageFailure',
+  'rawError',
 ]);
 
-export function stripManagedDebugPayload(payload: Record<string, unknown>) {
+const MANAGED_TOOL_ENVELOPE_DEBUG_KEYS = new Set([
+  'contentForModel',
+  'errorMessage',
+]);
+
+function stripManagedDebugValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => stripManagedDebugValue(item));
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
   const sanitized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(payload || {})) {
+  for (const [key, nestedValue] of Object.entries(record)) {
     if (MANAGED_DEBUG_PAYLOAD_KEYS.has(key)) {
       continue;
     }
-    sanitized[key] = value;
+    if (key === 'toolResultEnvelope' && nestedValue && typeof nestedValue === 'object' && !Array.isArray(nestedValue)) {
+      const envelope = nestedValue as Record<string, unknown>;
+      const sanitizedEnvelope: Record<string, unknown> = {};
+      for (const [envelopeKey, envelopeValue] of Object.entries(envelope)) {
+        if (MANAGED_TOOL_ENVELOPE_DEBUG_KEYS.has(envelopeKey)) {
+          continue;
+        }
+        sanitizedEnvelope[envelopeKey] = stripManagedDebugValue(envelopeValue);
+      }
+      sanitized[key] = sanitizedEnvelope;
+      continue;
+    }
+    sanitized[key] = stripManagedDebugValue(nestedValue);
   }
   return sanitized;
+}
+
+export function stripManagedDebugPayload(payload: Record<string, unknown>) {
+  return stripManagedDebugValue(payload || {}) as Record<string, unknown>;
 }
 
 export function parseToolArguments(raw: string) {
@@ -380,7 +411,7 @@ export function buildManagedToolDefinitions() {
       function: {
         name: 'debug_open_page',
         description:
-          'Start website debugging behavior by opening a target http/https URL, or a file:// URL inside the workspace, in the sandbox Chromium debug session shown by n.eko. Before calling this for product/app QA, write or update a workspace test document such as docs/test-plan.md, then use this tool as the testing-phase browser entry. The tool verifies the target is reachable/readable and the CDP tab is ready before reporting success. After this, use Playwright/playwright-mcp against the same CDP 9222 browser for functional testing, record defects in the test document, repair, and retest before final delivery. Use this when users ask to 启动网站调试功能 or open a page in the debug view.',
+          'Start website debugging behavior by opening a target http/https URL, or a file:// URL inside the workspace, in the sandbox Chromium debug session shown by n.eko. Before calling this for product/app QA, write or update a workspace test document such as docs/test-plan.md, then use this tool as the testing-phase browser entry. The tool verifies the target is reachable/readable and the CDP tab is ready before reporting success, then the platform captures the Action screenshot. After this, use browser_interact for every Playwright/n.eko visual check step; do not write custom screenshot scripts, do not install or search for Playwright, and do not launch a separate browser. Use this when users ask to 启动网站调试功能 or open a page in the debug view.',
         parameters: objectSchema(
           {
             url: {
@@ -402,7 +433,7 @@ export function buildManagedToolDefinitions() {
       function: {
         name: 'browser_interact',
         description:
-          'Perform one explicit Playwright-backed browser testing action in the same n.eko Chromium debug session after debug_open_page succeeds. Supported actions are direct projections of Playwright APIs: locator.click, getByText(...).click, mouse.click, locator.fill, keyboard.type, keyboard.press, mouse.wheel, locator.waitFor, getByText(...).waitFor, page.waitForLoadState, and page.waitForTimeout. Each call should describe exactly what user-visible action is being performed.',
+          'Perform one explicit Playwright-backed browser testing action in the same n.eko Chromium debug session after debug_open_page succeeds. The platform connects to the default CDP browser at http://127.0.0.1:9222, uses the sandbox Playwright defaults, and captures an Action screenshot after each successful action. Supported actions are direct projections of Playwright APIs: locator.click, getByText(...).click, mouse.click, locator.fill, keyboard.type, keyboard.press, mouse.wheel, locator.waitFor, getByText(...).waitFor, page.waitForLoadState, and page.waitForTimeout. Each call should describe exactly what user-visible action is being performed.',
         parameters: objectSchema(
           {
             action: {
@@ -595,7 +626,8 @@ export function buildManagedToolDefinitions() {
       type: 'function',
       function: {
         name: 'write_file',
-        description: 'Write or replace a UTF-8 text file in the workspace.',
+        description:
+          'Write or replace a UTF-8 text file in the workspace. Do not use this for final docx/xlsx/pptx/pdf or archive deliverables.',
         parameters: objectSchema(
           {
             path: { type: 'string', description: 'Workspace-relative file path.' },
@@ -717,14 +749,74 @@ export function buildManagedToolDefinitions() {
           'Load one markdown resource file for an already selected skill into the sandbox skill directory when the current task needs more detail.',
         parameters: objectSchema(
           {
-            skillId: { type: 'string', description: 'Skill id from the active skill list.' },
-            revisionId: { type: 'string', description: 'Revision id from the active skill list.' },
+            skillId: {
+              type: 'string',
+              description: 'Skill id from the active skill list. Prefer the raw skillId, not display ids.',
+            },
+            revisionId: {
+              type: 'string',
+              description: 'Revision id from the active skill list. Prefer the raw revisionId, not display ids.',
+            },
             resourcePath: {
               type: 'string',
               description: 'Relative markdown resource path such as references/foo.md or templates/bar.md.',
             },
           },
           ['skillId', 'revisionId', 'resourcePath']
+        ),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'render_pptx_from_instructions',
+        description:
+          'Render a PPTX file in the sandbox from a validated PptRenderInstruction after ppt-workflow has produced and reviewed the deck plan. Use only when the user wants a final PowerPoint file and no ppt-html-deck source has been created for this run.',
+        parameters: objectSchema(
+          {
+            instructions: {
+              type: 'object',
+              description:
+                'PptRenderInstruction object with deck, theme, slides, sources, and empty openQuestions.',
+              properties: {},
+              required: [],
+              additionalProperties: true,
+            },
+            outputFileName: {
+              type: 'string',
+              description: 'Optional final .pptx filename, for example career-plan.pptx.',
+            },
+          },
+          ['instructions']
+        ),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'render_pptx_from_html_deck',
+        description:
+          'Render a final PPTX from a PPT-only HtmlDeckSpec plus a sandbox ppt-html-deck source project. The renderer wraps slide fragments with shared CSS from ppt-html-deck/index.html before exporting so the PPTX corresponds to the HTML source. This is not a website deployment or debug-browser workflow; use only when ppt-workflow is active and the user wants a PowerPoint file.',
+        parameters: objectSchema(
+          {
+            htmlDeckSpec: {
+              type: 'object',
+              description:
+                'HtmlDeckSpec object with taskType=ppt_html_deck, deck metadata, slides with safe htmlFile paths, sources, and openQuestions.',
+              properties: {},
+              required: [],
+              additionalProperties: true,
+            },
+            projectRoot: {
+              type: 'string',
+              description: 'Workspace-relative HTML deck project root. Defaults to ppt-html-deck.',
+            },
+            outputFileName: {
+              type: 'string',
+              description: 'Optional final .pptx filename, for example strategy-review.pptx.',
+            },
+          },
+          ['htmlDeckSpec']
         ),
       },
     },
@@ -784,7 +876,8 @@ export function buildManagedToolDefinitions() {
       type: 'function',
       function: {
         name: 'ask_user',
-        description: 'Ask the user one precise clarification question when blocked by missing requirements.',
+        description:
+          'Ask the user one precise clarification question when blocked by missing requirements. Use structuredClarification only for PPT / presentation brief cards.',
         parameters: objectSchema(
           {
             question: { type: 'string', description: 'The clarification question.' },
@@ -796,8 +889,54 @@ export function buildManagedToolDefinitions() {
             clarificationType: {
               type: 'string',
               description:
-                'Optional structured missing-requirement field: artifact_type, tech_stack, scope_boundary, integration_target, or acceptance_requirement.',
+                'Optional structured missing-requirement field: artifact_type, tech_stack, scope_boundary, integration_target, acceptance_requirement, or presentation_brief.',
             },
+            structuredClarification: objectSchema(
+              {
+                kind: { type: 'string', description: 'Must be structured_clarification.' },
+                taskType: { type: 'string', description: 'ppt, report, website, or generic.' },
+                title: { type: 'string', description: 'Short title for the choice-card flow.' },
+                summary: { type: 'string', description: 'Short reason for this clarification.' },
+                maxCards: { type: 'integer', description: 'Maximum card count. Must be 4 or less.' },
+                cards: {
+                  type: 'array',
+                  description:
+                    'At most 4 cards, each asking one decision. Each card should include 3 generated options; the fourth option is user-custom input rendered by the UI.',
+                  items: objectSchema(
+                    {
+                      id: { type: 'string' },
+                      title: { type: 'string' },
+                      question: { type: 'string' },
+                      why: { type: 'string' },
+                      selectionMode: { type: 'string', enum: ['single', 'multiple'] },
+                      required: { type: 'boolean' },
+                      allowOther: { type: 'boolean' },
+                      allowNote: { type: 'boolean', description: 'Use false; custom input is handled as the fourth option.' },
+                      notePlaceholder: { type: 'string' },
+                      options: {
+                        type: 'array',
+                        items: objectSchema(
+                          {
+                            id: { type: 'string' },
+                            label: { type: 'string' },
+                            description: { type: 'string' },
+                            impact: { type: 'string' },
+                            recommended: { type: 'boolean' },
+                          },
+                          ['id', 'label']
+                        ),
+                      },
+                    },
+                    ['id', 'title', 'question', 'selectionMode', 'options']
+                  ),
+                },
+                briefFields: {
+                  type: 'array',
+                  items: { type: 'string' },
+                },
+              },
+              ['kind', 'taskType', 'title', 'cards']
+            ),
           },
           ['question']
         ),
@@ -870,8 +1009,15 @@ export function buildManagedMcpToolName(providerId: string, toolName: string) {
 export function buildManagedToolDefinitionsWithMcp(input?: { mcpProviders?: ManagedMcpProvider[] }) {
   const baseTools = buildManagedToolDefinitions();
   const providers = Array.isArray(input?.mcpProviders) ? input?.mcpProviders : [];
-  const dynamicTools = providers.flatMap((provider) =>
-    (Array.isArray(provider.tools) ? provider.tools : []).map((tool) => {
+  const sortedProviders = [...providers].sort((left, right) => {
+    const leftKey = `${asText(left.providerId)}::${asText(left.connectorKey)}`;
+    const rightKey = `${asText(right.providerId)}::${asText(right.connectorKey)}`;
+    return leftKey.localeCompare(rightKey);
+  });
+  const dynamicTools = sortedProviders.flatMap((provider) =>
+    [...(Array.isArray(provider.tools) ? provider.tools : [])]
+      .sort((left, right) => asText(left.toolName).localeCompare(asText(right.toolName)))
+      .map((tool) => {
       const parameters =
         tool.inputSchema && typeof tool.inputSchema === 'object'
           ? tool.inputSchema
@@ -892,7 +1038,10 @@ export function buildManagedToolDefinitionsWithMcp(input?: { mcpProviders?: Mana
       };
     })
   );
-  return [...baseTools, ...dynamicTools];
+  const stableDynamicTools = dynamicTools.sort((left, right) =>
+    asText(left.function?.name).localeCompare(asText(right.function?.name))
+  );
+  return [...baseTools, ...stableDynamicTools];
 }
 
 export function readManagedSkillContext(value: unknown): ManagedSkillContext[] {

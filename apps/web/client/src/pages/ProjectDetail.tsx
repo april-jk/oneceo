@@ -350,7 +350,7 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
             </div>
             <Dialog open={createManagerOpen} onOpenChange={setCreateManagerOpen}>
               <DialogTrigger asChild>
-                <Button className="gap-2">
+                <Button data-tour="project-detail-create-manager" className="gap-2">
                   <Plus className="w-4 h-4" />
                   {t('projectDetail.createManager')}
                 </Button>
@@ -408,14 +408,17 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
         {/* Main Content */}
         <ScrollArea className="flex-1">
           <div className="p-6 space-y-4">
-            {managers.map((manager) => (
+            {managers.map((manager, managerIndex) => (
               <motion.div
                 key={manager.id}
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.3 }}
               >
-                <Card className="overflow-hidden">
+                <Card
+                  data-tour={managerIndex === 0 ? 'project-detail-manager-card' : undefined}
+                  className="overflow-hidden"
+                >
                   <CardHeader 
                     className="cursor-pointer hover:bg-muted/50 transition-colors" 
                     onClick={() => toggleManager(manager.id)}
@@ -463,8 +466,12 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
                               {t('projectDetail.noTasks')}
                             </div>
                           ) : (
-                            manager.tasks.map((task) => (
-                              <Card key={task.id} className="border-l-4 border-l-foreground/20">
+                            manager.tasks.map((task, taskIndex) => (
+                              <Card
+                                key={task.id}
+                                data-tour={managerIndex === 0 && taskIndex === 0 ? 'project-detail-task-card' : undefined}
+                                className="border-l-4 border-l-foreground/20"
+                              >
                                 <CardHeader 
                                   className="cursor-pointer hover:bg-muted/30 transition-colors py-4"
                                   onClick={() => toggleTask(manager.id, task.id)}
@@ -502,6 +509,7 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
                                         <span>{task.deadline}</span>
                                       </div>
                                       <Button
+                                        data-tour={managerIndex === 0 && taskIndex === 0 ? 'project-detail-task-documents' : undefined}
                                         size="sm"
                                         variant="outline"
                                         className="gap-2"

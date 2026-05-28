@@ -1,0 +1,29 @@
+name: Protected Branch Source Validation
+
+on:
+  pull_request:
+    branches:
+      - staging
+      - product
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+      - ready_for_review
+
+jobs:
+  validate-source-branch:
+    name: validate-source-branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce task-creation-agent as the only source branch
+        env:
+          EXPECTED_HEAD_REF: task-creation-agent
+          ACTUAL_HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "$ACTUAL_HEAD_REF" != "$EXPECTED_HEAD_REF" ]; then
+            echo "Pull requests into $BASE_REF must come from $EXPECTED_HEAD_REF, but received $ACTUAL_HEAD_REF."
+            exit 1
+          fi

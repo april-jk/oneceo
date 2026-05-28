@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, test } from 'node:test';
 import express from 'express';
+import cors from 'cors';
 import { appUserLegacyIdMappingDAO } from '../src/db/dao/app-user-legacy-id-mapping.dao';
 import { taskCreationSessionDAO } from '../src/db/dao/task-creation-session.dao';
 import authRoutes from '../src/routes/auth-routes';
+import authOauthRoutes from '../src/routes/auth-oauth-routes';
 import { appAuthMiddleware } from '../src/middleware/app-auth-middleware';
 import { appAuthLoginRateLimitService } from '../src/services/app-auth-login-rate-limit-service';
 import { appAuthService } from '../src/services/app-auth-service';
 import {
+  APP_OAUTH_STATE_COOKIE_NAME,
   APP_SESSION_COOKIE_NAME,
   APP_SESSION_STATE_COOKIE_NAME,
   LEGACY_APP_SESSION_COOKIE_NAME,
@@ -32,6 +35,17 @@ const originalLoginBlockSeconds = process.env.APP_AUTH_LOGIN_BLOCK_SECONDS;
 const originalLoginEmailMaxFailures = process.env.APP_AUTH_LOGIN_EMAIL_MAX_FAILURES;
 const originalLoginIpMaxFailures = process.env.APP_AUTH_LOGIN_IP_MAX_FAILURES;
 const originalRedisEnabled = process.env.ONECEO_REDIS_ENABLED;
+const originalGoogleClientId = process.env.APP_AUTH_GOOGLE_CLIENT_ID;
+const originalGoogleClientSecret = process.env.APP_AUTH_GOOGLE_CLIENT_SECRET;
+const originalAppAuthOauthStateSecret = process.env.APP_AUTH_OAUTH_STATE_SECRET;
+const originalGithubDevClientId = process.env.APP_AUTH_GITHUB_DEV_CLIENT_ID;
+const originalGithubDevClientSecret = process.env.APP_AUTH_GITHUB_DEV_CLIENT_SECRET;
+const originalGithubStagingClientId = process.env.APP_AUTH_GITHUB_STAGING_CLIENT_ID;
+const originalGithubStagingClientSecret = process.env.APP_AUTH_GITHUB_STAGING_CLIENT_SECRET;
+const originalGithubProductClientId = process.env.APP_AUTH_GITHUB_PRODUCT_CLIENT_ID;
+const originalGithubProductClientSecret = process.env.APP_AUTH_GITHUB_PRODUCT_CLIENT_SECRET;
+const originalGithubCallbackBaseUrl = process.env.APP_AUTH_GITHUB_CALLBACK_BASE_URL;
+const originalFrontendUrl = process.env.FRONTEND_URL;
 
 function restoreEnv(name: string, value: string | undefined) {
   if (value === undefined) {
@@ -59,6 +73,17 @@ afterEach(() => {
   restoreEnv('APP_AUTH_LOGIN_EMAIL_MAX_FAILURES', originalLoginEmailMaxFailures);
   restoreEnv('APP_AUTH_LOGIN_IP_MAX_FAILURES', originalLoginIpMaxFailures);
   restoreEnv('ONECEO_REDIS_ENABLED', originalRedisEnabled);
+  restoreEnv('APP_AUTH_GOOGLE_CLIENT_ID', originalGoogleClientId);
+  restoreEnv('APP_AUTH_GOOGLE_CLIENT_SECRET', originalGoogleClientSecret);
+  restoreEnv('APP_AUTH_OAUTH_STATE_SECRET', originalAppAuthOauthStateSecret);
+  restoreEnv('APP_AUTH_GITHUB_DEV_CLIENT_ID', originalGithubDevClientId);
+  restoreEnv('APP_AUTH_GITHUB_DEV_CLIENT_SECRET', originalGithubDevClientSecret);
+  restoreEnv('APP_AUTH_GITHUB_STAGING_CLIENT_ID', originalGithubStagingClientId);
+  restoreEnv('APP_AUTH_GITHUB_STAGING_CLIENT_SECRET', originalGithubStagingClientSecret);
+  restoreEnv('APP_AUTH_GITHUB_PRODUCT_CLIENT_ID', originalGithubProductClientId);
+  restoreEnv('APP_AUTH_GITHUB_PRODUCT_CLIENT_SECRET', originalGithubProductClientSecret);
+  restoreEnv('APP_AUTH_GITHUB_CALLBACK_BASE_URL', originalGithubCallbackBaseUrl);
+  restoreEnv('FRONTEND_URL', originalFrontendUrl);
 });
 
 async function startServer(): Promise<TestServer> {
@@ -66,6 +91,51 @@ async function startServer(): Promise<TestServer> {
   app.use(express.json());
   app.use(appAuthMiddleware);
   app.use('/api/auth', authRoutes);
+  app.use('/api/auth', authOauthRoutes);
+
+  const server = await new Promise<import('node:http').Server>((resolve) => {
+    const next = app.listen(0, () => resolve(next));
+  });
+
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('failed to resolve test server address');
+  }
+
+  return {
+    origin: `http://127.0.0.1:${address.port}`,
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      }),
+  };
+}
+
+async function startServerWithCors(frontendUrl = 'https://app.oneceo.ai,https://admin.oneceo.ai'): Promise<TestServer> {
+  process.env.FRONTEND_URL = frontendUrl;
+  const app = express();
+  const allowedOrigins = String(process.env.FRONTEND_URL || 'http://localhost:3000')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  app.use(
+    cors({
+      origin(origin, callback) {
+        if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+          callback(null, true);
+          return;
+        }
+        callback(null, false);
+      },
+      credentials: true,
+    })
+  );
+  app.get('/cors-check', (_req, res) => {
+    res.json({ success: true });
+  });
 
   const server = await new Promise<import('node:http').Server>((resolve) => {
     const next = app.listen(0, () => resolve(next));
@@ -271,6 +341,99 @@ test('POST /api/auth/login returns user and app session cookie', async () => {
       currentUser: '1',
       wroteSessionCookie: '1',
     });
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/auth/oauth/google/start returns google auth url', async () => {
+  const server = await startServer();
+  process.env.APP_AUTH_GOOGLE_CLIENT_ID = 'google-client';
+  process.env.APP_AUTH_GOOGLE_CLIENT_SECRET = 'google-secret';
+  process.env.APP_AUTH_OAUTH_STATE_SECRET = 'oauth-state-secret';
+  process.env.APP_AUTH_GITHUB_PRODUCT_CLIENT_ID = 'github-client';
+  process.env.APP_AUTH_GITHUB_PRODUCT_CLIENT_SECRET = 'github-secret';
+  process.env.APP_AUTH_GITHUB_CALLBACK_BASE_URL = server.origin;
+
+  try {
+    const response = await fetch(`${server.origin}/api/auth/oauth/google/start?redirect=%2Fhome`);
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.match(payload.data.authUrl, /^https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth/);
+    assert.match(getSetCookieHeader(response), new RegExp(`${APP_OAUTH_STATE_COOKIE_NAME}=`));
+    assert.match(getSetCookieHeader(response), /HttpOnly/);
+    assert.match(getSetCookieHeader(response), /SameSite=Lax/);
+    assert.match(getSetCookieHeader(response), /Priority=High/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/auth/oauth/google/start rejects unsafe redirect target', async () => {
+  const server = await startServer();
+  process.env.APP_AUTH_GOOGLE_CLIENT_ID = 'google-client';
+  process.env.APP_AUTH_GOOGLE_CLIENT_SECRET = 'google-secret';
+  process.env.APP_AUTH_OAUTH_STATE_SECRET = 'oauth-state-secret';
+
+  try {
+    const response = await fetch(`${server.origin}/api/auth/oauth/google/start?redirect=https%3A%2F%2Fevil.example.com`);
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.match(payload.data.authUrl, /state=/);
+    assert.doesNotMatch(payload.data.authUrl, /evil\.example\.com/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/auth/oauth/google/callback rejects mismatched state and clears oauth cookie', async () => {
+  const server = await startServer();
+
+  try {
+    const response = await fetch(`${server.origin}/api/auth/oauth/google/callback?code=test-code&state=query-state`, {
+      headers: {
+        cookie: `${APP_OAUTH_STATE_COOKIE_NAME}=cookie-state`,
+      },
+      redirect: 'manual',
+    });
+
+    assert.equal(response.status, 302);
+    assert.equal(response.headers.get('location'), '/login?oauth_error=OAuth%20state%20%E9%9D%9E%E6%B3%95');
+    assert.match(getSetCookieHeader(response), new RegExp(`${APP_OAUTH_STATE_COOKIE_NAME}=;`));
+    assert.match(getSetCookieHeader(response), /Max-Age=0/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/auth/oauth/google/callback rejects expired oauth state payload', async () => {
+  const server = await startServer();
+  const expiredState = Buffer.from(
+    JSON.stringify({
+      nonce: 'expired-nonce',
+      redirectTarget: '/home',
+      issuedAt: Date.now() - 1000 * 60 * 11,
+    }),
+    'utf8'
+  ).toString('base64url');
+
+  try {
+    const response = await fetch(
+      `${server.origin}/api/auth/oauth/google/callback?code=test-code&state=${encodeURIComponent(expiredState)}`,
+      {
+        headers: {
+          cookie: `${APP_OAUTH_STATE_COOKIE_NAME}=${expiredState}`,
+        },
+        redirect: 'manual',
+      }
+    );
+
+    assert.equal(response.status, 302);
+    assert.equal(response.headers.get('location'), '/login?oauth_error=OAuth%20state%20%E9%9D%9E%E6%B3%95');
   } finally {
     await server.close();
   }
@@ -565,6 +728,77 @@ test('POST /api/auth/login marks app session cookie as Secure when browser origi
     assert.match(setCookie, new RegExp(`${APP_SESSION_COOKIE_NAME}=app-token-https-origin`));
     assert.match(setCookie, new RegExp(`${APP_SESSION_STATE_COOKIE_NAME}=authenticated`));
     assert.match(setCookie, /;\s*Secure(?:;|$)/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /api/auth/login keeps session token cookie HttpOnly and state cookie browser-readable', async () => {
+  const server = await startServer();
+  appAuthService.login = async () => ({
+    token: 'app-token-cookie-flags',
+    session: { id: 'sess-cookie-flags' } as any,
+    user: createUser('user-cookie-flags'),
+  });
+
+  try {
+    const response = await fetch(`${server.origin}/api/auth/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: 'https://oneceo.ai',
+      },
+      body: JSON.stringify({
+        email: 'login@example.com',
+        password: 'password123',
+      }),
+    });
+    const setCookie = getSetCookieHeader(response);
+
+    assert.equal(response.status, 200);
+    assert.match(setCookie, new RegExp(`${APP_SESSION_COOKIE_NAME}=app-token-cookie-flags`));
+    assert.match(setCookie, new RegExp(`${APP_SESSION_STATE_COOKIE_NAME}=authenticated`));
+    assert.match(setCookie, new RegExp(`${APP_SESSION_COOKIE_NAME}=[^;]+;[^\\n]*HttpOnly`));
+    assert.doesNotMatch(
+      setCookie,
+      new RegExp(`${APP_SESSION_STATE_COOKIE_NAME}=[^;]+;[^\\n]*HttpOnly`)
+    );
+  } finally {
+    await server.close();
+  }
+});
+
+test('CORS allows credentialed requests from configured origins', async () => {
+  const server = await startServerWithCors();
+
+  try {
+    const response = await fetch(`${server.origin}/cors-check`, {
+      headers: {
+        origin: 'https://app.oneceo.ai',
+      },
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('access-control-allow-origin'), 'https://app.oneceo.ai');
+    assert.equal(response.headers.get('access-control-allow-credentials'), 'true');
+  } finally {
+    await server.close();
+  }
+});
+
+test('CORS blocks credentialed requests from non-whitelisted origins', async () => {
+  const server = await startServerWithCors();
+
+  try {
+    const response = await fetch(`${server.origin}/cors-check`, {
+      headers: {
+        origin: 'https://evil.example.com',
+      },
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('access-control-allow-origin'), null);
+    assert.equal(response.headers.get('access-control-allow-credentials'), null);
   } finally {
     await server.close();
   }

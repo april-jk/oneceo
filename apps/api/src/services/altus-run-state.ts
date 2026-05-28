@@ -7,6 +7,7 @@ import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-servi
 import type { AltusSessionMemory } from './task-session-altus-memory-service';
 import type { SessionSkillState, SkillSelectionInput } from './task-session-skill-state-service';
 import type { AgentRuntimeSnapshot } from './agent-runtime-profile-service';
+import type { ManagedMcpToolConfirmationPayload } from './managed-mcp-tool-confirmation';
 
 export class AltusRunState {
   status: ManagedRunStatus;
@@ -29,6 +30,15 @@ export class AltusRunState {
       runtimeTokenSource?: string;
       userInput: string;
       messageType?: 'user_input' | 'user_response';
+      mcpToolConfirmationPrompt?: string | null;
+      rejectedMcpToolConfirmation?: ManagedMcpToolConfirmationPayload | null;
+      confirmedMcpToolReplay?: {
+        confirmationId: string;
+        confirmationToken: string;
+        confirmationAgentRunId?: string | null;
+        toolName: string;
+        argumentsJson: Record<string, unknown>;
+      } | null;
       sessionTitle?: string | null;
       memoryContextPrompt?: string | null;
       userMemory: AltusUserMemory;

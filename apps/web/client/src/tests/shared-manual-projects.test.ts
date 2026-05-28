@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TaskCreationProjectSummary } from "@/lib/task-creation-client";
 import {
+  readSidebarExpandedState,
   removeSharedManualProjectFromList,
   sortSharedManualProjects,
   upsertSharedManualProjectList,
@@ -65,5 +66,48 @@ describe("shared manual projects helpers", () => {
     );
 
     expect(projects.map((project) => project.id)).toEqual(["b"]);
+  });
+
+  it("returns fallback when sidebar expand state JSON is invalid", () => {
+    expect(readSidebarExpandedState("{invalid", "expandedProjects", ["fallback"])).toEqual([
+      "fallback",
+    ]);
+  });
+
+  it("reads sidebar expanded state from persisted local storage payload", () => {
+    const raw = JSON.stringify({
+      expandedProjectGroups: ["manual-projects", "self-organized", 42],
+    });
+
+    expect(readSidebarExpandedState(raw, "expandedProjectGroups", ["manual-projects"])).toEqual([
+      "manual-projects",
+      "self-organized",
+    ]);
+  });
+
+  it("returns fallback when the target sidebar expand state field is not an array", () => {
+    expect(
+      readSidebarExpandedState(
+        JSON.stringify({ expandedProjects: { id: "project-a" } }),
+        "expandedProjects",
+        ["fallback"],
+      ),
+    ).toEqual(["fallback"]);
+  });
+
+  it("returns fallback when sidebar expanded state payload is missing", () => {
+    expect(readSidebarExpandedState(null, "expandedProjects", ["fallback"])).toEqual(["fallback"]);
+  });
+
+  it("keeps only non-empty strings from sidebar expand state arrays", () => {
+    expect(
+      readSidebarExpandedState(
+        JSON.stringify({
+          expandedProjects: ["project-a", "", "  ", 1, null, "project-b"],
+        }),
+        "expandedProjects",
+        ["fallback"],
+      ),
+    ).toEqual(["project-a", "project-b"]);
   });
 });

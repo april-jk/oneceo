@@ -45,6 +45,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   FileText,
   FolderOpen,
@@ -76,6 +77,7 @@ import { Link, useLocation } from "wouter";
 import { useTranslation } from "react-i18next";
 import React from "react";
 import { toast } from "sonner";
+import { isDevRuntime } from "@/lib/runtime-env";
 import {
   createTaskCreationProject,
   deleteTaskCreationProject,
@@ -93,11 +95,13 @@ import {
 import {
   removeSharedManualProject,
   upsertSharedManualProject,
+  readSidebarExpandedState,
   useSharedManualProjects,
 } from "@/lib/shared-manual-projects";
 import { SELF_ORGANIZED_PROJECTS } from "@/lib/self-organized-projects";
 import type { TaskProjectSelection } from "@/lib/task-project-selection";
 import { openSettingsDialog } from "@/lib/settings-dialog-events";
+import { openNotificationCenter } from "@/lib/notification-center-events";
 import { useAuth } from "@/contexts/AuthContext";
 import { ProjectEditorDialog } from "@/components/ProjectEditorDialog";
 
@@ -210,6 +214,8 @@ export default function Sidebar({
   onToggleCollapse,
   selectedProject,
 }: SidebarProps) {
+  const showSelfOrganizedProjects = isDevRuntime();
+  const SIDEBAR_EXPAND_STATE_STORAGE_PREFIX = "oneceo_sidebar_expand_state_v1";
   type ProjectManager = {
     id: string;
     name: string;
@@ -235,19 +241,63 @@ export default function Sidebar({
     shareEnabled?: boolean;
     shareToken?: string | null;
   };
+  type SidebarPromoItem = {
+    id: string;
+    bannerId?: string;
+    title: string;
+    imageUrl?: string | null;
+    linkType?: "internal" | "external" | "none";
+    linkTarget?: string | null;
+  };
+  type SidebarPromoBanner = {
+    id: string;
+    displayType: "single" | "carousel";
+    allowDismiss: boolean;
+    version: number;
+    items: SidebarPromoItem[];
+  };
   const SESSION_PREVIEW_COUNT = 6;
   const [location, setLocation] = useLocation();
   const currentPath = React.useMemo(() => location.split("?")[0] || location, [location]);
   const { t } = useTranslation();
   const { user, credits } = useAuth();
+  const expandStateStorageKey = React.useMemo(
+    () => `${SIDEBAR_EXPAND_STATE_STORAGE_PREFIX}:${user?.id || "anonymous"}`,
+    [user?.id],
+  );
   const creditBalanceLabel = credits ? credits.balance.toLocaleString() : "--";
-  const { projects: manualProjects } = useSharedManualProjects(user?.id);
-  const [expandedProjectGroups, setExpandedProjectGroups] = React.useState<string[]>([]);
-  const [expandedProjects, setExpandedProjects] = React.useState<string[]>([]);
-  const [expandedManagers, setExpandedManagers] = React.useState<string[]>([]);
+  const { projects: manualProjects, loading: manualProjectsLoading } = useSharedManualProjects(user?.id);
+  const [expandedProjectGroups, setExpandedProjectGroups] = React.useState<string[]>(() => {
+    if (typeof window === "undefined") return ["manual-projects"];
+    try {
+      const raw = window.localStorage.getItem(expandStateStorageKey);
+      return readSidebarExpandedState(raw, "expandedProjectGroups", ["manual-projects"]);
+    } catch {
+      return ["manual-projects"];
+    }
+  });
+  const [expandedProjects, setExpandedProjects] = React.useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = window.localStorage.getItem(expandStateStorageKey);
+      return readSidebarExpandedState(raw, "expandedProjects", []);
+    } catch {
+      return [];
+    }
+  });
+  const [expandedManagers, setExpandedManagers] = React.useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = window.localStorage.getItem(expandStateStorageKey);
+      return readSidebarExpandedState(raw, "expandedManagers", []);
+    } catch {
+      return [];
+    }
+  });
   const [tasksDialogOpen, setTasksDialogOpen] = React.useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = React.useState(false);
   const [sessionTasks, setSessionTasks] = React.useState<SessionTask[]>([]);
+  const [sessionListLoading, setSessionListLoading] = React.useState(true);
   const [projectSessionsByProjectId, setProjectSessionsByProjectId] = React.useState<
     Record<string, SessionTask[]>
   >({});
@@ -269,6 +319,10 @@ export default function Sidebar({
   const [deleteProjectDialogOpen, setDeleteProjectDialogOpen] = React.useState(false);
   const [deleteProjectTarget, setDeleteProjectTarget] = React.useState<TaskCreationProjectSummary | null>(null);
   const [deleteProjectSubmitting, setDeleteProjectSubmitting] = React.useState(false);
+  const [unreadCount, setUnreadCount] = React.useState(0);
+  const [promoBanner, setPromoBanner] = React.useState<SidebarPromoBanner | null>(null);
+  const [promoLoading, setPromoLoading] = React.useState(false);
+  const [promoCurrentIndex, setPromoCurrentIndex] = React.useState(0);
   const listLoadingRef = React.useRef(false);
   const lastListFetchRef = React.useRef(0);
   const lastListErrorToastAtRef = React.useRef(0);
@@ -332,6 +386,22 @@ export default function Sidebar({
   );
 
   React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        expandStateStorageKey,
+        JSON.stringify({
+          expandedProjectGroups,
+          expandedProjects,
+          expandedManagers,
+        }),
+      );
+    } catch {
+      // ignore localStorage write failures
+    }
+  }, [expandStateStorageKey, expandedProjectGroups, expandedProjects, expandedManagers]);
+
+  React.useEffect(() => {
     projectSessionsByProjectIdRef.current = projectSessionsByProjectId;
   }, [projectSessionsByProjectId]);
 
@@ -377,6 +447,117 @@ export default function Sidebar({
       return changed ? next : prev;
     });
   }, []);
+
+  React.useEffect(() => {
+    if (collapsed) return;
+    let disposed = false;
+    const loadPromo = async () => {
+      setPromoLoading(true);
+      try {
+        const response = await fetch("/api/ui/promo-banners/active?placement=sidebar_bubble", {
+          credentials: "include",
+        });
+        if (!response.ok) {
+          throw new Error("加载侧边栏气泡失败");
+        }
+        const data = await response.json();
+        if (disposed) return;
+        const banner = data?.banner || null;
+        if (
+          banner &&
+          typeof banner.id === "string" &&
+          Array.isArray(banner.items) &&
+          banner.items.length > 0
+        ) {
+          const dismissedKey = `oneceo-sidebar-promo-dismissed:${user?.id || "anonymous"}:${banner.id}:v${String(banner.version || 1)}`;
+          if (typeof window !== "undefined" && window.localStorage.getItem(dismissedKey) === "1") {
+            setPromoBanner(null);
+            return;
+          }
+          setPromoBanner(banner);
+          setPromoCurrentIndex(0);
+        } else {
+          setPromoBanner(null);
+        }
+      } catch (error) {
+        console.error("[Sidebar] failed to load promo banner:", error);
+        setPromoBanner(null);
+      } finally {
+        if (!disposed) setPromoLoading(false);
+      }
+    };
+    void loadPromo();
+    return () => {
+      disposed = true;
+    };
+  }, [collapsed, user?.id]);
+
+  React.useEffect(() => {
+    if (!promoBanner || promoBanner.items.length < 2 || promoBanner.displayType !== "carousel") return;
+    const timer = window.setInterval(() => {
+      setPromoCurrentIndex((prev) => (prev + 1) % promoBanner.items.length);
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [promoBanner]);
+
+  const currentPromoItem = React.useMemo(() => {
+    if (!promoBanner || promoBanner.items.length === 0) return null;
+    if (promoBanner.displayType !== "carousel") return promoBanner.items[0] || null;
+    const safeIndex = Math.max(0, Math.min(promoCurrentIndex, promoBanner.items.length - 1));
+    return promoBanner.items[safeIndex] || null;
+  }, [promoBanner, promoCurrentIndex]);
+
+  const reportPromoEvent = React.useCallback(
+    async (eventType: "impression" | "click" | "dismiss", item?: SidebarPromoItem | null) => {
+      if (!promoBanner) return;
+      try {
+        await fetch(`/api/ui/promo-banners/${promoBanner.id}/events`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            eventType,
+            itemId: item?.id || null,
+            metadata: {
+              placement: "sidebar_bubble",
+              displayType: promoBanner.displayType,
+              index: promoCurrentIndex,
+            },
+          }),
+        });
+      } catch (error) {
+        console.error("[Sidebar] failed to report promo event:", error);
+      }
+    },
+    [promoBanner, promoCurrentIndex],
+  );
+
+  React.useEffect(() => {
+    if (!promoBanner || !currentPromoItem) return;
+    void reportPromoEvent("impression", currentPromoItem);
+  }, [currentPromoItem, promoBanner, reportPromoEvent]);
+
+  const handlePromoDismiss = React.useCallback(() => {
+    if (!promoBanner) return;
+    if (typeof window !== "undefined") {
+      const key = `oneceo-sidebar-promo-dismissed:${user?.id || "anonymous"}:${promoBanner.id}:v${String(promoBanner.version || 1)}`;
+      window.localStorage.setItem(key, "1");
+    }
+    void reportPromoEvent("dismiss", currentPromoItem);
+    setPromoBanner(null);
+  }, [currentPromoItem, promoBanner, reportPromoEvent, user?.id]);
+
+  const handlePromoClick = React.useCallback(() => {
+    if (!currentPromoItem) return;
+    void reportPromoEvent("click", currentPromoItem);
+    if (currentPromoItem.linkType === "internal" && currentPromoItem.linkTarget) {
+      setLocation(currentPromoItem.linkTarget);
+      return;
+    }
+    if (currentPromoItem.linkType === "external" && currentPromoItem.linkTarget) {
+      window.open(currentPromoItem.linkTarget, "_blank", "noopener,noreferrer");
+    }
+  }, [currentPromoItem, reportPromoEvent, setLocation]);
 
   const loadProjectSessions = React.useCallback(
     async (projectId: string, options?: { force?: boolean }) => {
@@ -445,6 +626,10 @@ export default function Sidebar({
       }
       return changed ? next : prev;
     });
+    setExpandedProjects((prev) => {
+      const next = prev.filter((projectId) => validProjectIds.has(projectId));
+      return next.length === prev.length ? prev : next;
+    });
   }, [manualProjects]);
 
   React.useEffect(() => {
@@ -474,6 +659,9 @@ export default function Sidebar({
       const now = Date.now();
       if (!force && now - lastListFetchRef.current < 3000) return;
       listLoadingRef.current = true;
+      if (force || sessionTasks.length === 0) {
+        setSessionListLoading(true);
+      }
       try {
         const list = await listTaskCreationSessions("all");
         if (disposed) return;
@@ -493,11 +681,14 @@ export default function Sidebar({
         }
       } finally {
         listLoadingRef.current = false;
+        if (!disposed) {
+          setSessionListLoading(false);
+        }
       }
     };
     const onVisibility = () => {
       if (document.visibilityState === "visible") {
-        void load(true);
+        void load(false);
       }
     };
     const onSessionUpdated = (event: Event) => {
@@ -590,12 +781,56 @@ export default function Sidebar({
           }
           return prev;
         });
+
+        if (hasProjectIdPatch) {
+          const appliedProjectId =
+            typeof detail?.projectId === "string" && detail.projectId.trim()
+              ? detail.projectId.trim()
+              : null;
+          const appliedProjectName =
+            typeof detail?.projectName === "string" && detail.projectName.trim()
+              ? detail.projectName.trim()
+              : null;
+          const nextUpdatedAt =
+            hasUpdatedAtPatch &&
+            typeof (detail as { updatedAt?: unknown }).updatedAt === "string" &&
+            (detail as { updatedAt?: string }).updatedAt?.trim()
+              ? (detail as { updatedAt?: string }).updatedAt?.trim()
+              : undefined;
+
+          setProjectSessionsByProjectId((prev) => {
+            const next = { ...prev };
+            const patchBase: SessionTask = {
+              sessionId: patchedSessionId,
+              title: patchedTitle || t("sidebar.sessionFallbackTitle"),
+              status: patchedStatus || "in_progress",
+              isFavorite: hasFavoritePatch ? Boolean(detail?.isFavorite) : false,
+              projectId: appliedProjectId,
+              projectName: appliedProjectName,
+              ...(typeof nextUpdatedAt === "string" ? { updatedAt: nextUpdatedAt } : {}),
+            };
+
+            for (const [projectId, sessions] of Object.entries(next)) {
+              const filtered = sessions.filter((session) => session.sessionId !== patchedSessionId);
+              next[projectId] = filtered;
+            }
+
+            if (appliedProjectId) {
+              const existing = next[appliedProjectId] || [];
+              next[appliedProjectId] = sortSessionTasks([
+                patchBase,
+                ...existing,
+              ]);
+            }
+
+            return next;
+          });
+        }
       }
       if (patchedSessionId && patchIsMeaningful) {
-        void load(true);
-        window.setTimeout(() => {
-          void load(true);
-        }, 4000);
+        // Use local patch as the primary update path to avoid visible sidebar flashing.
+        // Fallback polling will reconcile any missed server-side fields.
+        lastListFetchRef.current = Date.now();
       }
     };
     void load(true);
@@ -614,6 +849,34 @@ export default function Sidebar({
       );
     };
   }, [mapSessionTask, sortSessionTasks, t]);
+
+  // 获取未读通知数量
+  React.useEffect(() => {
+    const fetchUnreadCount = async () => {
+      try {
+        const response = await fetch("/api/notifications/unread-count", {
+          credentials: "include",
+        });
+        if (response.ok) {
+          const data = await response.json();
+          setUnreadCount(data.count || 0);
+        }
+      } catch (error) {
+        console.error("[Sidebar] failed to load unread count:", error);
+      }
+    };
+    void fetchUnreadCount();
+    const timer = window.setInterval(fetchUnreadCount, 60000);
+
+    // 监听通知已读事件，刷新未读数量
+    const handleNotificationRead = () => void fetchUnreadCount();
+    window.addEventListener("oneceo:notification-read", handleNotificationRead);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("oneceo:notification-read", handleNotificationRead);
+    };
+  }, []);
 
   const toggleProjectGroup = (groupId: string) => {
     setExpandedProjectGroups((prev) =>
@@ -648,24 +911,28 @@ export default function Sidebar({
     { icon: Search, label: t("sidebar.search"), href: "/search" },
     { icon: Library, label: t("sidebar.library"), href: "/library" },
     { icon: FolderOpen, label: t("sidebar.projects"), href: "/projects" },
-    { icon: Network, label: t("sidebar.ceoView"), href: "/ceo-view" },
+    ...(showSelfOrganizedProjects
+      ? [{ icon: Network, label: t("sidebar.ceoView"), href: "/ceo-view" }]
+      : []),
   ];
 
   const selfOrganizedProjectsData = React.useMemo<SidebarProjectNode[]>(
     () =>
-      SELF_ORGANIZED_PROJECTS.map((project) => ({
-        id: project.id,
-        name: project.name,
-        description: project.description,
-        managers: project.managers.map((manager) => ({
-          id: manager.id,
-          name: manager.name,
-          type: manager.type,
-          tasks: manager.tasks,
-        })),
-        kind: "self-organized" as const,
-      })),
-    [],
+      showSelfOrganizedProjects
+        ? SELF_ORGANIZED_PROJECTS.map((project) => ({
+            id: project.id,
+            name: project.name,
+            description: project.description,
+            managers: project.managers.map((manager) => ({
+              id: manager.id,
+              name: manager.name,
+              type: manager.type,
+              tasks: manager.tasks,
+            })),
+            kind: "self-organized" as const,
+          }))
+        : [],
+    [showSelfOrganizedProjects],
   );
   const manualProjectNodes = React.useMemo<SidebarProjectNode[]>(
     () =>
@@ -695,12 +962,20 @@ export default function Sidebar({
     () => sortSessionTasks(sessionTasks),
     [sessionTasks, sortSessionTasks],
   );
-  const sessionPreviewList = orderedSessionTasks.slice(
+  const ungroupedRecentSessionTasks = React.useMemo(
+    () =>
+      orderedSessionTasks.filter(
+        (session) =>
+          !(typeof session.projectId === "string" && session.projectId.trim()),
+      ),
+    [orderedSessionTasks],
+  );
+  const sessionPreviewList = ungroupedRecentSessionTasks.slice(
     0,
     SESSION_PREVIEW_COUNT,
   );
   const hiddenSessionCount = Math.max(
-    orderedSessionTasks.length - SESSION_PREVIEW_COUNT,
+    ungroupedRecentSessionTasks.length - SESSION_PREVIEW_COUNT,
     0,
   );
   const hasSessionOverflow = hiddenSessionCount > 0;
@@ -1254,6 +1529,7 @@ export default function Sidebar({
                   onClick={() => {
                     setLocation(`/new-task?new=${Date.now()}`);
                   }}
+                  data-tour="sidebar-new-task"
                   data-umami-event="sidebar_new_task_click"
                   data-umami-event-target="/new-task"
                 >
@@ -1321,8 +1597,25 @@ export default function Sidebar({
               <div className="overflow-x-hidden px-2.5 pb-2.5 pr-3">
                 <div className="space-y-3">
                   {manualProjectNodes.length === 0 ? (
-                    <div className="px-2 py-2 text-xs leading-5 text-muted-foreground">
-                      {t("sidebar.noManualProjects")}
+                    <div className="space-y-1 px-0 py-1">
+                      {manualProjectsLoading ? (
+                        <>
+                          <div className="flex items-center gap-1 px-0.5">
+                            <Skeleton className="h-7 w-7 shrink-0 rounded-lg" />
+                            <Skeleton className="h-7 flex-1 rounded-lg" />
+                            <Skeleton className="h-7 w-7 shrink-0 rounded-lg" />
+                          </div>
+                          <div className="flex items-center gap-1 px-0.5">
+                            <Skeleton className="h-7 w-7 shrink-0 rounded-lg" />
+                            <Skeleton className="h-7 flex-1 rounded-lg" />
+                            <Skeleton className="h-7 w-7 shrink-0 rounded-lg" />
+                          </div>
+                        </>
+                      ) : (
+                        <div className="px-2 py-1 text-xs leading-5 text-muted-foreground">
+                          {t("sidebar.noManualProjects")}
+                        </div>
+                      )}
                     </div>
                   ) : null}
                   {manualProjectNodes.map((project) => {
@@ -1429,13 +1722,27 @@ export default function Sidebar({
                         {t("sidebar.recentSessions")}
                       </span>
                       <span className="shrink-0 text-[11px] text-muted-foreground">
-                        {orderedSessionTasks.length}
+                        {ungroupedRecentSessionTasks.length}
                       </span>
                     </div>
 
-                    {sessionTasks.length === 0 ? (
-                      <div className="px-3 py-2 text-xs leading-5 text-muted-foreground">
-                        {t("sidebar.noTasks")}
+                    {sessionListLoading && sessionTasks.length === 0 ? (
+                      <div className="space-y-1 px-2 py-1">
+                        <div className="grid h-7 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-1.5 px-2">
+                          <Skeleton className="h-3.5 w-3.5 rounded-sm" />
+                          <Skeleton className="h-3.5 w-full rounded-sm" />
+                          <Skeleton className="h-3.5 w-9 rounded-sm" />
+                        </div>
+                        <div className="grid h-7 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-1.5 px-2">
+                          <Skeleton className="h-3.5 w-3.5 rounded-sm" />
+                          <Skeleton className="h-3.5 w-11/12 rounded-sm" />
+                          <Skeleton className="h-3.5 w-9 rounded-sm" />
+                        </div>
+                        <div className="grid h-7 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-1.5 px-2">
+                          <Skeleton className="h-3.5 w-3.5 rounded-sm" />
+                          <Skeleton className="h-3.5 w-10/12 rounded-sm" />
+                          <Skeleton className="h-3.5 w-9 rounded-sm" />
+                        </div>
                       </div>
                     ) : (
                       <div className="space-y-1">
@@ -1479,11 +1786,12 @@ export default function Sidebar({
                   </Button>
                 </div>
 
-                <div className="space-y-1">
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="icon"
+                {showSelfOrganizedProjects ? (
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
                       className="h-7 w-7 shrink-0"
                       onClick={() => toggleProjectGroup("self-organized")}
                     >
@@ -1607,7 +1915,8 @@ export default function Sidebar({
                       })}
                     </div>
                   )}
-                </div>
+                  </div>
+                ) : null}
               </div>
             </ScrollArea>
           </div>
@@ -1615,87 +1924,82 @@ export default function Sidebar({
       </div>
 
       {/* Bottom Section */}
-      <div
-        className="border-t border-sidebar-border p-2.5"
-        onMouseEnter={() => setSettingsMenuOpen(true)}
-        onMouseLeave={() => setSettingsMenuOpen(false)}
-      >
-        <DropdownMenu
-          open={settingsMenuOpen}
-          onOpenChange={setSettingsMenuOpen}
-        >
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150 ${collapsed ? "" : "min-w-0 overflow-hidden"}`}
-              onClick={() => openSettingsDialog({ tab: "personalization" })}
-            >
-              <Settings className="w-4 h-4" />
-              {!collapsed && (
-                <span className="min-w-0 truncate text-sm font-medium">
-                  {t("sidebar.settings")}
-                </span>
-              )}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            side="top"
-            align="start"
-            className="w-72 p-0 rounded-2xl border border-border shadow-lg"
-          >
-            <div className="p-4 border-b border-border">
-              <div className="flex items-center gap-3 mb-3">
-                <Avatar className="h-12 w-12">
-                  <AvatarImage
-                    src={user?.email ? `https://avatar.vercel.sh/${encodeURIComponent(user.email)}` : undefined}
-                    alt={user?.displayName || user?.email || t("account.title")}
+      <div className="border-t border-sidebar-border p-2.5">
+        {!collapsed && !promoLoading && promoBanner && currentPromoItem ? (
+          <div className="mb-2 overflow-hidden rounded-xl border border-sidebar-border bg-sidebar-accent/20">
+            <button type="button" className="w-full text-left" onClick={handlePromoClick}>
+              {currentPromoItem.imageUrl ? (
+                <img
+                  src={currentPromoItem.imageUrl}
+                  alt={currentPromoItem.title}
+                  className="h-24 w-full object-cover"
+                />
+              ) : null}
+              <div className="space-y-1 px-3 py-2">
+                <p className="text-sm font-semibold text-sidebar-foreground truncate">
+                  {currentPromoItem.title}
+                </p>
+              </div>
+            </button>
+            <div className="flex items-center justify-between px-3 pb-2">
+              <div className="flex items-center gap-1">
+                {promoBanner.items.map((_, index) => (
+                  <button
+                    key={`promo-dot-${index}`}
+                    type="button"
+                    className={`h-1.5 rounded-full transition-all ${
+                      promoCurrentIndex === index ? "w-4 bg-sidebar-foreground/80" : "w-1.5 bg-sidebar-foreground/30"
+                    }`}
+                    onClick={() => setPromoCurrentIndex(index)}
+                    aria-label={`切换到第 ${index + 1} 条`}
                   />
-                  <AvatarFallback>{(user?.displayName || user?.email || "U").slice(0, 1).toUpperCase()}</AvatarFallback>
-                </Avatar>
-                <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-sm text-foreground truncate">
-                    {user?.displayName || user?.email || t("userMenu.guestName")}
-                  </div>
-                  <div className="text-xs text-muted-foreground truncate">
-                    {user?.email || t("userMenu.guestSubtitle")}
-                  </div>
-                </div>
+                ))}
               </div>
-              <div className="bg-accent/50 rounded-xl p-3 border border-border">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <Coins className="w-4 h-4 text-amber-500" />
-                    <span className="text-sm font-medium text-foreground">
-                      {t("sidebar.credits")}
-                    </span>
-                  </div>
-                  <span className="text-sm font-bold text-foreground">
-                    {creditBalanceLabel}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Crown className="w-4 h-4 text-purple-500" />
-                  <span className="text-xs text-muted-foreground">
-                    {t("sidebar.proMember")}
-                  </span>
-                </div>
-              </div>
+              {promoBanner.allowDismiss ? (
+                <button
+                  type="button"
+                  className="text-[11px] text-muted-foreground hover:text-sidebar-foreground"
+                  onClick={handlePromoDismiss}
+                >
+                  关闭
+                </button>
+              ) : null}
             </div>
-            <div className="p-2">
-              <DropdownMenuItem className="rounded-lg py-2.5 px-3">
-                <Bell className="w-4 h-4 mr-2 text-muted-foreground" />
-                <span className="text-sm">{t("sidebar.notifications")}</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="rounded-lg py-2.5 px-3"
-                onSelect={() => openSettingsDialog({ tab: "settings" })}
-              >
-                <Settings className="w-4 h-4 mr-2 text-muted-foreground" />
-                <span className="text-sm">{t("sidebar.settings")}</span>
-              </DropdownMenuItem>
-            </div>
-          </DropdownMenuContent>
-        </DropdownMenu>
+          </div>
+        ) : null}
+
+        {/* 通知按钮 */}
+        <Button
+          variant="ghost"
+          className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150 mb-1 ${collapsed ? "" : "min-w-0 overflow-hidden"}`}
+          onClick={() => openNotificationCenter()}
+        >
+          <span className="relative">
+            <Bell className={`w-4 h-4 ${unreadCount > 0 ? "animate-bounce" : ""}`} />
+            {unreadCount > 0 && (
+              <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full" />
+            )}
+          </span>
+          {!collapsed && (
+            <span className="min-w-0 truncate text-sm font-medium">
+              {t("sidebar.notifications")}
+            </span>
+          )}
+        </Button>
+
+        {/* 设置按钮 */}
+        <Button
+          variant="ghost"
+          className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150 ${collapsed ? "" : "min-w-0 overflow-hidden"}`}
+          onClick={() => openSettingsDialog({ tab: "personalization" })}
+        >
+          <Settings className="w-4 h-4" />
+          {!collapsed && (
+            <span className="min-w-0 truncate text-sm font-medium">
+              {t("sidebar.settings")}
+            </span>
+          )}
+        </Button>
       </div>
 
       <Dialog open={tasksDialogOpen} onOpenChange={setTasksDialogOpen}>

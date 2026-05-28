@@ -42,6 +42,7 @@ import {
   replaceSessionConnectorDraftEntries,
 } from '@/lib/session-connector-draft';
 import { ALTUS_MODE_STORAGE_KEY, readAltusMode } from '@/lib/altus-settings';
+import { isManagedInternalSupportArtifact } from '@/lib/managed-artifact-visibility';
 
 export interface AgentMessage {
   id?: string;
@@ -184,13 +185,33 @@ export function shouldDeferPendingSessionRouteSync(input: {
   return false;
 }
 
+export function buildBoundSessionRoute(input: {
+  sessionId?: string | null;
+  search?: string | null;
+}): string {
+  const sessionId = asText(input.sessionId);
+  if (!sessionId) return '';
+  const params = new URLSearchParams(typeof input.search === 'string' ? input.search : '');
+  params.delete('new');
+  params.delete('sessionId');
+  const query = params.toString();
+  const base = `/session/${encodeURIComponent(sessionId)}`;
+  return query ? `${base}?${query}` : base;
+}
+
 function extractOrchestratorSessionId(message: AgentMessage): string | null {
   const candidate = message?.metadata?.orchestratorSessionId;
   return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
 }
 
 function shouldAttemptSessionTitleResolve(value: string): boolean {
-  return typeof value === 'string' && value.trim().length > 0;
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim().replace(/\s+/g, ' ');
+  if (!normalized) return false;
+  if (normalized.length >= 12) return true;
+  return /(帮我|请|请帮|分析|排查|修复|开发|实现|优化|重构|设计|生成|创建|制作|写|继续|修改|整理|总结|如何|怎么|为什么|报错|bug|问题|页面|功能|css|html|nodejs|代码|接口|数据库|deploy|build|fix|debug|analy[sz]e|implement|optimi[sz]e|refactor|create|write)/i.test(
+    normalized
+  );
 }
 
 function dispatchTaskCreationSessionUpdated(detail: {
@@ -262,6 +283,23 @@ function toRecord(value: unknown): Record<string, unknown> {
     if (Object.keys(parsed).length > 0) return parsed;
   }
   return {};
+}
+
+function hasStructuredClarificationPlan(metadataRaw: unknown): boolean {
+  const metadata = toRecord(metadataRaw);
+  if (toRecord(metadata.structuredClarification).kind === 'structured_clarification') {
+    return true;
+  }
+  return toRecord(toRecord(metadata.result).structuredClarification).kind === 'structured_clarification';
+}
+
+function isPresentationBriefClarificationAwaitingCards(message: AgentMessage): boolean {
+  if (message.type !== 'clarification_request') return false;
+  const metadata = toRecord(message.metadata);
+  return (
+    asText(metadata.clarificationType) === 'presentation_brief' &&
+    !hasStructuredClarificationPlan(metadata)
+  );
 }
 
 function asText(value: unknown): string {
@@ -960,7 +998,22 @@ function shouldDisplayExecutorEvent(metadataRaw: unknown, contentRaw?: string): 
   const itemType =
     asText(metadata.itemType).toLowerCase() ||
     asText(item.type).toLowerCase();
+  const toolName = asText(metadata.toolName).toLowerCase();
+  const args = toRecord(metadata.arguments);
+  const outputPreview = toRecord(metadata.outputPreview);
+  const artifactPath =
+    asText(args.path) ||
+    asText(outputPreview.path) ||
+    asText(toRecord(metadata.writeFileProgress).path);
   if (executor === 'codex' && (normalizedEventType === 'stderr.line' || normalizedEventType === 'stdout.line')) {
+    return false;
+  }
+  if (
+    asText(metadata.executor).toLowerCase() === 'altus' &&
+    asText(metadata.executionMode).toLowerCase() === 'managed' &&
+    (toolName === 'write_file' || toolName === 'read_file') &&
+    isManagedInternalSupportArtifact(artifactPath)
+  ) {
     return false;
   }
   if (!normalizedEventType) {
@@ -1003,6 +1056,38 @@ function shouldDisplayExecutorEvent(metadataRaw: unknown, contentRaw?: string): 
     return true;
   }
   return hasMeaningfulExecutorEventText(metadataRaw, contentRaw);
+}
+
+function isManagedReadOnlyShellInspectionEvent(message: Partial<AgentMessage>): boolean {
+  if (message.type !== 'executor_event') return false;
+  const metadata = toRecord(message.metadata);
+  if (asText(metadata.executor).toLowerCase() !== 'altus') return false;
+  if (asText(metadata.executionMode).toLowerCase() !== 'managed') return false;
+  if (asText(metadata.toolName).toLowerCase() !== 'shell_execute') return false;
+  if (asText(metadata.eventType).toLowerCase() !== 'tool_call_completed') return false;
+  const args = toRecord(metadata.arguments);
+  const command = asText(args.command).trim().toLowerCase();
+  if (!command) return false;
+  return /(^|\s)(ls|cat|find|tree|pwd|head|tail|sed|rg|grep)(\s|$)/.test(command);
+}
+
+function isSemanticallyDuplicateManagedInspectionTail(
+  previous: Partial<AgentMessage> | undefined,
+  next: Partial<AgentMessage>
+): boolean {
+  if (!previous) return false;
+  if (!isManagedReadOnlyShellInspectionEvent(previous) || !isManagedReadOnlyShellInspectionEvent(next)) {
+    return false;
+  }
+  const previousMeta = toRecord(previous.metadata);
+  const nextMeta = toRecord(next.metadata);
+  const previousText = (asText(previous.content) || asText(previous.message)).trim();
+  const nextText = (asText(next.content) || asText(next.message)).trim();
+  if (!previousText || !nextText) return false;
+  const previousPurpose = asText(previousMeta.toolPurpose).trim();
+  const nextPurpose = asText(nextMeta.toolPurpose).trim();
+  if (previousPurpose && nextPurpose && previousPurpose === nextPurpose) return true;
+  return previousText === nextText;
 }
 
 function mapExecutorEventStage(
@@ -1171,6 +1256,13 @@ export function deriveSessionStateFromMessages(messages: AgentMessage[]): {
   }
 
   const clarification = relevantMessages[lastClarificationIndex];
+  if (clarification && isPresentationBriefClarificationAwaitingCards(clarification)) {
+    return {
+      stopProcessing: Boolean(lastStopMessage),
+      runtimeStatus: lastTerminalMessage ? resolveTerminalMessageOutcome(lastTerminalMessage) : null,
+      currentQuestion: null,
+    };
+  }
   const hasUserResponseAfter = relevantMessages
     .slice(lastClarificationIndex + 1)
     .some((message) => message.type === 'user_response');
@@ -1189,7 +1281,10 @@ export function deriveSessionStateFromMessages(messages: AgentMessage[]): {
 }
 
 export function shouldStopProcessingForMessage(message: AgentMessage): boolean {
-  if (message.type === 'clarification_request' || message.type === 'plan_generated') {
+  if (message.type === 'clarification_request') {
+    return !isPresentationBriefClarificationAwaitingCards(message);
+  }
+  if (message.type === 'plan_generated') {
     return true;
   }
 
@@ -1514,6 +1609,44 @@ function normalizeAgentMessageIdentity(message: AgentMessage): AgentMessage {
       messageKey,
     },
   };
+}
+
+function resolveAgentMessageTimelineCursor(message: Partial<AgentMessage>): number | null {
+  const metadata = toRecord(message.metadata);
+  return (
+    asPositiveInt((message as { timelineCursor?: unknown }).timelineCursor) ??
+    asPositiveInt(metadata.timelineCursor) ??
+    asPositiveInt(metadata.sessionEventSeq) ??
+    asPositiveInt(metadata.timestamp)
+  );
+}
+
+function orderAgentMessagesByTimeline(messages: AgentMessage[]): AgentMessage[] {
+  const indexed = messages.map((message, index) => ({
+    message,
+    index,
+    cursor: resolveAgentMessageTimelineCursor(message),
+  }));
+  const hasSortablePair = indexed.some((left, leftIndex) =>
+    indexed.some(
+      (right, rightIndex) =>
+        rightIndex > leftIndex &&
+        left.cursor !== null &&
+        right.cursor !== null &&
+        left.cursor !== right.cursor
+    )
+  );
+  if (!hasSortablePair) {
+    return messages;
+  }
+  return indexed
+    .sort((left, right) => {
+      if (left.cursor !== null && right.cursor !== null && left.cursor !== right.cursor) {
+        return left.cursor - right.cursor;
+      }
+      return left.index - right.index;
+    })
+    .map((item) => item.message);
 }
 
 function isManagedAssistantMessage(message: Partial<AgentMessage>): boolean {
@@ -1867,6 +2000,12 @@ export function mergeRealtimeMessage(
   if (isDuplicateExecutorTail) {
     return prev;
   }
+  if (
+    message.type === 'executor_event' &&
+    isSemanticallyDuplicateManagedInspectionTail(lastMessage, message)
+  ) {
+    return prev;
+  }
   const sessionEventSeq = asPositiveInt(metadata.sessionEventSeq);
   if (sessionEventSeq !== null) {
     const hasSameSessionEventSeq = prev.some((item) => {
@@ -1946,12 +2085,12 @@ export function mergeRealtimeMessage(
       };
       return next;
     }
-    return [...prev, message];
+    return orderAgentMessagesByTimeline([...prev, message]);
   }
   if (message.type === 'opencode_event' && isNonTextPartEvent(metadata)) {
     const streamKey = resolveStreamKeyFromMetadata(metadata);
     if (!streamKey) {
-      return [...prev, message];
+      return orderAgentMessagesByTimeline([...prev, message]);
     }
 
     const idx = prev.findIndex((item) => {
@@ -1978,12 +2117,12 @@ export function mergeRealtimeMessage(
       return next;
     }
 
-    return [...prev, message];
+    return orderAgentMessagesByTimeline([...prev, message]);
   }
   if (message.type === 'opencode_event' && isTextStreamEvent(metadata, message.content)) {
     const streamKey = resolveTextStreamKeyFromMetadata(metadata);
     if (!streamKey) {
-      return [...prev, message];
+      return orderAgentMessagesByTimeline([...prev, message]);
     }
 
     const idx = prev.findIndex((item) => {
@@ -2016,19 +2155,19 @@ export function mergeRealtimeMessage(
       return next;
     }
 
-    return [...prev, message];
+    return orderAgentMessagesByTimeline([...prev, message]);
   }
 
   if (message.type === 'opencode_event' && asText(metadata.eventType) === 'message.final') {
     const finalStreamKey = resolveTextStreamKeyFromMetadata(metadata);
     if (!finalStreamKey) {
-      return [...prev, message];
+      return orderAgentMessagesByTimeline([...prev, message]);
     }
     const filtered = prev.filter((item) => {
       if (item.type !== 'opencode_event') return true;
       return resolveAgentMessageKey(item) !== messageKey;
     });
-    return [...filtered, message];
+    return orderAgentMessagesByTimeline([...filtered, message]);
   }
 
   if (message.type === 'status_update' && isTerminalOpencodeMessage(message)) {
@@ -2045,10 +2184,10 @@ export function mergeRealtimeMessage(
     if (exists) {
       return prev;
     }
-    return [...prev, message];
+    return orderAgentMessagesByTimeline([...prev, message]);
   }
 
-  return [...prev, message];
+  return orderAgentMessagesByTimeline([...prev, message]);
 }
 
 function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreationHistoryMessage[] {
@@ -2081,6 +2220,23 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
         asText(toRecord(last?.metadata).eventType).toLowerCase() === asText(metadata.eventType).toLowerCase() &&
         asText(last?.content) &&
         asText(last?.content) === asText(item?.content)
+      ) {
+        continue;
+      }
+      if (
+        last &&
+        isSemanticallyDuplicateManagedInspectionTail(
+          {
+            type: 'executor_event',
+            content: asText(last?.content),
+            metadata: toRecord(last?.metadata),
+          },
+          {
+            type: 'executor_event',
+            content: asText(item?.content),
+            metadata,
+          }
+        )
       ) {
         continue;
       }
@@ -2281,7 +2437,7 @@ export function mergeHistoryAgentMessages(base: AgentMessage[], incoming: AgentM
     indexByKey.set(key, merged.length);
     merged.push(item);
   }
-  return merged;
+  return orderAgentMessagesByTimeline(merged);
 }
 
 export function reconcileHistoryWithPendingLocalMessages(
@@ -2492,7 +2648,12 @@ export function primeOptimisticHistoryViewCache(input: {
 }
 
 function mapHistoryMessageToAgentMessage(item: TaskCreationHistoryMessage, historySessionId: string): AgentMessage | null {
-  const metadata = item?.metadata || {};
+  const metadata: Record<string, unknown> = {
+    ...(item?.metadata || {}),
+    ...(asPositiveInt(item?.timelineCursor) !== null && asPositiveInt(toRecord(item?.metadata).timelineCursor) === null
+      ? { timelineCursor: asPositiveInt(item?.timelineCursor) }
+      : {}),
+  };
   const messageType = item?.messageType;
   const role = item?.role;
   const id = item?.id;
@@ -2768,7 +2929,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   }, [initialProjectIdForNewSession, sessionId]);
   const [isInterrupting, setIsInterrupting] = useState(false);
   const [pendingSandboxPromptVersion, setPendingSandboxPromptVersion] = useState(0);
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   const search = useSearch();
   const { user } = useAuth();
 
@@ -3027,13 +3188,15 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     const currentMatch = currentPath.match(/^\/session\/([^/?#]+)/);
     const currentInPath = currentMatch ? decodeURIComponent(currentMatch[1]) : '';
     if (currentInPath !== nextSessionId || params.get('new') || params.get('sessionId')) {
-      params.delete('new');
-      params.delete('sessionId');
-      const query = params.toString();
-      const base = `/session/${encodeURIComponent(nextSessionId)}`;
-      window.history.replaceState(null, '', query ? `${base}?${query}` : base);
+      setLocation(
+        buildBoundSessionRoute({
+          sessionId: nextSessionId,
+          search: window.location.search,
+        }),
+        { replace: true }
+      );
     }
-  }, []);
+  }, [setLocation]);
 
   useEffect(() => {
     const routeState = resolveSessionRouteState({
@@ -3490,17 +3653,20 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         const options = Array.isArray(rawOptions)
           ? rawOptions.map((item) => asText(item)).filter(Boolean)
           : [];
+        const awaitingPresentationCards =
+          asText(baseMetadata.clarificationType) === 'presentation_brief' &&
+          !hasStructuredClarificationPlan(baseMetadata);
         setCurrentQuestion(
-          question
+          !awaitingPresentationCards && question
             ? {
                 question,
                 options: options.length > 0 ? options : undefined,
               }
             : null
         );
-        setIsProcessing(false);
-        setManagedRunStreaming(false);
-        setManagedRunStatus('waiting_user');
+        setIsProcessing(awaitingPresentationCards);
+        setManagedRunStreaming(awaitingPresentationCards);
+        setManagedRunStatus(awaitingPresentationCards ? 'in_progress' : 'waiting_user');
         if (sessionKey) {
           void loadHistoryRef.current(sessionKey, { reason: 'managed_recovery' });
         }
@@ -4343,6 +4509,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const normalizeHistoryMessages = useCallback(
     (historySessionId: string, list: TaskCreationHistoryMessage[]) => {
       const ordered = [...list].sort((a, b) => {
+        const ca = asPositiveInt((a as { timelineCursor?: unknown })?.timelineCursor) ?? asPositiveInt(toRecord(a?.metadata).timelineCursor);
+        const cb = asPositiveInt((b as { timelineCursor?: unknown })?.timelineCursor) ?? asPositiveInt(toRecord(b?.metadata).timelineCursor);
+        if (ca !== null && cb !== null && ca !== cb) return ca - cb;
         const sa = asPositiveInt(toRecord(a?.metadata).sessionEventSeq);
         const sb = asPositiveInt(toRecord(b?.metadata).sessionEventSeq);
         if (sa !== null && sb !== null && sa !== sb) return sa - sb;
@@ -4697,6 +4866,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       targetSessionId?: string,
       options?: {
         preservePendingRecovery?: boolean;
+        expectedNewRunAfterId?: string | null;
       }
     ) => {
       const sid = (targetSessionId || sessionId || '').trim();
@@ -4736,6 +4906,28 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
 
         const nextRunId = (latest.id || latest.runId || '').trim();
         const nextStatus = normalizeManagedRunStatus(latest.status);
+        const expectedNewRunAfterId = asText(options?.expectedNewRunAfterId);
+        if (
+          options?.preservePendingRecovery &&
+          expectedNewRunAfterId &&
+          nextRunId === expectedNewRunAfterId &&
+          nextStatus === 'waiting_user'
+        ) {
+          writeManagedRunRecoveryState({
+            sessionId: sid,
+            runId: null,
+            status: 'starting',
+            processing: true,
+          });
+          setManagedRunId(null);
+          managedRunIdRef.current = null;
+          setManagedRunStatus('starting');
+          managedRunStatusRef.current = 'starting';
+          setManagedRunStreaming(false);
+          setManagedRunError(null);
+          setIsProcessing(true);
+          return;
+        }
         setManagedRunId(nextRunId);
         managedRunIdRef.current = nextRunId;
         setManagedRunStatus(nextStatus);
@@ -4776,6 +4968,32 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       }
     },
     [loadHistory, sessionId]
+  );
+
+  const awaitManagedRunRecovery = useCallback(
+    async (targetSessionId?: string | null) => {
+      const sid = (targetSessionId || sessionId || '').trim();
+      if (!sid || !isManagedAltusMode()) return;
+      const previousRunId = managedRunIdRef.current;
+      writeManagedRunRecoveryState({
+        sessionId: sid,
+        runId: null,
+        status: 'starting',
+        processing: true,
+      });
+      setManagedRunId(null);
+      managedRunIdRef.current = null;
+      setManagedRunStatus('starting');
+      managedRunStatusRef.current = 'starting';
+      setManagedRunStreaming(false);
+      setManagedRunError(null);
+      setIsProcessing(true);
+      await refreshManagedRun(sid, {
+        preservePendingRecovery: true,
+        expectedNewRunAfterId: previousRunId,
+      });
+    },
+    [refreshManagedRun, sessionId]
   );
 
   useEffect(() => {
@@ -5210,7 +5428,10 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
 
   const sendChatInput = useCallback(async (input: string, options?: SendInputOptions) => {
     const text = input.trim();
-    if (!text) return;
+    const metadataOnly = Boolean(
+      options?.metadata && Object.keys(options.metadata).length > 0 && !text
+    );
+    if (!text && !metadataOnly) return;
     const optimisticAttachments = Array.isArray(options?.files) ? buildOptimisticAttachments(options.files) : [];
 
     let activeSessionId = resolveChatInputSessionId({
@@ -5218,6 +5439,14 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       currentSessionId: sessionId,
       locationPath: location,
     });
+    const routeState = resolveSessionRouteState({
+      locationPath: location,
+      search,
+    });
+    if (routeState.createNewToken) {
+      // /new-task?new=... must always create a fresh session instead of reusing stale state.
+      activeSessionId = '';
+    }
     if (activeSessionId && activeSessionId !== sessionId) {
       bindSessionId(activeSessionId);
     }
@@ -5227,26 +5456,6 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       if (isProcessing) {
         await interruptCurrentRun(activeSessionId || undefined);
       }
-      let shouldBindCreatedSession = false;
-      const initialProjectId = !sessionId ? initialProjectIdForNewSession || undefined : undefined;
-      if (!activeSessionId) {
-        const created = await createTaskCreationDraftSession(text);
-        const createdSessionId = (created?.id || '').trim();
-        if (!createdSessionId) {
-          throw new Error('managed draft session id missing');
-        }
-        activeSessionId = createdSessionId;
-        shouldBindCreatedSession = true;
-        if (initialProjectId) {
-          await createTaskCreationSession({
-            sessionId: createdSessionId,
-            mode: 'altus',
-            projectId: initialProjectId,
-          });
-        }
-        applyPendingConnectorDraftAsync(createdSessionId);
-      }
-
       const messageKey = generateClientMessageKey('user');
       const metadataAttachments = readUploadedAttachments(toRecord(options?.metadata).attachments);
       const combinedAttachments = mergeUploadedAttachments(
@@ -5260,15 +5469,52 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       };
       const optimisticUserMessage: AgentMessage = {
         messageKey,
-        type: 'user_input',
+        type: metadataOnly ? 'user_response' : 'user_input',
         content: text,
         metadata: messageMetadata,
         sessionId: activeSessionId || undefined,
       };
-
       setIsProcessing(true);
       setCurrentQuestion(null);
       activeProcessingMessageKeyRef.current = messageKey;
+      trackPendingLocalMessage(activeSessionId, optimisticUserMessage);
+      setMessages((prev) => mergeRealtimeMessage(prev, optimisticUserMessage, WELCOME_MESSAGE));
+
+      let shouldBindCreatedSession = false;
+      const initialProjectId = !activeSessionId ? initialProjectIdForNewSession || undefined : undefined;
+      if (!activeSessionId) {
+        try {
+          const created = await createTaskCreationDraftSession({
+            title: text || "MCP 高风险操作确认",
+          });
+          const createdSessionId = (created?.id || '').trim();
+          if (!createdSessionId) {
+            throw new Error('managed draft session id missing');
+          }
+          activeSessionId = createdSessionId;
+          shouldBindCreatedSession = true;
+          if (initialProjectId) {
+            await createTaskCreationSession({
+              sessionId: createdSessionId,
+              mode: 'altus',
+              projectId: initialProjectId,
+            });
+          }
+          applyPendingConnectorDraftAsync(createdSessionId);
+        } catch (error) {
+          setIsProcessing(false);
+          activeProcessingMessageKeyRef.current = null;
+          if (activeSessionId) {
+            clearManagedRunRecoveryState(activeSessionId);
+          }
+          throw error;
+        }
+      }
+      const sessionBoundOptimisticMessage: AgentMessage = {
+        ...optimisticUserMessage,
+        sessionId: activeSessionId || undefined,
+      };
+
       if (activeSessionId) {
         writeManagedRunRecoveryState({
           sessionId: activeSessionId,
@@ -5277,18 +5523,18 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           processing: true,
         });
       }
-      trackPendingLocalMessage(activeSessionId, optimisticUserMessage);
+      trackPendingLocalMessage(activeSessionId, sessionBoundOptimisticMessage);
       if (activeSessionId) {
         const nextMessages = primeOptimisticHistoryViewCache({
           sessionId: activeSessionId,
           currentMessages: messagesRef.current,
-          optimisticMessage: optimisticUserMessage,
+          optimisticMessage: sessionBoundOptimisticMessage,
           oldestCursor: oldestHistoryCursorRef.current,
           hasOlderHistory,
         });
         setMessages(nextMessages);
       } else {
-        setMessages((prev) => mergeRealtimeMessage(prev, optimisticUserMessage, WELCOME_MESSAGE));
+        setMessages((prev) => mergeRealtimeMessage(prev, sessionBoundOptimisticMessage, WELCOME_MESSAGE));
       }
       if (shouldBindCreatedSession && activeSessionId) {
         bindSessionId(activeSessionId);
@@ -5317,7 +5563,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
               prev,
               {
                 messageKey,
-                type: 'user_input',
+                type: metadataOnly ? 'user_response' : 'user_input',
                 content: text,
                 metadata: {
                   ...messageMetadata,
@@ -5450,7 +5696,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       let prePersistedUserInput = false;
       if (activeSessionId) {
         try {
-          const initialProjectId = !sessionId ? initialProjectIdForNewSession || undefined : undefined;
+          const initialProjectId = !activeSessionId ? initialProjectIdForNewSession || undefined : undefined;
           await createTaskCreationSession({
             sessionId: activeSessionId,
             mode: 'sandbox',
@@ -5609,6 +5855,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     applyPendingConnectorDraftAsync,
     bindSessionId,
     location,
+    search,
     orchestratorSessionId,
     opencodeSessionId,
     refreshRuntimeStatus,
@@ -5643,6 +5890,15 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     bindSessionId(nextSessionId);
     return nextSessionId;
   }, [bindSessionId, sessionId]);
+
+  const appendLocalMessage = useCallback(
+    (message: AgentMessage, options?: { sessionId?: string | null }) => {
+      const targetSessionId = asText(options?.sessionId) || sessionId || null;
+      setMessages((prev) => mergeRealtimeMessage(prev, message, WELCOME_MESSAGE));
+      trackPendingLocalMessage(targetSessionId, message);
+    },
+    [sessionId, trackPendingLocalMessage]
+  );
 
   return {
     isConnected,
@@ -5684,6 +5940,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     ensureSession,
     loadOlderHistory,
     answerQuestion,
+    appendLocalMessage,
+    awaitManagedRunRecovery,
     clearMessages,
     connect,
     disconnect,

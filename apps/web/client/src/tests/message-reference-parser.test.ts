@@ -132,4 +132,25 @@ describe("message-reference-parser", () => {
     expect(resolved.skills).toHaveLength(1);
     expect(resolved.skills[0]?.skillId).toBe("skill-nested");
   });
+
+  it("parses mcp connector references from metadata", () => {
+    const resolved = resolveUserMessageReferences({
+      content: "连接器测试",
+      metadata: {
+        originalInput: "连接器测试",
+        mcpReferences: [
+          {
+            key: "github",
+            name: "GitHub",
+            category: "code",
+          },
+        ],
+      },
+    });
+
+    expect(resolved.text).toBe("连接器测试");
+    expect(resolved.mcpReferences).toHaveLength(1);
+    expect(resolved.mcpReferences[0]?.key).toBe("github");
+    expect(resolved.mcpReferences[0]?.name).toBe("GitHub");
+  });
 });

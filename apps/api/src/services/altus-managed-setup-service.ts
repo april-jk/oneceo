@@ -29,9 +29,20 @@ import {
 } from './altus-clarification-policy-reducer';
 import { altusClarificationTransitionAgent } from './altus-clarification-transition-agent';
 import {
+  buildPresentationBriefClarificationQuestion,
+  buildPresentationStructuredClarificationPlan,
+  coversPresentationBrief,
+  shouldRequestPresentationBrief,
+  type StructuredClarificationCardPlan,
+} from './altus-structured-clarification-service';
+import {
   altusManagedContextService,
   buildManagedConversationEntries,
 } from './altus-managed-context-service';
+import {
+  buildOfficialWebShellMaterializationGuidance,
+  materializeOfficialWebShellInSandbox,
+} from './oneceo-official-web-shell-materialization-service';
 
 const INLINE_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const INLINE_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
@@ -194,7 +205,7 @@ const ROOT_STACK_FILES = [
   'pom.xml',
 ] as const;
 const COMPOSIO_BROKERED_RUNTIME_TRANSPORT = 'api_brokered_mcp';
-const COMPOSIO_BROKERED_CONNECTORS = new Set(['github', 'notion', 'slack', 'figma', 'supabase']);
+const COMPOSIO_BROKERED_CONNECTORS = new Set(['github', 'notion', 'slack', 'figma', 'google_super', 'supabase']);
 
 function isSnapshotRuntimeTransportSupported(binding: { connectorKey?: unknown; runtimeTransport?: unknown }) {
   if (!COMPOSIO_BROKERED_CONNECTORS.has(asText(binding.connectorKey))) {
@@ -213,6 +224,7 @@ type FinalClarificationDecision = {
   clarificationType: TaskClarificationType;
   clarificationQuestion: string;
   clarificationOptions?: string[];
+  structuredClarification?: StructuredClarificationCardPlan;
 };
 
 type TransitionResolvedProfileInput = {
@@ -221,6 +233,7 @@ type TransitionResolvedProfileInput = {
   todoDecision: Pick<AltusManagedTaskIntentProfile, 'todoRequired' | 'todoReason'>;
   reduced: ClarificationReducerResult;
   currentText: string;
+  pendingQuestion?: string | null;
   texts: string[];
 };
 
@@ -305,6 +318,8 @@ function coversClarificationType(
       return coversIntegrationTarget(text);
     case 'acceptance_requirement':
       return coversAcceptanceRequirement(text);
+    case 'presentation_brief':
+      return coversPresentationBrief(text);
     default:
       return false;
   }
@@ -339,7 +354,23 @@ function buildClarificationQuestion(
         question: `${followUpPrefix}这次只需要源码，还是还需要本地可运行、测试通过，或可以直接部署？`,
         options: options || [...ACCEPTANCE_REQUIREMENT_OPTIONS],
       };
+    case 'presentation_brief':
+      return {
+        question: `${followUpPrefix}${buildPresentationBriefClarificationQuestion()}`,
+      };
   }
+}
+
+function buildStructuredClarificationFallback(input: {
+  clarificationType: TaskClarificationType;
+  question: string;
+  options?: string[];
+  userRequest?: string;
+}): StructuredClarificationCardPlan | undefined {
+  if (input.clarificationType === 'presentation_brief') {
+    return buildPresentationStructuredClarificationPlan({ userRequest: input.userRequest || input.question });
+  }
+  return undefined;
 }
 
 async function pathExists(targetPath: string) {
@@ -461,11 +492,20 @@ async function deriveWorkspaceTechStackHints(workspaceRoot: string): Promise<Wor
   };
 }
 
-function resolveTodoDecision(shape: TaskIntentShape): Pick<AltusManagedTaskIntentProfile, 'todoRequired' | 'todoReason'> {
+function resolveTodoDecision(
+  shape: TaskIntentShape,
+  options?: { deployableWebAppBlueprintRequired?: boolean }
+): Pick<AltusManagedTaskIntentProfile, 'todoRequired' | 'todoReason'> {
   if (shape.candidateTodoSignals.explicitTodoRequest) {
     return {
       todoRequired: true,
       todoReason: 'explicit_user_request',
+    };
+  }
+  if (options?.deployableWebAppBlueprintRequired) {
+    return {
+      todoRequired: true,
+      todoReason: 'deployable_web_app_blueprint',
     };
   }
   if (
@@ -502,6 +542,16 @@ function resolveTodoDecision(shape: TaskIntentShape): Pick<AltusManagedTaskInten
   };
 }
 
+function shouldRequireDeployableWebAppBlueprint(input: {
+  profile: AltusManagedTaskIntentProfile;
+  needsClarification: boolean;
+}) {
+  return Boolean(
+    input.profile.mode === 'deployable_web_app' &&
+      !input.needsClarification
+  );
+}
+
 function resolveClarificationDecision(input: {
   shape: TaskIntentShape;
   currentText: string;
@@ -529,10 +579,29 @@ function resolveClarificationDecision(input: {
       clarificationType: pendingType,
       clarificationQuestion: followUp.question,
       clarificationOptions: followUp.options,
+      structuredClarification: buildStructuredClarificationFallback({
+        clarificationType: pendingType,
+        question: followUp.question,
+        options: followUp.options,
+        userRequest: combinedText,
+      }),
     };
   }
 
   const candidates: Array<Exclude<TaskClarificationType, 'none'>> = [];
+  const needsPresentationBrief =
+    shouldRequestPresentationBrief(combinedText) && !coversPresentationBrief(combinedText);
+  if (needsPresentationBrief) {
+    const question = buildClarificationQuestion('presentation_brief');
+    return {
+      needsClarification: true,
+      clarificationType: 'presentation_brief',
+      clarificationQuestion: question.question,
+      clarificationOptions: question.options,
+      structuredClarification: buildPresentationStructuredClarificationPlan({ userRequest: combinedText }),
+    };
+  }
+
   const needsArtifactClarification =
     softwareRequest &&
     (input.shape.boundaryOnlySoftwareRequest ||
@@ -594,6 +663,12 @@ function resolveClarificationDecision(input: {
       clarificationType,
       clarificationQuestion: question.question,
       clarificationOptions: question.options,
+      structuredClarification: buildStructuredClarificationFallback({
+        clarificationType,
+        question: question.question,
+        options: question.options,
+        userRequest: combinedText,
+      }),
     };
   }
 
@@ -618,18 +693,88 @@ function shouldUseClarificationTransitionAgent(input: {
   );
 }
 
+function isConfirmationLikeResponse(text: string) {
+  const normalized = normalizeText(text).replace(/[。．.!！?？\s]+/g, '');
+  return (
+    normalized === '确认' ||
+    normalized === '确认继续' ||
+    normalized === '确认部署' ||
+    normalized === '继续' ||
+    normalized === '继续部署' ||
+    normalized === '可以' ||
+    normalized === '可以继续' ||
+    normalized === '好的' ||
+    normalized === '好' ||
+    normalized === '是' ||
+    normalized === '是的' ||
+    normalized === 'yes' ||
+    normalized === 'ok' ||
+    normalized === 'okay'
+  );
+}
+
+function isDeploymentRiskConfirmationQuestion(question?: string | null) {
+  const normalized = normalizeText(question);
+  return normalized.includes('部署到生产环境') || normalized.includes('外部预览部署');
+}
+
+function resolveConfirmedDeploymentIntent(
+  input: Pick<TransitionResolvedProfileInput, 'baseProfile' | 'currentText' | 'pendingQuestion' | 'reduced' | 'texts'>
+): Pick<
+  AltusManagedTaskIntentProfile,
+  'deployRequested' | 'deploymentAllowed' | 'mode' | 'platformCapabilityIntent' | 'reason' | 'webArtifactRequested'
+> | null {
+  if (!input.reduced.accepted || input.reduced.nextState !== 'ready_to_execute') {
+    return null;
+  }
+  if (!isDeploymentRiskConfirmationQuestion(input.pendingQuestion)) {
+    return null;
+  }
+  if (!isConfirmationLikeResponse(input.currentText)) {
+    return null;
+  }
+  if (input.texts.length < 2) {
+    return null;
+  }
+
+  const historicalProfile = deriveManagedTaskIntentProfile(input.texts.slice(0, -1));
+  if (!historicalProfile.deploymentAllowed || historicalProfile.platformCapabilityIntent?.mode !== 'execute') {
+    return null;
+  }
+
+  return {
+    mode: historicalProfile.mode === 'neutral' ? 'deployable_web_app' : historicalProfile.mode,
+    reason:
+      historicalProfile.reason === 'latest_deployable_request' ||
+      historicalProfile.reason === 'historical_deployable_request'
+        ? historicalProfile.reason
+        : 'historical_deployable_request',
+    webArtifactRequested: historicalProfile.webArtifactRequested || input.baseProfile.webArtifactRequested,
+    deployRequested: true,
+    deploymentAllowed: true,
+    platformCapabilityIntent: historicalProfile.platformCapabilityIntent,
+  };
+}
+
 function buildProfileFromTransition(input: TransitionResolvedProfileInput): AltusManagedTaskIntentProfile {
   const fallbackQuestion = input.reduced.accepted
     ? ''
     : input.reduced.question;
   if (!input.reduced.accepted) {
+    const clarificationType = input.reduced.clarificationType || input.shape.candidateClarificationType || 'none';
     return {
       ...input.baseProfile,
       ...input.todoDecision,
       needsClarification: true,
-      clarificationType: input.reduced.clarificationType || input.shape.candidateClarificationType || 'none',
+      clarificationType,
       clarificationQuestion: fallbackQuestion,
       clarificationOptions: input.reduced.options,
+      structuredClarification: buildStructuredClarificationFallback({
+        clarificationType,
+        question: fallbackQuestion,
+        options: input.reduced.options,
+        userRequest: input.texts.join('\n'),
+      }),
       clarificationTransition: {
         nextState: input.reduced.nextState,
         reason: input.reduced.reason,
@@ -638,13 +783,21 @@ function buildProfileFromTransition(input: TransitionResolvedProfileInput): Altu
   }
 
   if (input.reduced.nextState === 'clarifying') {
+    const clarificationType = input.reduced.clarificationType || input.shape.candidateClarificationType || 'none';
+    const clarificationQuestion = input.reduced.question || input.shape.candidateClarificationQuestion;
     return {
       ...input.baseProfile,
       ...input.todoDecision,
       needsClarification: true,
-      clarificationType: input.reduced.clarificationType || input.shape.candidateClarificationType || 'none',
-      clarificationQuestion: input.reduced.question || input.shape.candidateClarificationQuestion,
+      clarificationType,
+      clarificationQuestion,
       clarificationOptions: input.reduced.options,
+      structuredClarification: buildStructuredClarificationFallback({
+        clarificationType,
+        question: clarificationQuestion,
+        options: input.reduced.options,
+        userRequest: input.texts.join('\n'),
+      }),
       clarificationTransition: {
         nextState: 'clarifying',
         reason: input.reduced.reason,
@@ -665,11 +818,23 @@ function buildProfileFromTransition(input: TransitionResolvedProfileInput): Altu
       : input.shape;
   const effectiveTodoDecision =
     input.reduced.nextState === 'new_turn'
-      ? resolveTodoDecision(effectiveShape)
+      ? resolveTodoDecision(effectiveShape, {
+          deployableWebAppBlueprintRequired: shouldRequireDeployableWebAppBlueprint({
+            profile: effectiveBaseProfile,
+            needsClarification: false,
+          }),
+        })
       : input.todoDecision;
+  const confirmedDeploymentIntent = resolveConfirmedDeploymentIntent(input);
+  const resolvedBaseProfile = confirmedDeploymentIntent
+    ? {
+        ...effectiveBaseProfile,
+        ...confirmedDeploymentIntent,
+      }
+    : effectiveBaseProfile;
 
   return {
-    ...effectiveBaseProfile,
+    ...resolvedBaseProfile,
     ...effectiveTodoDecision,
     needsClarification: false,
     clarificationType: 'none',
@@ -810,6 +975,27 @@ function extractMessageTextContent(content: ChatMessage['content']) {
 
 export class AltusManagedSetupService {
   constructor(private readonly imageObjectService: ManagedImageObjectService = managedImageObjectService) {}
+
+  private getConversationHistoryEntryLimit() {
+    const fallback = 120;
+    const parsed = Number(process.env.ALTUS_MANAGED_HISTORY_ENTRY_LIMIT || fallback);
+    if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+    return Math.min(240, Math.floor(parsed));
+  }
+
+  private getConversationHistoryTokenBudget() {
+    const fallback = 5600;
+    const parsed = Number(process.env.ALTUS_MANAGED_HISTORY_TOKEN_BUDGET || fallback);
+    if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+    return Math.min(16000, Math.floor(parsed));
+  }
+
+  private getConversationHistoryMinTailEntries() {
+    const fallback = 10;
+    const parsed = Number(process.env.ALTUS_MANAGED_HISTORY_MIN_TAIL_ENTRIES || fallback);
+    if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+    return Math.min(40, Math.floor(parsed));
+  }
 
   private async buildInlineImageBlocks(input: {
     metadata?: unknown;
@@ -993,7 +1179,13 @@ export class AltusManagedSetupService {
     };
   }
 
-  async ensureSandbox(sessionId: string, sessionTitle?: string | null) {
+  async ensureSandbox(
+    sessionId: string,
+    sessionTitle?: string | null,
+    options?: {
+      taskIntentProfile?: AltusManagedTaskIntentProfile | null;
+    }
+  ) {
     const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
     const provision = await sandboxAgentProvisionService.provisionWithLock({
       executor: 'altus',
@@ -1027,6 +1219,30 @@ export class AltusManagedSetupService {
       executor: 'altus',
       workspaceRoot,
     });
+    const materialization = await materializeOfficialWebShellInSandbox({
+      sandboxId: provision.sessionId,
+      workspaceRoot,
+      taskIntentProfile: options?.taskIntentProfile,
+    }).catch((error) => {
+      console.warn('[OFFICIAL_WEB_SHELL_MATERIALIZATION_WARN]', {
+        sessionId,
+        sandboxId: provision.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    });
+    if (materialization?.applied) {
+      await this.persistTimelineMessage({
+        sessionId,
+        role: 'system',
+        messageType: 'system_template_materialized',
+        content: buildOfficialWebShellMaterializationGuidance(),
+        metadata: {
+          eventType: 'official_web_shell_materialized',
+          writtenPaths: materialization.writtenPaths,
+        },
+      });
+    }
     void sessionMcpRecoveryService.ensureSessionRecovered(sessionId, provision.sessionId).catch(() => null);
     return {
       sandboxId: provision.sessionId,
@@ -1101,7 +1317,11 @@ export class AltusManagedSetupService {
     const attachmentContextPrompt = collectAttachmentContextPrompt(history);
     const todoContextPrompt = buildTodoContextPrompt(history);
     const inlineImageCache = new Map<string, ChatMessageContentPart>();
-    const relevantHistory = buildManagedConversationEntries(history, { limit: 24 });
+    const relevantHistory = buildManagedConversationEntries(history, {
+      limit: this.getConversationHistoryEntryLimit(),
+      tokenBudget: this.getConversationHistoryTokenBudget(),
+      minTailEntries: this.getConversationHistoryMinTailEntries(),
+    });
     const relevant: ChatMessage[] = [];
 
     for (const item of relevantHistory) {
@@ -1207,13 +1427,19 @@ export class AltusManagedSetupService {
     const currentText = asText(currentInput);
     const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId).catch(() => null);
     const pendingClarificationType = sessionMemory?.pendingClarificationType || null;
+    const pendingQuestion = sessionMemory?.pendingQuestion || null;
     if (currentText && isPlatformCapabilityAdvisoryText(currentText)) {
       const currentTexts = [currentText];
       const advisoryProfile = deriveManagedTaskIntentProfile(currentTexts);
       const advisoryShape = classifyTaskIntentShape(currentTexts);
       return {
         ...advisoryProfile,
-        ...resolveTodoDecision(advisoryShape),
+        ...resolveTodoDecision(advisoryShape, {
+          deployableWebAppBlueprintRequired: shouldRequireDeployableWebAppBlueprint({
+            profile: advisoryProfile,
+            needsClarification: false,
+          }),
+        }),
         needsClarification: false,
         clarificationType: 'none',
         clarificationQuestion: '',
@@ -1231,7 +1457,7 @@ export class AltusManagedSetupService {
       currentInput: currentText,
       currentMessageType: messageType,
       pendingClarificationType,
-      pendingQuestion: sessionMemory?.pendingQuestion || null,
+      pendingQuestion,
       pendingOptions: Array.isArray(sessionMemory?.pendingOptions) ? sessionMemory.pendingOptions : null,
       clarificationTranscriptLimit: 10,
       userTextLimit: 8,
@@ -1242,6 +1468,33 @@ export class AltusManagedSetupService {
     const baseProfile = deriveManagedTaskIntentProfile(texts);
     const shape = classifyTaskIntentShape(texts);
     const workspaceHints = await deriveWorkspaceTechStackHints(resolveOpencodeWorkspacePath(sessionId));
+    if (
+      messageType === 'user_response' &&
+      currentText &&
+      isDeploymentRiskConfirmationQuestion(pendingQuestion) &&
+      isConfirmationLikeResponse(currentText)
+    ) {
+      return buildProfileFromTransition({
+        baseProfile,
+        shape,
+        todoDecision: resolveTodoDecision(shape, {
+          deployableWebAppBlueprintRequired: shouldRequireDeployableWebAppBlueprint({
+            profile: baseProfile,
+            needsClarification: false,
+          }),
+        }),
+        reduced: {
+          accepted: true,
+          nextState: 'ready_to_execute',
+          clearedPending: true,
+          assumptions: [currentText],
+          reason: 'confirmed_pending_deployment_risk',
+        },
+        currentText,
+        pendingQuestion,
+        texts,
+      });
+    }
     if (shouldUseClarificationTransitionAgent({ baseProfile, shape, pendingClarificationType })) {
       try {
         const proposal = await altusClarificationTransitionAgent.propose({
@@ -1249,7 +1502,7 @@ export class AltusManagedSetupService {
           recentUserTexts: texts,
           recentMessages: recentTransitionMessages,
           pendingClarificationType,
-          pendingQuestion: sessionMemory?.pendingQuestion || null,
+          pendingQuestion,
           pendingOptions: Array.isArray(sessionMemory?.pendingOptions) ? sessionMemory.pendingOptions : null,
           shape,
         });
@@ -1258,7 +1511,7 @@ export class AltusManagedSetupService {
             {
               status: pendingClarificationType ? 'clarifying' : 'none',
               pendingClarificationType,
-              pendingQuestion: sessionMemory?.pendingQuestion || null,
+              pendingQuestion,
             },
             proposal
           );
@@ -1270,9 +1523,15 @@ export class AltusManagedSetupService {
             return buildProfileFromTransition({
               baseProfile,
               shape,
-              todoDecision: resolveTodoDecision(shape),
+              todoDecision: resolveTodoDecision(shape, {
+                deployableWebAppBlueprintRequired: shouldRequireDeployableWebAppBlueprint({
+                  profile: baseProfile,
+                  needsClarification: false,
+                }),
+              }),
               reduced,
               currentText,
+              pendingQuestion,
               texts,
             });
           }
@@ -1290,7 +1549,12 @@ export class AltusManagedSetupService {
       return buildProfileFromTransition({
         baseProfile,
         shape,
-        todoDecision: resolveTodoDecision(shape),
+        todoDecision: resolveTodoDecision(shape, {
+          deployableWebAppBlueprintRequired: shouldRequireDeployableWebAppBlueprint({
+            profile: baseProfile,
+            needsClarification: false,
+          }),
+        }),
         reduced: {
           accepted: true,
           nextState: 'ready_to_execute',
@@ -1299,6 +1563,7 @@ export class AltusManagedSetupService {
           reason: 'answered_pending_clarification',
         },
         currentText,
+        pendingQuestion,
         texts,
       });
     }
@@ -1320,7 +1585,12 @@ export class AltusManagedSetupService {
       pendingClarificationType: treatAsNewTurn ? null : pendingClarificationType,
       workspaceHints,
     });
-    const todoDecision = resolveTodoDecision(effectiveShape);
+    const todoDecision = resolveTodoDecision(effectiveShape, {
+      deployableWebAppBlueprintRequired: shouldRequireDeployableWebAppBlueprint({
+        profile: effectiveBaseProfile,
+        needsClarification: clarificationDecision.needsClarification,
+      }),
+    });
 
     return {
       ...effectiveBaseProfile,
@@ -1329,6 +1599,7 @@ export class AltusManagedSetupService {
       clarificationType: clarificationDecision.clarificationType,
       clarificationQuestion: clarificationDecision.clarificationQuestion,
       clarificationOptions: clarificationDecision.clarificationOptions,
+      structuredClarification: clarificationDecision.structuredClarification,
     };
   }
 

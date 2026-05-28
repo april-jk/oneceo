@@ -27,7 +27,12 @@ import {
   AltusManagedAskUserPairingService,
   altusManagedAskUserPairingService,
 } from './altus-managed-ask-user-pairing-service';
+import {
+  buildManagedMcpToolConfirmationPrompt,
+  readManagedMcpToolConfirmationPayload,
+} from './managed-mcp-tool-confirmation';
 import { normalizeAgentModelTier, resolveAgentRuntimeProfile, toAgentRuntimeSnapshot } from './agent-runtime-profile-service';
+import { mcpToolConfirmationService } from './mcp-tool-confirmation-service';
 
 export class AltusManagedRunEntryService {
   private readonly controllers = new Map<string, AbortController>();
@@ -96,8 +101,20 @@ export class AltusManagedRunEntryService {
   }
 
   async startRun(sessionId: string, userId: string, input: ManagedRunStartInput) {
+    const mcpToolConfirmation = readManagedMcpToolConfirmationPayload(input.metadata);
+    const approvedMcpReplay =
+      mcpToolConfirmation?.action === 'approve'
+        ? await mcpToolConfirmationService.resolveApprovedReplay({
+            appUserId: userId,
+            taskSessionId: sessionId,
+            confirmationId: mcpToolConfirmation.confirmationId,
+            connectorKey: mcpToolConfirmation.connectorKey,
+            toolName: mcpToolConfirmation.toolName,
+            confirmationAgentRunId: mcpToolConfirmation.confirmationAgentRunId || null,
+          })
+        : null;
     const content = asText(input.content);
-    if (!content) {
+    if (!content && !mcpToolConfirmation) {
       throw new Error('消息内容不能为空');
     }
 
@@ -163,7 +180,9 @@ export class AltusManagedRunEntryService {
     });
 
     const isClarificationAnswer = Boolean(asText(sessionMemory?.pendingQuestion));
-    const messageType = isClarificationAnswer ? 'user_response' : 'user_input';
+    const isMcpToolConfirmationResponse = Boolean(mcpToolConfirmation);
+    const messageType =
+      isClarificationAnswer || isMcpToolConfirmationResponse ? 'user_response' : 'user_input';
     const messageKey = asText(input.messageKey) || `managed:${run.id}:${messageType}`;
     await this.setupService.persistTimelineMessage({
       sessionId,
@@ -254,6 +273,23 @@ export class AltusManagedRunEntryService {
       runtimeTokenSource: runtimeProfile.tokenSource,
       userInput: content,
       messageType,
+      mcpToolConfirmationPrompt:
+        mcpToolConfirmation?.action === 'reject'
+          ? buildManagedMcpToolConfirmationPrompt(mcpToolConfirmation)
+          : null,
+      rejectedMcpToolConfirmation:
+        mcpToolConfirmation?.action === 'reject' ? mcpToolConfirmation : null,
+      confirmedMcpToolReplay:
+        mcpToolConfirmation?.action === 'approve' && approvedMcpReplay && mcpToolConfirmation.confirmationToken
+          ? {
+              confirmationId: approvedMcpReplay.confirmationId,
+              confirmationToken: mcpToolConfirmation.confirmationToken,
+              confirmationAgentRunId:
+                mcpToolConfirmation.confirmationAgentRunId || approvedMcpReplay.agentRunId || null,
+              toolName: approvedMcpReplay.toolName,
+              argumentsJson: approvedMcpReplay.argumentsJson,
+            }
+          : null,
       sessionTitle: sessionMemory?.title || null,
       memoryContextPrompt: memoryContext.promptSection,
       userMemory: memoryContext.userMemory,

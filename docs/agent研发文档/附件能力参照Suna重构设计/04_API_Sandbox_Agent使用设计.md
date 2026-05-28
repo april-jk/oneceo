@@ -310,31 +310,17 @@ type TaskAttachmentContextItem = {
 };
 ```
 
-## 7. 远程附件处理
+## 7. 安全与限制
 
-当前 `oneceo` 已有：
-
-- `apps/api/src/services/remote-attachment-service.ts`
-- `POST /api/task-creation/attachments/fetch`
-
-本次设计不废弃该能力，但调整其定位：
-
-1. 远程链接导入仍在前端先转为 `File`
-2. 之后进入与本地文件完全一致的统一输入链路
-3. 不再走单独的“远程附件专用消息处理”
-
-## 8. 安全与限制
-
-### 8.1 服务端必须二次校验
+### 7.1 服务端必须二次校验
 
 无论前端是否校验，服务端都必须再次验证：
 
 - 文件类型
 - 文件大小
 - 附件数量
-- 私有网络远程链接限制
 
-### 8.2 路径安全
+### 7.2 路径安全
 
 文件名规范化时必须：
 
@@ -342,7 +328,7 @@ type TaskAttachmentContextItem = {
 - 移除目录分隔符
 - 保证最终路径只能落在 `uploads/`
 
-### 8.3 Prompt 注入安全
+### 7.3 Prompt 注入安全
 
 解析文本注入 prompt 时必须：
 
@@ -350,7 +336,7 @@ type TaskAttachmentContextItem = {
 - 去除二进制异常内容
 - 标记来源文件名
 
-## 9. 与当前路由/Hook 的映射
+## 8. 与当前路由/Hook 的映射
 
 当前 oneceo 入口：
 

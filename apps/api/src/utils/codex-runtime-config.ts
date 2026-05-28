@@ -17,14 +17,15 @@ export function buildCodexPlaywrightMcpSection(): string {
   const display = asString(process.env.NEKO_DISPLAY) || ':0';
   return [
     '[mcp_servers.playwright]',
-    'command = "npx"',
-    `args = ["@playwright/mcp@latest", "--cdp-endpoint", ${JSON.stringify(cdpEndpoint)}]`,
+    'command = "playwright-mcp"',
+    `args = ["--cdp-endpoint", ${JSON.stringify(cdpEndpoint)}]`,
     '',
     '[mcp_servers.playwright.env]',
     'PLAYWRIGHT_BROWSERS_PATH = "/opt/ms-playwright"',
     'PLAYWRIGHT_HEADLESS = "false"',
     `DISPLAY = ${JSON.stringify(display)}`,
     'XDG_RUNTIME_DIR = "/tmp"',
+    'NODE_PATH = "/usr/local/lib/node_modules"',
     '',
   ].join('\n');
 }

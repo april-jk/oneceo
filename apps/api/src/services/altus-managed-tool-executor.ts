@@ -4,6 +4,10 @@ import type { AltusRunRecoveryMode, AltusRunTransitionReason } from './altus-run
 import type { ToolCall } from './altus-managed-shared';
 import { asText } from './altus-managed-shared';
 import {
+  traceToolCallStart,
+  traceToolCallComplete,
+} from './api-trace-service';
+import {
   buildManagedToolResultEnvelope,
   type ManagedToolResultEnvelope,
 } from './altus-managed-tool-result-envelope';
@@ -61,6 +65,10 @@ type ToolFailureDisposition = {
   recoveryMode?: AltusRunRecoveryMode;
   eventPayload?: Record<string, unknown>;
   meta?: Record<string, unknown>;
+  errorCode?: string;
+  retryable?: boolean;
+  sanitizedError?: string;
+  rawError?: string;
 };
 
 export class AltusManagedToolExecutor {
@@ -79,6 +87,7 @@ export class AltusManagedToolExecutor {
   async executeToolCall(input: {
     toolCall: ToolCall;
     args: Record<string, unknown>;
+    eventArgs?: Record<string, unknown>;
     signal: AbortSignal;
     modelRoundId?: string | number | null;
     onResult?: (result: Extract<ManagedToolResult, { type: 'result' }>) => ToolResultDisposition;
@@ -86,6 +95,16 @@ export class AltusManagedToolExecutor {
   }): Promise<AltusManagedToolExecutionEnvelope> {
     const toolName = asText(input.toolCall?.function?.name);
     const toolCallId = asText(input.toolCall?.id);
+    const toolStartedAt = new Date();
+    const eventArgs = input.eventArgs || input.args;
+
+    const toolTrace = await traceToolCallStart({
+      sessionId: this.input.sessionId,
+      runId: this.input.runId,
+      toolName: toolName || 'unknown',
+      arguments: input.args,
+      startedAt: toolStartedAt,
+    });
 
     await this.input.eventWriter.appendRunEvent(
       this.input.runId,
@@ -95,7 +114,7 @@ export class AltusManagedToolExecutor {
       {
         toolName,
         content: this.input.buildToolEventContent(toolName, 'started'),
-        arguments: input.args,
+        arguments: eventArgs,
         toolCallId,
       }
     );
@@ -109,10 +128,22 @@ export class AltusManagedToolExecutor {
           toolUseId: toolCallId,
           toolName,
           modelRoundId: input.modelRoundId,
-          args: input.args,
+          args: eventArgs,
           content: result.question,
           contentForUser: result.question,
+          result: result.structuredClarification
+            ? { structuredClarification: result.structuredClarification }
+            : undefined,
           activatedSkills: result.activatedSkills as any,
+        });
+        traceToolCallComplete(toolTrace, {
+          responseBody: {
+            type: 'ask_user',
+            question: result.question,
+            structuredClarification: result.structuredClarification,
+          },
+          completedAt: new Date(),
+          durationMs: Date.now() - toolStartedAt.getTime(),
         });
         return {
           status: 'ask_user',
@@ -131,7 +162,7 @@ export class AltusManagedToolExecutor {
           toolUseId: toolCallId,
           toolName,
           modelRoundId: input.modelRoundId,
-          args: input.args,
+          args: eventArgs,
           content: JSON.stringify({
             summary: result.summary,
             verification: result.verification || [],
@@ -139,6 +170,11 @@ export class AltusManagedToolExecutor {
           }),
           contentForUser: result.summary,
           activatedSkills: result.activatedSkills as any,
+        });
+        traceToolCallComplete(toolTrace, {
+          responseBody: { type: 'complete', summary: result.summary },
+          completedAt: new Date(),
+          durationMs: Date.now() - toolStartedAt.getTime(),
         });
         return {
           status: 'complete',
@@ -151,14 +187,17 @@ export class AltusManagedToolExecutor {
       }
 
       const disposition = input.onResult?.(result) || {};
+      const contentForModel = result.terminalInstruction
+        ? `${result.content}\n\n${result.terminalInstruction}`
+        : result.content;
       const toolResultEnvelope = buildManagedToolResultEnvelope({
         status: 'ok',
         runId: this.input.runId,
         toolUseId: toolCallId,
         toolName,
         modelRoundId: input.modelRoundId,
-        args: input.args,
-        content: result.content,
+        args: eventArgs,
+        content: contentForModel,
         contentForUser: this.input.buildToolEventContent(toolName, 'completed'),
         activatedSkills: result.activatedSkills as any,
         result: result.content,
@@ -171,12 +210,24 @@ export class AltusManagedToolExecutor {
         {
           toolName,
           content: this.input.buildToolEventContent(toolName, 'completed'),
-          arguments: input.args,
+          arguments: eventArgs,
           toolCallId,
           toolResultEnvelope,
+          ...(Array.isArray(result.evidence) && result.evidence.length > 0
+            ? {
+                evidence: result.evidence,
+                browserScreenshot:
+                  result.evidence.find((item: any) => item?.type === 'browser_screenshot') || undefined,
+              }
+            : {}),
           ...(disposition.eventPayload || {}),
         }
       );
+      traceToolCallComplete(toolTrace, {
+        responseBody: { type: 'result', content: result.content },
+        completedAt: new Date(),
+        durationMs: Date.now() - toolStartedAt.getTime(),
+      });
 
       return {
         status: 'result',
@@ -193,16 +244,20 @@ export class AltusManagedToolExecutor {
       const rawError = error instanceof Error ? error.message : String(error || 'tool_failed');
       const sanitizedError = this.input.sanitizeToolEventError(toolName, rawError);
       const disposition = input.onFailure?.(rawError, sanitizedError) || {};
+      const effectiveRawError = disposition.rawError || rawError;
+      const effectiveSanitizedError = disposition.sanitizedError || sanitizedError;
       const toolResultEnvelope = buildManagedToolResultEnvelope({
         status: 'error',
         runId: this.input.runId,
         toolUseId: toolCallId,
         toolName,
         modelRoundId: input.modelRoundId,
-        args: input.args,
-        content: sanitizedError,
-        contentForUser: sanitizedError,
-        errorMessage: rawError,
+        args: eventArgs,
+        content: effectiveSanitizedError,
+        contentForUser: effectiveSanitizedError,
+        errorCode: disposition.errorCode,
+        errorMessage: effectiveRawError,
+        retryable: disposition.retryable,
       });
 
       await this.input.eventWriter.appendRunEvent(
@@ -213,22 +268,28 @@ export class AltusManagedToolExecutor {
         {
           toolName,
           content: this.input.buildToolEventContent(toolName, 'failed'),
-          arguments: input.args,
+          arguments: eventArgs,
           toolCallId,
-          error: sanitizedError,
+          error: effectiveSanitizedError,
           toolResultEnvelope,
           transitionReason: disposition.transitionReason || 'tool_failed_but_recoverable',
           ...(disposition.eventPayload || {}),
         }
       );
+      traceToolCallComplete(toolTrace, {
+        responseBody: { type: 'error', error: effectiveSanitizedError },
+        completedAt: new Date(),
+        durationMs: Date.now() - toolStartedAt.getTime(),
+        errorMessage: effectiveSanitizedError,
+      });
 
       return {
         status: 'failed',
         toolName,
         toolCallId,
         args: input.args,
-        error: sanitizedError,
-        rawError,
+        error: effectiveSanitizedError,
+        rawError: effectiveRawError,
         toolResultEnvelope,
         transitionReason: disposition.transitionReason || 'tool_failed_but_recoverable',
         recoveryMode: disposition.recoveryMode || 'tool_repair',

@@ -2,9 +2,11 @@ import express from 'express';
 import { assertTaskSessionRuntimeStartAllowed, ensureTaskSessionRuntime } from './task-creation-routes';
 import { getPublicErrorMessage } from '../utils/error-response';
 import { createRequireInternalToken } from './internal-auth-middleware';
-import { appUserDAO, appUserSessionDAO, taskCreationSessionDAO } from '../db/dao';
+import { appUserDAO, appUserSessionDAO, taskCreationSessionDAO, taskSessionRunDAO } from '../db/dao';
+import { sandboxExecutionEnvironmentDAO } from '../db/dao';
 import { taskCreationFileMemoryStore, type FileSessionRecord } from '../agents/task-creation/file-memory-store';
 import { isCanonicalAppUserId, normalizeUserId } from '../utils/user-id';
+import { taskSessionWebsitePreviewSnapshotService } from '../services/task-session-website-preview-snapshot-service';
 
 const router = express.Router();
 const requireInternalToken = createRequireInternalToken({
@@ -28,6 +30,14 @@ function mapAdminStageFromStatus(status: unknown) {
   if (normalized === 'failed') return 'failed';
   if (normalized === 'waiting_user') return 'clarifying';
   return null;
+}
+
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function pickRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function buildAdminSessionSummary(input: {
@@ -179,6 +189,40 @@ router.get('/task-creation/admin/sessions/:sessionId/messages', async (req, res)
   }
 });
 
+router.get('/task-creation/admin/sessions/:sessionId/runs/:runId/tool-calls/:toolCallId/browser-screenshot.png', async (req, res) => {
+  try {
+    const { sessionId, runId, toolCallId } = req.params;
+    const run = await taskSessionRunDAO.getRun(runId);
+    if (!run || run.sessionId !== sessionId) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('浏览器截图不存在'),
+      });
+    }
+    const screenshot = await taskSessionWebsitePreviewSnapshotService.getBrowserActionScreenshotImage({
+      runId,
+      toolCallId,
+    });
+    if (!screenshot) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('浏览器截图不存在'),
+      });
+    }
+
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.setHeader('Content-Type', screenshot.mimeType);
+    res.setHeader('Content-Length', String(screenshot.body.length));
+    return res.status(200).send(screenshot.body);
+  } catch (error: any) {
+    console.error('内部读取管理态浏览器操作截图失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '读取浏览器操作截图失败'),
+    });
+  }
+});
+
 router.get('/task-creation/admin/sessions/:sessionId/intent', async (req, res) => {
   try {
     const result = await taskCreationSessionDAO.getIntentResult(req.params.sessionId);
@@ -229,16 +273,39 @@ router.get('/task-creation/admin/sessions/:sessionId/execution-plan', async (req
 
 router.get('/task-creation/admin/sessions/:sessionId/debug', async (req, res) => {
   try {
-    const memorySession = await taskCreationFileMemoryStore.getSession(req.params.sessionId);
+    const { sessionId } = req.params;
+    const [memorySession, binding] = await Promise.all([
+      taskCreationFileMemoryStore.getSession(sessionId),
+      taskSessionRunDAO.getSandboxBindingBySession(sessionId).catch(() => null),
+    ]);
     const runtime = memorySession?.runtime || null;
+    const sandboxId = asText(binding?.sandboxId) || asText(runtime?.orchestratorSessionId);
+    const environment = sandboxId
+      ? await sandboxExecutionEnvironmentDAO.getBySessionId(sandboxId).catch(() => null)
+      : null;
+    const metadata = pickRecord(environment?.metadata);
+    const debugMeta = pickRecord(metadata.debug);
+    const nekoMeta = pickRecord(debugMeta.neko);
+    const baseUrl = asText(nekoMeta.baseUrl) || asText(nekoMeta.url);
+    const clientUrl = asText(nekoMeta.clientUrl);
+    const status = asText(nekoMeta.status) || asText(environment?.status) || asText(binding?.status) || (sandboxId ? 'ready' : 'unknown');
+    const ready = Boolean(sandboxId) && (
+      Boolean(baseUrl) ||
+      status === 'running' ||
+      status === 'ready' ||
+      environment?.status === 'ready' ||
+      asText(binding?.status) === 'ready'
+    );
     return res.json({
       success: true,
       data: {
-        ready: Boolean(runtime?.orchestratorSessionId),
-        status: runtime?.orchestratorSessionId ? 'running' : 'unknown',
-        sandboxId: runtime?.orchestratorSessionId || undefined,
-        updatedAt: toIso(runtime?.updatedAt || memorySession?.updatedAt),
-        message: runtime?.orchestratorSessionId ? 'runtime linked' : 'runtime not linked',
+        ready,
+        status,
+        sandboxId: sandboxId || undefined,
+        url: clientUrl || baseUrl || undefined,
+        reasonCode: asText(nekoMeta.reasonCode) || undefined,
+        updatedAt: toIso(environment?.updatedAt || binding?.updatedAt || runtime?.updatedAt || memorySession?.updatedAt),
+        message: asText(nekoMeta.message) || (sandboxId ? 'runtime linked' : 'runtime not linked'),
       },
     });
   } catch (error: any) {

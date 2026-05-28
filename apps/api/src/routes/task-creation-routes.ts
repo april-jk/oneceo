@@ -5,12 +5,13 @@
  */
 
 import express from 'express';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   appUserProjectDAO,
   appUserLegacyIdMappingDAO,
   sandboxExecutionEnvironmentDAO,
   taskCreationSessionDAO,
+  taskSessionMcpToolConfirmationDAO,
   taskSessionRunDAO,
   taskSessionWorkspaceCacheDAO,
 } from '../db/dao';
@@ -54,15 +55,11 @@ import { codexRemoteService } from '../services/codex-remote-service';
 import { restoreWorkspaceIfArchived } from '../services/sandbox-archive-service';
 import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registry';
 import { resolveAttachConnectorError, sessionConnectorService } from '../services/session-connector-service';
+import { mcpToolConfirmationService } from '../services/mcp-tool-confirmation-service';
 import { sessionConnectorDraftService } from '../services/session-connector-draft-service';
 import { connectorGuideService } from '../services/connector-guide-service';
 import { sessionMcpRecoveryService } from '../services/session-mcp-recovery-service';
 import { taskSessionCacheFacade } from '../services/task-session-cache-facade';
-import {
-  inferFilenameFromResponse,
-  resolveRemoteAttachmentTarget,
-  type RemoteAttachmentProvider,
-} from '../services/remote-attachment-service';
 import {
   TASK_ATTACHMENT_MAX_BYTES,
   isAllowedAttachmentFile,
@@ -77,6 +74,9 @@ import { altusMemoryContextService } from '../services/altus-memory-context-serv
 import { projectDefaultConnectorService } from '../services/project-default-connector-service';
 import { taskCreationProjectRedisCacheService } from '../services/task-creation-project-redis-cache-service';
 import { taskSessionDeploymentRedisCacheService } from '../services/task-session-deployment-redis-cache-service';
+import { altusManagedRunService } from '../services/altus-managed-run-service';
+import { buildManagedMcpToolConfirmationMetadata } from '../services/managed-mcp-tool-confirmation';
+import { buildPresentationStructuredClarificationPlan } from '../services/altus-structured-clarification-service';
 import { isLegacyClientUserId, isSameUserId, normalizeUserId } from '../utils/user-id';
 
 const router = express.Router();
@@ -86,6 +86,7 @@ const recentHistoryHydrationQueuedAt = new Map<string, number>();
 const DEFAULT_SESSION_TITLE = '待识别任务';
 const WAITING_SESSION_TITLE = '待补充需求';
 const LEGACY_DEFAULT_SESSION_TITLE = '新建任务会话';
+const AUTO_TITLE_RESOLVE_USER_MESSAGE_LIMIT = 3;
 const WEAK_INTENT_TITLE_INPUTS = new Set([
   '你好',
   '您好',
@@ -762,7 +763,7 @@ function toIso(value: Date | string | null | undefined): string {
 function toSessionSummary(session: any) {
   const normalizedStage = normalizeLiveSessionStage(session);
   const titleResolution = resolveDisplaySessionTitle({
-    storedTitle: session.title,
+    storedTitle: (session as any).title,
     storedTitleSource: session.titleSource,
     storedTitleState: session.titleState,
     status: session.status,
@@ -983,6 +984,9 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
     : false;
   const sandboxExecutor = inferredExecutor || (hasSandboxHistory ? 'opencode' : '');
   const titleResolution = resolveDisplaySessionTitle({
+    storedTitle: (session as any).title,
+    storedTitleSource: (session as any).titleSource,
+    storedTitleState: (session as any).titleState,
     taskDescriptionTitle: taskDescription?.title,
     firstUserMessage: messages?.find((m) => m.role === 'user')?.content,
     status,
@@ -1101,6 +1105,9 @@ async function buildLightweightFileSessionFromDb(sessionId: string): Promise<Fil
           ? 'clarifying'
           : 'executing';
   const titleResolution = resolveDisplaySessionTitle({
+    storedTitle: (session as any).title,
+    storedTitleSource: (session as any).titleSource,
+    storedTitleState: (session as any).titleState,
     taskDescriptionTitle: taskDescription?.title,
     firstUserMessage: normalizedRecentMessages.find((message) => asText(message.role) === 'user')?.content,
     status,
@@ -1356,6 +1363,9 @@ async function buildSessionSummaryFromDbSessions(
     const firstUserMessage =
       messages?.find((message) => message.role === 'user' && asText(message.content))?.content || '';
     const titleResolution = resolveDisplaySessionTitle({
+      storedTitle: (session as any).title,
+      storedTitleSource: (session as any).titleSource,
+      storedTitleState: (session as any).titleState,
       taskDescriptionTitle: description?.title,
       firstUserMessage,
       status: session.status,
@@ -2137,25 +2147,6 @@ function shellEscape(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
 }
 
-function parseRemoteAttachmentProvider(value: unknown): RemoteAttachmentProvider {
-  const normalized = asText(value);
-  if (
-    normalized === 'website' ||
-    normalized === 'google-drive' ||
-    normalized === 'onedrive'
-  ) {
-    return normalized;
-  }
-  throw new Error('不支持的远程来源');
-}
-
-function shouldAllowPrivateRemoteAttachmentHosts() {
-  if (process.env.ALLOW_PRIVATE_REMOTE_ATTACHMENTS === '1') {
-    return true;
-  }
-  return process.env.NODE_ENV !== 'production';
-}
-
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -2552,6 +2543,12 @@ function asTimelineCursor(value: unknown): number | null {
 
 function resolveMessageTimelineCursor(message: any): number {
   const metadata = pickRecord(message?.metadata);
+  const topLevelTimelineCursor = asTimelineCursor(message?.timelineCursor);
+  if (topLevelTimelineCursor !== null) return topLevelTimelineCursor;
+
+  const metadataTimelineCursor = asTimelineCursor(metadata.timelineCursor);
+  if (metadataTimelineCursor !== null) return metadataTimelineCursor;
+
   const sessionEventSeq = asPositiveInt(metadata.sessionEventSeq);
   if (sessionEventSeq !== null) return sessionEventSeq;
 
@@ -2607,6 +2604,10 @@ function sanitizeTimelineMetadataForClient(metadataRaw: unknown): Record<string,
     'runId',
     'sessionId',
     'executionMode',
+    'question',
+    'options',
+    'clarificationType',
+    'structuredClarification',
     'deliverables',
     'verification',
     'streamKey',
@@ -2622,6 +2623,8 @@ function sanitizeTimelineMetadataForClient(metadataRaw: unknown): Record<string,
     'itemText',
     'command',
     'outputPreview',
+    'browserScreenshot',
+    'previewSnapshot',
     'exitCode',
     'fileChanges',
     'filePaths',
@@ -3117,8 +3120,42 @@ type TimelineMessage = {
   messageType: string;
   content: string;
   metadata?: Record<string, unknown>;
+  timelineCursor?: number | null;
   createdAt: string;
 };
+
+function isLegacyPresentationBriefClarification(input: {
+  messageType?: string | null;
+  content?: string | null;
+  metadata: Record<string, unknown>;
+}) {
+  if (input.messageType !== 'clarification_request') return false;
+  if (
+    asText(input.metadata.clarificationType) ||
+    hasStructuredClarificationMetadata({ metadata: input.metadata } as TimelineMessage)
+  ) {
+    return false;
+  }
+  const question = asText(input.metadata.question) || asText(input.content);
+  return /ppt/i.test(question) && question.includes('开始制作前') && question.includes('关键决策');
+}
+
+function hydrateLegacyPresentationBriefMetadata(input: {
+  messageType?: string | null;
+  content?: string | null;
+  metadata: Record<string, unknown>;
+  latestUserRequest?: string;
+}) {
+  if (!isLegacyPresentationBriefClarification(input)) {
+    return input.metadata;
+  }
+  const userRequest = asText(input.latestUserRequest) || asText(input.content) || asText(input.metadata.question);
+  return {
+    ...input.metadata,
+    clarificationType: 'presentation_brief',
+    structuredClarification: buildPresentationStructuredClarificationPlan({ userRequest }),
+  };
+}
 
 function mapStoredMessagesToTimeline(
   messages: Array<{
@@ -3127,42 +3164,59 @@ function mapStoredMessagesToTimeline(
     messageType?: string | null;
     content?: string | null;
     metadata?: unknown;
+    timelineCursor?: number | null;
     createdAt?: unknown;
   }>
 ): TimelineMessage[] {
-  return Array.isArray(messages)
-    ? messages.map((message, idx) => {
-        const sanitizedMetadata = sanitizeTimelineMetadataForClient(message.metadata);
-        const normalizedMetadata = normalizeMessageTimelineMetadata(
-          sanitizedMetadata,
-          message.createdAt,
-          idx
-        );
-        const messageKey = buildTimelineMessageKey({
-          id: message.id,
-          messageType: message.messageType,
-          metadata: sanitizedMetadata,
-          createdAt: message.createdAt,
-        });
-        const timestamp = asTimelineCursor(normalizedMetadata.timestamp);
-        const createdAt =
-          timestamp !== null
-            ? new Date(timestamp).toISOString()
-            : toIso(message.createdAt as any);
-        return {
-          id: String(message.id),
-          messageKey,
-          role: (message.role as any) || 'agent',
-          messageType: message.messageType || 'message',
-          content: message.content || '',
-          metadata: {
-            ...normalizedMetadata,
-            messageKey,
-          },
-          createdAt,
-        };
-      })
-    : [];
+  if (!Array.isArray(messages)) return [];
+  let latestUserRequest = '';
+  return messages.map((message, idx) => {
+    let sanitizedMetadata = sanitizeTimelineMetadataForClient(message.metadata);
+    sanitizedMetadata = hydrateLegacyPresentationBriefMetadata({
+      messageType: message.messageType,
+      content: message.content,
+      metadata: sanitizedMetadata,
+      latestUserRequest,
+    });
+    const timelineCursor =
+      asTimelineCursor(message.timelineCursor) ?? asTimelineCursor(sanitizedMetadata.timelineCursor);
+    if (timelineCursor !== null) {
+      sanitizedMetadata.timelineCursor = timelineCursor;
+    }
+    const normalizedMetadata = normalizeMessageTimelineMetadata(
+      sanitizedMetadata,
+      message.createdAt,
+      idx
+    );
+    const messageKey = buildTimelineMessageKey({
+      id: message.id,
+      messageType: message.messageType,
+      metadata: sanitizedMetadata,
+      createdAt: message.createdAt,
+    });
+    const timestamp = asTimelineCursor(normalizedMetadata.timestamp);
+    const createdAt =
+      timestamp !== null
+        ? new Date(timestamp).toISOString()
+        : toIso(message.createdAt as any);
+    const timelineMessage = {
+      id: String(message.id),
+      messageKey,
+      role: (message.role as any) || 'agent',
+      messageType: message.messageType || 'message',
+      content: message.content || '',
+      metadata: {
+        ...normalizedMetadata,
+        messageKey,
+      },
+      timelineCursor,
+      createdAt,
+    };
+    if (timelineMessage.role === 'user' && asText(timelineMessage.content)) {
+      latestUserRequest = timelineMessage.content;
+    }
+    return timelineMessage;
+  });
 }
 
 function attachTimelineMessageKeys(
@@ -3172,12 +3226,17 @@ function attachTimelineMessageKeys(
     messageType: string;
     content: string;
     metadata?: Record<string, unknown>;
+    timelineCursor?: number | null;
     createdAt: string;
   }>
 ): TimelineMessage[] {
   return Array.isArray(messages)
     ? messages.map((message) => {
         const sanitizedMetadata = sanitizeTimelineMetadataForClient(message.metadata);
+        const timelineCursor = asTimelineCursor(message.timelineCursor) ?? asTimelineCursor(sanitizedMetadata.timelineCursor);
+        if (timelineCursor !== null) {
+          sanitizedMetadata.timelineCursor = timelineCursor;
+        }
         const messageKey = buildTimelineMessageKey({
           id: message.id,
           messageType: message.messageType,
@@ -3191,9 +3250,106 @@ function attachTimelineMessageKeys(
             ...sanitizedMetadata,
             messageKey,
           },
+          timelineCursor,
         };
       })
     : [];
+}
+
+function tryParseJsonObject(value: string): unknown {
+  const text = asText(value);
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function collectMcpConfirmationIdsFromValue(
+  value: unknown,
+  ids: Set<string>,
+  depth = 0
+) {
+  if (depth > 8 || value == null) return;
+  if (typeof value === 'string') {
+    collectMcpConfirmationIdsFromValue(tryParseJsonObject(value), ids, depth + 1);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectMcpConfirmationIdsFromValue(item, ids, depth + 1);
+    }
+    return;
+  }
+  if (typeof value !== 'object') return;
+
+  const record = pickRecord(value);
+  const confirmationId = asText(record.confirmationId);
+  if (confirmationId) {
+    ids.add(confirmationId);
+  }
+
+  for (const key of [
+    'mcpToolConfirmation',
+    'structuredContent',
+    'result',
+    'outputPreview',
+    'output',
+    'content',
+    'rawPayload',
+    'event',
+    'properties',
+    'part',
+    'state',
+    'data',
+    'payload',
+  ]) {
+    collectMcpConfirmationIdsFromValue(record[key], ids, depth + 1);
+  }
+}
+
+async function enrichTimelineMessagesWithMcpConfirmationStatuses(
+  messages: TimelineMessage[]
+): Promise<TimelineMessage[]> {
+  const confirmationIds = new Set<string>();
+  for (const message of messages) {
+    collectMcpConfirmationIdsFromValue(message.metadata, confirmationIds);
+    collectMcpConfirmationIdsFromValue(message.content, confirmationIds);
+  }
+  if (confirmationIds.size === 0) return messages;
+
+  const rows = await taskSessionMcpToolConfirmationDAO.listByIds(Array.from(confirmationIds));
+  const statusById = new Map(
+    rows.map((row) => [asText(row.id), asText(row.status).toLowerCase()])
+  );
+  if (statusById.size === 0) return messages;
+
+  return messages.map((message) => {
+    const messageConfirmationIds = new Set<string>();
+    collectMcpConfirmationIdsFromValue(message.metadata, messageConfirmationIds);
+    collectMcpConfirmationIdsFromValue(message.content, messageConfirmationIds);
+
+    const statuses: Record<string, string> = {};
+    for (const confirmationId of messageConfirmationIds) {
+      const status = statusById.get(confirmationId);
+      if (status) {
+        statuses[confirmationId] = status;
+      }
+    }
+    if (Object.keys(statuses).length === 0) return message;
+
+    return {
+      ...message,
+      metadata: {
+        ...(message.metadata || {}),
+        mcpToolConfirmationStatuses: {
+          ...pickRecord(message.metadata?.mcpToolConfirmationStatuses),
+          ...statuses,
+        },
+      },
+    };
+  });
 }
 
 async function resolveRenderableTimelineMessages(
@@ -3281,6 +3437,8 @@ async function resolveRenderableTimelineMessages(
     return 0;
   });
 
+  messages = await enrichTimelineMessagesWithMcpConfirmationStatuses(messages);
+
   return messages;
 }
 
@@ -3297,6 +3455,140 @@ function buildTimelinePage(messages: TimelineMessage[]) {
     oldestCursor: resolveMessageTimelineCursor(messages[0]) || null,
     newestCursor: resolveMessageTimelineCursor(messages[messages.length - 1]) || null,
   };
+}
+
+function resolveTimelineMessageKey(message: any): string {
+  return asText(message?.messageKey) || asText(pickRecord(message?.metadata).messageKey);
+}
+
+function hasStructuredClarificationMetadata(message: TimelineMessage | undefined): boolean {
+  const metadata = pickRecord(message?.metadata);
+  if (asText(pickRecord(metadata.structuredClarification).kind) === 'structured_clarification') {
+    return true;
+  }
+  return asText(pickRecord(pickRecord(metadata.result).structuredClarification).kind) === 'structured_clarification';
+}
+
+function hasMatchingClarificationMetadata(input: {
+  redisMessage: TimelineMessage | undefined;
+  dbMessage: TimelineMessage | undefined;
+}) {
+  const dbMetadata = pickRecord(input.dbMessage?.metadata);
+  const redisMetadata = pickRecord(input.redisMessage?.metadata);
+  const dbClarificationType = asText(dbMetadata.clarificationType);
+  if (!dbClarificationType) {
+    return true;
+  }
+  if (asText(redisMetadata.clarificationType) !== dbClarificationType) {
+    return false;
+  }
+  if (hasStructuredClarificationMetadata(input.dbMessage)) {
+    return hasStructuredClarificationMetadata(input.redisMessage);
+  }
+  return true;
+}
+
+function isClarificationMetadataMessage(message: TimelineMessage | undefined) {
+  if (!message) return false;
+  const metadata = pickRecord(message.metadata);
+  return message.messageType === 'clarification_request' || Boolean(asText(metadata.clarificationType));
+}
+
+function needsCanonicalClarificationMetadata(input: {
+  candidateMessages: TimelineMessage[];
+  canonicalMessages: TimelineMessage[];
+}) {
+  const candidateByKey = new Map(
+    input.candidateMessages.map((message) => [resolveTimelineMessageKey(message), message])
+  );
+  return input.canonicalMessages
+    .filter(isClarificationMetadataMessage)
+    .some((canonicalMessage) => {
+      const messageKey = resolveTimelineMessageKey(canonicalMessage);
+      const candidateMessage = messageKey ? candidateByKey.get(messageKey) : undefined;
+      return !hasMatchingClarificationMetadata({
+        redisMessage: candidateMessage,
+        dbMessage: canonicalMessage,
+      });
+    });
+}
+
+function shouldCheckCanonicalClarificationMetadata(messages: TimelineMessage[]) {
+  return messages.some(isClarificationMetadataMessage);
+}
+
+function isRecentRedisPageFresh(input: {
+  redisPage: Record<string, unknown>;
+  latestDbMessages: TimelineMessage[];
+}) {
+  const redisMessages = Array.isArray(input.redisPage.messages)
+    ? (input.redisPage.messages as TimelineMessage[])
+    : [];
+  const dbMessages = Array.isArray(input.latestDbMessages) ? input.latestDbMessages : [];
+  if (dbMessages.length === 0) {
+    return redisMessages.length === 0;
+  }
+  if (redisMessages.length === 0) {
+    return false;
+  }
+
+  const redisLatest = redisMessages[redisMessages.length - 1];
+  const dbLatest = dbMessages[dbMessages.length - 1];
+  const redisNewestCursor =
+    asTimelineCursor(input.redisPage.newestCursor) ?? resolveMessageTimelineCursor(redisLatest);
+  const dbNewestCursor = resolveMessageTimelineCursor(dbLatest);
+  if (redisNewestCursor !== dbNewestCursor) {
+    return false;
+  }
+  const redisMessageKey = resolveTimelineMessageKey(redisLatest);
+  const dbMessageKey = resolveTimelineMessageKey(dbLatest);
+  if (dbMessageKey && redisMessageKey !== dbMessageKey) {
+    return false;
+  }
+  if (
+    !hasMatchingClarificationMetadata({
+      redisMessage: redisLatest,
+      dbMessage: dbLatest,
+    })
+  ) {
+    return false;
+  }
+  if (needsCanonicalClarificationMetadata({ candidateMessages: redisMessages, canonicalMessages: dbMessages })) {
+    return false;
+  }
+  return true;
+}
+
+async function loadCanonicalRecentTimelineMessages(
+  sessionId: string,
+  session: any,
+  limit = 50
+) {
+  const canonicalMessages = await taskCreationSessionDAO.getMessages(sessionId);
+  const timeline = filterLegacyTimelineNoise(
+    injectRuntimeGenerationBoundaries(
+      annotateRuntimeGenerations(mapStoredMessagesToTimeline(canonicalMessages), session?.runtime)
+    )
+  );
+  return timeline.slice(Math.max(timeline.length - limit, 0));
+}
+
+async function replaceRecentMessagesSnapshotFromTimeline(
+  sessionId: string,
+  messages: TimelineMessage[]
+) {
+  if (!Array.isArray(messages) || messages.length === 0) return;
+  await taskCreationSessionDAO.replaceRecentMessagesSnapshot(
+    sessionId,
+    messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      messageType: message.messageType,
+      metadata: message.metadata,
+      createdAt: message.createdAt,
+    }))
+  );
 }
 
 function hasLegacyRecentNoise(messages: TimelineMessage[]) {
@@ -3398,6 +3690,24 @@ function scheduleRecentHistoryHydration(sessionId: string) {
 function pickRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === 'object') return value as Record<string, unknown>;
   return {};
+}
+
+function isTruthyQueryFlag(value: unknown) {
+  const normalized = Array.isArray(value) ? asText(value[0]) : asText(value);
+  return ['1', 'true', 'yes', 'on'].includes(normalized.toLowerCase());
+}
+
+function getDeploymentCacheAnalyticsStatus(value: unknown) {
+  const record = pickRecord(value);
+  const directStatus = asText(record.status);
+  if (directStatus) return directStatus.toLowerCase();
+  const analytics = pickRecord(record.analytics);
+  return asText(analytics.status).toLowerCase();
+}
+
+function shouldUseDeploymentReadCache(value: unknown, refresh: unknown) {
+  if (isTruthyQueryFlag(refresh)) return false;
+  return getDeploymentCacheAnalyticsStatus(value) !== 'bound';
 }
 
 async function invalidateTaskSessionDeploymentReads(userId: string, sessionId: string) {
@@ -3777,8 +4087,9 @@ function serializeDeliverableArtifact(input: {
 }
 
 function buildAttachmentDisposition(fileName: string): string {
-  const fallback = fileName.replace(/[^\x20-\x7E]+/g, '_').replace(/["\\]/g, '_') || 'download';
-  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+  const safeFileName = String(fileName || '').replace(/[\r\n]/g, ' ').trim();
+  const fallback = safeFileName.replace(/[^\x20-\x7E]+/g, '_').replace(/["\\]/g, '_') || 'download';
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(safeFileName || 'download')}`;
 }
 
 function isTextLikeMimeType(mimeType: string): boolean {
@@ -4561,8 +4872,13 @@ router.post('/sessions/:sessionId/title/resolve', async (req, res) => {
       storedTitleState: session.titleState,
       status: session.status,
     });
+    const recentMessages = await taskCreationSessionDAO.getRecentMessages(session.id, 50).catch(() => []);
+    const userMessageCount = Array.isArray(recentMessages)
+      ? recentMessages.filter((message) => asText(message.role) === 'user' && asText(message.content)).length
+      : 0;
+    const autoResolveWindowExpired = userMessageCount > AUTO_TITLE_RESOLVE_USER_MESSAGE_LIMIT;
     const titleLocked = Boolean(session.titleLocked) || currentTitleResolution.titleSource !== 'placeholder';
-    if (!input || titleLocked || !isExplicitSessionTitleInput(input)) {
+    if (!input || titleLocked || autoResolveWindowExpired || !isExplicitSessionTitleInput(input)) {
       return res.json({
         success: true,
         data: {
@@ -4573,6 +4889,7 @@ router.post('/sessions/:sessionId/title/resolve', async (req, res) => {
           titleState: currentTitleResolution.titleState,
           titleResolvedAt: session.titleResolvedAt || null,
           resolved: false,
+          autoResolveWindowExpired,
         },
       });
     }
@@ -4889,7 +5206,7 @@ router.get('/sessions/:sessionId', async (req, res) => {
 
 /**
  * GET /api/task-creation/sessions/:sessionId/messages/recent
- * 首屏最近消息热缓存，仅依赖数据库
+ * 首屏最近消息热缓存；Redis 命中必须先和 DB recent 最新消息对账。
  */
 router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
   try {
@@ -4908,18 +5225,70 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
         tenantKey,
       });
       if (redisCachedPage) {
-        return res.json({
-          success: true,
-          data: redisCachedPage,
-        });
+        const latestCachedMessages = await taskCreationSessionDAO.getRecentMessages(sessionId, 1);
+        let latestRecentMessages = filterLegacyTimelineNoise(
+          injectRuntimeGenerationBoundaries(
+            annotateRuntimeGenerations(mapStoredMessagesToTimeline(latestCachedMessages), session?.runtime)
+          )
+        );
+        const redisCachedMessages = Array.isArray(redisCachedPage.messages)
+          ? (redisCachedPage.messages as TimelineMessage[])
+          : [];
+        if (
+          shouldCheckCanonicalClarificationMetadata(latestRecentMessages) ||
+          shouldCheckCanonicalClarificationMetadata(redisCachedMessages)
+        ) {
+          const latestCanonicalMessages = await loadCanonicalRecentTimelineMessages(sessionId, session, 50);
+          if (
+            needsCanonicalClarificationMetadata({
+              candidateMessages: latestRecentMessages,
+              canonicalMessages: latestCanonicalMessages,
+            })
+          ) {
+            latestRecentMessages = latestCanonicalMessages;
+          }
+        }
+        if (
+          isRecentRedisPageFresh({
+            redisPage: redisCachedPage,
+            latestDbMessages: latestRecentMessages,
+          })
+        ) {
+          const enrichedMessages = await enrichTimelineMessagesWithMcpConfirmationStatuses(
+            Array.isArray(redisCachedPage.messages) ? redisCachedPage.messages : []
+          );
+          return res.json({
+            success: true,
+            data: {
+              ...redisCachedPage,
+              messages: enrichedMessages,
+            },
+          });
+        }
       }
     }
     const cachedMessages = await taskCreationSessionDAO.getRecentMessages(sessionId, 50);
-    const recentMessages = filterLegacyTimelineNoise(
+    let recentMessages = filterLegacyTimelineNoise(
       injectRuntimeGenerationBoundaries(
         annotateRuntimeGenerations(mapStoredMessagesToTimeline(cachedMessages), session?.runtime)
       )
     );
+    const canonicalRecentMessages = shouldCheckCanonicalClarificationMetadata(recentMessages)
+      ? await loadCanonicalRecentTimelineMessages(sessionId, session, 50)
+      : [];
+    const shouldUseCanonicalRecent =
+      canonicalRecentMessages.length > 0 &&
+      needsCanonicalClarificationMetadata({
+        candidateMessages: recentMessages,
+        canonicalMessages: canonicalRecentMessages,
+      });
+    if (shouldUseCanonicalRecent) {
+      recentMessages = canonicalRecentMessages;
+      void replaceRecentMessagesSnapshotFromTimeline(sessionId, canonicalRecentMessages).catch((error) => {
+        console.warn('[RECENT_MESSAGES_SYNC_FAILED]', { sessionId, error });
+      });
+    }
+    recentMessages = await enrichTimelineMessagesWithMcpConfirmationStatuses(recentMessages);
     const shouldHydrateFromNativeHistory =
       shouldPreferOpencodeNativeHistory &&
       (!hasRenderableAssistantReply(recentMessages) || hasLegacyRecentNoise(recentMessages));
@@ -4936,18 +5305,7 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
           (resolvedRecentMessages[resolvedRecentMessages.length - 1]?.messageKey || '');
 
       if (cacheOutOfSync && resolvedRecentMessages.length > 0) {
-        void taskCreationSessionDAO
-          .replaceRecentMessagesSnapshot(
-            sessionId,
-            resolvedRecentMessages.map((message) => ({
-              id: message.id,
-              role: message.role,
-              content: message.content,
-              messageType: message.messageType,
-              metadata: message.metadata,
-              createdAt: message.createdAt,
-            }))
-          )
+        void replaceRecentMessagesSnapshotFromTimeline(sessionId, resolvedRecentMessages)
           .catch((error) => {
             console.warn('[RECENT_MESSAGES_SYNC_FAILED]', { sessionId, error });
           });
@@ -5133,69 +5491,6 @@ router.get('/sessions/:sessionId/messages', async (req, res) => {
   }
 });
 
-router.post('/attachments/fetch', async (req, res) => {
-  try {
-    currentUserResolver.require(req);
-    const provider = parseRemoteAttachmentProvider(req.body?.provider);
-    const sourceUrl = asText(req.body?.url);
-    const target = resolveRemoteAttachmentTarget(provider, sourceUrl, {
-      allowPrivateHosts: shouldAllowPrivateRemoteAttachmentHosts(),
-    });
-
-    const upstream = await fetch(target.fetchUrl, {
-      redirect: 'follow',
-      headers: {
-        'user-agent': 'oneceo-remote-attachment/1.0',
-      },
-    });
-    if (!upstream.ok) {
-      throw new Error(`远程文件获取失败 (${upstream.status})`);
-    }
-
-    const declaredSize = asPositiveInt(upstream.headers.get('content-length'));
-    if (declaredSize !== null && declaredSize > TASK_ATTACHMENT_MAX_BYTES) {
-      throw new Error('单个附件不能超过 10 MB');
-    }
-
-    const rawBody = Buffer.from(await upstream.arrayBuffer());
-    if (!rawBody.length) {
-      throw new Error('远程文件内容为空');
-    }
-    if (rawBody.length > TASK_ATTACHMENT_MAX_BYTES) {
-      throw new Error('单个附件不能超过 10 MB');
-    }
-
-    const mimeType = asText(upstream.headers.get('content-type')).split(';')[0] || 'application/octet-stream';
-    const filename = inferFilenameFromResponse({
-      contentDisposition: upstream.headers.get('content-disposition'),
-      responseUrl: upstream.url || target.fetchUrl,
-      fallbackName: target.suggestedName,
-      mimeType,
-    });
-    if (!isAllowedAttachmentFile({ name: filename, mimeType })) {
-      throw new Error('仅支持文本、文档和图片类附件');
-    }
-
-    res.setHeader('Content-Type', mimeType);
-    res.setHeader('Content-Length', String(rawBody.length));
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader(
-      'Access-Control-Expose-Headers',
-      'Content-Type, Content-Length, X-Attachment-Name, X-Attachment-Provider'
-    );
-    res.setHeader('X-Attachment-Name', encodeURIComponent(filename));
-    res.setHeader('X-Attachment-Provider', provider);
-    return res.status(200).send(rawBody);
-  } catch (error: any) {
-    console.error('远程附件获取失败:', error);
-    const authError = resolveSessionConnectorOwnershipError(error);
-    return res.status(authError?.status || 400).json({
-      success: false,
-      error: getPublicErrorMessage(authError?.message || error?.message || '远程附件获取失败'),
-    });
-  }
-});
-
 router.post(
   '/sessions/:sessionId/attachments',
   express.raw({ type: '*/*', limit: `${TASK_ATTACHMENT_MAX_BYTES}b` }),
@@ -5311,8 +5606,22 @@ router.get('/sessions/:sessionId/deliverables/:artifactId/download', async (req,
     }
 
     const body = await downloadFromR2(artifact.storageKey);
+    const sha256 = createHash('sha256').update(body).digest('hex');
+    if (artifact.sha256 && sha256 !== artifact.sha256) {
+      console.error('[DELIVERABLE_INTEGRITY_MISMATCH]', {
+        artifactId: artifact.id,
+        storageKey: artifact.storageKey,
+        expectedSha256: artifact.sha256,
+        actualSha256: sha256,
+      });
+      return res.status(500).json({
+        success: false,
+        error: getPublicErrorMessage('交付物完整性校验失败，请重试生成'),
+      });
+    }
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Type', artifact.mimeType || 'application/octet-stream');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Length', String(body.length));
     res.setHeader('Content-Disposition', buildAttachmentDisposition(artifact.displayName));
     return res.status(200).send(body);
@@ -5352,6 +5661,43 @@ router.get('/sessions/:sessionId/preview-snapshots/:runId/website.png', async (r
     return res.status(ownershipError?.status || 400).json({
       success: false,
       error: getPublicErrorMessage(ownershipError?.message || error?.message || '读取预览截图失败'),
+    });
+  }
+});
+
+router.get('/sessions/:sessionId/runs/:runId/tool-calls/:toolCallId/browser-screenshot.png', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { sessionId, runId, toolCallId } = req.params;
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const run = await taskSessionRunDAO.getRun(runId);
+    if (!run || run.sessionId !== sessionId) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('浏览器截图不存在'),
+      });
+    }
+    const screenshot = await taskSessionWebsitePreviewSnapshotService.getBrowserActionScreenshotImage({
+      runId,
+      toolCallId,
+    });
+    if (!screenshot) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('浏览器截图不存在'),
+      });
+    }
+
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.setHeader('Content-Type', screenshot.mimeType);
+    res.setHeader('Content-Length', String(screenshot.body.length));
+    return res.status(200).send(screenshot.body);
+  } catch (error: any) {
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('读取浏览器操作截图失败:', error);
+    return res.status(ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(ownershipError?.message || error?.message || '读取浏览器操作截图失败'),
     });
   }
 });
@@ -6092,7 +6438,7 @@ router.get('/sessions/:sessionId/deployment', async (req, res) => {
       sessionId,
       deploymentId || undefined
     );
-    if (cached) {
+    if (cached && shouldUseDeploymentReadCache(cached, req.query.refresh)) {
       return res.json({
         success: true,
         data: cached,
@@ -6150,7 +6496,7 @@ router.get('/sessions/:sessionId/deployment/analytics', async (req, res) => {
       sessionId,
       range
     );
-    if (cached) {
+    if (cached && shouldUseDeploymentReadCache(cached, req.query.refresh)) {
       return res.json({
         success: true,
         data: cached,
@@ -8743,6 +9089,94 @@ router.delete('/sessions/:sessionId', async (req, res) => {
     res.status(500).json({
       success: false,
       error: getPublicErrorMessage('删除会话失败，请稍后重试'),
+    });
+  }
+});
+
+router.post('/sessions/:sessionId/mcp-confirmations/:confirmationId/approve', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { sessionId, confirmationId } = req.params;
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const result = await mcpToolConfirmationService.approveConfirmation({
+      appUserId: currentUser.userId,
+      taskSessionId: sessionId,
+      confirmationId,
+    });
+    const resumedRun = await altusManagedRunService.startRun(sessionId, currentUser.userId, {
+      content: '',
+      messageKey: `managed:mcp-confirmation-approve:${confirmationId}`,
+      metadata: buildManagedMcpToolConfirmationMetadata({
+        action: 'approve',
+        confirmationId: result.confirmationId,
+        connectorKey: result.connectorKey,
+        toolName: result.toolName,
+        confirmationToken: result.confirmationToken,
+        confirmationAgentRunId: result.confirmationAgentRunId || undefined,
+        summary: result.summary,
+      }),
+    });
+    return res.json({
+      success: true,
+      data: {
+        ...result,
+        run: resumedRun,
+      },
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(
+        authError?.message || ownershipError?.message || error?.message || '确认 MCP 工具执行失败'
+      ),
+    });
+  }
+});
+
+router.post('/sessions/:sessionId/mcp-confirmations/:confirmationId/reject', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { sessionId, confirmationId } = req.params;
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const result = await mcpToolConfirmationService.rejectConfirmation({
+      appUserId: currentUser.userId,
+      taskSessionId: sessionId,
+      confirmationId,
+    });
+    const publicSummary = mcpToolConfirmationService.getPublicSummary(result.summaryJson);
+    const rejectionRun = await altusManagedRunService.startRun(sessionId, currentUser.userId, {
+      content: '',
+      messageKey: `managed:mcp-confirmation-reject:${confirmationId}`,
+      metadata: buildManagedMcpToolConfirmationMetadata({
+        action: 'reject',
+        confirmationId: result.id,
+        connectorKey: result.connectorKey,
+        toolName: result.toolName,
+        confirmationAgentRunId:
+          typeof result.agentRunId === 'string' && result.agentRunId.trim()
+            ? result.agentRunId
+            : undefined,
+        summary: publicSummary,
+      }),
+    });
+    return res.json({
+      success: true,
+      data: {
+        confirmationId: result.id,
+        status: result.status,
+        run: rejectionRun,
+      },
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(
+        authError?.message || ownershipError?.message || error?.message || '拒绝 MCP 工具执行失败'
+      ),
     });
   }
 });

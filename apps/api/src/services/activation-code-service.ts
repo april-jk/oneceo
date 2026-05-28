@@ -1,4 +1,4 @@
-import { eq, and, sql, desc, count, like, gte, lte, isNull, or } from 'drizzle-orm';
+import { eq, and, sql, desc, asc, count, like, gte, lte, isNull, or, inArray } from 'drizzle-orm';
 import { db } from '../config/database';
 import {
   creditActivationCodes,
@@ -18,6 +18,24 @@ import type {
 import { BillingService } from './billing-service';
 
 const billingService = new BillingService();
+
+function normalizeActivationPrefix(prefix?: string | null): string | undefined {
+  const normalized = String(prefix ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized || undefined;
+}
+
+function normalizeActivationCodeInput(code?: string | null): string {
+  return String(code ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '')
+    .replace(/[^A-Z0-9-]/g, '');
+}
 
 /**
  * 生成随机激活码
@@ -86,6 +104,7 @@ export class ActivationCodeService {
     if (maxUses < 1 || !Number.isInteger(maxUses)) {
       throw new Error('最大使用次数必须大于 0');
     }
+    const normalizedPrefix = normalizeActivationPrefix(prefix);
 
     const batchId = quantity > 1 ? generateBatchId() : undefined;
     const expiresAt = expiresInDays
@@ -101,7 +120,7 @@ export class ActivationCodeService {
 
       // 确保生成唯一码
       do {
-        code = generateActivationCode(prefix);
+        code = generateActivationCode(normalizedPrefix);
         attempts++;
         if (attempts > 10) {
           throw new Error('生成唯一激活码失败，请重试');
@@ -200,17 +219,23 @@ export class ActivationCodeService {
     // 排序
     const sortColumn = (() => {
       switch (sortBy) {
-        case 'expires_at':
-          return creditActivationCodes.expiresAt;
+        case 'code':
+          return creditActivationCodes.code;
         case 'credits_amount':
           return creditActivationCodes.creditsAmount;
+        case 'status':
+          return creditActivationCodes.status;
+        case 'current_uses':
+          return creditActivationCodes.currentUses;
+        case 'group_name':
+          return creditActivationCodeGroups.name;
+        case 'expires_at':
+          return creditActivationCodes.expiresAt;
         case 'created_at':
         default:
           return creditActivationCodes.createdAt;
       }
     })();
-
-    const orderFn = sortOrder === 'asc' ? desc : desc; // 默认降序
 
     // 查询总数
     const countResult = await db
@@ -249,7 +274,7 @@ export class ActivationCodeService {
       .leftJoin(appUsers, eq(creditActivationCodes.usedBy, appUsers.id))
       .leftJoin(creditActivationCodeGroups, eq(creditActivationCodes.groupId, creditActivationCodeGroups.id))
       .where(whereClause)
-      .orderBy(sortOrder === 'asc' ? sortColumn : desc(sortColumn))
+      .orderBy(sortOrder === 'asc' ? asc(sortColumn) : desc(sortColumn))
       .limit(limit)
       .offset(offset);
 
@@ -364,6 +389,158 @@ export class ActivationCodeService {
   }
 
   /**
+   * 批量更新激活码状态（启用/禁用）
+   */
+  async bulkUpdateActivationCodeStatus(
+    ids: string[],
+    status: 'active' | 'disabled'
+  ): Promise<{
+    matched: number;
+    updated: number;
+    skippedAlreadyTarget: number;
+    skippedUsed: number;
+    skippedExpired: number;
+    skippedOtherStatus: number;
+    missing: number;
+  }> {
+    const uniqueIds = Array.from(new Set(
+      ids
+        .filter((id) => typeof id === 'string' && id.trim().length > 0)
+        .map((id) => id.trim())
+    ));
+    if (uniqueIds.length === 0) {
+      return {
+        matched: 0,
+        updated: 0,
+        skippedAlreadyTarget: 0,
+        skippedUsed: 0,
+        skippedExpired: 0,
+        skippedOtherStatus: 0,
+        missing: 0,
+      };
+    }
+
+    const existingRows = await db
+      .select({
+        id: creditActivationCodes.id,
+        status: creditActivationCodes.status,
+      })
+      .from(creditActivationCodes)
+      .where(inArray(creditActivationCodes.id, uniqueIds as any[]));
+    const matched = existingRows.length;
+    const missing = Math.max(0, uniqueIds.length - matched);
+
+    if (matched === 0) {
+      return {
+        matched: 0,
+        updated: 0,
+        skippedAlreadyTarget: 0,
+        skippedUsed: 0,
+        skippedExpired: 0,
+        skippedOtherStatus: 0,
+        missing,
+      };
+    }
+
+    const eligibleRows = existingRows.filter((row) => row.status === 'active' || row.status === 'disabled');
+    const ineligibleRows = existingRows.filter((row) => row.status !== 'active' && row.status !== 'disabled');
+    const skippedUsed = ineligibleRows.filter((row) => row.status === 'used').length;
+    const skippedExpired = ineligibleRows.filter((row) => row.status === 'expired').length;
+    const skippedOtherStatus = Math.max(0, ineligibleRows.length - skippedUsed - skippedExpired);
+    const skippedAlreadyTarget = eligibleRows.filter((row) => row.status === status).length;
+    const actionableIds = eligibleRows
+      .filter((row) => row.status !== status)
+      .map((row) => row.id);
+
+    if (actionableIds.length === 0) {
+      return {
+        matched,
+        updated: 0,
+        skippedAlreadyTarget,
+        skippedUsed,
+        skippedExpired,
+        skippedOtherStatus,
+        missing,
+      };
+    }
+
+    const updatedRows = await db
+      .update(creditActivationCodes)
+      .set({ status, updatedAt: new Date() })
+      .where(
+        and(
+          inArray(creditActivationCodes.id, actionableIds as any[]),
+          sql`${creditActivationCodes.status} IN ('active', 'disabled')`
+        )
+      )
+      .returning({ id: creditActivationCodes.id });
+
+    return {
+      matched,
+      updated: updatedRows.length,
+      skippedAlreadyTarget,
+      skippedUsed,
+      skippedExpired,
+      skippedOtherStatus,
+      missing,
+    };
+  }
+
+  /**
+   * 批量删除激活码（仅删除未使用激活码）
+   */
+  async bulkDeleteActivationCodes(ids: string[]): Promise<{
+    matched: number;
+    deleted: number;
+    skippedUsed: number;
+    missing: number;
+  }> {
+    const uniqueIds = Array.from(new Set(
+      ids
+        .filter((id) => typeof id === 'string' && id.trim().length > 0)
+        .map((id) => id.trim())
+    ));
+    if (uniqueIds.length === 0) {
+      return { matched: 0, deleted: 0, skippedUsed: 0, missing: 0 };
+    }
+
+    const existingRows = await db
+      .select({
+        id: creditActivationCodes.id,
+        currentUses: creditActivationCodes.currentUses,
+      })
+      .from(creditActivationCodes)
+      .where(inArray(creditActivationCodes.id, uniqueIds as any[]));
+    const matched = existingRows.length;
+    const missing = Math.max(0, uniqueIds.length - matched);
+
+    if (matched === 0) {
+      return { matched: 0, deleted: 0, skippedUsed: 0, missing };
+    }
+
+    const deletableIds = existingRows
+      .filter((row) => row.currentUses === 0)
+      .map((row) => row.id);
+    const skippedUsed = existingRows.length - deletableIds.length;
+
+    if (deletableIds.length === 0) {
+      return { matched, deleted: 0, skippedUsed, missing };
+    }
+
+    const deletedRows = await db
+      .delete(creditActivationCodes)
+      .where(
+        and(
+          inArray(creditActivationCodes.id, deletableIds as any[]),
+          eq(creditActivationCodes.currentUses, 0)
+        )
+      )
+      .returning({ id: creditActivationCodes.id });
+
+    return { matched, deleted: deletedRows.length, skippedUsed, missing };
+  }
+
+  /**
    * 获取激活码统计
    */
   async getActivationCodeStats(): Promise<{
@@ -422,47 +599,59 @@ export class ActivationCodeService {
     code: string,
     userId: string
   ): Promise<{ success: boolean; creditsGranted: number; newBalance: number; message: string }> {
-    // 查找激活码
-    const activationCode = await db
-      .select()
-      .from(creditActivationCodes)
-      .where(eq(creditActivationCodes.code, code))
-      .limit(1);
-
-    if (activationCode.length === 0) {
-      return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码不存在' };
+    const normalizedCode = normalizeActivationCodeInput(code);
+    if (!normalizedCode) {
+      return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码不能为空' };
     }
 
-    const ac = activationCode[0];
-
-    // 检查状态
-    if (ac.status === 'disabled') {
-      return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码已被禁用' };
-    }
-
-    if (ac.status === 'used' && ac.maxUses === 1) {
-      return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码已被使用' };
-    }
-
-    // 检查是否过期
-    if (ac.expiresAt && ac.expiresAt < new Date()) {
-      // 更新状态为过期
-      await db
-        .update(creditActivationCodes)
-        .set({ status: 'expired', updatedAt: new Date() })
-        .where(eq(creditActivationCodes.id, ac.id));
-      return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码已过期' };
-    }
-
-    // 检查使用次数
-    if (ac.currentUses >= ac.maxUses) {
-      return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码已达到最大使用次数' };
-    }
-
-    // 检查用户是否已使用过（单次使用码）
-    if (ac.maxUses === 1) {
-      const existingUse = await db
+    return await db.transaction(async (trx) => {
+      const exactMatch = await trx
         .select()
+        .from(creditActivationCodes)
+        .where(eq(creditActivationCodes.code, normalizedCode))
+        .limit(1);
+
+      const fallbackMatch = exactMatch.length > 0
+        ? []
+        : await trx
+            .select()
+            .from(creditActivationCodes)
+            .where(sql`upper(${creditActivationCodes.code}) = ${normalizedCode}`)
+            .orderBy(desc(creditActivationCodes.createdAt))
+            .limit(1);
+      const ac = exactMatch[0] ?? fallbackMatch[0] ?? null;
+      if (!ac) {
+        return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码不存在' };
+      }
+      // 锁定该激活码行，避免并发重复兑换和次数超发。
+      await trx.execute(sql`select id from credit_activation_codes where id = ${ac.id} for update`);
+
+      // 检查状态
+      if (ac.status === 'disabled') {
+        return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码已被禁用' };
+      }
+
+      if (ac.status === 'used' && ac.maxUses === 1) {
+        return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码已被使用' };
+      }
+
+      // 检查是否过期
+      if (ac.expiresAt && ac.expiresAt < new Date()) {
+        await trx
+          .update(creditActivationCodes)
+          .set({ status: 'expired', updatedAt: new Date() })
+          .where(eq(creditActivationCodes.id, ac.id));
+        return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码已过期' };
+      }
+
+      // 检查使用次数
+      if (ac.currentUses >= ac.maxUses) {
+        return { success: false, creditsGranted: 0, newBalance: 0, message: '激活码已达到最大使用次数' };
+      }
+
+      // 同一用户同一激活码只能兑换一次（无论 maxUses）
+      const existingUse = await trx
+        .select({ id: creditActivationCodeUses.id })
         .from(creditActivationCodeUses)
         .where(
           and(
@@ -471,14 +660,10 @@ export class ActivationCodeService {
           )
         )
         .limit(1);
-
       if (existingUse.length > 0) {
         return { success: false, creditsGranted: 0, newBalance: 0, message: '您已使用过该激活码' };
       }
-    }
 
-    // 执行兑换（事务）
-    return await db.transaction(async (trx) => {
       // 增加用户积分
       const creditResult = await billingService.addCredits(userId, ac.creditsAmount, 'recharge', {
         sourceType: 'activation_code',

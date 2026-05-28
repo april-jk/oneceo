@@ -43,9 +43,25 @@ export type TemplateComplianceReport = {
     analyticsEntryDetected: boolean;
     healthcheckRouteDetected: boolean;
     databaseDependencyDetected: boolean | null;
+    officialTemplateDetected: boolean | null;
   };
   warnings: string[];
   errors: string[];
+};
+
+export type OneCeoOfficialWebTemplateReport = {
+  matched: boolean;
+  templateFamily: 'oneceo_official_vite_node_shell';
+  checks: {
+    packageJsonDetected: boolean;
+    clientDirDetected: boolean;
+    serverDirDetected: boolean;
+    sharedDirDetected: boolean;
+    viteDependencyDetected: boolean;
+    frontendDependencyDetected: boolean;
+    buildCommandMatched: boolean;
+    startCommandMatched: boolean;
+  };
 };
 
 function asText(value: unknown): string {
@@ -173,6 +189,44 @@ function hasDependency(packageJson: Record<string, unknown>, name: string): bool
   const dependencies = asObject(packageJson.dependencies);
   const devDependencies = asObject(packageJson.devDependencies);
   return Boolean(asText(dependencies[name]) || asText(devDependencies[name]));
+}
+
+function normalizeCommandForMatch(command: string): string {
+  return command.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+export async function detectOneCeoOfficialWebTemplate(input: {
+  sourceDir: string;
+  packageJson: Record<string, unknown> | null;
+}): Promise<OneCeoOfficialWebTemplateReport> {
+  const scripts = asObject(input.packageJson?.scripts);
+  const report: OneCeoOfficialWebTemplateReport = {
+    matched: false,
+    templateFamily: 'oneceo_official_vite_node_shell',
+    checks: {
+      packageJsonDetected: Boolean(input.packageJson),
+      clientDirDetected: await exists(join(input.sourceDir, 'client')),
+      serverDirDetected: await exists(join(input.sourceDir, 'server')),
+      sharedDirDetected: await exists(join(input.sourceDir, 'shared')),
+      viteDependencyDetected: input.packageJson ? hasDependency(input.packageJson, 'vite') : false,
+      frontendDependencyDetected: input.packageJson
+        ? hasDependency(input.packageJson, 'react') || hasDependency(input.packageJson, 'react-dom')
+        : false,
+      buildCommandMatched: normalizeCommandForMatch(asText(scripts.build)).includes('vite build'),
+      startCommandMatched: normalizeCommandForMatch(asText(scripts.start)) === 'node dist/index.js',
+    },
+  };
+
+  report.matched =
+    report.checks.packageJsonDetected &&
+    report.checks.clientDirDetected &&
+    report.checks.serverDirDetected &&
+    report.checks.viteDependencyDetected &&
+    report.checks.frontendDependencyDetected &&
+    report.checks.buildCommandMatched &&
+    report.checks.startCommandMatched;
+
+  return report;
 }
 
 function inferStack(packageJson: Record<string, unknown>): string {
@@ -320,11 +374,46 @@ async function detectBrokenEjsLayoutBodyUsage(
   return layoutTemplateWithBody.filePath.replace(`${sourceDir}/`, '');
 }
 
-function buildDefaultManifest(input: {
+async function buildDefaultManifest(input: {
+  sourceDir: string;
   packageJson: Record<string, unknown>;
   healthcheckPath: string;
-}): OneCeoDeploymentManifest {
+}): Promise<OneCeoDeploymentManifest> {
   const scripts = asObject(input.packageJson.scripts);
+  const officialTemplate = await detectOneCeoOfficialWebTemplate({
+    sourceDir: input.sourceDir,
+    packageJson: input.packageJson,
+  });
+
+  if (officialTemplate.matched) {
+    return {
+      templateVersion: '1.0.0',
+      appType: 'web_app',
+      stack: 'oneceo_fixed_vite_node_shell',
+      build: {
+        command: asText(scripts.build) || 'npm run build',
+        outputDir: 'dist/public',
+      },
+      start: {
+        command: 'node dist/index.js',
+        portEnv: 'PORT',
+      },
+      healthcheck: {
+        path: input.healthcheckPath,
+      },
+      features: {
+        analytics: true,
+        userTracking: true,
+        database: false,
+        auth: 'optional',
+        objectStorage: false,
+      },
+      runtime: {
+        framework: 'frontend_dist',
+        transport: 'http',
+      },
+    };
+  }
 
   return {
     templateVersion: '1.0.0',
@@ -430,12 +519,17 @@ export async function ensureTemplateCompliance(sourceDir: string): Promise<Templ
   const packageJson = await readJsonFile(packageJsonPath);
   const healthcheckPath = await inferHealthcheckPath(sourceDir);
   const existingManifest = await readJsonFile(manifestPath);
+  const officialTemplate = await detectOneCeoOfficialWebTemplate({
+    sourceDir,
+    packageJson,
+  });
   if (!packageJson && !existingManifest) {
     throw new Error('部署前检查失败：缺少 package.json 或 oneceo.manifest.json');
   }
 
   const fallbackManifest = packageJson
-    ? buildDefaultManifest({
+    ? await buildDefaultManifest({
+        sourceDir,
         packageJson,
         healthcheckPath,
       })
@@ -482,6 +576,9 @@ export async function ensureTemplateCompliance(sourceDir: string): Promise<Templ
   if (looksLikeJavaManifest(manifest) && manifest.healthcheck.path !== '/') {
     manifest.healthcheck.path = '/';
     warnings.push('检测到 Java/Spring Boot 站点，已将 Railway 健康检查标准化为 /，避免框架控制器注解差异阻断上线');
+  }
+  if (officialTemplate.matched) {
+    warnings.push('检测到 OneCEO 官方固定模板壳，部署主链将按固定模板契约处理');
   }
 
   const scripts = asObject(packageJson?.scripts);
@@ -557,6 +654,7 @@ export async function ensureTemplateCompliance(sourceDir: string): Promise<Templ
             ? hasDependency(packageJson, 'pg') || hasDependency(packageJson, 'drizzle-orm')
             : null
           : null,
+      officialTemplateDetected: officialTemplate.matched,
     },
     warnings,
     errors,

@@ -72,6 +72,8 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<string>('created_at');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [selectedCodeIds, setSelectedCodeIds] = useState<string[]>([]);
+  const [bulkActionLoading, setBulkActionLoading] = useState(false);
 
   // 创建弹窗状态
   const [createFormOpen, setCreateFormOpen] = useState(false);
@@ -138,6 +140,7 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
         const data = await response.json();
         setCodes(data.items || []);
         setTotal(data.total || 0);
+        setSelectedCodeIds([]);
       } else {
         onNotify?.('error', '加载失败', '无法获取激活码列表');
       }
@@ -451,6 +454,116 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
     }
   };
 
+  const toggleSelectCode = (id: string) => {
+    setSelectedCodeIds((prev) => (
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    ));
+  };
+
+  const toggleSelectAllCurrentPage = () => {
+    if (codes.length === 0) return;
+    const pageIds = codes.map((code) => code.id);
+    const allSelected = pageIds.every((id) => selectedCodeIds.includes(id));
+    if (allSelected) {
+      setSelectedCodeIds((prev) => prev.filter((id) => !pageIds.includes(id)));
+    } else {
+      setSelectedCodeIds((prev) => Array.from(new Set([...prev, ...pageIds])));
+    }
+  };
+
+  const handleBulkStatusUpdate = async (status: 'active' | 'disabled') => {
+    if (selectedCodeIds.length === 0) {
+      onNotify?.('error', '未选择', '请先选择要操作的激活码');
+      return;
+    }
+    setBulkActionLoading(true);
+    try {
+      const response = await fetch('/api/internal/billing/activation-codes/bulk-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ ids: selectedCodeIds, status }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: '批量操作失败' }));
+        onNotify?.('error', '批量操作失败', error.error || '无法批量更新状态');
+        return;
+      }
+      const result = await response.json();
+      const skipParts: string[] = [];
+      if (result.skippedAlreadyTarget > 0) {
+        skipParts.push(`${result.skippedAlreadyTarget} 条已是目标状态`);
+      }
+      if (result.skippedUsed > 0) {
+        skipParts.push(`${result.skippedUsed} 条已使用不可变更`);
+      }
+      if (result.skippedExpired > 0) {
+        skipParts.push(`${result.skippedExpired} 条已过期不可变更`);
+      }
+      if (result.skippedOtherStatus > 0) {
+        skipParts.push(`${result.skippedOtherStatus} 条状态不可变更`);
+      }
+      if (result.missing > 0) {
+        skipParts.push(`${result.missing} 条不存在`);
+      }
+      onNotify?.(
+        'success',
+        status === 'disabled' ? '批量禁用完成' : '批量启用完成',
+        `已更新 ${result.updated} 条${skipParts.length > 0 ? `，跳过：${skipParts.join('，')}` : ''}`
+      );
+      setSelectedCodeIds([]);
+      fetchCodes();
+      fetchStats();
+    } catch (error) {
+      console.error('批量更新激活码状态失败:', error);
+      onNotify?.('error', '批量操作失败', '无法批量更新状态');
+    } finally {
+      setBulkActionLoading(false);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedCodeIds.length === 0) {
+      onNotify?.('error', '未选择', '请先选择要删除的激活码');
+      return;
+    }
+    setBulkActionLoading(true);
+    try {
+      const response = await fetch('/api/internal/billing/activation-codes/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ ids: selectedCodeIds }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: '批量删除失败' }));
+        onNotify?.('error', '批量删除失败', error.error || '无法批量删除激活码');
+        return;
+      }
+      const result = await response.json();
+      const skipParts: string[] = [];
+      if (result.skippedUsed > 0) {
+        skipParts.push(`${result.skippedUsed} 条已使用不可删除`);
+      }
+      if (result.missing > 0) {
+        skipParts.push(`${result.missing} 条不存在`);
+      }
+      onNotify?.(
+        'success',
+        '批量删除完成',
+        `已删除 ${result.deleted} 条${skipParts.length > 0 ? `，跳过：${skipParts.join('，')}` : ''}`
+      );
+      setSelectedCodeIds([]);
+      fetchCodes();
+      fetchStats();
+    } catch (error) {
+      console.error('批量删除激活码失败:', error);
+      onNotify?.('error', '批量删除失败', '无法批量删除激活码');
+    } finally {
+      setBulkActionLoading(false);
+    }
+  };
+
   // 复制到剪贴板
   const copyToClipboard = async (text: string) => {
     try {
@@ -491,6 +604,31 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
 
   // 计算总页数
   const totalPages = Math.ceil(total / limit);
+  const currentPageIds = codes.map((code) => code.id);
+  const allCurrentPageSelected = currentPageIds.length > 0 && currentPageIds.every((id) => selectedCodeIds.includes(id));
+
+  const handleSortChange = (nextSortBy: string) => {
+    if (sortBy === nextSortBy) {
+      setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setSortBy(nextSortBy);
+    setSortOrder('desc');
+  };
+
+  const renderSortHeader = (label: string, key: string) => {
+    const active = sortBy === key;
+    const arrow = active ? (sortOrder === 'asc' ? '↑' : '↓') : '';
+    return (
+      <button
+        type="button"
+        className={`sortable-header${active ? ' active' : ''}`}
+        onClick={() => handleSortChange(key)}
+      >
+        {label} {arrow}
+      </button>
+    );
+  };
 
   return (
     <section className="activation-code-management">
@@ -540,6 +678,40 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
         </AdminButton>
       </div>
 
+      {selectedCodeIds.length > 0 && (
+        <div className="activation-code-bulk-actions">
+          <span className="bulk-selection-text">已选择 {selectedCodeIds.length} 项</span>
+          <AdminButton
+            variant="secondary"
+            onClick={() => handleBulkStatusUpdate('disabled')}
+            loading={bulkActionLoading}
+          >
+            批量禁用
+          </AdminButton>
+          <AdminButton
+            variant="secondary"
+            onClick={() => handleBulkStatusUpdate('active')}
+            loading={bulkActionLoading}
+          >
+            批量启用
+          </AdminButton>
+          <AdminButton
+            variant="danger"
+            onClick={handleBulkDelete}
+            loading={bulkActionLoading}
+          >
+            批量删除
+          </AdminButton>
+          <AdminButton
+            variant="secondary"
+            onClick={() => setSelectedCodeIds([])}
+            disabled={bulkActionLoading}
+          >
+            清空选择
+          </AdminButton>
+        </div>
+      )}
+
       {/* 筛选栏 */}
       <div className="activation-code-filters">
         <select
@@ -579,28 +751,44 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
         <table className="activation-code-table">
           <thead>
             <tr>
-              <th>激活码</th>
-              <th>积分</th>
-              <th>状态</th>
-              <th>使用次数</th>
-              <th>分组</th>
-              <th>过期时间</th>
-              <th>创建时间</th>
+              <th>
+                <input
+                  type="checkbox"
+                  checked={allCurrentPageSelected}
+                  onChange={toggleSelectAllCurrentPage}
+                  aria-label="全选当前页"
+                />
+              </th>
+              <th>{renderSortHeader('激活码', 'code')}</th>
+              <th>{renderSortHeader('积分', 'credits_amount')}</th>
+              <th>{renderSortHeader('状态', 'status')}</th>
+              <th>{renderSortHeader('使用次数', 'current_uses')}</th>
+              <th>{renderSortHeader('分组', 'group_name')}</th>
+              <th>{renderSortHeader('过期时间', 'expires_at')}</th>
+              <th>{renderSortHeader('创建时间', 'created_at')}</th>
               <th>操作</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={8} className="empty">加载中...</td>
+                <td colSpan={9} className="empty">加载中...</td>
               </tr>
             ) : codes.length === 0 ? (
               <tr>
-                <td colSpan={8} className="empty">暂无激活码</td>
+                <td colSpan={9} className="empty">暂无激活码</td>
               </tr>
             ) : (
               codes.map((code) => (
                 <tr key={code.id}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={selectedCodeIds.includes(code.id)}
+                      onChange={() => toggleSelectCode(code.id)}
+                      aria-label={`选择激活码 ${code.code}`}
+                    />
+                  </td>
                   <td>
                     <div className="code-cell">
                       <code className="code-text">{code.code}</code>
@@ -1088,6 +1276,23 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
           flex-wrap: wrap;
         }
 
+        .activation-code-bulk-actions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-wrap: wrap;
+          padding: 10px 12px;
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          background: var(--surface-muted);
+        }
+
+        .bulk-selection-text {
+          font-size: 13px;
+          color: var(--text-soft);
+          margin-right: 4px;
+        }
+
         .filter-select,
         .filter-search {
           padding: 8px 12px;
@@ -1124,6 +1329,23 @@ export function ActivationCodeManagement({ onNotify }: ActivationCodeManagementP
           font-size: 12px;
           text-transform: uppercase;
           color: var(--text-soft);
+        }
+
+        .sortable-header {
+          border: none;
+          background: transparent;
+          color: inherit;
+          font: inherit;
+          cursor: pointer;
+          padding: 0;
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+        }
+
+        .sortable-header.active {
+          color: var(--text);
+          font-weight: 700;
         }
 
         .code-cell {

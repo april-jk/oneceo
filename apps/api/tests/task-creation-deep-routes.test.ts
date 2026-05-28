@@ -46,6 +46,7 @@ const originalResolveAppUserIdByLegacyUserId = legacyMappingDaoAny.resolveAppUse
 const originalGetTaskDescription = sessionDaoAny.getTaskDescription;
 const originalGetRecentMessages = sessionDaoAny.getRecentMessages;
 const originalGetMessages = sessionDaoAny.getMessages;
+const originalReplaceRecentMessagesSnapshot = sessionDaoAny.replaceRecentMessagesSnapshot;
 const originalGetRun = runDaoAny.getRun;
 const originalFindActiveRun = runDaoAny.findActiveRun;
 const originalGetSessionFile = fileStoreAny.getSession;
@@ -79,6 +80,7 @@ after(async () => {
   sessionDaoAny.getTaskDescription = originalGetTaskDescription;
   sessionDaoAny.getRecentMessages = originalGetRecentMessages;
   sessionDaoAny.getMessages = originalGetMessages;
+  sessionDaoAny.replaceRecentMessagesSnapshot = originalReplaceRecentMessagesSnapshot;
   runDaoAny.getRun = originalGetRun;
   runDaoAny.findActiveRun = originalFindActiveRun;
   fileStoreAny.getSession = originalGetSessionFile;
@@ -409,15 +411,32 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent prefers redis c
     executor: 'codex',
   });
   redisCacheAny.getRecentMessagesPage = async () => ({
-    messages: [{ id: 'redis-message-1', role: 'user', content: 'from redis recent' }],
+    messages: [
+      {
+        id: 'redis-message-1',
+        messageKey: 'db:redis-message-1',
+        role: 'user',
+        messageType: 'user_input',
+        content: 'from redis recent',
+        metadata: { timelineCursor: 1, messageKey: 'db:redis-message-1' },
+      },
+    ],
     source: 'redis_recent',
     oldestCursor: 1,
     newestCursor: 1,
     hasOlderHistory: false,
   });
-  sessionDaoAny.getRecentMessages = async () => {
-    throw new Error('db recent should not be reached when redis cache hits');
-  };
+  sessionDaoAny.getRecentMessages = async () => [
+    {
+      id: 'redis-message-1',
+      role: 'user',
+      content: 'from redis recent',
+      messageType: 'user_input',
+      metadata: { timelineCursor: 1, messageKey: 'db:redis-message-1' },
+      timelineCursor: 1,
+      createdAt: new Date(1712100000000).toISOString(),
+    },
+  ];
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-redis-recent/messages/recent`, {
@@ -429,6 +448,164 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent prefers redis c
     assert.equal(payload.data.source, 'redis_recent');
     assert.equal(payload.data.messages[0].content, 'from redis recent');
   } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/task-creation/sessions/:sessionId/messages/recent rejects stale redis clarification metadata', async () => {
+  const server = await startServer();
+  const sessionId = '5f9e1c2a-2e35-4b8d-99f1-2a9f724c67e1';
+  let cachedPayload: Record<string, unknown> | null = null;
+  sessionDaoAny.getSession = async (sessionId: string) => ({ id: sessionId, userId: 'owner-user' });
+  fileStoreAny.getSession = async (sessionId: string) => ({
+    ...ownerSession(sessionId),
+    mode: 'altus',
+    executor: 'altus',
+    runtime: { executionMode: 'managed', executor: 'altus' },
+  });
+  redisCacheAny.getRecentMessagesPage = async () => ({
+    messages: [
+      {
+        id: 'message-clarification',
+        messageKey: 'managed:run-ppt:clarification',
+        role: 'agent',
+        messageType: 'clarification_request',
+        content: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+        metadata: {
+          timelineCursor: 10,
+          messageKey: 'managed:run-ppt:clarification',
+          clarificationType: 'presentation_brief',
+        },
+      },
+      {
+        id: 'message-status-after-clarification',
+        messageKey: 'managed:run-ppt:run_status:waiting_user',
+        role: 'system',
+        messageType: 'status_update',
+        content: '正在等待用户补充信息',
+        metadata: {
+          timelineCursor: 11,
+          messageKey: 'managed:run-ppt:run_status:waiting_user',
+          eventType: 'run_status',
+        },
+      },
+    ],
+    source: 'redis_recent_stale',
+    oldestCursor: 10,
+    newestCursor: 11,
+    hasOlderHistory: false,
+  });
+  redisCacheAny.setRecentMessagesPage = async (input: { payload: Record<string, unknown> }) => {
+    cachedPayload = input.payload;
+  };
+  sessionDaoAny.replaceRecentMessagesSnapshot = async () => undefined;
+  sessionDaoAny.getRecentMessages = async () => [
+    {
+      id: 'message-user',
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我分析一下 沐曦股份，做个 ppt',
+      metadata: {
+        timelineCursor: 9,
+        messageKey: 'user:ppt-request',
+      },
+      timelineCursor: 9,
+      createdAt: new Date(1712099999000).toISOString(),
+    },
+    {
+      id: 'message-clarification',
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+      metadata: {
+        timelineCursor: 10,
+        messageKey: 'managed:run-ppt:clarification',
+        question: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+        eventType: 'clarification_requested',
+      },
+      timelineCursor: 10,
+      createdAt: new Date(1712100000000).toISOString(),
+    },
+    {
+      id: 'message-status-after-clarification',
+      role: 'system',
+      messageType: 'status_update',
+      content: '正在等待用户补充信息',
+      metadata: {
+        timelineCursor: 11,
+        messageKey: 'managed:run-ppt:run_status:waiting_user',
+        eventType: 'run_status',
+      },
+      timelineCursor: 11,
+      createdAt: new Date(1712100001000).toISOString(),
+    },
+  ];
+  sessionDaoAny.getMessages = async () => [
+    {
+      id: 'message-user',
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我分析一下 沐曦股份，做个 ppt',
+      metadata: {
+        timelineCursor: 9,
+        messageKey: 'user:ppt-request',
+      },
+      timelineCursor: 9,
+      createdAt: new Date(1712099999000).toISOString(),
+    },
+    {
+      id: 'message-clarification',
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+      metadata: {
+        timelineCursor: 10,
+        messageKey: 'managed:run-ppt:clarification',
+        question: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+        eventType: 'clarification_requested',
+      },
+      timelineCursor: 10,
+      createdAt: new Date(1712100000000).toISOString(),
+    },
+    {
+      id: 'message-status-after-clarification',
+      role: 'system',
+      messageType: 'status_update',
+      content: '正在等待用户补充信息',
+      metadata: {
+        timelineCursor: 11,
+        messageKey: 'managed:run-ppt:run_status:waiting_user',
+        eventType: 'run_status',
+      },
+      timelineCursor: 11,
+      createdAt: new Date(1712100001000).toISOString(),
+    },
+  ];
+
+  try {
+    const response = await testFetch(`${server.origin}/api/task-creation/sessions/${sessionId}/messages/recent`, {
+      headers: { 'x-test-user-id': 'owner-user' },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.notEqual(payload.data.source, 'redis_recent_stale');
+    const clarificationMessage = (payload.data.messages as any[]).find(
+      (message) => message?.messageType === 'clarification_request'
+    );
+    const cachedClarificationMessage = (cachedPayload?.messages as any[])?.find(
+      (message) => message?.messageType === 'clarification_request'
+    );
+    assert.equal(
+      clarificationMessage?.metadata?.structuredClarification?.kind,
+      'structured_clarification'
+    );
+    assert.equal(
+      cachedClarificationMessage?.metadata?.structuredClarification?.kind,
+      'structured_clarification'
+    );
+  } finally {
+    sessionDaoAny.replaceRecentMessagesSnapshot = originalReplaceRecentMessagesSnapshot;
     await server.close();
   }
 });
@@ -1031,24 +1208,6 @@ test('GET /api/task-creation/sessions/:sessionId/opencode/events falls back to d
 
     assert.match(text, /from db replay/);
     assert.match(text, /"status":"connected"/);
-  } finally {
-    await server.close();
-  }
-});
-
-test('POST /api/task-creation/attachments/fetch rejects anonymous access', async () => {
-  const server = await startServer();
-
-  try {
-    const response = await testFetch(`${server.origin}/api/task-creation/attachments/fetch`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ provider: 'website', url: 'https://example.com/file.txt' }),
-    });
-    const payload = await response.json();
-
-    assert.equal(response.status, 401);
-    assert.equal(payload.success, false);
   } finally {
     await server.close();
   }

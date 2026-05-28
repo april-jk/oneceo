@@ -36,6 +36,13 @@
 - 增加极简控制条：`锁定` / `全屏`
 - 交互逻辑在 `uiLocked` 时禁用鼠标和键盘输入
 
+### 运行时贴边规则
+- `apps/api/src/services/sandbox-debug-service.ts` 在每次启用 n.eko 调试时注入版本化的 `oneceo-edgefill-v*.css`，并移除旧版贴边样式引用。
+- 该样式强制 n.eko 根节点、视频容器和 `<video>` / `<canvas>` 元素使用全视口宽高，视频层向外轻微 overscan，消除默认比例盒和边缘 letterbox。
+- oneceo 前端 `DebugPreview` 的 iframe 必须直接铺满调试内容区；锁定、重启和新窗口入口只能作为浮层存在，不能用工具栏占据 iframe 上方空间。
+- Chromium 启动时固定 `--window-position=0,0`、`--window-size=<screen>`、`--force-device-scale-factor=1`，并使用 `--app=about:blank` + fullscreen/kiosk 参数，避免 Xvfb 桌面底色被一起转发。
+- `configVersion` 变更后会触发已有 sandbox 重新启动调试服务，旧的 n.eko/Chromium 参数不会继续复用。
+
 ## 构建流程
 构建模板时会执行：
 1. 克隆 n.eko 源码

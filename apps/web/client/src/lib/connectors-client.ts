@@ -7,6 +7,7 @@ export type ConnectorKey =
   | "notion"
   | "supabase"
   | "figma"
+  | "google_super"
   | "vercel"
   | "postgres"
   | "custom_api"
@@ -155,14 +156,23 @@ async function requestJson<T>(url: string, options: JsonOptions = {}): Promise<T
   const response = await fetch(url, {
     method: options.method || "GET",
     credentials: "include",
+    cache: "no-store",
     headers: buildClientIdentityHeaders({
       "Content-Type": "application/json",
+      "Accept": "application/json",
+      "Cache-Control": "no-cache",
     }),
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
-  const payload = (await response.json()) as T & { error?: string };
+  const rawPayload = await response.text();
+  const payload = rawPayload
+    ? (JSON.parse(rawPayload) as T & { error?: string })
+    : ({ error: `empty response: ${response.status}` } as T & { error?: string });
   if (!response.ok) {
     throw new Error(payload?.error || `request failed: ${response.status}`);
+  }
+  if (!rawPayload) {
+    throw new Error(payload?.error || "empty response");
   }
   return payload;
 }
@@ -337,6 +347,8 @@ export async function completeConnectorProfileOauth(
     redirectUri: string;
     teamId?: string;
     configurationId?: string;
+    connectedAccountId?: string;
+    status?: string;
     next?: string;
     source?: string;
   }
@@ -423,6 +435,8 @@ export async function completeConnectorOauth(
     redirectUri: string;
     teamId?: string;
     configurationId?: string;
+    connectedAccountId?: string;
+    status?: string;
     next?: string;
     source?: string;
   }
@@ -539,6 +553,39 @@ export async function detachSessionConnector(
     }
   );
   return result.data?.connector || null;
+}
+
+export async function approveMcpToolConfirmation(
+  sessionId: string,
+  confirmationId: string
+): Promise<{ confirmationToken: string; expiresAt: string }> {
+  const result = await requestJson<{
+    data?: { confirmationToken?: string; expiresAt?: string };
+  }>(
+    `${getApiBaseUrl()}/api/task-creation/sessions/${encodeURIComponent(
+      sessionId
+    )}/mcp-confirmations/${encodeURIComponent(confirmationId)}/approve`,
+    { method: "POST" }
+  );
+  if (!result.data?.confirmationToken) {
+    throw new Error("confirmation token empty");
+  }
+  return {
+    confirmationToken: result.data.confirmationToken,
+    expiresAt: String(result.data.expiresAt || ""),
+  };
+}
+
+export async function rejectMcpToolConfirmation(
+  sessionId: string,
+  confirmationId: string
+): Promise<void> {
+  await requestJson(
+    `${getApiBaseUrl()}/api/task-creation/sessions/${encodeURIComponent(
+      sessionId
+    )}/mcp-confirmations/${encodeURIComponent(confirmationId)}/reject`,
+    { method: "POST" }
+  );
 }
 
 export async function saveSessionConnectorDraft(

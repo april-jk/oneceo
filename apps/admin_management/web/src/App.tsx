@@ -1,6 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type * as React from 'react';
-
 // 管理后台主页面：统一组装导航、区块切换和会话/主机/技能/发布等能力面板。
 import { api } from './api';
 import type { AdminUser } from './api';
@@ -9,7 +8,6 @@ import {
   AdminButton,
   AdminDetailShell,
   AdminStickyInspector,
-  AuditTimeline,
   AdminTabs,
   CodePanel,
   DangerConfirmDialog,
@@ -40,10 +38,6 @@ import type {
   AdminThemeKey,
   AdminThemeMode,
   AdminThemeSettings,
-  AgentManagementOverview,
-  AuditDetailResponse,
-  AuditLogEntry,
-  AuditResponse,
   ConversationMessage,
   ConversationSession,
   ConversationSessionDetailResponse,
@@ -63,6 +57,7 @@ import type {
   SandboxManagementOverview,
   SandboxLiveSummary,
   VmItem,
+  ApiTraceItem,
 } from './types';
 
 const KvmControlCenter = lazy(() =>
@@ -100,8 +95,17 @@ const OsacReleaseManagementSection = lazy(() =>
 const BillingManagementSection = lazy(() =>
   import('./components/BillingManagementSection').then((module) => ({ default: module.BillingManagementSection }))
 );
+const NotificationManagement = lazy(() =>
+  import('./components/NotificationManagement').then((module) => ({ default: module.NotificationManagement }))
+);
+const PromoBannerManagement = lazy(() =>
+  import('./components/PromoBannerManagement').then((module) => ({ default: module.PromoBannerManagement }))
+);
+const MembershipManagementSection = lazy(() =>
+  import('./components/MembershipManagementSection').then((module) => ({ default: module.MembershipManagementSection }))
+);
 
-type SectionKey = 'kvm' | 'operations' | 'deployment' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit' | 'billing';
+type SectionKey = 'kvm' | 'operations' | 'deployment' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'billing' | 'notification' | 'membership' | 'promoBanner';
 type NavGroupKey = 'runtime' | 'platform' | 'billing';
 type ToastTone = 'error' | 'success' | 'warning' | 'info';
 type SandboxDetailTab = 'overview' | 'files' | 'processes' | 'connectivity' | 'archive' | 'terminal';
@@ -143,15 +147,6 @@ function sandboxDisplayLabel(detail: SandboxRuntimeDetail | null | undefined, fa
     '当前环境'
   );
 }
-
-type AuditFilterState = {
-  query: string;
-  operator: string;
-  action: string;
-  result: string;
-  from: string;
-  to: string;
-};
 
 type ConversationDialogTab = 'overview' | 'billing' | 'interaction' | 'infra' | 'raw' | 'transitions';
 type ConversationBillingUsage = {
@@ -422,16 +417,6 @@ const NAV_ITEMS: Array<{
     signal: '账号关联',
   },
   {
-    key: 'audit',
-    group: 'runtime',
-    label: '审计日志',
-    subtitle: '操作追踪',
-    tag: 'LOG',
-    iconKey: 'audit',
-    description: '查看操作记录、结果状态和时间线。',
-    signal: '操作记录',
-  },
-  {
     key: 'kvm',
     group: 'runtime',
     label: 'KVM 管理',
@@ -440,16 +425,6 @@ const NAV_ITEMS: Array<{
     iconKey: 'kvm',
     description: '查看宿主机资源、虚拟机状态和实例操作。',
     signal: '资源占用',
-  },
-  {
-    key: 'agent',
-    group: 'platform',
-    label: '智能体管理',
-    subtitle: '智能体运行状态',
-    tag: 'AGT',
-    iconKey: 'agent',
-    description: '查看服务健康、能力分布和会话状态。',
-    signal: '服务健康',
   },
   {
     key: 'skill',
@@ -490,6 +465,36 @@ const NAV_ITEMS: Array<{
     iconKey: 'billing',
     description: '查看平台积分消耗、调整用户余额、配置模型定价。',
     signal: '消费统计',
+  },
+  {
+    key: 'membership',
+    group: 'platform',
+    label: '会员管理',
+    subtitle: '会员类型与权益',
+    tag: 'MBR',
+    iconKey: 'billing',
+    description: '维护会员类型、默认积分和 Agent 权限。',
+    signal: '会员权益',
+  },
+  {
+    key: 'promoBanner',
+    group: 'platform',
+    label: '宣传条幅管理',
+    subtitle: '首页气泡与侧边栏气泡',
+    tag: 'PRM',
+    iconKey: 'notification',
+    description: '配置首页与侧边栏宣传气泡，支持图片和轮播。',
+    signal: '条幅状态',
+  },
+  {
+    key: 'notification',
+    group: 'platform',
+    label: '通知管理',
+    subtitle: '系统通知与下发',
+    tag: 'NTF',
+    iconKey: 'notification',
+    description: '管理系统通知，向用户下发通知。',
+    signal: '通知状态',
   },
 ];
 
@@ -532,16 +537,10 @@ type ArchiveSortState = {
 };
 type ArchiveColumnKey = 'time' | 'type' | 'size' | 'reason' | 'status' | 'actions';
 type ConversationSortKey = 'session' | 'user' | 'executor' | 'session_id' | 'status' | 'updated_at' | 'created_at';
-type AuditSortKey = 'id' | 'time' | 'action' | 'result' | 'operator' | 'target' | 'session';
 type SortDirection = 'asc' | 'desc';
 
 type ConversationSortState = {
   key: ConversationSortKey;
-  direction: SortDirection;
-};
-
-type AuditSortState = {
-  key: AuditSortKey;
   direction: SortDirection;
 };
 
@@ -575,11 +574,6 @@ const DEFAULT_ARCHIVE_SORT: ArchiveSortState = {
 
 const DEFAULT_CONVERSATION_SORT: ConversationSortState = {
   key: 'updated_at',
-  direction: 'desc',
-};
-
-const DEFAULT_AUDIT_SORT: AuditSortState = {
-  key: 'time',
   direction: 'desc',
 };
 
@@ -1929,6 +1923,7 @@ type ConversationReplayItem =
       summary: string;
       preview: string;
       detail: string;
+      browserScreenshot?: Record<string, unknown> | null;
       artifactPaths: string[];
       expandWrite: boolean;
       messageKey?: string;
@@ -1957,6 +1952,12 @@ type ConversationReplayItem =
       author: string;
       messageKey?: string;
       showAuthor?: boolean;
+    }
+  | {
+      id: string;
+      kind: 'api_trace';
+      trace: ApiTraceItem;
+      timestamp: string;
     };
 
 type ConversationOpencodeEventInfo = {
@@ -2224,6 +2225,10 @@ function getConversationManagedToolDisplayName(toolName: string): string {
       return '代码搜索';
     case 'ask_user':
       return '请求澄清';
+    case 'debug_open_page':
+      return '视觉检测：打开页面';
+    case 'browser_interact':
+      return '视觉检测步骤';
     case 'complete_task':
       return '完成任务';
     default:
@@ -2284,6 +2289,12 @@ function formatConversationManagedToolSummary(toolName: string, metadataRaw: unk
   if (toolName === 'ask_user') {
     return asText(args.question) || '请求用户澄清';
   }
+  if (toolName === 'debug_open_page') {
+    return asText(args.url) ? `打开 ${asText(args.url)}` : '打开页面并截图';
+  }
+  if (toolName === 'browser_interact') {
+    return asText(args.description) || asText(args.action) || '执行 Playwright 检查';
+  }
   if (toolName === 'complete_task') {
     return asText(args.summary) || '输出最终完成总结';
   }
@@ -2320,6 +2331,16 @@ function formatConversationManagedToolPreview(toolName: string, metadataRaw: unk
 
   if (toolName === 'search_code') {
     return asText(output.output) || asText(args.query) || '已返回搜索结果';
+  }
+
+  if (toolName === 'debug_open_page' || toolName === 'browser_interact') {
+    const screenshot = toRecord(metadata.browserScreenshot);
+    const source = toRecord(screenshot.source);
+    return [
+      toolName === 'debug_open_page' ? '正在进行视觉检测' : asText(args.description) || asText(args.action) || '视觉检测步骤已完成',
+      asText(source.url),
+      asText(screenshot.status) === 'captured' ? '已捕获截图' : asText(screenshot.status),
+    ].filter(Boolean).join('\n');
   }
 
   if (toolName === 'complete_task') {
@@ -2372,6 +2393,24 @@ function formatConversationManagedToolDetail(toolName: string, metadataRaw: unkn
       const options = (args.options as unknown[]).map((item) => asText(item)).filter(Boolean).join(' / ');
       pushLine('建议选项', options);
     }
+  } else if (toolName === 'debug_open_page' || toolName === 'browser_interact') {
+    const screenshot = toRecord(metadata.browserScreenshot);
+    const source = toRecord(screenshot.source);
+    pushLine('操作', asText(args.description) || asText(args.action) || (toolName === 'debug_open_page' ? '打开页面' : 'Playwright 检查'));
+    pushLine('页面', asText(source.url));
+    pushLine('标题', asText(source.title));
+    pushLine('截图状态', asText(screenshot.status));
+    const visualCheck = toRecord(screenshot.visualCheck);
+    const visualStatus = asText(visualCheck.status);
+    if (visualStatus) {
+      pushLine('视觉诊断', [
+        visualStatus,
+        asText(visualCheck.reasonCode),
+        asText(visualCheck.message),
+      ].filter(Boolean).join(' / '));
+    }
+    pushLine('截图时间', asText(screenshot.capturedAt));
+    pushLine('截图对象', asText(screenshot.storageKey));
   } else if (toolName === 'complete_task') {
     pushLine('完成摘要', args.summary);
     if (Array.isArray(args.verification)) {
@@ -2431,6 +2470,7 @@ function buildConversationManagedToolItem(message: ConversationMessage): Convers
     summary: formatConversationManagedToolSummary(toolName, metadata),
     preview: formatConversationManagedToolPreview(toolName, metadata),
     detail: formatConversationManagedToolDetail(toolName, metadata),
+    browserScreenshot: toRecord(metadata.browserScreenshot),
     artifactPaths: collectConversationReplayArtifactPaths(toolName, metadata),
     expandWrite: shouldExpandConversationManagedWriteFileCard(toolName, status, metadata),
     messageKey: conversationMessageKey(message),
@@ -2726,318 +2766,6 @@ function conversationReplayNoticeText(message: ConversationMessage): string {
   return parts.join(' · ') || '会话状态已更新';
 }
 
-function buildConversationReplayItems(messages: ConversationMessage[]): ConversationReplayItem[] {
-  const items: ConversationReplayItem[] = [];
-
-  const pushAgentPlain = (message: ConversationMessage, text: string, author: string, options: string[] = []) => {
-    const normalized = normalizeConversationReplayText(text);
-    if (!normalized) return;
-    const last = items[items.length - 1];
-    if (last?.kind === 'agent_plain' && normalizeConversationReplayText(last.text) === normalized && last.author === author) {
-      return;
-    }
-    items.push({
-      id: message.id,
-      kind: 'agent_plain',
-      text,
-      timestamp: message.createdAt,
-      author,
-      options,
-      messageKey: conversationMessageKey(message),
-    });
-  };
-
-  const pushCapsule = (message: ConversationMessage, label: string, segments?: string[]) => {
-    const text = label.trim();
-    if (!text) return;
-    items.push({
-      id: message.id,
-      kind: 'capsule',
-      label: text,
-      timestamp: message.createdAt,
-      tone: conversationReplayCapsuleTone(message, text),
-      loading: isConversationProgressStatusLabel(text),
-      segments,
-      messageKey: conversationMessageKey(message),
-    });
-  };
-
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index];
-    const type = String(message.messageType || '');
-    if (type === 'user_input' || type === 'user_response') {
-      items.push({
-        id: message.id,
-        kind: 'user',
-        text: conversationReplayMessageText(message),
-        timestamp: message.createdAt,
-        messageKey: conversationMessageKey(message),
-      });
-      continue;
-    }
-
-    if (type === 'assistant_message' || type === 'agent_message') {
-      const text = conversationReplayMessageText(message);
-      const capsule = extractConversationReplayCapsule(text);
-      if (capsule) {
-        if (isConversationProgressStatusLabel(capsule.label) && !capsule.rest.trim()) {
-          pushCapsule(message, capsule.label);
-          continue;
-        }
-        pushCapsule(message, capsule.label);
-        if (capsule.rest.trim()) {
-          pushAgentPlain(message, capsule.rest, conversationReplayAuthor(message));
-        }
-        continue;
-      }
-      pushAgentPlain(message, text, conversationReplayAuthor(message));
-      continue;
-    }
-
-    if (type === 'clarification_request') {
-      const question = clarificationQuestion(message);
-      const options = clarificationOptions(message);
-      const previousMessage = index > 0 ? messages[index - 1] : null;
-      const previousContent =
-        previousMessage && ['assistant_message', 'agent_message'].includes(String(previousMessage.messageType || ''))
-          ? conversationReplayMessageText(previousMessage)
-          : '';
-      const currentRunId = messageRunId(message);
-      const previousRunId = previousMessage ? messageRunId(previousMessage) : null;
-      const sameRun = !currentRunId || !previousRunId || currentRunId === previousRunId;
-
-      if (
-        previousContent &&
-        sameRun &&
-        normalizeConversationClarificationText(previousContent) === normalizeConversationClarificationText(question)
-      ) {
-        items.push({
-          id: message.id,
-          kind: 'clarification_notice',
-          text: 'Altus 将在你回复后继续工作',
-          timestamp: message.createdAt,
-          messageKey: conversationMessageKey(message),
-        });
-        continue;
-      }
-
-      pushAgentPlain(message, question, conversationReplayAuthor(message), options);
-      items.push({
-        id: `${message.id}:notice`,
-        kind: 'clarification_notice',
-        text: 'Altus 将在你回复后继续工作',
-        timestamp: message.createdAt,
-        messageKey: conversationMessageKey(message),
-      });
-      continue;
-    }
-
-    if (type === 'status_update' || type === 'session_started') {
-      const output = messageOutputPreviewRecord(message);
-      const label = conversationReplayNoticeText(message);
-      const segments =
-        messageEventType(message) === 'deliverables_ready' && Array.isArray(output?.deliverables)
-          ? ['完成任务', '已完成', '对话已结束。']
-          : undefined;
-      pushCapsule(message, label, segments);
-      continue;
-    }
-
-    if (type === 'executor_event') {
-      if (isManagedConversationExecutionEvent(message)) {
-        const managedToolItem = buildConversationManagedToolItem(message);
-        if (managedToolItem) {
-          items.push(managedToolItem);
-          continue;
-        }
-      }
-
-      const metadata = toRecord(message.metadata);
-      const eventType = asText(metadata.eventType).toLowerCase();
-      const eventInfo = getConversationReplayOpencodeEventInfo(metadata);
-      const item = toRecord(toRecord(metadata.event).item);
-      const itemType = (asText(metadata.itemType) || asText(item.type)).toLowerCase();
-      const content =
-        asText(item.text) ||
-        asText(item.content) ||
-        asText(item.message) ||
-        conversationReplayMessageText(message);
-      const executorName = messageExecutor(message) ? executorLabel(messageExecutor(message) || '') : conversationReplayAuthor(message);
-
-      if (eventType === 'turn.started') {
-        pushCapsule(message, `${executorName} 开始执行`);
-        continue;
-      }
-
-      if (eventType === 'turn.completed') {
-        pushCapsule(message, `${executorName} 执行完成`);
-        continue;
-      }
-
-      if (eventType === 'turn.failed' || eventType === 'turn.interrupted') {
-        pushCapsule(message, content || `${executorName} 执行失败`);
-        continue;
-      }
-
-      if (eventType === 'turn/plan/updated' && content) {
-        pushAgentPlain(message, content, executorName);
-        continue;
-      }
-
-      if (eventType === 'stderr.line' || eventType === 'stdout.line' || eventType === 'item/filechange/outputdelta') {
-        continue;
-      }
-
-      if (itemType === 'approval_request' || itemType === 'approvalrequest') {
-        pushCapsule(message, '需要授权');
-        pushAgentPlain(message, content || `${executorName} 需要进一步授权后才能继续执行。`, executorName);
-        continue;
-      }
-
-      if (itemType === 'command_execution' || itemType === 'commandexecution') {
-        const commandText = asText(metadata.command) || asText(item.command);
-        items.push(
-          buildConversationOpencodeToolCard({
-            message,
-            eventType: 'command.executed',
-            toolName: 'bash',
-            properties: {
-              command: commandText,
-              stdout: asText(metadata.outputPreview) || asText(item.aggregated_output),
-              status: asText(metadata.itemStatus) || asText(item.status),
-            },
-            part: {},
-            content,
-            metadata,
-          }),
-        );
-        continue;
-      }
-
-      if (itemType === 'file_change' || itemType === 'filechange' || itemType === 'diff' || eventType === 'turn/diff/updated') {
-        const files = Array.isArray((metadata as { fileChanges?: unknown[] }).fileChanges)
-          ? ((metadata as { fileChanges?: unknown[] }).fileChanges || [])
-              .map((entry) => toRecord(entry))
-              .map((entry) => ({
-                kind: asText(entry.kind),
-                path: asText(entry.path) || asText(entry.file),
-              }))
-              .filter((entry) => entry.path)
-          : [];
-        items.push(
-          buildConversationOpencodeToolCard({
-            message,
-            eventType: 'file.changed',
-            toolName: asText(eventInfo.toolName) || 'apply_patch',
-            properties: {
-              label: files[0]?.kind ? conversationReplayMapFileChangeLabel(files[0].kind) : '文件变更',
-              files,
-              file: files[0]?.path || '',
-              path: files[0]?.path || '',
-              status: asText(metadata.itemStatus) || asText(item.status) || 'completed',
-            },
-            part: {},
-            content,
-            metadata,
-          }),
-        );
-        continue;
-      }
-
-      if (
-        eventInfo.partType === 'tool' ||
-        eventInfo.eventType.startsWith('file.') ||
-        eventInfo.eventType.startsWith('pty.') ||
-        eventInfo.eventType === 'command.executed' ||
-        content.startsWith('[Tool]')
-      ) {
-        items.push(
-          buildConversationOpencodeToolCard({
-            message,
-            eventType: eventInfo.eventType,
-            toolName: eventInfo.toolName,
-            properties: eventInfo.properties,
-            part: eventInfo.part,
-            content,
-            metadata,
-          }),
-        );
-        continue;
-      }
-
-      if (content) {
-        pushAgentPlain(message, content, executorName);
-      }
-      continue;
-    }
-
-    if (type === 'opencode_event') {
-      const metadata = toRecord(message.metadata);
-      const eventInfo = getConversationReplayOpencodeEventInfo(metadata);
-      const content = conversationReplayMessageText(message);
-      const normalizedContent = normalizeConversationReplayText(content);
-
-      if (eventInfo.eventType === 'message.final') {
-        if (!normalizedContent) continue;
-        pushAgentPlain(message, content, 'OpenCode');
-        continue;
-      }
-
-      if (eventInfo.partType === 'text') {
-        if (!normalizedContent) continue;
-        pushAgentPlain(message, content, 'OpenCode');
-        continue;
-      }
-
-      if (
-        eventInfo.partType === 'tool' ||
-        eventInfo.eventType.startsWith('file.') ||
-        eventInfo.eventType.startsWith('pty.') ||
-        eventInfo.eventType === 'command.executed' ||
-        content.startsWith('[Tool]')
-      ) {
-        items.push(
-          buildConversationOpencodeToolCard({
-            message,
-            eventType: eventInfo.eventType,
-            toolName: eventInfo.toolName,
-            properties: eventInfo.properties,
-            part: eventInfo.part,
-            content,
-            metadata,
-          }),
-        );
-      }
-      continue;
-    }
-
-    if (type === 'error' || type === 'opencode_error') {
-      items.push({
-        id: message.id,
-        kind: 'error',
-        text: conversationReplayMessageText(message),
-        timestamp: message.createdAt,
-        author: conversationReplayAuthor(message),
-        messageKey: conversationMessageKey(message),
-      });
-    }
-  }
-
-  let previousAuthor = '';
-  for (const item of items) {
-    if (item.kind === 'agent_plain' || item.kind === 'error') {
-      item.showAuthor = item.author !== previousAuthor;
-      previousAuthor = item.author;
-      continue;
-    }
-    if (item.kind === 'capsule') {
-      continue;
-    }
-    previousAuthor = '';
-  }
-
-  return items;
-}
 
 function formatStateSnapshot(snapshot?: { status?: string; stage?: string; phase?: string }) {
   const status = statusLabel(snapshot?.status || '-');
@@ -3119,22 +2847,6 @@ function resultClassName(result: string) {
   return `status-pill result-pill result-${result}`;
 }
 
-function auditActionLabel(action?: string | null) {
-  if (action === 'start') return '启动';
-  if (action === 'stop') return '停止';
-  if (action === 'shutdown') return '关机';
-  if (action === 'reboot') return '重启';
-  if (action === 'resume') return '恢复';
-  if (action === 'suspend') return '暂停';
-  return action || '-';
-}
-
-function auditResultLabel(result?: string | null) {
-  if (result === 'success') return '成功';
-  if (result === 'failed') return '失败';
-  return result || '-';
-}
-
 function templateIdOf(template?: E2bTemplate | E2bTemplateWithBuilds | null) {
   if (!template) return '';
   return ((template as any).templateID ?? (template as any).templateId ?? '') as string;
@@ -3199,15 +2911,6 @@ const DEFAULT_TRANSITION_FILTERS = {
   toTime: '',
 };
 
-const DEFAULT_AUDIT_FILTERS: AuditFilterState = {
-  query: '',
-  operator: 'all',
-  action: 'all',
-  result: 'all',
-  from: '',
-  to: '',
-};
-
 type AdminUrlState = {
   activeSection: SectionKey;
   deployment: DeploymentManagementViewState;
@@ -3234,7 +2937,6 @@ type AdminUrlState = {
   skill: SkillManagementViewState;
   connectorGuide: ConnectorGuideManagementViewState;
   osacRelease: OsacReleaseManagementViewState;
-  audit: AuditFilterState;
 };
 
 const ADMIN_URL_QUERY_KEYS = [
@@ -3288,14 +2990,6 @@ const ADMIN_URL_QUERY_KEYS = [
   'osac_q',
   'osac_id',
   'osac_dialog',
-  'audit_q',
-  'audit_operator',
-  'audit_action',
-  'audit_result',
-  'audit_session',
-  'audit_target',
-  'audit_from',
-  'audit_to',
 ] as const;
 
 const USER_DETAIL_TAB_VALUES = new Set(['overview', 'billing', 'conversations', 'sandboxes', 'deployments']);
@@ -3320,7 +3014,6 @@ function isSectionKey(value: string | null): value is SectionKey {
     || value === 'connectorGuide'
     || value === 'osacRelease'
     || value === 'sandbox'
-    || value === 'audit'
     || value === 'billing';
 }
 
@@ -3388,7 +3081,6 @@ function readAdminUrlState(): AdminUrlState {
   const skillState = cloneSkillManagementViewState();
   const connectorGuideState = cloneConnectorGuideManagementViewState();
   const osacReleaseState = cloneOsacReleaseManagementViewState();
-  const auditState = { ...DEFAULT_AUDIT_FILTERS };
 
   if (typeof window === 'undefined') {
     return {
@@ -3417,7 +3109,6 @@ function readAdminUrlState(): AdminUrlState {
       skill: skillState,
       connectorGuide: connectorGuideState,
       osacRelease: osacReleaseState,
-      audit: auditState,
     };
   }
 
@@ -3500,13 +3191,6 @@ function readAdminUrlState(): AdminUrlState {
   osacReleaseState.selectedReleaseId = params.get('osac_id') || null;
   osacReleaseState.detailDialogOpen = params.get('osac_dialog') === '1' && Boolean(osacReleaseState.selectedReleaseId);
 
-  auditState.query = params.get('audit_q') || '';
-  auditState.operator = params.get('audit_operator') || 'all';
-  auditState.action = params.get('audit_action') || 'all';
-  auditState.result = params.get('audit_result') || 'all';
-  auditState.from = params.get('audit_from') || '';
-  auditState.to = params.get('audit_to') || '';
-
   return {
     activeSection,
     deployment: deploymentState,
@@ -3541,7 +3225,6 @@ function readAdminUrlState(): AdminUrlState {
     skill: skillState,
     connectorGuide: connectorGuideState,
     osacRelease: osacReleaseState,
-    audit: auditState,
   };
 }
 
@@ -3554,7 +3237,6 @@ function writeAdminUrlState(input: {
   skill: SkillManagementViewState;
   connectorGuide: ConnectorGuideManagementViewState;
   osacRelease: OsacReleaseManagementViewState;
-  audit: AuditFilterState;
 }) {
   if (typeof window === 'undefined') return;
 
@@ -3677,15 +3359,6 @@ function writeAdminUrlState(input: {
     }
   }
 
-  if (input.activeSection === 'audit') {
-    if (input.audit.query) url.searchParams.set('audit_q', input.audit.query);
-    if (input.audit.operator !== 'all') url.searchParams.set('audit_operator', input.audit.operator);
-    if (input.audit.action !== 'all') url.searchParams.set('audit_action', input.audit.action);
-    if (input.audit.result !== 'all') url.searchParams.set('audit_result', input.audit.result);
-    if (input.audit.from) url.searchParams.set('audit_from', input.audit.from);
-    if (input.audit.to) url.searchParams.set('audit_to', input.audit.to);
-  }
-
   const nextQuery = url.searchParams.toString();
   const nextUrl = `${url.pathname}${nextQuery ? `?${nextQuery}` : ''}${url.hash}`;
   const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -3754,6 +3427,27 @@ export default function App() {
   const [conversationBillingUsage, setConversationBillingUsage] = useState<ConversationBillingUsage | null>(null);
   const [conversationBillingLoading, setConversationBillingLoading] = useState(false);
   const [transitionView, setTransitionView] = useState<'timeline' | 'list'>('timeline');
+  const [conversationApiTraces, setConversationApiTraces] = useState<ApiTraceItem[]>([]);
+  const [conversationApiTracesLoading, setConversationApiTracesLoading] = useState(false);
+
+  const [apiTraceStats, setApiTraceStats] = useState<{
+    totalCalls: number;
+    avgDurationMs: number;
+    errorCount: number;
+    totalTokens: number;
+    byType: Array<{ type: string; count: number }>;
+    byTool: Array<{ toolName: string | null; count: number; avgDurationMs: number }>;
+    byModel: Array<{ model: string | null; count: number; totalTokens: number }>;
+  } | null>(null);
+  const [apiTraceStatsLoading, setApiTraceStatsLoading] = useState(false);
+  const [apiTraceTrend, setApiTraceTrend] = useState<Array<{
+    bucket: string;
+    count: number;
+    avgDurationMs: number;
+    totalTokens: number;
+    errorCount: number;
+  }> | null>(null);
+  const [apiTraceTrendLoading, setApiTraceTrendLoading] = useState(false);
   const [transitionQuery, setTransitionQuery] = useState('');
   const [transitionFilters, setTransitionFilters] = useState(DEFAULT_TRANSITION_FILTERS);
   const [transitionAdvancedFiltersOpen, setTransitionAdvancedFiltersOpen] = useState(false);
@@ -3769,7 +3463,6 @@ export default function App() {
   const [connectorGuideManagementViewState, setConnectorGuideManagementViewState] = useState<ConnectorGuideManagementViewState>(() => cloneConnectorGuideManagementViewState(initialUrlState.connectorGuide));
   const [osacReleaseManagementViewState, setOsacReleaseManagementViewState] = useState<OsacReleaseManagementViewState>(() => cloneOsacReleaseManagementViewState(initialUrlState.osacRelease));
 
-  const [agentOverview, setAgentOverview] = useState<AgentManagementOverview | null>(null);
   const [sandboxOverview, setSandboxOverview] = useState<SandboxManagementOverview | null>(null);
   const [sandboxLiveSummary, setSandboxLiveSummary] = useState<SandboxLiveSummary | null>(null);
   const [sandboxLiveSummaryRefreshing, setSandboxLiveSummaryRefreshing] = useState(false);
@@ -3845,24 +3538,16 @@ export default function App() {
   const [templateAliasDraft, setTemplateAliasDraft] = useState('');
   const [templateAliasResult, setTemplateAliasResult] = useState<unknown>(null);
   const [sandboxBusyIds, setSandboxBusyIds] = useState<Record<string, boolean>>({});
-  const [auditEntries, setAuditEntries] = useState<AuditLogEntry[]>([]);
-  const [auditResponseMeta, setAuditResponseMeta] = useState<AuditResponse>({
-    total: 0,
-    filteredTotal: 0,
-    limit: 80,
-    offset: 0,
-    entries: [],
-    availableActions: [],
-    availableOperators: [],
-    availableTargets: [],
+
+  const [conversationView, setConversationView] = useState<'index' | 'overview'>(() => {
+    return (localStorage.getItem('admin-conversation-view') as 'index' | 'overview') || 'index';
   });
-  const [auditFilters, setAuditFilters] = useState<AuditFilterState>({ ...initialUrlState.audit });
-  const [auditSort, setAuditSort] = useState<AuditSortState>(DEFAULT_AUDIT_SORT);
-  const [auditDetail, setAuditDetail] = useState<AuditDetailResponse | null>(null);
-  const [auditSummaryRefreshing, setAuditSummaryRefreshing] = useState(false);
-  const [auditSummaryFetchedAt, setAuditSummaryFetchedAt] = useState<string | null>(null);
-  const [auditSummaryClock, setAuditSummaryClock] = useState(() => Date.now());
-  const [selectedAgentStageKey, setSelectedAgentStageKey] = useState<string | null>(null);
+  const [overviewSelectedStageKey, setOverviewSelectedStageKey] = useState<string | null>(null);
+  const [serviceHealth, setServiceHealth] = useState({
+    oneceoApi: { online: false as boolean, timestamp: null as string | null },
+    agentApi: { online: false as boolean, message: '未知' as string, timestamp: null as string | null },
+  });
+
   const [toasts, setToasts] = useState<UiToast[]>([]);
   const [operationOverlay, setOperationOverlay] = useState<{ message: string } | null>(null);
   const [sandboxLoadProgress, setSandboxLoadProgress] = useState<SandboxLoadProgressState>({
@@ -3891,8 +3576,7 @@ export default function App() {
     startWidth: number;
   } | null>(null);
   const conversationDetailCacheRef = useRef<Map<string, ConversationSessionDetailResponse>>(new Map());
-  const auditRequestVersionRef = useRef(0);
-  const auditFiltersRef = useRef<AuditFilterState>({ ...initialUrlState.audit });
+
   const toastIdRef = useRef(1);
   const lastErrorToastRef = useRef<string | null>(null);
   const sidebarNavRef = useRef<HTMLElement | null>(null);
@@ -4066,6 +3750,7 @@ export default function App() {
     }
     setSelectedSessionId(sessionId);
     setConversationDetailLoading(true);
+    setConversationApiTraces([]);
   }, [selectedSessionId]);
 
   const claimOverlayZIndex = useCallback(() => {
@@ -4148,21 +3833,6 @@ export default function App() {
       return {
         key,
         direction: key === 'updated_at' || key === 'created_at' ? 'desc' : 'asc',
-      };
-    });
-  }, []);
-
-  const toggleAuditSort = useCallback((key: AuditSortKey) => {
-    setAuditSort((previous) => {
-      if (previous.key === key) {
-        return {
-          key,
-          direction: previous.direction === 'asc' ? 'desc' : 'asc',
-        };
-      }
-      return {
-        key,
-        direction: key === 'time' ? 'desc' : 'asc',
       };
     });
   }, []);
@@ -4250,11 +3920,6 @@ export default function App() {
     },
     [archiveColumnWidths]
   );
-
-  const loadAgentSection = useCallback(async () => {
-    const result = await api.getAgentManagementOverview();
-    setAgentOverview(result);
-  }, []);
 
   const loadSandboxOverview = useCallback(async () => {
     if (sandboxOverviewRequestRef.current) {
@@ -4556,14 +4221,6 @@ export default function App() {
     []
   );
 
-  const auditOriginForEntry = useCallback(
-    (entry: AuditLogEntry): AdminDetailOrigin => ({
-      section: 'audit',
-      trail: `审计日志 / ${auditActionLabel(entry.action)} / ${entry.id}`,
-    }),
-    []
-  );
-
   const openTemplateDetail = useCallback(async (templateId: string) => {
     try {
       await runBlockingTask(
@@ -4698,18 +4355,6 @@ export default function App() {
     void openSandboxDetail(sandboxId, origin || currentConversationOrigin());
   }, [currentConversationOrigin, openSandboxDetail]);
 
-  const openConversationFromAudit = useCallback((entry: AuditLogEntry) => {
-    if (!entry.sessionId) return;
-    setError(null);
-    openConversationDialog(entry.sessionId, 'overview', auditOriginForEntry(entry));
-  }, [auditOriginForEntry, openConversationDialog]);
-
-  const openSandboxFromAudit = useCallback((entry: AuditLogEntry) => {
-    if (!entry.targetVmId) return;
-    setError(null);
-    void openSandboxDetail(entry.targetVmId, auditOriginForEntry(entry));
-  }, [auditOriginForEntry, openSandboxDetail]);
-
   const openConversationManagementView = useCallback(() => {
     sectionRefreshHandlerRef.current = null;
     setConversationSectionOrigin(conversationDialogOrigin);
@@ -4733,7 +4378,43 @@ export default function App() {
   }, [sandboxModalOrigin]);
 
   useEffect(() => {
-    if (authStatus !== 'authenticated' || activeSection !== 'sandbox') {
+    if (authStatus !== 'authenticated') {
+      return;
+    }
+    if (activeSection !== 'conversation') {
+      return;
+    }
+    let cancelled = false;
+    setApiTraceStatsLoading(true);
+    setApiTraceTrendLoading(true);
+    const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    void api.getApiTraceStats({ from })
+      .then((stats) => {
+        if (!cancelled) setApiTraceStats(stats);
+      })
+      .catch(() => {
+        if (!cancelled) setApiTraceStats(null);
+      })
+      .finally(() => {
+        if (!cancelled) setApiTraceStatsLoading(false);
+      });
+    void api.getApiTraceTrend({ from, interval: 'hour' })
+      .then((trend) => {
+        if (!cancelled) setApiTraceTrend(trend);
+      })
+      .catch(() => {
+        if (!cancelled) setApiTraceTrend(null);
+      })
+      .finally(() => {
+        if (!cancelled) setApiTraceTrendLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authStatus, activeSection]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated') {
       return;
     }
     const initialSandboxId = initialUrlStateRef.current?.sandbox.selectedSandboxId;
@@ -5441,65 +5122,6 @@ export default function App() {
     }
   }, [runBlockingTask]);
 
-  useEffect(() => {
-    auditFiltersRef.current = auditFilters;
-  }, [auditFilters]);
-
-  const loadAuditSection = useCallback(
-    async (filters: AuditFilterState = auditFiltersRef.current) => {
-      const requestVersion = ++auditRequestVersionRef.current;
-      const result = await api.listAudit({
-        query: filters.query.trim() || undefined,
-        operator: filters.operator !== 'all' ? filters.operator : undefined,
-        action: filters.action !== 'all' ? filters.action : undefined,
-        result: filters.result !== 'all' ? filters.result : undefined,
-        from: filters.from ? new Date(filters.from).toISOString() : undefined,
-        to: filters.to ? new Date(filters.to).toISOString() : undefined,
-        limit: 80,
-        offset: 0,
-      });
-      if (requestVersion !== auditRequestVersionRef.current) {
-        return;
-      }
-      setAuditEntries(result.entries);
-      setAuditResponseMeta(result);
-      setAuditSummaryFetchedAt(new Date().toISOString());
-      setAuditSummaryClock(Date.now());
-      setError(null);
-    },
-    []
-  );
-
-  const refreshAuditSummary = useCallback(async () => {
-    setAuditSummaryRefreshing(true);
-    try {
-      await loadAuditSection();
-      setError(null);
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : '刷新审计日志失败');
-    } finally {
-      setAuditSummaryRefreshing(false);
-    }
-  }, [loadAuditSection]);
-
-  const openAuditDetail = useCallback(
-    async (auditId: string) => {
-      try {
-        await runBlockingTask(
-          '正在加载日志详情',
-          async () => {
-            const result = await api.getAuditDetail(auditId);
-            setAuditDetail(result);
-          },
-          { fallbackError: '加载日志详情失败' }
-        );
-      } catch {
-        // error is routed to banner and toast
-      }
-    },
-    [runBlockingTask]
-  );
-
   const loadSection = useCallback(
     async (section: SectionKey, initial = false) => {
       if (initial) {
@@ -5509,7 +5131,7 @@ export default function App() {
 
       try {
         if (section === 'kvm') {
-          await Promise.all([loadKvmSection(), loadAuditSection()]);
+          await loadKvmSection();
         } else if (section === 'operations') {
           setError(null);
         } else if (section === 'deployment') {
@@ -5518,8 +5140,6 @@ export default function App() {
           await loadConversationSessions();
         } else if (section === 'user') {
           setError(null);
-        } else if (section === 'agent') {
-          await loadAgentSection();
         } else if (section === 'skill') {
           setError(null);
         } else if (section === 'connectorGuide') {
@@ -5534,7 +5154,7 @@ export default function App() {
             ]);
           }
         } else {
-          await loadAuditSection();
+          setError(null);
         }
         setError(null);
       } catch (requestError) {
@@ -5545,8 +5165,6 @@ export default function App() {
       }
     },
     [
-      loadAgentSection,
-      loadAuditSection,
       loadConversationSessions,
       loadKvmSection,
       loadSandboxSection,
@@ -5666,11 +5284,9 @@ export default function App() {
       skill: skillManagementViewState,
       connectorGuide: connectorGuideManagementViewState,
       osacRelease: osacReleaseManagementViewState,
-      audit: auditFilters,
     });
   }, [
     activeSection,
-    auditFilters,
     connectorGuideManagementViewState,
     conversationExecutorFilter,
     deploymentManagementViewState,
@@ -5694,18 +5310,28 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    const firstStageKey = agentOverview?.stageDistribution?.[0]?.stageKey || null;
-    if (!selectedAgentStageKey || !(agentOverview?.stageDistribution || []).some((item) => item.stageKey === selectedAgentStageKey)) {
-      setSelectedAgentStageKey(firstStageKey);
-    }
-  }, [agentOverview, selectedAgentStageKey]);
-
-  useEffect(() => {
     if (authStatus !== 'authenticated') {
       return;
     }
     loadSection(activeSection, true);
   }, [activeSection, authStatus, loadSection]);
+
+  useEffect(() => {
+    if (conversationView !== 'overview' || authStatus !== 'authenticated') return;
+    Promise.allSettled([api.health(), api.getAgentHealth()]).then(([apiHealth, agentHealth]) => {
+      setServiceHealth({
+        oneceoApi: {
+          online: apiHealth.status === 'fulfilled' && apiHealth.value.status === 'ok',
+          timestamp: apiHealth.status === 'fulfilled' ? apiHealth.value.timestamp : null,
+        },
+        agentApi: {
+          online: agentHealth.status === 'fulfilled',
+          message: agentHealth.status === 'fulfilled' ? agentHealth.value.message : '智能体接口不可用',
+          timestamp: agentHealth.status === 'fulfilled' ? agentHealth.value.timestamp : null,
+        },
+      });
+    });
+  }, [conversationView, authStatus]);
 
   useEffect(() => {
     if (!sandboxLiveSummary?.countedAt) {
@@ -5730,18 +5356,6 @@ export default function App() {
       window.clearInterval(timer);
     };
   }, [conversationSummaryFetchedAt]);
-
-  useEffect(() => {
-    if (!auditSummaryFetchedAt) {
-      return;
-    }
-    const timer = window.setInterval(() => {
-      setAuditSummaryClock(Date.now());
-    }, 10000);
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [auditSummaryFetchedAt]);
 
   useEffect(() => {
     if (!loading || activeSection !== 'sandbox' || !sandboxLoadProgress.startedAt) {
@@ -5945,6 +5559,30 @@ export default function App() {
       cancelled = true;
     };
   }, [conversationDetail?.session.id, conversationDialogTab]);
+
+  useEffect(() => {
+    const sessionId = conversationDetail?.session.id || null;
+    if (!sessionId) return;
+    let cancelled = false;
+    setConversationApiTracesLoading(true);
+    void api.getSessionApiTraces(sessionId, { limit: 500 })
+      .then((result) => {
+        if (!cancelled) {
+          setConversationApiTraces(result.traces);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setConversationApiTraces([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setConversationApiTracesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationDetail?.session.id]);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') {
@@ -6302,48 +5940,58 @@ export default function App() {
       failedToolNames,
     };
   })();
-  const agentCapabilitySummary = (() => {
-    const capabilities = agentOverview?.capabilities || [];
-    return {
-      total: capabilities.length,
-      available: capabilities.filter((item) => item.status === 'available').length,
-      planned: capabilities.filter((item) => item.status === 'planned').length,
-    };
-  })();
-  const auditSummary = (() => {
-    return {
-      total: auditResponseMeta.filteredTotal || auditEntries.length,
-      success: auditEntries.filter((item) => item.result === 'success').length,
-      failed: auditEntries.filter((item) => item.result !== 'success').length,
-    };
-  })();
-  const auditSummaryAge = formatCompactRelativeTime(auditSummaryFetchedAt, auditSummaryClock);
-  const sortedAuditEntries = [...auditEntries].sort((a, b) => {
-    let delta = 0;
-    if (auditSort.key === 'id') {
-      delta = (a.id || '').localeCompare(b.id || '', 'zh-Hans-CN', { sensitivity: 'base' });
-    } else if (auditSort.key === 'time') {
-      delta = toTimestamp(a.timestamp) - toTimestamp(b.timestamp);
-    } else if (auditSort.key === 'action') {
-      delta = auditActionLabel(a.action).localeCompare(auditActionLabel(b.action), 'zh-Hans-CN', { sensitivity: 'base' });
-    } else if (auditSort.key === 'result') {
-      delta = auditResultLabel(a.result).localeCompare(auditResultLabel(b.result), 'zh-Hans-CN', { sensitivity: 'base' });
-    } else if (auditSort.key === 'operator') {
-      delta = (a.operator || '').localeCompare(b.operator || '', 'zh-Hans-CN', { sensitivity: 'base' });
-    } else if (auditSort.key === 'target') {
-      delta = (a.targetVmId || '').localeCompare(b.targetVmId || '', 'zh-Hans-CN', { sensitivity: 'base' });
-    } else if (auditSort.key === 'session') {
-      delta = (a.sessionId || '').localeCompare(b.sessionId || '', 'zh-Hans-CN', { sensitivity: 'base' });
+
+  // 阶段分布：从会话列表前端计算
+  const stageDistribution = (() => {
+    const map = new Map<
+      string,
+      {
+        stageKey: string;
+        label: string;
+        value: number;
+        statuses: Map<string, number>;
+        recentSessions: ConversationSession[];
+      }
+    >();
+    for (const session of conversationSessions) {
+      const key = session.stage || 'unknown';
+      const bucket = map.get(key) || {
+        stageKey: key,
+        label: conversationStageLabel(key),
+        value: 0,
+        statuses: new Map<string, number>(),
+        recentSessions: [],
+      };
+      bucket.value += 1;
+      bucket.statuses.set(session.status, (bucket.statuses.get(session.status) || 0) + 1);
+      bucket.recentSessions.push(session);
+      map.set(key, bucket);
     }
-    if (delta !== 0) return auditSort.direction === 'asc' ? delta : -delta;
-    return toTimestamp(b.timestamp) - toTimestamp(a.timestamp);
-  });
-  const selectedAgentStage =
-    agentOverview?.stageDistribution.find((item) => item.stageKey === selectedAgentStageKey) ||
-    agentOverview?.stageDistribution[0] ||
+    return Array.from(map.values())
+      .map((item) => ({
+        stageKey: item.stageKey,
+        label: item.label,
+        value: item.value,
+        statusSummary: Array.from(item.statuses.entries())
+          .map(([label, value]) => ({ label: statusLabel(label), value }))
+          .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label)),
+        recentSessions: [...item.recentSessions]
+          .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+          .slice(0, 6),
+      }))
+      .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+  })();
+
+  const selectedOverviewStage =
+    stageDistribution.find((item) => item.stageKey === overviewSelectedStageKey) ||
+    stageDistribution[0] ||
     null;
-  const auditActionOptions = auditResponseMeta.availableActions || [];
-  const auditOperatorOptions = auditResponseMeta.availableOperators || [];
+
+  const capabilities = [
+    { key: 'task-creation', name: 'Task Creation Agent', transport: 'WebSocket', endpoint: '/ws/task-creation', status: 'available' },
+    { key: 'ceo-view', name: 'CEO View Agent', transport: 'HTTP', endpoint: '/api/agents/ceo-view/*', status: 'planned' },
+    { key: 'task-detail', name: 'Task Detail Agent', transport: 'HTTP', endpoint: '/api/agents/task-detail/*', status: 'planned' },
+  ];
 
   const stateTransitions = conversationDetail?.trace?.stateTransitions || [];
   const llmItems = conversationDetail?.trace?.llm || [];
@@ -6497,7 +6145,6 @@ export default function App() {
   ].filter(Boolean).length;
   const latestFilteredTransition = filteredTransitions[filteredTransitions.length - 1] || null;
   const latestRelatedEnvironmentUpdatedAt = recentRelatedEnvironments[0]?.updatedAt || primaryEnvironment?.updatedAt || null;
-  const conversationReplayItems = buildConversationReplayItems(conversationMessages);
   const conversationDialogDetail =
     conversationDialog && conversationDetail?.session.id === conversationDialog.sessionId
       ? conversationDetail
@@ -6798,44 +6445,6 @@ export default function App() {
 
   const renderConversationDetailedLogsPanel = () => (
     <div className="conversation-detailed-logs-stack">
-      <article className="sub-panel conversation-detailed-logs-summary">
-        <div className="conversation-detailed-logs-summary-top">
-          <div>
-            <p className="section-tag">原始日志</p>
-            <h3 className="conversation-detailed-logs-title">结构化导出视图</h3>
-            <p className="panel-caption conversation-detailed-logs-caption">
-              保留完整结构，先给出消息量、LLM 轨迹和最近记录时间，再进入 JSON 正文。
-            </p>
-          </div>
-          <div className="conversation-detailed-logs-meta">
-            <span className="session-status">会话 {conversationDetailedLogs.sessionId || '-'}</span>
-            <span className="session-status">导出 {formatDateTime(conversationDetailedLogs.exportedAt)}</span>
-          </div>
-        </div>
-        <div className="conversation-detailed-logs-stat-strip">
-          <article className="conversation-detailed-logs-stat">
-            <span>消息记录</span>
-            <strong>{conversationDetailedLogs.counts.messages}</strong>
-            <small>用户、智能体与系统消息</small>
-          </article>
-          <article className="conversation-detailed-logs-stat">
-            <span>LLM 轨迹</span>
-            <strong>{conversationDetailedLogs.counts.llm}</strong>
-            <small>模型调用与推断条目</small>
-          </article>
-          <article className="conversation-detailed-logs-stat">
-            <span>总载荷</span>
-            <strong>{conversationDetailedLogs.counts.total}</strong>
-            <small>当前导出结构中的全部条目</small>
-          </article>
-          <article className="conversation-detailed-logs-stat">
-            <span>最近记录</span>
-            <strong>{formatDateTime(conversationDetailedLogs.entries[0]?.timestamp)}</strong>
-            <small>{conversationDetailedLogs.entries[0]?.summary || '当前没有日志条目'}</small>
-          </article>
-        </div>
-      </article>
-
       <article className="sub-panel conversation-detailed-logs-panel">
         <div className="conversation-detailed-logs-panel-head">
           <div>
@@ -7276,214 +6885,37 @@ export default function App() {
     </section>
   );
 
-  const renderConversationReplayPanel = () => (
-    <div className="conversation-replay-shell">
-      <div className="conversation-replay-scroll">
-        {conversationReplayItems.length === 0 ? (
-          <p className="empty">无可回放的用户态消息。</p>
-        ) : (
-          conversationReplayItems.map((item) => {
-            if (item.kind === 'user') {
-              return (
-                <div key={item.id} className="conversation-replay-row conversation-replay-row-user" title={formatDateTime(item.timestamp)}>
-                  <div className="conversation-replay-user-bubble">
-                    <span className="conversation-replay-user-text">{item.text}</span>
-                  </div>
-                </div>
-              );
-            }
+  const renderConversationReplayPanel = () => {
+    const sessionId = conversationDetail?.session.id;
+    if (!sessionId) {
+      return <p className="empty">会话数据加载中...</p>;
+    }
 
-            if (item.kind === 'capsule') {
-              const segments = item.segments && item.segments.length > 0 ? item.segments : [item.label];
-              const lastIndex = segments.length - 1;
-              return (
-                <div key={item.id} className="conversation-replay-row conversation-replay-row-agent" title={formatDateTime(item.timestamp)}>
-                  <div className={`conversation-replay-capsule conversation-replay-capsule-${item.tone}`}>
-                    <span className="conversation-replay-capsule-content">
-                      {segments.map((segment, index) => (
-                        <span
-                          key={`${item.id}-${segment}-${index}`}
-                          className={item.loading && (segments.length === 1 || index < lastIndex) ? 'conversation-replay-capsule-loading' : ''}
-                        >
-                          {segment}
-                          {index < lastIndex ? <span className="conversation-replay-capsule-dot">·</span> : null}
-                        </span>
-                      ))}
-                    </span>
-                  </div>
-                </div>
-              );
-            }
-
-            if (item.kind === 'clarification_notice') {
-              return (
-                <div key={item.id} className="conversation-replay-row conversation-replay-row-agent" title={formatDateTime(item.timestamp)}>
-                  <div className="conversation-replay-clarification">
-                    <span className="conversation-replay-clarification-icon" aria-hidden="true" />
-                    <span>{item.text}</span>
-                  </div>
-                </div>
-              );
-            }
-
-            if (item.kind === 'managed_tool') {
-              const statusLabel =
-                item.status === 'failed'
-                  ? '失败'
-                  : item.status === 'completed'
-                    ? '已完成'
-                    : item.status === 'running'
-                      ? '进行中'
-                      : '未知';
-              return (
-                <div key={item.id} className="conversation-replay-row conversation-replay-row-agent" title={formatDateTime(item.timestamp)}>
-                  <div className="conversation-replay-tool-block">
-                    <div
-                      className={`conversation-replay-managed-tool ${
-                        item.expandWrite ? 'conversation-replay-managed-tool-expanded' : 'conversation-replay-managed-tool-compact'
-                      } conversation-replay-managed-tool-${item.status}`}
-                    >
-                      {item.expandWrite ? (
-                        <>
-                          <div className="conversation-replay-managed-tool-header">
-                            <div className="conversation-replay-tool-title-group">
-                              <span className="conversation-replay-tool-icon-badge">写</span>
-                              <div>
-                                <div className="conversation-replay-tool-title">写入文件</div>
-                                <div className="conversation-replay-tool-subtitle">{item.summary}</div>
-                              </div>
-                            </div>
-                            <div className="conversation-replay-tool-status-stack">
-                              <span className={`conversation-replay-tool-status conversation-replay-tool-status-${item.status}`}>{statusLabel}</span>
-                              <span className="conversation-replay-tool-meta">{formatDateTime(item.timestamp)}</span>
-                            </div>
-                          </div>
-                          <div className="conversation-replay-tool-preview conversation-replay-tool-preview-code">
-                            {item.preview || '正在生成代码片段...'}
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <span className="conversation-replay-tool-icon-badge">
-                            {item.toolName === 'shell_execute'
-                              ? '命'
-                              : item.toolName === 'write_file'
-                                ? '写'
-                                : item.toolName === 'read_file'
-                                  ? '读'
-                                  : item.toolName === 'search_code'
-                                    ? '搜'
-                                    : item.toolName === 'list_directory'
-                                      ? '列'
-                                      : item.toolName === 'ask_user'
-                                        ? '问'
-                                        : '工'}
-                          </span>
-                          <span className="conversation-replay-managed-tool-content">
-                            <span className="conversation-replay-managed-tool-label">{getConversationManagedToolDisplayName(item.toolName)}</span>
-                            <span className={`conversation-replay-tool-status conversation-replay-tool-status-${item.status}`}>{statusLabel}</span>
-                            {item.summary ? <span className="conversation-replay-managed-tool-summary">{item.summary}</span> : null}
-                          </span>
-                        </>
-                      )}
-                    </div>
-                    {!item.expandWrite && item.status === 'failed' && item.preview ? (
-                      <div className="conversation-replay-tool-preview conversation-replay-tool-preview-plain">
-                        {item.preview}
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              );
-            }
-
-            if (item.kind === 'opencode_tool') {
-              return (
-                <div key={item.id} className="conversation-replay-row conversation-replay-row-agent" title={formatDateTime(item.timestamp)}>
-                  <div className="conversation-replay-tool-block">
-                    <div
-                      className={`conversation-replay-opencode-tool ${
-                        item.variant === 'card'
-                          ? 'conversation-replay-opencode-tool-card'
-                          : 'conversation-replay-opencode-tool-chip'
-                      } conversation-replay-opencode-tool-${item.tone || 'default'}`}
-                    >
-                      <div className="conversation-replay-tool-title-group">
-                        <span className="conversation-replay-tool-icon-badge">{item.iconLabel}</span>
-                        <div>
-                          <div className="conversation-replay-tool-title-row">
-                            <span className="conversation-replay-tool-title">{item.title}</span>
-                            {item.statusLabel ? (
-                              <span className="conversation-replay-tool-status conversation-replay-tool-status-compact">
-                                {item.statusLabel}
-                              </span>
-                            ) : null}
-                          </div>
-                          {item.subtitle ? <div className="conversation-replay-tool-subtitle">{item.subtitle}</div> : null}
-                        </div>
-                      </div>
-                      {item.command ? (
-                        <div className="conversation-replay-tool-preview conversation-replay-tool-preview-code">
-                          {item.command}
-                        </div>
-                      ) : null}
-                      {item.variant === 'card' && item.preview ? (
-                        <div
-                          className={`conversation-replay-tool-preview ${
-                            item.previewMode === 'code'
-                              ? 'conversation-replay-tool-preview-code'
-                              : 'conversation-replay-tool-preview-plain'
-                          }`}
-                        >
-                          {item.preview}
-                        </div>
-                      ) : null}
-                    </div>
-                    {item.variant === 'chip' && item.preview && item.detail && item.preview !== item.detail ? (
-                      <div className="conversation-replay-tool-preview conversation-replay-tool-preview-plain">{item.preview}</div>
-                    ) : null}
-                  </div>
-                </div>
-              );
-            }
-
-            if (item.kind === 'error') {
-              return (
-                <div key={item.id} className="conversation-replay-row conversation-replay-row-agent" title={formatDateTime(item.timestamp)}>
-                  <article className="conversation-replay-agent-block conversation-replay-agent-block-error">
-                    {item.showAuthor !== false ? (
-                      <div className="conversation-replay-author">{item.author || '智能体'}</div>
-                    ) : null}
-                    <div className="conversation-replay-agent-text">{item.text}</div>
-                  </article>
-                </div>
-              );
-            }
-
-            return (
-              <div key={item.id} className="conversation-replay-row conversation-replay-row-agent" title={formatDateTime(item.timestamp)}>
-                <article className="conversation-replay-agent-block">
-                  {item.showAuthor !== false ? (
-                    <div className="conversation-replay-author">{item.author || '智能体'}</div>
-                  ) : null}
-                  <div className="conversation-replay-agent-text">{item.text}</div>
-                  {item.options?.length ? (
-                    <div className="conversation-replay-option-list">
-                      {item.options.map((option) => (
-                        <span key={`${item.id}-${option}`} className="conversation-replay-option-chip">
-                          {option}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                </article>
-              </div>
-            );
-          })
-        )}
+    return (
+      <div className="panel fade-in" style={{ textAlign: 'center', padding: '48px 24px' }}>
+        <p className="section-tag" style={{ marginBottom: 12 }}>交互回放</p>
+        <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>对话回放已移至独立页面</h2>
+        <p className="panel-caption" style={{ marginBottom: 24, maxWidth: 480, margin: '0 auto 24px' }}>
+          为了提供更好的查看体验，完整的对话回放（含消息、工具调用、API Trace）现在在新标签页中展示。
+        </p>
+        <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className="primary-btn"
+            onClick={() => {
+              window.open(`/conversation-replay.html?session=${encodeURIComponent(sessionId)}`, '_blank');
+            }}
+          >
+            在新标签页打开回放
+          </button>
+        </div>
+        <div style={{ marginTop: 24, display: 'flex', gap: 24, justifyContent: 'center', color: 'var(--text-secondary)', fontSize: 13 }}>
+          <span>{conversationMessages.length} 条消息</span>
+          <span>{conversationApiTraces.length} 条 API Trace</span>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const activeNavItem = NAV_ITEMS.find((item) => item.key === activeSection) || NAV_ITEMS[0];
   const activeNavGroup = NAV_GROUPS.find((group) => group.key === activeNavItem.group) || NAV_GROUPS[0];
@@ -7500,10 +6932,8 @@ export default function App() {
     riskTags: asArray(item?.riskTags),
   }));
   const activeServiceOnline =
-    activeSection === 'agent'
-      ? agentOverview?.agentApi.online
-      : activeSection === 'operations'
-        ? true
+    activeSection === 'operations'
+      ? true
       : activeSection === 'deployment'
         ? true
       : activeSection === 'conversation'
@@ -7518,16 +6948,12 @@ export default function App() {
             ? true
       : activeSection === 'billing'
         ? true
-      : activeSection === 'sandbox'
+        : activeSection === 'sandbox'
         ? sandboxApi?.online
-        : activeSection === 'audit'
-          ? true
         : kvmOverview?.orchestrator.online;
   const activeServiceLabel =
-    activeSection === 'agent'
-      ? '智能体服务'
-      : activeSection === 'operations'
-        ? '运营分析'
+    activeSection === 'operations'
+      ? '运营分析'
       : activeSection === 'deployment'
         ? '平台接口'
       : activeSection === 'conversation'
@@ -7542,10 +6968,8 @@ export default function App() {
             ? '平台接口'
       : activeSection === 'billing'
         ? '计费服务'
-      : activeSection === 'sandbox'
+        : activeSection === 'sandbox'
         ? 'Sandbox 服务'
-        : activeSection === 'audit'
-          ? '审计流'
         : 'KVM 服务';
   const updatedAtLabel =
     activeSection === 'sandbox'
@@ -7564,10 +6988,6 @@ export default function App() {
             ? connectorGuideUpdatedAt
             : activeSection === 'osacRelease'
               ? osacReleaseUpdatedAt
-        : activeSection === 'agent'
-          ? agentOverview?.agentApi.timestamp || agentOverview?.oneceoApi.timestamp
-        : activeSection === 'audit'
-          ? auditSummaryFetchedAt || auditEntries[0]?.timestamp
             : kvmOverview?.updatedAt;
   const lockMainAreaScroll =
     activeSection === 'operations' ||
@@ -7576,7 +6996,6 @@ export default function App() {
     activeSection === 'user' ||
     activeSection === 'skill' ||
     activeSection === 'osacRelease' ||
-    activeSection === 'audit' ||
     activeSection === 'sandbox';
   const currentTemplateId = templateIdOf(templateDetail);
   const currentTemplateAlias = templateAliasOf(templateDetail);
@@ -7610,27 +7029,6 @@ export default function App() {
       // error is routed to banner and toast
     }
   }, [activeSection, breadcrumbTitle, loadSection, runBlockingTask]);
-
-  const updateAuditFilters = useCallback(
-    (nextValue: AuditFilterState | ((current: AuditFilterState) => AuditFilterState)) => {
-      setAuditFilters((current) => {
-        const next = typeof nextValue === 'function'
-          ? (nextValue as (value: AuditFilterState) => AuditFilterState)(current)
-          : nextValue;
-        auditFiltersRef.current = next;
-        void loadAuditSection(next)
-          .catch((requestError) => {
-            setError(requestError instanceof Error ? requestError.message : '审计日志加载失败');
-          });
-        return next;
-      });
-    },
-    [loadAuditSection]
-  );
-
-  const resetAuditFilters = useCallback(() => {
-    updateAuditFilters(DEFAULT_AUDIT_FILTERS);
-  }, [updateAuditFilters]);
 
   const resetSandboxRuntimeFilters = useCallback(() => {
     setSandboxRuntimeQuery('');
@@ -7757,7 +7155,6 @@ export default function App() {
     try {
       await api.powerVm(vm.vmId, action);
       await loadKvmSection();
-      await loadAuditSection();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : 'VM 操作失败');
     } finally {
@@ -7984,7 +7381,6 @@ export default function App() {
         vms={vms}
         onDataChanged={async () => {
           await loadKvmSection();
-          await loadAuditSection();
         }}
         onError={(message) => setError(message)}
       />
@@ -8073,6 +7469,136 @@ export default function App() {
               <strong className="mono">{conversationDetail?.runtime?.opencodeSessionId || '-'}</strong>
             </div>
           </div>
+        </article>
+
+        <article className="panel aside-panel">
+          <div className="panel-header panel-header-stack">
+            <div>
+              <p className="section-tag">API 追踪（24h）</p>
+              <h2>调用聚合</h2>
+            </div>
+          </div>
+          {apiTraceStatsLoading ? (
+            <p className="empty">加载中...</p>
+          ) : apiTraceStats ? (
+            <div className="detail-kv-list">
+              <div>
+                <span>总调用</span>
+                <strong>{apiTraceStats.totalCalls}</strong>
+              </div>
+              <div>
+                <span>平均耗时</span>
+                <strong>{Math.round(apiTraceStats.avgDurationMs)}ms</strong>
+              </div>
+              <div>
+                <span>错误数</span>
+                <strong className={apiTraceStats.errorCount > 0 ? 'status-error' : ''}>{apiTraceStats.errorCount}</strong>
+              </div>
+              <div>
+                <span>总 Token</span>
+                <strong>{apiTraceStats.totalTokens.toLocaleString()}</strong>
+              </div>
+              {apiTraceStats.byType.slice(0, 3).map((item) => (
+                <div key={item.type}>
+                  <span>{item.type === 'llm_request' ? 'LLM' : item.type === 'tool_call' ? '工具' : item.type === 'service_api' ? '服务' : '连接器'}</span>
+                  <strong>{item.count}</strong>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="empty">暂无数据</p>
+          )}
+
+          {/* 趋势折线图 */}
+          {apiTraceTrendLoading ? (
+            <p className="empty" style={{ marginTop: '12px' }}>趋势加载中...</p>
+          ) : apiTraceTrend && apiTraceTrend.length > 0 ? (
+            <div className="api-trace-trend-chart" style={{ marginTop: '16px' }}>
+              <p className="section-tag" style={{ marginBottom: '8px' }}>调用趋势</p>
+              <svg viewBox="0 0 300 80" style={{ width: '100%', height: 'auto' }}>
+                {(() => {
+                  const data = apiTraceTrend;
+                  const maxCount = Math.max(...data.map((d) => d.count), 1);
+                  const points = data.map((d, i) => {
+                    const x = (i / (data.length - 1 || 1)) * 300;
+                    const y = 80 - (d.count / maxCount) * 70 - 5;
+                    return `${x},${y}`;
+                  }).join(' ');
+                  const areaPoints = `0,80 ${points} 300,80`;
+                  return (
+                    <>
+                      <defs>
+                        <linearGradient id="trendGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#0969da" stopOpacity="0.3" />
+                          <stop offset="100%" stopColor="#0969da" stopOpacity="0" />
+                        </linearGradient>
+                      </defs>
+                      <polygon points={areaPoints} fill="url(#trendGradient)" />
+                      <polyline points={points} fill="none" stroke="#0969da" strokeWidth="1.5" />
+                      {data.map((d, i) => {
+                        const x = (i / (data.length - 1 || 1)) * 300;
+                        const y = 80 - (d.count / maxCount) * 70 - 5;
+                        return (
+                          <circle key={i} cx={x} cy={y} r="2" fill="#0969da" />
+                        );
+                      })}
+                    </>
+                  );
+                })()}
+              </svg>
+            </div>
+          ) : null}
+
+          {/* 类型分布饼图 */}
+          {apiTraceStats?.byType && apiTraceStats.byType.length > 0 ? (
+            <div className="api-trace-pie-chart" style={{ marginTop: '16px' }}>
+              <p className="section-tag" style={{ marginBottom: '8px' }}>类型分布</p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <svg viewBox="0 0 100 100" style={{ width: '80px', height: '80px', flexShrink: 0 }}>
+                  {(() => {
+                    const data = apiTraceStats.byType;
+                    const total = data.reduce((sum, d) => sum + d.count, 0) || 1;
+                    const colors = ['#0969da', '#1a7f37', '#d1242f', '#bf8700'];
+                    let currentAngle = 0;
+                    return data.map((d, i) => {
+                      const angle = (d.count / total) * 360;
+                      const startAngle = currentAngle;
+                      const endAngle = currentAngle + angle;
+                      currentAngle = endAngle;
+                      const startRad = ((startAngle - 90) * Math.PI) / 180;
+                      const endRad = ((endAngle - 90) * Math.PI) / 180;
+                      const x1 = 50 + 40 * Math.cos(startRad);
+                      const y1 = 50 + 40 * Math.sin(startRad);
+                      const x2 = 50 + 40 * Math.cos(endRad);
+                      const y2 = 50 + 40 * Math.sin(endRad);
+                      const largeArc = angle > 180 ? 1 : 0;
+                      return (
+                        <path
+                          key={i}
+                          d={`M 50 50 L ${x1} ${y1} A 40 40 0 ${largeArc} 1 ${x2} ${y2} Z`}
+                          fill={colors[i % colors.length]}
+                          stroke="#fff"
+                          strokeWidth="1"
+                        />
+                      );
+                    });
+                  })()}
+                </svg>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {apiTraceStats.byType.map((item, i) => {
+                    const colors = ['#0969da', '#1a7f37', '#d1242f', '#bf8700'];
+                    return (
+                      <div key={item.type} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
+                        <span style={{ width: '8px', height: '8px', borderRadius: '2px', backgroundColor: colors[i % colors.length], display: 'inline-block' }} />
+                        <span>{item.type === 'llm_request' ? 'LLM' : item.type === 'tool_call' ? '工具' : item.type === 'service_api' ? '服务' : '连接器'}</span>
+                        <strong>{item.count}</strong>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          ) : null}
         </article>
       </section>
 
@@ -8890,30 +8416,68 @@ export default function App() {
           <article className="panel conversation-index-panel">
             <div className="panel-header conversation-index-panel-header">
               <div>
-                <p className="section-tag">会话索引</p>
-                <h2>会话索引</h2>
+                <p className="section-tag">对话管理</p>
+                <h2>{conversationView === 'overview' ? '运营概览' : '会话列表'}</h2>
               </div>
-              <div className="sandbox-list-header-actions conversation-index-header-actions">
-                <div className="conversation-live-summary-strip session-status sandbox-live-count" aria-label="会话索引摘要">
-                  <span className="sandbox-live-metric sandbox-live-metric-total">
-                    <span>全部</span>
-                    <strong>{conversationSummary.total}</strong>
-                  </span>
-                  <span className="sandbox-live-metric sandbox-live-metric-running">
-                    <span>进行中</span>
-                    <strong>{conversationSummary.inProgress}</strong>
-                  </span>
-                  <span className="sandbox-live-metric conversation-live-metric-waiting">
-                    <span>待确认</span>
-                    <strong>{conversationSummary.waitingUser}</strong>
-                  </span>
-                  <span className="sandbox-live-metric conversation-live-metric-failed">
-                    <span>失败</span>
-                    <strong>{conversationSummary.failed}</strong>
-                  </span>
-                  <span className="sandbox-live-age" title={formatDateTime(conversationSummaryFetchedAt)}>
-                    {conversationSummaryAge}
-                  </span>
+              <div className="sandbox-list-header-actions conversation-index-header-actions" style={{ gap: '12px' }}>
+                <div className="view-switcher" role="tablist" aria-label="视图切换">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={conversationView === 'index'}
+                    className={`view-switcher-tab ${conversationView === 'index' ? 'active' : ''}`}
+                    onClick={() => {
+                      setConversationView('index');
+                      localStorage.setItem('admin-conversation-view', 'index');
+                    }}
+                  >
+                    会话列表
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={conversationView === 'overview'}
+                    className={`view-switcher-tab ${conversationView === 'overview' ? 'active' : ''}`}
+                    onClick={() => {
+                      setConversationView('overview');
+                      localStorage.setItem('admin-conversation-view', 'overview');
+                    }}
+                  >
+                    运营概览
+                  </button>
+                </div>
+                {conversationView === 'overview' ? (
+                  <div className="conversation-live-summary-strip session-status sandbox-live-count" aria-label="会话索引摘要">
+                    <span className="sandbox-live-metric sandbox-live-metric-total">
+                      <span>全部</span>
+                      <strong>{conversationSummary.total}</strong>
+                    </span>
+                    <span className="sandbox-live-metric sandbox-live-metric-running">
+                      <span>进行中</span>
+                      <strong>{conversationSummary.inProgress}</strong>
+                    </span>
+                    <span className="sandbox-live-metric conversation-live-metric-waiting">
+                      <span>待确认</span>
+                      <strong>{conversationSummary.waitingUser}</strong>
+                    </span>
+                    <span className="sandbox-live-metric conversation-live-metric-failed">
+                      <span>失败</span>
+                      <strong>{conversationSummary.failed}</strong>
+                    </span>
+                    <span className="sandbox-live-age" title={formatDateTime(conversationSummaryFetchedAt)}>
+                      {conversationSummaryAge}
+                    </span>
+                    <button
+                      type="button"
+                      className={`sandbox-live-refresh-btn ${conversationSummaryRefreshing ? 'is-refreshing' : ''}`}
+                      onClick={() => void refreshConversationSummary()}
+                      disabled={conversationSummaryRefreshing}
+                      aria-label="刷新会话列表"
+                    >
+                      ↻
+                    </button>
+                  </div>
+                ) : (
                   <button
                     type="button"
                     className={`sandbox-live-refresh-btn ${conversationSummaryRefreshing ? 'is-refreshing' : ''}`}
@@ -8923,9 +8487,11 @@ export default function App() {
                   >
                     ↻
                   </button>
-                </div>
+                )}
               </div>
             </div>
+            {conversationView === 'index' ? (
+              <>
             <div className="conversation-index-toolbar">
               <div className="runtime-filter-grid conversation-index-filter-grid conversation-index-filter-grid-compact">
                 <label className="state-filter-field">
@@ -9176,6 +8742,156 @@ export default function App() {
                 </tbody>
               </table>
             </div>
+              </>
+            ) : (
+              <div className="conversation-overview-content">
+                {/* 服务健康卡片 */}
+                <div className="agent-overview-status-row" style={{ marginBottom: '16px', padding: '12px 16px', background: 'var(--panel-bg)', borderRadius: '8px' }}>
+                  <span className={`service-state ${serviceHealth.oneceoApi.online ? 'ok' : 'down'}`}>
+                    {serviceHealth.oneceoApi.online ? '平台接口在线' : '平台接口离线'}
+                  </span>
+                  <span className={`service-state ${serviceHealth.agentApi.online ? 'ok' : 'down'}`}>
+                    {serviceHealth.agentApi.online ? '智能体服务在线' : '智能体服务离线'}
+                  </span>
+                  <span className="panel-caption" style={{ marginLeft: 'auto' }}>
+                    最近检查 {formatDateTime(serviceHealth.agentApi.timestamp || serviceHealth.oneceoApi.timestamp)}
+                  </span>
+                </div>
+
+                {/* 会话统计卡片 */}
+                <div className="agent-overview-strip">
+                  <article className="agent-overview-card">
+                    <span>总会话</span>
+                    <strong>{conversationSummary.total}</strong>
+                    <small>当前任务创建记录</small>
+                  </article>
+                  <article className="agent-overview-card">
+                    <span>待确认</span>
+                    <strong>{conversationSummary.waitingUser}</strong>
+                    <small>等用户补充信息</small>
+                  </article>
+                  <article className="agent-overview-card">
+                    <span>进行中</span>
+                    <strong>{conversationSummary.inProgress}</strong>
+                    <small>仍在持续推进</small>
+                  </article>
+                  <article className="agent-overview-card">
+                    <span>失败</span>
+                    <strong>{conversationSummary.failed}</strong>
+                    <small>优先排查异常链路</small>
+                  </article>
+                  <article className="agent-overview-card">
+                    <span>可用能力</span>
+                    <strong>{capabilities.filter((c) => c.status === 'available').length}/{capabilities.length}</strong>
+                    <small>
+                      {capabilities.filter((c) => c.status === 'planned').length > 0
+                        ? `${capabilities.filter((c) => c.status === 'planned').length} 个规划中`
+                        : '当前都已落地'}
+                    </small>
+                  </article>
+                </div>
+
+                {/* 阶段分布 */}
+                <section className="panel fade-in agent-stage-workbench">
+                  <div className="panel-header panel-header-stack">
+                    <div>
+                      <h2>任务阶段</h2>
+                      <span className="panel-caption">按阶段切换，只看当前最需要处理的会话。</span>
+                    </div>
+                  </div>
+
+                  {stageDistribution.length > 0 ? (
+                    <>
+                      <div className="agent-stage-tabs" role="tablist" aria-label="任务阶段">
+                        {stageDistribution.map((item) => (
+                          <button
+                            key={item.stageKey}
+                            type="button"
+                            role="tab"
+                            aria-selected={selectedOverviewStage?.stageKey === item.stageKey}
+                            className={`agent-stage-tab ${selectedOverviewStage?.stageKey === item.stageKey ? 'active' : ''}`}
+                            onClick={() => setOverviewSelectedStageKey(item.stageKey)}
+                          >
+                            <span>{item.label}</span>
+                            <strong>{item.value}</strong>
+                          </button>
+                        ))}
+                      </div>
+
+                      {selectedOverviewStage ? (
+                        <div id="agent-stage-detail-panel" className="agent-stage-detail-surface" role="tabpanel">
+                          <div className="agent-stage-detail-head">
+                            <div>
+                              <p className="section-tag">当前阶段</p>
+                              <h3>{selectedOverviewStage.label}</h3>
+                              <p className="panel-caption">
+                                {selectedOverviewStage.statusSummary
+                                  .filter((item) => item.value > 0)
+                                  .map((item) => `${item.label} ${item.value}`)
+                                  .join(' · ') || '当前没有状态构成'}
+                              </p>
+                            </div>
+                            <span className="status-pill">{selectedOverviewStage.value} 个会话</span>
+                          </div>
+
+                          <div className="agent-status-pills">
+                            {selectedOverviewStage.statusSummary
+                              .filter((summary) => summary.value > 0)
+                              .map((summary) => (
+                                <span key={`${selectedOverviewStage.stageKey}-${summary.label}`} className="session-status">
+                                  {summary.label} · {summary.value}
+                                </span>
+                              ))}
+                          </div>
+
+                          <div className="agent-session-compact-list">
+                            {selectedOverviewStage.recentSessions.map((session) => (
+                              <article key={session.id} className="agent-session-compact-item">
+                                <div className="agent-session-compact-main">
+                                  <strong title={session.title || session.id}>{session.title || '未命名会话'}</strong>
+                                  <span className="session-status">{statusLabel(session.status)}</span>
+                                </div>
+                                <p className="agent-session-compact-meta">更新时间 {formatDateTime(session.updatedAt)}</p>
+                                {session.pendingQuestion ? (
+                                  <p className="agent-session-pending">待补充: {summarizeText(session.pendingQuestion, 120)}</p>
+                                ) : null}
+                              </article>
+                            ))}
+                            {selectedOverviewStage.recentSessions.length === 0 ? <p className="empty">当前阶段暂无最近会话。</p> : null}
+                          </div>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
+                    <p className="empty">当前没有阶段数据。</p>
+                  )}
+                </section>
+
+                {/* 智能体能力 */}
+                <section className="panel fade-in agent-capability-compact-panel">
+                  <div className="panel-header">
+                    <h2>智能体能力</h2>
+                    <span className="panel-caption">保留能力名称、接入方式和可用状态。</span>
+                  </div>
+                  <div className="agent-capability-summary">
+                    <span className="session-status">可用 {capabilities.filter((c) => c.status === 'available').length}</span>
+                    <span className="session-status">规划中 {capabilities.filter((c) => c.status === 'planned').length}</span>
+                    <span className="session-status">总数 {capabilities.length}</span>
+                  </div>
+                  <div className="agent-capability-list">
+                    {capabilities.map((item) => (
+                      <article key={item.key} className="agent-capability-row" title={item.endpoint}>
+                        <div className="agent-capability-main">
+                          <strong>{capabilityNameLabel(item.name)}</strong>
+                          <span className="agent-capability-transport mono">{item.transport}</span>
+                        </div>
+                        <span className={`capability-status ${item.status}`}>{capabilityStatusLabel(item.status)}</span>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              </div>
+            )}
           </article>
         </section>
       </main>
@@ -9232,167 +8948,6 @@ export default function App() {
         </AdminDetailShell>
       ) : null}
       </>
-    );
-  };
-
-  const renderAgentSection = () => {
-    const taskSessions = agentOverview?.taskCreationSessions;
-    const overviewTimestamp = formatDateTime(agentOverview?.agentApi.timestamp || agentOverview?.oneceoApi.timestamp);
-    const selectedStageStatusText =
-      selectedAgentStage?.statusSummary
-        .filter((item) => item.value > 0)
-        .map((item) => `${item.label} ${item.value}`)
-        .join(' · ') || '当前没有状态构成';
-
-    return (
-      <main className="content-stack agent-command-center">
-        <section className="panel fade-in agent-overview-panel">
-          <div className="agent-overview-head">
-            <div>
-              <p className="section-tag">智能体总览</p>
-              <h2>服务、会话与能力</h2>
-              <p className="panel-caption">
-                {agentApiMessageLabel(agentOverview?.agentApi.message)} · 最近检查 {overviewTimestamp}
-              </p>
-            </div>
-            <div className="agent-overview-status-row">
-              <span className={`service-state ${agentOverview?.oneceoApi.online ? 'ok' : 'down'}`}>
-                {agentOverview?.oneceoApi.online ? '平台接口在线' : '平台接口离线'}
-              </span>
-              <span className={`service-state ${agentOverview?.agentApi.online ? 'ok' : 'down'}`}>
-                {agentOverview?.agentApi.online ? '智能体服务在线' : '智能体服务离线'}
-              </span>
-            </div>
-          </div>
-
-          <div className="agent-overview-strip">
-            <article className="agent-overview-card">
-              <span>总会话</span>
-              <strong>{taskSessions?.total ?? 0}</strong>
-              <small>当前任务创建记录</small>
-            </article>
-            <article className="agent-overview-card">
-              <span>待确认</span>
-              <strong>{taskSessions?.waitingUser ?? 0}</strong>
-              <small>等用户补充信息</small>
-            </article>
-            <article className="agent-overview-card">
-              <span>进行中</span>
-              <strong>{taskSessions?.inProgress ?? 0}</strong>
-              <small>仍在持续推进</small>
-            </article>
-            <article className="agent-overview-card">
-              <span>失败</span>
-              <strong>{taskSessions?.failed ?? 0}</strong>
-              <small>优先排查异常链路</small>
-            </article>
-            <article className="agent-overview-card">
-              <span>可用能力</span>
-              <strong>
-                {agentCapabilitySummary.available}/{agentCapabilitySummary.total}
-              </strong>
-              <small>
-                {agentCapabilitySummary.planned > 0 ? `${agentCapabilitySummary.planned} 个规划中` : '当前都已落地'}
-              </small>
-            </article>
-          </div>
-        </section>
-
-        <section className="panel fade-in agent-stage-workbench">
-          <div className="panel-header panel-header-stack">
-            <div>
-              <h2>任务阶段</h2>
-              <span className="panel-caption">按阶段切换，只看当前最需要处理的会话。</span>
-            </div>
-          </div>
-
-          {(agentOverview?.stageDistribution || []).length > 0 ? (
-            <>
-              <div className="agent-stage-tabs" role="tablist" aria-label="任务阶段">
-                {(agentOverview?.stageDistribution || []).map((item) => (
-                  <button
-                    key={item.stageKey}
-                    type="button"
-                    role="tab"
-                    aria-selected={selectedAgentStage?.stageKey === item.stageKey}
-                    aria-controls="agent-stage-detail-panel"
-                    className={`agent-stage-tab ${selectedAgentStage?.stageKey === item.stageKey ? 'active' : ''}`}
-                    onClick={() => setSelectedAgentStageKey(item.stageKey)}
-                  >
-                    <span>{item.label}</span>
-                    <strong>{item.value}</strong>
-                  </button>
-                ))}
-              </div>
-
-              {selectedAgentStage ? (
-                <div id="agent-stage-detail-panel" className="agent-stage-detail-surface" role="tabpanel">
-                  <div className="agent-stage-detail-head">
-                    <div>
-                      <p className="section-tag">当前阶段</p>
-                      <h3>{selectedAgentStage.label}</h3>
-                      <p className="panel-caption">{selectedStageStatusText}</p>
-                    </div>
-                    <span className="status-pill">{selectedAgentStage.value} 个会话</span>
-                  </div>
-
-                  <div className="agent-status-pills">
-                    {selectedAgentStage.statusSummary
-                      .filter((summary) => summary.value > 0)
-                      .map((summary) => (
-                        <span key={`${selectedAgentStage.stageKey}-${summary.label}`} className="session-status">
-                          {summary.label} · {summary.value}
-                        </span>
-                      ))}
-                  </div>
-
-                  <div className="agent-session-compact-list">
-                    {selectedAgentStage.recentSessions.map((session) => (
-                      <article key={session.id} className="agent-session-compact-item">
-                        <div className="agent-session-compact-main">
-                          <strong title={session.title || session.id}>{session.title || '未命名会话'}</strong>
-                          <span className="session-status">{statusLabel(session.status)}</span>
-                        </div>
-                        <p className="agent-session-compact-meta">更新时间 {formatDateTime(session.updatedAt)}</p>
-                        {session.pendingQuestion ? (
-                          <p className="agent-session-pending">待补充: {summarizeText(session.pendingQuestion, 120)}</p>
-                        ) : null}
-                      </article>
-                    ))}
-                    {selectedAgentStage.recentSessions.length === 0 ? <p className="empty">当前阶段暂无最近会话。</p> : null}
-                  </div>
-                </div>
-              ) : null}
-            </>
-          ) : (
-            <p className="empty">当前没有阶段数据。</p>
-          )}
-        </section>
-
-        <section className="panel fade-in agent-capability-compact-panel">
-          <div className="panel-header">
-            <h2>智能体能力</h2>
-            <span className="panel-caption">保留能力名称、接入方式和可用状态。</span>
-          </div>
-          <div className="agent-capability-summary">
-            <span className="session-status">可用 {agentCapabilitySummary.available}</span>
-            <span className="session-status">规划中 {agentCapabilitySummary.planned}</span>
-            <span className="session-status">总数 {agentCapabilitySummary.total}</span>
-          </div>
-          <div className="agent-capability-list">
-            {(agentOverview?.capabilities || []).map((item) => (
-              <article key={item.key} className="agent-capability-row" title={item.endpoint || undefined}>
-                <div className="agent-capability-main">
-                  <strong>{capabilityNameLabel(item.name)}</strong>
-                  <span className="agent-capability-transport mono">{item.transport}</span>
-                </div>
-                <span className={`capability-status ${item.status}`}>{capabilityStatusLabel(item.status)}</span>
-              </article>
-            ))}
-            {(agentOverview?.capabilities || []).length === 0 ? <p className="empty">当前没有可展示的能力信息。</p> : null}
-          </div>
-        </section>
-      </main>
     );
   };
 
@@ -9998,21 +9553,6 @@ export default function App() {
                     ),
                   },
                   {
-                    key: 'audit',
-                    title: '最近操作',
-                    icon: getAdminModuleIcon('audit', { size: 15 }),
-                    children: (
-                      <AuditTimeline
-                        compact
-                        maxItems={3}
-                        items={[
-                          { id: 'last-active', title: '最近活跃', time: formatDateTime(sandboxRuntimeDetail.runtime.lastActiveAt), description: sandboxRuntimeDetail.runtime.lastActiveReason || '暂无活跃原因', tone: 'info', icon: getAdminStatusIcon('running', { size: 12 }) },
-                          ...archiveRows.slice(0, 2).map((row) => ({ id: `archive-${row.id}`, title: '归档快照', time: formatDateTime(row.timestamp), description: row.reason || '归档记录', tone: row.status === 'failed' ? 'danger' as const : 'success' as const, icon: getAdminActionIcon('archive', { size: 12 }) })),
-                        ]}
-                      />
-                    ),
-                  },
-                  {
                     key: 'recommendation',
                     title: '推荐动作',
                     icon: getAdminActionIcon('sync', { size: 15 }),
@@ -10132,16 +9672,7 @@ export default function App() {
                         ]}
                       />
                     </article>
-                    <article className="admin-detail-section">
-                      <h3 className="admin-detail-section-title">审计时间线</h3>
-                      <AuditTimeline
-                        items={[
-                          { id: 'created', title: 'Sandbox 记录创建', time: formatDateTime(sandboxRuntimeDetail.runtime.createdAt || sandboxRuntimeDetail.runtime.startedAt), description: sandboxRuntimeDetail.runtime.template ? `模板：${sandboxRuntimeDetail.runtime.template}` : '创建时间来自运行时记录', tone: 'neutral', icon: getAdminStatusIcon('waiting', { size: 12 }) },
-                          { id: 'last-active', title: '最近活跃', time: formatDateTime(sandboxRuntimeDetail.runtime.lastActiveAt), description: sandboxRuntimeDetail.runtime.lastActiveReason || '暂无活跃原因', tone: 'info', icon: getAdminStatusIcon('running', { size: 12 }) },
-                          ...archiveRows.slice(0, 3).map((row) => ({ id: `archive-full-${row.id}`, title: '归档快照', time: formatDateTime(row.timestamp), description: row.reason || '归档记录', tone: row.status === 'failed' ? 'danger' as const : 'success' as const, icon: getAdminActionIcon('archive', { size: 12 }), meta: [{ label: '快照', value: row.snapshotKey || row.id || '-' }, { label: '大小', value: row.size }] })),
-                        ]}
-                      />
-                    </article>
+
                   </section>
 
                   <section className="inspector-overview-bottom-grid">
@@ -11367,459 +10898,7 @@ export default function App() {
       </>
     );
   };
-  const renderAuditEntryActions = (entry: AuditLogEntry) => (
-    <div className="audit-link-stack">
-      {entry.targetVmId ? (
-        <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromAudit(entry)}>
-          查看 Sandbox
-        </button>
-      ) : null}
-      {entry.sessionId ? (
-        <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openConversationFromAudit(entry)}>
-          查看对话
-        </button>
-      ) : null}
-    </div>
-  );
 
-  const renderAuditSection = () => {
-    const auditDetailSubject = auditDetail
-      ? auditDetail.entry.targetVmId || auditDetail.entry.sessionId || auditDetail.entry.id
-      : '-';
-    const sortedAuditRelatedEntries = auditDetail
-      ? [...auditDetail.relatedEntries].sort((left, right) => {
-          const delta = toTimestamp(right.timestamp) - toTimestamp(left.timestamp);
-          if (delta !== 0) return delta;
-          return right.id.localeCompare(left.id, 'zh-Hans-CN', { sensitivity: 'base' });
-        })
-      : [];
-
-    return (
-    <>
-      <main className="content-stack viewport-lock-page audit-page">
-        <section className="fade-in">
-          <article className="panel hero-panel">
-            <div className="panel-header audit-hero-header">
-              <div>
-                <p className="section-tag">审计摘要</p>
-                <h2>管理动作与失败排查</h2>
-              </div>
-              <div className="sandbox-list-header-actions audit-hero-actions">
-                <div className="audit-live-summary-strip session-status sandbox-live-count" aria-label="审计日志摘要">
-                  <span className="sandbox-live-metric sandbox-live-metric-total">
-                    <span>全部</span>
-                    <strong>{auditSummary.total}</strong>
-                  </span>
-                  <span className="sandbox-live-metric sandbox-live-metric-running">
-                    <span>成功</span>
-                    <strong>{auditSummary.success}</strong>
-                  </span>
-                  <span className="sandbox-live-metric audit-live-metric-failed">
-                    <span>失败</span>
-                    <strong>{auditSummary.failed}</strong>
-                  </span>
-                  <span className="sandbox-live-age" title={formatDateTime(auditSummaryFetchedAt)}>
-                    {auditSummaryAge}
-                  </span>
-                  <button
-                    type="button"
-                    className={`sandbox-live-refresh-btn ${auditSummaryRefreshing ? 'is-refreshing' : ''}`}
-                    onClick={() => void refreshAuditSummary()}
-                    disabled={auditSummaryRefreshing}
-                    aria-label="刷新审计日志"
-                  >
-                    ↻
-                  </button>
-                </div>
-              </div>
-            </div>
-          </article>
-        </section>
-
-        <section className="panel fade-in audit-filter-panel">
-          <div className="audit-filter-toolbar">
-            <div className="audit-filter-toolbar-copy">
-              <p className="section-tag">筛选条件</p>
-              <h2>筛选条件</h2>
-              <span className="panel-caption">按关键词、操作人、动作、结果和时间快速定位。</span>
-            </div>
-          </div>
-          <div className="audit-filter-grid audit-filter-grid-compact">
-            <label className="audit-filter-field">
-              <span>搜索</span>
-              <input
-                className="control-input"
-                placeholder="日志 ID、详情、实例、会话"
-                value={auditFilters.query}
-                onChange={(event) => updateAuditFilters((previous) => ({ ...previous, query: event.target.value }))}
-              />
-            </label>
-            <label className="audit-filter-field">
-              <span>操作人</span>
-              <select
-                className="control-input"
-                value={auditFilters.operator}
-                onChange={(event) => updateAuditFilters((previous) => ({ ...previous, operator: event.target.value }))}
-              >
-                <option value="all">全部操作人</option>
-                {auditOperatorOptions.map((item) => (
-                  <option key={item} value={item}>
-                    {item}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="audit-filter-field">
-              <span>动作</span>
-              <select
-                className="control-input"
-                value={auditFilters.action}
-                onChange={(event) => updateAuditFilters((previous) => ({ ...previous, action: event.target.value }))}
-              >
-                <option value="all">全部动作</option>
-                {auditActionOptions.map((item) => (
-                  <option key={item} value={item}>
-                    {auditActionLabel(item)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="audit-filter-field">
-              <span>结果</span>
-              <select
-                className="control-input"
-                value={auditFilters.result}
-                onChange={(event) => updateAuditFilters((previous) => ({ ...previous, result: event.target.value }))}
-              >
-                <option value="all">全部结果</option>
-                <option value="success">成功</option>
-                <option value="failed">失败</option>
-              </select>
-            </label>
-            <label className="audit-filter-field">
-              <span>开始时间</span>
-              <input
-                className="control-input"
-                type="datetime-local"
-                value={auditFilters.from}
-                onChange={(event) => updateAuditFilters((previous) => ({ ...previous, from: event.target.value }))}
-              />
-            </label>
-            <label className="audit-filter-field">
-              <span>结束时间</span>
-              <input
-                className="control-input"
-                type="datetime-local"
-                value={auditFilters.to}
-                onChange={(event) => updateAuditFilters((previous) => ({ ...previous, to: event.target.value }))}
-              />
-            </label>
-            <div className="audit-filter-actions">
-              <button type="button" className="secondary-btn" onClick={resetAuditFilters}>
-                重置筛选
-              </button>
-            </div>
-          </div>
-        </section>
-
-        <section className="panel fade-in audit-log-panel">
-          <div className="panel-header">
-            <h2>审计日志</h2>
-            <span className="panel-caption">
-              当前显示 {auditEntries.length} 条，筛选后共 {auditResponseMeta.filteredTotal || auditEntries.length} 条
-            </span>
-          </div>
-          <div className="table-wrap">
-            <table className="audit-table">
-              <thead>
-                <tr>
-                  <th>
-                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'id' ? 'active' : ''}`} onClick={() => toggleAuditSort('id')}>
-                      日志 ID
-                      <span className="runtime-sort-indicator">{auditSort.key === 'id' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
-                    </button>
-                  </th>
-                  <th>
-                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'time' ? 'active' : ''}`} onClick={() => toggleAuditSort('time')}>
-                      时间
-                      <span className="runtime-sort-indicator">{auditSort.key === 'time' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
-                    </button>
-                  </th>
-                  <th>
-                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'action' ? 'active' : ''}`} onClick={() => toggleAuditSort('action')}>
-                      动作
-                      <span className="runtime-sort-indicator">{auditSort.key === 'action' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
-                    </button>
-                  </th>
-                  <th>
-                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'result' ? 'active' : ''}`} onClick={() => toggleAuditSort('result')}>
-                      结果
-                      <span className="runtime-sort-indicator">{auditSort.key === 'result' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
-                    </button>
-                  </th>
-                  <th>
-                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'operator' ? 'active' : ''}`} onClick={() => toggleAuditSort('operator')}>
-                      操作人
-                      <span className="runtime-sort-indicator">{auditSort.key === 'operator' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
-                    </button>
-                  </th>
-                  <th>
-                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'target' ? 'active' : ''}`} onClick={() => toggleAuditSort('target')}>
-                      目标实例
-                      <span className="runtime-sort-indicator">{auditSort.key === 'target' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
-                    </button>
-                  </th>
-                  <th>
-                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'session' ? 'active' : ''}`} onClick={() => toggleAuditSort('session')}>
-                      会话
-                      <span className="runtime-sort-indicator">{auditSort.key === 'session' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
-                    </button>
-                  </th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {auditEntries.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="empty">
-                      暂无符合条件的审计日志。
-                    </td>
-                  </tr>
-                ) : (
-                  sortedAuditEntries.map((entry) => (
-                    <tr key={entry.id}>
-                      <td>
-                        <button
-                          type="button"
-                          className="link-btn sandbox-jump-btn mono audit-id-link"
-                          title={entry.id}
-                          onClick={() => void openAuditDetail(entry.id)}
-                        >
-                          {truncateMiddle(entry.id, 10, 8)}
-                        </button>
-                      </td>
-                      <td>{formatDateTime(entry.timestamp)}</td>
-                      <td>{auditActionLabel(entry.action)}</td>
-                      <td>
-                        <span className={resultClassName(entry.result)}>{auditResultLabel(entry.result)}</span>
-                      </td>
-                      <td>{entry.operator}</td>
-                      <td>
-                        {entry.targetVmId ? (
-                          <button
-                            type="button"
-                            className="link-btn sandbox-jump-btn mono audit-id-link"
-                            title={entry.targetVmId}
-                            onClick={() => openSandboxFromAudit(entry)}
-                          >
-                            {truncateMiddle(entry.targetVmId, 10, 8)}
-                          </button>
-                        ) : (
-                          <span className="mono">-</span>
-                        )}
-                      </td>
-                      <td>
-                        {entry.sessionId ? (
-                          <button
-                            type="button"
-                            className="link-btn sandbox-jump-btn mono audit-id-link"
-                            title={entry.sessionId}
-                            onClick={() => openConversationFromAudit(entry)}
-                          >
-                            {truncateMiddle(entry.sessionId, 10, 8)}
-                          </button>
-                        ) : (
-                          <span className="mono">-</span>
-                        )}
-                      </td>
-                      <td>
-                        <button type="button" className="table-btn" onClick={() => void openAuditDetail(entry.id)}>
-                          查看详情
-                        </button>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      </main>
-
-      {auditDetail ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setAuditDetail(null)}>
-          <div
-            className="modal-card audit-detail-modal"
-            onClick={(event) => {
-              event.stopPropagation();
-            }}
-          >
-            <div className="modal-header audit-detail-modal-header">
-              <div>
-                <p className="section-tag">审计详情</p>
-                <h2>{auditActionLabel(auditDetail.entry.action)} · {auditDetailSubject}</h2>
-                <p className="panel-caption">
-                  日志 {auditDetail.entry.id} · {formatDateTime(auditDetail.entry.timestamp)}
-                </p>
-              </div>
-              <div className="audit-detail-header-actions">
-                {auditDetail.entry.sessionId ? (
-                  <button type="button" className="secondary-btn" onClick={() => openConversationFromAudit(auditDetail.entry)}>
-                    打开对话
-                  </button>
-                ) : null}
-                {auditDetail.entry.targetVmId ? (
-                  <button type="button" className="secondary-btn" onClick={() => openSandboxFromAudit(auditDetail.entry)}>
-                    打开 Sandbox
-                  </button>
-                ) : null}
-                <button type="button" className="secondary-btn" onClick={() => setAuditDetail(null)}>
-                  关闭
-                </button>
-              </div>
-            </div>
-            <div className="audit-detail-summary-strip">
-              <span className={resultClassName(auditDetail.entry.result)}>{auditResultLabel(auditDetail.entry.result)}</span>
-              <span className="audit-detail-meta-pill">{auditActionLabel(auditDetail.entry.action)}</span>
-              <span className="audit-detail-meta-pill">{auditDetail.entry.operator || '-'}</span>
-              <span className="audit-detail-meta-pill">{auditDetail.relatedEntries.length} 条关联</span>
-            </div>
-            <div className="detail-grid modal-grid audit-detail-grid">
-              <article className="sub-panel audit-detail-primary-panel">
-                <div className="editor-header">
-                  <div>
-                    <h3>当前记录</h3>
-                    <p className="cell-subtle">先看当前动作与结果，再决定是否继续跳转或展开原始记录。</p>
-                  </div>
-                </div>
-                <div className="audit-detail-fact-grid">
-                  <div className="audit-detail-fact">
-                    <span>日志 ID</span>
-                    <strong className="mono">{auditDetail.entry.id}</strong>
-                  </div>
-                  <div className="audit-detail-fact">
-                    <span>时间</span>
-                    <strong>{formatDateTime(auditDetail.entry.timestamp)}</strong>
-                  </div>
-                  <div className="audit-detail-fact">
-                    <span>动作</span>
-                    <strong>{auditActionLabel(auditDetail.entry.action)}</strong>
-                  </div>
-                  <div className="audit-detail-fact">
-                    <span>结果</span>
-                    <strong>{auditResultLabel(auditDetail.entry.result)}</strong>
-                  </div>
-                  <div className="audit-detail-fact">
-                    <span>操作人</span>
-                    <strong>{auditDetail.entry.operator || '-'}</strong>
-                  </div>
-                  <div className="audit-detail-fact">
-                    <span>目标实例</span>
-                    <strong className="mono">{auditDetail.entry.targetVmId || '-'}</strong>
-                  </div>
-                  <div className="audit-detail-fact">
-                    <span>会话 ID</span>
-                    <strong className="mono">{auditDetail.entry.sessionId || '-'}</strong>
-                  </div>
-                  <div className="audit-detail-fact">
-                    <span>关联记录</span>
-                    <strong>{auditDetail.relatedEntries.length}</strong>
-                  </div>
-                </div>
-
-                <div className={`audit-detail-note-card ${auditDetail.entry.detail ? '' : 'is-empty'}`}>
-                  <span>说明</span>
-                  <p>{auditDetail.entry.detail || '没有额外说明。'}</p>
-                </div>
-
-                <details className="audit-detail-json-panel">
-                  <summary>查看原始记录</summary>
-                  <pre className="json-block">{toJsonText(auditDetail.entry)}</pre>
-                </details>
-              </article>
-
-              <article className="sub-panel audit-detail-sidebar-panel">
-                <div className="editor-header">
-                  <div>
-                    <h3>关联上下文</h3>
-                    <p className="cell-subtle">直接打开对应资源，或继续查看关联日志。</p>
-                  </div>
-                </div>
-                <div className="audit-detail-context-grid">
-                  <div className="audit-detail-context-card">
-                    <span>日志 ID</span>
-                    <strong className="mono">{auditDetail.entry.id}</strong>
-                  </div>
-                  {auditDetail.entry.targetVmId ? (
-                    <div className="audit-detail-context-card">
-                      <span>Sandbox</span>
-                      <button
-                        type="button"
-                        className="link-btn sandbox-jump-btn mono audit-id-link"
-                        title={auditDetail.entry.targetVmId}
-                        onClick={() => openSandboxFromAudit(auditDetail.entry)}
-                      >
-                        {truncateMiddle(auditDetail.entry.targetVmId, 10, 8)}
-                      </button>
-                    </div>
-                  ) : null}
-                  {auditDetail.entry.sessionId ? (
-                    <div className="audit-detail-context-card">
-                      <span>对话</span>
-                      <button
-                        type="button"
-                        className="link-btn sandbox-jump-btn mono audit-id-link"
-                        title={auditDetail.entry.sessionId}
-                        onClick={() => openConversationFromAudit(auditDetail.entry)}
-                      >
-                        {truncateMiddle(auditDetail.entry.sessionId, 10, 8)}
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="editor-header audit-detail-section-head">
-                  <div>
-                    <h3>关联记录</h3>
-                    <p className="cell-subtle">按时间倒序展示，点击日志 ID 可继续查看细节。</p>
-                  </div>
-                </div>
-                {sortedAuditRelatedEntries.length > 0 ? (
-                  <div className="audit-related-list">
-                    {sortedAuditRelatedEntries.map((entry) => (
-                      <article key={entry.id} className="audit-related-item">
-                        <div className="audit-related-head">
-                          <button
-                            type="button"
-                            className="link-btn sandbox-jump-btn mono audit-id-link"
-                            title={entry.id}
-                            onClick={() => void openAuditDetail(entry.id)}
-                          >
-                            {truncateMiddle(entry.id, 10, 8)}
-                          </button>
-                          <span className={resultClassName(entry.result)}>{auditResultLabel(entry.result)}</span>
-                        </div>
-                        <div className="audit-related-meta">
-                          <span>{auditActionLabel(entry.action)}</span>
-                          <span>{formatDateTime(entry.timestamp)}</span>
-                          <span>{entry.operator || '-'}</span>
-                        </div>
-                        {(entry.sessionId || entry.targetVmId) ? renderAuditEntryActions(entry) : null}
-                        {entry.detail ? <p className="audit-related-detail">{entry.detail}</p> : null}
-                      </article>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="empty">没有其他关联记录。</p>
-                )}
-              </article>
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </>
-  );
-  };
 
   const handleSidebarSectionOpen = (nextSection: SectionKey) => {
     sectionRefreshHandlerRef.current = null;
@@ -11997,7 +11076,6 @@ export default function App() {
         />
       );
     }
-    if (activeSection === 'agent') return renderAgentSection();
     if (activeSection === 'skill') {
       return (
         <SkillManagementSection
@@ -12046,8 +11124,29 @@ export default function App() {
         </Suspense>
       );
     }
+    if (activeSection === 'notification') {
+      return (
+        <Suspense fallback={<div className="p-6">加载中...</div>}>
+          <NotificationManagement onNotify={pushToast} />
+        </Suspense>
+      );
+    }
+    if (activeSection === 'membership') {
+      return (
+        <Suspense fallback={<div className="p-6">加载中...</div>}>
+          <MembershipManagementSection />
+        </Suspense>
+      );
+    }
+    if (activeSection === 'promoBanner') {
+      return (
+        <Suspense fallback={<div className="p-6">加载中...</div>}>
+          <PromoBannerManagement onNotify={pushToast} />
+        </Suspense>
+      );
+    }
     if (activeSection === 'sandbox') return renderSandboxSection();
-    return renderAuditSection();
+    return null;
   };
 
   return (

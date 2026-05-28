@@ -155,6 +155,65 @@ describe('managed deliverable card timing', () => {
     expect(emittedRuns.has('run-web-snapshot-failed-1')).toBe(true);
   });
 
+  it('passes browser screenshot fallback into website card when snapshot failed after visual pass', () => {
+    const emittedRuns = new Set<string>();
+    const artifactsByRun = new Map();
+    const item = buildManagedCompletionCardItem({
+      message: createManagedMessage({
+        type: 'agent_message',
+        runId: 'run-web-snapshot-fallback-1',
+        deliverables: [
+          {
+            id: 'artifact-web-snapshot-fallback-1',
+            runId: 'run-web-snapshot-fallback-1',
+            name: 'index.html',
+            path: 'dist/index.html',
+            mimeType: 'text/html',
+            sizeBytes: 1024,
+          },
+        ],
+        previewSnapshot: {
+          kind: 'website_screenshot',
+          status: 'capture_failed',
+          reasonCode: 'preview_visual_check_failed',
+          message: 'app_runtime_error: 页面浏览器运行时报错',
+        },
+      }),
+      managedArtifactsByRun: artifactsByRun,
+      emittedManagedCompletionRuns: emittedRuns,
+      browserScreenshotsByRun: new Map([
+        [
+          'run-web-snapshot-fallback-1',
+          [
+            {
+              toolCallId: 'tool-debug-open-page-fallback',
+              screenshot: {
+                type: 'browser_screenshot',
+                kind: 'browser_action_screenshot',
+                status: 'captured',
+                storageKey: 'sessions/session-1/browser-actions/passed.png',
+                mimeType: 'image/png',
+                width: 1280,
+                height: 720,
+                visualCheck: {
+                  status: 'passed',
+                },
+              },
+            },
+          ],
+        ],
+      ]),
+    });
+
+    expect(item?.kind).toBe('managed_artifact_card');
+    const card = item as Extract<ChatItem, { kind: 'managed_artifact_card' }>;
+    expect(card.previewSnapshot?.status).toBe('capture_failed');
+    expect(card.browserScreenshotFallback?.toolCallId).toBe('tool-debug-open-page-fallback');
+    expect(card.browserScreenshotFallback?.screenshot.storageKey).toBe(
+      'sessions/session-1/browser-actions/passed.png',
+    );
+  });
+
   it('keeps deliverable card for non-web deliverables', () => {
     const emittedRuns = new Set<string>();
     const artifactsByRun = new Map();
@@ -183,6 +242,46 @@ describe('managed deliverable card timing', () => {
       'result.docx'
     );
     expect(emittedRuns.has('run-docx-1')).toBe(true);
+  });
+
+  it('keeps PPTX delivery card when ppt-html-deck source files were generated', () => {
+    const emittedRuns = new Set<string>();
+    const artifactsByRun = new Map([
+      [
+        'run-ppt-html-1',
+        [
+          { path: 'ppt-html-deck/index.html', previewType: 'web' },
+          { path: 'ppt-html-deck/slides/001-cover.html', previewType: 'web' },
+          { path: 'ppt-html-deck/slides/002-summary.html', previewType: 'web' },
+          { path: 'ppt-html-deck/export/visual-qa-report.json', previewType: 'code' },
+        ],
+      ],
+    ]);
+    const item = buildManagedCompletionCardItem({
+      message: createManagedMessage({
+        type: 'status_update',
+        eventType: 'deliverables_ready',
+        runId: 'run-ppt-html-1',
+        deliverables: [
+          {
+            id: 'artifact-pptx-1',
+            runId: 'run-ppt-html-1',
+            name: '战略复盘.pptx',
+            path: 'ppt-html-deck/export/strategy-review.pptx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            sizeBytes: 4096,
+          },
+        ],
+      }),
+      managedArtifactsByRun: artifactsByRun,
+      emittedManagedCompletionRuns: emittedRuns,
+    });
+
+    expect(item?.kind).toBe('managed_deliverable_card');
+    const card = item as Extract<ChatItem, { kind: 'managed_deliverable_card' }>;
+    expect(card.deliverables).toHaveLength(1);
+    expect(card.deliverables[0]?.path).toBe('ppt-html-deck/export/strategy-review.pptx');
+    expect(emittedRuns.has('run-ppt-html-1')).toBe(true);
   });
 
   it('emits deliverable card as soon as assistant message contains deliverables', () => {

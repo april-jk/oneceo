@@ -169,6 +169,8 @@ Altus system prompt 固定分成：
 2. `revisionId`
 3. `resourcePath`
 
+2026-05-03 补充：模型应优先传 Active skills 中的裸 `skillId` 与裸 `revisionId`。运行时允许兼容提示词上下文中出现的展示型标识，例如 `skill:platform:<skillId>`、`skill-catalog:platform:<skillId>:<revisionId>`，但兼容仅用于归一化 active skill 校验，不放宽“必须是当前会话已激活 skill”的约束。
+
 运行规则：
 
 1. 如果 `contentStorage = database`

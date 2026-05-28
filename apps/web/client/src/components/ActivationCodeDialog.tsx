@@ -42,11 +42,11 @@ export function ActivationCodeDialog({
   } | null>(null);
 
   const handleCodeChange = useCallback((value: string) => {
-    // 自动格式化激活码（转大写，添加分隔符）
+    // 自动格式化激活码（转大写并过滤非法字符）；允许更长前缀场景
     const formatted = value
       .toUpperCase()
       .replace(/[^A-Z0-9-]/g, "")
-      .slice(0, 19); // 最大长度：XXXX-XXXX-XXXX-XXXX
+      .slice(0, 128);
     setCode(formatted);
     setResult(null);
   }, []);
@@ -177,7 +177,7 @@ export function ActivationCodeDialog({
               />
             </div>
             <p className="text-xs text-muted-foreground">
-              激活码由管理员提供，格式为 XXXX-XXXX-XXXX-XXXX
+              激活码支持前缀，示例：PREFIX-XXXX-XXXX-XXXX-XXXX
             </p>
           </div>
 

@@ -414,6 +414,9 @@ test('TaskCreationService sandbox prompt skips playwright for script tasks but k
 
   assert.match(webPrompt, /playwright-mcp/);
   assert.match(webPrompt, /Chromium/);
+  assert.match(webPrompt, /\/usr\/local\/bin\/playwright-mcp/);
+  assert.match(webPrompt, /\/opt\/ms-playwright/);
+  assert.match(webPrompt, /NODE_PATH=\/usr\/local\/lib\/node_modules/);
 });
 
 test('TaskCreationService execution handoff uses Altus coordinator and never calls OpenCode remote', async () => {

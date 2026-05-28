@@ -45,6 +45,13 @@ import {
   waitForOsacBridgeReady,
 } from './sandbox-osac-bridge-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
+import { platformRuntimeArtifactService } from './platform-runtime-artifact-service';
+
+const SANDBOX_GLOBAL_NODE_MODULES = '/usr/local/lib/node_modules';
+const SANDBOX_PLAYWRIGHT_BROWSERS_PATH = '/opt/ms-playwright';
+const SANDBOX_PLAYWRIGHT_CDP_URL = 'http://127.0.0.1:9222';
+const SANDBOX_PLAYWRIGHT_MCP_COMMAND = 'playwright-mcp';
+const SANDBOX_BROWSER_USE_COMMAND = 'browser-use';
 
 type ProvisionInput = {
   metadata?: Record<string, unknown>;
@@ -337,6 +344,19 @@ function isSandboxUnavailableError(error: unknown): boolean {
   );
 }
 
+function isSandboxControlPlaneTransientError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('fetch failed') ||
+    normalized.includes('econnreset') ||
+    normalized.includes('connect timeout') ||
+    normalized.includes('und_err_connect_timeout') ||
+    normalized.includes('socket hang up') ||
+    normalized.includes('tls connection')
+  );
+}
+
 async function markSandboxClosedBestEffort(sessionId: string, reason: string) {
   try {
     await sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, {
@@ -493,10 +513,19 @@ function buildSandboxEnv(executor: ProvisionExecutor = 'opencode'): Record<strin
     env.DISPLAY = display;
   }
   env.PLAYWRIGHT_HEADLESS = 'false';
-  const browsersPath = (process.env.PLAYWRIGHT_BROWSERS_PATH || '').trim();
-  if (browsersPath) {
-    env.PLAYWRIGHT_BROWSERS_PATH = browsersPath;
-  }
+  env.PLAYWRIGHT_BROWSERS_PATH = (process.env.PLAYWRIGHT_BROWSERS_PATH || '').trim() || SANDBOX_PLAYWRIGHT_BROWSERS_PATH;
+  env.ONECEO_PLAYWRIGHT_CDP_URL = (process.env.ONECEO_PLAYWRIGHT_CDP_URL || '').trim() || SANDBOX_PLAYWRIGHT_CDP_URL;
+  env.ONECEO_NPM_GLOBAL_ROOT = (process.env.ONECEO_NPM_GLOBAL_ROOT || '').trim() || SANDBOX_GLOBAL_NODE_MODULES;
+  env.ONECEO_PLAYWRIGHT_MCP_COMMAND = SANDBOX_PLAYWRIGHT_MCP_COMMAND;
+  env.ONECEO_BROWSER_USE_COMMAND = SANDBOX_BROWSER_USE_COMMAND;
+  env.ONECEO_NEKO_BINARY = '/usr/local/bin/neko';
+  env.ONECEO_NEKO_STATIC_ROOT = '/opt/neko/client/dist';
+  env.ONECEO_BROWSER_USE_VENV = '/opt/browser-use';
+  env.NODE_PATH = [
+    (process.env.NODE_PATH || '').trim(),
+    env.ONECEO_NPM_GLOBAL_ROOT,
+    SANDBOX_GLOBAL_NODE_MODULES,
+  ].filter(Boolean).join(':');
   env.XDG_RUNTIME_DIR = '/tmp';
   return env;
 }
@@ -653,12 +682,22 @@ function buildOpencodeConfig(
     mcp: {
       browser_use: {
         type: 'local',
-        command: ['browser-use', '--mcp'],
+        command: [envs.ONECEO_BROWSER_USE_COMMAND || SANDBOX_BROWSER_USE_COMMAND, '--mcp'],
         enabled: true,
       },
       playwright: {
         type: 'local',
-        command: ['npx', '@playwright/mcp@latest', '--cdp-endpoint', 'http://127.0.0.1:9222'],
+        command: [
+          '/usr/bin/env',
+          `DISPLAY=${envs.DISPLAY || ':0'}`,
+          'PLAYWRIGHT_HEADLESS=false',
+          `PLAYWRIGHT_BROWSERS_PATH=${envs.PLAYWRIGHT_BROWSERS_PATH || SANDBOX_PLAYWRIGHT_BROWSERS_PATH}`,
+          `NODE_PATH=${envs.NODE_PATH || SANDBOX_GLOBAL_NODE_MODULES}`,
+          'XDG_RUNTIME_DIR=/tmp',
+          envs.ONECEO_PLAYWRIGHT_MCP_COMMAND || SANDBOX_PLAYWRIGHT_MCP_COMMAND,
+          '--cdp-endpoint',
+          envs.ONECEO_PLAYWRIGHT_CDP_URL || SANDBOX_PLAYWRIGHT_CDP_URL,
+        ],
         enabled: true,
       },
       ...extraMcpEntries,
@@ -914,6 +953,9 @@ function buildSandboxVerifyScript(): string {
     'fi',
     '',
     'echo "[verify] OPENAI_BASE_URL=$OPENAI_BASE_URL"',
+    'echo "[verify] ONECEO_PLAYWRIGHT_CDP_URL=${ONECEO_PLAYWRIGHT_CDP_URL:-}"',
+    'echo "[verify] PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH:-}"',
+    'echo "[verify] NODE_PATH=${NODE_PATH:-}"',
     '',
     'ip=""',
     'for url in https://api.ipify.org https://icanhazip.com https://ifconfig.me/ip; do',
@@ -989,6 +1031,16 @@ function buildSandboxVerifyScript(): string {
     '  exit 17',
     'fi',
     '',
+    'command -v playwright >/dev/null 2>&1 || { echo "[verify] playwright_cli=missing"; exit 18; }',
+    'echo "[verify] playwright_cli=$(command -v playwright)"',
+    'command -v playwright-mcp >/dev/null 2>&1 || { echo "[verify] playwright_mcp=missing"; exit 19; }',
+    'echo "[verify] playwright_mcp=$(command -v playwright-mcp)"',
+    'command -v neko >/dev/null 2>&1 || { echo "[verify] neko=missing"; exit 20; }',
+    'echo "[verify] neko=$(command -v neko)"',
+    'test -d "${ONECEO_BROWSER_USE_VENV:-/opt/browser-use}" || { echo "[verify] browser_use_venv=missing"; exit 24; }',
+    'test -d "${ONECEO_NEKO_STATIC_ROOT:-/opt/neko/client/dist}" || { echo "[verify] neko_static=missing"; exit 25; }',
+    'node -e "require.resolve(\\"playwright\\"); require.resolve(\\"@playwright/mcp/package.json\\"); console.log(\\"[verify] node_modules_playwright_ok\\")"',
+    '',
   ];
   return lines.join('\n');
 }
@@ -1015,7 +1067,7 @@ ${remotePath} > ${logPath} 2>&1`;
 async function ensurePlaywrightDeps(sessionId: string) {
   const command = `
 set -euo pipefail
-PLAYWRIGHT_BROWSERS_PATH="\${PLAYWRIGHT_BROWSERS_PATH:-/opt/ms-playwright}"
+PLAYWRIGHT_BROWSERS_PATH="\${PLAYWRIGHT_BROWSERS_PATH:-${SANDBOX_PLAYWRIGHT_BROWSERS_PATH}}"
 
 if [[ ! -d "$PLAYWRIGHT_BROWSERS_PATH" ]]; then
   echo "[playwright] browsers path missing: $PLAYWRIGHT_BROWSERS_PATH"
@@ -1047,8 +1099,12 @@ async function assertPlaywrightReady(sessionId: string) {
   const command = `
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
+export NODE_PATH="\${NODE_PATH:-${SANDBOX_GLOBAL_NODE_MODULES}}"
 
+command -v playwright >/dev/null 2>&1
 playwright --version >/dev/null 2>&1
+node -e "require.resolve('playwright'); require.resolve('@playwright/mcp/package.json')"
+command -v ${SANDBOX_PLAYWRIGHT_MCP_COMMAND} >/dev/null 2>&1
 `;
   await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30000 });
 }
@@ -1056,8 +1112,9 @@ playwright --version >/dev/null 2>&1
 async function assertBrowserUseReady(sessionId: string) {
   const command = `
 set -euo pipefail
-command -v browser-use >/dev/null 2>&1
-browser-use --version >/dev/null 2>&1 || browser-use --help >/dev/null 2>&1
+command -v ${SANDBOX_BROWSER_USE_COMMAND} >/dev/null 2>&1
+${SANDBOX_BROWSER_USE_COMMAND} --version >/dev/null 2>&1 || ${SANDBOX_BROWSER_USE_COMMAND} --help >/dev/null 2>&1
+test -d /opt/browser-use
 `;
   await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30000 });
 }
@@ -1261,7 +1318,13 @@ export class SandboxAgentProvisionService {
     if (!taskSessionId) {
       return this.provision(input);
     }
-    const lockKey = taskSessionId;
+    const codexMode =
+      normalizeProvisionCodexMode(input.metadata?.codexExecutionMode) ||
+      normalizeProvisionCodexMode(input.metadata?.codexMode) ||
+      normalizeProvisionCodexMode(input.metadata?.transport === 'app_server' ? 'ws' : input.metadata?.transport) ||
+      'auto';
+    const template = pickString(input.metadata?.template) || '';
+    const lockKey = [taskSessionId, executor, codexMode, template].join(':');
     const existing = provisionLocks.get(lockKey);
     if (existing) {
       return existing;
@@ -1374,11 +1437,29 @@ export class SandboxAgentProvisionService {
       const isReused = Boolean(reusable);
 
       try {
-        const info = await runStep('sandbox_info', () => e2bConnector.getSandboxInfo(sessionId));
-        const trafficAccessToken =
-          (info as any)?.trafficAccessToken || (info as any)?.traffic_access_token || null;
         const existingEnvironment = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
         const existingMetadata = ((existingEnvironment?.metadata || {}) as Record<string, unknown>) || {};
+        let info: any = null;
+        try {
+          info = await runStep('sandbox_info', () => e2bConnector.getSandboxInfo(sessionId));
+        } catch (error) {
+          if (!isReused || executor !== 'altus' || !isSandboxControlPlaneTransientError(error)) {
+            throw error;
+          }
+          writeConnectorDebugLog('[PROVISION_REUSED_SANDBOX_INFO_SKIPPED]', {
+            taskSessionId: taskSessionId || null,
+            executor,
+            orchestratorSessionId: sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          }, 'warn');
+        }
+        const existingE2bMetadata = (existingMetadata.e2b as Record<string, unknown> | undefined) || {};
+        const trafficAccessToken =
+          (info as any)?.trafficAccessToken ||
+          (info as any)?.traffic_access_token ||
+          pickString(existingE2bMetadata.trafficAccessToken) ||
+          pickString(existingE2bMetadata.traffic_access_token) ||
+          null;
 
         await runStep('commands_ready', () => waitForSandboxCommands(sessionId));
 
@@ -1392,27 +1473,41 @@ export class SandboxAgentProvisionService {
         let codexConfigToml: string | null = null;
         let codexAuthJson: string | null = null;
 
-	        if (!isReused) {
-	          const restoreResult = await runStep('workspace_restore', () =>
-	            restoreWorkspaceIfArchived(
-	              sessionId,
-	              {
-	                snapshotKey: preferredRestoreSnapshotKey || undefined,
-	                taskSessionId,
-	                restoreRequired: reusableResolution.restoreRequired || Boolean(preferredRestoreSnapshotKey),
-	                expectedSourceSandboxId: reusableResolution.handoffSourceSandboxId || undefined,
-	                reason: reusableResolution.handoffReason || 'sandbox_provision',
-	              }
-	            )
-	          );
-	          if (restoreResult.status === 'missing_required_archive') {
-	            throw new Error(`workspace restore failed: ${restoreResult.reason}`);
-	          }
-	          if (restoreResult.status === 'restored' && taskSessionId) {
-	            await taskCreationCacheStore.invalidateWorkspaceBySession(taskSessionId);
-	            await taskSessionRedisCacheService.invalidateWorkspaceBySessionId(taskSessionId);
-	          }
-	        }
+        if (!isReused) {
+          const restoreRequired = reusableResolution.restoreRequired || Boolean(preferredRestoreSnapshotKey);
+          let restoreResult: Awaited<ReturnType<typeof restoreWorkspaceIfArchived>> | null = null;
+          try {
+            restoreResult = await runStep('workspace_restore', () =>
+              restoreWorkspaceIfArchived(
+                sessionId,
+                {
+                  snapshotKey: preferredRestoreSnapshotKey || undefined,
+                  taskSessionId,
+                  restoreRequired,
+                  expectedSourceSandboxId: reusableResolution.handoffSourceSandboxId || undefined,
+                  reason: reusableResolution.handoffReason || 'sandbox_provision',
+                }
+              )
+            );
+          } catch (error) {
+            if (restoreRequired) {
+              throw error;
+            }
+            writeConnectorDebugLog('[PROVISION_WORKSPACE_RESTORE_SKIPPED_NONBLOCKING]', {
+              taskSessionId: taskSessionId || null,
+              executor,
+              orchestratorSessionId: sessionId,
+              error: error instanceof Error ? error.message : String(error),
+            }, 'warn');
+          }
+          if (restoreResult?.status === 'missing_required_archive') {
+            throw new Error(`workspace restore failed: ${restoreResult.reason}`);
+          }
+          if (restoreResult?.status === 'restored' && taskSessionId) {
+            await taskCreationCacheStore.invalidateWorkspaceBySession(taskSessionId);
+            await taskSessionRedisCacheService.invalidateWorkspaceBySessionId(taskSessionId);
+          }
+        }
 
         let baseUrl: string | undefined;
         let host: string | undefined;
@@ -1421,6 +1516,12 @@ export class SandboxAgentProvisionService {
         let osacHostPort: number | null = null;
         let osacConnectionMode: string | null = pickString(existingMetadata.osacConnectionMode) || null;
         let osacAuthToken: string | null = pickString(existingMetadata.osacAuthToken);
+        let osacBinaryVersion: string | null = pickString(existingMetadata.osacBinaryVersion);
+        let osacBinarySha256: string | null = pickString(existingMetadata.osacBinarySha256);
+        let osacBinaryObjectKey: string | null = pickString(existingMetadata.osacBinaryObjectKey);
+        const expectedOsacSpec = await runStep('osac_artifact_spec', () =>
+          platformRuntimeArtifactService.getPublishedOsacDownloadSpec()
+        );
 
         if (executor === 'opencode') {
           host = await runStep('sandbox_host', () => resolveE2bPublicHost(sessionId, e2bConfig.opencodePort));
@@ -1451,6 +1552,8 @@ export class SandboxAgentProvisionService {
           const reusableBridge = await canReuseOsacBridge({
             endpoint: osacEndpoint,
             authToken: osacAuthToken,
+            currentSha256: osacBinarySha256,
+            expectedSha256: expectedOsacSpec.sha256,
           });
           if (reusableBridge) {
             osacHostPort =
@@ -1469,6 +1572,9 @@ export class SandboxAgentProvisionService {
             osacHostPort = osacBootstrapConfig.osacPort;
             osacConnectionMode = 'direct';
             osacAuthToken = bridge.osacAuthToken;
+            osacBinaryVersion = bridge.osacVersion;
+            osacBinarySha256 = bridge.osacSha256;
+            osacBinaryObjectKey = bridge.osacObjectKey;
             await runStep('osac_ready', () =>
               waitForOsacBridgeReady({
                 endpoint: bridge.osacEndpoint,
@@ -1508,6 +1614,8 @@ export class SandboxAgentProvisionService {
           const reusableBridge = await canReuseOsacBridge({
             endpoint: osacEndpoint,
             authToken: osacAuthToken,
+            currentSha256: osacBinarySha256,
+            expectedSha256: expectedOsacSpec.sha256,
           });
           if (reusableBridge) {
             osacHostPort =
@@ -1527,6 +1635,9 @@ export class SandboxAgentProvisionService {
             osacHostPort = osacBootstrapConfig.osacPort;
             osacConnectionMode = 'direct';
             osacAuthToken = bridge.osacAuthToken;
+            osacBinaryVersion = bridge.osacVersion;
+            osacBinarySha256 = bridge.osacSha256;
+            osacBinaryObjectKey = bridge.osacObjectKey;
             await runStep('osac_ready', () =>
               waitForOsacBridgeReady({
                 endpoint: bridge.osacEndpoint,
@@ -1538,6 +1649,8 @@ export class SandboxAgentProvisionService {
           const reusableBridge = await canReuseOsacBridge({
             endpoint: osacEndpoint,
             authToken: osacAuthToken,
+            currentSha256: osacBinarySha256,
+            expectedSha256: expectedOsacSpec.sha256,
           });
           if (reusableBridge) {
             osacHostPort =
@@ -1556,6 +1669,9 @@ export class SandboxAgentProvisionService {
             osacHostPort = osacBootstrapConfig.osacPort;
             osacConnectionMode = 'direct';
             osacAuthToken = bridge.osacAuthToken;
+            osacBinaryVersion = bridge.osacVersion;
+            osacBinarySha256 = bridge.osacSha256;
+            osacBinaryObjectKey = bridge.osacObjectKey;
             await runStep('osac_ready', () =>
               waitForOsacBridgeReady({
                 endpoint: bridge.osacEndpoint,
@@ -1576,19 +1692,19 @@ export class SandboxAgentProvisionService {
           executor,
           codexExecutionMode: codexExecutionMode || undefined,
           codexMode: codexExecutionMode || undefined,
-          sandboxBaseUrl: baseUrl,
-          sandboxPort: baseUrl ? e2bConfig.opencodePort : undefined,
-          sandboxHost: host,
+          sandboxBaseUrl: baseUrl || existingMetadata.sandboxBaseUrl,
+          sandboxPort: baseUrl ? e2bConfig.opencodePort : existingMetadata.sandboxPort,
+          sandboxHost: host || existingMetadata.sandboxHost,
           workspaceRoot: workspaceRoot || undefined,
           stateRoot: stateRoot || undefined,
-          altusBaseUrl: executor === 'altus' ? baseUrl : undefined,
-          altusPort: executor === 'altus' && baseUrl ? e2bConfig.opencodePort : undefined,
-          altusHost: executor === 'altus' ? host : undefined,
+          altusBaseUrl: executor === 'altus' ? baseUrl || existingMetadata.altusBaseUrl : undefined,
+          altusPort: executor === 'altus' ? (baseUrl ? e2bConfig.opencodePort : existingMetadata.altusPort) : undefined,
+          altusHost: executor === 'altus' ? host || existingMetadata.altusHost : undefined,
           altusWorkspaceRoot: executor === 'altus' ? workspaceRoot || undefined : undefined,
           altusStateRoot: executor === 'altus' ? stateRoot || undefined : undefined,
-          opencodeBaseUrl: baseUrl,
-          opencodePort: baseUrl ? e2bConfig.opencodePort : undefined,
-          opencodeHost: host,
+          opencodeBaseUrl: baseUrl || existingMetadata.opencodeBaseUrl,
+          opencodePort: baseUrl ? e2bConfig.opencodePort : existingMetadata.opencodePort,
+          opencodeHost: host || existingMetadata.opencodeHost,
           opencodeWorkspaceRoot: workspaceRoot || undefined,
           opencodeStateRoot: stateRoot || undefined,
           codexArchiveHome: codexArchiveHome || undefined,
@@ -1601,6 +1717,9 @@ export class SandboxAgentProvisionService {
           osacHostPort: osacHostPort || undefined,
           osacConnectionMode: osacConnectionMode || undefined,
           osacAuthToken: osacAuthToken || undefined,
+          osacBinaryVersion: osacBinaryVersion || undefined,
+          osacBinarySha256: osacBinarySha256 || undefined,
+          osacBinaryObjectKey: osacBinaryObjectKey || undefined,
           e2b: {
             ...(existingEnvironment?.metadata as any)?.e2b,
             sandboxId: sessionId,
@@ -1703,3 +1822,9 @@ export class SandboxAgentProvisionService {
 }
 
 export const sandboxAgentProvisionService = new SandboxAgentProvisionService();
+
+export const __sandboxAgentProvisionInternalsForTest = {
+  buildOpencodeConfig,
+  buildSandboxVerifyScript,
+  isSandboxControlPlaneTransientError,
+};

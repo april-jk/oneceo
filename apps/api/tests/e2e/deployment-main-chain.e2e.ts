@@ -1,8 +1,10 @@
 import '../../src/config/env';
 
 import assert from 'node:assert/strict';
+import { execFile as execFileCallback } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
 import { e2bConnector } from '../../src/connectors/e2b-connector';
 import {
@@ -37,15 +39,30 @@ type TestReport = {
   finishedAt?: string;
   apiBase: string;
   marker: string;
+  promptCategory?: string;
+  promptLabel?: string;
+  promptText?: string;
   userEmail?: string;
   sessionId?: string;
   runId?: string;
+  deployRunId?: string;
   orchestratorSessionId?: string;
   publicUrl?: string;
   deploymentStatus?: string;
   bindingState?: string;
   providerErrorCode?: string;
   analyticsStatus?: string;
+  publicReachabilityStatus?: 'passed' | 'failed' | 'unverified';
+  publicMarkerStatus?: 'passed' | 'failed' | 'unverified';
+  analyticsBootstrapStatus?: 'passed' | 'failed' | 'unverified';
+  browserVisitStatus?: 'passed' | 'failed' | 'skipped';
+  analyticsTrackingStatus?: 'passed' | 'failed' | 'unverified';
+  publicProbeError?: string;
+  publicMarkerLocation?: string;
+  browserVisitScreenshot?: string;
+  browserVisitError?: string;
+  browserAnalyticsSendStatus?: number;
+  browserPageErrors?: string[];
   sandboxCleanup?: string;
   sessionCleanup?: string;
   passed: boolean;
@@ -57,14 +74,43 @@ type TestReport = {
   error?: string;
 };
 
+const execFile = promisify(execFileCallback);
 const API_BASE = String(process.env.ONECEO_E2E_API_BASE || `http://127.0.0.1:${process.env.PORT || '4000'}`).replace(/\/+$/, '');
 const HEALTH_URL = `${API_BASE}/health`;
+const REPO_ROOT = path.resolve(process.cwd(), '../..');
 const RUN_TIMEOUT_MS = Math.max(5 * 60_000, Number(process.env.ONECEO_E2E_RUN_TIMEOUT_MS || 12 * 60_000));
 const DEPLOY_TIMEOUT_MS = Math.max(5 * 60_000, Number(process.env.ONECEO_E2E_DEPLOY_TIMEOUT_MS || 15 * 60_000));
 const URL_TIMEOUT_MS = Math.max(60_000, Number(process.env.ONECEO_E2E_URL_TIMEOUT_MS || 5 * 60_000));
+const ANALYTICS_TRACKING_TIMEOUT_MS = Math.max(
+  60_000,
+  Number(process.env.ONECEO_E2E_ANALYTICS_TRACKING_TIMEOUT_MS || 3 * 60_000)
+);
+const PUBLIC_FETCH_TIMEOUT_MS = Math.max(5_000, Number(process.env.ONECEO_E2E_PUBLIC_FETCH_TIMEOUT_MS || 15_000));
+const BROWSER_VISIT_WAIT_MS = Math.max(1_000, Number(process.env.ONECEO_E2E_BROWSER_VISIT_WAIT_MS || 8_000));
 const POLL_INTERVAL_MS = Math.max(2_000, Number(process.env.ONECEO_E2E_POLL_INTERVAL_MS || 5_000));
+const REQUIRE_PUBLIC_REACHABILITY = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.ONECEO_E2E_REQUIRE_PUBLIC_REACHABILITY || '').trim().toLowerCase()
+);
+const BROWSER_VISIT_ENABLED = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.ONECEO_E2E_BROWSER_VISIT || '').trim().toLowerCase()
+);
+const REQUIRE_ANALYTICS_TRACKING = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.ONECEO_E2E_REQUIRE_ANALYTICS_TRACKING || '').trim().toLowerCase()
+);
+const ANALYTICS_BLOCKING = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.ONECEO_E2E_ANALYTICS_BLOCKING || '').trim().toLowerCase()
+);
+const REQUIRE_BROWSER_NO_ERRORS = !['0', 'false', 'no', 'off'].includes(
+  String(process.env.ONECEO_E2E_REQUIRE_BROWSER_NO_ERRORS ?? 'true').trim().toLowerCase()
+);
 const KEEP_RESOURCES = ['1', 'true', 'yes', 'on'].includes(String(process.env.ONECEO_E2E_KEEP_RESOURCES || '').trim().toLowerCase());
 const TEST_ACCOUNT_PATH = path.resolve(process.cwd(), '../web/e2e/playwright-test-account.json');
+const PROMPT_CATEGORY = asText(process.env.ONECEO_E2E_PROMPT_CATEGORY) || 'default';
+const PROMPT_LABEL = asText(process.env.ONECEO_E2E_PROMPT_LABEL) || PROMPT_CATEGORY;
+const PROMPT_TEXT_OVERRIDE = asText(process.env.ONECEO_E2E_PROMPT_TEXT);
+const REPORT_TAG = asText(process.env.ONECEO_E2E_REPORT_TAG);
+const DEPLOY_TRIGGER_MODE = asText(process.env.ONECEO_E2E_DEPLOY_TRIGGER_MODE).toLowerCase() === 'chat' ? 'chat' : 'api';
+const DEPLOY_TRIGGER_PROMPT = asText(process.env.ONECEO_E2E_DEPLOY_TRIGGER_PROMPT) || '帮我部署当前项目';
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -72,6 +118,24 @@ function sleep(ms: number) {
 
 function asText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function toPublicHttpUrl(value: unknown) {
+  const text = asText(value);
+  if (!text) return '';
+  if (/^https?:\/\//i.test(text)) return text;
+  if (/^[a-z0-9.-]+\.[a-z]{2,}(\/.*)?$/i.test(text)) return `https://${text}`;
+  return '';
+}
+
+function resolvePreferredPublicProbeUrl(panel: JsonRecord) {
+  const domains = Array.isArray(panel?.domains) ? panel.domains : [];
+  const candidates = [panel?.publicUrl, panel?.publicDomain, panel?.latestStaticUrl, panel?.latestUrl, domains[0]];
+  for (const candidate of candidates) {
+    const url = toPublicHttpUrl(candidate);
+    if (url) return url;
+  }
+  return '';
 }
 
 function nowStamp() {
@@ -82,8 +146,9 @@ async function writeReport(report: TestReport) {
   const reportsDir = path.resolve(process.cwd(), 'tests/e2e/reports');
   await fs.mkdir(reportsDir, { recursive: true });
   const stamp = nowStamp();
-  const jsonPath = path.join(reportsDir, `deployment-main-chain-${stamp}.json`);
-  const mdPath = path.join(reportsDir, `deployment-main-chain-${stamp}.md`);
+  const suffix = REPORT_TAG ? `-${REPORT_TAG}` : '';
+  const jsonPath = path.join(reportsDir, `deployment-main-chain-${stamp}${suffix}.json`);
+  const mdPath = path.join(reportsDir, `deployment-main-chain-${stamp}${suffix}.md`);
 
   await fs.writeFile(jsonPath, JSON.stringify(report, null, 2), 'utf8');
 
@@ -94,15 +159,31 @@ async function writeReport(report: TestReport) {
     `- finishedAt: ${report.finishedAt || '-'}`,
     `- apiBase: ${report.apiBase}`,
     `- marker: ${report.marker}`,
+    `- promptCategory: ${report.promptCategory || '-'}`,
+    `- promptLabel: ${report.promptLabel || '-'}`,
     `- userEmail: ${report.userEmail || '-'}`,
     `- sessionId: ${report.sessionId || '-'}`,
     `- runId: ${report.runId || '-'}`,
+    `- deployRunId: ${report.deployRunId || '-'}`,
     `- orchestratorSessionId: ${report.orchestratorSessionId || '-'}`,
     `- publicUrl: ${report.publicUrl || '-'}`,
     `- deploymentStatus: ${report.deploymentStatus || '-'}`,
     `- bindingState: ${report.bindingState || '-'}`,
     `- providerErrorCode: ${report.providerErrorCode || '-'}`,
     `- analyticsStatus: ${report.analyticsStatus || '-'}`,
+    `- publicReachabilityStatus: ${report.publicReachabilityStatus || '-'}`,
+    `- publicMarkerStatus: ${report.publicMarkerStatus || '-'}`,
+    `- analyticsBootstrapStatus: ${report.analyticsBootstrapStatus || '-'}`,
+    `- browserVisitStatus: ${report.browserVisitStatus || '-'}`,
+    `- analyticsTrackingStatus: ${report.analyticsTrackingStatus || '-'}`,
+    `- publicMarkerLocation: ${report.publicMarkerLocation || '-'}`,
+    `- browserVisitScreenshot: ${report.browserVisitScreenshot || '-'}`,
+    `- browserAnalyticsSendStatus: ${report.browserAnalyticsSendStatus ?? '-'}`,
+    `- browserPageErrors: ${
+      Array.isArray(report.browserPageErrors) && report.browserPageErrors.length > 0
+        ? report.browserPageErrors.join(' | ')
+        : '-'
+    }`,
     `- sandboxCleanup: ${report.sandboxCleanup || '-'}`,
     `- sessionCleanup: ${report.sessionCleanup || '-'}`,
     `- passed: ${report.passed}`,
@@ -226,6 +307,46 @@ async function postApiData<T>(url: string, cookie: string, payload?: unknown): P
   return ((body as ApiResult<T>).data ?? body) as T;
 }
 
+async function readWorkspaceFileIfExists(sessionId: string, cookie: string, filePath: string) {
+  const encodedPath = encodeURIComponent(filePath);
+  const { response, body } = await requestJson<JsonRecord>(
+    `${API_BASE}/api/task-creation/sessions/${sessionId}/workspace/file?path=${encodedPath}&refresh=1`,
+    {
+      method: 'GET',
+      cookie,
+    }
+  );
+  if (!response.ok) {
+    return null;
+  }
+  const payload = ((body as ApiResult<JsonRecord>).data ?? body) as JsonRecord;
+  if (payload?.isBinary) {
+    return null;
+  }
+  return payload;
+}
+
+async function findMarkerInWorkspaceFiles(
+  sessionId: string,
+  cookie: string,
+  marker: string,
+  candidates: string[]
+) {
+  for (const candidate of candidates) {
+    const result = await readWorkspaceFileIfExists(sessionId, cookie, candidate);
+    if (typeof result?.content !== 'string') {
+      continue;
+    }
+    if (result.content.includes(marker)) {
+      return {
+        path: candidate,
+        matched: true,
+      };
+    }
+  }
+  return null;
+}
+
 async function deleteApi(url: string, cookie: string) {
   const { response, body } = await requestJson<JsonRecord>(url, {
     method: 'DELETE',
@@ -281,6 +402,9 @@ async function poll<T>(
 }
 
 function buildGenerationPrompt(marker: string) {
+  if (PROMPT_TEXT_OVERRIDE) {
+    return PROMPT_TEXT_OVERRIDE.replaceAll('__ONECEO_E2E_MARKER__', marker);
+  }
   return [
     '在当前工作区直接创建一个最小可部署静态网页应用，不要提问，不要解释，不要部署。',
     '要求：',
@@ -294,22 +418,294 @@ function buildGenerationPrompt(marker: string) {
   ].join('\n');
 }
 
-async function fetchPublicHtml(url: string) {
-  const response = await fetch(url, {
-    redirect: 'follow',
-  });
-  const text = await response.text();
+type PublicTextFetchResult = {
+  ok: boolean;
+  url: string;
+  status?: number;
+  text?: string;
+  error?: string;
+};
+
+type PublicDeploymentProbe = {
+  reachable: boolean;
+  status?: number;
+  markerFound: boolean;
+  markerLocation?: string;
+  analyticsBootstrapFound: boolean;
+  unresolvedEnvPlaceholderFound: boolean;
+  assetUrls: string[];
+  error?: string;
+};
+
+function normalizeErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    const cause = (error as Error & { cause?: unknown }).cause;
+    const causeMessage =
+      cause instanceof Error
+        ? cause.message
+        : typeof cause === 'object' && cause && 'message' in cause
+          ? String((cause as { message?: unknown }).message)
+          : '';
+    return [error.name, error.message, causeMessage].filter(Boolean).join(': ');
+  }
+  return String(error);
+}
+
+async function fetchPublicText(url: string): Promise<PublicTextFetchResult> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PUBLIC_FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        accept: 'text/html,application/javascript,text/css;q=0.8,*/*;q=0.1',
+        'user-agent': 'OneCEO-Deployment-E2E/1.0',
+      },
+    });
+    return {
+      ok: response.ok,
+      url,
+      status: response.status,
+      text: await response.text(),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      url,
+      error: normalizeErrorMessage(error),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function resolvePublicAssetUrl(publicUrl: string, assetPath: string) {
+  try {
+    return new URL(assetPath, publicUrl).toString();
+  } catch {
+    return '';
+  }
+}
+
+function extractScriptAssetUrls(publicUrl: string, html: string) {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  const scriptPattern = /<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = scriptPattern.exec(html)) && urls.length < 12) {
+    const resolved = resolvePublicAssetUrl(publicUrl, match[1] || '');
+    if (!resolved || seen.has(resolved)) continue;
+    seen.add(resolved);
+    urls.push(resolved);
+  }
+  return urls;
+}
+
+function hasAnalyticsBootstrap(text: string) {
+  return (
+    /window\.__ONECEO_ANALYTICS__/.test(text) ||
+    /data-oneceo-analytics=["']runtime["']/.test(text)
+  );
+}
+
+async function probePublicDeployment(publicUrl: string, marker: string): Promise<PublicDeploymentProbe> {
+  const htmlFetch = await fetchPublicText(publicUrl);
+  if (!htmlFetch.ok || typeof htmlFetch.text !== 'string') {
+    return {
+      reachable: false,
+      status: htmlFetch.status,
+      markerFound: false,
+      analyticsBootstrapFound: false,
+      unresolvedEnvPlaceholderFound: false,
+      assetUrls: [],
+      error: htmlFetch.error || `HTTP ${htmlFetch.status || 'unknown'}`,
+    };
+  }
+
+  const html = htmlFetch.text;
+  const assetUrls = extractScriptAssetUrls(publicUrl, html);
+  const analyticsBootstrapFound = hasAnalyticsBootstrap(html);
+  const unresolvedEnvPlaceholderFound = /%VITE_[A-Z0-9_]+%/.test(html);
+  if (html.includes(marker)) {
+    return {
+      reachable: true,
+      status: htmlFetch.status,
+      markerFound: true,
+      markerLocation: 'html',
+      analyticsBootstrapFound,
+      unresolvedEnvPlaceholderFound,
+      assetUrls,
+    };
+  }
+
+  let lastAssetError = '';
+  for (const assetUrl of assetUrls) {
+    const assetFetch = await fetchPublicText(assetUrl);
+    if (!assetFetch.ok || typeof assetFetch.text !== 'string') {
+      lastAssetError = assetFetch.error || `HTTP ${assetFetch.status || 'unknown'} for ${assetUrl}`;
+      continue;
+    }
+    if (assetFetch.text.includes(marker)) {
+      return {
+        reachable: true,
+        status: htmlFetch.status,
+        markerFound: true,
+        markerLocation: assetUrl,
+        analyticsBootstrapFound,
+        unresolvedEnvPlaceholderFound,
+        assetUrls,
+      };
+    }
+  }
+
   return {
-    status: response.status,
-    text,
+    reachable: true,
+    status: htmlFetch.status,
+    markerFound: false,
+    analyticsBootstrapFound,
+    unresolvedEnvPlaceholderFound,
+    assetUrls,
+    error: lastAssetError || 'marker not found in HTML or linked script assets',
   };
 }
 
+async function pollPublicDeployment(publicUrl: string, marker: string): Promise<PublicDeploymentProbe> {
+  const started = Date.now();
+  let lastProbe: PublicDeploymentProbe | null = null;
+  while (Date.now() - started < URL_TIMEOUT_MS) {
+    lastProbe = await probePublicDeployment(publicUrl, marker);
+    if (lastProbe.reachable && lastProbe.markerFound) {
+      return lastProbe;
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
+  return (
+    lastProbe || {
+      reachable: false,
+      markerFound: false,
+      analyticsBootstrapFound: false,
+      unresolvedEnvPlaceholderFound: false,
+      assetUrls: [],
+      error: 'public deployment probe did not run',
+    }
+  );
+}
+
+type BrowserVisitResult = {
+  ok: boolean;
+  status: 'passed' | 'failed' | 'skipped';
+  screenshotPath?: string;
+  analyticsSendStatus?: number;
+  pageErrors?: string[];
+  error?: string;
+};
+
+async function visitPublicDeploymentWithBrowser(publicUrl: string): Promise<BrowserVisitResult> {
+  if (!BROWSER_VISIT_ENABLED) {
+    return { ok: false, status: 'skipped' };
+  }
+
+  const reportsDir = path.resolve(process.cwd(), 'tests/e2e/reports');
+  await fs.mkdir(reportsDir, { recursive: true });
+  const screenshotPath = path.join(reportsDir, `deployment-browser-visit-${nowStamp()}.png`);
+  const browserScript = `
+import { chromium } from '@playwright/test';
+
+const [url, screenshotPath, waitMsRaw] = process.argv.slice(1);
+const waitMs = Math.max(1000, Number(waitMsRaw || 8000));
+const browser = await chromium.launch({ headless: true });
+const page = await browser.newPage({
+  userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  viewport: { width: 1365, height: 900 }
+});
+const pageErrors = [];
+page.on('pageerror', (error) => pageErrors.push(error.message || String(error)));
+const analyticsResponsePromise = page
+  .waitForResponse(
+    (response) => response.url().includes('/api/send') && response.url().includes('analytics.oneceo.ai'),
+    { timeout: Math.max(15000, waitMs + 10000) }
+  )
+  .catch(() => null);
+await page.goto(url, { waitUntil: 'domcontentloaded', timeout: Math.max(30000, waitMs + 15000) });
+await page.waitForTimeout(waitMs);
+const analyticsResponse = await analyticsResponsePromise;
+await page.screenshot({ path: screenshotPath, fullPage: true });
+await browser.close();
+console.log(JSON.stringify({
+  analyticsSendStatus: analyticsResponse ? analyticsResponse.status() : null,
+  pageErrors: pageErrors.slice(0, 5)
+}));
+`;
+  try {
+    const { stdout } = await execFile(
+      'pnpm',
+      [
+        '--dir',
+        REPO_ROOT,
+        '--filter',
+        'web',
+        'exec',
+        'node',
+        '--input-type=module',
+        '--eval',
+        browserScript,
+        publicUrl,
+        screenshotPath,
+        String(BROWSER_VISIT_WAIT_MS),
+      ],
+      {
+        cwd: REPO_ROOT,
+        env: process.env,
+        maxBuffer: 4 * 1024 * 1024,
+      }
+    );
+    const metadata = JSON.parse(stdout.trim().split('\n').pop() || '{}') as {
+      analyticsSendStatus?: number | null;
+      pageErrors?: string[];
+    };
+    const analyticsSendStatus = Number(metadata.analyticsSendStatus);
+    const pageErrors = Array.isArray(metadata.pageErrors) ? metadata.pageErrors.filter(Boolean) : [];
+    if (REQUIRE_BROWSER_NO_ERRORS && pageErrors.length > 0) {
+      return {
+        ok: false,
+        status: 'failed',
+        screenshotPath,
+        analyticsSendStatus,
+        pageErrors,
+        error: `browser page emitted runtime errors: ${pageErrors.join(' | ')}`,
+      };
+    }
+    return {
+      ok: true,
+      status: 'passed',
+      screenshotPath,
+      analyticsSendStatus,
+      pageErrors,
+    };
+  } catch (error: any) {
+    return {
+      ok: false,
+      status: 'failed',
+      screenshotPath,
+      error:
+        asText(error?.stderr) ||
+        asText(error?.stdout) ||
+        asText(error?.message) ||
+        normalizeErrorMessage(error),
+    };
+  }
+}
+
 async function main() {
+  const marker = `ONECEO_E2E_MARKER_${Date.now().toString(36)}`;
   const report: TestReport = {
     startedAt: new Date().toISOString(),
     apiBase: API_BASE,
-    marker: `ONECEO_E2E_MARKER_${Date.now().toString(36)}`,
+    marker,
+    promptCategory: PROMPT_CATEGORY,
+    promptLabel: PROMPT_LABEL,
+    promptText: PROMPT_TEXT_OVERRIDE || buildGenerationPrompt(marker),
     checkpoints: [],
     passed: false,
   };
@@ -405,6 +801,19 @@ async function main() {
     const latestRunStatus = asText(latestRun.status).toLowerCase();
     const persistedRun = await taskSessionRunDAO.getRun(runId);
     assert.ok(persistedRun, 'run should persist in DB');
+    checkpoint('managed_run_terminal', 'passed', {
+      runStatus: latestRunStatus,
+      dbRunStatus: persistedRun?.status || null,
+      error: latestRun.error || latestRun.errorMessage || latestRun.lastError || null,
+      finalMessage: asText(latestRun.finalMessage || latestRun.summary || latestRun.message).slice(0, 500) || null,
+    });
+    if (latestRunStatus === 'failed') {
+      checkpoint('managed_run_failed', 'failed', {
+        runStatus: latestRunStatus,
+        dbRunStatus: persistedRun?.status || null,
+        error: latestRun.error || latestRun.errorMessage || latestRun.lastError || null,
+      });
+    }
     assert.notEqual(latestRunStatus, 'failed', 'managed run should not fail');
     assert.notEqual(latestRunStatus, 'stopped', 'managed run should not stop');
     assert.notEqual(latestRunStatus, 'waiting_user', 'managed run should not ask for clarification');
@@ -418,24 +827,47 @@ async function main() {
       cookieSession.cookie
     );
     const treeText = JSON.stringify(workspaceTree);
-    assert.match(treeText, /index\.html/i);
-    assert.match(treeText, /styles\.css/i);
-    assert.match(treeText, /app\.js/i);
+    const hasRootStaticShape =
+      /index\.html/i.test(treeText) && /styles\.css/i.test(treeText) && /app\.js/i.test(treeText);
+    const hasOfficialShellShape =
+      /client\/index\.html/i.test(treeText) && /server\/index\.(t|j)s/i.test(treeText);
+    assert.ok(
+      hasRootStaticShape || hasOfficialShellShape,
+      `workspace tree did not match a supported website shape: ${treeText.slice(0, 1200)}`
+    );
     checkpoint('workspace_tree', 'passed', {
-      containsIndex: /index\.html/i.test(treeText),
-      containsStyles: /styles\.css/i.test(treeText),
-      containsAppJs: /app\.js/i.test(treeText),
+      hasRootStaticShape,
+      hasOfficialShellShape,
     });
 
-    const indexFile = await getApiData<JsonRecord>(
-      `${API_BASE}/api/task-creation/sessions/${sessionId}/workspace/file?path=${encodeURIComponent('index.html')}&refresh=1`,
-      cookieSession.cookie
+    const workspaceMarkerCandidates = hasOfficialShellShape
+      ? [
+          'client/index.html',
+          'client/src/main.jsx',
+          'client/src/main.tsx',
+          'client/src/App.jsx',
+          'client/src/App.tsx',
+          'src/main.jsx',
+          'src/main.tsx',
+          'src/App.jsx',
+          'src/App.tsx',
+          'public/index.html',
+        ]
+      : ['index.html', 'app.js', 'styles.css'];
+    const markerSource = await findMarkerInWorkspaceFiles(
+      sessionId,
+      cookieSession.cookie,
+      report.marker,
+      workspaceMarkerCandidates
     );
-    assert.equal(indexFile.isBinary, false, 'index.html should be text');
-    assert.match(String(indexFile.content || ''), new RegExp(report.marker));
-    checkpoint('workspace_index_html', 'passed', {
-      path: indexFile.path || 'index.html',
+    assert.ok(
+      markerSource,
+      `workspace should contain marker in a supported entry source: ${workspaceMarkerCandidates.join(', ')}`
+    );
+    checkpoint('workspace_marker_source', 'passed', {
+      path: markerSource.path,
       markerFound: true,
+      officialShell: hasOfficialShellShape,
     });
 
     const baseline = await getApiData<JsonRecord>(
@@ -451,13 +883,52 @@ async function main() {
       warnings: Array.isArray(baseline.warnings) ? baseline.warnings : [],
     });
 
-    const deployPanel = await postApiData<JsonRecord>(
-      `${API_BASE}/api/task-creation/sessions/${sessionId}/deployment/deploy`,
-      cookieSession.cookie
-    );
+    let deployPanel: JsonRecord;
+    if (DEPLOY_TRIGGER_MODE === 'chat') {
+      const deployRunStart = await postApiData<JsonRecord>(`${API_BASE}/api/altus-managed/inputs`, cookieSession.cookie, {
+        sessionId,
+        content: DEPLOY_TRIGGER_PROMPT,
+        metadata: {
+          source: 'deployment_main_chain_e2e_deploy_trigger',
+        },
+      });
+      const deployRunId = asText(deployRunStart?.run?.id || deployRunStart?.run?.runId);
+      report.deployRunId = deployRunId || undefined;
+      assert.ok(deployRunId, 'deploy trigger run id should exist');
+      checkpoint('deployment_trigger_submit', 'passed', {
+        mode: DEPLOY_TRIGGER_MODE,
+        runId: deployRunId,
+      });
+
+      const deployRun = await poll<JsonRecord>(
+        'deploy trigger run terminal',
+        RUN_TIMEOUT_MS,
+        async () => getApiData<JsonRecord>(`${API_BASE}/api/altus-managed/sessions/${sessionId}/runs/${deployRunId}`, cookieSession!.cookie),
+        (value) => {
+          const status = asText(value?.status).toLowerCase();
+          return ['completed', 'failed', 'stopped', 'waiting_user'].includes(status);
+        }
+      );
+      const deployRunStatus = asText(deployRun.status).toLowerCase();
+      checkpoint('deployment_trigger_run_terminal', 'passed', {
+        mode: DEPLOY_TRIGGER_MODE,
+        runStatus: deployRunStatus,
+        error: deployRun.error || deployRun.errorMessage || deployRun.lastError || null,
+      });
+      assert.notEqual(deployRunStatus, 'failed', 'deploy trigger run should not fail');
+      assert.notEqual(deployRunStatus, 'stopped', 'deploy trigger run should not stop');
+      assert.notEqual(deployRunStatus, 'waiting_user', 'deploy trigger run should not ask for clarification');
+      deployPanel = await getApiData<JsonRecord>(`${API_BASE}/api/task-creation/sessions/${sessionId}/deployment?refresh=1`, cookieSession.cookie);
+    } else {
+      deployPanel = await postApiData<JsonRecord>(
+        `${API_BASE}/api/task-creation/sessions/${sessionId}/deployment/deploy`,
+        cookieSession.cookie
+      );
+    }
     console.log('[e2e] deployment requested');
     assert.ok(asText(deployPanel.bindingState), 'deploy panel should return bindingState');
     checkpoint('deployment_trigger', 'passed', {
+      mode: DEPLOY_TRIGGER_MODE,
       bindingState: deployPanel.bindingState || null,
       provisioningPhase: deployPanel.provisioningPhase || null,
     });
@@ -469,10 +940,11 @@ async function main() {
       (value) => {
         const state = asText(value?.bindingState).toLowerCase();
         const latestStatus = asText(value?.latestStatus).toLowerCase();
+        const publicProbeUrl = resolvePreferredPublicProbeUrl(value || {});
         if (state === 'repair_required' || state === 'provider_error') {
           return true;
         }
-        if (state === 'ready' && (value?.latestUrl || value?.latestStaticUrl || (Array.isArray(value?.domains) && value.domains.length > 0))) {
+        if ((state === 'ready' || state === 'public_settling') && publicProbeUrl) {
           return true;
         }
         return ['success', 'deployed', 'active'].includes(latestStatus);
@@ -495,43 +967,132 @@ async function main() {
     });
 
     const publicUrl =
-      asText(finalDeployment.latestUrl) ||
-      asText(finalDeployment.latestStaticUrl) ||
-      (Array.isArray(finalDeployment.domains) && finalDeployment.domains.length > 0
-        ? asText(finalDeployment.domains[0])
-        : '');
+      resolvePreferredPublicProbeUrl(finalDeployment);
     if (publicUrl) {
       report.publicUrl = publicUrl;
-      const publicPage = await poll<{ status: number; text: string }>(
-        'public deployment reachable',
-        URL_TIMEOUT_MS,
-        async () => fetchPublicHtml(publicUrl),
-        (value) => value.status === 200 && value.text.includes(report.marker)
-      );
-      assert.match(publicPage.text, /window\.__ONECEO_ANALYTICS__/);
-      assert.doesNotMatch(publicPage.text, /%VITE_[A-Z0-9_]+%/);
-      checkpoint('public_url_reachable', 'passed', {
-        publicUrl,
-        status: publicPage.status,
-        markerFound: publicPage.text.includes(report.marker),
-        analyticsBootstrapFound: /window\.__ONECEO_ANALYTICS__/.test(publicPage.text),
-      });
+      const publicProbe = await pollPublicDeployment(publicUrl, report.marker);
+      report.publicProbeError = publicProbe.error;
+      report.publicReachabilityStatus = publicProbe.reachable ? 'passed' : 'unverified';
+      report.publicMarkerStatus = publicProbe.markerFound ? 'passed' : publicProbe.reachable ? 'failed' : 'unverified';
+      report.analyticsBootstrapStatus = publicProbe.analyticsBootstrapFound
+        ? 'passed'
+        : publicProbe.reachable
+          ? 'failed'
+          : 'unverified';
+      report.publicMarkerLocation = publicProbe.markerLocation;
 
-      const analyticsAfterVisit = await poll<JsonRecord>(
-        'analytics status after visit',
-        2 * 60_000,
-        async () => getApiData<JsonRecord>(`${API_BASE}/api/task-creation/sessions/${sessionId}/deployment`, cookieSession!.cookie),
-        (value) => {
-          const status = asText(value?.analytics?.status).toLowerCase();
-          return status === 'bound' || status === 'tracking';
+      if (!publicProbe.reachable && REQUIRE_PUBLIC_REACHABILITY) {
+        throw new Error(`public URL could not be verified from this environment: ${publicProbe.error || 'unknown error'}`);
+      }
+      if (publicProbe.reachable) {
+        assert.equal(publicProbe.status, 200, `public URL should return HTTP 200, got ${publicProbe.status}`);
+        assert.equal(publicProbe.markerFound, true, 'public deployment should contain marker in HTML or linked script assets');
+        assert.equal(publicProbe.unresolvedEnvPlaceholderFound, false, 'public HTML should not contain unresolved Vite env placeholders');
+        checkpoint('public_url_reachable', 'passed', {
+          publicUrl,
+          status: publicProbe.status,
+          markerFound: publicProbe.markerFound,
+          markerLocation: publicProbe.markerLocation || null,
+          analyticsBootstrapFound: publicProbe.analyticsBootstrapFound,
+          assetUrls: publicProbe.assetUrls,
+        });
+        if (publicProbe.analyticsBootstrapFound) {
+          checkpoint('analytics_bootstrap_published', 'passed', {
+            analyticsBootstrapFound: true,
+          });
+        } else {
+          checkpoint('analytics_bootstrap_missing', 'failed', {
+            analyticsBootstrapFound: false,
+            note: 'public HTML is reachable, but the runtime analytics bootstrap was not published',
+          });
+          if (ANALYTICS_BLOCKING) {
+            throw new Error('public deployment is reachable but OneCEO analytics bootstrap was not published');
+          }
         }
-      );
-      report.analyticsStatus = asText(analyticsAfterVisit.analytics?.status) || report.analyticsStatus;
-      checkpoint('analytics_status', 'passed', {
-        analyticsStatus: analyticsAfterVisit.analytics?.status || null,
-        pageviews: analyticsAfterVisit.analytics?.pageviews ?? null,
-        visits: analyticsAfterVisit.analytics?.visits ?? null,
-      });
+
+        const browserVisit = await visitPublicDeploymentWithBrowser(publicUrl);
+        report.browserVisitStatus = browserVisit.status;
+        report.browserVisitScreenshot = browserVisit.screenshotPath;
+        report.browserVisitError = browserVisit.error;
+        report.browserAnalyticsSendStatus = browserVisit.analyticsSendStatus;
+        report.browserPageErrors = browserVisit.pageErrors;
+        if (browserVisit.ok) {
+          checkpoint('browser_visit_public_url', 'passed', {
+            publicUrl,
+            screenshotPath: browserVisit.screenshotPath || null,
+            analyticsSendStatus: browserVisit.analyticsSendStatus ?? null,
+            pageErrors: browserVisit.pageErrors || [],
+            waitMs: BROWSER_VISIT_WAIT_MS,
+          });
+        } else if (browserVisit.status === 'skipped') {
+          checkpoint('browser_visit_skipped', 'passed', {
+            reason: 'set ONECEO_E2E_BROWSER_VISIT=true to execute public URL JavaScript',
+          });
+        } else {
+          checkpoint('browser_visit_public_url', 'failed', {
+            publicUrl,
+            error: browserVisit.error || null,
+            analyticsSendStatus: browserVisit.analyticsSendStatus ?? null,
+            pageErrors: browserVisit.pageErrors || [],
+          });
+          throw new Error(`public browser visit failed: ${browserVisit.error || 'unknown error'}`);
+        }
+
+        if (BROWSER_VISIT_ENABLED) {
+          const sendOk = browserVisit.analyticsSendStatus === 200;
+          checkpoint('analytics_send', sendOk ? 'passed' : 'failed', {
+            analyticsSendStatus: browserVisit.analyticsSendStatus ?? null,
+            blocking: ANALYTICS_BLOCKING,
+          });
+          if (!sendOk && ANALYTICS_BLOCKING) {
+            throw new Error('browser visit did not observe analytics.oneceo.ai/api/send returning HTTP 200');
+          }
+        }
+      } else {
+        checkpoint('public_url_reachability_unverified', 'passed', {
+          publicUrl,
+          error: publicProbe.error || null,
+          requirePublicReachability: REQUIRE_PUBLIC_REACHABILITY,
+        });
+      }
+
+      try {
+        const analyticsAfterVisit = await poll<JsonRecord>(
+          'analytics status after visit',
+          REQUIRE_ANALYTICS_TRACKING ? ANALYTICS_TRACKING_TIMEOUT_MS : 2 * 60_000,
+          async () => getApiData<JsonRecord>(`${API_BASE}/api/task-creation/sessions/${sessionId}/deployment?refresh=1`, cookieSession!.cookie),
+          (value) => {
+            const status = asText(value?.analytics?.status).toLowerCase();
+            return REQUIRE_ANALYTICS_TRACKING ? status === 'tracking' : status === 'bound' || status === 'tracking';
+          }
+        );
+        report.analyticsStatus = asText(analyticsAfterVisit.analytics?.status) || report.analyticsStatus;
+        const trackingReached = asText(analyticsAfterVisit.analytics?.status).toLowerCase() === 'tracking';
+        report.analyticsTrackingStatus = trackingReached ? 'passed' : BROWSER_VISIT_ENABLED ? 'failed' : 'unverified';
+        const analyticsStatusCheckpoint = REQUIRE_ANALYTICS_TRACKING && !trackingReached ? 'failed' : 'passed';
+        checkpoint('analytics_status', analyticsStatusCheckpoint, {
+          analyticsStatus: analyticsAfterVisit.analytics?.status || null,
+          requireTracking: REQUIRE_ANALYTICS_TRACKING,
+          analyticsBlocking: ANALYTICS_BLOCKING,
+          browserVisitEnabled: BROWSER_VISIT_ENABLED,
+          pageviews: analyticsAfterVisit.analytics?.pageviews ?? null,
+          visits: analyticsAfterVisit.analytics?.visits ?? null,
+        });
+        if (analyticsStatusCheckpoint === 'failed' && ANALYTICS_BLOCKING) {
+          throw new Error('analytics status did not reach tracking before timeout');
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        report.analyticsTrackingStatus = BROWSER_VISIT_ENABLED ? 'failed' : 'unverified';
+        checkpoint('analytics_status', 'failed', {
+          requireTracking: REQUIRE_ANALYTICS_TRACKING,
+          analyticsBlocking: ANALYTICS_BLOCKING,
+          error: message,
+        });
+        if (ANALYTICS_BLOCKING) {
+          throw error;
+        }
+      }
     } else {
       assert.ok(
         report.bindingState === 'repair_required' || report.bindingState === 'provider_error',

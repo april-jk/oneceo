@@ -42,15 +42,15 @@ const BUILTIN_CONNECTOR_GUIDES: Record<string, BuiltinConnectorGuide> = {
     serverInstructionsMarkdown: [
       'Slack is connected through oneceo API broker and Composio Tool Router, not through a sandbox-installed Slack MCP server or user-provided token.',
       'Never ask the user to paste a Slack user token, bot token, workspace secret, or Composio credential into chat, shell, environment variables, or sandbox files.',
-      'Use the attached Slack MCP router tools exposed in this session. Start with `slack__COMPOSIO_SEARCH_TOOLS` to find Slack actions, then use `slack__COMPOSIO_GET_TOOL_SCHEMAS` and `slack__COMPOSIO_MULTI_EXECUTE_TOOL` for execution.',
-      'Call `slack__COMPOSIO_SEARCH_TOOLS` with `queries`, for example `{ "queries": [{ "use_case": "search Slack channels and read recent messages" }], "session": { "generate_id": true } }`.',
+      'Use the attached Slack MCP router tools exposed in this session. After this guide is loaded, use `slack__COMPOSIO_SEARCH_TOOLS` only when you need to discover the matching Slack action/tool slug; otherwise continue with schema lookup or execution for known actions.',
+      'When Slack search is needed, call `slack__COMPOSIO_SEARCH_TOOLS` with `queries`, for example `{ "queries": [{ "use_case": "search Slack channels and read recent messages" }], "session": { "generate_id": true } }`.',
       'Treat Slack as a workspace communication connector and confirm the target workspace, channel, conversation, or user before reads that may expose private content.',
       'Before sending or updating messages, confirm the target channel or conversation explicitly.',
     ].join('\n'),
     guideReminderMarkdown: [
       'A Slack connector guide is active for this session.',
       'Use the already attached Composio-backed Slack router tools; do not request tokens or install any Slack MCP server in shell.',
-      'Identify the target workspace/channel/conversation first, then call `slack__COMPOSIO_SEARCH_TOOLS` with a `queries` array, schema lookup, and router execution against the confirmed scope.',
+      'Identify the target workspace/channel/conversation first. If the exact action is unclear, call `slack__COMPOSIO_SEARCH_TOOLS` with the guide-specified `queries` shape; otherwise use the known schema or execution path directly.',
     ].join('\n'),
     blockingRulesMarkdown: [
       'Do not use shell commands to install or invoke Slack MCP. The sandbox does not receive Slack or Composio credentials.',
@@ -58,7 +58,7 @@ const BUILTIN_CONNECTOR_GUIDES: Record<string, BuiltinConnectorGuide> = {
       'Do not post or update Slack messages until the target channel/conversation and intended content are explicit.',
       'Do not assume private channel access; ask the user to connect an account with access if a read fails.',
     ].join('\n'),
-    notes: `${BUILTIN_NOTES_PREFIX} v2-slack-composio-router.`,
+    notes: `${BUILTIN_NOTES_PREFIX} v3-slack-composio-router-guide-first.`,
   },
   supabase: {
     description: 'Supabase connector prompt guide',
@@ -66,8 +66,8 @@ const BUILTIN_CONNECTOR_GUIDES: Record<string, BuiltinConnectorGuide> = {
     serverInstructionsMarkdown: [
       'Supabase is connected through oneceo API broker and Composio Tool Router, not through a sandbox-installed Supabase MCP CLI or user-provided access token.',
       'Never ask the user to paste a Supabase token into the chat, shell, environment variables, or sandbox files.',
-      'Use the attached Supabase MCP router tools exposed in this session. Start with `supabase__COMPOSIO_SEARCH_TOOLS` to find Supabase actions, then use `supabase__COMPOSIO_GET_TOOL_SCHEMAS` and `supabase__COMPOSIO_MULTI_EXECUTE_TOOL` for execution.',
-      'Call `supabase__COMPOSIO_SEARCH_TOOLS` with `queries`, for example `{ "queries": [{ "use_case": "inspect Supabase projects and database schemas" }], "session": { "generate_id": true } }`.',
+      'Use the attached Supabase MCP router tools exposed in this session. After this guide is loaded, use `supabase__COMPOSIO_SEARCH_TOOLS` only when you need to discover the matching Supabase action/tool slug; otherwise continue with schema lookup or execution for known actions.',
+      'When Supabase search is needed, call `supabase__COMPOSIO_SEARCH_TOOLS` with `queries`, for example `{ "queries": [{ "use_case": "inspect Supabase projects and database schemas" }], "session": { "generate_id": true } }`.',
       'Treat Supabase operations as production-impacting unless the session explicitly proves a sandbox project.',
       'Inspect available projects, schemas, and target resources before writes or destructive SQL.',
       'Prefer reversible reads and schema inspection before migration-like operations.',
@@ -83,7 +83,7 @@ const BUILTIN_CONNECTOR_GUIDES: Record<string, BuiltinConnectorGuide> = {
       'Do not issue destructive schema or data changes until the target project is explicitly identified.',
       'If the user intent does not clearly distinguish read-only analysis from live mutation, ask before proceeding.',
     ].join('\n'),
-    notes: `${BUILTIN_NOTES_PREFIX} v2-supabase-composio-router.`,
+    notes: `${BUILTIN_NOTES_PREFIX} v3-supabase-composio-router-guide-first.`,
   },
   vercel: {
     description: 'Vercel connector prompt guide',
@@ -109,8 +109,8 @@ const BUILTIN_CONNECTOR_GUIDES: Record<string, BuiltinConnectorGuide> = {
     serverInstructionsMarkdown: [
       'Notion is connected through oneceo API broker and Composio Tool Router, not through a sandbox-installed Notion MCP CLI.',
       'Never install, curl, run, ping, or configure `@notionhq/mcp-cli`, `notion-mcp`, `mcp.notion.com`, or any local Notion MCP server inside the sandbox.',
-      'Use the attached Notion MCP router tools exposed in this session. Start with `notion__COMPOSIO_SEARCH_TOOLS` to find Notion actions, then use `notion__COMPOSIO_GET_TOOL_SCHEMAS` and `notion__COMPOSIO_MULTI_EXECUTE_TOOL` for execution.',
-      'Call `notion__COMPOSIO_SEARCH_TOOLS` with `queries`, for example `{ "queries": [{ "use_case": "search Notion pages by title" }], "session": { "generate_id": true } }`. Do not pass direct MCP/OAuth configuration fields to this search tool.',
+      'Use the attached Notion MCP router tools exposed in this session. After this guide is loaded, use `notion__COMPOSIO_SEARCH_TOOLS` only when you need to discover the matching Notion action/tool slug; otherwise continue with schema lookup or execution for known actions.',
+      'When Notion search is needed, call `notion__COMPOSIO_SEARCH_TOOLS` with `queries`, for example `{ "queries": [{ "use_case": "search Notion pages by title" }], "session": { "generate_id": true } }`. Do not pass direct MCP/OAuth configuration fields to this search tool.',
       'Treat Notion as a workspace-scoped knowledge connector and confirm the current workspace/page/database target before writes.',
       'Prefer reading page structure, database schema, and access scope before create/update/archive operations.',
       'When the user asks to organize or update Notion content, inspect the existing hierarchy first instead of assuming naming or parent page structure.',
@@ -118,7 +118,7 @@ const BUILTIN_CONNECTOR_GUIDES: Record<string, BuiltinConnectorGuide> = {
     guideReminderMarkdown: [
       'A Notion connector guide is active for this session.',
       'Use the already attached Composio-backed Notion router tools; do not install or invoke any Notion MCP CLI in shell.',
-      'Identify the target workspace/page/database first, then call `notion__COMPOSIO_SEARCH_TOOLS` with a `queries` array, schema lookup, and router execution against the confirmed scope.',
+      'Identify the target workspace/page/database first. If the exact action is unclear, call `notion__COMPOSIO_SEARCH_TOOLS` with the guide-specified `queries` shape; otherwise use the known schema or execution path directly.',
     ].join('\n'),
     blockingRulesMarkdown: [
       'Do not use shell commands to install or invoke Notion MCP. The sandbox does not receive Notion or Composio credentials.',
@@ -126,7 +126,7 @@ const BUILTIN_CONNECTOR_GUIDES: Record<string, BuiltinConnectorGuide> = {
       'Do not create, move, archive, or overwrite Notion pages/databases until the target parent location is explicit.',
       'If multiple workspaces or similarly named pages could match the user request, stop and ask instead of guessing.',
     ].join('\n'),
-    notes: `${BUILTIN_NOTES_PREFIX} v3-composio-router-search-schema.`,
+    notes: `${BUILTIN_NOTES_PREFIX} v4-composio-router-guide-first.`,
   },
   figma: {
     description: 'Figma connector prompt guide',
@@ -135,15 +135,15 @@ const BUILTIN_CONNECTOR_GUIDES: Record<string, BuiltinConnectorGuide> = {
       'Figma is connected through oneceo API broker and Composio Tool Router, not through a sandbox-installed Figma MCP CLI or user-provided personal access token.',
       'Never ask the user to paste a Figma token into the chat, shell, environment variables, or sandbox files.',
       'Never install, curl, run, or configure a local Figma MCP server inside the sandbox.',
-      'Use the attached Figma MCP router tools exposed in this session. Start with `figma__COMPOSIO_SEARCH_TOOLS` to find Figma actions, then use schema lookup and router execution for the confirmed scope.',
-      'Call `figma__COMPOSIO_SEARCH_TOOLS` with `queries`, for example `{ "queries": [{ "use_case": "read Figma file structure from a file URL" }], "session": { "generate_id": true } }`.',
+      'Use the attached Figma MCP router tools exposed in this session. After this guide is loaded, use `figma__COMPOSIO_SEARCH_TOOLS` only when you need to discover the matching Figma action/tool slug; otherwise continue with schema lookup or execution for known actions.',
+      'When Figma search is needed, call `figma__COMPOSIO_SEARCH_TOOLS` with `queries`, for example `{ "queries": [{ "use_case": "read Figma file structure from a file URL" }], "session": { "generate_id": true } }`.',
       'Treat Figma as a design-file connector. Confirm the current file, page, frame, node, or comment target before write operations.',
       'Read existing file structure and node metadata before creating comments, editing variables, or modifying design resources.',
     ].join('\n'),
     guideReminderMarkdown: [
       'A Figma connector guide is active for this session.',
       'Use the already attached Composio-backed Figma router tools; do not request tokens or install any Figma MCP CLI in shell.',
-      'Identify the target file/page/node first, then call `figma__COMPOSIO_SEARCH_TOOLS` with a `queries` array, schema lookup, and router execution against the confirmed scope.',
+      'Identify the target file/page/node first. If the exact action is unclear, call `figma__COMPOSIO_SEARCH_TOOLS` with the guide-specified `queries` shape; otherwise use the known schema or execution path directly.',
     ].join('\n'),
     blockingRulesMarkdown: [
       'Do not use shell commands to install or invoke Figma MCP. The sandbox does not receive Figma or Composio credentials.',
@@ -151,7 +151,31 @@ const BUILTIN_CONNECTOR_GUIDES: Record<string, BuiltinConnectorGuide> = {
       'Do not create comments, webhooks, variables, dev resources, or modify Figma resources until the target file/page/node is explicit.',
       'If the user provides only a vague design reference and multiple files or nodes could match, stop and ask instead of guessing.',
     ].join('\n'),
-    notes: `${BUILTIN_NOTES_PREFIX} v1-figma-composio-router.`,
+    notes: `${BUILTIN_NOTES_PREFIX} v2-figma-composio-router-guide-first.`,
+  },
+  google_super: {
+    description: 'Google Workspace connector prompt guide',
+    triggerMode: 'on_attach',
+    serverInstructionsMarkdown: [
+      'Google Workspace is connected through oneceo API broker and Composio Google Super, not through a sandbox-installed Google MCP server or user-provided Google token.',
+      'Never ask the user to paste Google OAuth tokens, refresh tokens, Composio API keys, MCP URLs, or MCP headers into chat, shell, environment variables, or sandbox files.',
+      'Use the attached Google Workspace MCP router tools exposed in this session. After this guide is loaded, use `google_super__COMPOSIO_SEARCH_TOOLS` only when you need to discover the matching Google action/tool slug; otherwise continue with schema lookup or execution for known actions.',
+      'When Google Workspace search is needed, call `google_super__COMPOSIO_SEARCH_TOOLS` with `queries`, for example `{ "queries": [{ "use_case": "search Gmail messages by sender" }], "session": { "generate_id": true } }`.',
+      'Do not load or summarize every Google Super tool schema up front. Discover only the current task-relevant tools by search and schema lookup when discovery is actually needed.',
+      'For Gmail, Calendar, Drive, Docs, Sheets, and Tasks writes, identify the target recipient, event, file, document, spreadsheet, or task before executing.',
+      'High-risk Google write operations require one-time user confirmation through the platform confirmation flow. A confirmation only applies to the same tool and argument hash once.',
+    ].join('\n'),
+    guideReminderMarkdown: [
+      'A Google Workspace connector guide is active for this session.',
+      'Use the already attached Composio-backed Google Super router tools; do not request tokens or install Google MCP servers in shell.',
+      'If the exact action is unclear, call `google_super__COMPOSIO_SEARCH_TOOLS` with the guide-specified `queries` shape, then fetch schema only for selected actions. If the action is clear, skip search and use the known schema or execution path directly.',
+    ].join('\n'),
+    blockingRulesMarkdown: [
+      'Do not run local Google MCP servers, curl Composio MCP URLs, or expose Composio/Google credentials in sandbox.',
+      'Do not send email, invite attendees, update calendars, mutate Drive permissions/files, or edit Docs/Sheets until the target object and side effect are explicit.',
+      'Do not retry a rejected or expired confirmation by changing arguments silently; ask the user for the specific operation again.',
+    ].join('\n'),
+    notes: `${BUILTIN_NOTES_PREFIX} v2-google-super-composio-router-guide-first.`,
   },
   custom_api: {
     description: 'Custom API MCP broker prompt guide',
@@ -234,6 +258,14 @@ function formatGuideSection(title: string, items: Array<{ connectorKey: string; 
     `# ${title}`,
     ...items.map((item) => [`## ${item.connectorKey}`, item.content].join('\n')).filter(Boolean),
   ].join('\n\n');
+}
+
+function formatPreloadGuideInstruction(connectorKey: string) {
+  return `- ${connectorKey}: Active connector guide exists. Before using any ${connectorKey} MCP tool, call load_connector_guide with connectorKey=${connectorKey}.`;
+}
+
+function formatPreloadGuideReminder(connectorKey: string) {
+  return `- ${connectorKey}: Full connector guide content is available only after load_connector_guide returns. Do not call connector search or execution tools before loading it.`;
 }
 
 export class ConnectorGuideService {
@@ -553,13 +585,17 @@ export class ConnectorGuideService {
     const instructions = guides
       .map(({ sessionGuide, revision }) => ({
         connectorKey: sessionGuide.connectorKey,
-        content: asText(revision.serverInstructionsMarkdown),
+        content: asText(revision.serverInstructionsMarkdown)
+          ? formatPreloadGuideInstruction(sessionGuide.connectorKey)
+          : '',
       }))
       .filter((item) => item.content);
     const reminders = guides
       .map(({ sessionGuide, revision }) => ({
         connectorKey: sessionGuide.connectorKey,
-        content: asText(revision.guideReminderMarkdown),
+        content: asText(revision.guideReminderMarkdown)
+          ? formatPreloadGuideReminder(sessionGuide.connectorKey)
+          : '',
       }))
       .filter((item) => item.content);
 

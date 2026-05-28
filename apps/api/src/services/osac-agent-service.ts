@@ -454,21 +454,22 @@ mcp = data.get("mcp")
 if not isinstance(mcp, dict):
     mcp = {}
 
-import shutil
 import os
 
 display = os.environ.get("NEKO_DISPLAY", ":0")
+node_path = os.environ.get("NODE_PATH", "/usr/local/lib/node_modules")
+browser_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/opt/ms-playwright")
 
-use_bin = shutil.which("playwright-mcp") is not None
-base_cmd = ["playwright-mcp"] if use_bin else ["npx", "@playwright/mcp@latest"]
 mcp["playwright"] = {
     "type": "local",
     "command": [
         "/usr/bin/env",
         f"DISPLAY={display}",
         "PLAYWRIGHT_HEADLESS=false",
+        f"PLAYWRIGHT_BROWSERS_PATH={browser_path}",
+        f"NODE_PATH={node_path}",
         "XDG_RUNTIME_DIR=/tmp",
-        *base_cmd,
+        "playwright-mcp",
         "--cdp-endpoint",
         "${desiredCdpEndpoint}",
     ],

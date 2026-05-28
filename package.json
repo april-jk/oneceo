@@ -1,6 +1,6 @@
 {
   "name": "oneceo",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "AI Agent 项目管理平台 - 支持项目-经理-员工三层级智能调度",
   "scripts": {
@@ -29,6 +29,7 @@
   "packageManager": "pnpm@10.4.1",
   "pnpm": {
     "overrides": {
+      "dompurify": "3.4.2",
       "e2b>chalk": "4.1.2"
     }
   }

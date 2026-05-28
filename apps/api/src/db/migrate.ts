@@ -45,6 +45,7 @@ const REQUIRED_TABLES = [
   'custom_api_definitions',
   'custom_api_endpoint_tools',
   'custom_api_confirmations',
+  'task_session_mcp_tool_confirmations',
   'custom_api_call_audit_logs',
   'user_platform_skill_bindings',
   'user_custom_skills',
@@ -67,6 +68,18 @@ const REQUIRED_TABLES = [
   'credit_activation_codes',
   'credit_activation_code_uses',
   'credit_activation_code_groups',
+  'membership_plans',
+  'user_memberships',
+  'membership_grants',
+  'membership_audit_logs',
+  'membership_daily_restores',
+  'notifications',
+  'user_notifications',
+  'ui_promo_banners',
+  'ui_promo_banner_items',
+  'ui_promo_banner_events',
+  'session_api_traces',
+  'api_request_logs',
 ] as const;
 
 const REQUIRED_COLUMNS = [
@@ -175,6 +188,11 @@ const REQUIRED_COLUMNS = [
   ['custom_api_call_audit_logs', 'status'],
   ['custom_api_confirmations', 'arguments_hash'],
   ['custom_api_confirmations', 'expires_at'],
+  ['task_session_mcp_tool_confirmations', 'arguments_hash'],
+  ['task_session_mcp_tool_confirmations', 'confirmation_token_hash'],
+  ['task_session_mcp_tool_confirmations', 'summary_json'],
+  ['task_session_mcp_tool_confirmations', 'status'],
+  ['task_session_mcp_tool_confirmations', 'expires_at'],
   ['platform_skills', 'slug'],
   ['platform_skills', 'metadata_json'],
   ['platform_skills', 'published_revision_id'],
@@ -250,6 +268,50 @@ const REQUIRED_COLUMNS = [
   ['platform_runtime_artifact_channels', 'arch'],
   ['platform_runtime_artifact_channels', 'channel'],
   ['platform_runtime_artifact_channels', 'published_release_id'],
+  ['membership_plans', 'code'],
+  ['membership_plans', 'name'],
+  ['membership_plans', 'status'],
+  ['membership_plans', 'default_credits'],
+  ['membership_plans', 'is_default'],
+  ['membership_plans', 'daily_auto_restore_enabled'],
+  ['membership_plans', 'daily_auto_restore_credits'],
+  ['user_memberships', 'user_id'],
+  ['user_memberships', 'membership_plan_id'],
+  ['user_memberships', 'status'],
+  ['membership_grants', 'user_id'],
+  ['membership_grants', 'membership_plan_id'],
+  ['membership_audit_logs', 'action'],
+  ['membership_audit_logs', 'target_type'],
+  ['membership_daily_restores', 'user_id'],
+  ['membership_daily_restores', 'membership_plan_id'],
+  ['membership_daily_restores', 'restore_date'],
+  ['notifications', 'title'],
+  ['notifications', 'content'],
+  ['notifications', 'type'],
+  ['notifications', 'priority'],
+  ['notifications', 'target_type'],
+  ['notifications', 'status'],
+  ['user_notifications', 'user_id'],
+  ['user_notifications', 'notification_id'],
+  ['user_notifications', 'is_read'],
+  ['ui_promo_banners', 'placement'],
+  ['ui_promo_banners', 'display_type'],
+  ['ui_promo_banners', 'status'],
+  ['ui_promo_banners', 'priority'],
+  ['ui_promo_banner_items', 'banner_id'],
+  ['ui_promo_banner_items', 'title'],
+  ['ui_promo_banner_items', 'link_type'],
+  ['ui_promo_banner_events', 'banner_id'],
+  ['ui_promo_banner_events', 'event_type'],
+  ['session_api_traces', 'session_id'],
+  ['session_api_traces', 'trace_type'],
+  ['session_api_traces', 'sequence'],
+  ['session_api_traces', 'created_at'],
+  ['api_request_logs', 'app_user_id'],
+  ['api_request_logs', 'method'],
+  ['api_request_logs', 'path'],
+  ['api_request_logs', 'response_status'],
+  ['api_request_logs', 'created_at'],
 ] as const;
 
 const REQUIRED_INDEXES = [
@@ -316,8 +378,58 @@ const REQUIRED_INDEXES = [
   'idx_activation_codes_used_by',
   'idx_activation_code_uses_code_id',
   'idx_activation_code_uses_user_id',
+  'idx_activation_code_uses_user_code_unique',
   'idx_activation_code_groups_name',
   'idx_activation_code_groups_status',
+  'idx_membership_plans_code',
+  'idx_membership_plans_status',
+  'idx_membership_plans_sort_order',
+  'idx_membership_plans_is_default',
+  'idx_user_memberships_user_id',
+  'idx_user_memberships_membership_plan_id',
+  'idx_user_memberships_status',
+  'idx_user_memberships_user_active',
+  'idx_membership_grants_user_id',
+  'idx_membership_grants_membership_plan_id',
+  'idx_membership_grants_created_at',
+  'idx_membership_grants_credit_transaction_id',
+  'idx_membership_audit_logs_actor_id',
+  'idx_membership_audit_logs_target_type_target_id',
+  'idx_membership_audit_logs_created_at',
+  'idx_membership_daily_restores_user_id',
+  'idx_membership_daily_restores_membership_plan_id',
+  'idx_membership_daily_restores_restore_date',
+  'idx_membership_daily_restores_unique',
+  'idx_membership_daily_restores_credit_transaction_id',
+  'idx_notifications_type',
+  'idx_notifications_status',
+  'idx_notifications_created_at',
+  'idx_user_notifications_user_notification',
+  'idx_user_notifications_user_id',
+  'idx_user_notifications_notification_id',
+  'idx_user_notifications_user_read',
+  'idx_ui_promo_banners_placement',
+  'idx_ui_promo_banners_status',
+  'idx_ui_promo_banners_priority',
+  'idx_ui_promo_banners_active_sort',
+  'idx_ui_promo_banner_items_banner_id',
+  'idx_ui_promo_banner_items_sort_order',
+  'idx_ui_promo_banner_events_banner_id',
+  'idx_ui_promo_banner_events_user_id',
+  'idx_ui_promo_banner_events_type',
+  'idx_session_api_traces_session_id',
+  'idx_session_api_traces_session_type',
+  'idx_session_api_traces_session_sequence',
+  'idx_session_api_traces_run_id',
+  'idx_session_api_traces_tool_name',
+  'idx_session_api_traces_created_at',
+  'idx_session_api_traces_type_created_at',
+  'idx_api_request_logs_user_id',
+  'idx_api_request_logs_user_created_at',
+  'idx_api_request_logs_path',
+  'idx_api_request_logs_status',
+  'idx_api_request_logs_session_id',
+  'idx_api_request_logs_created_at',
 ] as const;
 
 /**
@@ -818,6 +930,24 @@ CREATE TABLE IF NOT EXISTS custom_api_confirmations (
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS task_session_mcp_tool_confirmations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  app_user_id TEXT NOT NULL,
+  task_session_id TEXT NOT NULL,
+  agent_run_id TEXT,
+  connector_key TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  arguments_hash TEXT NOT NULL,
+  confirmation_token_hash TEXT,
+  summary_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'pending',
+  expires_at TIMESTAMP NOT NULL,
+  approved_at TIMESTAMP,
+  consumed_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS custom_api_call_audit_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id TEXT NOT NULL,
@@ -864,6 +994,10 @@ CREATE INDEX IF NOT EXISTS idx_custom_api_endpoint_tools_definition_status
   ON custom_api_endpoint_tools (definition_id, review_status);
 CREATE INDEX IF NOT EXISTS idx_custom_api_confirmations_lookup
   ON custom_api_confirmations (user_id, task_session_id, endpoint_tool_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_mcp_tool_confirmations_lookup
+  ON task_session_mcp_tool_confirmations (app_user_id, task_session_id, connector_key, tool_name);
+CREATE INDEX IF NOT EXISTS idx_task_session_mcp_tool_confirmations_token_hash
+  ON task_session_mcp_tool_confirmations (confirmation_token_hash);
 CREATE INDEX IF NOT EXISTS idx_custom_api_call_audit_logs_session_created
   ON custom_api_call_audit_logs (task_session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_custom_api_call_audit_logs_tool_created
@@ -888,6 +1022,32 @@ CREATE TABLE IF NOT EXISTS app_users (
 );
 ALTER TABLE app_users
   ADD COLUMN IF NOT EXISTS profile_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE app_users
+  ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+ALTER TABLE app_users
+  ADD COLUMN IF NOT EXISTS avatar_storage_key TEXT;
+ALTER TABLE app_users
+  ADD COLUMN IF NOT EXISTS avatar_source TEXT NOT NULL DEFAULT 'default';
+ALTER TABLE app_users
+  ADD COLUMN IF NOT EXISTS avatar_updated_at TIMESTAMP;
+
+CREATE TABLE IF NOT EXISTS app_user_oauth_accounts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  provider_subject TEXT NOT NULL,
+  provider_email TEXT,
+  display_name TEXT,
+  avatar_url TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+ALTER TABLE app_user_oauth_accounts
+  ADD COLUMN IF NOT EXISTS provider_email TEXT;
+ALTER TABLE app_user_oauth_accounts
+  ADD COLUMN IF NOT EXISTS display_name TEXT;
+ALTER TABLE app_user_oauth_accounts
+  ADD COLUMN IF NOT EXISTS avatar_url TEXT;
 
 CREATE TABLE IF NOT EXISTS app_user_projects (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -972,6 +1132,14 @@ CREATE TABLE IF NOT EXISTS admin_user_sessions (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_email ON app_users(email);
 CREATE INDEX IF NOT EXISTS idx_app_users_status ON app_users(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_oauth_accounts_provider_subject
+  ON app_user_oauth_accounts(provider, provider_subject);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_oauth_accounts_user_provider
+  ON app_user_oauth_accounts(user_id, provider);
+CREATE INDEX IF NOT EXISTS idx_app_user_oauth_accounts_user_id
+  ON app_user_oauth_accounts(user_id);
+CREATE INDEX IF NOT EXISTS idx_app_user_oauth_accounts_provider
+  ON app_user_oauth_accounts(provider);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_projects_user_name
   ON app_user_projects(user_id, name);
 CREATE INDEX IF NOT EXISTS idx_app_user_projects_user_id ON app_user_projects(user_id);
@@ -1442,6 +1610,87 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_user_custom_skill_documents_skill_path
   ON user_custom_skill_documents(custom_skill_id, document_path);
 CREATE INDEX IF NOT EXISTS idx_user_custom_skill_documents_skill_sort
   ON user_custom_skill_documents(custom_skill_id, sort_order);
+
+-- 会话 API 追踪表
+CREATE TABLE IF NOT EXISTS session_api_traces (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
+  run_id UUID REFERENCES task_session_runs(id) ON DELETE SET NULL,
+  trace_type TEXT NOT NULL,
+  sequence INTEGER NOT NULL DEFAULT 0,
+  model TEXT,
+  provider TEXT,
+  tool_name TEXT,
+  service_name TEXT,
+  endpoint TEXT,
+  request_method TEXT,
+  request_headers JSONB,
+  request_body JSONB,
+  request_body_text TEXT,
+  response_status INTEGER,
+  response_headers JSONB,
+  response_body JSONB,
+  response_body_text TEXT,
+  duration_ms INTEGER,
+  started_at TIMESTAMP,
+  completed_at TIMESTAMP,
+  prompt_tokens INTEGER DEFAULT 0,
+  completion_tokens INTEGER DEFAULT 0,
+  cached_prompt_tokens INTEGER DEFAULT 0,
+  cache_creation_tokens INTEGER DEFAULT 0,
+  total_tokens INTEGER DEFAULT 0,
+  error_message TEXT,
+  error_stack TEXT,
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_api_traces_session_id
+  ON session_api_traces(session_id);
+CREATE INDEX IF NOT EXISTS idx_session_api_traces_session_type
+  ON session_api_traces(session_id, trace_type);
+CREATE INDEX IF NOT EXISTS idx_session_api_traces_session_sequence
+  ON session_api_traces(session_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_session_api_traces_run_id
+  ON session_api_traces(run_id);
+CREATE INDEX IF NOT EXISTS idx_session_api_traces_tool_name
+  ON session_api_traces(tool_name);
+CREATE INDEX IF NOT EXISTS idx_session_api_traces_created_at
+  ON session_api_traces(created_at);
+CREATE INDEX IF NOT EXISTS idx_session_api_traces_type_created_at
+  ON session_api_traces(trace_type, created_at);
+
+-- API 请求日志表
+CREATE TABLE IF NOT EXISTS api_request_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  app_user_id UUID NOT NULL,
+  method TEXT NOT NULL,
+  path TEXT NOT NULL,
+  query_string TEXT,
+  request_headers JSONB DEFAULT '{}'::jsonb,
+  request_body_summary TEXT,
+  response_status INTEGER,
+  response_body_summary TEXT,
+  duration_ms INTEGER,
+  ip_address TEXT,
+  user_agent TEXT,
+  task_session_id UUID,
+  metadata_json JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_request_logs_user_id
+  ON api_request_logs(app_user_id);
+CREATE INDEX IF NOT EXISTS idx_api_request_logs_user_created_at
+  ON api_request_logs(app_user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_api_request_logs_path
+  ON api_request_logs(path);
+CREATE INDEX IF NOT EXISTS idx_api_request_logs_status
+  ON api_request_logs(response_status);
+CREATE INDEX IF NOT EXISTS idx_api_request_logs_session_id
+  ON api_request_logs(task_session_id);
+CREATE INDEX IF NOT EXISTS idx_api_request_logs_created_at
+  ON api_request_logs(created_at);
 `;
 
 const deliverableTablesSQL = `
@@ -1722,6 +1971,103 @@ VALUES
   ('agent', 500, 0, true),
   ('sandbox', 500, 0, true)
 ON CONFLICT DO NOTHING;
+
+-- 会员类型表
+CREATE TABLE IF NOT EXISTS membership_plans (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  code TEXT NOT NULL,
+  name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  default_credits INTEGER NOT NULL DEFAULT 0,
+  is_default BOOLEAN NOT NULL DEFAULT false,
+  allowed_agent_levels_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  benefits_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  daily_auto_restore_enabled BOOLEAN NOT NULL DEFAULT false,
+  daily_auto_restore_credits INTEGER NOT NULL DEFAULT 0,
+  description TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  effective_from TIMESTAMP,
+  effective_until TIMESTAMP,
+  created_by UUID REFERENCES admin_users(id) ON DELETE SET NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_membership_plans_code ON membership_plans(code);
+CREATE INDEX IF NOT EXISTS idx_membership_plans_status ON membership_plans(status);
+CREATE INDEX IF NOT EXISTS idx_membership_plans_sort_order ON membership_plans(sort_order);
+CREATE INDEX IF NOT EXISTS idx_membership_plans_is_default ON membership_plans(is_default);
+
+-- 会员关联用户表
+CREATE TABLE IF NOT EXISTS user_memberships (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  membership_plan_id UUID NOT NULL REFERENCES membership_plans(id) ON DELETE RESTRICT,
+  status TEXT NOT NULL DEFAULT 'active',
+  started_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMP,
+  source_type TEXT NOT NULL DEFAULT 'manual',
+  source_id UUID,
+  assigned_by UUID REFERENCES admin_users(id) ON DELETE SET NULL,
+  assigned_reason TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_user_memberships_user_id ON user_memberships(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_memberships_membership_plan_id ON user_memberships(membership_plan_id);
+CREATE INDEX IF NOT EXISTS idx_user_memberships_status ON user_memberships(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_memberships_user_active ON user_memberships(user_id, status);
+
+-- 会员积分发放记录表
+CREATE TABLE IF NOT EXISTS membership_grants (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  membership_plan_id UUID NOT NULL REFERENCES membership_plans(id) ON DELETE RESTRICT,
+  grant_credits INTEGER NOT NULL DEFAULT 0,
+  grant_reason TEXT NOT NULL DEFAULT '',
+  grant_status TEXT NOT NULL DEFAULT 'issued',
+  credit_transaction_id UUID REFERENCES credit_transactions(id) ON DELETE SET NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_membership_grants_user_id ON membership_grants(user_id);
+CREATE INDEX IF NOT EXISTS idx_membership_grants_membership_plan_id ON membership_grants(membership_plan_id);
+CREATE INDEX IF NOT EXISTS idx_membership_grants_created_at ON membership_grants(created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_membership_grants_credit_transaction_id ON membership_grants(credit_transaction_id);
+
+-- 会员操作审计表
+CREATE TABLE IF NOT EXISTS membership_audit_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  actor_id UUID REFERENCES admin_users(id) ON DELETE SET NULL,
+  action TEXT NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id UUID,
+  before_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  after_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  reason TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_membership_audit_logs_actor_id ON membership_audit_logs(actor_id);
+CREATE INDEX IF NOT EXISTS idx_membership_audit_logs_target_type_target_id ON membership_audit_logs(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_membership_audit_logs_created_at ON membership_audit_logs(created_at);
+
+-- 会员每日恢复记录（幂等）
+CREATE TABLE IF NOT EXISTS membership_daily_restores (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  membership_plan_id UUID NOT NULL REFERENCES membership_plans(id) ON DELETE RESTRICT,
+  restore_date DATE NOT NULL,
+  restore_credits INTEGER NOT NULL DEFAULT 0,
+  credit_transaction_id UUID REFERENCES credit_transactions(id) ON DELETE SET NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_membership_daily_restores_user_id ON membership_daily_restores(user_id);
+CREATE INDEX IF NOT EXISTS idx_membership_daily_restores_membership_plan_id ON membership_daily_restores(membership_plan_id);
+CREATE INDEX IF NOT EXISTS idx_membership_daily_restores_restore_date ON membership_daily_restores(restore_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_membership_daily_restores_unique ON membership_daily_restores(user_id, membership_plan_id, restore_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_membership_daily_restores_credit_transaction_id ON membership_daily_restores(credit_transaction_id);
+
+ALTER TABLE membership_plans ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE membership_plans ADD COLUMN IF NOT EXISTS daily_auto_restore_enabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE membership_plans ADD COLUMN IF NOT EXISTS daily_auto_restore_credits INTEGER NOT NULL DEFAULT 0;
 `;
 
 const activationCodeTablesSQL = `
@@ -1777,6 +2123,104 @@ CREATE TABLE IF NOT EXISTS credit_activation_code_uses (
 );
 CREATE INDEX IF NOT EXISTS idx_activation_code_uses_code_id ON credit_activation_code_uses(activation_code_id);
 CREATE INDEX IF NOT EXISTS idx_activation_code_uses_user_id ON credit_activation_code_uses(user_id);
+DELETE FROM credit_activation_code_uses a
+USING credit_activation_code_uses b
+WHERE a.id < b.id
+  AND a.activation_code_id = b.activation_code_id
+  AND a.user_id = b.user_id;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_activation_code_uses_user_code_unique ON credit_activation_code_uses(activation_code_id, user_id);
+`;
+
+const notificationTablesSQL = `
+-- 通知主表
+CREATE TABLE IF NOT EXISTS notifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'system',
+  priority TEXT NOT NULL DEFAULT 'normal',
+  target_type TEXT NOT NULL DEFAULT 'all',
+  target_user_ids JSONB,
+  status TEXT NOT NULL DEFAULT 'draft',
+  published_at TIMESTAMP,
+  expires_at TIMESTAMP,
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by UUID REFERENCES admin_users(id) ON DELETE SET NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_type ON notifications(type);
+CREATE INDEX IF NOT EXISTS idx_notifications_status ON notifications(status);
+CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at);
+
+-- 用户通知关联表
+CREATE TABLE IF NOT EXISTS user_notifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  notification_id UUID NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+  is_read BOOLEAN NOT NULL DEFAULT FALSE,
+  read_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id, notification_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_notifications_user_notification ON user_notifications(user_id, notification_id);
+CREATE INDEX IF NOT EXISTS idx_user_notifications_user_id ON user_notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_notifications_notification_id ON user_notifications(notification_id);
+CREATE INDEX IF NOT EXISTS idx_user_notifications_user_read ON user_notifications(user_id, is_read);
+`;
+
+const promoBannerTablesSQL = `
+CREATE TABLE IF NOT EXISTS ui_promo_banners (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  placement TEXT NOT NULL DEFAULT 'sidebar_bubble',
+  display_type TEXT NOT NULL DEFAULT 'single',
+  status TEXT NOT NULL DEFAULT 'draft',
+  priority INTEGER NOT NULL DEFAULT 0,
+  allow_dismiss BOOLEAN NOT NULL DEFAULT TRUE,
+  dismiss_reset_on_version BOOLEAN NOT NULL DEFAULT TRUE,
+  start_at TIMESTAMP,
+  end_at TIMESTAMP,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_by UUID REFERENCES admin_users(id) ON DELETE SET NULL,
+  updated_by UUID REFERENCES admin_users(id) ON DELETE SET NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ui_promo_banners_placement ON ui_promo_banners(placement);
+CREATE INDEX IF NOT EXISTS idx_ui_promo_banners_status ON ui_promo_banners(status);
+CREATE INDEX IF NOT EXISTS idx_ui_promo_banners_priority ON ui_promo_banners(priority);
+CREATE INDEX IF NOT EXISTS idx_ui_promo_banners_active_sort ON ui_promo_banners(placement, status, priority, updated_at);
+
+CREATE TABLE IF NOT EXISTS ui_promo_banner_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  banner_id UUID NOT NULL REFERENCES ui_promo_banners(id) ON DELETE CASCADE,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  title TEXT NOT NULL,
+  subtitle TEXT,
+  image_url TEXT,
+  cta_text TEXT,
+  link_type TEXT NOT NULL DEFAULT 'none',
+  link_target TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ui_promo_banner_items_banner_id ON ui_promo_banner_items(banner_id);
+CREATE INDEX IF NOT EXISTS idx_ui_promo_banner_items_sort_order ON ui_promo_banner_items(sort_order);
+
+CREATE TABLE IF NOT EXISTS ui_promo_banner_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  banner_id UUID NOT NULL REFERENCES ui_promo_banners(id) ON DELETE CASCADE,
+  item_id UUID REFERENCES ui_promo_banner_items(id) ON DELETE SET NULL,
+  user_id UUID REFERENCES app_users(id) ON DELETE SET NULL,
+  event_type TEXT NOT NULL,
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ui_promo_banner_events_banner_id ON ui_promo_banner_events(banner_id);
+CREATE INDEX IF NOT EXISTS idx_ui_promo_banner_events_user_id ON ui_promo_banner_events(user_id);
+CREATE INDEX IF NOT EXISTS idx_ui_promo_banner_events_type ON ui_promo_banner_events(event_type);
 `;
 
 export async function inspectDatabaseSchemaReadiness(): Promise<SchemaReadinessReport> {
@@ -1874,6 +2318,19 @@ export async function runMigration() {
       await db.execute(sql.raw(activationCodeTablesSQL));
     } catch (activationCodeErr) {
       console.error('[MIGRATION] activation code tables failed (non-fatal):', activationCodeErr);
+    }
+
+    // Step 3: notification tables (separate - failure does not affect billing)
+    try {
+      await db.execute(sql.raw(notificationTablesSQL));
+    } catch (notificationErr) {
+      console.error('[MIGRATION] notification tables failed (non-fatal):', notificationErr);
+    }
+
+    try {
+      await db.execute(sql.raw(promoBannerTablesSQL));
+    } catch (promoBannerErr) {
+      console.error('[MIGRATION] promo banner tables failed (non-fatal):', promoBannerErr);
     }
 
     // 迁移：将定价基础单位从 1k tokens 切换到 1M tokens（必须在插入定价数据之前执行）

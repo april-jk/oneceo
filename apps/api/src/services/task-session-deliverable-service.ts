@@ -5,6 +5,7 @@ import { e2bConnector } from '../connectors/e2b-connector';
 import { uploadToR2 } from './r2-client';
 import { isArchiveStorageConfigured } from './sandbox-archive-service';
 import type { ManagedCompletionAttachment } from './altus-managed-shared';
+import { officeArtifactQualityService, type OfficeArtifactKind } from './office-artifact-quality-service';
 
 export type TaskSessionDeliverableArtifactRecord = {
   id: string;
@@ -63,6 +64,14 @@ function resolveMimeType(filePath: string, explicit?: string): string {
   return map[ext] || 'application/octet-stream';
 }
 
+function resolveOfficeArtifactKind(filePath: string, mimeType: string): OfficeArtifactKind | null {
+  const normalizedMime = mimeType.toLowerCase();
+  const ext = path.posix.extname(filePath).toLowerCase();
+  if (ext === '.docx' || normalizedMime.includes('wordprocessingml.document')) return 'docx';
+  if (ext === '.xlsx' || normalizedMime.includes('spreadsheetml.sheet')) return 'xlsx';
+  return null;
+}
+
 function shellEscape(value: string): string {
   return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
 }
@@ -79,6 +88,21 @@ function toIso(value: Date | string | null | undefined): string | null {
   if (value instanceof Date) return value.toISOString();
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
+function isBlockingOfficeQualityError(errorCode: string): boolean {
+  const code = asText(errorCode);
+  if (!code) return false;
+  if (code.startsWith('docx_unreadable:') || code.startsWith('xlsx_unreadable:')) return true;
+  return [
+    'docx_extension_invalid',
+    'docx_file_too_small',
+    'docx_document_xml_missing',
+    'xlsx_extension_invalid',
+    'xlsx_file_too_small',
+    'xlsx_workbook_xml_missing',
+    'xlsx_worksheet_missing',
+  ].includes(code);
 }
 
 function serializeRecord(record: Awaited<ReturnType<typeof taskSessionDeliverableArtifactDAO.getById>>) {
@@ -186,6 +210,28 @@ export class TaskSessionDeliverableService {
         const mimeType = isDirectory
           ? 'application/gzip'
           : resolveMimeType(relativePath, attachment.mimeType);
+        const officeKind = isDirectory ? null : resolveOfficeArtifactKind(relativePath, mimeType);
+        if (officeKind) {
+          const qualityReport = officeArtifactQualityService.validateOfficeArtifact({
+            kind: officeKind,
+            artifactPath: relativePath,
+            bytes,
+          });
+          const blockingErrors = qualityReport.errors.filter((code) => isBlockingOfficeQualityError(code));
+          const advisoryErrors = qualityReport.errors.filter((code) => !isBlockingOfficeQualityError(code));
+          if (blockingErrors.length > 0) {
+            throw new Error(
+              `office_deliverable_quality_failed:${JSON.stringify({
+                ...qualityReport,
+                errors: blockingErrors,
+                advisoryErrors,
+              })}`,
+            );
+          }
+          if (advisoryErrors.length > 0 || qualityReport.warnings.length > 0) {
+            console.warn('[OFFICE_DELIVERABLE_QUALITY_WARNING]', JSON.stringify(qualityReport));
+          }
+        }
         const sha256 = createHash('sha256').update(bytes).digest('hex');
         const storageKey = this.buildStorageKey(input.sessionId, input.runId, displayName);
 

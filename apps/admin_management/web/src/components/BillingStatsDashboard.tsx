@@ -55,24 +55,24 @@ interface StatsData {
 
 /* ─── Color tokens ─── */
 const C = {
-  primary: 'oklch(54% 0.19 259)',
+  primary: 'var(--primary)',
   text: 'var(--text)',
   textSoft: 'var(--text-soft)',
   textFaint: 'var(--text-faint)',
   border: 'var(--border)',
   surfaceMuted: 'var(--surface-muted)',
   surfaceStrong: 'var(--surface-strong)',
-  danger: 'oklch(55% 0.19 27)',
-  success: 'oklch(57% 0.15 154)',
+  danger: 'var(--danger)',
+  success: 'var(--success)',
 };
 
 const PIE_COLORS = [
-  'oklch(54% 0.19 259)',
-  'oklch(57% 0.13 221)',
-  'oklch(57% 0.15 154)',
-  'oklch(67% 0.16 75)',
-  'oklch(55% 0.19 27)',
-  'oklch(55% 0.18 300)',
+  'var(--primary)',
+  'var(--primary-soft, oklch(57% 0.13 221))',
+  'var(--success)',
+  'var(--warning, oklch(67% 0.16 75))',
+  'var(--danger)',
+  'var(--info, oklch(55% 0.18 300))',
 ];
 
 /* ─── Tooltip ─── */

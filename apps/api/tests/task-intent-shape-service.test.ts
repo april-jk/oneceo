@@ -52,6 +52,15 @@ test('task intent shape classifier keeps company website requests deployable whe
   assert.equal(shape.needsClarification, false);
 });
 
+test('task intent shape classifier treats official-site hints as PPT sources', () => {
+  const shape = classifyTaskIntentShape(
+    '帮我分析一下沐曦股份，做个 ppt\n已确认需求：内容来源与可信度：官网、公告、权威媒体优先'
+  );
+
+  assert.notEqual(shape.artifactKind, 'web_app');
+  assert.equal(shape.webArtifactRequested, false);
+});
+
 test('task intent shape classifier emits todo candidate signals for debugging chains', () => {
   const shape = classifyTaskIntentShape('帮我排查这个登录 bug，修复后补测试并验证。');
 

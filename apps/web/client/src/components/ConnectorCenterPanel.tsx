@@ -44,6 +44,7 @@ import {
   completeConnectorProfileOauth,
   createConnectorProfile,
   deleteConnectorProfile,
+  getConnectorCatalog,
   getMyConnectorProfiles,
   setDefaultConnectorProfile,
   startConnectorOauth,
@@ -77,11 +78,12 @@ export const GITHUB_FIXED_CALLBACK_PATH = "/github/callback";
 export const NOTION_FIXED_CALLBACK_PATH = "/notion/callback";
 export const SUPABASE_FIXED_CALLBACK_PATH = "/supabase/callback";
 export const SLACK_FIXED_CALLBACK_PATH = "/slack/callback";
+export const FIGMA_FIXED_CALLBACK_PATH = "/figma/callback";
+export const GOOGLE_SUPER_FIXED_CALLBACK_PATH = "/google-super/callback";
 export const VERCEL_FIXED_CALLBACK_PATH = "/vercel/callback";
 const GITHUB_INSTALLATION_MISSING_PATTERN = /没有任何可用安装|未安装到任何账号|installation/i;
 const CONNECTOR_TABS: Array<{ key: ConnectorCenterTab; labelKey: string }> = [
   { key: "app", labelKey: "connectors.tabs.app" },
-  { key: "custom_api", labelKey: "connectors.tabs.customApi" },
   { key: "custom_mcp", labelKey: "connectors.tabs.customMcp" },
 ];
 
@@ -186,6 +188,8 @@ function isFixedConnectorCallbackPath(pathname: string) {
     pathname === NOTION_FIXED_CALLBACK_PATH ||
     pathname === SUPABASE_FIXED_CALLBACK_PATH ||
     pathname === SLACK_FIXED_CALLBACK_PATH ||
+    pathname === FIGMA_FIXED_CALLBACK_PATH ||
+    pathname === GOOGLE_SUPER_FIXED_CALLBACK_PATH ||
     pathname === VERCEL_FIXED_CALLBACK_PATH
   );
 }
@@ -202,6 +206,10 @@ export function resolveConnectorOauthCallbackContext(location: string, params: U
         ? "supabase"
       : currentPath === SLACK_FIXED_CALLBACK_PATH
         ? "slack"
+        : currentPath === FIGMA_FIXED_CALLBACK_PATH
+          ? "figma"
+        : currentPath === GOOGLE_SUPER_FIXED_CALLBACK_PATH
+          ? "google_super"
         : currentPath === VERCEL_FIXED_CALLBACK_PATH
           ? "vercel"
           : null;
@@ -249,6 +257,30 @@ export function cleanupConnectorQuery(
         : "/home"
       : url.pathname;
   return `${nextPath}${url.search ? `?${url.searchParams.toString()}` : ""}`;
+}
+
+export function resolveConnectorCatalogForProfiles(
+  profileCatalog: ConnectorCatalogItem[],
+  catalogFallback: ConnectorCatalogItem[]
+) {
+  return profileCatalog.length > 0 ? profileCatalog : catalogFallback;
+}
+
+export function resolveConnectorDirectoryState(input: {
+  loading: boolean;
+  loadError: string | null;
+  catalogCount: number;
+  activeTab: ConnectorCenterTab;
+  appCatalogCount: number;
+  filteredAppCatalogCount: number;
+}) {
+  if (input.loading && input.catalogCount === 0) return "loading";
+  if (input.loadError && input.catalogCount === 0) return "error";
+  if (input.activeTab === "custom_mcp") return "custom_mcp";
+  if (input.activeTab !== "app") return "empty_tab";
+  if (!input.loading && input.appCatalogCount === 0) return "no_catalog";
+  if (!input.loading && input.filteredAppCatalogCount === 0) return "no_matches";
+  return "ready";
 }
 
 function getFieldValue(
@@ -332,28 +364,21 @@ function getDirectoryStatus(
 }
 
 function renderEmptyTab(tab: ConnectorCenterTab) {
-  const isApi = tab === "custom_api";
   return (
     <div className="flex h-full flex-col items-center justify-center px-6 py-16 text-center">
       <div className="rounded-2xl border border-border/70 bg-muted/30 px-4 py-2 text-sm text-muted-foreground">
         {i18n.t("connectors.comingSoon")}
       </div>
       <h4 className="mt-5 text-lg font-semibold text-foreground">
-        {isApi
-          ? i18n.t("connectors.empty.customApiReserved")
-          : i18n.t("connectors.empty.customMcpReserved")}
+        {i18n.t("connectors.empty.customMcpReserved")}
       </h4>
       <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
         {i18n.t("connectors.empty.intro")}
-        {isApi
-          ? i18n.t("connectors.empty.customApiDetail")
-          : i18n.t("connectors.empty.customMcpDetail")}
+        {i18n.t("connectors.empty.customMcpDetail")}
       </p>
       <Button disabled className="mt-6 rounded-xl">
         <Plus className="mr-2 h-4 w-4" />
-        {isApi
-          ? i18n.t("connectors.empty.createCustomApi")
-          : i18n.t("connectors.empty.createCustomMcp")}
+        {i18n.t("connectors.empty.createCustomMcp")}
       </Button>
     </div>
   );
@@ -369,6 +394,7 @@ export function shouldUseConnectorLevelOauth(connectorKey: ConnectorKey | null |
     connectorKey === "notion" ||
     connectorKey === "supabase" ||
     connectorKey === "figma" ||
+    connectorKey === "google_super" ||
     connectorKey === "slack" ||
     connectorKey === "vercel"
   );
@@ -440,6 +466,7 @@ export function ConnectorCenterPanel({
   const effectiveHighlightedProfileId = params.get("profileId");
 
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [actionKey, setActionKey] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ConnectorCenterTab>("app");
   const [query, setQuery] = useState("");
@@ -454,43 +481,70 @@ export function ConnectorCenterPanel({
   >({});
   const [formState, setFormState] = useState<Record<string, ConnectorFormValues>>({});
 
+  const applyConnectorSnapshot = (
+    nextCatalog: ConnectorCatalogItem[],
+    nextProfiles: ConnectorProfile[],
+  ) => {
+    setCatalog(nextCatalog);
+    setProfiles(nextProfiles);
+
+    const profilesByConnector = groupProfilesByConnector(nextProfiles);
+    setSelectedProfileIds((prev) => {
+      const next = { ...prev };
+      for (const item of nextCatalog) {
+        next[item.key] = resolvePreferredProfileId(
+          profilesByConnector[item.key] || [],
+          prev[item.key],
+        );
+      }
+      return next;
+    });
+
+    setFormState((prev) => {
+      const next = { ...prev };
+      for (const item of nextCatalog) {
+        const connectorProfiles = profilesByConnector[item.key] || [];
+        next[editorKey(item.key, null)] = buildFormValues(
+          item,
+          undefined,
+          prev[editorKey(item.key, null)],
+        );
+        for (const profile of connectorProfiles) {
+          const key = editorKey(item.key, profile.profileId);
+          next[key] = buildFormValues(item, profile, prev[key]);
+        }
+      }
+      return next;
+    });
+  };
+
   const load = async () => {
     setLoading(true);
+    setLoadError(null);
+    let catalogFallback: ConnectorCatalogItem[] = [];
+
+    try {
+      catalogFallback = await getConnectorCatalog();
+      if (catalogFallback.length > 0) {
+        applyConnectorSnapshot(catalogFallback, profiles);
+      }
+    } catch (error) {
+      console.warn("[ConnectorCenterPanel] catalog prefetch failed:", error);
+    }
+
     try {
       const result = await getMyConnectorProfiles();
-      setCatalog(result.catalog);
-      setProfiles(result.profiles);
-
-      const profilesByConnector = groupProfilesByConnector(result.profiles);
-      setSelectedProfileIds((prev) => {
-        const next = { ...prev };
-        for (const item of result.catalog) {
-          next[item.key] = resolvePreferredProfileId(
-            profilesByConnector[item.key] || [],
-            prev[item.key]
-          );
-        }
-        return next;
-      });
-
-      setFormState((prev) => {
-        const next = { ...prev };
-        for (const item of result.catalog) {
-          const connectorProfiles = profilesByConnector[item.key] || [];
-          next[editorKey(item.key, null)] = buildFormValues(
-            item,
-            undefined,
-            prev[editorKey(item.key, null)]
-          );
-          for (const profile of connectorProfiles) {
-            const key = editorKey(item.key, profile.profileId);
-            next[key] = buildFormValues(item, profile, prev[key]);
-          }
-        }
-        return next;
-      });
+      const nextCatalog = resolveConnectorCatalogForProfiles(result.catalog, catalogFallback);
+      applyConnectorSnapshot(nextCatalog, result.profiles);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : i18n.t("connectors.errors.loadFailed"));
+      const message =
+        error instanceof Error ? error.message : i18n.t("connectors.errors.loadFailed");
+      setLoadError(message);
+      if (catalogFallback.length === 0) {
+        toast.error(message);
+      } else {
+        toast.warning(message);
+      }
     } finally {
       setLoading(false);
     }
@@ -524,7 +578,7 @@ export function ConnectorCenterPanel({
     const useConnectorLevelCallback = useConnectorLevelOauth;
     if (!callbackContext.shouldHandle) return;
     if (!state || !connector) return;
-    if (!code && connector !== "github" && connector !== "notion" && connector !== "slack" && connector !== "figma" && connector !== "supabase") return;
+    if (!code && connector !== "github" && connector !== "notion" && connector !== "slack" && connector !== "figma" && connector !== "google_super" && connector !== "supabase") return;
     if (!useConnectorLevelCallback && !profileId) return;
     if (callbackHandled.current) return;
     callbackHandled.current = true;
@@ -563,6 +617,14 @@ export function ConnectorCenterPanel({
                 ? {
                     callbackPath: SLACK_FIXED_CALLBACK_PATH,
                   }
+              : connector === "figma"
+                ? {
+                    callbackPath: FIGMA_FIXED_CALLBACK_PATH,
+                  }
+              : connector === "google_super"
+                ? {
+                    callbackPath: GOOGLE_SUPER_FIXED_CALLBACK_PATH,
+                  }
               : connector === "vercel"
                 ? {
                     callbackPath: VERCEL_FIXED_CALLBACK_PATH,
@@ -581,6 +643,10 @@ export function ConnectorCenterPanel({
             redirectUri,
             teamId: asText(params.get("teamId")),
             configurationId: asText(params.get("configurationId")),
+            connectedAccountId: asText(
+              params.get("connected_account_id") || params.get("connectedAccountId")
+            ),
+            status: asText(params.get("status")),
             next: asText(params.get("next")),
             source: asText(params.get("source")),
           });
@@ -596,6 +662,10 @@ export function ConnectorCenterPanel({
             redirectUri,
             teamId: asText(params.get("teamId")),
             configurationId: asText(params.get("configurationId")),
+            connectedAccountId: asText(
+              params.get("connected_account_id") || params.get("connectedAccountId")
+            ),
+            status: asText(params.get("status")),
             next: asText(params.get("next")),
             source: asText(params.get("source")),
           });
@@ -753,6 +823,7 @@ export function ConnectorCenterPanel({
       item.key !== "supabase" &&
       item.key !== "notion" &&
       item.key !== "figma" &&
+      item.key !== "google_super" &&
       item.key !== "vercel";
 
     if (requiresExplicitProfileName && !payload.profileName) {
@@ -844,6 +915,14 @@ export function ConnectorCenterPanel({
                   ? {
                       callbackPath: NOTION_FIXED_CALLBACK_PATH,
                     }
+                  : detailItem.key === "figma"
+                    ? {
+                      callbackPath: FIGMA_FIXED_CALLBACK_PATH,
+                    }
+                  : detailItem.key === "google_super"
+                    ? {
+                        callbackPath: GOOGLE_SUPER_FIXED_CALLBACK_PATH,
+                      }
                   : detailItem.key === "vercel"
                     ? {
                         callbackPath: VERCEL_FIXED_CALLBACK_PATH,
@@ -1000,7 +1079,51 @@ export function ConnectorCenterPanel({
     ) : null;
 
   const renderDirectory = () => {
-    if (activeTab === "custom_mcp") {
+    const directoryState = resolveConnectorDirectoryState({
+      loading,
+      loadError,
+      catalogCount: catalog.length,
+      activeTab,
+      appCatalogCount: appCatalog.length,
+      filteredAppCatalogCount: filteredAppCatalog.length,
+    });
+
+    if (directoryState === "loading") {
+      return (
+        <div className="flex h-full flex-col items-center justify-center px-6 py-16 text-center">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          <p className="mt-3 text-sm text-muted-foreground">
+            {t("connectors.loading")}
+          </p>
+        </div>
+      );
+    }
+
+    if (directoryState === "error") {
+      return (
+        <div className="flex h-full flex-col items-center justify-center px-6 py-16 text-center">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full border border-destructive/30 bg-destructive/5">
+            <AlertCircle className="h-5 w-5 text-destructive" />
+          </div>
+          <h4 className="mt-4 text-lg font-semibold text-foreground">
+            {t("connectors.errors.loadFailed")}
+          </h4>
+          <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
+            {loadError}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            className="mt-5 rounded-xl"
+            onClick={() => void load()}
+          >
+            {t("connectors.actions.retry")}
+          </Button>
+        </div>
+      );
+    }
+
+    if (directoryState === "custom_mcp") {
       return (
         <CustomMcpManagementPanel
           profiles={profilesByConnector.custom_mcp || []}
@@ -1010,7 +1133,7 @@ export function ConnectorCenterPanel({
         />
       );
     }
-    if (activeTab !== "app") {
+    if (directoryState === "empty_tab") {
       return renderEmptyTab(activeTab);
     }
 
@@ -1031,6 +1154,7 @@ export function ConnectorCenterPanel({
         <button
           key={`${item.key}-${item.featured ? "featured" : "list"}`}
           type="button"
+          data-tour="connectors-directory-card"
           onClick={() => {
             setDetailKey(item.key);
             setActiveTab("app");
@@ -1088,7 +1212,11 @@ export function ConnectorCenterPanel({
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               {filteredAppCatalog.map((item) => renderCard(item))}
             </div>
-            {!loading && filteredAppCatalog.length === 0 ? (
+            {directoryState === "no_catalog" ? (
+              <div className="rounded-2xl border border-dashed border-border/70 px-4 py-10 text-center text-sm text-muted-foreground">
+                {t("connectors.empty.noCatalog")}
+              </div>
+            ) : directoryState === "no_matches" ? (
               <div className="rounded-2xl border border-dashed border-border/70 px-4 py-10 text-center text-sm text-muted-foreground">
                 {t("connectors.empty.noMatches")}
               </div>
@@ -1240,7 +1368,9 @@ export function ConnectorCenterPanel({
                         ) : (
                           <Plus className="h-4 w-4" />
                         )}
-                        {t("connectors.actions.connect")}
+                        {selectedDetailProfile
+                          ? t("connectors.actions.reconnect")
+                          : t("connectors.actions.connect")}
                       </Button>
                     </>
                   )}
@@ -1249,10 +1379,7 @@ export function ConnectorCenterPanel({
                 {renderTargetBanner()}
 
                 <div className="mt-4 w-full max-w-[720px] space-y-8">
-                {/* 仅在已授权态显示必要错误，未授权态不展示错误提示 */}
                 {unifiedOauthCard &&
-                !githubConnector &&
-                selectedDetailProfile?.authStatus === "authorized" &&
                 selectedDetailProfile?.lastError ? (
                   <div className="flex items-start gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -1512,7 +1639,7 @@ export function ConnectorCenterPanel({
     <div className="flex h-full flex-col overflow-hidden bg-transparent">
       <div className="border-b border-border/70 px-6 py-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2">
+          <div data-tour="connectors-tabs" className="flex items-center gap-2">
             {CONNECTOR_TABS.map((tab) => (
               <button
                 key={tab.key}
@@ -1533,7 +1660,7 @@ export function ConnectorCenterPanel({
               </button>
             ))}
           </div>
-          <div className="w-full sm:w-[220px]">
+          <div data-tour="connectors-search" className="w-full sm:w-[220px]">
             <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}

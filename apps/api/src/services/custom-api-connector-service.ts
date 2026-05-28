@@ -7,6 +7,7 @@ import {
 import { customApiSecurityReviewService } from './custom-api-security-review-service';
 import { userConnectorService } from './user-connector-service';
 import { sessionConnectorService } from './session-connector-service';
+import { assertCustomApiEnabled } from './custom-api-feature-flag';
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -42,10 +43,12 @@ function asHostList(baseUrl: string, raw: unknown): string[] {
 
 export class CustomApiConnectorService {
   async listDefinitions(userId: string) {
+    assertCustomApiEnabled();
     return customApiDefinitionDAO.listByOwner(userId);
   }
 
   async createDefinition(userId: string, input: Record<string, unknown>) {
+    assertCustomApiEnabled();
     const baseUrl = asText(input.baseUrl);
     const validation = customApiSecurityReviewService.validateBaseUrl(baseUrl);
     if (!validation.valid || !validation.url) {
@@ -69,6 +72,7 @@ export class CustomApiConnectorService {
   }
 
   async updateDefinition(userId: string, definitionId: string, input: Record<string, unknown>) {
+    assertCustomApiEnabled();
     const current = await customApiDefinitionDAO.getByIdAndOwner(definitionId, userId);
     if (!current) throw new Error('custom_api_definition_not_found');
     const patch: Record<string, unknown> = {};
@@ -94,6 +98,7 @@ export class CustomApiConnectorService {
   }
 
   async createProfile(userId: string, definitionId: string, input: Record<string, unknown>) {
+    assertCustomApiEnabled();
     const definition = await customApiDefinitionDAO.getByIdAndOwner(definitionId, userId);
     if (!definition) throw new Error('custom_api_definition_not_found');
     return userConnectorService.createProfile(userId, 'custom_api', {
@@ -110,12 +115,14 @@ export class CustomApiConnectorService {
   }
 
   async listTools(userId: string, definitionId: string) {
+    assertCustomApiEnabled();
     const definition = await customApiDefinitionDAO.getByIdAndOwner(definitionId, userId);
     if (!definition) throw new Error('custom_api_definition_not_found');
     return customApiEndpointToolDAO.listByDefinition(definitionId);
   }
 
   async createTool(userId: string, definitionId: string, input: Record<string, unknown>) {
+    assertCustomApiEnabled();
     const definition = await customApiDefinitionDAO.getByIdAndOwner(definitionId, userId);
     if (!definition) throw new Error('custom_api_definition_not_found');
     const review = customApiSecurityReviewService.validateEndpoint(input as any);
@@ -141,6 +148,7 @@ export class CustomApiConnectorService {
   }
 
   async updateTool(userId: string, toolId: string, input: Record<string, unknown>) {
+    assertCustomApiEnabled();
     const tool = await customApiEndpointToolDAO.getById(toolId);
     if (!tool) throw new Error('custom_api_tool_not_found');
     const definition = await customApiDefinitionDAO.getByIdAndOwner(tool.definitionId, userId);
@@ -169,6 +177,7 @@ export class CustomApiConnectorService {
   }
 
   async submitReview(userId: string, toolId: string) {
+    assertCustomApiEnabled();
     const tool = await customApiEndpointToolDAO.getById(toolId);
     if (!tool) throw new Error('custom_api_tool_not_found');
     const definition = await customApiDefinitionDAO.getByIdAndOwner(tool.definitionId, userId);
@@ -185,6 +194,7 @@ export class CustomApiConnectorService {
   }
 
   async evaluateRisk(input: Record<string, unknown>) {
+    assertCustomApiEnabled();
     return customApiSecurityReviewService.validateEndpoint({
       method: asText(input.method),
       pathTemplate: asText(input.pathTemplate),
@@ -205,6 +215,7 @@ export class CustomApiConnectorService {
     endpointToolIds: string[],
     orchestratorSessionId?: string
   ) {
+    assertCustomApiEnabled();
     const definition = await customApiDefinitionDAO.getByIdAndOwner(definitionId, userId);
     if (!definition) throw new Error('custom_api_definition_not_found');
     const tools = await customApiEndpointToolDAO.listByDefinition(definitionId);
@@ -226,6 +237,7 @@ export class CustomApiConnectorService {
   }
 
   async approveTool(toolId: string, adminUserId: string, reviewNote?: string) {
+    assertCustomApiEnabled();
     const tool = await customApiEndpointToolDAO.getById(toolId);
     if (!tool) throw new Error('custom_api_tool_not_found');
     const review = customApiSecurityReviewService.validateEndpoint({
@@ -248,6 +260,7 @@ export class CustomApiConnectorService {
   }
 
   async rejectTool(toolId: string, adminUserId: string, reviewNote?: string) {
+    assertCustomApiEnabled();
     return customApiEndpointToolDAO.updateReviewStatus(toolId, {
       reviewStatus: 'rejected',
       reviewedBy: adminUserId,
@@ -257,6 +270,7 @@ export class CustomApiConnectorService {
   }
 
   async publishTool(toolId: string, adminUserId: string, reviewNote?: string) {
+    assertCustomApiEnabled();
     const tool = await customApiEndpointToolDAO.getById(toolId);
     if (!tool) throw new Error('custom_api_tool_not_found');
     if (tool.reviewStatus !== 'approved') throw new Error('custom_api_tool_must_be_approved_before_publish');
@@ -270,6 +284,7 @@ export class CustomApiConnectorService {
   }
 
   async disableTool(toolId: string, adminUserId: string, reviewNote?: string) {
+    assertCustomApiEnabled();
     return customApiEndpointToolDAO.updateReviewStatus(toolId, {
       reviewStatus: 'disabled',
       reviewedBy: adminUserId,
@@ -279,14 +294,17 @@ export class CustomApiConnectorService {
   }
 
   async listReviewQueue() {
+    assertCustomApiEnabled();
     return customApiEndpointToolDAO.listReviewQueue();
   }
 
   async listAuditLogs(limit?: number) {
+    assertCustomApiEnabled();
     return customApiAuditLogDAO.list(limit);
   }
 
   async createConfirmation(userId: string, input: Record<string, unknown>) {
+    assertCustomApiEnabled();
     const endpointToolId = asText(input.endpointToolId);
     const taskSessionId = asText(input.taskSessionId);
     const toolName = asText(input.toolName);

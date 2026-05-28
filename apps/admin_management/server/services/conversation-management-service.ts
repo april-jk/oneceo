@@ -6,8 +6,6 @@ import type {
   TaskCreationSession,
 } from '../connectors/oneceo-api-connector';
 import type { KvmOrchestratorConnector } from '../connectors/kvm-orchestrator-connector';
-import type { AuditService } from './audit-service';
-
 type TraceEvent = {
   id: string;
   timestamp?: string;
@@ -1035,7 +1033,6 @@ export class ConversationManagementService {
   constructor(
     private readonly oneceoApi: OneceoApiConnector,
     private readonly kvmConnector: KvmOrchestratorConnector,
-    private readonly auditService: AuditService
   ) {}
 
   async listSessions(limit = 20) {
@@ -1134,7 +1131,6 @@ export class ConversationManagementService {
       vmMetrics: null,
       vmLogs: null,
       quota: null,
-      auditEntries: [],
       errors: sessionErrors,
     };
 
@@ -1189,6 +1185,14 @@ export class ConversationManagementService {
         },
       },
     };
+  }
+
+  getBrowserActionScreenshot(input: {
+    sessionId: string;
+    runId: string;
+    toolCallId: string;
+  }) {
+    return this.oneceoApi.getTaskCreationBrowserActionScreenshot(input);
   }
 
   async getSessionInfra(sessionId: string) {
@@ -1320,21 +1324,6 @@ export class ConversationManagementService {
         ])
       : [null, null, null, null];
 
-    const auditEntries = await this.auditService
-      .list(300)
-      .then((entries) =>
-        entries.filter((entry) => {
-          if (binding.orchestratorSessionId && entry.sessionId === binding.orchestratorSessionId) {
-            return true;
-          }
-          if (vmName && entry.targetVmId === vmName) {
-            return true;
-          }
-          return false;
-        })
-      )
-      .catch(() => []);
-
     const osacTypeCounter = osacMessages.reduce<Record<string, number>>((acc, item) => {
       const key = item.type || 'UNKNOWN';
       acc[key] = (acc[key] || 0) + 1;
@@ -1366,7 +1355,6 @@ export class ConversationManagementService {
       vmMetrics: kvmVmMetrics,
       vmLogs: kvmVmLogs,
       quota: kvmQuota,
-      auditEntries,
       errors: kvmErrors,
     };
 
@@ -1493,5 +1481,46 @@ export class ConversationManagementService {
       completed: sessions.filter((item) => item.status === 'completed').length,
       failed: sessions.filter((item) => item.status === 'failed').length,
     };
+  }
+
+  async getSessionApiTraces(sessionId: string, options?: {
+    type?: string;
+    toolName?: string;
+    model?: string;
+    limit?: number;
+    offset?: number;
+  }) {
+    return this.oneceoApi.getSessionApiTraces(sessionId, options);
+  }
+
+  async getApiTraceAggregate(options?: {
+    type?: string;
+    toolName?: string;
+    model?: string;
+    sessionId?: string;
+    from?: string;
+    to?: string;
+    groupBy?: string;
+    limit?: number;
+    offset?: number;
+  }) {
+    return this.oneceoApi.getApiTraceAggregate(options);
+  }
+
+  async getApiTraceStats(options?: {
+    type?: string;
+    from?: string;
+    to?: string;
+  }) {
+    return this.oneceoApi.getApiTraceStats(options);
+  }
+
+  async getApiTraceTrend(options?: {
+    type?: string;
+    from?: string;
+    to?: string;
+    interval?: string;
+  }) {
+    return this.oneceoApi.getApiTraceTrend(options);
   }
 }

@@ -4,9 +4,13 @@ import {
   adminUserSessions,
   adminUsers,
   appUserEmailVerifications,
+  appUserOauthAccounts,
   appUserSessions,
   appUsers,
 } from '../schema';
+
+type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type DbExecutor = typeof db | DbTransaction;
 
 function normalizeEmail(value: string) {
   return value.trim().toLowerCase();
@@ -16,14 +20,18 @@ function normalizeLoginName(value: string) {
   return value.trim().toLowerCase();
 }
 
+function hashLikeOauthPassword(provider: string, providerSubject: string) {
+  return `oauth:${provider.trim().toLowerCase()}:${providerSubject.trim()}`;
+}
+
 class AppUserDAO {
   async create(input: {
     email: string;
     passwordHash: string;
     displayName: string;
     profileJson?: Record<string, unknown>;
-  }) {
-    const [created] = await db
+  }, executor: DbExecutor = db) {
+    const [created] = await executor
       .insert(appUsers)
       .values({
         email: normalizeEmail(input.email),
@@ -32,6 +40,43 @@ class AppUserDAO {
         profileJson: input.profileJson || {},
       })
       .returning();
+    return created;
+  }
+
+  async createOauthUser(input: {
+    email: string;
+    displayName: string;
+    provider: string;
+    providerSubject: string;
+    providerEmail?: string | null;
+    avatarUrl?: string | null;
+    avatarSource?: string | null;
+    avatarStorageKey?: string | null;
+    profileJson?: Record<string, unknown>;
+  }, executor: DbExecutor = db) {
+    const [created] = await executor
+      .insert(appUsers)
+      .values({
+        email: normalizeEmail(input.email),
+        passwordHash: hashLikeOauthPassword(input.provider, input.providerSubject),
+        displayName: input.displayName.trim(),
+        avatarUrl: input.avatarUrl || null,
+        avatarStorageKey: input.avatarStorageKey || null,
+        avatarSource: input.avatarSource?.trim() || 'default',
+        avatarUpdatedAt: input.avatarUrl ? new Date() : null,
+        profileJson: input.profileJson || {},
+      })
+      .returning();
+
+    await executor.insert(appUserOauthAccounts).values({
+      userId: created.id as any,
+      provider: input.provider.trim(),
+      providerSubject: input.providerSubject.trim(),
+      providerEmail: input.providerEmail || null,
+      displayName: input.displayName.trim() || null,
+      avatarUrl: input.avatarUrl || null,
+    });
+
     return created;
   }
 
@@ -45,6 +90,55 @@ class AppUserDAO {
     return record;
   }
 
+  async getByOauthAccount(provider: string, providerSubject: string) {
+    const [record] = await db
+      .select({
+        user: appUsers,
+      })
+      .from(appUserOauthAccounts)
+      .innerJoin(appUsers, eq(appUsers.id, appUserOauthAccounts.userId))
+      .where(
+        and(
+          eq(appUserOauthAccounts.provider, provider.trim()),
+          eq(appUserOauthAccounts.providerSubject, providerSubject.trim())
+        )
+      );
+    return record?.user || null;
+  }
+
+  async upsertOauthAccount(input: {
+    userId: string;
+    provider: string;
+    providerSubject: string;
+    providerEmail?: string | null;
+    displayName?: string | null;
+    avatarUrl?: string | null;
+  }) {
+    const [record] = await db
+      .insert(appUserOauthAccounts)
+      .values({
+        userId: input.userId as any,
+        provider: input.provider.trim(),
+        providerSubject: input.providerSubject.trim(),
+        providerEmail: input.providerEmail || null,
+        displayName: input.displayName || null,
+        avatarUrl: input.avatarUrl || null,
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: [appUserOauthAccounts.provider, appUserOauthAccounts.providerSubject],
+        set: {
+          userId: input.userId as any,
+          providerEmail: input.providerEmail || null,
+          displayName: input.displayName || null,
+          avatarUrl: input.avatarUrl || null,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return record;
+  }
+
   async updateById(
     id: string,
     input: {
@@ -52,6 +146,10 @@ class AppUserDAO {
       displayName?: string;
       profileJson?: Record<string, unknown>;
       status?: string;
+      avatarUrl?: string | null;
+      avatarStorageKey?: string | null;
+      avatarSource?: string;
+      avatarUpdatedAt?: Date | null;
     }
   ) {
     const nextValues: Record<string, unknown> = {
@@ -69,6 +167,18 @@ class AppUserDAO {
     if (typeof input.status === 'string' && input.status.trim()) {
       nextValues.status = input.status.trim();
     }
+    if (Object.prototype.hasOwnProperty.call(input, 'avatarUrl')) {
+      nextValues.avatarUrl = input.avatarUrl ?? null;
+    }
+    if (Object.prototype.hasOwnProperty.call(input, 'avatarStorageKey')) {
+      nextValues.avatarStorageKey = input.avatarStorageKey ?? null;
+    }
+    if (typeof input.avatarSource === 'string' && input.avatarSource.trim()) {
+      nextValues.avatarSource = input.avatarSource.trim();
+    }
+    if (Object.prototype.hasOwnProperty.call(input, 'avatarUpdatedAt')) {
+      nextValues.avatarUpdatedAt = input.avatarUpdatedAt ?? null;
+    }
     const [updated] = await db
       .update(appUsers)
       .set(nextValues)
@@ -84,6 +194,29 @@ class AppUserDAO {
       .where(eq(appUsers.id, id as any))
       .returning();
     return updated;
+  }
+
+  async updateAvatar(
+    id: string,
+    input: {
+      avatarUrl: string | null;
+      avatarStorageKey: string | null;
+      avatarSource: string;
+      avatarUpdatedAt: Date | null;
+    }
+  ) {
+    const [updated] = await db
+      .update(appUsers)
+      .set({
+        avatarUrl: input.avatarUrl,
+        avatarStorageKey: input.avatarStorageKey,
+        avatarSource: input.avatarSource.trim(),
+        avatarUpdatedAt: input.avatarUpdatedAt,
+        updatedAt: new Date(),
+      })
+      .where(eq(appUsers.id, id as any))
+      .returning();
+    return updated || null;
   }
 }
 
@@ -203,8 +336,8 @@ class AppUserEmailVerificationDAO {
     return record;
   }
 
-  async markConsumed(id: string) {
-    const [record] = await db
+  async markConsumed(id: string, executor: DbExecutor = db) {
+    const [record] = await executor
       .update(appUserEmailVerifications)
       .set({
         consumedAt: new Date(),

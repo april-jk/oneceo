@@ -7,6 +7,7 @@ import { connectorSecretService } from './connector-secret-service';
 import { connectorStorageBootstrap } from './connector-storage-bootstrap';
 import { connectorRedisCacheService } from './connector-redis-cache-service';
 import { composioConnectorService } from './composio-connector-service';
+import { assertCustomApiEnabled } from './custom-api-feature-flag';
 import {
   type ConnectorAccountMaterial,
   type ConnectorAccountSecret,
@@ -66,6 +67,8 @@ type CompleteOauthInput = {
   redirectUri: string;
   teamId?: string;
   configurationId?: string;
+  connectedAccountId?: string;
+  status?: string;
   next?: string;
   source?: string;
 };
@@ -461,6 +464,61 @@ function shouldForceFigmaComposioReconnect(row: UserConnectorProfileRow): boolea
     asText(secret?.source) === 'composio' &&
     asText(secret?.composioMcpUrl)
   );
+}
+
+function isComposioCredentialError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /invalid api key|valid api key|unauthorized|forbidden|401|403/i.test(message);
+}
+
+function formatComposioOAuthStartError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error || '');
+  if (isComposioCredentialError(error)) {
+    return `Composio service credential is invalid. Update COMPOSIO_API_KEY on the server, then reconnect this connector. ${raw}`;
+  }
+  return raw || 'Failed to start Composio authorization';
+}
+
+const COMPOSIO_CALLBACK_PATHS: Partial<Record<ConnectorKey, string>> = {
+  github: '/github/callback',
+  notion: '/notion/callback',
+  supabase: '/supabase/callback',
+  slack: '/slack/callback',
+  figma: '/figma/callback',
+  google_super: '/google-super/callback',
+};
+
+function resolveComposioCallbackBaseUrl(): string {
+  const baseUrl =
+    asText(process.env.COMPOSIO_OAUTH_CALLBACK_BASE_URL) ||
+    asText(process.env.FRONTEND_URL);
+  if (!baseUrl) {
+    throw new Error('COMPOSIO_OAUTH_CALLBACK_BASE_URL or FRONTEND_URL is required for Composio OAuth');
+  }
+  const parsed = new URL(baseUrl);
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('COMPOSIO_OAUTH_CALLBACK_BASE_URL must be an http(s) URL');
+  }
+  parsed.pathname = parsed.pathname.replace(/\/+$/, '');
+  parsed.search = '';
+  parsed.hash = '';
+  return parsed.toString().replace(/\/+$/, '');
+}
+
+export function resolveComposioOauthCallbackUrl(
+  connectorKey: ConnectorKey,
+  inputRedirectUri: string
+): URL {
+  const callbackPath = COMPOSIO_CALLBACK_PATHS[connectorKey];
+  if (!callbackPath) {
+    throw new Error(`${connectorKey} Composio OAuth callback path is not configured`);
+  }
+  const callbackUrl = new URL(callbackPath, `${resolveComposioCallbackBaseUrl()}/`);
+  const input = asText(inputRedirectUri);
+  if (input) {
+    callbackUrl.search = new URL(input).search;
+  }
+  return callbackUrl;
 }
 
 function resolveOauthRedirectUri(
@@ -948,6 +1006,9 @@ export class UserConnectorService {
   }
 
   async createProfile(userId: string, connectorKey: ConnectorKey, input: SaveConnectorInput) {
+    if (connectorKey === 'custom_api') {
+      assertCustomApiEnabled();
+    }
     const saved = await this.saveProfileInternal(userId, connectorKey, null, input);
     await this.invalidateMeCache(userId);
     return saved;
@@ -957,6 +1018,9 @@ export class UserConnectorService {
     const existing = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
     if (!existing) {
       throw new Error('Connector profile does not exist');
+    }
+    if (existing.connectorKey === 'custom_api') {
+      assertCustomApiEnabled();
     }
     const saved = await this.saveProfileInternal(
       userId,
@@ -973,6 +1037,9 @@ export class UserConnectorService {
     const existing = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
     if (!existing) {
       throw new Error('Connector profile does not exist');
+    }
+    if (existing.connectorKey === 'custom_api') {
+      assertCustomApiEnabled();
     }
     await userConnectorProfileDAO.delete(profileId, userId);
     if (existing.isDefault) {
@@ -996,6 +1063,9 @@ export class UserConnectorService {
     if (!existing) {
       throw new Error('Connector profile does not exist');
     }
+    if (existing.connectorKey === 'custom_api') {
+      assertCustomApiEnabled();
+    }
     await userConnectorProfileDAO.clearDefaultForConnector(userId, existing.connectorKey);
     const saved = await userConnectorProfileDAO.update(profileId, userId, { isDefault: true } as any);
     if (!saved) {
@@ -1010,6 +1080,9 @@ export class UserConnectorService {
     const existing = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
     if (!existing) {
       throw new Error('Connector profile does not exist');
+    }
+    if (existing.connectorKey === 'custom_api') {
+      assertCustomApiEnabled();
     }
     const catalogItem = connectorRegistry.getCatalogItem(existing.connectorKey);
     const saved = await userConnectorProfileDAO.update(profileId, userId, {
@@ -1088,17 +1161,39 @@ export class UserConnectorService {
         status: 'pending',
         expiresAt: new Date(Date.now() + 30 * 60 * 1000),
       } as any);
-      const callbackUrl = input.redirectUri ? new URL(input.redirectUri) : null;
-      callbackUrl?.searchParams.set('state', state);
-      if (!callbackUrl) {
-        throw new Error(`${catalogItem.name} Composio OAuth requires redirectUri`);
+      const callbackUrl = resolveComposioOauthCallbackUrl(connectorKey, input.redirectUri);
+      callbackUrl.searchParams.set('state', state);
+      let auth: Awaited<ReturnType<typeof composioConnectorService.startAuthorization>>;
+      try {
+        auth = await composioConnectorService.startAuthorization({
+          connectorKey,
+          userId,
+          callbackUrl: callbackUrl.toString(),
+          catalogItem,
+        });
+      } catch (error) {
+        const message = formatComposioOAuthStartError(error);
+        const credentialError = isComposioCredentialError(error);
+        await connectorAuthRequestDAO.markFailedByState(state, 'failed');
+        await userConnectorProfileDAO.update(profileId, userId, {
+          authMode: 'oauth',
+          authStatus: credentialError || asText(profile.authStatus) !== 'authorized'
+            ? 'needs_auth'
+            : profile.authStatus,
+          ...(credentialError ? { secretCiphertext: null } : {}),
+          metadataJson: mergeMetadata(pickObject(profile.metadataJson), {
+            provider: 'composio',
+            composioUserId: composioConnectorService.buildComposioUserId(userId),
+            composioToolkitSlugs: catalogItem.composio?.toolkitSlugs || [],
+            connectionStatus: 'start_failed',
+            lastConnectionError: message,
+            lastConnectionCheckAt: new Date().toISOString(),
+          }),
+          lastError: message,
+        } as any);
+        await this.invalidateMeCache(userId);
+        throw new Error(message);
       }
-      const auth = await composioConnectorService.startAuthorization({
-        connectorKey,
-        userId,
-        callbackUrl: callbackUrl.toString(),
-        catalogItem,
-      });
       const metadataJson = mergeMetadata(pickObject(profile.metadataJson), {
         provider: 'composio',
         composioUserId: auth.composioUserId,
@@ -1211,11 +1306,19 @@ export class UserConnectorService {
               connectorKey
             )
           : null;
+        const callbackConnectedAccountId = asText(input.connectedAccountId);
+        const callbackStatus = asText(input.status);
+        const callbackMetadata = mergeMetadata(pickObject(profile.metadataJson), {
+          ...(callbackConnectedAccountId
+            ? { composioConnectedAccountId: callbackConnectedAccountId }
+            : {}),
+          ...(callbackStatus ? { callbackStatus } : {}),
+        });
         const confirmed = await composioConnectorService.confirmAuthorization({
           connectorKey,
           userId,
           catalogItem,
-          metadata: pickObject(profile.metadataJson),
+          metadata: callbackMetadata,
           secret: currentSecret,
         });
         await connectorAuthRequestDAO.markCompleted(request.requestId, 'completed');

@@ -2,6 +2,7 @@ import type {
   TaskCreationPlatformSkill,
   TaskCreationUploadedAttachment,
 } from "@/lib/task-creation-client";
+import type { TaskCreationMcpReference } from "@/lib/task-input-metadata";
 
 const ATTACHED_LINE_REGEX = /^\[Attached:\s*(.*?)\s*->\s*(.*?)\]$/i;
 const MOJIBAKE_HINT_REGEX = /[Ãâåçéèêëìíîïðñòóôõöøùúûüýþÿ]/;
@@ -149,6 +150,22 @@ function normalizeSkill(value: unknown): TaskCreationPlatformSkill | null {
   };
 }
 
+function normalizeMcpReference(value: unknown): TaskCreationMcpReference | null {
+  const item = toRecord(value);
+  const key = asText(item.key) || asText(item.connectorKey) || asText(item.id);
+  const name =
+    asText(item.name) ||
+    asText(item.displayName) ||
+    asText(item.label) ||
+    key;
+  if (!key || !name) return null;
+  return {
+    key,
+    name,
+    category: asText(item.category),
+  };
+}
+
 function dedupeAttachments(
   attachments: TaskCreationUploadedAttachment[],
 ): TaskCreationUploadedAttachment[] {
@@ -168,6 +185,20 @@ function dedupeSkills(skills: TaskCreationPlatformSkill[]): TaskCreationPlatform
   const result: TaskCreationPlatformSkill[] = [];
   for (const item of skills) {
     const key = `${asText(item.skillId)}|${asText(item.revisionId) || asText(item.skillId)}`;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
+}
+
+function dedupeMcpReferences(
+  references: TaskCreationMcpReference[],
+): TaskCreationMcpReference[] {
+  const seen = new Set<string>();
+  const result: TaskCreationMcpReference[] = [];
+  for (const item of references) {
+    const key = `${asText(item.key)}|${asText(item.name)}`;
     if (!key || seen.has(key)) continue;
     seen.add(key);
     result.push(item);
@@ -205,6 +236,7 @@ export function resolveUserMessageReferences(input: {
   text: string;
   attachments: TaskCreationUploadedAttachment[];
   skills: TaskCreationPlatformSkill[];
+  mcpReferences: TaskCreationMcpReference[];
 } {
   const record = toRecord(input.metadata);
   const nestedReferences = toRecord(record.references);
@@ -241,10 +273,20 @@ export function resolveUserMessageReferences(input: {
   )
     .map(normalizeSkill)
     .filter((item): item is TaskCreationPlatformSkill => Boolean(item));
+  const mcpReferences = (
+    Array.isArray(record.mcpReferences)
+      ? record.mcpReferences
+      : Array.isArray(nestedReferences.mcpReferences)
+        ? nestedReferences.mcpReferences
+        : []
+  )
+    .map(normalizeMcpReference)
+    .filter((item): item is TaskCreationMcpReference => Boolean(item));
 
   return {
     text: stripAttachmentReferencesFromText(baseText),
     attachments: dedupeAttachments([...metadataAttachments, ...markerAttachments]),
     skills: dedupeSkills([...metadataSkills, ...managedSkills]),
+    mcpReferences: dedupeMcpReferences(mcpReferences),
   };
 }

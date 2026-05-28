@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Mic, Send, Sparkles } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import ConnectorDialog from "@/components/ConnectorDialog";
 import AttachmentChipList from "@/components/AttachmentChipList";
@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { CreditBadge } from "@/components/CreditBadge";
 import UserMenu from "@/components/UserMenu";
+import { useAuth } from "@/contexts/AuthContext";
 import type { TaskCreationPlatformSkill } from "@/lib/task-creation-client";
 import {
   DEFAULT_ATTACHMENT_PROMPT,
@@ -60,7 +61,7 @@ function QuickActionRow({
             <Button
               key={`${action}-${index}`}
               variant="outline"
-              className="h-11 shrink-0 rounded-xl border-border bg-background px-4 text-sm font-medium text-foreground shadow-sm transition-colors hover:border-foreground/15 hover:bg-accent"
+              className="h-10 shrink-0 rounded-lg border-border/80 bg-card/88 px-4 text-sm font-semibold text-foreground/86 shadow-[0_8px_18px_rgba(15,35,65,0.06)] transition-colors hover:border-ring/45 hover:bg-accent"
               data-umami-event="landing_quick_action_select"
               data-umami-event-surface="home_page"
               onClick={() => onSelect(action)}
@@ -77,10 +78,21 @@ function QuickActionRow({
 export default function HomePage() {
   const [, setLocation] = useLocation();
   const { t } = useTranslation();
+  const { status } = useAuth();
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">("pro");
   const quickActionRows = t("homePage.quickActions", { returnObjects: true }) as string[][];
+
+  useEffect(() => {
+    if (status === "authenticated") {
+      setLocation("/home");
+    }
+  }, [setLocation, status]);
+
+  if (status === "authenticated") {
+    return null;
+  }
 
   const goToNewTask = (input: string) => {
     const value = input.trim() || (attachments.length ? DEFAULT_ATTACHMENT_PROMPT : "");
@@ -105,7 +117,7 @@ export default function HomePage() {
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
-      <nav className="border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
+      <nav className="border-b border-border/80 bg-background/92 supports-[backdrop-filter]:bg-background/78 sticky top-0 z-50">
         <div className="container mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <img src="/logo.png" alt="oneceo" className="w-9 h-9 rounded-lg" />
@@ -126,25 +138,25 @@ export default function HomePage() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, ease: "easeOut" }}
-          className="w-full max-w-3xl space-y-8"
+          className="w-full max-w-3xl space-y-7"
         >
-          <div className="text-center space-y-4">
+          <div className="text-center space-y-3">
             <motion.div
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               transition={{ delay: 0.1, duration: 0.4 }}
               className="flex items-center justify-center gap-3"
             >
-              <div className="w-12 h-12 bg-foreground rounded-2xl flex items-center justify-center shadow-lg">
+              <div className="w-12 h-12 bg-foreground rounded-xl flex items-center justify-center shadow-[0_14px_30px_rgba(15,35,65,0.16)]">
                 <span className="text-background font-bold text-xl">M</span>
               </div>
-              <h1 className="text-3xl font-semibold text-foreground tracking-tight">{t("homePage.title")}</h1>
+              <h1 className="text-3xl font-bold text-foreground">{t("homePage.title")}</h1>
             </motion.div>
             <motion.p
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: 0.2, duration: 0.4 }}
-              className="text-muted-foreground text-lg"
+              className="text-muted-foreground text-lg leading-7"
             >
               {t("homePage.subtitle")}
             </motion.p>
@@ -154,7 +166,7 @@ export default function HomePage() {
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.3, duration: 0.4 }}
-            className="bg-card border-2 border-border rounded-3xl shadow-lg hover:shadow-xl transition-all duration-200"
+            className="bg-card/96 border border-border/80 rounded-[1.15rem] shadow-[0_16px_34px_rgba(15,35,65,0.08)] hover:border-border transition-all duration-200"
           >
             <div className="p-4 space-y-3">
               <Textarea
@@ -167,7 +179,7 @@ export default function HomePage() {
                     goToNewTask(message);
                   }
                 }}
-                className="border-0 bg-transparent focus-visible:ring-0 text-base resize-none min-h-[100px] px-0 py-0"
+                className="border-0 bg-transparent focus-visible:ring-0 text-[15px] leading-6 resize-none min-h-[100px] px-0 py-0 md:text-[15px]"
                 rows={4}
               />
 
@@ -187,7 +199,7 @@ export default function HomePage() {
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="sm" className="h-9 px-3 rounded-xl gap-2 hover:bg-muted">
+                            <Button variant="ghost" size="sm" className="h-9 px-3 rounded-lg gap-2 hover:bg-muted">
                               <Sparkles className="w-4 h-4 text-muted-foreground" />
                               <span className="text-sm text-muted-foreground">{t(`homePage.models.${selectedModel}`)}</span>
                             </Button>
@@ -224,7 +236,7 @@ export default function HomePage() {
                   <div className="flex items-center gap-1">
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl hover:bg-muted">
+                        <Button variant="ghost" size="icon" className="h-9 w-9 rounded-lg hover:bg-muted">
                           <Mic className="w-4 h-4 text-muted-foreground" />
                         </Button>
                       </TooltipTrigger>
@@ -237,7 +249,7 @@ export default function HomePage() {
                           onClick={() => goToNewTask(message)}
                           disabled={!message.trim() && attachments.length === 0}
                           size="icon"
-                          className="h-9 w-9 rounded-xl bg-foreground hover:bg-foreground/90 disabled:opacity-50"
+                          className="h-9 w-9 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                           data-umami-event="landing_prompt_submit"
                           data-umami-event-surface="home_page"
                         >

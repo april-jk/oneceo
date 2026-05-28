@@ -1,0 +1,1597 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>对话回放</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #f6f8fa;
+      --surface: #f9fbfd;
+      --surface-raised: #f2f5f8;
+      --surface-soft: #edf1f5;
+      --border: #d0d7de;
+      --border-subtle: #e5e9ef;
+      --text: #1f2328;
+      --text-secondary: #57606a;
+      --text-faint: #6b7480;
+      --success: #2f8f68;
+      --danger: #cf222e;
+      --info: #0969da;
+      --warning: #9a6700;
+      --neutral: #6b7280;
+      --mono: 'Fira Code', SFMono-Regular, Consolas, monospace;
+      --radius: 8px;
+    }
+    html { scroll-behavior: smooth; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'IBM Plex Sans', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    .container { max-width: 960px; margin: 0 auto; padding: 24px; }
+    @media (min-width: 1400px) {
+      .container { max-width: 1200px; padding: 32px; }
+      .row { max-width: 80%; }
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 24px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    .header-left { flex: 1; min-width: 0; }
+    .section-tag {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+    .title { font-size: 24px; font-weight: 700; overflow-wrap: break-word; }
+    .subtitle { font-size: 13px; color: var(--text-secondary); margin-top: 4px; }
+    .close-btn {
+      background: var(--surface-raised);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 16px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .close-btn:hover { background: var(--border); }
+
+    /* Filter bar */
+    .filter-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .filter-pill {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      padding: 4px 12px;
+      border-radius: 999px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: border-color 0.15s, background 0.15s, color 0.15s;
+    }
+    .filter-pill:hover { border-color: var(--text-secondary); color: var(--text); }
+    .filter-pill.active { background: var(--info); border-color: var(--info); color: #fff; }
+    .filter-count { font-size: 12px; color: var(--text-secondary); margin-left: auto; }
+    .search-input {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 6px 12px;
+      font-size: 13px;
+      font-family: inherit;
+      color: var(--text);
+      min-width: 200px;
+      flex: 1;
+      max-width: 320px;
+      margin-left: auto;
+    }
+    .search-input:focus {
+      outline: 2px solid var(--info);
+      outline-offset: 2px;
+      border-color: var(--info);
+    }
+    .search-input::placeholder { color: var(--text-faint); }
+
+    /* Timeline */
+    .timeline { display: flex; flex-direction: column; gap: 8px; position: relative; padding-left: 24px; }
+    .timeline::before {
+      content: '';
+      position: absolute;
+      left: 7px;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: var(--border-subtle);
+      border-radius: 1px;
+    }
+
+    /* Message rows */
+    .row {
+      display: flex;
+      max-width: 85%;
+      animation: fadeIn 0.2s ease;
+      position: relative;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+    .row-user { align-self: flex-end; }
+    .row-agent { align-self: flex-start; }
+    .row-trace { align-self: center; width: 100%; max-width: 600px; flex-direction: column; align-items: stretch; gap: 0; }
+
+    /* Timeline dots */
+    .row::before {
+      content: '';
+      position: absolute;
+      left: -20px;
+      top: 14px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 2px solid var(--border);
+      z-index: 1;
+    }
+    .row-user::before { border-color: var(--info); background: var(--info); }
+    .row-agent::before { border-color: var(--text-secondary); }
+    .row-trace::before { border-color: var(--warning); background: var(--warning); }
+    .row-error::before { border-color: var(--danger); background: var(--danger); width: 12px; height: 12px; left: -22px; }
+
+    /* User bubble */
+    .user-bubble {
+      background: var(--info);
+      color: #f6fbff;
+      padding: 10px 14px;
+      border-radius: 16px 16px 4px 16px;
+      font-size: 14px;
+      line-height: 1.5;
+      overflow-wrap: break-word;
+    }
+
+    /* Agent blocks */
+    .agent-block {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px 16px 16px 4px;
+      padding: 12px 14px;
+      font-size: 14px;
+      line-height: 1.6;
+      overflow-wrap: break-word;
+    }
+    .agent-block-error {
+      border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+      border-top: 2px solid var(--danger);
+      background: color-mix(in srgb, var(--danger) 4%, var(--surface));
+    }
+    .agent-author { font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .agent-text { white-space: pre-wrap; }
+
+    /* Capsules */
+    .capsule {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .capsule-system { background: color-mix(in srgb, var(--neutral) 6%, transparent); color: var(--text-faint); padding: 3px 10px; font-size: 11px; }
+    .capsule-intent { background: color-mix(in srgb, var(--info) 5%, transparent); color: var(--text-soft); padding: 3px 10px; font-size: 11px; }
+    .capsule-planning { background: color-mix(in srgb, var(--warning) 5%, transparent); color: var(--text-soft); padding: 3px 10px; font-size: 11px; }
+    .capsule-execution { background: color-mix(in srgb, var(--success) 8%, transparent); color: #1a5c3e; }
+    .capsule-review { background: color-mix(in srgb, var(--warning) 8%, transparent); color: #7a5100; }
+    .capsule-error { background: color-mix(in srgb, var(--danger) 8%, transparent); color: #9e1c23; }
+
+    /* Tool blocks */
+    .tool-block {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 14px;
+      font-size: 13px;
+    }
+    .tool-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .tool-badge {
+      width: 22px; height: 22px; border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; font-weight: 700; background: var(--surface-raised); color: var(--text);
+    }
+    .tool-title { font-weight: 600; }
+    .tool-status { font-size: 11px; padding: 1px 6px; border-radius: 4px; margin-left: auto; }
+    .tool-status-success { background: color-mix(in srgb, var(--success) 10%, transparent); color: #1a5c3e; }
+    .tool-status-failed { background: color-mix(in srgb, var(--danger) 10%, transparent); color: #9e1c23; }
+    .tool-preview { font-size: 12px; color: var(--text-secondary); margin-top: 6px; padding: 8px; background: var(--bg); border-radius: 6px; font-family: var(--mono); white-space: pre-wrap; overflow-wrap: break-word; }
+    .tool-screenshot {
+      display: block;
+      margin-top: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+    }
+    .tool-screenshot img {
+      display: block;
+      width: 100%;
+      max-height: 260px;
+      object-fit: contain;
+    }
+    .tool-screenshot-meta {
+      margin-top: 6px;
+      font-size: 11px;
+      color: var(--text-faint);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .tool-screenshot-unavailable {
+      margin-top: 8px;
+      padding: 8px;
+      border-radius: 8px;
+      border: 1px solid color-mix(in srgb, var(--warning) 18%, transparent);
+      background: color-mix(in srgb, var(--warning) 6%, transparent);
+      color: #7a5100;
+      font-size: 12px;
+    }
+
+    /* Clarification */
+    .clarification {
+      background: color-mix(in srgb, var(--warning) 6%, transparent);
+      border: 1px solid color-mix(in srgb, var(--warning) 18%, transparent);
+      border-radius: 12px;
+      padding: 10px 14px;
+      font-size: 13px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .clarification::before {
+      content: '?';
+      width: 18px; height: 18px; border-radius: 50%;
+      background: var(--warning); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 700; flex-shrink: 0;
+    }
+
+    /* API Trace inline card */
+    .trace-card {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 12px;
+      transition: border-color 0.15s, background 0.15s;
+      width: 100%;
+      position: relative;
+    }
+    .trace-card:hover { background: var(--surface-raised); border-color: var(--text-secondary); }
+    .trace-card-error {
+      border-top: 2px solid var(--danger);
+      background: color-mix(in srgb, var(--danger) 4%, var(--surface));
+    }
+    .trace-card::before {
+      content: '';
+      position: absolute;
+      left: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--neutral);
+    }
+    .trace-card-info::before { background: var(--info); }
+    .trace-card-warning::before { background: var(--warning); }
+    .trace-card-neutral::before { background: var(--neutral); }
+    .trace-card-error::before { background: var(--danger); width: 8px; height: 8px; }
+    .trace-card { padding-left: 22px; }
+    .trace-badge {
+      font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 4px; flex-shrink: 0;
+    }
+    .trace-badge-info { background: color-mix(in srgb, var(--info) 10%, transparent); color: #0550ae; }
+    .trace-badge-warning { background: color-mix(in srgb, var(--warning) 10%, transparent); color: #7a5100; }
+    .trace-badge-neutral { background: color-mix(in srgb, var(--neutral) 10%, transparent); color: #4b5563; }
+    .trace-name { font-family: var(--mono); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .trace-status { flex-shrink: 0; font-size: 11px; }
+    .trace-duration { font-family: var(--mono); color: var(--text-secondary); flex-shrink: 0; }
+    .trace-tokens { font-family: var(--mono); color: var(--text-secondary); flex-shrink: 0; font-size: 11px; }
+
+    /* Drawer */
+    .drawer-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.25);
+      display: none;
+      z-index: 200;
+    }
+    .drawer-overlay.open { display: block; }
+    .drawer-panel {
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: 680px;
+      max-width: 90vw;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      box-shadow: 0 28px 80px color-mix(in srgb, #1f2328 18%, transparent), 0 4px 14px color-mix(in srgb, #1f2328 10%, transparent);
+      display: flex;
+      flex-direction: column;
+      transform: translateX(100%);
+      transition: transform 0.25s cubic-bezier(0.25, 1, 0.5, 1);
+    }
+    .drawer-overlay.open .drawer-panel { transform: translateX(0); }
+    .drawer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .drawer-header h3 { font-size: 15px; font-weight: 700; margin: 0; }
+    .drawer-close {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      line-height: 1;
+    }
+    .drawer-close:hover { background: var(--surface-raised); color: var(--danger); border-color: var(--danger); }
+    .drawer-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+    }
+
+    /* Loading */
+    .loading { text-align: center; padding: 60px 20px; color: var(--text-secondary); }
+    .loading-spinner {
+      width: 24px; height: 24px; border: 2px solid var(--border);
+      border-top-color: var(--info); border-radius: 50%;
+      animation: spin 0.8s linear infinite; margin: 0 auto 12px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Empty */
+    .empty { text-align: center; padding: 60px 20px; color: var(--text-secondary); }
+    .empty h2 { font-size: 18px; margin-bottom: 8px; color: var(--text); }
+
+    /* Error */
+    .error { text-align: center; padding: 60px 20px; }
+    .error h2 { font-size: 18px; margin-bottom: 8px; color: var(--danger); }
+    .error p { color: var(--text-secondary); }
+
+    /* Keyboard focus */
+    .row-focused > .user-bubble,
+    .row-focused > .agent-block,
+    .row-focused > .capsule,
+    .row-focused > .clarification,
+    .row-focused > .tool-block,
+    .row-focused > .trace-card {
+      outline: 2px solid var(--info);
+      outline-offset: 2px;
+    }
+
+    /* Help modal */
+    .help-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.4);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      backdrop-filter: blur(2px);
+    }
+    .help-overlay.open { display: flex; }
+    .help-modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      max-width: 400px;
+      width: 90%;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+    }
+    .help-modal h3 { font-size: 16px; margin-bottom: 16px; }
+    .help-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      font-size: 13px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .help-row:last-child { border-bottom: none; }
+    .help-key {
+      font-family: var(--mono);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 12px;
+    }
+
+    /* Back to top */
+    .back-to-top {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      transition: all 0.2s;
+      z-index: 100;
+    }
+    .back-to-top.visible { display: flex; }
+    .back-to-top:hover { background: var(--info); color: #fff; border-color: var(--info); }
+
+    /* Keyboard hint */
+    .keyboard-hint {
+      font-size: 11px;
+      color: var(--text-faint);
+      margin-top: 6px;
+    }
+
+    /* Prompt preview */
+    .prompt-preview {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+    .prompt-preview-header {
+      padding: 8px 12px;
+      background: var(--surface-raised);
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .prompt-preview-body {
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .prompt-msg {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .prompt-msg-role {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-secondary);
+    }
+    .prompt-msg-role::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .prompt-msg-system .prompt-msg-role::before { background: var(--neutral); }
+    .prompt-msg-user .prompt-msg-role::before { background: var(--info); }
+    .prompt-msg-assistant .prompt-msg-role::before { background: var(--success); }
+    .prompt-msg-tool .prompt-msg-role::before { background: var(--warning); }
+    .prompt-msg-content {
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .prompt-msg-system .prompt-msg-content {
+      background: var(--surface-raised);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+    }
+    .prompt-msg-user .prompt-msg-content {
+      background: var(--info);
+      color: #f6fbff;
+      border-radius: 12px 12px 4px 12px;
+    }
+    .prompt-msg-assistant .prompt-msg-content {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px 12px 12px 4px;
+    }
+    .prompt-msg-tool .prompt-msg-content {
+      background: rgba(154,103,0,0.06);
+      border: 1px solid rgba(154,103,0,0.18);
+    }
+    .prompt-msg-tool-call {
+      font-family: var(--mono);
+      font-size: 11px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px;
+      margin-top: 4px;
+    }
+
+    /* Trace detail (drawer) */
+    .trace-detail {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 0;
+      width: 100%;
+    }
+    .trace-detail-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .trace-detail-title {
+      font-size: 14px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .trace-detail-meta {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      font-size: 12px;
+    }
+    .trace-metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .trace-metric {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      text-align: center;
+    }
+    .trace-metric-value {
+      font-family: var(--mono);
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .trace-metric-label {
+      font-size: 10px;
+      color: var(--text-secondary);
+      margin-top: 2px;
+    }
+    .trace-panel {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 10px;
+      overflow: hidden;
+    }
+    .trace-panel-header {
+      padding: 8px 12px;
+      background: var(--surface-raised);
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .panel-copy-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      padding: 2px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 500;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .panel-copy-btn:hover { border-color: var(--info); color: var(--info); }
+    .panel-copy-btn.copied { border-color: var(--success); color: var(--success); }
+    .trace-panel-body {
+      padding: 12px;
+      display: none;
+    }
+    .trace-panel-body.open { display: block; }
+    .trace-code {
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.5;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+    }
+    /* JSON Tree styles */
+    .json-tree {
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .json-tree-node {
+      position: relative;
+      padding-left: 18px;
+    }
+    .json-tree-branch > .json-tree-node::before {
+      content: '';
+      position: absolute;
+      left: 4px;
+      top: 0;
+      bottom: 0;
+      width: 1px;
+      background: var(--border);
+    }
+    .json-tree-toggle {
+      position: absolute;
+      left: 0;
+      top: 2px;
+      width: 14px;
+      height: 14px;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      color: var(--text-secondary);
+      padding: 0;
+      line-height: 1;
+    }
+    .json-tree-toggle:hover { color: var(--text); }
+    .json-tree-key {
+      color: #0969da;
+      font-weight: 600;
+      margin-right: 4px;
+    }
+    .json-tree-key::after { content: ':'; color: var(--text-faint); }
+    .json-tree-value-string { color: #2f8f68; }
+    .json-tree-value-number { color: #cf222e; }
+    .json-tree-value-boolean { color: #6b7480; font-weight: 600; }
+    .json-tree-value-null { color: #9ca3af; font-style: italic; }
+    .json-tree-bracket { color: var(--text-faint); }
+    .json-tree-count {
+      font-size: 10px;
+      color: var(--text-faint);
+      margin-left: 4px;
+    }
+    .json-tree-ellipsed {
+      color: var(--text-faint);
+      cursor: pointer;
+    }
+    .json-tree-ellipsed:hover { color: var(--text-secondary); }
+    .json-tree-collapsed { display: none; }
+    .json-tree-collapsed.open { display: block; }
+    .json-tree-leaf {
+      padding-left: 18px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0 4px;
+      align-items: baseline;
+    }
+    .json-tree-preview {
+      color: var(--text-faint);
+      font-size: 11px;
+    }
+
+    .trace-error-block {
+      background: color-mix(in srgb, var(--danger) 6%, transparent);
+      border: 1px solid color-mix(in srgb, var(--danger) 18%, transparent);
+      border-radius: 6px;
+      margin-bottom: 10px;
+      overflow: hidden;
+    }
+    .trace-error-header {
+      padding: 8px 12px;
+      background: color-mix(in srgb, var(--danger) 10%, transparent);
+      font-size: 12px;
+      font-weight: 600;
+      color: #9e1c23;
+    }
+    .trace-error-body {
+      padding: 12px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: #9e1c23;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .row { animation: none; }
+      .trace-detail { animation: none; }
+      html { scroll-behavior: auto; }
+      .drawer-panel { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container" id="app">
+    <div class="loading">
+      <div class="loading-spinner"></div>
+      <p>正在加载对话数据...</p>
+    </div>
+  </div>
+
+  <div class="drawer-overlay" id="drawer-overlay" onclick="closeTraceDrawer()">
+    <div class="drawer-panel" onclick="event.stopPropagation()">
+      <div class="drawer-header">
+        <h3>Trace 详情</h3>
+        <button class="drawer-close" onclick="closeTraceDrawer()" title="关闭 (Esc)">&times;</button>
+      </div>
+      <div class="drawer-body" id="drawer-body"></div>
+    </div>
+  </div>
+
+  <div class="help-overlay" id="help-overlay" onclick="showHelp(false)">
+    <div class="help-modal" onclick="event.stopPropagation()">
+      <h3>键盘快捷键</h3>
+      <div class="help-row"><span>向下导航</span><span class="help-key">j / &darr;</span></div>
+      <div class="help-row"><span>向上导航</span><span class="help-key">k / &uarr;</span></div>
+      <div class="help-row"><span>下一个错误</span><span class="help-key">n</span></div>
+      <div class="help-row"><span>上一个错误</span><span class="help-key">p</span></div>
+      <div class="help-row"><span>展开/收起 Trace</span><span class="help-key">Enter</span></div>
+      <div class="help-row"><span>显示帮助</span><span class="help-key">?</span></div>
+      <div class="help-row"><span>取消聚焦</span><span class="help-key">Esc</span></div>
+    </div>
+  </div>
+
+  <button class="back-to-top" id="back-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="回到顶部">&uarr;</button>
+
+  <script>
+    const API_BASE = '';
+    let messages = [];
+    let traces = [];
+    let sessionTitle = '';
+    let sessionMeta = {};
+    let filter = 'all';
+    let searchQuery = '';
+    let activeTraceId = null;
+    const expandedTraceIds = new Set();
+    let focusedIndex = -1;
+    let mergedItems = [];
+
+    function formatDateTime(value) {
+      if (!value) return '-';
+      try {
+        const d = new Date(value);
+        return d.toLocaleString('zh-CN', { hour12: false });
+      } catch {
+        return value;
+      }
+    }
+
+    function normalizeText(value) {
+      return value.replace(/\s+/g, ' ').trim().toLowerCase();
+    }
+
+    function asText(value) {
+      return typeof value === 'string' ? value.trim() : '';
+    }
+
+    function toRecord(value) {
+      return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    }
+
+    function parseJsonMaybe(value) {
+      if (value && typeof value === 'object') return value;
+      if (typeof value !== 'string' || !value.trim()) return {};
+      try {
+        return JSON.parse(value);
+      } catch {
+        return {};
+      }
+    }
+
+    function displayToolName(toolName) {
+      if (toolName === 'debug_open_page') return '视觉检测：打开页面';
+      if (toolName === 'browser_interact') return '视觉检测步骤';
+      if (toolName === 'complete_task') return '完成任务';
+      if (toolName === 'shell_execute') return '命令执行';
+      if (toolName === 'write_file') return '写入文件';
+      if (toolName === 'read_file') return '读取文件';
+      if (toolName === 'list_directory') return '列出目录';
+      if (toolName === 'search_code') return '代码搜索';
+      if (toolName === 'todowrite') return '待办';
+      return toolName || '工具调用';
+    }
+
+    function summarizeBrowserAction(metadata) {
+      const args = toRecord(metadata.arguments);
+      if (asText(args.description)) return asText(args.description);
+      const output = parseJsonMaybe(metadata.outputPreview);
+      if (asText(output.description)) return asText(output.description);
+      if (asText(output.action)) return asText(output.action);
+      if (asText(args.url)) return '打开 ' + asText(args.url);
+      return asText(metadata.content) || '正在进行视觉检测';
+    }
+
+    function readBrowserScreenshot(metadata) {
+      const screenshot = toRecord(metadata.browserScreenshot);
+      if (!asText(screenshot.status)) return null;
+      return screenshot;
+    }
+
+    function browserScreenshotUrl(item) {
+      return '/api/conversations/sessions/' +
+        encodeURIComponent(sessionMeta.id || '') +
+        '/runs/' + encodeURIComponent(item.runId || '') +
+        '/tool-calls/' + encodeURIComponent(item.toolCallId || '') +
+        '/browser-screenshot.png';
+    }
+
+    function extractCapsule(content) {
+      const text = content.trim();
+      const match = text.match(/^\{([^{}]+)\}\s*([\s\S]*)$/);
+      if (match) {
+        return { label: match[1].trim(), rest: (match[2] || '').trim() };
+      }
+      const statusList = ['构思阶段','分析阶段','开发阶段','测试阶段','修复阶段','交付阶段','正在分析您的任务需求','已识别任务类型','正在规划任务详情','任务规划完成','正在生成执行计划','执行计划已生成'];
+      for (const s of statusList) {
+        if (text.includes(s)) return { label: text, rest: '' };
+      }
+      const fallback = ['意图识别','任务规划','执行计划','系统','错误'];
+      for (const f of fallback) {
+        if (text.startsWith(f)) {
+          const rest = text.slice(f.length).trim();
+          return { label: f, rest: rest ? rest.replace(/^[\uff1a:]\s*/, '') : '' };
+        }
+      }
+      return null;
+    }
+
+    function capsuleTone(content) {
+      const text = content.toLowerCase();
+      if (text.includes('错误') || text.includes('失败') || text.includes('exception')) return 'error';
+      if (text.includes('执行') || text.includes('运行') || text.includes('构建') || text.includes('部署')) return 'execution';
+      if (text.includes('计划') || text.includes('规划') || text.includes('方案')) return 'planning';
+      if (text.includes('分析') || text.includes('评估')) return 'review';
+      if (text.includes('意图') || text.includes('识别')) return 'intent';
+      return 'system';
+    }
+
+    function buildReplayItems(msgs) {
+      const items = [];
+      for (const m of msgs) {
+        const role = m.role;
+        const content = m.content || '';
+        const metadata = m.metadata || {};
+
+        if (role === 'user') {
+          items.push({ kind: 'user', id: m.id, text: content, timestamp: m.createdAt });
+          continue;
+        }
+
+        // Tool events
+        const eventType = metadata.eventType || metadata.messageEventType || '';
+        if (eventType === 'tool_call_started' || eventType === 'tool_call_completed' || eventType === 'tool_call_failed') {
+          const toolName = metadata.toolName || metadata.tool_name || 'tool';
+          const status = eventType === 'tool_call_failed' ? 'failed' : eventType === 'tool_call_completed' ? 'completed' : 'running';
+          const output = parseJsonMaybe(metadata.outputPreview);
+          const screenshot = readBrowserScreenshot(metadata);
+          const isBrowserTool = toolName === 'debug_open_page' || toolName === 'browser_interact';
+          items.push({
+            kind: 'tool',
+            id: m.id,
+            toolName,
+            title: displayToolName(toolName),
+            status,
+            runId: asText(metadata.runId),
+            toolCallId: asText(metadata.toolCallId) || m.id,
+            preview: isBrowserTool ? summarizeBrowserAction(metadata) : metadata.outputPreview || metadata.result || '',
+            screenshot,
+            screenshotMeta: screenshot ? [asText(toRecord(screenshot.source).title), asText(toRecord(screenshot.source).url), asText(screenshot.capturedAt)].filter(Boolean).join(' · ') : '',
+            timestamp: m.createdAt,
+          });
+          continue;
+        }
+
+        // Clarification
+        if (metadata.isClarification || metadata.clarification || content.includes('为了更准确地')) {
+          items.push({ kind: 'clarification', id: m.id, text: content, timestamp: m.createdAt });
+          continue;
+        }
+
+        // Capsule
+        const capsule = extractCapsule(content);
+        if (capsule) {
+          items.push({
+            kind: 'capsule',
+            id: m.id,
+            label: capsule.label,
+            text: capsule.rest,
+            tone: capsuleTone(content),
+            timestamp: m.createdAt,
+          });
+          continue;
+        }
+
+        // Error
+        if (metadata.isError || metadata.error || content.toLowerCase().includes('error') || content.includes('异常')) {
+          items.push({ kind: 'error', id: m.id, text: content, author: metadata.agentName || metadata.agent || '智能体', timestamp: m.createdAt });
+          continue;
+        }
+
+        // Plain agent message
+        items.push({ kind: 'agent', id: m.id, text: content, author: metadata.agentName || metadata.agent || '智能体', timestamp: m.createdAt });
+      }
+      return items;
+    }
+
+    function filterItemsBySearch(items) {
+      if (!searchQuery.trim()) return items;
+      const q = normalizeText(searchQuery);
+      return items.filter(function(item) {
+        if (item.kind === 'user') return normalizeText(item.text).includes(q);
+        if (item.kind === 'agent' || item.kind === 'error') return normalizeText(item.text).includes(q) || normalizeText(item.author || '').includes(q);
+        if (item.kind === 'capsule') return normalizeText(item.label + ' ' + item.text).includes(q);
+        if (item.kind === 'clarification') return normalizeText(item.text).includes(q);
+        if (item.kind === 'tool') return normalizeText(item.toolName + ' ' + (item.title || '') + ' ' + item.preview).includes(q);
+        if (item.kind === 'api_trace') {
+          const t = item.trace;
+          return normalizeText(t.model || t.toolName || t.serviceName || t.endpoint || t.traceType).includes(q) ||
+                 normalizeText(t.errorMessage || '').includes(q);
+        }
+        return false;
+      });
+    }
+
+    function mergeItems(replayItems, traceItems) {
+      const traceObjs = traceItems.map(function(t) {
+        return {
+          kind: 'api_trace',
+          id: t.id,
+          trace: t,
+          timestamp: t.createdAt,
+        };
+      });
+      const merged = [...replayItems, ...traceObjs].sort(
+        function(a, b) { return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(); }
+      );
+      let filtered;
+      if (filter === 'messages-only') {
+        filtered = merged.filter(function(item) { return item.kind !== 'api_trace'; });
+      } else if (filter !== 'all') {
+        filtered = merged.filter(function(item) {
+          return item.kind !== 'api_trace' || item.trace.traceType === filter;
+        });
+      } else {
+        filtered = merged;
+      }
+      return filterItemsBySearch(filtered);
+    }
+
+    function renderBadge(typeLabel, typeTone) {
+      return '<span class="trace-badge trace-badge-' + typeTone + '" style="margin-right:6px;">' + typeLabel + '</span>';
+    }
+
+    function renderTraceCard(trace) {
+      const typeLabel = trace.traceType === 'llm_request' ? 'LLM' : trace.traceType === 'tool_call' ? '工具' : trace.traceType === 'service_api' ? '服务' : '连接器';
+      const typeTone = trace.traceType === 'llm_request' ? 'info' : trace.traceType === 'tool_call' ? 'warning' : 'neutral';
+      const hasError = !!trace.errorMessage;
+      let html = '<button type="button" class="trace-card trace-card-' + typeTone + (hasError ? ' trace-card-error' : '') + '"';
+      html += ' onclick="openTraceDetailDrawer(\'' + trace.id + '\')">';
+      html += '<span class="trace-badge trace-badge-' + typeTone + '" style="margin-right:6px;">' + typeLabel + '</span>';
+      html += '<span class="trace-name">' + (trace.model || trace.toolName || trace.serviceName || trace.endpoint || trace.traceType) + '</span>';
+      html += '<span class="trace-status ' + (hasError ? 'status-error' : 'status-success') + '" style="color:' + (hasError ? 'var(--danger)' : 'var(--success)') + ';font-size:11px;">' + (hasError ? '失败' : '成功') + '</span>';
+      html += '<span class="trace-duration">' + (trace.durationMs ? trace.durationMs + 'ms' : '-') + '</span>';
+      if (trace.totalTokens) {
+        html += '<span class="trace-tokens">' + (trace.promptTokens || 0) + '+' + (trace.completionTokens || 0) + '=' + trace.totalTokens + '</span>';
+      }
+      html += '</button>';
+      return html;
+    }
+
+    function openTraceDetailDrawer(traceId) {
+      activeTraceId = traceId;
+      const trace = traces.find(function(t) { return t.id === traceId; });
+      if (!trace) return;
+      document.getElementById('drawer-body').innerHTML = renderTraceDrawerContent(trace);
+      document.getElementById('drawer-overlay').classList.add('open');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeTraceDrawer() {
+      activeTraceId = null;
+      document.getElementById('drawer-overlay').classList.remove('open');
+      document.body.style.overflow = '';
+    }
+
+    function toggleTraceDetail(traceId) {
+      openTraceDetailDrawer(traceId);
+    }
+
+    function syntaxHighlightJSON(json) {
+      if (typeof json !== 'string') json = JSON.stringify(json, null, 2);
+      json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return json.replace(
+        /("(?:\\.|[^"\\])*")(\s*:)?/g,
+        function (match, string, colon) {
+          const keyClass = colon ? 'json-key' : 'json-string';
+          return '<span class="' + keyClass + '">' + string + '</span>' + (colon || '');
+        }
+      )
+      .replace(/\b(true|false)\b/g, '<span class="json-boolean">$1</span>')
+      .replace(/\b(null)\b/g, '<span class="json-null">$1</span>')
+      .replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="json-number">$1</span>');
+    }
+
+    function formatRawHttp(t) {
+      const lines = [];
+      lines.push((t.requestMethod || 'POST') + ' ' + (t.endpoint || '/') + ' HTTP/1.1');
+      lines.push('Host: ' + (t.provider || 'upstream'));
+      if (t.requestHeaders) {
+        Object.entries(t.requestHeaders).forEach(function ([k, v]) {
+          lines.push(k + ': ' + (Array.isArray(v) ? v.join(', ') : v));
+        });
+      }
+      lines.push('');
+      if (t.requestBody) {
+        lines.push(JSON.stringify(t.requestBody, null, 2));
+      }
+      lines.push('');
+      lines.push('HTTP/1.1 ' + (t.responseStatus || 200) + ' ' + (t.errorMessage ? 'Error' : 'OK'));
+      if (t.responseHeaders) {
+        Object.entries(t.responseHeaders).forEach(function ([k, v]) {
+          lines.push(k + ': ' + (Array.isArray(v) ? v.join(', ') : v));
+        });
+      }
+      lines.push('');
+      if (t.responseBody) {
+        lines.push(JSON.stringify(t.responseBody, null, 2));
+      }
+      if (t.errorMessage) {
+        lines.push(t.errorMessage);
+      }
+      return lines.join('\n');
+    }
+
+    function copyToClipboard(text, btn) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function() {
+          if (btn) { btn.textContent = '已复制'; btn.classList.add('copied'); setTimeout(function() { btn.textContent = '复制'; btn.classList.remove('copied'); }, 1500); }
+        });
+      } else {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch(e) {}
+        document.body.removeChild(ta);
+        if (btn) { btn.textContent = '已复制'; btn.classList.add('copied'); setTimeout(function() { btn.textContent = '复制'; btn.classList.remove('copied'); }, 1500); }
+      }
+    }
+
+    function renderTracePanel(title, content, isOpen, rawContent) {
+      const copyId = 'cp-' + Math.random().toString(36).slice(2, 8);
+      const escapedRaw = rawContent !== undefined ? encodeURIComponent(String(rawContent)) : '';
+      return (
+        '<div class="trace-panel">' +
+        '<div class="trace-panel-header" onclick="this.nextElementSibling.classList.toggle(\'open\')">' +
+        '<span>' + title + '</span>' +
+        '<div style="display:flex;align-items:center;gap:8px;">' +
+        (escapedRaw ? '<button type="button" class="panel-copy-btn" id="' + copyId + '" onclick="event.stopPropagation();copyToClipboard(decodeURIComponent(\'' + escapedRaw + '\').replace(/\\\\n/g,\'\\n\'),this)">复制</button>' : '') +
+        '<span style="font-size:11px;color:var(--text-secondary);">' + (isOpen ? '收起' : '展开') + '</span>' +
+        '</div>' +
+        '</div>' +
+        '<div class="trace-panel-body ' + (isOpen ? 'open' : '') + '">' +
+        '<div class="trace-code">' + content + '</div>' +
+        '</div>' +
+        '</div>'
+      );
+    }
+
+    function renderJSONTree(data) {
+      function renderValue(val, key, depth) {
+        var type = val === null ? 'null' : Array.isArray(val) ? 'array' : typeof val;
+        var isBranch = type === 'object' || type === 'array';
+        var id = 'jt-' + Math.random().toString(36).slice(2, 9);
+
+        if (!isBranch) {
+          var valClass = 'json-tree-value-' + type;
+          var display = type === 'string' ? '"' + escapeHtml(val) + '"' : String(val);
+          var html = '<div class="json-tree-leaf">';
+          if (key !== undefined) html += '<span class="json-tree-key">' + escapeHtml(String(key)) + '</span>';
+          html += '<span class="' + valClass + '">' + display + '</span>';
+          html += '</div>';
+          return html;
+        }
+
+        var children = type === 'array' ? val : Object.entries(val);
+        var count = type === 'array' ? val.length : Object.keys(val).length;
+
+        var html = '<div class="json-tree-node json-tree-branch">';
+        html += '<button type="button" class="json-tree-toggle" onclick="document.getElementById(\'' + id + '\').classList.toggle(\'open\');this.textContent=document.getElementById(\'' + id + '\').classList.contains(\'open\')?\'\u25bc\':\'\u25b6\'">\u25bc</button>';
+
+        if (key !== undefined) {
+          html += '<span class="json-tree-key">' + escapeHtml(String(key)) + '</span>';
+        }
+
+        var bracketOpen = type === 'array' ? '[' : '{';
+        var bracketClose = type === 'array' ? ']' : '}';
+        html += '<span class="json-tree-bracket">' + bracketOpen + '</span>';
+        html += '<span class="json-tree-count">' + count + ' ' + (type === 'array' ? '项' : '键') + '</span>';
+        html += '<span class="json-tree-bracket">' + bracketClose + '</span>';
+
+        html += '<div class="json-tree-collapsed open" id="' + id + '">';
+        if (type === 'array') {
+          val.forEach(function(v, i) {
+            html += renderValue(v, i, depth + 1);
+          });
+        } else {
+          Object.entries(val).forEach(function(entry) {
+            html += renderValue(entry[1], entry[0], depth + 1);
+          });
+        }
+        html += '</div>';
+        html += '</div>';
+        return html;
+      }
+
+      return '<div class="json-tree">' + renderValue(data, undefined, 0) + '</div>';
+    }
+
+    function renderTraceDrawerContent(trace) {
+      const typeLabel = trace.traceType === 'llm_request' ? 'LLM' : trace.traceType === 'tool_call' ? '工具' : trace.traceType === 'service_api' ? '服务' : '连接器';
+      const typeTone = trace.traceType === 'llm_request' ? 'info' : trace.traceType === 'tool_call' ? 'warning' : 'neutral';
+      const hasError = !!trace.errorMessage;
+
+      let html = '<div class="trace-detail">';
+
+      // Header
+      html += '<div class="trace-detail-header">';
+      html += '<div class="trace-detail-title">';
+      html += '<span class="trace-badge trace-badge-' + typeTone + '">' + typeLabel + '</span>';
+      html += '<span class="mono">' + (trace.model || trace.toolName || trace.serviceName || trace.endpoint || trace.traceType) + '</span>';
+      html += '</div>';
+      html += '<div class="trace-detail-meta">';
+      html += '<span class="' + (hasError ? 'status-error' : 'status-success') + '">' + (hasError ? '\u25cf 失败' : '\u25cf 成功') + '</span>';
+      html += '<span class="mono">' + (trace.durationMs ? trace.durationMs + 'ms' : '-') + '</span>';
+      html += '<span class="mono">' + formatDateTime(trace.createdAt) + '</span>';
+      if (trace.sequence !== undefined) {
+        html += '<span class="mono">seq: ' + trace.sequence + '</span>';
+      }
+      html += '</div>';
+      html += '</div>';
+
+      // Token metrics
+      if (trace.promptTokens || trace.completionTokens) {
+        html += '<div class="trace-metrics">';
+        html += '<div class="trace-metric"><div class="trace-metric-value">' + (trace.promptTokens || 0) + '</div><div class="trace-metric-label">Prompt</div></div>';
+        html += '<div class="trace-metric"><div class="trace-metric-value">' + (trace.completionTokens || 0) + '</div><div class="trace-metric-label">Completion</div></div>';
+        html += '<div class="trace-metric"><div class="trace-metric-value">' + (trace.totalTokens || 0) + '</div><div class="trace-metric-label">Total</div></div>';
+        if (trace.cachedPromptTokens) {
+          html += '<div class="trace-metric"><div class="trace-metric-value">' + trace.cachedPromptTokens + '</div><div class="trace-metric-label">Cached</div></div>';
+        }
+        if (trace.cacheCreationTokens) {
+          html += '<div class="trace-metric"><div class="trace-metric-value">' + trace.cacheCreationTokens + '</div><div class="trace-metric-label">Cache 创建</div></div>';
+        }
+        html += '</div>';
+      }
+
+      // Prompt preview (for LLM requests)
+      if (trace.traceType === 'llm_request' && trace.requestBody && trace.requestBody.messages) {
+        var msgs = trace.requestBody.messages;
+        html += '<div class="prompt-preview">';
+        html += '<div class="prompt-preview-header" data-raw="' + encodeURIComponent(JSON.stringify(msgs, null, 2)) + '">Prompt 上下文 <span style="font-weight:400;color:var(--text-faint);">' + msgs.length + ' 条消息</span> <button type="button" class="panel-copy-btn" style="margin-left:8px;" onclick="event.stopPropagation();copyToClipboard(decodeURIComponent(this.parentElement.dataset.raw).replace(/\\\\n/g,\'\\n\'),this)">复制</button></div>';
+        html += '<div class="prompt-preview-body">';
+        for (var mi = 0; mi < msgs.length; mi++) {
+          var msg = msgs[mi];
+          var role = msg.role || 'unknown';
+          var content = msg.content || '';
+          var roleClass = 'prompt-msg-' + role;
+          var roleLabel = role === 'system' ? 'System' : role === 'user' ? 'User' : role === 'assistant' ? 'Assistant' : role === 'tool' ? 'Tool' : role;
+          html += '<div class="prompt-msg ' + roleClass + '">';
+          html += '<div class="prompt-msg-role">' + roleLabel + '</div>';
+          if (typeof content === 'string' && content) {
+            html += '<div class="prompt-msg-content">' + escapeHtml(content) + '</div>';
+          } else if (Array.isArray(content)) {
+            // multimodal content array
+            for (var ci = 0; ci < content.length; ci++) {
+              var part = content[ci];
+              if (part.type === 'text' && part.text) {
+                html += '<div class="prompt-msg-content">' + escapeHtml(part.text) + '</div>';
+              } else if (part.type === 'image_url' && part.image_url) {
+                html += '<div class="prompt-msg-content" style="font-style:italic;color:var(--text-faint);">[图片: ' + escapeHtml(String(part.image_url.url || part.image_url).slice(0, 60)) + '...]</div>';
+              }
+            }
+          }
+          if (msg.tool_calls) {
+            html += '<div class="prompt-msg-tool-call">工具调用: ' + escapeHtml(JSON.stringify(msg.tool_calls, null, 2)) + '</div>';
+          }
+          if (msg.tool_call_id) {
+            html += '<div class="prompt-msg-tool-call">tool_call_id: ' + escapeHtml(msg.tool_call_id) + '</div>';
+          }
+          html += '</div>';
+        }
+        html += '</div></div>';
+      }
+
+      // Error
+      if (trace.errorMessage) {
+        html += '<div class="trace-error-block">';
+        html += '<div class="trace-error-header" data-raw="' + encodeURIComponent(trace.errorMessage) + '">错误 <button type="button" class="panel-copy-btn" style="margin-left:8px;" onclick="event.stopPropagation();copyToClipboard(decodeURIComponent(this.parentElement.dataset.raw).replace(/\\\\n/g,\'\\n\'),this)">复制</button></div>';
+        html += '<div class="trace-error-body">' + escapeHtml(trace.errorMessage) + '</div>';
+        html += '</div>';
+      }
+
+      // Request / Response
+      if (trace.requestBody || trace.responseBody) {
+        if (trace.requestBody) {
+          html += renderTracePanel('请求', renderJSONTree(trace.requestBody), true, JSON.stringify(trace.requestBody, null, 2));
+        }
+        if (trace.responseBody) {
+          html += renderTracePanel('响应', renderJSONTree(trace.responseBody), true, JSON.stringify(trace.responseBody, null, 2));
+        }
+      }
+
+      // Raw HTTP
+      html += renderTracePanel('原始 HTTP', escapeHtml(formatRawHttp(trace)), false, formatRawHttp(trace));
+
+      // Metadata
+      if (trace.metadataJson && Object.keys(trace.metadataJson).length > 0) {
+        html += renderTracePanel('元数据', renderJSONTree(trace.metadataJson), false, JSON.stringify(trace.metadataJson, null, 2));
+      }
+
+      html += '</div>';
+      return html;
+    }
+
+    function renderTraceInlineDetail(trace) {
+      // Kept for backward compatibility, delegates to drawer
+      return renderTraceDrawerContent(trace);
+    }
+
+    function render() {
+      mergedItems = mergeItems(buildReplayItems(messages), traces);
+      let html = '';
+
+      // Header
+      html += '<div class="header">';
+      html += '<div class="header-left">';
+      html += '<div class="section-tag">对话回放</div>';
+      html += '<div class="title">' + (sessionTitle || '会话回放') + '</div>';
+      html += '<div class="subtitle">' + messages.length + ' 条消息 \u00b7 ' + traces.length + ' 条 API Trace';
+      if (sessionMeta.createdAt) {
+        html += ' \u00b7 ' + formatDateTime(sessionMeta.createdAt);
+      }
+      if (sessionMeta.status) {
+        html += ' \u00b7 状态: ' + escapeHtml(sessionMeta.status);
+      }
+      html += '</div>';
+      html += '<div class="keyboard-hint">按 ? 查看键盘快捷键</div>';
+      html += '</div>';
+      html += '<button class="close-btn" onclick="window.close()">关闭标签页</button>';
+      html += '</div>';
+
+      // Filter bar
+      html += '<div class="filter-bar">';
+      const filters = [
+        { key: 'all', label: '全部' },
+        { key: 'messages-only', label: '仅对话' },
+        { key: 'llm_request', label: 'LLM' },
+        { key: 'tool_call', label: '工具' },
+        { key: 'service_api', label: '服务' },
+        { key: 'connector_api', label: '连接器' },
+      ];
+      for (const f of filters) {
+        html += '<button type="button" class="filter-pill ' + (filter === f.key ? 'active' : '') + '" onclick="setFilter(\'' + f.key + '\')">' + f.label + '</button>';
+      }
+      html += '<input type="text" class="search-input" id="search-input" placeholder="\u641c\u7d22\u6d88\u606f\u3001trace\u3001\u5de5\u5177\u2026" value="' + escapeHtml(searchQuery) + '">';
+      html += '<span class="filter-count">' + mergedItems.length + ' 条</span>';
+      html += '</div>';
+
+      // Timeline
+      html += '<div class="timeline" id="timeline">';
+      if (mergedItems.length === 0) {
+        html += '<div class="empty"><h2>\u6682\u65e0\u6570\u636e</h2><p>\u5f53\u524d\u7b5b\u9009\u6761\u4ef6\u4e0b\u6ca1\u6709\u53ef\u5c55\u793a\u7684\u5185\u5bb9</p></div>';
+      } else {
+        for (const item of mergedItems) {
+          if (item.kind === 'user') {
+            html += '<div class="row row-user">';
+            html += '<div class="user-bubble">' + escapeHtml(item.text) + '</div>';
+            html += '</div>';
+          } else if (item.kind === 'agent') {
+            html += '<div class="row row-agent">';
+            html += '<div class="agent-block">';
+            html += '<div class="agent-author">' + escapeHtml(item.author) + '</div>';
+            html += '<div class="agent-text">' + escapeHtml(item.text) + '</div>';
+            html += '</div>';
+            html += '</div>';
+          } else if (item.kind === 'error') {
+            html += '<div class="row row-error">';
+            html += '<div class="agent-block agent-block-error">';
+            html += '<div class="agent-author">' + escapeHtml(item.author) + '</div>';
+            html += '<div class="agent-text">' + escapeHtml(item.text) + '</div>';
+            html += '</div>';
+            html += '</div>';
+          } else if (item.kind === 'capsule') {
+            html += '<div class="row row-agent">';
+            html += '<div class="capsule capsule-' + item.tone + '">' + escapeHtml(item.label) + (item.text ? ' \u00b7 ' + escapeHtml(item.text) : '') + '</div>';
+            html += '</div>';
+          } else if (item.kind === 'clarification') {
+            html += '<div class="row row-agent">';
+            html += '<div class="clarification">' + escapeHtml(item.text) + '</div>';
+            html += '</div>';
+          } else if (item.kind === 'tool') {
+            const statusClass = item.status === 'failed' ? 'tool-status-failed' : 'tool-status-success';
+            const statusText = item.status === 'failed' ? '\u5931\u8d25' : item.status === 'completed' ? '\u5df2\u5b8c\u6210' : '\u8fdb\u884c\u4e2d';
+            html += '<div class="row row-agent">';
+            html += '<div class="tool-block">';
+            html += '<div class="tool-header">';
+            html += '<span class="tool-badge">\u5de5</span>';
+            html += '<span class="tool-title">' + escapeHtml(item.title || item.toolName) + '</span>';
+            html += '<span class="tool-status ' + statusClass + '" style="margin-left:auto;">' + statusText + '</span>';
+            html += '</div>';
+            if (item.preview) {
+              html += '<div class="tool-preview">' + escapeHtml(item.preview) + '</div>';
+            }
+            if (item.screenshot && item.screenshot.status === 'captured' && item.screenshot.storageKey) {
+              const imageUrl = browserScreenshotUrl(item);
+              html += '<a class="tool-screenshot" href="' + escapeHtml(imageUrl) + '" target="_blank" rel="noreferrer">';
+              html += '<img src="' + escapeHtml(imageUrl) + '" alt="视觉检测截图" loading="lazy">';
+              html += '</a>';
+              if (item.screenshotMeta) {
+                html += '<div class="tool-screenshot-meta">' + escapeHtml(item.screenshotMeta) + '</div>';
+              }
+              const visualCheck = toRecord(item.screenshot.visualCheck);
+              if (asText(visualCheck.status)) {
+                html += '<div class="tool-screenshot-meta">' + escapeHtml([
+                  '视觉诊断: ' + asText(visualCheck.status),
+                  asText(visualCheck.reasonCode),
+                  asText(visualCheck.message)
+                ].filter(Boolean).join(' / ')) + '</div>';
+              }
+            } else if (item.screenshot && item.screenshot.status) {
+              html += '<div class="tool-screenshot-unavailable">截图不可用：' + escapeHtml(item.screenshot.message || item.screenshot.reasonCode || item.screenshot.status) + '</div>';
+            }
+            html += '</div>';
+            html += '</div>';
+          } else if (item.kind === 'api_trace') {
+            html += '<div class="row row-trace">';
+            html += renderTraceCard(item.trace);
+            html += '</div>';
+          }
+        }
+      }
+      html += '</div>';
+
+      document.getElementById('app').innerHTML = html;
+
+      // Bind search input
+      const searchInput = document.getElementById('search-input');
+      if (searchInput) {
+        searchInput.addEventListener('input', function(e) {
+          searchQuery = e.target.value;
+          render();
+          requestAnimationFrame(function() {
+            const el = document.getElementById('search-input');
+            if (el) { el.focus(); }
+          });
+        });
+      }
+
+      // Restore focus after render
+      if (focusedIndex >= 0) {
+        requestAnimationFrame(updateFocus);
+      }
+    }
+
+    function setFilter(newFilter) {
+      filter = newFilter;
+      render();
+    }
+
+    function escapeHtml(text) {
+      if (!text) return '';
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function updateFocus() {
+      const rows = document.querySelectorAll('.timeline > .row');
+      rows.forEach(function(row, i) {
+        row.classList.toggle('row-focused', i === focusedIndex);
+      });
+      if (focusedIndex >= 0 && rows[focusedIndex]) {
+        rows[focusedIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+
+    function navigateFocus(delta) {
+      const rows = document.querySelectorAll('.timeline > .row');
+      if (rows.length === 0) return;
+      focusedIndex = Math.max(0, Math.min(rows.length - 1, focusedIndex + delta));
+      updateFocus();
+    }
+
+    function findNextError(direction) {
+      const rows = document.querySelectorAll('.timeline > .row');
+      if (rows.length === 0) return;
+      let start = focusedIndex >= 0 ? focusedIndex : (direction > 0 ? -1 : rows.length);
+      for (let i = start + direction; i >= 0 && i < rows.length; i += direction) {
+        const item = mergedItems[i];
+        if (!item) continue;
+        if (item.kind === 'error') { focusedIndex = i; updateFocus(); return; }
+        if (item.kind === 'api_trace' && item.trace.errorMessage) { focusedIndex = i; updateFocus(); return; }
+        if (item.kind === 'tool' && item.status === 'failed') { focusedIndex = i; updateFocus(); return; }
+      }
+    }
+
+    function toggleFocusedTrace() {
+      if (focusedIndex < 0) return;
+      const item = mergedItems[focusedIndex];
+      if (item && item.kind === 'api_trace') {
+        openTraceDetailDrawer(item.trace.id);
+      }
+    }
+
+    function showHelp(show) {
+      document.getElementById('help-overlay').classList.toggle('open', show);
+    }
+
+    document.addEventListener('keydown', function (e) {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if (document.getElementById('help-overlay').classList.contains('open')) {
+        if (e.key === 'Escape' || e.key === '?') {
+          showHelp(false);
+          e.preventDefault();
+        }
+        return;
+      }
+      if (document.getElementById('drawer-overlay').classList.contains('open')) {
+        if (e.key === 'Escape') {
+          closeTraceDrawer();
+          e.preventDefault();
+        }
+        return;
+      }
+      switch (e.key) {
+        case 'j':
+        case 'ArrowDown':
+          navigateFocus(1);
+          e.preventDefault();
+          break;
+        case 'k':
+        case 'ArrowUp':
+          navigateFocus(-1);
+          e.preventDefault();
+          break;
+        case 'n':
+          findNextError(1);
+          e.preventDefault();
+          break;
+        case 'p':
+          findNextError(-1);
+          e.preventDefault();
+          break;
+        case 'Enter':
+          toggleFocusedTrace();
+          e.preventDefault();
+          break;
+        case '?':
+          showHelp(true);
+          e.preventDefault();
+          break;
+        case 'Escape':
+          focusedIndex = -1;
+          updateFocus();
+          break;
+      }
+    });
+
+    function onScroll() {
+      const btn = document.getElementById('back-to-top');
+      if (!btn) return;
+      btn.classList.toggle('visible', window.scrollY > 400);
+    }
+    window.addEventListener('scroll', onScroll);
+
+    async function loadData() {
+      const params = new URLSearchParams(window.location.search);
+      const sessionId = params.get('session');
+      if (!sessionId) {
+        document.getElementById('app').innerHTML = '<div class="error"><h2>\u53c2\u6570\u9519\u8bef</h2><p>\u7f3a\u5c11\u4f1a\u8bdd ID</p></div>';
+        return;
+      }
+
+      try {
+        // Load session core data
+        const coreRes = await fetch(API_BASE + '/api/conversations/sessions/' + encodeURIComponent(sessionId) + '/core', {
+          credentials: 'same-origin',
+        });
+        if (!coreRes.ok) throw new Error('加载会话数据失败: ' + coreRes.status);
+        const coreData = await coreRes.json();
+        if (!coreData.success) throw new Error(coreData.error || '加载失败');
+
+        const detail = coreData.data || coreData;
+        messages = detail.messages || [];
+        sessionTitle = detail.session?.title || detail.title || '会话 ' + sessionId.slice(0, 8);
+        sessionMeta = {
+          createdAt: detail.session?.createdAt || detail.createdAt,
+          status: detail.session?.status || detail.status,
+          id: sessionId,
+        };
+
+        // Load API traces
+        const tracesRes = await fetch(API_BASE + '/api/conversations/sessions/' + encodeURIComponent(sessionId) + '/api-traces?limit=500', {
+          credentials: 'same-origin',
+        });
+        if (tracesRes.ok) {
+          const tracesData = await tracesRes.json();
+          const td = tracesData.data || tracesData;
+          traces = td.traces || [];
+        }
+
+        render();
+      } catch (err) {
+        document.getElementById('app').innerHTML = '<div class="error"><h2>\u52a0\u8f7d\u5931\u8d25</h2><p>' + escapeHtml(err.message) + '</p></div>';
+      }
+    }
+
+    loadData();
+  </script>
+</body>
+</html>

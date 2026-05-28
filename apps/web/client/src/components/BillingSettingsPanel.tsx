@@ -71,7 +71,7 @@ export function BillingSettingsPanel({ onClose }: { onClose?: () => void }) {
   return (
     <div className="space-y-6">
       {/* 余额卡片 */}
-      <div className="p-6 rounded-lg bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200">
+      <div data-tour="billing-balance" className="p-6 rounded-lg bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200">
         <div className="text-sm text-amber-700 mb-1">当前余额</div>
         <div className="text-3xl font-bold text-amber-800 flex items-center gap-2">
           <Diamond className="w-8 h-8" />
@@ -85,7 +85,7 @@ export function BillingSettingsPanel({ onClose }: { onClose?: () => void }) {
       </div>
 
       {/* 充值入口 */}
-      <div className="flex gap-3">
+      <div data-tour="billing-actions" className="flex gap-3">
         <Button
           onClick={() => setRechargeOpen(true)}
           className="h-10 px-4 rounded-lg bg-[#0969da] hover:bg-[#0550ae] text-white font-semibold text-sm shadow-none"
@@ -105,7 +105,10 @@ export function BillingSettingsPanel({ onClose }: { onClose?: () => void }) {
 
       {/* 消费记录列表 */}
       <div>
-        <div className="mb-4 flex items-center justify-between gap-3">
+        <div
+          data-tour="billing-records-header"
+          className="mb-4 flex items-center justify-between gap-3"
+        >
           <h3 className="text-lg font-semibold">消费记录</h3>
           <Button
             variant="ghost"

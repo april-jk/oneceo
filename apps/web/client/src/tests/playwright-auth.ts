@@ -4,10 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-import {
-  type Browser,
-  type BrowserContext,
-} from "@playwright/test";
+import { type Browser, type BrowserContext, type Page } from "@playwright/test";
 
 const execFile = promisify(execFileCb);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -41,9 +38,12 @@ async function loadTestAccount(): Promise<TestAccount> {
 let ensureUserPromise: Promise<void> | null = null;
 
 async function ensureSharedPlaywrightUser() {
-  if (!ensureUserPromise) {
-    ensureUserPromise = (async () => {
-      const account = await loadTestAccount();
+  if (ensureUserPromise) {
+    return ensureUserPromise;
+  }
+  ensureUserPromise = (async () => {
+    const account = await loadTestAccount();
+    try {
       await execFile(
         "pnpm",
         ["--filter", "api", "exec", "tsx", "scripts/ensure-playwright-test-user.ts"],
@@ -58,9 +58,93 @@ async function ensureSharedPlaywrightUser() {
           maxBuffer: 1024 * 1024,
         },
       );
-    })();
+    } catch (error) {
+      console.warn("[playwright-auth] ensure user script failed, continue with browser bootstrap", error);
+    }
+  })();
+  return ensureUserPromise;
+}
+
+async function bootstrapWithRegisterFallback(
+  page: Page,
+  account: TestAccount,
+) {
+  const registerResult = await page.evaluate(
+    async ({ email, password, displayName }) => {
+      const sendCodeResponse = await fetch("/api/auth/register/send-code", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email }),
+      });
+      const sendCodePayload = await sendCodeResponse.json().catch(() => null);
+      if (!sendCodeResponse.ok) {
+        return {
+          ok: false,
+          step: "send-code",
+          status: sendCodeResponse.status,
+          payload: sendCodePayload,
+        };
+      }
+
+      const registerResponse = await fetch("/api/auth/register", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email,
+          password,
+          displayName,
+          verificationCode: "000000",
+        }),
+      });
+      const registerPayload = await registerResponse.json().catch(() => null);
+      return {
+        ok: registerResponse.ok,
+        step: "register",
+        status: registerResponse.status,
+        payload: registerPayload,
+      };
+    },
+    {
+      email: account.email,
+      password: account.password,
+      displayName: account.displayName,
+    },
+  );
+  if (!registerResult.ok) {
+    throw new Error(`register fallback failed: ${registerResult.status} ${JSON.stringify(registerResult.payload)}`);
   }
-  await ensureUserPromise;
+
+  const retryLogin = await page.evaluate(
+    async ({ email, password }) => {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email, password }),
+      });
+      const payload = await response.json().catch(() => null);
+      return {
+        ok: response.ok,
+        status: response.status,
+        payload,
+      };
+    },
+    {
+      email: account.email,
+      password: account.password,
+    },
+  );
+  if (!retryLogin.ok) {
+    throw new Error(`browser login failed after register bootstrap: ${retryLogin.status} ${JSON.stringify(retryLogin.payload)}`);
+  }
 }
 
 export async function bootstrapSharedAuthenticatedUser(
@@ -96,8 +180,9 @@ export async function bootstrapSharedAuthenticatedUser(
       },
     );
     if (!loginResult.ok) {
-      throw new Error(`browser login failed: ${loginResult.status} ${JSON.stringify(loginResult.payload)}`);
+      await bootstrapWithRegisterFallback(page, account);
     }
+
     const meResult = await page.evaluate(async () => {
       const response = await fetch("/api/auth/me", {
         credentials: "include",

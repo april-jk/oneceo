@@ -6,12 +6,17 @@ import { Server } from 'socket.io';
 import type { WebSocketEvent } from '@oneceo/shared';
 import agentRoutes from './routes/agent-routes';
 import taskCreationRoutes from './routes/task-creation-routes';
+import taskCreationVoiceRoutes from './routes/task-creation-voice-routes';
 import altusManagedRoutes from './routes/altus-managed-routes';
 import sandboxRoutes from './routes/sandbox-routes';
 import osacRoutes from './routes/osac-routes';
 import llmProxyRoutes from './routes/llm-proxy-routes';
-import connectorRoutes from './routes/connector-routes';
+import connectorRoutes, {
+  CONNECTOR_CALLBACK_PATHS,
+  buildConnectorFrontendCallbackRedirectUrl,
+} from './routes/connector-routes';
 import authRoutes from './routes/auth-routes';
+import authOauthRoutes from './routes/auth-oauth-routes';
 import internalSkillRoutes from './routes/internal-skill-routes';
 import internalSandboxRoutes from './routes/internal-sandbox-routes';
 import internalConnectorGuideRoutes from './routes/internal-connector-guide-routes';
@@ -22,9 +27,15 @@ import internalAdminAppUserRoutes from './routes/internal-admin-app-user-routes'
 import internalAdminDeploymentRoutes from './routes/internal-admin-deployment-routes';
 import internalAdminOperationsAnalyticsRoutes from './routes/internal-admin-operations-analytics-routes';
 import internalTaskCreationRoutes from './routes/internal-task-creation-routes';
+import internalMembershipRoutes from './routes/internal-membership-routes';
 import billingRoutes from './routes/billing-routes';
 import internalBillingRoutes from './routes/internal-billing-routes';
 import activationCodeRoutes from './routes/activation-code-routes';
+import notificationRoutes from './routes/notification-routes';
+import internalNotificationRoutes from './routes/internal-notification-routes';
+import internalPromoBannerRoutes from './routes/internal-promo-banner-routes';
+import uiPromoBannerRoutes from './routes/ui-promo-banner-routes';
+import internalTraceRoutes from './routes/trace-routes';
 import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
 import { closeDatabaseConnection, testDatabaseConnection } from './config/database';
 import { getPublicErrorMessage } from './utils/error-response';
@@ -33,6 +44,11 @@ import { hostedProviderHostService } from './services/hosted-provider-host-servi
 import { osacPersistentRecoveryService } from './services/osac-persistent-recovery-service';
 import { sessionMcpRecoveryService } from './services/session-mcp-recovery-service';
 import { startSandboxArchiveJob, stopSandboxArchiveJob } from './services/sandbox-archive-job';
+import { startMembershipDailyRestoreJob, stopMembershipDailyRestoreJob } from './services/membership-daily-restore-job';
+import { startApiTraceCleanupJob, stopApiTraceCleanupJob } from './services/api-trace-cleanup-job';
+import { startApiRequestLogCleanupJob, stopApiRequestLogCleanupJob } from './services/api-request-log-cleanup-job';
+import { volcengineAsrWebSocketProxyService } from './services/volcengine-asr-websocket-proxy-service';
+import { requestLogMiddleware } from './middleware/request-log-middleware';
 import {
   startTaskSessionDeploymentSyncJob,
   stopTaskSessionDeploymentSyncJob,
@@ -120,8 +136,9 @@ app.use(
 app.use('/api/llm-proxy', express.raw({ type: '*/*', limit: llmProxyBodyLimit }));
 app.use(express.json({ limit: jsonBodyLimit }));
 app.use(appAuthMiddleware);
+app.use(requestLogMiddleware);
 
-// 请求日志
+// 请求日志（控制台）
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
@@ -137,6 +154,20 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     version: '1.0.0',
   });
+});
+
+app.get(CONNECTOR_CALLBACK_PATHS, (req, res) => {
+  const redirectUrl = buildConnectorFrontendCallbackRedirectUrl(
+    req.originalUrl || req.url,
+    process.env.FRONTEND_URL || 'http://localhost:3000'
+  );
+  if (!redirectUrl) {
+    return res.status(404).json({
+      success: false,
+      error: getPublicErrorMessage('Unknown connector callback path'),
+    });
+  }
+  return res.redirect(302, redirectUrl);
 });
 
 // ============================================================================
@@ -162,7 +193,9 @@ app.post('/api/projects', (req, res) => {
 
 // 任务创建相关 API
 app.use('/api/auth', authRoutes);
+app.use('/api/auth', authOauthRoutes);
 app.use('/api/task-creation', taskCreationRoutes);
+app.use('/api/task-creation/voice', taskCreationVoiceRoutes);
 app.use('/api/altus-managed', altusManagedRoutes);
 app.use('/api/sandbox', sandboxRoutes);
 app.use('/api/sandbox/osac', osacRoutes);
@@ -178,9 +211,15 @@ app.use('/api/internal', internalAdminAppUserRoutes);
 app.use('/api/internal', internalAdminDeploymentRoutes);
 app.use('/api/internal/admin/operations/analytics', internalAdminOperationsAnalyticsRoutes);
 app.use('/api/internal', internalTaskCreationRoutes);
+app.use('/api/internal', internalMembershipRoutes);
 app.use('/api/billing', billingRoutes);
 app.use('/api/internal/billing', internalBillingRoutes);
 app.use('/api/activation-codes', activationCodeRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/internal/notifications', internalNotificationRoutes);
+app.use('/api/internal/promo-banners', internalPromoBannerRoutes);
+app.use('/api/ui/promo-banners', uiPromoBannerRoutes);
+app.use('/api/internal', internalTraceRoutes);
 
 // 任务相关 API
 app.get('/api/tasks', (req, res) => {
@@ -303,7 +342,10 @@ async function shutdown(signal: string, exitCode = 0) {
       listenRetryTimer = null;
     }
     stopSandboxArchiveJob();
+    stopMembershipDailyRestoreJob();
     stopTaskSessionDeploymentSyncJob();
+    stopApiTraceCleanupJob();
+    stopApiRequestLogCleanupJob();
   } catch (error) {
     console.warn('[API] stop background jobs failed:', error);
   }
@@ -318,6 +360,12 @@ async function shutdown(signal: string, exitCode = 0) {
     taskCreationWebSocketService.close();
   } catch (error) {
     console.warn('[API] taskCreationWebSocketService.close failed:', error);
+  }
+
+  try {
+    volcengineAsrWebSocketProxyService.close();
+  } catch (error) {
+    console.warn('[API] volcengineAsrWebSocketProxyService.close failed:', error);
   }
 
   await new Promise<void>((resolve) => {
@@ -374,7 +422,20 @@ httpServer.on('error', (error: any) => {
 });
 
 // 初始化任务创建 WebSocket 服务
-taskCreationWebSocketService.initialize(httpServer);
+taskCreationWebSocketService.initialize();
+volcengineAsrWebSocketProxyService.initialize();
+httpServer.on('upgrade', (req, socket, head) => {
+  const pathname = new URL(req.url || '', 'http://localhost').pathname;
+  if (pathname === '/socket.io') {
+    return;
+  }
+  if (volcengineAsrWebSocketProxyService.handleUpgrade(req, socket, head)) {
+    return;
+  }
+  if (taskCreationWebSocketService.handleUpgrade(req, socket, head)) {
+    return;
+  }
+});
 osacLlmProxyBridgeService.initialize();
 hostedProviderHostService.initialize();
 
@@ -411,8 +472,13 @@ async function startServer() {
     }
     // 启动 Sandbox 空闲归档任务
     startSandboxArchiveJob();
+    // 启动会员每日自动恢复积分任务
+    startMembershipDailyRestoreJob();
     // 启动部署状态后台同步任务
     startTaskSessionDeploymentSyncJob();
+    // 启动 API 追踪数据清理任务
+    startApiTraceCleanupJob();
+    startApiRequestLogCleanupJob();
     
     console.log('');
   });

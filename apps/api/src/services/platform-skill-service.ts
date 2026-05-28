@@ -10,8 +10,10 @@ import type {
 import { ensurePlatformSkillGovernanceSchema } from '../db/migrate';
 import { platformSkillImportService } from './platform-skill-import-service';
 import type { SkillImportPreview } from './platform-skill-import-service';
-import { PLATFORM_SKILL_SEEDS } from './platform-skill-seeds';
+import { PLATFORM_SKILL_SEEDS, type PlatformSkillSeed } from './platform-skill-seeds';
 import { skillObjectStorageService } from './skill-object-storage-service';
+
+const DEPRECATED_PLATFORM_SKILL_SEED_SLUGS = ['office-ppt', 'magazine-web-ppt'] as const;
 
 export type PlatformSkillResourceSummary = {
   totalCount: number;
@@ -177,6 +179,10 @@ function asObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
 export function normalizePlatformSkillGovernance(input: unknown): PlatformSkillGovernance {
   const metadata = asObject(input);
   const autoActivation = asObject(metadata.autoActivation);
@@ -223,6 +229,40 @@ function shouldSyncSeedGovernance(seedMetadata: unknown, existingMetadata: unkno
     return false;
   }
   return JSON.stringify(expected) !== JSON.stringify(current);
+}
+
+function buildSeedRevisionSignature(input: {
+  slug: string;
+  name: string;
+  description: string;
+  category: string;
+  bodyMarkdown: string;
+  resources: Array<{ resourcePath: string; resourceType?: string; contentMarkdown: string }>;
+}) {
+  return computeSkillSignature(JSON.stringify({
+    slug: normalizeSlug(input.slug),
+    name: asText(input.name),
+    description: asText(input.description),
+    category: asText(input.category),
+    bodyMarkdown: asText(input.bodyMarkdown),
+    resources: input.resources
+      .map((item) => ({
+        resourcePath: normalizeResourcePath(item.resourcePath),
+        resourceType: assertResourceType(item.resourceType),
+        contentMarkdown: asText(item.contentMarkdown),
+      }))
+      .sort((left, right) => left.resourcePath.localeCompare(right.resourcePath)),
+  }));
+}
+
+function seedResourcesToRevisionResources(seed: PlatformSkillSeed) {
+  return Array.isArray(seed.resources)
+    ? seed.resources.map((item) => ({
+        resourcePath: normalizeResourcePath(item.resourcePath),
+        resourceType: assertResourceType(item.resourceType),
+        contentMarkdown: assertNonEmpty(item.contentMarkdown, 'skill resource 正文'),
+      }))
+    : [];
 }
 
 function isMissingPlatformSkillGovernanceColumnError(error: unknown) {
@@ -282,6 +322,64 @@ export class PlatformSkillService {
     await ensurePlatformSkillGovernanceSchemaReady();
   }
 
+  private async getPublishedSeedRevisionState(skill: PlatformSkill) {
+    if (!skill.publishedRevisionId) return { seedManaged: true, signature: '' };
+    if (!isUuid(skill.publishedRevisionId)) return { seedManaged: false, signature: '' };
+    const revision = await platformSkillDAO.getRevision(skill.publishedRevisionId);
+    if (!revision) return { seedManaged: true, signature: '' };
+    if (asText(revision.createdBy) !== 'seed') {
+      return { seedManaged: false, signature: '' };
+    }
+    const entry = await this.getEffectiveEntry(revision);
+    const { resources } = await this.toRevisionResources(revision.id);
+    return { seedManaged: true, signature: buildSeedRevisionSignature({
+      slug: revision.slugSnapshot,
+      name: revision.nameSnapshot,
+      description: revision.descriptionSnapshot,
+      category: revision.categorySnapshot || skill.category,
+      bodyMarkdown: await this.getEffectiveBodyMarkdown(revision, entry),
+      resources: resources.map((item) => ({
+        resourcePath: item.resourcePath,
+        resourceType: item.resourceType,
+        contentMarkdown: item.contentMarkdown,
+      })),
+    }) };
+  }
+
+  private async publishSeedRevisionIfChanged(skill: PlatformSkill, seed: PlatformSkillSeed, metadataJson: Record<string, unknown>) {
+    const seedResources = seedResourcesToRevisionResources(seed);
+    const expectedSignature = buildSeedRevisionSignature({
+      slug: seed.slug,
+      name: seed.name,
+      description: seed.description,
+      category: seed.category,
+      bodyMarkdown: seed.bodyMarkdown,
+      resources: seedResources,
+    });
+    const current = await this.getPublishedSeedRevisionState(skill);
+    if (!current.seedManaged || current.signature === expectedSignature) {
+      return;
+    }
+    await platformSkillDAO.createPublishedRevision(skill.id, {
+      name: seed.name,
+      description: seed.description,
+      category: seed.category,
+      metadataJson,
+      bodyMarkdown: seed.bodyMarkdown,
+      createdBy: 'seed',
+      resources: seedResources,
+    });
+  }
+
+  private async archiveDeprecatedSeedSkills() {
+    for (const slug of DEPRECATED_PLATFORM_SKILL_SEED_SLUGS) {
+      const skill = await platformSkillDAO.getSkillBySlug(slug);
+      if (skill && assertStatus(skill.status) !== 'archived') {
+        await platformSkillDAO.updateSkillStatus(skill.id, 'archived');
+      }
+    }
+  }
+
   async ensureSeeded() {
     if (this.seeded) return;
     let repairedGovernanceSchema = false;
@@ -291,8 +389,25 @@ export class PlatformSkillService {
         for (const seed of PLATFORM_SKILL_SEEDS) {
           const existed = await platformSkillDAO.getSkillBySlug(seed.slug);
           if (existed) {
+            const expected = governanceToMetadataJson(seed.metadataJson as any);
             if (shouldSyncSeedGovernance(seed.metadataJson, existed.metadataJson)) {
-              await platformSkillDAO.updateSkillMetadata(existed.id, governanceToMetadataJson(seed.metadataJson as any));
+              await platformSkillDAO.updateSkillMetadata(existed.id, expected);
+            }
+            if (assertStatus(existed.status) === 'archived') {
+              await platformSkillDAO.updateSkillStatus(existed.id, 'active');
+            }
+            if (!existed.publishedRevisionId) {
+              await platformSkillDAO.createPublishedRevision(existed.id, {
+                name: seed.name,
+                description: seed.description,
+                category: seed.category,
+                metadataJson: expected,
+                bodyMarkdown: seed.bodyMarkdown,
+                createdBy: 'seed',
+                resources: seedResourcesToRevisionResources(seed),
+              });
+            } else {
+              await this.publishSeedRevisionIfChanged(existed, seed, expected);
             }
             continue;
           }
@@ -314,13 +429,7 @@ export class PlatformSkillService {
                 bodyMarkdown: seed.bodyMarkdown,
                 createdBy: 'seed',
               },
-              resources: Array.isArray(seed.resources)
-                ? seed.resources.map((item) => ({
-                    resourcePath: normalizeResourcePath(item.resourcePath),
-                    resourceType: assertResourceType(item.resourceType),
-                    contentMarkdown: assertNonEmpty(item.contentMarkdown, 'skill resource 正文'),
-                  }))
-                : [],
+              resources: seedResourcesToRevisionResources(seed),
             });
           } catch (error) {
             if (this.isUniqueViolation(error)) {
@@ -330,6 +439,7 @@ export class PlatformSkillService {
             throw error;
           }
         }
+        await this.archiveDeprecatedSeedSkills();
         this.seeded = true;
       } catch (error) {
         if (!repairedGovernanceSchema && isMissingPlatformSkillGovernanceColumnError(error)) {

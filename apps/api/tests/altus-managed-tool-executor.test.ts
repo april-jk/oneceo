@@ -161,3 +161,46 @@ test('executeToolCall maps deployment not allowed into non-retryable envelope', 
   assert.equal(envelope.toolResultEnvelope.retryable, false);
   assert.match(envelope.toolResultEnvelope.contentForModel, /Deployment is not allowed/);
 });
+
+test('executeToolCall lets coordinator stop repeated debug_open_page retries', async () => {
+  const events: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const executor = new AltusManagedToolExecutor({
+    runId: 'run-debug-repeat',
+    sessionId: 'session-debug-repeat',
+    userId: 'user-debug-repeat',
+    runtime: {
+      execute: mock.fn(async () => {
+        throw new Error('debug_open_page_repeat_blocked: same_target=http://127.0.0.1:3000 same_reason=debug_target_unreachable');
+      }),
+    } as any,
+    eventWriter: {
+      appendRunEvent: mock.fn(async (_runId, _sessionId, _userId, eventType, payload) => {
+        events.push({ eventType, payload: payload as Record<string, unknown> });
+      }),
+    } as any,
+    buildToolEventContent: (toolName, phase) => `${toolName}:${phase}`,
+    sanitizeToolEventError: () => '同一个预览目标连续打开失败，平台已停止重复截图重试。',
+  });
+
+  const envelope = await executor.executeToolCall({
+    toolCall: createToolCall('debug_open_page', 'tool-debug-repeat'),
+    args: { url: 'http://127.0.0.1:3000/' },
+    signal: new AbortController().signal,
+    modelRoundId: 4,
+    onFailure: () => ({
+      transitionReason: 'tool_failed_user_action_required',
+      recoveryMode: 'awaiting_user',
+      errorCode: 'debug_open_page_repeat_blocked',
+      retryable: false,
+      sanitizedError: '同一个预览目标连续打开失败，平台已停止重复截图重试。',
+    }),
+  });
+
+  assert.equal(envelope.status, 'failed');
+  assert.equal(envelope.transitionReason, 'tool_failed_user_action_required');
+  assert.equal(envelope.recoveryMode, 'awaiting_user');
+  assert.equal(envelope.toolResultEnvelope.errorCode, 'debug_open_page_repeat_blocked');
+  assert.equal(envelope.toolResultEnvelope.retryable, false);
+  assert.match(envelope.toolResultEnvelope.contentForModel, /Do not call debug_open_page again/i);
+  assert.equal(events[1]?.payload.error, '同一个预览目标连续打开失败，平台已停止重复截图重试。');
+});

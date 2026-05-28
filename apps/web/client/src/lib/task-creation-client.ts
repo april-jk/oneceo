@@ -5,7 +5,7 @@ export type TaskCreationSessionSummary = {
   id: string;
   title?: string;
   titleLocked?: boolean;
-  titleSource?: "placeholder" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
+  titleSource?: "placeholder" | "first_user_input" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
   titleState?: "provisional" | "resolved" | "manual";
   titleResolvedAt?: string;
   isFavorite?: boolean;
@@ -72,6 +72,7 @@ export type TaskCreationHistoryMessage = {
   content?: string;
   messageType?: string;
   metadata?: Record<string, unknown>;
+  timelineCursor?: number | null;
   createdAt?: string;
 };
 
@@ -197,6 +198,11 @@ export type SubmitTaskCreationManagedInputResult = {
   run: TaskCreationManagedRunSummary;
 };
 
+export type TaskCreationVoiceTranscriptResult = {
+  text: string;
+  confidence?: number;
+};
+
 export type TaskCreationDeliverableArtifact = {
   id: string;
   runId: string;
@@ -222,6 +228,12 @@ export type TaskCreationWebsitePreviewSnapshot = {
   capturedAt?: string;
   reasonCode?: string;
   message?: string;
+  visualCheck?: {
+    status: "passed" | "failed";
+    reasonCode?: string;
+    message?: string;
+    diagnostics?: Record<string, unknown>;
+  };
   source?: {
     sandboxId?: string;
     port?: number;
@@ -520,7 +532,7 @@ export type TaskCreationSessionDetail = {
   id: string;
   title?: string;
   titleLocked?: boolean;
-  titleSource?: "placeholder" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
+  titleSource?: "placeholder" | "first_user_input" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
   titleState?: "provisional" | "resolved" | "manual";
   titleResolvedAt?: string;
   isFavorite?: boolean;
@@ -884,7 +896,9 @@ export async function getTaskCreationOlderMessages(
   );
 }
 
-export async function createTaskCreationDraftSession(title?: string): Promise<TaskCreationSessionDetail> {
+export async function createTaskCreationDraftSession(
+  input?: { title?: string; projectId?: string | null }
+): Promise<TaskCreationSessionDetail> {
   const url = `${getApiBaseUrl()}/api/task-creation/sessions/draft`;
   const response = await fetch(url, {
     method: "POST",
@@ -892,7 +906,8 @@ export async function createTaskCreationDraftSession(title?: string): Promise<Ta
       "Content-Type": "application/json",
     }),
     body: JSON.stringify({
-      title: title || undefined,
+      title: input?.title || undefined,
+      projectId: input?.projectId || undefined,
     }),
   });
   if (!response.ok) {
@@ -912,7 +927,7 @@ export async function resolveTaskCreationSessionTitle(
   id: string;
   title?: string;
   titleLocked?: boolean;
-  titleSource?: "placeholder" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
+  titleSource?: "placeholder" | "first_user_input" | "first_explicit_user_input" | "task_description" | "clarification_summary" | "manual";
   titleState?: "provisional" | "resolved" | "manual";
   titleResolvedAt?: string | null;
   resolved?: boolean;
@@ -1840,6 +1855,17 @@ export function getTaskCreationPreviewSnapshotUrl(sessionId: string, runId: stri
   return `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/preview-snapshots/${safeRunId}/website.png`;
 }
 
+export function getTaskCreationBrowserActionScreenshotUrl(
+  sessionId: string,
+  runId: string,
+  toolCallId: string,
+): string {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const safeRunId = encodeURIComponent(runId);
+  const safeToolCallId = encodeURIComponent(toolCallId);
+  return `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/runs/${safeRunId}/tool-calls/${safeToolCallId}/browser-screenshot.png`;
+}
+
 export async function listTaskCreationDeliverables(
   sessionId: string,
   options?: { runId?: string }
@@ -1867,10 +1893,16 @@ export async function downloadTaskCreationDeliverable(
   }
 
   const blob = await response.blob();
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const utf8NameMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  const asciiNameMatch = disposition.match(/filename=\"?([^\";]+)\"?/i);
+  const resolvedName = utf8NameMatch
+    ? decodeURIComponent(utf8NameMatch[1] || "")
+    : (asciiNameMatch?.[1] || "").trim();
   const objectUrl = window.URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = objectUrl;
-  anchor.download = artifact.name || "deliverable";
+  anchor.download = resolvedName || artifact.name || "deliverable";
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
@@ -1933,6 +1965,37 @@ export async function submitTaskCreationManagedInput(
   const result = (await response.json()) as { data?: SubmitTaskCreationManagedInputResult };
   if (!result?.data?.run) {
     throw new Error("managed input result empty");
+  }
+  return result.data;
+}
+
+export async function transcribeTaskCreationVoiceInput(
+  audio: Blob,
+  options: { clientTranscript?: string } = {},
+): Promise<TaskCreationVoiceTranscriptResult> {
+  const formData = new FormData();
+  formData.set("audio", audio, "voice-input.wav");
+  const clientTranscript = options.clientTranscript?.trim();
+  if (clientTranscript) {
+    formData.set("clientTranscript", clientTranscript);
+  }
+
+  const response = await fetch(
+    `${getApiBaseUrl()}/api/task-creation/voice/transcribe`,
+    {
+      method: "POST",
+      headers: buildClientIdentityHeaders(),
+      body: formData,
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as {
+    data?: TaskCreationVoiceTranscriptResult;
+  };
+  if (!result?.data?.text) {
+    throw new Error("voice transcript result empty");
   }
   return result.data;
 }

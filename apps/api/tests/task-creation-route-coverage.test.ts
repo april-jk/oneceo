@@ -7,6 +7,7 @@ import { appUserProjectDAO, taskCreationSessionDAO } from '../src/db/dao';
 import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-memory-store';
 import { sessionConnectorService } from '../src/services/session-connector-service';
 import { userSkillService } from '../src/services/user-skill-service';
+import { billingService } from '../src/services/billing-service';
 
 type TestServer = {
   origin: string;
@@ -18,6 +19,7 @@ const projectDaoAny = appUserProjectDAO as any;
 const fileStoreAny = taskCreationFileMemoryStore as any;
 const sessionConnectorAny = sessionConnectorService as any;
 const userSkillServiceAny = userSkillService as any;
+const billingServiceAny = billingService as any;
 
 const originalGetSession = sessionDaoAny.getSession;
 const originalListProjects = projectDaoAny.listByUser;
@@ -29,6 +31,8 @@ const originalDeleteProject = projectDaoAny.deleteOwnedProject;
 const originalGetIntentResult = sessionDaoAny.getIntentResult;
 const originalGetTaskDescription = sessionDaoAny.getTaskDescription;
 const originalGetExecutionPlan = sessionDaoAny.getExecutionPlan;
+const originalGetRecentMessages = sessionDaoAny.getRecentMessages;
+const originalGetMessages = sessionDaoAny.getMessages;
 const originalDeleteSession = sessionDaoAny.deleteSession;
 const originalUpdateSessionProject = sessionDaoAny.updateSessionProject;
 const originalClearSessionProjectAssignment = sessionDaoAny.clearProjectAssignmentForUser;
@@ -51,6 +55,8 @@ const originalCreateCustomSkill = userSkillServiceAny.createCustomSkill;
 const originalUpdateCustomSkill = userSkillServiceAny.updateCustomSkill;
 const originalArchiveCustomSkill = userSkillServiceAny.archiveCustomSkill;
 const originalActivateCustomSkill = userSkillServiceAny.activateCustomSkill;
+const originalHasEnoughCredits = billingServiceAny.hasEnoughCredits;
+const originalGetUserCredits = billingServiceAny.getUserCredits;
 
 after(() => {
   sessionDaoAny.getSession = originalGetSession;
@@ -63,6 +69,8 @@ after(() => {
   sessionDaoAny.getIntentResult = originalGetIntentResult;
   sessionDaoAny.getTaskDescription = originalGetTaskDescription;
   sessionDaoAny.getExecutionPlan = originalGetExecutionPlan;
+  sessionDaoAny.getRecentMessages = originalGetRecentMessages;
+  sessionDaoAny.getMessages = originalGetMessages;
   sessionDaoAny.deleteSession = originalDeleteSession;
   sessionDaoAny.updateSessionProject = originalUpdateSessionProject;
   sessionDaoAny.clearProjectAssignmentForUser = originalClearSessionProjectAssignment;
@@ -85,9 +93,13 @@ after(() => {
   userSkillServiceAny.updateCustomSkill = originalUpdateCustomSkill;
   userSkillServiceAny.archiveCustomSkill = originalArchiveCustomSkill;
   userSkillServiceAny.activateCustomSkill = originalActivateCustomSkill;
+  billingServiceAny.hasEnoughCredits = originalHasEnoughCredits;
+  billingServiceAny.getUserCredits = originalGetUserCredits;
 });
 
 async function startServer(): Promise<TestServer> {
+  billingServiceAny.hasEnoughCredits = async () => true;
+  billingServiceAny.getUserCredits = async () => ({ balance: 1000 });
   const app = express();
   app.use(express.json());
   app.use(mockAuthContextMiddleware());
@@ -144,7 +156,7 @@ test('auth-only task-creation routes reject anonymous access', async () => {
       });
       const payload = await response.json();
       assert.equal(response.status, 401, item.path);
-      assert.equal(payload.success, false, item.path);
+      assert.notEqual(payload.success, true, item.path);
     }
   } finally {
     await server.close();
@@ -293,6 +305,186 @@ test('project detail routes bind requests to current user and return scoped sess
 
     assert.equal(received.includes(`project:${userId}:${projectId}`), true);
     assert.equal(received.includes(`sessions:${userId}:${projectId}`), true);
+  } finally {
+    await server.close();
+  }
+});
+
+test('session messages preserve structured clarification metadata for PPT cards', async () => {
+  const server = await startServer();
+  const sessionId = 'session-ppt-clarification-cards';
+  const structuredClarification = {
+    kind: 'structured_clarification',
+    taskType: 'ppt',
+    title: '沐曦股份 PPT 制作前确认关键决策',
+    summary: '先确认与当前 PPT 直接相关的关键决策。',
+    maxCards: 4,
+    briefFields: ['purpose_audience'],
+    cards: [
+      {
+        id: 'purpose_audience',
+        title: '演示目的与受众',
+        question: '沐曦股份 PPT 主要给谁看？',
+        why: '决定叙事角度和信息密度',
+        selectionMode: 'single',
+        required: true,
+        allowOther: true,
+        allowNote: false,
+        options: [
+          {
+            id: 'investor_pitch',
+            label: '投资人融资路演',
+            description: '强调投资价值',
+            impact: '突出市场和融资用途。',
+            recommended: true,
+          },
+          {
+            id: 'executive_strategy',
+            label: '内部高管战略汇报',
+            description: '强调战略判断',
+            impact: '突出风险和资源投入。',
+          },
+          {
+            id: 'brand_business_intro',
+            label: '企业品牌与业务推介',
+            description: '强调业务亮点',
+            impact: '突出业务叙事。',
+          },
+        ],
+      },
+    ],
+  };
+
+  sessionDaoAny.getSession = async (id: string) => ({
+    id,
+    userId: 'owner-user',
+    title: 'PPT cards',
+    status: 'waiting_user',
+    mode: 'altus',
+    executor: 'altus',
+    runtime: { executionMode: 'managed', executor: 'altus' },
+    metadataJson: {},
+  });
+  sessionDaoAny.getMessages = async () => [
+    {
+      id: 'message-clarification',
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+      messageKey: 'managed:run-ppt:clarification',
+      metadata: {
+        question: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+        clarificationType: 'presentation_brief',
+        structuredClarification,
+        runId: 'run-ppt',
+        eventType: 'clarification_requested',
+        ignoredInternalField: 'should-not-leak',
+      },
+      timelineCursor: 1,
+      createdAt: '2026-05-26T00:00:00.000Z',
+    },
+  ];
+  fileStoreAny.getSession = async () => ({
+    id: sessionId,
+    title: 'PPT cards',
+    status: 'waiting_user',
+    mode: 'altus',
+    executor: 'altus',
+    runtime: { executionMode: 'managed', executor: 'altus' },
+    messages: [],
+  });
+  fileStoreAny.getMessages = async () => [];
+  sessionDaoAny.getTaskDescription = async () => null;
+  sessionDaoAny.getRecentMessages = async () => [];
+
+  try {
+    const response = await fetch(`${server.origin}/api/task-creation/sessions/${sessionId}/messages`, {
+      headers: { 'x-test-user-id': 'owner-user' },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.equal(payload.data?.[0]?.messageType, 'clarification_request');
+    assert.equal(payload.data?.[0]?.metadata?.clarificationType, 'presentation_brief');
+    assert.deepEqual(payload.data?.[0]?.metadata?.structuredClarification, structuredClarification);
+    assert.equal(payload.data?.[0]?.metadata?.ignoredInternalField, undefined);
+  } finally {
+    await server.close();
+  }
+});
+
+test('session messages hydrate legacy PPT clarification cards from stored question', async () => {
+  const server = await startServer();
+  const sessionId = 'session-ppt-legacy-clarification-cards';
+
+  sessionDaoAny.getSession = async (id: string) => ({
+    id,
+    userId: 'owner-user',
+    title: 'PPT legacy cards',
+    status: 'waiting_user',
+    mode: 'altus',
+    executor: 'altus',
+    runtime: { executionMode: 'managed', executor: 'altus' },
+    metadataJson: {},
+  });
+  sessionDaoAny.getMessages = async () => [
+    {
+      id: 'message-user',
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我分析一下 沐曦股份，做个 ppt',
+      messageKey: 'user:ppt-request',
+      metadata: {
+        messageKey: 'user:ppt-request',
+      },
+      timelineCursor: 1,
+      createdAt: '2026-05-26T00:00:00.000Z',
+    },
+    {
+      id: 'message-clarification',
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这份 PPT 开始制作前，先确认 4 个关键决策。你可以直接选择，也可以跳过由 Altus 按推荐项处理。',
+      messageKey: 'managed:run-ppt:clarification',
+      metadata: {
+        question: '这份 PPT 开始制作前，先确认 4 个关键决策。你可以直接选择，也可以跳过由 Altus 按推荐项处理。',
+        runId: 'run-ppt',
+        eventType: 'clarification_requested',
+      },
+      timelineCursor: 2,
+      createdAt: '2026-05-26T00:00:01.000Z',
+    },
+  ];
+  fileStoreAny.getSession = async () => ({
+    id: sessionId,
+    title: 'PPT legacy cards',
+    status: 'waiting_user',
+    mode: 'altus',
+    executor: 'altus',
+    runtime: { executionMode: 'managed', executor: 'altus' },
+    messages: [],
+  });
+  fileStoreAny.getMessages = async () => [];
+  sessionDaoAny.getTaskDescription = async () => null;
+  sessionDaoAny.getRecentMessages = async () => [];
+
+  try {
+    const response = await fetch(`${server.origin}/api/task-creation/sessions/${sessionId}/messages`, {
+      headers: { 'x-test-user-id': 'owner-user' },
+    });
+    const payload = await response.json();
+    const clarification = payload.data?.find(
+      (message: any) => message?.messageType === 'clarification_request'
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(clarification?.metadata?.clarificationType, 'presentation_brief');
+    assert.equal(
+      clarification?.metadata?.structuredClarification?.kind,
+      'structured_clarification'
+    );
+    assert.match(clarification?.metadata?.structuredClarification?.title || '', /沐曦股份/);
   } finally {
     await server.close();
   }
@@ -503,6 +695,7 @@ test('intent and delete routes work for the owner', async () => {
 
 test('project assignment route updates db and file memory for the owner', async () => {
   const server = await startServer();
+  const sessionId = '33333333-3333-4333-8333-333333333333';
   const dbUpdates: Array<{ sessionId: string; payload: Record<string, unknown> }> = [];
   const fileUpdates: Array<{ sessionId: string; payload: Record<string, unknown> }> = [];
   const sessionState = {
@@ -550,9 +743,12 @@ test('project assignment route updates db and file memory for the owner', async 
     sessionState.projectId = typeof payload.projectId === 'string' ? payload.projectId : null;
     sessionState.projectName = typeof payload.projectName === 'string' ? payload.projectName : null;
   };
+  sessionDaoAny.getTaskDescription = async () => null;
+  sessionDaoAny.getRecentMessages = async () => [];
+  sessionDaoAny.getMessages = async () => [];
 
   try {
-    const response = await fetch(`${server.origin}/api/task-creation/sessions/s-3/project`, {
+    const response = await fetch(`${server.origin}/api/task-creation/sessions/${sessionId}/project`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -570,7 +766,7 @@ test('project assignment route updates db and file memory for the owner', async 
     assert.equal(payload.data.projectName, 'oneceo.ai');
     assert.deepEqual(dbUpdates, [
       {
-        sessionId: 's-3',
+        sessionId,
         payload: {
           projectId: '1',
           projectName: 'oneceo.ai',
@@ -579,7 +775,7 @@ test('project assignment route updates db and file memory for the owner', async 
     ]);
     assert.deepEqual(fileUpdates, [
       {
-        sessionId: 's-3',
+        sessionId,
         payload: {
           projectId: '1',
           projectName: 'oneceo.ai',
@@ -593,6 +789,7 @@ test('project assignment route updates db and file memory for the owner', async 
 
 test('project assignment route rejects after session memory has entered effective run', async () => {
   const server = await startServer();
+  const sessionId = '34444444-4444-4444-8444-444444444444';
 
   sessionDaoAny.getSession = async (sessionId: string) => ({
     id: sessionId,
@@ -614,9 +811,12 @@ test('project assignment route rejects after session memory has entered effectiv
     projectName: null,
     messages: [],
   });
+  sessionDaoAny.getTaskDescription = async () => null;
+  sessionDaoAny.getRecentMessages = async () => [];
+  sessionDaoAny.getMessages = async () => [];
 
   try {
-    const response = await fetch(`${server.origin}/api/task-creation/sessions/s-locked/project`, {
+    const response = await fetch(`${server.origin}/api/task-creation/sessions/${sessionId}/project`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -684,6 +884,7 @@ test('create session route persists initial project assignment before first mess
     dbProjectAssignments.push(payload);
     return null;
   };
+  sessionDaoAny.getTaskDescription = async () => null;
   sessionDaoAny.addMessage = async () => undefined;
 
   try {

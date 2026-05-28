@@ -34,6 +34,7 @@ import {
   summarizeProjectInstruction,
   type TaskCreationSessionSummary,
 } from "@/lib/task-creation-client";
+import { isDevRuntime } from "@/lib/runtime-env";
 
 type ProjectSessionItem = {
   sessionId: string;
@@ -43,6 +44,7 @@ type ProjectSessionItem = {
 };
 
 export default function ManagerView() {
+  const showSelfOrganizedProjects = isDevRuntime();
   const [, setLocation] = useLocation();
   const { t } = useTranslation();
   const { user } = useAuth();
@@ -263,14 +265,14 @@ export default function ManagerView() {
             <h1 className="text-3xl font-bold tracking-tight">{t("managerView.title")}</h1>
             <p className="mt-1 text-muted-foreground">{t("managerView.subtitle")}</p>
           </div>
-          <Button className="gap-2" onClick={requestCreateProject}>
+          <Button data-tour="projects-create-button" className="gap-2" onClick={requestCreateProject}>
             <Plus className="h-4 w-4" />
             {t("managerView.createProject")}
           </Button>
         </div>
 
-        <section className="space-y-4">
-          <div className="flex items-center gap-2">
+        <section data-tour="projects-manual-section" className="space-y-4">
+          <div data-tour="projects-manual-header" className="flex items-center gap-2">
             <Layers3 className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">
               {t("sidebar.projects")}
@@ -423,41 +425,43 @@ export default function ManagerView() {
           )}
         </section>
 
-        <section className="space-y-4">
-          <button
-            type="button"
-            className="flex w-full items-center justify-between rounded-2xl border border-border/70 bg-card px-4 py-3 text-left transition-colors hover:bg-accent/30"
-            onClick={() => setSelfOrganizedExpanded((prev) => !prev)}
-          >
-            <div className="flex items-center gap-3">
-              <FolderOpen className="h-5 w-5 text-muted-foreground" />
-              <div>
-                <h2 className="text-base font-semibold text-foreground">
-                  {t("sidebar.selfOrganizedProjects")}
-                </h2>
-                <p className="text-sm text-muted-foreground">
-                  {SELF_ORGANIZED_PROJECTS.length}
-                </p>
+        {showSelfOrganizedProjects ? (
+          <section data-tour="projects-self-organized-section" className="space-y-4">
+            <button
+              type="button"
+              data-tour="projects-self-organized-toggle"
+              className="flex w-full items-center justify-between rounded-2xl border border-border/70 bg-card px-4 py-3 text-left transition-colors hover:bg-accent/30"
+              onClick={() => setSelfOrganizedExpanded((prev) => !prev)}
+            >
+              <div className="flex items-center gap-3">
+                <FolderOpen className="h-5 w-5 text-muted-foreground" />
+                <div>
+                  <h2 className="text-base font-semibold text-foreground">
+                    {t("sidebar.selfOrganizedProjects")}
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    {SELF_ORGANIZED_PROJECTS.length}
+                  </p>
+                </div>
               </div>
-            </div>
-            {selfOrganizedExpanded ? (
-              <ChevronDown className="h-4 w-4 text-muted-foreground" />
-            ) : (
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-            )}
-          </button>
+              {selfOrganizedExpanded ? (
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              )}
+            </button>
 
-          <AnimatePresence initial={false}>
-            {selfOrganizedExpanded ? (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: "auto", opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.2 }}
-                className="space-y-4 overflow-hidden"
-              >
-                {SELF_ORGANIZED_PROJECTS.map((project) => (
-                  <Card key={project.id} className="p-6">
+            <AnimatePresence initial={false}>
+              {selfOrganizedExpanded ? (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="space-y-4 overflow-hidden"
+                >
+                  {SELF_ORGANIZED_PROJECTS.map((project, projectIndex) => (
+                    <Card key={project.id} className="p-6">
                     <div className="mb-4 flex items-start justify-between">
                       <div className="flex-1">
                         <div className="mb-2 flex items-center gap-3">
@@ -497,7 +501,10 @@ export default function ManagerView() {
                       </Button>
                     </div>
 
-                    <div className="mb-4 ml-12 flex items-center gap-6">
+                    <div
+                      data-tour={projectIndex === 0 ? "projects-self-organized-summary" : undefined}
+                      className="mb-4 ml-12 flex items-center gap-6"
+                    >
                       <div className="flex items-center gap-2 text-sm">
                         <BarChart className="h-4 w-4 text-muted-foreground" />
                         <span className="text-muted-foreground">{t("managerView.progressLabel")}</span>
@@ -526,12 +533,19 @@ export default function ManagerView() {
                           transition={{ duration: 0.2 }}
                           className="ml-12 space-y-3"
                         >
-                          {project.managers.map((manager) => (
+                          {project.managers.map((manager, managerIndex) => (
                             <div
                               key={manager.id}
                               className="rounded-lg border-l-4 border-primary bg-muted/30 p-4"
                             >
-                              <div className="mb-3 flex items-start justify-between">
+                              <div
+                                data-tour={
+                                  projectIndex === 0 && managerIndex === 0
+                                    ? "projects-manager-header"
+                                    : undefined
+                                }
+                                className="mb-3 flex items-start justify-between"
+                              >
                                 <div className="flex-1">
                                   <div className="mb-1 flex items-center gap-2">
                                     <Button
@@ -627,12 +641,13 @@ export default function ManagerView() {
                         </motion.div>
                       ) : null}
                     </AnimatePresence>
-                  </Card>
-                ))}
-              </motion.div>
-            ) : null}
-          </AnimatePresence>
-        </section>
+                    </Card>
+                  ))}
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+          </section>
+        ) : null}
       </div>
     </WorkspaceLayout>
   );

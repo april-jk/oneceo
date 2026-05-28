@@ -27,6 +27,11 @@ import {
   type DeploymentTemplateBaselineData,
   type DeploymentWorkspacePublishReport,
 } from './task-creation-deployment-source-service';
+import {
+  formatTaskSessionDeploymentLocalPreflightFailure,
+  isTaskSessionDeploymentLocalPreflightPlatformFailure,
+  runTaskSessionDeploymentLocalPreflight,
+} from './task-session-deployment-local-preflight-service';
 import { platformDeploymentAccountService } from './platform-deployment-account-service';
 import { setSandboxMetadata } from './sandbox-activity-service';
 import {
@@ -36,6 +41,26 @@ import {
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function toPublicHttpUrl(value: unknown): string {
+  const text = asText(value);
+  if (!text) return '';
+  if (/^https?:\/\//i.test(text)) return text;
+  if (/^[a-z0-9.-]+\.[a-z]{2,}(\/.*)?$/i.test(text)) return `https://${text}`;
+  return '';
+}
+
+export function resolvePreferredPanelPublicUrl(
+  panel: Pick<RailwayDeploymentPanelData, 'publicUrl' | 'publicDomain' | 'latestStaticUrl' | 'latestUrl' | 'domains'>
+): string {
+  const domains = Array.isArray(panel.domains) ? panel.domains : [];
+  const candidates = [panel.publicUrl, panel.publicDomain, panel.latestStaticUrl, panel.latestUrl, domains[0]];
+  for (const candidate of candidates) {
+    const url = toPublicHttpUrl(candidate);
+    if (url) return url;
+  }
+  return '';
 }
 
 function pickRecord(value: unknown): Record<string, unknown> {
@@ -81,6 +106,7 @@ let deploymentSyncTimer: NodeJS.Timeout | null = null;
 let deploymentSyncRunning = false;
 const deploymentSyncRunningSessions = new Set<string>();
 const terminalSuccessDeploymentStatuses = new Set(['SUCCESS', 'DEPLOYED', 'ACTIVE']);
+const terminalFailureDeploymentStatuses = new Set(['FAILED', 'CRASHED', 'REMOVED']);
 const PUBLIC_REACHABILITY_SETTLING_TIMEOUT_MS = Math.max(
   60_000,
   Number(process.env.TASK_SESSION_DEPLOYMENT_PUBLIC_SETTLING_TIMEOUT_MS || 180_000)
@@ -589,7 +615,7 @@ export function shouldCleanupFailedDeploymentResources(input: {
   );
 }
 
-function resolveDeploymentAnalyticsDomain(input: {
+export function resolveDeploymentAnalyticsDomain(input: {
   metadata: Record<string, unknown>;
   accountPublicUrl?: string;
   accountPublicDomain?: string;
@@ -601,10 +627,10 @@ function resolveDeploymentAnalyticsDomain(input: {
     asText(input.panel?.latestStaticUrl) ||
     asText(input.panel?.latestUrl) ||
     asText(input.panel?.domains?.[0]) ||
+    asText(input.accountDomain) ||
     asText(input.accountPublicUrl) ||
     asText(input.accountPublicDomain) ||
     asText(analytics.domain) ||
-    asText(input.accountDomain) ||
     ''
   );
 }
@@ -682,10 +708,7 @@ async function readPublishedAnalyticsConfig(panel: RailwayDeploymentPanelData): 
   tag?: string;
   publicDomain?: string;
 } | null> {
-  const publicUrl =
-    asText(panel.latestStaticUrl) ||
-    asText(panel.latestUrl) ||
-    asText(panel.domains[0]);
+  const publicUrl = resolvePreferredPanelPublicUrl(panel);
   if (!publicUrl) {
     return null;
   }
@@ -724,7 +747,7 @@ async function reconcilePublishedAnalyticsMetadata(input: {
   }
   const currentAnalytics = pickRecord(input.metadata.analytics);
   const canonicalDomain = asText(input.panel.publicDomain) ||
-    asText(input.panel.latestStaticUrl || input.panel.latestUrl || input.panel.domains[0])
+    asText(input.panel.publicUrl || input.panel.latestStaticUrl || input.panel.latestUrl || input.panel.domains[0])
       .replace(/^https?:\/\//, '')
       .replace(/\/.*$/, '');
   const publishedDomain = asText(published?.publicDomain)
@@ -749,7 +772,7 @@ async function reconcilePublishedAnalyticsMetadata(input: {
       canonicalDomain ||
       publishedDomain ||
       asText(currentAnalytics.domain) ||
-      asText(input.panel.latestStaticUrl || input.panel.latestUrl || input.panel.domains[0])
+      asText(input.panel.publicUrl || input.panel.latestStaticUrl || input.panel.latestUrl || input.panel.domains[0])
         .replace(/^https?:\/\//, '')
         .replace(/\/.*$/, ''),
     updatedAt: new Date().toISOString(),
@@ -858,7 +881,7 @@ function shouldFollowupTaskSessionDeploymentSync(panel: RailwayDeploymentPanelDa
     panel.bindingState === 'provisioning' ||
     panel.bindingState === 'public_settling' ||
     (panel.analytics?.status === 'pending_domain' &&
-      Boolean(panel.latestStaticUrl || panel.latestUrl || panel.domains[0]))
+      Boolean(resolvePreferredPanelPublicUrl(panel)))
   );
 }
 
@@ -924,10 +947,7 @@ async function waitForTaskSessionPublicReachabilityAndRefresh(input: {
   session: FileSessionRecord | null;
   orchestratorSessionId: string;
 }) {
-  const publicUrl =
-    asText(input.panel.latestStaticUrl) ||
-    asText(input.panel.latestUrl) ||
-    asText(input.panel.domains[0]);
+  const publicUrl = resolvePreferredPanelPublicUrl(input.panel);
   const latestStatus = asText(input.panel.latestStatus).toUpperCase();
   const domainStatus = asText(input.panel.domainStatus).toLowerCase();
   const publicDomainStillActivating =
@@ -959,10 +979,7 @@ async function waitForTaskSessionPublicReachabilityAndRefresh(input: {
       selectedDeploymentId: input.panel.deploymentId,
       resolvedOrchestratorSessionId: input.orchestratorSessionId,
     }).catch(() => input.panel);
-    const refreshedUrl =
-      asText(refreshed.latestStaticUrl) ||
-      asText(refreshed.latestUrl) ||
-      asText(refreshed.domains[0]);
+    const refreshedUrl = resolvePreferredPanelPublicUrl(refreshed);
     const refreshedStatus = asText(refreshed.latestStatus).toUpperCase();
     const isStillPending =
       refreshed.activeDeploymentPending === true || asText(refreshed.bindingState) === 'provisioning';
@@ -1015,6 +1032,23 @@ function buildTaskSessionPublicReachabilityFailurePanel(
   };
 }
 
+function buildTaskSessionDeploymentProviderFailurePanel(
+  panel: RailwayDeploymentPanelData,
+  message: string
+): RailwayDeploymentPanelData {
+  return {
+    ...panel,
+    bindingState: 'repair_required',
+    provisioningPhase: 'deployment_trigger',
+    providerErrorCode: 'deployment_provider_error',
+    providerErrorMessage: message,
+    message,
+    lastVerifiedAt: new Date().toISOString(),
+    activeDeploymentPending: false,
+    publicReachabilityStartedAt: undefined,
+  };
+}
+
 function promoteTaskSessionSuccessfulLiveDeployment(
   panel: RailwayDeploymentPanelData
 ): RailwayDeploymentPanelData {
@@ -1047,11 +1081,14 @@ export async function validateTaskSessionDeploymentPublicReadiness(input: {
   const probe =
     input.probe ||
     ((probeInput, probeOptions) => waitForRailwayDeploymentPublicReachability(probeInput, probeOptions));
-  const publicUrl =
-    asText(input.panel.latestStaticUrl) ||
-    asText(input.panel.latestUrl) ||
-    asText(input.panel.domains[0]);
+  const publicUrl = resolvePreferredPanelPublicUrl(input.panel);
   const latestStatus = asText(input.panel.latestStatus).toUpperCase();
+  if (terminalFailureDeploymentStatuses.has(latestStatus)) {
+    return buildTaskSessionDeploymentProviderFailurePanel(
+      input.panel,
+      `部署平台返回失败状态：${latestStatus}。请检查构建日志或重新发布。`
+    );
+  }
   const domainStatus = asText(input.panel.domainStatus).toLowerCase();
   const publicDomainStillActivating =
     domainStatus === 'pending_dns' || domainStatus === 'pending_certificate';
@@ -1217,7 +1254,7 @@ export function formatTaskSessionDeploymentStatus(panel: RailwayDeploymentPanelD
   if (panel.latestStatus) {
     parts.push(`当前部署状态：${panel.latestStatus}`);
   }
-  const url = asText(panel.latestStaticUrl || panel.latestUrl);
+  const url = resolvePreferredPanelPublicUrl(panel);
   if (url) {
     parts.push(`访问地址：${url.replace(/^https?:\/\//, '')}`);
   }
@@ -1515,7 +1552,7 @@ export async function refreshTaskSessionDeploymentSnapshot(input: {
     resolvedOrchestratorSessionId: orchestratorSessionId,
   });
   const resourceBinding = panel.resourceBinding;
-  const hasPublicUrl = Boolean(asText(panel.latestStaticUrl) || asText(panel.latestUrl) || panel.domains[0]);
+  const hasPublicUrl = Boolean(resolvePreferredPanelPublicUrl(panel));
   const account = hasPublicUrl
     ? await platformDeploymentAccountService.getProjectAccount(
         input.userId,
@@ -1646,6 +1683,25 @@ export async function executeTaskSessionDeploymentAction(
             baseline.errors.join('；') || '当前项目缺少稳定发布所需的部署基线'
           }`
         );
+      }
+      if (input.action === 'deploy' || shouldRecycleFailedRedeploy) {
+        const localPreflight = await runTaskSessionDeploymentLocalPreflight({
+          orchestratorSessionId,
+          workspaceRoot,
+          baseline,
+        });
+        await setSandboxMetadata(orchestratorSessionId, {
+          deploymentLocalPreflight: localPreflight,
+        });
+        if (localPreflight.status === 'failed') {
+          const failureMessage = formatTaskSessionDeploymentLocalPreflightFailure(localPreflight);
+          if (isTaskSessionDeploymentLocalPreflightPlatformFailure(localPreflight)) {
+            throw new Error(`deployment_platform_capability_not_ready:${failureMessage}`);
+          }
+          throw new Error(
+            `deployment_preflight_not_ready:${failureMessage}`
+          );
+        }
       }
     }
     account = shouldRecycleFailedRedeploy

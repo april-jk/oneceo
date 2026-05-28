@@ -1,6 +1,7 @@
 export type AltusRunTransitionReason =
   | 'initial_execution'
   | 'tool_result_continue'
+  | 'tool_confirmation_requested'
   | 'plain_text_conversation_completed'
   | 'plain_text_continuation_prompted'
   | 'plain_text_continuation_failed'
@@ -8,6 +9,8 @@ export type AltusRunTransitionReason =
   | 'tool_failed_but_recoverable'
   | 'tool_failed_user_action_required'
   | 'deployment_completion_blocked'
+  | 'visual_detection_completion_blocked'
+  | 'deliverable_persistence_failed'
   | 'deployment_repair_required'
   | 'model_retryable_error'
   | 'model_non_retryable_error'

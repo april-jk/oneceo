@@ -212,3 +212,95 @@ test('saveSandboxFileMemoryToDb falls back to timeline-derived memory when sandb
   assert.equal(normalized.summary.goal, '请继续保持当前项目记忆');
   assert.equal(normalized.summary.latestOutcome, '好的，我会继续沿用当前项目记忆。');
 });
+
+test('ensureLlmContextAnchor allocates persistent context id for a session', async () => {
+  const service = new TaskSessionAltusMemoryService();
+  let savedPatch: Record<string, unknown> | null = null;
+
+  mock.method(taskSessionRedisCacheService, 'resolveScopeBySession', async () => null as any);
+  mock.method(taskCreationSessionDAO, 'getSessionMetadataJson', async () => ({
+    altusSessionMemory: {
+      version: 0,
+      summary: {
+        goal: '',
+        latestOutcome: '',
+        openQuestions: [],
+      },
+      constraints: [],
+      decisions: [],
+      workingNotes: [],
+    },
+  }));
+  mock.method(taskCreationSessionDAO, 'patchSessionMetadataJson', async (_sessionId, patch) => {
+    savedPatch = patch;
+    return null as any;
+  });
+
+  const state = await service.ensureLlmContextAnchor({
+    sessionId: 'session-altus-anchor-1',
+    runId: 'run-anchor-1',
+    model: 'claude-sonnet',
+    provider: 'anthropic',
+  });
+
+  const normalized = readSessionAltusMemory((savedPatch || {}).altusSessionMemory);
+  assert.match(String(normalized.llmContext.contextId), /^altus_ctx_/);
+  assert.equal(normalized.llmContext.lastRunId, 'run-anchor-1');
+  assert.equal(normalized.llmContext.lastModel, 'claude-sonnet');
+  assert.equal(normalized.llmContext.lastProvider, 'anthropic');
+  assert.equal(normalized.llmContext.callCount, 0);
+  assert.equal(state.llmContext.contextId, normalized.llmContext.contextId);
+});
+
+test('recordLlmContextUsage updates per-run usage stats on the anchor', async () => {
+  const service = new TaskSessionAltusMemoryService();
+  let savedPatch: Record<string, unknown> | null = null;
+
+  mock.method(taskSessionRedisCacheService, 'resolveScopeBySession', async () => null as any);
+  mock.method(taskCreationSessionDAO, 'getSessionMetadataJson', async () => ({
+    altusSessionMemory: {
+      version: 1,
+      summary: {
+        goal: '',
+        latestOutcome: '',
+        openQuestions: [],
+      },
+      constraints: [],
+      decisions: [],
+      workingNotes: [],
+      llmContext: {
+        contextId: 'altus_ctx_existing',
+        createdAt: '2026-05-13T00:00:00.000Z',
+        updatedAt: '2026-05-13T00:00:00.000Z',
+        callCount: 2,
+        lastCacheHitRatio: 0.5,
+      },
+    },
+  }));
+  mock.method(taskCreationSessionDAO, 'patchSessionMetadataJson', async (_sessionId, patch) => {
+    savedPatch = patch;
+    return null as any;
+  });
+
+  const state = await service.recordLlmContextUsage({
+    sessionId: 'session-altus-anchor-2',
+    runId: 'run-anchor-2',
+    model: 'gpt-5.4-mini',
+    provider: 'openai',
+    promptTokens: 100,
+    cachedTokens: 80,
+    cacheCreationTokens: 10,
+  });
+
+  const normalized = readSessionAltusMemory((savedPatch || {}).altusSessionMemory);
+  assert.equal(normalized.llmContext.contextId, 'altus_ctx_existing');
+  assert.equal(normalized.llmContext.callCount, 3);
+  assert.equal(normalized.llmContext.lastPromptTokens, 100);
+  assert.equal(normalized.llmContext.lastCachedTokens, 80);
+  assert.equal(normalized.llmContext.lastCacheCreationTokens, 10);
+  assert.equal(normalized.llmContext.lastCacheHitRatio, 0.8);
+  assert.equal(normalized.llmContext.lastRunId, 'run-anchor-2');
+  assert.equal(normalized.llmContext.lastModel, 'gpt-5.4-mini');
+  assert.equal(normalized.llmContext.lastProvider, 'openai');
+  assert.equal(state.llmContext.callCount, 3);
+});

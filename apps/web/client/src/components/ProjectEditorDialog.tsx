@@ -27,6 +27,7 @@ import type {
   TaskCreationProjectDefaultConnector,
   TaskCreationProjectSummary,
 } from "@/lib/task-creation-client";
+import { isGuidedTourInteraction } from "@/components/GuidedTour";
 
 type ProjectEditorDialogProps = {
   open: boolean;
@@ -81,6 +82,14 @@ export function ProjectEditorDialog({
   const [catalog, setCatalog] = React.useState<ConnectorCatalogItem[]>([]);
   const [profiles, setProfiles] = React.useState<ConnectorProfile[]>([]);
   const [loadingProfiles, setLoadingProfiles] = React.useState(false);
+  const preventGuidedTourOutsideClose = React.useMemo(
+    () => (event: Event) => {
+      if (isGuidedTourInteraction(event)) {
+        event.preventDefault();
+      }
+    },
+    [],
+  );
 
   React.useEffect(() => {
     if (!open) return;
@@ -226,7 +235,11 @@ export function ProjectEditorDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent
+        className="sm:max-w-2xl"
+        onInteractOutside={preventGuidedTourOutsideClose}
+        onPointerDownOutside={preventGuidedTourOutsideClose}
+      >
         <DialogHeader>
           <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-muted/60">
             <FolderOpen className="h-8 w-8 text-foreground" />
@@ -241,6 +254,7 @@ export function ProjectEditorDialog({
             <Label htmlFor="project-editor-name">{t("sidebar.projectNameLabel")}</Label>
             <Input
               id="project-editor-name"
+              data-tour="project-create-name"
               value={name}
               onChange={(event) => setName(event.target.value)}
               placeholder={t("sidebar.projectNamePlaceholder")}
@@ -258,6 +272,7 @@ export function ProjectEditorDialog({
             <Label htmlFor="project-editor-instruction">{t("projectEditor.projectInstructionLabel")}</Label>
             <Textarea
               id="project-editor-instruction"
+              data-tour="project-create-instruction"
               value={projectInstruction}
               onChange={(event) => setProjectInstruction(event.target.value.slice(0, 8000))}
               placeholder={t("projectEditor.projectInstructionPlaceholder")}
@@ -271,6 +286,7 @@ export function ProjectEditorDialog({
               <PopoverTrigger asChild>
                 <button
                   type="button"
+                  data-tour="project-create-connectors"
                   className="inline-flex h-[36px] min-w-[72px] w-full items-center justify-between gap-[6px] whitespace-nowrap rounded-[8px] bg-transparent px-[12px] py-[8px] text-sm font-medium text-[var(--text-primary)] outline outline-1 -outline-offset-1 outline-[var(--Button-border-secondary)] transition-colors hover:bg-[var(--fill-tsp-white-light)] hover:opacity-90 active:opacity-80"
                 >
                   <div className="text-[13px]">
@@ -452,7 +468,11 @@ export function ProjectEditorDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t("common.cancel")}
           </Button>
-          <Button onClick={() => void handleSubmit()} disabled={submitting || !name.trim()}>
+          <Button
+            data-tour="project-create-submit"
+            onClick={() => void handleSubmit()}
+            disabled={submitting || !name.trim()}
+          >
             {submitting
               ? t("sidebar.saving")
               : mode === "create"

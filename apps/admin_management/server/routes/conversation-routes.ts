@@ -43,5 +43,83 @@ export function createConversationRoutes(service: ConversationManagementService)
     })
   );
 
+  router.get(
+    '/sessions/:sessionId/api-traces',
+    asyncHandler(async (req, res) => {
+      const query = z.object({
+        type: z.enum(['llm_request', 'tool_call', 'service_api', 'connector_api']).optional(),
+        toolName: z.string().optional(),
+        model: z.string().optional(),
+        limit: z.coerce.number().int().min(1).max(500).optional().default(100),
+        offset: z.coerce.number().int().min(0).optional().default(0),
+      }).parse(req.query);
+      const result = await service.getSessionApiTraces(req.params.sessionId, query);
+      return ok(res, result);
+    })
+  );
+
+  router.get(
+    '/sessions/:sessionId/runs/:runId/tool-calls/:toolCallId/browser-screenshot.png',
+    asyncHandler(async (req, res) => {
+      const image = await service.getBrowserActionScreenshot({
+        sessionId: req.params.sessionId,
+        runId: req.params.runId,
+        toolCallId: req.params.toolCallId,
+      });
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.setHeader('Content-Type', image.contentType);
+      if (image.contentLength) {
+        res.setHeader('Content-Length', image.contentLength);
+      }
+      return res.status(200).send(image.body);
+    })
+  );
+
+  router.get(
+    '/api-traces/aggregate',
+    asyncHandler(async (req, res) => {
+      const query = z.object({
+        type: z.enum(['llm_request', 'tool_call', 'service_api', 'connector_api']).optional(),
+        toolName: z.string().optional(),
+        model: z.string().optional(),
+        sessionId: z.string().uuid().optional(),
+        from: z.string().datetime().optional(),
+        to: z.string().datetime().optional(),
+        groupBy: z.enum(['tool_name', 'model', 'service_name', 'trace_type']).optional().default('trace_type'),
+        limit: z.coerce.number().int().min(1).max(500).optional().default(100),
+        offset: z.coerce.number().int().min(0).optional().default(0),
+      }).parse(req.query);
+      const result = await service.getApiTraceAggregate(query);
+      return ok(res, result);
+    })
+  );
+
+  router.get(
+    '/api-traces/stats',
+    asyncHandler(async (req, res) => {
+      const query = z.object({
+        type: z.enum(['llm_request', 'tool_call', 'service_api', 'connector_api']).optional(),
+        from: z.string().datetime().optional(),
+        to: z.string().datetime().optional(),
+      }).parse(req.query);
+      const result = await service.getApiTraceStats(query);
+      return ok(res, result);
+    })
+  );
+
+  router.get(
+    '/api-traces/trend',
+    asyncHandler(async (req, res) => {
+      const query = z.object({
+        type: z.enum(['llm_request', 'tool_call', 'service_api', 'connector_api']).optional(),
+        from: z.string().datetime().optional(),
+        to: z.string().datetime().optional(),
+        interval: z.enum(['hour', 'day']).optional().default('hour'),
+      }).parse(req.query);
+      const result = await service.getApiTraceTrend(query);
+      return ok(res, result);
+    })
+  );
+
   return router;
 }

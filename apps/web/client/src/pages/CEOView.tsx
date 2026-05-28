@@ -149,7 +149,7 @@ export default function CEOView() {
           </div>
 
           {/* 关键指标卡片 - 横向排列 */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div data-tour="ceo-metrics" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* 项目总数 */}
             <Card className="p-6">
               <div className="flex items-center justify-between">
@@ -226,14 +226,17 @@ export default function CEOView() {
           <div className="flex-1 overflow-y-auto mb-4 scrollbar-thin scrollbar-thumb-muted-foreground/20 scrollbar-track-transparent">
             <div className="max-w-4xl mx-auto">
               {/* 欢迎消息 */}
-              <div className="flex items-start gap-4 mb-6">
+              <div data-tour="ceo-context" className="flex items-start gap-4 mb-6">
                 <div className="w-10 h-10 bg-primary rounded-full flex items-center justify-center flex-shrink-0">
                   <span className="text-primary-foreground font-semibold text-sm">
                     CEO
                   </span>
                 </div>
                 <div className="flex-1">
-                  <div className="bg-muted/50 rounded-2xl rounded-tl-none p-4">
+                  <div
+                    data-tour="ceo-context-bubble"
+                    className="bg-muted/50 rounded-2xl rounded-tl-none p-4"
+                  >
                     <p className="text-sm leading-relaxed">
                       {t("ceoView.welcomeIntro")}
                     </p>
@@ -259,7 +262,7 @@ export default function CEOView() {
           {/* 输入框区域 - 固定在聊天区底部 */}
           <div className="flex-shrink-0">
             <div className="max-w-4xl mx-auto">
-              <Card className="p-4">
+              <Card data-tour="ceo-composer" className="p-4">
                 <div className="space-y-3">
                   {/* Textarea */}
                   <Textarea

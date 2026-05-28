@@ -2,11 +2,8 @@ import type {
   AdminThemeKey,
   AdminThemeMode,
   AdminThemeSettings,
-  AgentManagementOverview,
   AppUserDetailResponse,
   AppUserListResponse,
-  AuditDetailResponse,
-  AuditResponse,
   ConversationSessionDetailResponse,
   ConversationSessionInfraResponse,
   ConversationSessionsResponse,
@@ -26,6 +23,12 @@ import type {
   ConnectorGuideValidationResult,
   DashboardOverview,
   HostListResponse,
+  MembershipPlan,
+  MembershipPagedResponse,
+  MembershipUserListItem,
+  MembershipDailyRestoreHistoryItem,
+  NewMembershipPlanPayload,
+  UserMembership,
   OsacRelease,
   OsacReleaseDetailResponse,
   OsacReleaseListResponse,
@@ -61,6 +64,7 @@ import type {
   VmIpInfo,
   VmListResponse,
   VmMetricsInfo,
+  ApiTraceItem,
 } from './types';
 
 type ApiSuccess<T> = {
@@ -788,8 +792,10 @@ export const api = {
       timeoutMs: 20000,
       abortMessage: '加载运行关联信息超时，请稍后重试',
     }),
-  getAgentManagementOverview: () =>
-    request<AgentManagementOverview>('/api/agent-management/overview'),
+  health: () =>
+    request<{ status: string; timestamp: string }>('/health'),
+  getAgentHealth: () =>
+    request<{ success: boolean; message: string; timestamp: string }>('/api/agents/health'),
   getSandboxManagementOverview: (limit = 50) =>
     request<SandboxManagementOverview>(`/api/sandbox-management/overview?limit=${limit}`),
   getSandboxLiveSummary: (options?: { forceRefresh?: boolean }) =>
@@ -950,20 +956,122 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  listAudit: (
-    query: {
-      query?: string;
-      operator?: string;
-      action?: string;
-      result?: string;
-      sessionId?: string;
-      targetVmId?: string;
-      from?: string;
-      to?: string;
-      limit?: number;
-      offset?: number;
-    } = {}
-  ) => {
+  getSessionApiTraces: (sessionId: string, query: {
+    type?: string;
+    toolName?: string;
+    model?: string;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
+    const params = new URLSearchParams();
+    params.set('sessionId', sessionId);
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+    return request<{
+      total: number;
+      limit: number;
+      offset: number;
+      traces: ApiTraceItem[];
+    }>(`/api/conversations/sessions/${encodeURIComponent(sessionId)}/api-traces?${params.toString()}`);
+  },
+
+  getApiTraceAggregate: (query: {
+    type?: string;
+    toolName?: string;
+    model?: string;
+    sessionId?: string;
+    from?: string;
+    to?: string;
+    groupBy?: string;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+    return request<Array<{
+      dimension: string | null;
+      count: number;
+      avgDurationMs: number;
+      totalTokens: number;
+      errorCount: number;
+    }>>(`/api/conversations/api-traces/aggregate?${params.toString()}`);
+  },
+
+  getApiTraceStats: (query: {
+    type?: string;
+    from?: string;
+    to?: string;
+  } = {}) => {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+    return request<{
+      totalCalls: number;
+      avgDurationMs: number;
+      errorCount: number;
+      totalTokens: number;
+      byType: Array<{ type: string; count: number }>;
+      byTool: Array<{ toolName: string | null; count: number; avgDurationMs: number }>;
+      byModel: Array<{ model: string | null; count: number; totalTokens: number }>;
+    }>(`/api/conversations/api-traces/stats?${params.toString()}`);
+  },
+
+  getApiTraceTrend: (query: {
+    type?: string;
+    from?: string;
+    to?: string;
+    interval?: string;
+  } = {}) => {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+    return request<Array<{
+      bucket: string;
+      count: number;
+      avgDurationMs: number;
+      totalTokens: number;
+      errorCount: number;
+    }>>(`/api/conversations/api-traces/trend?${params.toString()}`);
+  },
+
+  listMembershipPlans: () => request<MembershipPlan[]>('/api/internal/membership/plans'),
+  getMembershipPlan: (planId: string) =>
+    request<MembershipPlan>(`/api/internal/membership/plans/${encodeURIComponent(planId)}`),
+  createMembershipPlan: (payload: NewMembershipPlanPayload) =>
+    request<MembershipPlan>('/api/internal/membership/plans', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateMembershipPlan: (planId: string, payload: Partial<NewMembershipPlanPayload>) =>
+    request<MembershipPlan>(`/api/internal/membership/plans/${encodeURIComponent(planId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  updateMembershipPlanStatus: (planId: string, payload: { status: string }) =>
+    request<MembershipPlan>(`/api/internal/membership/plans/${encodeURIComponent(planId)}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  listMembershipUsers: (query: {
+    userId?: string;
+    membershipPlanId?: string;
+    status?: string;
+    page?: number;
+    pageSize?: number;
+  } = {}) => {
     const params = new URLSearchParams();
     Object.entries(query).forEach(([key, value]) => {
       if (value !== undefined && value !== null && value !== '') {
@@ -971,8 +1079,53 @@ export const api = {
       }
     });
     const suffix = params.toString() ? `?${params.toString()}` : '';
-    return request<AuditResponse>(`/api/audit${suffix}`);
+    return request<MembershipPagedResponse<MembershipUserListItem>>(`/api/internal/membership/users${suffix}`);
   },
-  getAuditDetail: (auditId: string) =>
-    request<AuditDetailResponse>(`/api/audit/${encodeURIComponent(auditId)}`),
+  listUserMemberships: (userId: string) =>
+    request<UserMembership[]>(`/api/internal/membership/users/${encodeURIComponent(userId)}`),
+  assignUserMembership: (userId: string, payload: Record<string, unknown>) =>
+    request(`/api/internal/membership/users/${encodeURIComponent(userId)}/assign`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  updateUserMembershipStatus: (
+    membershipId: string,
+    payload: { status: 'active' | 'expired' | 'cancelled'; reason?: string }
+  ) =>
+    request<UserMembership>(`/api/internal/membership/user-memberships/${encodeURIComponent(membershipId)}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  updateUserMembershipExpireAt: (
+    membershipId: string,
+    payload: { expiresAt?: string | null; reason?: string }
+  ) =>
+    request<UserMembership>(`/api/internal/membership/user-memberships/${encodeURIComponent(membershipId)}/expire`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  runMembershipDailyRestore: (payload: { date?: string } = {}) =>
+    request<{ restoreDate: string; restoredCount: number }>('/api/internal/membership/daily-restore/run', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  listMembershipDailyRestoreHistory: (query: {
+    page?: number;
+    pageSize?: number;
+    userId?: string;
+    membershipPlanId?: string;
+    startDate?: string;
+    endDate?: string;
+  } = {}) => {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<MembershipPagedResponse<MembershipDailyRestoreHistoryItem>>(
+      `/api/internal/membership/daily-restore/history${suffix}`
+    );
+  },
 };

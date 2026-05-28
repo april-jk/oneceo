@@ -1228,7 +1228,7 @@ export default function Home() {
   const voiceInputBaseRef = useRef("");
   const lastCreditRefreshRunStatusRef = useRef<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">(
-    "pro",
+    "lite",
   );
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewMaximized, setPreviewMaximized] = useState(false);

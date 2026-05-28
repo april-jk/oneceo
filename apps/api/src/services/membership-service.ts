@@ -242,6 +242,12 @@ export class MembershipService {
       if (input.isDefault && allowedAgentLevels.length === 0) {
         throw new Error('默认会员类型至少需要开放一个 Agent 等级');
       }
+      const previousDefaultPlans = input.isDefault
+        ? await trx
+            .select({ id: membershipPlans.id })
+            .from(membershipPlans)
+            .where(eq(membershipPlans.isDefault, true))
+        : [];
 
       if (input.isDefault) {
         await trx.update(membershipPlans).set({ isDefault: false, updatedAt: new Date() }).where(eq(membershipPlans.isDefault, true));
@@ -268,6 +274,15 @@ export class MembershipService {
         afterJson: plan as any,
         reason: input.description || '',
       });
+      if (plan.isDefault && previousDefaultPlans.length > 0) {
+        await this.syncDefaultMembershipAssignmentsWithExecutor(
+          trx,
+          plan.id,
+          previousDefaultPlans.map((item) => item.id),
+          actorId || null,
+          '新增默认会员类型后同步注册默认用户'
+        );
+      }
       return plan;
     });
   }
@@ -599,6 +614,60 @@ export class MembershipService {
     );
   }
 
+  private async backfillMissingDefaultMembershipsWithExecutor(
+    executor: MembershipDbExecutor,
+    defaultPlanId: string,
+    actorId?: string | null
+  ) {
+    const rows = await executor.execute(sql`
+      SELECT
+        u.id::text AS user_id,
+        CASE WHEN uc.user_id IS NULL THEN false ELSE true END AS has_credit_account
+      FROM app_users u
+      LEFT JOIN user_credits uc ON uc.user_id = u.id
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM user_memberships um
+        WHERE um.user_id = u.id
+      )
+      ORDER BY u.created_at ASC, u.id ASC
+    `);
+    const candidates = Array.isArray((rows as any)?.rows) ? (rows as any).rows : [];
+    let backfilledCount = 0;
+    for (const row of candidates) {
+      const userId = String(row.user_id || '').trim();
+      if (!userId) continue;
+      const hasCreditAccount = Boolean(row.has_credit_account);
+      await this.assignUserMembershipWithExecutor(
+        executor,
+        {
+          userId,
+          membershipPlanId: defaultPlanId,
+          sourceType: REGISTER_DEFAULT_SOURCE_TYPE,
+          assignedReason: '系统补齐历史用户默认会员',
+          grantCredits: hasCreditAccount ? 0 : undefined,
+        },
+        actorId || null
+      );
+      backfilledCount += 1;
+    }
+    if (backfilledCount > 0) {
+      await executor.insert(membershipAuditLogs).values({
+        actorId: actorId || null,
+        action: 'user_membership.default.backfill_missing',
+        targetType: 'membership_plan',
+        targetId: defaultPlanId,
+        beforeJson: {},
+        afterJson: {
+          defaultPlanId,
+          backfilledCount,
+        },
+        reason: '系统启动补齐无会员历史用户',
+      } satisfies NewMembershipAuditLog);
+    }
+    return { backfilledCount };
+  }
+
   async ensureSystemDefaultPlan() {
     return db.transaction(async (trx) => {
       const existingDefaultPlans = await trx
@@ -670,10 +739,12 @@ export class MembershipService {
         null,
         '系统默认会员初始化后同步注册默认用户'
       );
+      const backfillResult = await this.backfillMissingDefaultMembershipsWithExecutor(trx, plan.id, null);
 
       return {
         plan,
         syncedDefaultMemberships: syncResult.updatedCount,
+        backfilledMissingMemberships: backfillResult.backfilledCount,
       };
     });
   }

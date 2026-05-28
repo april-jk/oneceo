@@ -8,6 +8,21 @@ router.use(createRequireInternalToken({
   disabledMessage: '管理员认证内部接口未启用',
 }));
 
+router.post('/admin-auth/sync-bootstrap', async (_req, res) => {
+  try {
+    await adminAuthService.ensureBootstrapAdmin();
+    return res.json({
+      success: true,
+      data: { ok: true },
+    });
+  } catch (error: any) {
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '管理员默认账号同步失败'),
+    });
+  }
+});
+
 router.post('/admin-auth/login', async (req, res) => {
   try {
     const result = await adminAuthService.login(

@@ -399,6 +399,19 @@ class AdminUserDAO {
     return record;
   }
 
+  async updateBootstrapCredentials(id: string, input: { loginName: string; passwordHash: string }) {
+    const [updated] = await db
+      .update(adminUsers)
+      .set({
+        loginName: normalizeLoginName(input.loginName),
+        passwordHash: input.passwordHash,
+        updatedAt: new Date(),
+      })
+      .where(eq(adminUsers.id, id as any))
+      .returning();
+    return updated;
+  }
+
   async touchLastLogin(id: string) {
     const [updated] = await db
       .update(adminUsers)

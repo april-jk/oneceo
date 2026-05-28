@@ -47,7 +47,7 @@ function createAdmin(id: string) {
 test('POST /api/admin/auth/login proxies login and writes admin cookie', async () => {
   const connector = {
     adminLogin: async (input: { loginName: string; password: string }) => {
-      assert.equal(input.loginName, 'admin');
+      assert.equal(input.loginName, 'admin66');
       return {
         sessionToken: 'proxy-admin-token',
         adminUser: createAdmin('1'),
@@ -61,8 +61,8 @@ test('POST /api/admin/auth/login proxies login and writes admin cookie', async (
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        loginName: 'admin',
-        password: 'password123',
+        loginName: 'admin66',
+        password: 'cdiSSj@qq.2123comccc',
       }),
     });
     const payload = await response.json();

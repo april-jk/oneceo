@@ -5,8 +5,8 @@ const requireFromWeb = createRequire(new URL('../../../web/package.json', import
 const { chromium } = requireFromWeb('@playwright/test');
 
 const baseUrl = process.env.ADMIN_MANAGEMENT_BASE_URL || 'http://127.0.0.1:9310';
-const loginName = process.env.ONECEO_ADMIN_E2E_LOGIN || process.env.ONECEO_ADMIN_BOOTSTRAP_LOGIN || 'admin';
-const password = process.env.ONECEO_ADMIN_E2E_PASSWORD || process.env.ONECEO_ADMIN_BOOTSTRAP_PASSWORD || 'admin123';
+const loginName = process.env.ONECEO_ADMIN_E2E_LOGIN || process.env.ONECEO_ADMIN_BOOTSTRAP_LOGIN || 'admin66';
+const password = process.env.ONECEO_ADMIN_E2E_PASSWORD || process.env.ONECEO_ADMIN_BOOTSTRAP_PASSWORD || 'cdiSSj@qq.2123comccc';
 const allowMutations = process.env.ONECEO_E2E_ALLOW_BILLING_MUTATIONS === 'true';
 
 async function loginIfNeeded(page) {

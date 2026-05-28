@@ -7,6 +7,9 @@ function asText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+const DEFAULT_ADMIN_LOGIN = 'admin66';
+const DEFAULT_ADMIN_PASSWORD = 'cdiSSj@qq.2123comccc';
+
 function toPublicAdmin(admin: Awaited<ReturnType<typeof adminUserDAO.getById>>) {
   if (!admin) return null;
   return {
@@ -22,10 +25,33 @@ function toPublicAdmin(admin: Awaited<ReturnType<typeof adminUserDAO.getById>>) 
 
 export class AdminAuthService {
   async ensureBootstrapAdmin() {
+    const loginName = DEFAULT_ADMIN_LOGIN;
+    const password = DEFAULT_ADMIN_PASSWORD;
     const existing = await adminUserDAO.listAll();
-    if (existing.length > 0) return;
-    const loginName = asText(process.env.ONECEO_ADMIN_BOOTSTRAP_LOGIN) || 'admin';
-    const password = asText(process.env.ONECEO_ADMIN_BOOTSTRAP_PASSWORD) || 'admin123456';
+    if (existing.length > 0) {
+      const targetLoginName = loginName.toLowerCase();
+      const targetAdmin = existing.find((admin) => admin.loginName === targetLoginName);
+      const legacyBootstrapAdmin = existing.find(
+        (admin) =>
+          admin.loginName === 'admin' &&
+          admin.displayName === 'Platform Admin' &&
+          admin.role === 'super_admin'
+      );
+      if (targetAdmin) {
+        await adminUserDAO.updateBootstrapCredentials(String(targetAdmin.id), {
+          loginName,
+          passwordHash: await hashPassword(password),
+        });
+        console.warn('[ADMIN_AUTH_BOOTSTRAP_PASSWORD_SYNCED]', { loginName });
+      } else if (legacyBootstrapAdmin) {
+        await adminUserDAO.updateBootstrapCredentials(String(legacyBootstrapAdmin.id), {
+          loginName,
+          passwordHash: await hashPassword(password),
+        });
+        console.warn('[ADMIN_AUTH_BOOTSTRAP_UPDATED]', { fromLoginName: 'admin', loginName });
+      }
+      return;
+    }
     const displayName = asText(process.env.ONECEO_ADMIN_BOOTSTRAP_DISPLAY_NAME) || 'Platform Admin';
     const role = asText(process.env.ONECEO_ADMIN_BOOTSTRAP_ROLE) || 'super_admin';
     await adminUserDAO.create({
